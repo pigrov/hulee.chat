@@ -525,13 +525,153 @@ textarea {
   display: contents;
 }
 
+.adminFrame {
+  grid-template-columns: 72px minmax(0, 1fr);
+}
+
+.adminWorkspace {
+  min-width: 0;
+  min-height: 100vh;
+  background: var(--hulee-color-page);
+}
+
+.adminHeader {
+  display: flex;
+  min-height: 88px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--hulee-color-border);
+  background: var(--hulee-color-surface-default);
+}
+
+.adminTitle {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.adminContent {
+  display: grid;
+  gap: 18px;
+  padding: 20px 24px;
+}
+
+.adminGrid {
+  display: grid;
+  grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.settingsPanel {
+  display: grid;
+  min-width: 0;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-default);
+}
+
+.integrationCatalog {
+  position: sticky;
+  top: 20px;
+}
+
+.integrationList,
+.managementList {
+  display: grid;
+  gap: 8px;
+}
+
+.integrationListItem,
+.managementRow {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-raised);
+}
+
+.integrationListItem[aria-current="page"] {
+  border-color: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 42%,
+    var(--hulee-color-border)
+  );
+}
+
+.listItemTitle {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.platformMetricGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.platformGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+
+.metricCard {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-default);
+}
+
+.metricIcon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-muted);
+  color: var(--hulee-color-text-muted);
+}
+
+.metricValue {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
 @media (max-width: 1100px) {
   .appFrame {
     grid-template-columns: 64px minmax(240px, 320px) minmax(0, 1fr);
   }
 
+  .adminFrame {
+    grid-template-columns: 64px minmax(0, 1fr);
+  }
+
   .clientPane {
     display: none;
+  }
+
+  .platformMetricGrid,
+  .platformGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -568,5 +708,25 @@ textarea {
 
   .messageBubble {
     width: 100%;
+  }
+
+  .adminHeader {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 16px;
+  }
+
+  .adminContent {
+    padding: 16px;
+  }
+
+  .adminGrid,
+  .platformMetricGrid,
+  .platformGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .integrationCatalog {
+    position: static;
   }
 }

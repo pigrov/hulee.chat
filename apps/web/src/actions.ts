@@ -58,22 +58,22 @@ export async function updateTelegramIntegrationAction(
   });
   await refreshTelegramDiagnostics();
 
-  revalidatePath("/");
+  revalidateTelegramIntegrationPaths();
 }
 
 export async function refreshTelegramDiagnosticsAction(): Promise<void> {
   await refreshTelegramDiagnostics();
-  revalidatePath("/");
+  revalidateTelegramIntegrationPaths();
 }
 
 export async function setTelegramWebhookAction(): Promise<void> {
   await setTelegramWebhook();
-  revalidatePath("/");
+  revalidateTelegramIntegrationPaths();
 }
 
 export async function deleteTelegramWebhookAction(): Promise<void> {
   await deleteTelegramWebhook();
-  revalidatePath("/");
+  revalidateTelegramIntegrationPaths();
 }
 
 function readRequiredFormString(formData: FormData, name: string): string {
@@ -97,4 +97,9 @@ function readOptionalFormString(
 
 function readFormCheckbox(formData: FormData, name: string): boolean {
   return formData.get(name) === "on";
+}
+
+function revalidateTelegramIntegrationPaths(): void {
+  revalidatePath("/");
+  revalidatePath("/admin/integrations");
 }
