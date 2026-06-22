@@ -88,7 +88,7 @@ jobs:
           printf '%s' '${{ secrets.GHCR_TOKEN }}' | docker login ghcr.io -u '${{ github.repository_owner }}' --password-stdin >/dev/null
           docker compose --env-file .env --env-file .release.env -f docker-compose.yml pull
           docker compose --env-file .env --env-file .release.env -f docker-compose.yml run --rm migrate
-          docker compose --env-file .env --env-file .release.env -f docker-compose.yml up -d postgres api worker web
+          docker compose --env-file .env --env-file .release.env -f docker-compose.yml up -d --wait --wait-timeout 180 postgres api worker web
           docker compose --env-file .env --env-file .release.env -f docker-compose.yml ps
           EOF
 
@@ -96,5 +96,16 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key \
             -p "${{ vars.DEPLOY_PORT }}" \
-            "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" \
-            "docker exec hulee_chat_api node -e \"fetch('http://127.0.0.1:3000/internal/v1/health').then(async r => { if (!r.ok) process.exit(1); console.log(await r.text()); }).catch(() => process.exit(1))\""
+            "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" <<'EOF'
+          set -euo pipefail
+          cd '${{ vars.DEPLOY_PATH }}'
+          for attempt in $(seq 1 30); do
+            if docker exec hulee_chat_api node -e "fetch('http://127.0.0.1:3000/internal/v1/health').then(async r => { if (!r.ok) process.exit(1); console.log(await r.text()); }).catch(() => process.exit(1))"; then
+              exit 0
+            fi
+            docker compose --env-file .env --env-file .release.env -f docker-compose.yml ps || true
+            sleep 5
+          done
+          docker logs --tail=100 hulee_chat_api || true
+          exit 1
+          EOF
