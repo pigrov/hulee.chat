@@ -62,6 +62,9 @@ services:
       HULEE_API_HOST: 0.0.0.0
       HULEE_API_PORT: 3000
     command: ["pnpm", "--filter", "@hulee/api", "start"]
+    networks:
+      - default
+      - web
     healthcheck:
       test:
         [
