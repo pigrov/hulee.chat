@@ -8,7 +8,8 @@ import { CoreError } from "@hulee/core";
 import type {
   OutboundDispatchRepository,
   QueuedOutboundMessageForDispatch,
-  TenantModuleConfigRepository
+  TenantModuleConfigRepository,
+  TenantSecretRepository
 } from "@hulee/db";
 import {
   createTelegramBotApiClient,
@@ -21,7 +22,10 @@ import {
 import type { OutboxHandler, OutboxRecord } from "./outbox-processor";
 
 export type SecretResolver = {
-  resolveSecret(secretRef: string): Promise<string | null>;
+  resolveSecret(input: {
+    tenantId: TenantId;
+    secretRef: string;
+  }): Promise<string | null>;
 };
 
 export type TelegramBotApiClientFactory = (
@@ -92,6 +96,7 @@ export function createTelegramOutboundDispatcher(
 
       const botToken = await resolveBotToken(
         options.secretResolver,
+        record.tenantId,
         config.botTokenSecretRef
       );
       const adapter = createTelegramChannelAdapter({
@@ -125,7 +130,7 @@ export function createEnvSecretResolver(
   env: Record<string, string | undefined> = process.env
 ): SecretResolver {
   return {
-    async resolveSecret(secretRef) {
+    async resolveSecret({ secretRef }) {
       const envName = secretRef.startsWith("env:")
         ? secretRef.slice("env:".length)
         : secretRef;
@@ -136,15 +141,39 @@ export function createEnvSecretResolver(
   };
 }
 
+export function createTenantSecretResolver(input: {
+  env?: Record<string, string | undefined>;
+  tenantSecrets?: TenantSecretRepository;
+}): SecretResolver {
+  const envResolver = createEnvSecretResolver(input.env);
+
+  return {
+    async resolveSecret({ tenantId, secretRef }) {
+      if (secretRef.startsWith("secret:")) {
+        return (
+          (await input.tenantSecrets?.resolveSecret({ tenantId, secretRef })) ??
+          null
+        );
+      }
+
+      return envResolver.resolveSecret({ tenantId, secretRef });
+    }
+  };
+}
+
 async function resolveBotToken(
   secretResolver: SecretResolver,
+  tenantId: TenantId,
   secretRef: string | undefined
 ): Promise<string> {
   if (!secretRef) {
     throw new CoreError("validation.failed");
   }
 
-  const token = await secretResolver.resolveSecret(secretRef);
+  const token = await secretResolver.resolveSecret({
+    tenantId,
+    secretRef
+  });
 
   if (!token) {
     throw new CoreError("validation.failed");

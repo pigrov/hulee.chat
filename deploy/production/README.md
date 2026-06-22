@@ -3,6 +3,10 @@
 Runtime secrets live on the server in `/srv/hulee-chat/.env`.
 GitHub Actions should not store tenant/provider secrets.
 
+`HULEE_SECRET_ENCRYPTION_KEY` is a deployment-local 32-byte key used to encrypt
+tenant-managed provider secrets such as Telegram bot tokens. Keep it in the
+server `.env`; do not add provider tokens or this key to GitHub Secrets.
+
 Initial server preparation:
 
 ```bash

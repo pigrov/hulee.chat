@@ -40,6 +40,7 @@ export async function updateTelegramIntegrationAction(
     formData,
     "botTokenSecretRef"
   );
+  const botToken = readOptionalFormString(formData, "botToken");
 
   await updateTelegramIntegration({
     enabled: readFormCheckbox(formData, "enabled"),
@@ -49,6 +50,10 @@ export async function updateTelegramIntegrationAction(
       botTokenSecretRef === undefined || botTokenSecretRef.trim().length === 0
         ? undefined
         : botTokenSecretRef.trim(),
+    botToken:
+      botToken === undefined || botToken.trim().length === 0
+        ? undefined
+        : botToken.trim(),
     outboundEnabled: readFormCheckbox(formData, "outboundEnabled")
   });
 

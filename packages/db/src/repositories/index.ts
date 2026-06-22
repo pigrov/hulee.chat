@@ -18,6 +18,14 @@ export {
   createSqlTenantModuleConfigRepository
 } from "./sql-module-config-repository";
 export {
+  buildFindTenantSecretSql,
+  buildUpsertTenantSecretSql,
+  createAesGcmTenantSecretCipher,
+  createSqlTenantSecretRepository,
+  createTenantSecretRef,
+  parseTenantSecretRef
+} from "./sql-tenant-secret-repository";
+export {
   buildFindQueuedOutboundMessageSql,
   buildMarkOutboundMessageFailedSql,
   buildMarkOutboundMessageSentSql,
@@ -90,6 +98,14 @@ export type {
   TenantModuleConfigRepository,
   UpsertTenantModuleConfigInput
 } from "./sql-module-config-repository";
+export type {
+  FindTenantSecretInput,
+  TenantSecretCipher,
+  TenantSecretPurpose,
+  TenantSecretRecord,
+  TenantSecretRepository,
+  UpsertTenantSecretInput
+} from "./sql-tenant-secret-repository";
 export type {
   FindQueuedOutboundMessageInput,
   MarkOutboundMessageFailedInput,

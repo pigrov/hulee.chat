@@ -124,13 +124,10 @@ export const internalTelegramIntegrationUpdateRequestSchema = z
     channelExternalId: z.string().trim().min(1).max(200),
     mode: internalTelegramIntegrationModeSchema.default("webhook"),
     botTokenSecretRef: z.string().trim().min(1).max(500).optional(),
+    botToken: z.string().trim().min(1).max(4096).optional(),
     outboundEnabled: z.boolean().default(false)
   })
-  .strict()
-  .refine((config) => !config.outboundEnabled || config.botTokenSecretRef, {
-    message: "botTokenSecretRef is required when outbound is enabled.",
-    path: ["botTokenSecretRef"]
-  });
+  .strict();
 
 export const internalTelegramIntegrationDiagnosticsSchema = z
   .object({

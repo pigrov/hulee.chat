@@ -24,6 +24,8 @@
   "integrations.telegram.mode": "Mode",
   "integrations.telegram.mode.webhook": "Webhook",
   "integrations.telegram.mode.polling": "Polling",
+  "integrations.telegram.botToken": "Bot token",
+  "integrations.telegram.botTokenPlaceholder": "Paste a new token to set or replace it",
   "integrations.telegram.botTokenSecretRef": "Bot token secret ref",
   "integrations.telegram.outboundEnabled": "Outbound messages",
   "integrations.telegram.webhookPath": "Webhook path",

@@ -20,6 +20,7 @@ describe("app config", () => {
       deploymentType: "on_prem",
       logLevel: "info",
       databaseUrl: defaultLocalDatabaseUrl,
+      secretEncryptionKey: undefined,
       host: "0.0.0.0",
       port: 3000,
       publicBaseUrl: undefined,
@@ -80,6 +81,16 @@ describe("app config", () => {
       pollIntervalMs: 2500,
       outboxBatchSize: 25,
       outboxRetryDelayMs: 45000
+    });
+  });
+
+  it("loads the deployment secret encryption key without logging it", () => {
+    expect(
+      loadApiConfig({
+        HULEE_SECRET_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef"
+      })
+    ).toMatchObject({
+      secretEncryptionKey: "0123456789abcdef0123456789abcdef"
     });
   });
 

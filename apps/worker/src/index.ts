@@ -9,14 +9,16 @@ import {
   type Logger
 } from "@hulee/observability";
 import {
+  createAesGcmTenantSecretCipher,
   createSqlOutboundDispatchRepository,
+  createSqlTenantSecretRepository,
   createSqlTenantModuleConfigRepository,
   type HuleeDatabase
 } from "@hulee/db";
 
 import type { OutboxHandler } from "./outbox-processor";
 import {
-  createEnvSecretResolver,
+  createTenantSecretResolver,
   createTelegramOutboundDispatcher,
   type SecretResolver,
   type TelegramBotApiClientFactory
@@ -57,6 +59,7 @@ export function createWorkerRuntime(
 
 export type WorkerOutboxHandlerOptions = {
   database: HuleeDatabase;
+  secretEncryptionKey?: string;
   secretResolver?: SecretResolver;
   telegramBotApiClientFactory?: TelegramBotApiClientFactory;
   telegramApiBaseUrl?: string;
@@ -65,12 +68,25 @@ export type WorkerOutboxHandlerOptions = {
 export function createWorkerOutboxHandler(
   options: WorkerOutboxHandlerOptions
 ): OutboxHandler {
+  const tenantSecrets = options.secretEncryptionKey
+    ? createSqlTenantSecretRepository(
+        options.database,
+        createAesGcmTenantSecretCipher({
+          key: options.secretEncryptionKey
+        })
+      )
+    : undefined;
+
   return createTelegramOutboundDispatcher({
     outboundRepository: createSqlOutboundDispatchRepository(options.database),
     moduleConfigRepository: createSqlTenantModuleConfigRepository(
       options.database
     ),
-    secretResolver: options.secretResolver ?? createEnvSecretResolver(),
+    secretResolver:
+      options.secretResolver ??
+      createTenantSecretResolver({
+        tenantSecrets
+      }),
     botApiClientFactory: options.telegramBotApiClientFactory,
     telegramApiBaseUrl: options.telegramApiBaseUrl
   });
@@ -79,6 +95,7 @@ export function createWorkerOutboxHandler(
 export { processOutboxBatch } from "./outbox-processor";
 export {
   createEnvSecretResolver,
+  createTenantSecretResolver,
   createTelegramOutboundDispatcher
 } from "./telegram-outbound-dispatcher";
 export type {

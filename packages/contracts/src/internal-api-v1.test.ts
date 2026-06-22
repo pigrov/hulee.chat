@@ -118,12 +118,43 @@ describe("internal API v1 schemas", () => {
     });
   });
 
-  it("rejects Telegram outbound config without a token secret reference", () => {
-    expect(() =>
+  it("allows Telegram updates to carry a write-only bot token", () => {
+    expect(
       internalTelegramIntegrationUpdateRequestSchema.parse({
         enabled: true,
         channelExternalId: "telegram-local",
+        botToken: "telegram-token",
         outboundEnabled: true
+      })
+    ).toEqual({
+      enabled: true,
+      channelExternalId: "telegram-local",
+      mode: "webhook",
+      botToken: "telegram-token",
+      outboundEnabled: true
+    });
+
+    expect(() =>
+      internalTelegramIntegrationResponseSchema.parse({
+        moduleId: "channel-telegram",
+        enabled: true,
+        config: {
+          channelExternalId: "telegram-local",
+          mode: "webhook",
+          botToken: "telegram-token",
+          outboundEnabled: true
+        },
+        diagnostics: {
+          status: "configured",
+          checkedAt: "2026-06-22T10:00:00.000Z",
+          checks: {
+            moduleEnabled: true,
+            configValid: true,
+            inboundWebhookReady: true,
+            outboundEnabled: true,
+            botTokenSecretRefConfigured: true
+          }
+        }
       })
     ).toThrow();
   });

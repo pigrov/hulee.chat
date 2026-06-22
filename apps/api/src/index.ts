@@ -1,8 +1,10 @@
 import { loadApiConfig, type ApiConfig, type EnvSource } from "@hulee/config";
 import {
+  createAesGcmTenantSecretCipher,
   createDrizzlePersistenceExecutor,
   createExternalMessageRepository,
   createSqlPublicApiAuditSink,
+  createSqlTenantSecretRepository,
   createSqlTenantModuleConfigRepository,
   createSqlTenantApiKeyRepository,
   type HuleeDatabase
@@ -28,7 +30,7 @@ import {
   createSqlInternalInboxQueryService
 } from "./internal-inbox-service";
 import {
-  createEnvSecretResolver,
+  createTenantSecretResolver,
   createInternalIntegrationService
 } from "./internal-integrations-service";
 import { createExternalChannelCommandService } from "./external-channel-command-service";
@@ -99,6 +101,7 @@ export function createPublicApiDataPlaneHandler(
 export type InternalApiDataPlaneHandlerOptions = {
   database: HuleeDatabase;
   env?: EnvSource;
+  secretEncryptionKey?: string;
   publicWebhookBaseUrl?: string;
   telegramApiBaseUrl?: string;
   logger?: Logger;
@@ -112,6 +115,14 @@ export function createInternalApiDataPlaneHandler(
     rawExecutor: options.database,
     persistenceExecutor: createDrizzlePersistenceExecutor(options.database)
   });
+  const tenantSecrets = options.secretEncryptionKey
+    ? createSqlTenantSecretRepository(
+        options.database,
+        createAesGcmTenantSecretCipher({
+          key: options.secretEncryptionKey
+        })
+      )
+    : undefined;
 
   return createInternalApiHandler({
     sessionResolver: createLocalDevInternalSessionResolver(),
@@ -123,7 +134,11 @@ export function createInternalApiDataPlaneHandler(
     }),
     integrations: createInternalIntegrationService({
       repository: createSqlTenantModuleConfigRepository(options.database),
-      secretResolver: createEnvSecretResolver(options.env),
+      secretResolver: createTenantSecretResolver({
+        env: options.env,
+        tenantSecrets
+      }),
+      secretWriter: tenantSecrets,
       telegramApiBaseUrl: options.telegramApiBaseUrl,
       publicWebhookBaseUrl: options.publicWebhookBaseUrl
     }),
@@ -158,7 +173,10 @@ export function createTelegramWebhookDataPlaneHandler(
 export type ApiDataPlaneHandlerOptions = PublicApiDataPlaneHandlerOptions &
   Pick<
     InternalApiDataPlaneHandlerOptions,
-    "env" | "publicWebhookBaseUrl" | "telegramApiBaseUrl"
+    | "env"
+    | "secretEncryptionKey"
+    | "publicWebhookBaseUrl"
+    | "telegramApiBaseUrl"
   >;
 
 export function createApiDataPlaneHandler(

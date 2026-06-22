@@ -16,7 +16,8 @@ const database = createHuleeDatabase({
 });
 const outboxRepository = createSqlOutboxRepository(database);
 const outboxHandler = createWorkerOutboxHandler({
-  database
+  database,
+  secretEncryptionKey: runtime.config.secretEncryptionKey
 });
 
 let stopping = false;

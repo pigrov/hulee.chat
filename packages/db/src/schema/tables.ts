@@ -163,6 +163,23 @@ export const tenantModules = pgTable(
   ]
 );
 
+export const tenantSecrets = pgTable(
+  "tenant_secrets",
+  {
+    tenantId: tenantIdColumn().references(() => tenants.id),
+    secretRef: text("secret_ref").notNull(),
+    purpose: text("purpose").notNull(),
+    encryptedValue: text("encrypted_value").notNull(),
+    encryptionKeyRef: text("encryption_key_ref").notNull().default("local"),
+    ...timestamps
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.secretRef] }),
+    index("tenant_secrets_tenant_idx").on(table.tenantId),
+    index("tenant_secrets_tenant_purpose_idx").on(table.tenantId, table.purpose)
+  ]
+);
+
 export const tenantEntitlements = pgTable(
   "tenant_entitlements",
   {

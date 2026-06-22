@@ -95,6 +95,43 @@ describe("internal integrations service", () => {
     );
   });
 
+  it("stores Telegram bot tokens in tenant secret storage and only keeps a secret ref in config", async () => {
+    const repository = new InMemoryTenantModuleConfigRepository();
+    const secretWriter = new InMemorySecretWriter();
+    const service = createInternalIntegrationService({
+      repository,
+      secretWriter,
+      now: () => now
+    });
+
+    const response = await service.updateTelegramIntegration(context, {
+      enabled: true,
+      channelExternalId: "telegram-local",
+      mode: "webhook",
+      botToken: "telegram-token-1",
+      outboundEnabled: true
+    });
+
+    expect(secretWriter.upserts).toEqual([
+      {
+        tenantId,
+        secretRef: "secret:tenant-integrations/channel-telegram/bot-token",
+        purpose: "telegram.bot_token",
+        plainText: "telegram-token-1",
+        updatedAt: now
+      }
+    ]);
+    expect(response.config?.botTokenSecretRef).toBe(
+      "secret:tenant-integrations/channel-telegram/bot-token"
+    );
+    expect(JSON.stringify(response)).not.toContain("telegram-token-1");
+    expect(
+      JSON.stringify(
+        repository.records.get(recordKey(tenantId, "channel-telegram"))
+      )
+    ).not.toContain("telegram-token-1");
+  });
+
   it("returns invalid diagnostics for malformed stored Telegram config", async () => {
     const repository = new InMemoryTenantModuleConfigRepository([
       {
@@ -345,6 +382,26 @@ class InMemoryTenantModuleConfigRepository implements TenantModuleConfigReposito
       config: input.config,
       diagnostics: input.diagnostics
     });
+  }
+}
+
+class InMemorySecretWriter {
+  readonly upserts: {
+    tenantId: TenantId;
+    secretRef: string;
+    purpose: "telegram.bot_token";
+    plainText: string;
+    updatedAt: Date;
+  }[] = [];
+
+  async upsertSecret(input: {
+    tenantId: TenantId;
+    secretRef: string;
+    purpose: "telegram.bot_token";
+    plainText: string;
+    updatedAt: Date;
+  }): Promise<void> {
+    this.upserts.push(input);
   }
 }
 

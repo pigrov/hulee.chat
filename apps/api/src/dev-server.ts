@@ -18,6 +18,7 @@ const server = createApiNodeServer({
     database,
     env,
     logger: runtime.logger,
+    secretEncryptionKey: runtime.config.secretEncryptionKey,
     publicWebhookBaseUrl: runtime.config.publicWebhookBaseUrl
   })
 });

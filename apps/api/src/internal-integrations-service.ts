@@ -9,7 +9,11 @@ import type {
 } from "@hulee/contracts";
 import { internalTelegramIntegrationDiagnosticsSchema } from "@hulee/contracts";
 import { CoreError } from "@hulee/core";
-import type { TenantModuleConfigRepository } from "@hulee/db";
+import type {
+  TenantModuleConfigRepository,
+  TenantSecretRepository
+} from "@hulee/db";
+import { createTenantSecretRef } from "@hulee/db";
 import {
   createTelegramBotApiClient,
   parseTelegramChannelConfig,
@@ -45,7 +49,20 @@ export type InternalIntegrationService = {
 };
 
 export type SecretResolver = {
-  resolveSecret(secretRef: string): Promise<string | null>;
+  resolveSecret(input: {
+    tenantId: TenantId;
+    secretRef: string;
+  }): Promise<string | null>;
+};
+
+export type SecretWriter = {
+  upsertSecret(input: {
+    tenantId: TenantId;
+    secretRef: string;
+    purpose: "telegram.bot_token";
+    plainText: string;
+    updatedAt: Date;
+  }): Promise<void>;
 };
 
 export type TelegramBotApiClientFactory = (
@@ -55,6 +72,7 @@ export type TelegramBotApiClientFactory = (
 export type InternalIntegrationServiceOptions = {
   repository: TenantModuleConfigRepository;
   secretResolver?: SecretResolver;
+  secretWriter?: SecretWriter;
   botApiClientFactory?: TelegramBotApiClientFactory;
   telegramApiBaseUrl?: string;
   publicWebhookBaseUrl?: string;
@@ -94,10 +112,21 @@ export function createInternalIntegrationService(
 
     async updateTelegramIntegration(context, request) {
       const updatedAt = now();
+      const existingConfig = await loadExistingTelegramConfig({
+        repository: options.repository,
+        tenantId: context.tenantId
+      });
+      const botTokenSecretRef = await resolveTelegramBotTokenSecretRef({
+        context,
+        request,
+        existingConfig,
+        secretWriter: options.secretWriter,
+        updatedAt
+      });
       const config: InternalTelegramIntegrationConfig = {
         channelExternalId: request.channelExternalId,
         mode: request.mode,
-        botTokenSecretRef: request.botTokenSecretRef,
+        botTokenSecretRef,
         outboundEnabled: request.outboundEnabled
       };
       const parsedConfig = parseTelegramChannelConfig(config);
@@ -182,7 +211,7 @@ export function createEnvSecretResolver(
   env: Record<string, string | undefined> = process.env
 ): SecretResolver {
   return {
-    async resolveSecret(secretRef) {
+    async resolveSecret({ secretRef }) {
       const envName = secretRef.startsWith("env:")
         ? secretRef.slice("env:".length)
         : secretRef;
@@ -191,6 +220,87 @@ export function createEnvSecretResolver(
       return value && value.length > 0 ? value : null;
     }
   };
+}
+
+export function createTenantSecretResolver(input: {
+  env?: Record<string, string | undefined>;
+  tenantSecrets?: TenantSecretRepository;
+}): SecretResolver {
+  const envResolver = createEnvSecretResolver(input.env);
+
+  return {
+    async resolveSecret({ tenantId, secretRef }) {
+      if (secretRef.startsWith("secret:")) {
+        return (
+          (await input.tenantSecrets?.resolveSecret({ tenantId, secretRef })) ??
+          null
+        );
+      }
+
+      return envResolver.resolveSecret({ tenantId, secretRef });
+    }
+  };
+}
+
+async function loadExistingTelegramConfig(input: {
+  repository: TenantModuleConfigRepository;
+  tenantId: TenantId;
+}): Promise<InternalTelegramIntegrationConfig | null> {
+  const record = await input.repository.findConfig({
+    tenantId: input.tenantId,
+    moduleId: telegramModuleId
+  });
+
+  if (!record?.config) {
+    return null;
+  }
+
+  try {
+    return parseTelegramChannelConfig(record.config);
+  } catch {
+    return null;
+  }
+}
+
+async function resolveTelegramBotTokenSecretRef(input: {
+  context: InternalIntegrationContext;
+  request: InternalTelegramIntegrationUpdateRequest;
+  existingConfig: InternalTelegramIntegrationConfig | null;
+  secretWriter?: SecretWriter;
+  updatedAt: Date;
+}): Promise<string | undefined> {
+  const botToken = input.request.botToken?.trim();
+
+  if (botToken && botToken.length > 0) {
+    if (!input.secretWriter) {
+      throw new CoreError("validation.failed");
+    }
+
+    const secretRef = buildTelegramBotTokenSecretRef(input.context.tenantId);
+
+    await input.secretWriter.upsertSecret({
+      tenantId: input.context.tenantId,
+      secretRef,
+      purpose: "telegram.bot_token",
+      plainText: botToken,
+      updatedAt: input.updatedAt
+    });
+
+    return secretRef;
+  }
+
+  return (
+    input.request.botTokenSecretRef?.trim() ||
+    input.existingConfig?.botTokenSecretRef
+  );
+}
+
+function buildTelegramBotTokenSecretRef(tenantId: TenantId): string {
+  return createTenantSecretRef({
+    tenantId,
+    moduleId: telegramModuleId,
+    secretName: "bot-token"
+  });
 }
 
 async function runTelegramProviderDiagnostics(
@@ -203,6 +313,7 @@ async function runTelegramProviderDiagnostics(
   }
 
   const diagnostics = await buildTelegramProviderDiagnostics({
+    tenantId: options.context.tenantId,
     config: state.config,
     enabled: state.enabled,
     secretResolver: options.secretResolver,
@@ -238,6 +349,7 @@ async function runTelegramWebhookSync(
   }
 
   const token = await resolveTelegramBotToken({
+    tenantId: options.context.tenantId,
     config: state.config,
     secretResolver: options.secretResolver
   });
@@ -362,6 +474,7 @@ async function persistTelegramDiagnostics(input: {
 }
 
 async function buildTelegramProviderDiagnostics(input: {
+  tenantId: TenantId;
   enabled: boolean;
   config: InternalTelegramIntegrationConfig;
   secretResolver: SecretResolver;
@@ -448,6 +561,7 @@ async function buildTelegramProviderDiagnostics(input: {
 }
 
 async function resolveTelegramBotToken(input: {
+  tenantId: TenantId;
   config: InternalTelegramIntegrationConfig;
   secretResolver: SecretResolver;
 }): Promise<string | null> {
@@ -455,7 +569,10 @@ async function resolveTelegramBotToken(input: {
     return null;
   }
 
-  return input.secretResolver.resolveSecret(input.config.botTokenSecretRef);
+  return input.secretResolver.resolveSecret({
+    tenantId: input.tenantId,
+    secretRef: input.config.botTokenSecretRef
+  });
 }
 
 function telegramProviderFailureDiagnostics(input: {

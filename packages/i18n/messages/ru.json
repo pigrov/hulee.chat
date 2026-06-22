@@ -31,6 +31,8 @@
   "integrations.telegram.mode": "Режим",
   "integrations.telegram.mode.webhook": "Webhook",
   "integrations.telegram.mode.polling": "Polling",
+  "integrations.telegram.botToken": "Токен бота",
+  "integrations.telegram.botTokenPlaceholder": "Вставьте новый токен для установки или замены",
   "integrations.telegram.botTokenSecretRef": "Ссылка на секрет токена",
   "integrations.telegram.outboundEnabled": "Исходящие сообщения",
   "integrations.telegram.webhookPath": "Путь webhook",

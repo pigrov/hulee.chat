@@ -39,6 +39,7 @@ export type BaseAppConfig = {
   deploymentType: DeploymentType;
   logLevel: LogLevel;
   databaseUrl: string;
+  secretEncryptionKey?: string;
 };
 
 export type ApiConfig = BaseAppConfig & {
@@ -109,7 +110,8 @@ const baseEnvSchema = z.object({
     deploymentTypeSchema.optional()
   ),
   HULEE_LOG_LEVEL: z.preprocess(emptyToUndefined, logLevelSchema.optional()),
-  DATABASE_URL: optionalUrl
+  DATABASE_URL: optionalUrl,
+  HULEE_SECRET_ENCRYPTION_KEY: optionalNonEmptyString
 });
 
 const apiEnvSchema = baseEnvSchema.extend({
@@ -131,6 +133,8 @@ const issueMessages: Record<string, string> = {
   HULEE_DEPLOYMENT_TYPE: "must be saas_shared, saas_isolated or on_prem",
   HULEE_LOG_LEVEL: "must be debug, info, warn or error",
   DATABASE_URL: "must be a valid URL and is required in production",
+  HULEE_SECRET_ENCRYPTION_KEY:
+    "must be a base64, hex or 32-byte UTF-8 encryption key",
   HULEE_API_HOST: "must not be empty",
   HULEE_API_PORT: "must be an integer from 1 to 65535",
   HULEE_PUBLIC_BASE_URL: "must be a valid URL",
@@ -177,7 +181,8 @@ function buildBaseConfig(
     nodeEnv,
     deploymentType: env.HULEE_DEPLOYMENT_TYPE ?? "on_prem",
     logLevel: env.HULEE_LOG_LEVEL ?? "info",
-    databaseUrl: env.DATABASE_URL ?? defaultLocalDatabaseUrl
+    databaseUrl: env.DATABASE_URL ?? defaultLocalDatabaseUrl,
+    secretEncryptionKey: env.HULEE_SECRET_ENCRYPTION_KEY
   };
 }
 

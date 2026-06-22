@@ -340,15 +340,15 @@ describe("internal API handler", () => {
     });
   });
 
-  it("rejects invalid Telegram outbound config before command execution", async () => {
+  it("rejects invalid Telegram integration payloads before command execution", async () => {
     const { handler, updateTelegramIntegration } = createHandler();
     const response = await handler.handle({
       method: "PUT",
       path: "/internal/v1/integrations/telegram",
       body: {
         enabled: true,
-        channelExternalId: "telegram-local",
-        outboundEnabled: true
+        channelExternalId: "",
+        outboundEnabled: false
       }
     });
 

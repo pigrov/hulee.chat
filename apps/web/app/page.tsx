@@ -310,13 +310,24 @@ function TelegramIntegrationPanel({
 
         <label className="fieldStack">
           <span className="detailLabel">
+            {t("integrations.telegram.botToken")}
+          </span>
+          <input
+            className="textInput"
+            type="password"
+            name="botToken"
+            placeholder={t("integrations.telegram.botTokenPlaceholder")}
+          />
+        </label>
+
+        <label className="fieldStack">
+          <span className="detailLabel">
             {t("integrations.telegram.botTokenSecretRef")}
           </span>
           <input
             className="textInput"
-            name="botTokenSecretRef"
-            defaultValue={config?.botTokenSecretRef ?? ""}
-            placeholder="env:HULEE_TELEGRAM_BOT_TOKEN"
+            value={config?.botTokenSecretRef ?? ""}
+            readOnly
           />
         </label>
 

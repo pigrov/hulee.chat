@@ -251,6 +251,7 @@ Tenant-owned tables:
 - `tenant_brand_profiles`
 - `tenant_brand_assets`
 - `tenant_modules`
+- `tenant_secrets`
 - `tenant_entitlements`
 - `tenant_usage_policies`
 - `usage_records`
