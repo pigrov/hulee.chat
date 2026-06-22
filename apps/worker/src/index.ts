@@ -10,11 +10,14 @@ import {
 } from "@hulee/observability";
 import {
   createAesGcmTenantSecretCipher,
+  createDrizzlePersistenceExecutor,
+  createExternalMessageRepository,
   createSqlOutboundDispatchRepository,
   createSqlTenantSecretRepository,
   createSqlTenantModuleConfigRepository,
   type HuleeDatabase
 } from "@hulee/db";
+import { createExternalChannelCommandService } from "@hulee/core";
 
 import type { OutboxHandler } from "./outbox-processor";
 import {
@@ -23,6 +26,12 @@ import {
   type SecretResolver,
   type TelegramBotApiClientFactory
 } from "./telegram-outbound-dispatcher";
+import {
+  runTelegramPollingSweep,
+  type TelegramPollingBotApiClientFactory,
+  type TelegramPollingSweepOptions,
+  type TelegramPollingSweepResult
+} from "./telegram-polling-sweeper";
 
 export type WorkerBoundary = {
   processesOutbox: true;
@@ -92,12 +101,63 @@ export function createWorkerOutboxHandler(
   });
 }
 
+export type WorkerTelegramPollingSweeperOptions = {
+  database: HuleeDatabase;
+  secretEncryptionKey?: string;
+  secretResolver?: SecretResolver;
+  telegramBotApiClientFactory?: TelegramPollingBotApiClientFactory;
+  telegramApiBaseUrl?: string;
+};
+
+export type WorkerTelegramPollingSweeper = {
+  sweep(): Promise<TelegramPollingSweepResult>;
+};
+
+export function createWorkerTelegramPollingSweeper(
+  options: WorkerTelegramPollingSweeperOptions
+): WorkerTelegramPollingSweeper {
+  const tenantSecrets = options.secretEncryptionKey
+    ? createSqlTenantSecretRepository(
+        options.database,
+        createAesGcmTenantSecretCipher({
+          key: options.secretEncryptionKey
+        })
+      )
+    : undefined;
+  const externalMessageRepository = createExternalMessageRepository({
+    rawExecutor: options.database,
+    persistenceExecutor: createDrizzlePersistenceExecutor(options.database)
+  });
+  const sweepOptions: TelegramPollingSweepOptions = {
+    moduleConfigRepository: createSqlTenantModuleConfigRepository(
+      options.database
+    ),
+    secretResolver:
+      options.secretResolver ??
+      createTenantSecretResolver({
+        tenantSecrets
+      }),
+    commands: createExternalChannelCommandService({
+      repository: externalMessageRepository
+    }),
+    botApiClientFactory: options.telegramBotApiClientFactory,
+    telegramApiBaseUrl: options.telegramApiBaseUrl
+  };
+
+  return {
+    async sweep() {
+      return runTelegramPollingSweep(sweepOptions);
+    }
+  };
+}
+
 export { processOutboxBatch } from "./outbox-processor";
 export {
   createEnvSecretResolver,
   createTenantSecretResolver,
   createTelegramOutboundDispatcher
 } from "./telegram-outbound-dispatcher";
+export { runTelegramPollingSweep } from "./telegram-polling-sweeper";
 export type {
   ClaimPendingOutboxInput,
   MarkOutboxFailedInput,
@@ -113,3 +173,8 @@ export type {
   TelegramBotApiClientFactory,
   TelegramOutboundDispatcherOptions
 } from "./telegram-outbound-dispatcher";
+export type {
+  TelegramPollingBotApiClientFactory,
+  TelegramPollingSweepOptions,
+  TelegramPollingSweepResult
+} from "./telegram-polling-sweeper";

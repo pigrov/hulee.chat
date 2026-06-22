@@ -159,6 +159,16 @@ export const internalTelegramIntegrationDiagnosticsSchema = z
       })
       .strict()
       .optional(),
+    polling: z
+      .object({
+        lastUpdateId: z.number().int().nonnegative().optional(),
+        lastRunAt: z.string().datetime({ offset: true }).optional(),
+        receivedUpdateCount: z.number().int().nonnegative().optional(),
+        acceptedUpdateCount: z.number().int().nonnegative().optional(),
+        failedUpdateCount: z.number().int().nonnegative().optional()
+      })
+      .strict()
+      .optional(),
     checks: z
       .object({
         moduleEnabled: z.boolean(),

@@ -195,6 +195,33 @@ describe("telegram channel adapter", () => {
         });
       }
 
+      if (method === "getUpdates") {
+        expect(body).toEqual({
+          offset: 1002,
+          limit: 1,
+          timeout: 0,
+          allowed_updates: ["message"]
+        });
+
+        return jsonTelegramResponse({
+          ok: true,
+          result: [
+            {
+              update_id: 1002,
+              message: {
+                message_id: 78,
+                date: 1782115200,
+                chat: {
+                  id: 9001,
+                  type: "private"
+                },
+                text: "Hello"
+              }
+            }
+          ]
+        });
+      }
+
       if (method === "setWebhook") {
         expect(body).toMatchObject({
           url: "https://example.test/webhooks/telegram/telegram-local",
@@ -236,6 +263,30 @@ describe("telegram channel adapter", () => {
       lastErrorMessage: "last failure"
     });
     await expect(
+      client.getUpdates({
+        offset: 1002,
+        limit: 1,
+        timeoutSeconds: 0,
+        allowedUpdates: ["message"]
+      })
+    ).resolves.toEqual([
+      {
+        updateId: 1002,
+        raw: {
+          update_id: 1002,
+          message: {
+            message_id: 78,
+            date: 1782115200,
+            chat: {
+              id: 9001,
+              type: "private"
+            },
+            text: "Hello"
+          }
+        }
+      }
+    ]);
+    await expect(
       client.setWebhook({
         url: "https://example.test/webhooks/telegram/telegram-local",
         secretToken: "secret-token"
@@ -244,7 +295,7 @@ describe("telegram channel adapter", () => {
     await expect(
       client.deleteWebhook({ dropPendingUpdates: true })
     ).resolves.toBeUndefined();
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 });
 

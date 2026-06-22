@@ -91,6 +91,39 @@ describe("SQL tenant module config repository", () => {
     ).resolves.toBeNull();
   });
 
+  it("lists enabled tenant module configs by module id", async () => {
+    const executor = new RecordingSqlExecutor([
+      {
+        tenant_id: tenantId,
+        module_id: "channel-telegram",
+        enabled: true,
+        config: {
+          channelExternalId: "telegram-local"
+        },
+        diagnostics: {}
+      }
+    ]);
+    const repository = createSqlTenantModuleConfigRepository(executor);
+
+    await expect(
+      repository.listEnabledConfigs({
+        moduleId: "channel-telegram",
+        limit: 10
+      })
+    ).resolves.toEqual([
+      {
+        tenantId,
+        moduleId: "channel-telegram",
+        enabled: true,
+        config: {
+          channelExternalId: "telegram-local"
+        },
+        diagnostics: {}
+      }
+    ]);
+    expect(executor.queries).toHaveLength(1);
+  });
+
   it("upserts tenant-scoped module config and diagnostics", async () => {
     const executor = new RecordingSqlExecutor([]);
     const repository = createSqlTenantModuleConfigRepository(executor);

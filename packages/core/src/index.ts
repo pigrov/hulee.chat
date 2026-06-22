@@ -5,6 +5,14 @@ export { createSequentialIdFactory } from "./ids";
 export type { IdFactory } from "./ids";
 export { assertEmployeeCan, hasPermission } from "./permissions";
 export type { Employee, EmployeeRole, Permission } from "./permissions";
+export { createExternalChannelCommandService } from "./external-channel-command-service";
+export type {
+  ExternalChannelCommandContext,
+  ExternalChannelCommandService,
+  ExternalChannelCommandServiceOptions,
+  ExternalMessageIngestionRepository,
+  PersistedMessageSummary
+} from "./external-channel-command-service";
 export type {
   PersistConversationReplyInput,
   TenantWorkspaceRepository

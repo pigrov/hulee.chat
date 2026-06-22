@@ -45,6 +45,7 @@ export {
   createTelegramChannelAdapter,
   deleteTelegramWebhook,
   getTelegramBotIdentity,
+  getTelegramUpdates,
   getTelegramWebhookInfo,
   normalizeTelegramIncomingMessage,
   parseTelegramChannelConfig,
@@ -62,9 +63,11 @@ export type {
   TelegramChannelInboundEnvelope,
   TelegramBotApiSettings,
   TelegramDeleteWebhookInput,
+  TelegramGetUpdatesInput,
   TelegramMessageSender,
   TelegramSetWebhookInput,
   TelegramSendMessageInput,
   TelegramSendMessageResult,
+  TelegramUpdate,
   TelegramWebhookInfo
 } from "./telegram-channel";

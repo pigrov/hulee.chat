@@ -22,6 +22,11 @@ export type FindTenantModuleConfigInput = {
   moduleId: string;
 };
 
+export type ListEnabledTenantModuleConfigsInput = {
+  moduleId: string;
+  limit?: number;
+};
+
 export type UpsertTenantModuleConfigInput = {
   tenantId: TenantId;
   moduleId: string;
@@ -38,6 +43,9 @@ export type TenantModuleConfigRepository = {
   findEnabledConfig(
     input: FindEnabledTenantModuleConfigInput
   ): Promise<TenantModuleConfigRecord | null>;
+  listEnabledConfigs(
+    input: ListEnabledTenantModuleConfigsInput
+  ): Promise<TenantModuleConfigRecord[]>;
   upsertConfig(input: UpsertTenantModuleConfigInput): Promise<void>;
 };
 
@@ -69,6 +77,14 @@ export function createSqlTenantModuleConfigRepository(
       );
 
       return result.rows[0] ? mapTenantModuleConfigRow(result.rows[0]) : null;
+    },
+
+    async listEnabledConfigs(input) {
+      const result = await rawExecutor.execute<TenantModuleConfigRow>(
+        buildListEnabledTenantModuleConfigsSql(input)
+      );
+
+      return result.rows.map(mapTenantModuleConfigRow);
     },
 
     async upsertConfig(input) {
@@ -107,6 +123,23 @@ export function buildFindEnabledTenantModuleConfigSql(
       and module_id = ${input.moduleId}
       and enabled = true
     limit 1
+  `;
+}
+
+export function buildListEnabledTenantModuleConfigsSql(
+  input: ListEnabledTenantModuleConfigsInput
+): SQL {
+  return sql`
+    select tenant_id,
+           module_id,
+           enabled,
+           config,
+           diagnostics
+    from tenant_modules
+    where module_id = ${input.moduleId}
+      and enabled = true
+    order by tenant_id asc
+    limit ${input.limit ?? 100}
   `;
 }
 

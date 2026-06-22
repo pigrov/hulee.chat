@@ -236,7 +236,11 @@ export default async function InboxPage({
           />
         </section>
         <SlotMount slot="client.profile.card" />
-        <TelegramIntegrationPanel integration={telegramIntegration} t={t} />
+        <TelegramIntegrationPanel
+          integration={telegramIntegration}
+          locale={locale}
+          t={t}
+        />
       </aside>
     </main>
   );
@@ -244,9 +248,11 @@ export default async function InboxPage({
 
 function TelegramIntegrationPanel({
   integration,
+  locale,
   t
 }: {
   integration: TelegramIntegrationViewModel;
+  locale: string;
   t: ReturnType<typeof createTranslator>["t"];
 }): ReactNode {
   const config = integration.config;
@@ -420,6 +426,42 @@ function TelegramIntegrationPanel({
               t
             )}
           />
+          <DetailItem
+            label={t("integrations.telegram.pollingLastUpdate")}
+            value={formatOptionalValue(
+              integration.diagnostics.polling?.lastUpdateId,
+              t
+            )}
+          />
+          <DetailItem
+            label={t("integrations.telegram.pollingLastRunAt")}
+            value={formatOptionalDateTime(
+              integration.diagnostics.polling?.lastRunAt,
+              locale,
+              t
+            )}
+          />
+          <DetailItem
+            label={t("integrations.telegram.pollingReceived")}
+            value={formatOptionalValue(
+              integration.diagnostics.polling?.receivedUpdateCount,
+              t
+            )}
+          />
+          <DetailItem
+            label={t("integrations.telegram.pollingAccepted")}
+            value={formatOptionalValue(
+              integration.diagnostics.polling?.acceptedUpdateCount,
+              t
+            )}
+          />
+          <DetailItem
+            label={t("integrations.telegram.pollingFailed")}
+            value={formatOptionalValue(
+              integration.diagnostics.polling?.failedUpdateCount,
+              t
+            )}
+          />
           {integration.diagnostics.operatorHint ? (
             <DetailItem
               label={t("integrations.telegram.operatorHint")}
@@ -583,6 +625,16 @@ function formatOptionalValue(
   }
 
   return String(value);
+}
+
+function formatOptionalDateTime(
+  value: string | undefined,
+  locale: string,
+  t: ReturnType<typeof createTranslator>["t"]
+): string {
+  return value === undefined
+    ? t("common.unknown")
+    : formatDateTime(value, locale);
 }
 
 function formatTelegramBotIdentity(

@@ -8,6 +8,7 @@ import { CoreError } from "@hulee/core";
 import type {
   FindEnabledTenantModuleConfigInput,
   FindTenantModuleConfigInput,
+  ListEnabledTenantModuleConfigsInput,
   MarkOutboundMessageFailedInput,
   MarkOutboundMessageSentInput,
   OutboundDispatchRepository,
@@ -176,6 +177,12 @@ class InMemoryModuleConfigRepository implements TenantModuleConfigRepository {
     input: FindEnabledTenantModuleConfigInput
   ): Promise<TenantModuleConfigRecord | null> {
     return this.moduleConfig(input);
+  }
+
+  async listEnabledConfigs(
+    _input: ListEnabledTenantModuleConfigsInput
+  ): Promise<TenantModuleConfigRecord[]> {
+    return [this.moduleConfig({ tenantId, moduleId: "channel-telegram" })];
   }
 
   async upsertConfig(_input: UpsertTenantModuleConfigInput): Promise<void> {}

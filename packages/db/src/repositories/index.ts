@@ -14,6 +14,7 @@ export {
 export {
   buildFindEnabledTenantModuleConfigSql,
   buildFindTenantModuleConfigSql,
+  buildListEnabledTenantModuleConfigsSql,
   buildUpsertTenantModuleConfigSql,
   createSqlTenantModuleConfigRepository
 } from "./sql-module-config-repository";
@@ -94,6 +95,7 @@ export type {
 export type {
   FindEnabledTenantModuleConfigInput,
   FindTenantModuleConfigInput,
+  ListEnabledTenantModuleConfigsInput,
   TenantModuleConfigRecord,
   TenantModuleConfigRepository,
   UpsertTenantModuleConfigInput

@@ -43,6 +43,18 @@ export type TelegramWebhookInfo = {
   raw: Record<string, unknown>;
 };
 
+export type TelegramUpdate = {
+  updateId: number;
+  raw: Record<string, unknown>;
+};
+
+export type TelegramGetUpdatesInput = {
+  offset?: number;
+  limit?: number;
+  timeoutSeconds?: number;
+  allowedUpdates?: readonly string[];
+};
+
 export type TelegramSetWebhookInput = {
   url: string;
   secretToken?: string;
@@ -59,6 +71,7 @@ export type TelegramBotApiClient = {
   ): Promise<TelegramSendMessageResult>;
   getMe(): Promise<TelegramBotIdentity>;
   getWebhookInfo(): Promise<TelegramWebhookInfo>;
+  getUpdates(input?: TelegramGetUpdatesInput): Promise<TelegramUpdate[]>;
   setWebhook(input: TelegramSetWebhookInput): Promise<void>;
   deleteWebhook(input?: TelegramDeleteWebhookInput): Promise<void>;
 };
@@ -325,6 +338,9 @@ export function createTelegramBotApiClient(
     async getWebhookInfo() {
       return getTelegramWebhookInfo(settings);
     },
+    async getUpdates(input) {
+      return getTelegramUpdates(settings, input);
+    },
     async setWebhook(input) {
       await setTelegramWebhook(settings, input);
     },
@@ -416,6 +432,52 @@ export async function getTelegramWebhookInfo(
         : undefined,
     raw: result ?? {}
   };
+}
+
+export async function getTelegramUpdates(
+  settings: TelegramBotApiSettings,
+  input: TelegramGetUpdatesInput = {}
+): Promise<TelegramUpdate[]> {
+  const payload = await requestTelegramJson(settings, "getUpdates", {
+    offset: input.offset,
+    limit: input.limit,
+    timeout: input.timeoutSeconds,
+    allowed_updates: input.allowedUpdates
+  });
+  const result = Array.isArray(payload.result) ? payload.result : undefined;
+
+  if (!result) {
+    throw new TelegramAdapterError(
+      "provider.permanent_failure",
+      "Telegram getUpdates response did not include an updates array."
+    );
+  }
+
+  return result.map((update) => {
+    const record = asRecord(update);
+
+    if (!record) {
+      throw new TelegramAdapterError(
+        "provider.permanent_failure",
+        "Telegram update was not an object."
+      );
+    }
+
+    const updateId =
+      typeof record.update_id === "number" ? record.update_id : undefined;
+
+    if (updateId === undefined) {
+      throw new TelegramAdapterError(
+        "provider.permanent_failure",
+        "Telegram update did not include update_id."
+      );
+    }
+
+    return {
+      updateId,
+      raw: record
+    };
+  });
 }
 
 export async function setTelegramWebhook(

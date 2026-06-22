@@ -320,6 +320,7 @@ async function runTelegramProviderDiagnostics(
     botApiClientFactory: options.botApiClientFactory,
     telegramApiBaseUrl: options.telegramApiBaseUrl,
     publicWebhookBaseUrl: options.publicWebhookBaseUrl,
+    polling: state.response.diagnostics.polling,
     checkedAt: state.checkedAt
   });
 
@@ -369,6 +370,7 @@ async function runTelegramWebhookSync(
       operatorHint: !token
         ? "Bot token secret could not be resolved."
         : "Public webhook base URL is not configured.",
+      polling: state.response.diagnostics.polling,
       checks: {
         botTokenResolved: Boolean(token),
         botApiReachable: false,
@@ -409,6 +411,7 @@ async function runTelegramWebhookSync(
       config: state.config,
       checkedAt: state.checkedAt,
       publicWebhookBaseUrl: options.publicWebhookBaseUrl,
+      polling: state.response.diagnostics.polling,
       error
     });
 
@@ -481,6 +484,7 @@ async function buildTelegramProviderDiagnostics(input: {
   botApiClientFactory: TelegramBotApiClientFactory;
   telegramApiBaseUrl?: string;
   publicWebhookBaseUrl?: string;
+  polling?: InternalTelegramIntegrationDiagnostics["polling"];
   checkedAt: string;
 }): Promise<InternalTelegramIntegrationDiagnostics> {
   const token = await resolveTelegramBotToken(input);
@@ -494,6 +498,7 @@ async function buildTelegramProviderDiagnostics(input: {
       status: "invalid_config",
       lastErrorCode: "validation.failed",
       operatorHint: "Bot token secret could not be resolved.",
+      polling: input.polling,
       checks: {
         botTokenResolved: false,
         botApiReachable: false,
@@ -531,6 +536,7 @@ async function buildTelegramProviderDiagnostics(input: {
         expectedUrl === undefined
           ? "Public webhook base URL is not configured."
           : undefined,
+      polling: input.polling,
       bot: {
         id: bot.id,
         username: bot.username,
@@ -555,6 +561,7 @@ async function buildTelegramProviderDiagnostics(input: {
       config: input.config,
       checkedAt: input.checkedAt,
       publicWebhookBaseUrl: input.publicWebhookBaseUrl,
+      polling: input.polling,
       error
     });
   }
@@ -580,6 +587,7 @@ function telegramProviderFailureDiagnostics(input: {
   config: InternalTelegramIntegrationConfig;
   checkedAt: string;
   publicWebhookBaseUrl?: string;
+  polling?: InternalTelegramIntegrationDiagnostics["polling"];
   error: unknown;
 }): InternalTelegramIntegrationDiagnostics {
   return buildTelegramDiagnostics({
@@ -590,6 +598,7 @@ function telegramProviderFailureDiagnostics(input: {
     status: "provider_unreachable",
     lastErrorCode: platformErrorCodeFromTelegramError(input.error),
     operatorHint: "Telegram Bot API call failed.",
+    polling: input.polling,
     checks: {
       botTokenResolved: true,
       botApiReachable: false,
@@ -677,6 +686,7 @@ function buildTelegramDiagnostics(input: {
   bot?: InternalTelegramIntegrationDiagnostics["bot"];
   webhook?: InternalTelegramIntegrationDiagnostics["webhook"];
   checks?: Partial<InternalTelegramIntegrationDiagnostics["checks"]>;
+  polling?: InternalTelegramIntegrationDiagnostics["polling"];
 }): InternalTelegramIntegrationDiagnostics {
   const webhookPath = buildTelegramWebhookPath(input.config.channelExternalId);
   const expectedWebhookUrl = buildTelegramPublicWebhookUrl(
@@ -709,7 +719,8 @@ function buildTelegramDiagnostics(input: {
         lastErrorCode: input.lastErrorCode,
         operatorHint: input.operatorHint,
         bot: input.bot,
-        webhook
+        webhook,
+        polling: input.polling
       }
     );
   }
@@ -735,7 +746,8 @@ function buildTelegramDiagnostics(input: {
       lastErrorCode: input.lastErrorCode,
       operatorHint: input.operatorHint,
       bot: input.bot,
-      webhook
+      webhook,
+      polling: input.polling
     }
   );
 }
@@ -747,6 +759,7 @@ function withOptionalTelegramDiagnostics(
     operatorHint?: string;
     bot?: InternalTelegramIntegrationDiagnostics["bot"];
     webhook?: InternalTelegramIntegrationDiagnostics["webhook"];
+    polling?: InternalTelegramIntegrationDiagnostics["polling"];
   }
 ): InternalTelegramIntegrationDiagnostics {
   return {
@@ -756,7 +769,8 @@ function withOptionalTelegramDiagnostics(
       : {}),
     ...(optional.operatorHint ? { operatorHint: optional.operatorHint } : {}),
     ...(optional.bot ? { bot: optional.bot } : {}),
-    ...(optional.webhook ? { webhook: optional.webhook } : {})
+    ...(optional.webhook ? { webhook: optional.webhook } : {}),
+    ...(optional.polling ? { polling: optional.polling } : {})
   };
 }
 

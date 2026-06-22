@@ -2,6 +2,7 @@ import type { EmployeeId, TenantId } from "@hulee/contracts";
 import type {
   FindEnabledTenantModuleConfigInput,
   FindTenantModuleConfigInput,
+  ListEnabledTenantModuleConfigsInput,
   TenantModuleConfigRecord,
   TenantModuleConfigRepository,
   UpsertTenantModuleConfigInput
@@ -211,6 +212,9 @@ describe("internal integrations service", () => {
               raw: {}
             };
           },
+          async getUpdates() {
+            return [];
+          },
           async setWebhook() {},
           async deleteWebhook() {}
         };
@@ -294,6 +298,9 @@ describe("internal integrations service", () => {
               raw: {}
             };
           },
+          async getUpdates() {
+            return [];
+          },
           async setWebhook(input) {
             setWebhookCalls.push(input.url);
           },
@@ -372,6 +379,14 @@ class InMemoryTenantModuleConfigRepository implements TenantModuleConfigReposito
       this.records.get(recordKey(input.tenantId, input.moduleId)) ?? null;
 
     return record?.enabled ? record : null;
+  }
+
+  async listEnabledConfigs(
+    input: ListEnabledTenantModuleConfigsInput
+  ): Promise<TenantModuleConfigRecord[]> {
+    return [...this.records.values()].filter(
+      (record) => record.moduleId === input.moduleId && record.enabled
+    );
   }
 
   async upsertConfig(input: UpsertTenantModuleConfigInput): Promise<void> {

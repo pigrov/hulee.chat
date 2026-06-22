@@ -6,6 +6,7 @@ import {
 
 import {
   createWorkerOutboxHandler,
+  createWorkerTelegramPollingSweeper,
   createWorkerRuntime,
   processOutboxBatch
 } from "./index";
@@ -16,6 +17,10 @@ const database = createHuleeDatabase({
 });
 const outboxRepository = createSqlOutboxRepository(database);
 const outboxHandler = createWorkerOutboxHandler({
+  database,
+  secretEncryptionKey: runtime.config.secretEncryptionKey
+});
+const telegramPollingSweeper = createWorkerTelegramPollingSweeper({
   database,
   secretEncryptionKey: runtime.config.secretEncryptionKey
 });
@@ -59,6 +64,18 @@ async function processNextBatch(): Promise<void> {
         processed: result.processed,
         failed: result.failed,
         skippedDuplicates: result.skippedDuplicates
+      });
+    }
+
+    const pollingResult = await telegramPollingSweeper.sweep();
+
+    if (pollingResult.configsPolled > 0 || pollingResult.updatesReceived > 0) {
+      runtime.logger.info("worker.telegram_polling_sweep_processed", {
+        configsScanned: pollingResult.configsScanned,
+        configsPolled: pollingResult.configsPolled,
+        updatesReceived: pollingResult.updatesReceived,
+        updatesAccepted: pollingResult.updatesAccepted,
+        updatesFailed: pollingResult.updatesFailed
       });
     }
   } catch (error) {

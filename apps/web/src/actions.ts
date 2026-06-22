@@ -56,6 +56,7 @@ export async function updateTelegramIntegrationAction(
         : botToken.trim(),
     outboundEnabled: readFormCheckbox(formData, "outboundEnabled")
   });
+  await refreshTelegramDiagnostics();
 
   revalidatePath("/");
 }
