@@ -1,0 +1,299 @@
+import type { DeploymentType } from "@hulee/contracts";
+import type { LogLevel } from "@hulee/observability";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { z } from "zod";
+
+export const defaultLocalDatabaseUrl =
+  "postgres://hulee:hulee@localhost:5432/hulee";
+
+export type RuntimeEnvironment = "development" | "test" | "production";
+export type HuleeAppName = "api" | "worker";
+
+export type EnvSource = Record<string, string | undefined>;
+
+export type ConfigIssue = {
+  variable: string;
+  message: string;
+};
+
+export class ConfigError extends Error {
+  readonly appName: HuleeAppName;
+  readonly issues: ConfigIssue[];
+
+  constructor(appName: HuleeAppName, issues: ConfigIssue[]) {
+    super(
+      `Invalid ${appName} configuration: ${issues
+        .map((issue) => `${issue.variable} ${issue.message}`)
+        .join("; ")}`
+    );
+    this.name = "ConfigError";
+    this.appName = appName;
+    this.issues = issues;
+  }
+}
+
+export type BaseAppConfig = {
+  appName: HuleeAppName;
+  nodeEnv: RuntimeEnvironment;
+  deploymentType: DeploymentType;
+  logLevel: LogLevel;
+  databaseUrl: string;
+};
+
+export type ApiConfig = BaseAppConfig & {
+  appName: "api";
+  host: string;
+  port: number;
+  publicBaseUrl?: string;
+  publicWebhookBaseUrl?: string;
+  sseEnabled: boolean;
+};
+
+export type WorkerConfig = BaseAppConfig & {
+  appName: "worker";
+  pollIntervalMs: number;
+  outboxBatchSize: number;
+  outboxRetryDelayMs: number;
+};
+
+const runtimeEnvironmentSchema = z.enum(["development", "test", "production"]);
+
+const deploymentTypeSchema = z.enum([
+  "saas_shared",
+  "saas_isolated",
+  "on_prem"
+]);
+
+const logLevelSchema = z.enum(["debug", "info", "warn", "error"]);
+
+const emptyToUndefined = (value: unknown): unknown => {
+  if (typeof value === "string" && value.trim() === "") {
+    return undefined;
+  }
+
+  return value;
+};
+
+const optionalUrl = z.preprocess(emptyToUndefined, z.string().url().optional());
+
+const optionalNonEmptyString = z.preprocess(
+  emptyToUndefined,
+  z.string().min(1).optional()
+);
+
+const optionalInteger = (minimum: number, maximum: number) =>
+  z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().int().min(minimum).max(maximum).optional()
+  );
+
+const optionalBoolean = z.preprocess(
+  emptyToUndefined,
+  z
+    .enum(["true", "false", "1", "0"])
+    .optional()
+    .transform((value) => {
+      if (value === undefined) {
+        return undefined;
+      }
+
+      return value === "true" || value === "1";
+    })
+);
+
+const baseEnvSchema = z.object({
+  NODE_ENV: z.preprocess(emptyToUndefined, runtimeEnvironmentSchema.optional()),
+  HULEE_DEPLOYMENT_TYPE: z.preprocess(
+    emptyToUndefined,
+    deploymentTypeSchema.optional()
+  ),
+  HULEE_LOG_LEVEL: z.preprocess(emptyToUndefined, logLevelSchema.optional()),
+  DATABASE_URL: optionalUrl
+});
+
+const apiEnvSchema = baseEnvSchema.extend({
+  HULEE_API_HOST: optionalNonEmptyString,
+  HULEE_API_PORT: optionalInteger(1, 65_535),
+  HULEE_PUBLIC_BASE_URL: optionalUrl,
+  HULEE_PUBLIC_WEBHOOK_BASE_URL: optionalUrl,
+  HULEE_SSE_ENABLED: optionalBoolean
+});
+
+const workerEnvSchema = baseEnvSchema.extend({
+  HULEE_WORKER_POLL_INTERVAL_MS: optionalInteger(100, 60_000),
+  HULEE_OUTBOX_BATCH_SIZE: optionalInteger(1, 500),
+  HULEE_OUTBOX_RETRY_DELAY_MS: optionalInteger(100, 3_600_000)
+});
+
+const issueMessages: Record<string, string> = {
+  NODE_ENV: "must be development, test or production",
+  HULEE_DEPLOYMENT_TYPE: "must be saas_shared, saas_isolated or on_prem",
+  HULEE_LOG_LEVEL: "must be debug, info, warn or error",
+  DATABASE_URL: "must be a valid URL and is required in production",
+  HULEE_API_HOST: "must not be empty",
+  HULEE_API_PORT: "must be an integer from 1 to 65535",
+  HULEE_PUBLIC_BASE_URL: "must be a valid URL",
+  HULEE_PUBLIC_WEBHOOK_BASE_URL: "must be a valid URL",
+  HULEE_SSE_ENABLED: "must be true, false, 1 or 0",
+  HULEE_WORKER_POLL_INTERVAL_MS:
+    "must be an integer from 100 to 60000 milliseconds",
+  HULEE_OUTBOX_BATCH_SIZE: "must be an integer from 1 to 500",
+  HULEE_OUTBOX_RETRY_DELAY_MS:
+    "must be an integer from 100 to 3600000 milliseconds"
+};
+
+function zodIssuesToConfigIssues(issues: z.core.$ZodIssue[]): ConfigIssue[] {
+  return issues.map((issue) => {
+    const variable = String(issue.path[0] ?? "UNKNOWN");
+
+    return {
+      variable,
+      message: issueMessages[variable] ?? "has an invalid value"
+    };
+  });
+}
+
+function buildBaseConfig(
+  appName: HuleeAppName,
+  env: z.infer<typeof baseEnvSchema>
+): BaseAppConfig {
+  const nodeEnv = env.NODE_ENV ?? "development";
+  const issues: ConfigIssue[] = [];
+
+  if (nodeEnv === "production" && env.DATABASE_URL === undefined) {
+    issues.push({
+      variable: "DATABASE_URL",
+      message: "must be a valid URL and is required in production"
+    });
+  }
+
+  if (issues.length > 0) {
+    throw new ConfigError(appName, issues);
+  }
+
+  return {
+    appName,
+    nodeEnv,
+    deploymentType: env.HULEE_DEPLOYMENT_TYPE ?? "on_prem",
+    logLevel: env.HULEE_LOG_LEVEL ?? "info",
+    databaseUrl: env.DATABASE_URL ?? defaultLocalDatabaseUrl
+  };
+}
+
+export function loadApiConfig(env: EnvSource = process.env): ApiConfig {
+  const result = apiEnvSchema.safeParse(env);
+
+  if (!result.success) {
+    throw new ConfigError("api", zodIssuesToConfigIssues(result.error.issues));
+  }
+
+  return {
+    ...buildBaseConfig("api", result.data),
+    appName: "api",
+    host: result.data.HULEE_API_HOST ?? "0.0.0.0",
+    port: result.data.HULEE_API_PORT ?? 3000,
+    publicBaseUrl: result.data.HULEE_PUBLIC_BASE_URL,
+    publicWebhookBaseUrl:
+      result.data.HULEE_PUBLIC_WEBHOOK_BASE_URL ??
+      result.data.HULEE_PUBLIC_BASE_URL,
+    sseEnabled: result.data.HULEE_SSE_ENABLED ?? true
+  };
+}
+
+export function loadWorkerConfig(env: EnvSource = process.env): WorkerConfig {
+  const result = workerEnvSchema.safeParse(env);
+
+  if (!result.success) {
+    throw new ConfigError(
+      "worker",
+      zodIssuesToConfigIssues(result.error.issues)
+    );
+  }
+
+  return {
+    ...buildBaseConfig("worker", result.data),
+    appName: "worker",
+    pollIntervalMs: result.data.HULEE_WORKER_POLL_INTERVAL_MS ?? 1_000,
+    outboxBatchSize: result.data.HULEE_OUTBOX_BATCH_SIZE ?? 50,
+    outboxRetryDelayMs: result.data.HULEE_OUTBOX_RETRY_DELAY_MS ?? 30_000
+  };
+}
+
+export function loadLocalEnvFile(input?: {
+  cwd?: string;
+  fileName?: string;
+}): EnvSource {
+  const filePath = findEnvFile({
+    cwd: input?.cwd ?? process.cwd(),
+    fileName: input?.fileName ?? "env.local"
+  });
+
+  if (filePath === null) {
+    return {};
+  }
+
+  return parseEnvFile(readFileSync(filePath, "utf8"));
+}
+
+export function mergeEnvSources(...sources: readonly EnvSource[]): EnvSource {
+  return Object.assign({}, ...sources);
+}
+
+function parseEnvFile(source: string): EnvSource {
+  const env: EnvSource = {};
+
+  for (const rawLine of source.split(/\r?\n/)) {
+    const line = rawLine.trim();
+
+    if (line.length === 0 || line.startsWith("#")) {
+      continue;
+    }
+
+    const separatorIndex = line.indexOf("=");
+
+    if (separatorIndex <= 0) {
+      continue;
+    }
+
+    const key = line.slice(0, separatorIndex).trim();
+    const value = stripEnvQuotes(line.slice(separatorIndex + 1).trim());
+
+    if (key.length > 0) {
+      env[key] = value;
+    }
+  }
+
+  return env;
+}
+
+function findEnvFile(input: { cwd: string; fileName: string }): string | null {
+  let currentDirectory = resolve(input.cwd);
+
+  while (true) {
+    const candidate = resolve(currentDirectory, input.fileName);
+
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+
+    const parentDirectory = dirname(currentDirectory);
+
+    if (parentDirectory === currentDirectory) {
+      return null;
+    }
+
+    currentDirectory = parentDirectory;
+  }
+}
+
+function stripEnvQuotes(value: string): string {
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    return value.slice(1, -1);
+  }
+
+  return value;
+}

@@ -1,0 +1,100 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/hulee.chat
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+
+      - name: Log in to GHCR for push
+        run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push image
+        run: |
+          docker build \
+            -f deploy/docker/Dockerfile \
+            -t "$IMAGE_NAME:${{ github.sha }}" \
+            -t "$IMAGE_NAME:latest" \
+            .
+          docker push "$IMAGE_NAME:${{ github.sha }}"
+          docker push "$IMAGE_NAME:latest"
+
+      - name: Configure SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ vars.DEPLOY_PORT }}" -H "${{ vars.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Preflight server
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            -p "${{ vars.DEPLOY_PORT }}" \
+            "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" \
+            "test -d '${{ vars.DEPLOY_PATH }}' && test -f '${{ vars.DEPLOY_PATH }}/.env' && docker network inspect web >/dev/null"
+
+      - name: Upload compose files
+        run: |
+          scp -i ~/.ssh/deploy_key -P "${{ vars.DEPLOY_PORT }}" \
+            deploy/production/docker-compose.yml \
+            "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}:${{ vars.DEPLOY_PATH }}/docker-compose.yml"
+          scp -i ~/.ssh/deploy_key -P "${{ vars.DEPLOY_PORT }}" \
+            deploy/production/env.example \
+            "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}:${{ vars.DEPLOY_PATH }}/env.example"
+
+      - name: Write release environment
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            -p "${{ vars.DEPLOY_PORT }}" \
+            "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" \
+            "cat > '${{ vars.DEPLOY_PATH }}/.release.env'" <<EOF
+          HULEE_IMAGE=$IMAGE_NAME:${{ github.sha }}
+          HULEE_PUBLIC_BASE_URL=${{ vars.HULEE_PUBLIC_BASE_URL }}
+          HULEE_PUBLIC_WEBHOOK_BASE_URL=${{ vars.HULEE_PUBLIC_WEBHOOK_BASE_URL }}
+          EOF
+
+      - name: Deploy on server
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            -p "${{ vars.DEPLOY_PORT }}" \
+            "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" <<'EOF'
+          set -euo pipefail
+          cd '${{ vars.DEPLOY_PATH }}'
+          printf '%s' '${{ secrets.GHCR_TOKEN }}' | docker login ghcr.io -u '${{ github.repository_owner }}' --password-stdin >/dev/null
+          docker compose --env-file .env --env-file .release.env -f docker-compose.yml pull
+          docker compose --env-file .env --env-file .release.env -f docker-compose.yml run --rm migrate
+          docker compose --env-file .env --env-file .release.env -f docker-compose.yml up -d postgres api worker web
+          docker compose --env-file .env --env-file .release.env -f docker-compose.yml ps
+          EOF
+
+      - name: Smoke internal API
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            -p "${{ vars.DEPLOY_PORT }}" \
+            "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" \
+            "docker exec hulee_chat_api node -e \"fetch('http://127.0.0.1:3000/internal/v1/health').then(async r => { if (!r.ok) process.exit(1); console.log(await r.text()); }).catch(() => process.exit(1))\""

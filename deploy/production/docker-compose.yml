@@ -1,0 +1,115 @@
+name: hulee-chat
+
+x-app-base: &app-base
+  image: ${HULEE_IMAGE:?HULEE_IMAGE is required}
+  env_file:
+    - .env
+  environment:
+    NODE_ENV: production
+    DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+    HULEE_DEPLOYMENT_TYPE: ${HULEE_DEPLOYMENT_TYPE:-saas_shared}
+    HULEE_LOG_LEVEL: ${HULEE_LOG_LEVEL:-info}
+    HULEE_PUBLIC_BASE_URL: ${HULEE_PUBLIC_BASE_URL:?HULEE_PUBLIC_BASE_URL is required}
+    HULEE_PUBLIC_WEBHOOK_BASE_URL: ${HULEE_PUBLIC_WEBHOOK_BASE_URL:?HULEE_PUBLIC_WEBHOOK_BASE_URL is required}
+  restart: unless-stopped
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: hulee_chat_postgres
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-hulee}
+      POSTGRES_USER: ${POSTGRES_USER:-hulee}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  migrate:
+    <<: *app-base
+    container_name: hulee_chat_migrate
+    restart: "no"
+    command: ["pnpm", "db:migrate"]
+
+  seed:
+    <<: *app-base
+    container_name: hulee_chat_seed
+    restart: "no"
+    profiles:
+      - bootstrap
+    command: ["pnpm", "db:seed:mvp"]
+
+  api:
+    <<: *app-base
+    container_name: hulee_chat_api
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      HULEE_DEPLOYMENT_TYPE: ${HULEE_DEPLOYMENT_TYPE:-saas_shared}
+      HULEE_LOG_LEVEL: ${HULEE_LOG_LEVEL:-info}
+      HULEE_PUBLIC_BASE_URL: ${HULEE_PUBLIC_BASE_URL:?HULEE_PUBLIC_BASE_URL is required}
+      HULEE_PUBLIC_WEBHOOK_BASE_URL: ${HULEE_PUBLIC_WEBHOOK_BASE_URL:?HULEE_PUBLIC_WEBHOOK_BASE_URL is required}
+      HULEE_API_HOST: 0.0.0.0
+      HULEE_API_PORT: 3000
+    command: ["pnpm", "--filter", "@hulee/api", "start"]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "fetch(''http://127.0.0.1:3000/internal/v1/health'').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"'
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  worker:
+    <<: *app-base
+    container_name: hulee_chat_worker
+    command: ["pnpm", "--filter", "@hulee/worker", "start"]
+
+  web:
+    <<: *app-base
+    container_name: hulee_chat_web
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      HULEE_DEPLOYMENT_TYPE: ${HULEE_DEPLOYMENT_TYPE:-saas_shared}
+      HULEE_LOG_LEVEL: ${HULEE_LOG_LEVEL:-info}
+      HULEE_PUBLIC_BASE_URL: ${HULEE_PUBLIC_BASE_URL:?HULEE_PUBLIC_BASE_URL is required}
+      HULEE_PUBLIC_WEBHOOK_BASE_URL: ${HULEE_PUBLIC_WEBHOOK_BASE_URL:?HULEE_PUBLIC_WEBHOOK_BASE_URL is required}
+      HULEE_INTERNAL_API_BASE_URL: http://api:3000
+      HULEE_WEB_TENANT_ID: ${HULEE_WEB_TENANT_ID:-tenant_local_1}
+      HULEE_WEB_EMPLOYEE_ID: ${HULEE_WEB_EMPLOYEE_ID:-employee:local-dev}
+    command: ["pnpm", "--filter", "@hulee/web", "start"]
+    networks:
+      - default
+      - web
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "fetch(''http://127.0.0.1:3000/'').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"'
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  postgres-data:
+
+networks:
+  web:
+    external: true

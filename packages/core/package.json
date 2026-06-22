@@ -1,0 +1,12 @@
+{
+  "name": "@hulee/core",
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@hulee/contracts": "workspace:*",
+    "@hulee/entitlements": "workspace:*"
+  }
+}

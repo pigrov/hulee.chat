@@ -1,0 +1,14 @@
+{
+  "name": "@hulee/db",
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@hulee/contracts": "workspace:*",
+    "@hulee/core": "workspace:*",
+    "drizzle-orm": "^0.45.2",
+    "pg": "^8.22.0"
+  }
+}

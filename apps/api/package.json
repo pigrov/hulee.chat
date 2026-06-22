@@ -1,0 +1,21 @@
+{
+  "name": "@hulee/api",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/dev-server.ts",
+    "start": "tsx src/dev-server.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hulee/branding": "workspace:*",
+    "@hulee/config": "workspace:*",
+    "@hulee/contracts": "workspace:*",
+    "@hulee/core": "workspace:*",
+    "@hulee/db": "workspace:*",
+    "@hulee/entitlements": "workspace:*",
+    "@hulee/modules": "workspace:*",
+    "@hulee/observability": "workspace:*"
+  }
+}

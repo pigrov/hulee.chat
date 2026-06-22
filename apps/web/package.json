@@ -1,0 +1,27 @@
+{
+  "name": "@hulee/web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start --hostname 0.0.0.0 --port 3000",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hulee/app-shell": "workspace:*",
+    "@hulee/branding": "workspace:*",
+    "@hulee/contracts": "workspace:*",
+    "@hulee/i18n": "workspace:*",
+    "@hulee/ui": "workspace:*",
+    "lucide-react": "^1.21.0",
+    "next": "^16.2.9",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3"
+  }
+}

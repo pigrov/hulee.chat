@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ESNext", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "preserve",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@hulee/app-shell": ["packages/app-shell/src/index.ts"],
+      "@hulee/branding": ["packages/branding/src/index.ts"],
+      "@hulee/config": ["packages/config/src/index.ts"],
+      "@hulee/contracts": ["packages/contracts/src/index.ts"],
+      "@hulee/core": ["packages/core/src/index.ts"],
+      "@hulee/db": ["packages/db/src/index.ts"],
+      "@hulee/entitlements": ["packages/entitlements/src/index.ts"],
+      "@hulee/i18n": ["packages/i18n/src/index.ts"],
+      "@hulee/modules": ["packages/modules/src/index.ts"],
+      "@hulee/native-bridge": ["packages/native-bridge/src/index.ts"],
+      "@hulee/observability": ["packages/observability/src/index.ts"],
+      "@hulee/testing": ["packages/testing/src/index.ts"],
+      "@hulee/ui": ["packages/ui/src/index.ts"]
+    }
+  }
+}

@@ -1,0 +1,10 @@
+node_modules
+dist
+coverage
+.next
+apps/*/.next
+pnpm-lock.yaml
+.dockerignore
+deploy/docker/Dockerfile
+deploy/nginx/*.conf
+deploy/production/env.example

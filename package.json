@@ -1,0 +1,50 @@
+{
+  "name": "hulee",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "packageManager": "pnpm@10.32.1",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=10.0.0"
+  },
+  "scripts": {
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm db:check && pnpm i18n:check && pnpm encoding:check && pnpm branding:check && pnpm native:check",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "api:dev": "pnpm --filter @hulee/api dev",
+    "infra:up": "docker compose -f infra/docker-compose/docker-compose.yml up -d",
+    "infra:down": "docker compose -f infra/docker-compose/docker-compose.yml down",
+    "infra:logs": "docker compose -f infra/docker-compose/docker-compose.yml logs",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:seed:mvp": "tsx scripts/db/seed-mvp.ts",
+    "web:dev": "pnpm --filter @hulee/web exec next dev --hostname 127.0.0.1 --port 3001",
+    "db:check": "node scripts/checks/db-check.mjs",
+    "i18n:check": "node scripts/checks/i18n-check.mjs",
+    "encoding:check": "node scripts/checks/encoding-check.mjs",
+    "branding:check": "node scripts/checks/branding-check.mjs",
+    "native:check": "node scripts/checks/native-check.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@types/node": "^26.0.0",
+    "@types/pg": "^8.20.0",
+    "eslint": "^9.39.1",
+    "globals": "^16.5.0",
+    "prettier": "^3.6.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.3",
+    "vitest": "^4.0.8"
+  },
+  "dependencies": {
+    "drizzle-kit": "^0.31.10",
+    "drizzle-orm": "^0.45.2",
+    "pg": "^8.22.0",
+    "zod": "^4.4.3"
+  }
+}

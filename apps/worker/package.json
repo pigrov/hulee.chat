@@ -1,0 +1,17 @@
+{
+  "name": "@hulee/worker",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/runner.ts"
+  },
+  "dependencies": {
+    "@hulee/config": "workspace:*",
+    "@hulee/contracts": "workspace:*",
+    "@hulee/core": "workspace:*",
+    "@hulee/db": "workspace:*",
+    "@hulee/modules": "workspace:*",
+    "@hulee/observability": "workspace:*"
+  }
+}

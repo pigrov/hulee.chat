@@ -1,0 +1,12 @@
+{
+  "name": "@hulee/app-shell",
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@hulee/branding": "workspace:*",
+    "@hulee/contracts": "workspace:*"
+  }
+}

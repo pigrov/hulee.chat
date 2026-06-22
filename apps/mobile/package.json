@@ -1,0 +1,14 @@
+{
+  "name": "@hulee/mobile",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "dependencies": {
+    "@hulee/app-shell": "workspace:*",
+    "@hulee/branding": "workspace:*",
+    "@hulee/contracts": "workspace:*",
+    "@hulee/i18n": "workspace:*",
+    "@hulee/native-bridge": "workspace:*",
+    "@hulee/ui": "workspace:*"
+  }
+}

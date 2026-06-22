@@ -1,0 +1,49 @@
+export type TableScope = "global" | "tenant";
+
+export type TableDefinition = {
+  name: string;
+  scope: TableScope;
+  requiresTenantId: boolean;
+};
+
+export const initialTables = [
+  { name: "tenants", scope: "global", requiresTenantId: false },
+  { name: "tenant_domains", scope: "global", requiresTenantId: false },
+  { name: "platform_admin_accounts", scope: "global", requiresTenantId: false },
+  { name: "module_catalog", scope: "global", requiresTenantId: false },
+  { name: "tenant_settings", scope: "tenant", requiresTenantId: true },
+  { name: "tenant_brand_profiles", scope: "tenant", requiresTenantId: true },
+  { name: "tenant_brand_assets", scope: "tenant", requiresTenantId: true },
+  { name: "tenant_modules", scope: "tenant", requiresTenantId: true },
+  { name: "tenant_entitlements", scope: "tenant", requiresTenantId: true },
+  { name: "tenant_usage_policies", scope: "tenant", requiresTenantId: true },
+  { name: "usage_records", scope: "tenant", requiresTenantId: true },
+  { name: "usage_period_summaries", scope: "tenant", requiresTenantId: true },
+  { name: "tenant_api_keys", scope: "tenant", requiresTenantId: true },
+  { name: "accounts", scope: "tenant", requiresTenantId: true },
+  { name: "employees", scope: "tenant", requiresTenantId: true },
+  { name: "employee_roles", scope: "tenant", requiresTenantId: true },
+  { name: "teams", scope: "tenant", requiresTenantId: true },
+  { name: "clients", scope: "tenant", requiresTenantId: true },
+  { name: "client_contacts", scope: "tenant", requiresTenantId: true },
+  { name: "conversations", scope: "tenant", requiresTenantId: true },
+  {
+    name: "conversation_participants",
+    scope: "tenant",
+    requiresTenantId: true
+  },
+  { name: "messages", scope: "tenant", requiresTenantId: true },
+  {
+    name: "message_delivery_attempts",
+    scope: "tenant",
+    requiresTenantId: true
+  },
+  { name: "files", scope: "tenant", requiresTenantId: true },
+  { name: "event_store", scope: "tenant", requiresTenantId: true },
+  { name: "outbox", scope: "tenant", requiresTenantId: true },
+  { name: "audit_log", scope: "tenant", requiresTenantId: true },
+  { name: "webhook_subscriptions", scope: "tenant", requiresTenantId: true },
+  { name: "integration_diagnostics", scope: "tenant", requiresTenantId: true },
+  { name: "notification_endpoints", scope: "tenant", requiresTenantId: true },
+  { name: "notification_events", scope: "tenant", requiresTenantId: true }
+] as const satisfies readonly TableDefinition[];

@@ -1,0 +1,11 @@
+{
+  "name": "@hulee/ui",
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@hulee/contracts": "workspace:*"
+  }
+}

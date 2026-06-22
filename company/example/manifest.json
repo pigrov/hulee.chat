@@ -1,0 +1,6 @@
+{
+  "id": "company-example",
+  "compatibleCore": "0.0.x",
+  "modules": [],
+  "brandProfile": "theme.tokens.json"
+}
