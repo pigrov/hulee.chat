@@ -10,12 +10,29 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 
+import { AccessDeniedPage } from "../../src/access-denied";
+import {
+  canPlatformAdmin,
+  navigationAccessFromSession,
+  resolveWebAccessSession
+} from "../../src/access";
 import { AppFrame, DetailItem } from "../../src/app-chrome";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export default function PlatformAdminPage(): ReactNode {
+  const access = resolveWebAccessSession();
+
+  if (!canPlatformAdmin(access)) {
+    return (
+      <AccessDeniedPage
+        current="platform-admin"
+        navigationAccess={navigationAccessFromSession(access)}
+      />
+    );
+  }
+
   const { t } = createTranslator("ru");
   const deploymentType = process.env.HULEE_DEPLOYMENT_TYPE ?? "saas_shared";
   const publicBaseUrl =
@@ -26,6 +43,7 @@ export default function PlatformAdminPage(): ReactNode {
       brand={defaultBrandProfile}
       current="platform-admin"
       frameClassName="adminFrame"
+      navigationAccess={navigationAccessFromSession(access)}
       t={t}
     >
       <section className="adminWorkspace" aria-labelledby="platform-title">

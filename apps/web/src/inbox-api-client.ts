@@ -11,14 +11,14 @@ import {
   type InternalTelegramIntegrationUpdateRequest
 } from "@hulee/contracts";
 
+import { buildInternalApiHeaders } from "./access";
+
 export type InboxConversation = InternalInboxConversation;
 export type InboxMessage = InternalInboxMessage;
 export type InboxViewModel = InternalInboxViewResponse;
 export type TelegramIntegrationViewModel = InternalTelegramIntegrationResponse;
 
 const defaultInternalApiBaseUrl = "http://127.0.0.1:4000";
-const defaultTenantId = "tenant_local_1";
-
 export async function loadInboxViewModel(input?: {
   selectedConversationId?: string;
 }): Promise<InboxViewModel> {
@@ -171,12 +171,4 @@ async function postTelegramIntegrationCommand(
 
 function resolveInternalApiBaseUrl(): string {
   return process.env.HULEE_INTERNAL_API_BASE_URL ?? defaultInternalApiBaseUrl;
-}
-
-function buildInternalApiHeaders(): Record<string, string> {
-  return {
-    "x-hulee-tenant-id": process.env.HULEE_WEB_TENANT_ID ?? defaultTenantId,
-    "x-hulee-employee-id":
-      process.env.HULEE_WEB_EMPLOYEE_ID ?? "employee:local-dev"
-  };
 }

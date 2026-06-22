@@ -2,6 +2,12 @@ import { createTranslator } from "@hulee/i18n";
 import { Plug, ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
 
+import { AccessDeniedPage } from "../../../src/access-denied";
+import {
+  canTenantPermission,
+  navigationAccessFromSession,
+  resolveWebAccessSession
+} from "../../../src/access";
 import { AppFrame, DetailItem, SlotMount } from "../../../src/app-chrome";
 import {
   formatBoolean,
@@ -18,6 +24,17 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export default async function IntegrationsAdminPage(): Promise<ReactNode> {
+  const access = resolveWebAccessSession();
+
+  if (!canTenantPermission(access, "modules.manage")) {
+    return (
+      <AccessDeniedPage
+        current="tenant-admin"
+        navigationAccess={navigationAccessFromSession(access)}
+      />
+    );
+  }
+
   const [model, telegramIntegration] = await Promise.all([
     loadInboxViewModel(),
     loadTelegramIntegration()
@@ -29,6 +46,7 @@ export default async function IntegrationsAdminPage(): Promise<ReactNode> {
       brand={model.tenant.brand}
       current="tenant-admin"
       frameClassName="adminFrame"
+      navigationAccess={navigationAccessFromSession(access)}
       t={t}
     >
       <section className="adminWorkspace" aria-labelledby="admin-title">

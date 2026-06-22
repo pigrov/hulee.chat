@@ -13,6 +13,7 @@
     "@hulee/app-shell": "workspace:*",
     "@hulee/branding": "workspace:*",
     "@hulee/contracts": "workspace:*",
+    "@hulee/core": "workspace:*",
     "@hulee/i18n": "workspace:*",
     "@hulee/ui": "workspace:*",
     "lucide-react": "^1.21.0",

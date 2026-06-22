@@ -13,7 +13,7 @@ import {
   internalTelegramIntegrationUpdateRequestSchema,
   isPlatformErrorCode
 } from "@hulee/contracts";
-import { CoreError, type Permission } from "@hulee/core";
+import { CoreError, isPermission, type Permission } from "@hulee/core";
 import type { Logger } from "@hulee/observability";
 
 import type {
@@ -159,16 +159,16 @@ export function createLocalDevInternalSessionResolver(input?: {
           | undefined) ??
         input?.employeeId ??
         (`employee:${tenantId}:local-dev` as EmployeeId);
+      const headerPermissions = parsePermissionsHeader(
+        headerValue(request.headers, "x-hulee-permissions")
+      );
 
       return {
         requestId,
         tenantId,
         employeeId,
-        permissions: input?.permissions ?? [
-          "inbox.read",
-          "message.reply",
-          "modules.manage"
-        ]
+        permissions: input?.permissions ??
+          headerPermissions ?? ["inbox.read", "message.reply", "modules.manage"]
       };
     }
   };
@@ -373,6 +373,22 @@ function headerValue(
   }
 
   return undefined;
+}
+
+function parsePermissionsHeader(
+  value: string | undefined
+): readonly Permission[] | undefined {
+  if (value === undefined || value.trim().length === 0) {
+    return undefined;
+  }
+
+  const parsed = value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+  const permissions = parsed.filter(isPermission);
+
+  return permissions.length > 0 ? permissions : [];
 }
 
 function platformErrorCodeFromUnknown(error: unknown): PlatformErrorCode {

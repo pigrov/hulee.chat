@@ -656,6 +656,18 @@ textarea {
   line-height: 1.25;
 }
 
+.accessDenied {
+  display: flex;
+  max-width: 560px;
+  align-items: flex-start;
+  gap: 14px;
+  margin: 24px;
+  padding: 18px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-default);
+}
+
 @media (max-width: 1100px) {
   .appFrame {
     grid-template-columns: 64px minmax(240px, 320px) minmax(0, 1fr);

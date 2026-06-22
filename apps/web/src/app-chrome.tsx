@@ -13,6 +13,11 @@ const emptySlotRegistry = createSlotRegistry([]);
 
 export type AppNavigationSection = "inbox" | "tenant-admin" | "platform-admin";
 
+export type NavigationAccess = {
+  tenantAdmin: boolean;
+  platformAdmin: boolean;
+};
+
 type Translator = ReturnType<typeof createTranslator>["t"];
 
 type BrandProfileView = {
@@ -26,12 +31,14 @@ export function AppFrame({
   children,
   current,
   frameClassName,
+  navigationAccess,
   t
 }: {
   brand: BrandProfileView;
   children: ReactNode;
   current: AppNavigationSection;
   frameClassName?: string;
+  navigationAccess?: NavigationAccess;
   t: Translator;
 }): ReactNode {
   const productName = t("app.name", {
@@ -53,22 +60,26 @@ export function AppFrame({
         >
           <Inbox size={20} aria-hidden="true" />
         </Link>
-        <Link
-          className="railButton"
-          href="/admin/integrations"
-          aria-label={t("navigation.admin")}
-          aria-current={current === "tenant-admin" ? "page" : undefined}
-        >
-          <Settings size={20} aria-hidden="true" />
-        </Link>
-        <Link
-          className="railButton"
-          href="/platform"
-          aria-label={t("navigation.platformAdmin")}
-          aria-current={current === "platform-admin" ? "page" : undefined}
-        >
-          <ShieldCheck size={20} aria-hidden="true" />
-        </Link>
+        {(navigationAccess?.tenantAdmin ?? true) ? (
+          <Link
+            className="railButton"
+            href="/admin/integrations"
+            aria-label={t("navigation.admin")}
+            aria-current={current === "tenant-admin" ? "page" : undefined}
+          >
+            <Settings size={20} aria-hidden="true" />
+          </Link>
+        ) : null}
+        {(navigationAccess?.platformAdmin ?? true) ? (
+          <Link
+            className="railButton"
+            href="/platform"
+            aria-label={t("navigation.platformAdmin")}
+            aria-current={current === "platform-admin" ? "page" : undefined}
+          >
+            <ShieldCheck size={20} aria-hidden="true" />
+          </Link>
+        ) : null}
       </nav>
       {children}
     </main>

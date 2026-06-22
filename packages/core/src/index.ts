@@ -3,7 +3,13 @@ export type { TenantScope } from "./domain-events";
 export { CoreError } from "./errors";
 export { createSequentialIdFactory } from "./ids";
 export type { IdFactory } from "./ids";
-export { assertEmployeeCan, hasPermission } from "./permissions";
+export {
+  assertEmployeeCan,
+  hasPermission,
+  isEmployeeRole,
+  isPermission,
+  permissionsForRoles
+} from "./permissions";
 export type { Employee, EmployeeRole, Permission } from "./permissions";
 export { createExternalChannelCommandService } from "./external-channel-command-service";
 export type {

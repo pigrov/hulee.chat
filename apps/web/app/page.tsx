@@ -11,6 +11,12 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { sendReplyAction } from "../src/actions";
+import { AccessDeniedPage } from "../src/access-denied";
+import {
+  canTenantPermission,
+  navigationAccessFromSession,
+  resolveWebAccessSession
+} from "../src/access";
 import { AppFrame, DetailItem, SlotMount } from "../src/app-chrome";
 import { formatDateTime } from "../src/formatting";
 import {
@@ -27,6 +33,17 @@ export default async function InboxPage({
 }: {
   searchParams?: Promise<{ conversationId?: string }>;
 }): Promise<ReactNode> {
+  const access = resolveWebAccessSession();
+
+  if (!canTenantPermission(access, "inbox.read")) {
+    return (
+      <AccessDeniedPage
+        current="inbox"
+        navigationAccess={navigationAccessFromSession(access)}
+      />
+    );
+  }
+
   const resolvedSearchParams = await searchParams;
   const model = await loadInboxViewModel({
     selectedConversationId: resolvedSearchParams?.conversationId
@@ -38,7 +55,12 @@ export default async function InboxPage({
   });
 
   return (
-    <AppFrame brand={model.tenant.brand} current="inbox" t={t}>
+    <AppFrame
+      brand={model.tenant.brand}
+      current="inbox"
+      navigationAccess={navigationAccessFromSession(access)}
+      t={t}
+    >
       <section className="queuePane" aria-labelledby="inbox-title">
         <div className="paneHeader">
           <div className="paneHeaderRow">

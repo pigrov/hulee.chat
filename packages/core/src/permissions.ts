@@ -11,6 +11,15 @@ export type Permission =
   | "inbox.read"
   | "message.reply";
 
+const employeeRoles = ["tenant_admin", "supervisor", "agent"] as const;
+const permissions = [
+  "tenant.manage",
+  "employees.manage",
+  "modules.manage",
+  "inbox.read",
+  "message.reply"
+] as const satisfies readonly Permission[];
+
 const rolePermissions: Record<EmployeeRole, readonly Permission[]> = {
   tenant_admin: [
     "tenant.manage",
@@ -31,6 +40,28 @@ export type Employee = {
   roles: readonly EmployeeRole[];
   createdAt: string;
 };
+
+export function isEmployeeRole(value: string): value is EmployeeRole {
+  return employeeRoles.includes(value as EmployeeRole);
+}
+
+export function isPermission(value: string): value is Permission {
+  return permissions.includes(value as Permission);
+}
+
+export function permissionsForRoles(
+  roles: readonly EmployeeRole[]
+): readonly Permission[] {
+  const result = new Set<Permission>();
+
+  for (const role of roles) {
+    for (const permission of rolePermissions[role]) {
+      result.add(permission);
+    }
+  }
+
+  return [...result];
+}
 
 export function hasPermission(
   employee: Employee,

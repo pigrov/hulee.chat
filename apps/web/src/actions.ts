@@ -10,8 +10,11 @@ import {
   setTelegramWebhook,
   updateTelegramIntegration
 } from "./inbox-api-client";
+import { assertWebTenantPermission } from "./access";
 
 export async function sendReplyAction(formData: FormData): Promise<void> {
+  assertWebTenantPermission("message.reply");
+
   const conversationId = readRequiredFormString(formData, "conversationId");
   const text = readRequiredFormString(formData, "text").trim();
 
@@ -31,6 +34,8 @@ export async function sendReplyAction(formData: FormData): Promise<void> {
 export async function updateTelegramIntegrationAction(
   formData: FormData
 ): Promise<void> {
+  assertWebTenantPermission("modules.manage");
+
   const channelExternalId = readRequiredFormString(
     formData,
     "channelExternalId"
@@ -62,16 +67,22 @@ export async function updateTelegramIntegrationAction(
 }
 
 export async function refreshTelegramDiagnosticsAction(): Promise<void> {
+  assertWebTenantPermission("modules.manage");
+
   await refreshTelegramDiagnostics();
   revalidateTelegramIntegrationPaths();
 }
 
 export async function setTelegramWebhookAction(): Promise<void> {
+  assertWebTenantPermission("modules.manage");
+
   await setTelegramWebhook();
   revalidateTelegramIntegrationPaths();
 }
 
 export async function deleteTelegramWebhookAction(): Promise<void> {
+  assertWebTenantPermission("modules.manage");
+
   await deleteTelegramWebhook();
   revalidateTelegramIntegrationPaths();
 }

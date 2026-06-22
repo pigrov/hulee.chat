@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   createInternalApiHandler,
+  createLocalDevInternalSessionResolver,
   type InternalApiSession
 } from "./internal-api-handler";
 
@@ -332,6 +333,38 @@ describe("internal API handler", () => {
       path: "/internal/v1/integrations/telegram"
     });
 
+    expect(response.status).toBe(403);
+    expect(response.body).toMatchObject({
+      error: {
+        code: "permission.denied"
+      }
+    });
+  });
+
+  it("honors permissions passed by the internal web client headers", async () => {
+    const localDevResolver = createLocalDevInternalSessionResolver();
+    const resolvedSession = await localDevResolver.resolve(
+      {
+        method: "GET",
+        path: "/internal/v1/integrations/telegram",
+        headers: {
+          "x-hulee-tenant-id": tenantId,
+          "x-hulee-employee-id": employeeId,
+          "x-hulee-permissions": "inbox.read,message.reply"
+        }
+      },
+      "request-1"
+    );
+    const guardedHandler = createHandler({ session: resolvedSession }).handler;
+    const response = await guardedHandler.handle({
+      method: "GET",
+      path: "/internal/v1/integrations/telegram"
+    });
+
+    expect(resolvedSession?.permissions).toEqual([
+      "inbox.read",
+      "message.reply"
+    ]);
     expect(response.status).toBe(403);
     expect(response.body).toMatchObject({
       error: {

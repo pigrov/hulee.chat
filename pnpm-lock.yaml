@@ -132,6 +132,9 @@ importers:
       '@hulee/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@hulee/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@hulee/i18n':
         specifier: workspace:*
         version: link:../../packages/i18n
