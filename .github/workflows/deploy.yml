@@ -80,9 +80,10 @@ jobs:
 
       - name: Deploy on server
         run: |
-          ssh -i ~/.ssh/deploy_key \
+          ssh -T -i ~/.ssh/deploy_key \
             -p "${{ vars.DEPLOY_PORT }}" \
-            "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" <<'EOF'
+            "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" \
+            "bash -s" <<'EOF'
           set -euo pipefail
           cd '${{ vars.DEPLOY_PATH }}'
           printf '%s' '${{ secrets.GHCR_TOKEN }}' | docker login ghcr.io -u '${{ github.repository_owner }}' --password-stdin >/dev/null
@@ -94,9 +95,10 @@ jobs:
 
       - name: Smoke internal API
         run: |
-          ssh -i ~/.ssh/deploy_key \
+          ssh -T -i ~/.ssh/deploy_key \
             -p "${{ vars.DEPLOY_PORT }}" \
-            "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" <<'EOF'
+            "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" \
+            "bash -s" <<'EOF'
           set -euo pipefail
           cd '${{ vars.DEPLOY_PATH }}'
           for attempt in $(seq 1 30); do
