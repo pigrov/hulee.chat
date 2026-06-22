@@ -22,6 +22,7 @@ import {
   type TelegramBotApiClient,
   type TelegramBotApiSettings
 } from "@hulee/modules";
+import { randomBytes, randomUUID } from "node:crypto";
 
 export type InternalIntegrationContext = {
   requestId: string;
@@ -59,7 +60,7 @@ export type SecretWriter = {
   upsertSecret(input: {
     tenantId: TenantId;
     secretRef: string;
-    purpose: "telegram.bot_token";
+    purpose: "telegram.bot_token" | "telegram.webhook_secret_token";
     plainText: string;
     updatedAt: Date;
   }): Promise<void>;
@@ -76,6 +77,11 @@ export type InternalIntegrationServiceOptions = {
   botApiClientFactory?: TelegramBotApiClientFactory;
   telegramApiBaseUrl?: string;
   publicWebhookBaseUrl?: string;
+  webhookConnectorIdFactory?: (input: {
+    tenantId: TenantId;
+    channelExternalId: string;
+  }) => string;
+  webhookSecretTokenFactory?: () => string;
   now?: () => Date;
 };
 
@@ -93,6 +99,10 @@ export function createInternalIntegrationService(
     options.secretResolver ?? createEnvSecretResolver(process.env);
   const botApiClientFactory =
     options.botApiClientFactory ?? createTelegramBotApiClient;
+  const webhookConnectorIdFactory =
+    options.webhookConnectorIdFactory ?? createTelegramWebhookConnectorId;
+  const webhookSecretTokenFactory =
+    options.webhookSecretTokenFactory ?? createTelegramWebhookSecretToken;
 
   return {
     async loadTelegramIntegration(context) {
@@ -123,10 +133,26 @@ export function createInternalIntegrationService(
         secretWriter: options.secretWriter,
         updatedAt
       });
+      const webhookConnectorId =
+        existingConfig?.webhookConnectorId ??
+        webhookConnectorIdFactory({
+          tenantId: context.tenantId,
+          channelExternalId: request.channelExternalId
+        });
+      const webhookSecretTokenSecretRef =
+        await resolveTelegramWebhookSecretTokenSecretRef({
+          context,
+          existingConfig,
+          secretWriter: options.secretWriter,
+          webhookSecretTokenFactory,
+          updatedAt
+        });
       const config: InternalTelegramIntegrationConfig = {
         channelExternalId: request.channelExternalId,
         mode: request.mode,
         botTokenSecretRef,
+        webhookConnectorId,
+        webhookSecretTokenSecretRef,
         outboundEnabled: request.outboundEnabled
       };
       const parsedConfig = parseTelegramChannelConfig(config);
@@ -303,6 +329,57 @@ function buildTelegramBotTokenSecretRef(tenantId: TenantId): string {
   });
 }
 
+async function resolveTelegramWebhookSecretTokenSecretRef(input: {
+  context: InternalIntegrationContext;
+  existingConfig: InternalTelegramIntegrationConfig | null;
+  secretWriter?: SecretWriter;
+  webhookSecretTokenFactory: () => string;
+  updatedAt: Date;
+}): Promise<string | undefined> {
+  if (input.existingConfig?.webhookSecretTokenSecretRef) {
+    return input.existingConfig.webhookSecretTokenSecretRef;
+  }
+
+  if (!input.secretWriter) {
+    return undefined;
+  }
+
+  const secretRef = buildTelegramWebhookSecretTokenSecretRef(
+    input.context.tenantId
+  );
+
+  await input.secretWriter.upsertSecret({
+    tenantId: input.context.tenantId,
+    secretRef,
+    purpose: "telegram.webhook_secret_token",
+    plainText: input.webhookSecretTokenFactory(),
+    updatedAt: input.updatedAt
+  });
+
+  return secretRef;
+}
+
+function buildTelegramWebhookSecretTokenSecretRef(tenantId: TenantId): string {
+  return createTenantSecretRef({
+    tenantId,
+    moduleId: telegramModuleId,
+    secretName: "webhook-secret-token"
+  });
+}
+
+function createTelegramWebhookConnectorId(input: {
+  tenantId: TenantId;
+  channelExternalId: string;
+}): string {
+  void input;
+
+  return `tgwh_${randomUUID()}`;
+}
+
+function createTelegramWebhookSecretToken(): string {
+  return randomBytes(32).toString("base64url");
+}
+
 async function runTelegramProviderDiagnostics(
   options: TelegramProviderOperationOptions
 ): Promise<InternalTelegramIntegrationResponse> {
@@ -354,12 +431,17 @@ async function runTelegramWebhookSync(
     config: state.config,
     secretResolver: options.secretResolver
   });
+  const webhookSecretToken = await resolveTelegramWebhookSecretToken({
+    tenantId: options.context.tenantId,
+    config: state.config,
+    secretResolver: options.secretResolver
+  });
   const expectedUrl = buildTelegramPublicWebhookUrl(
     options.publicWebhookBaseUrl,
-    buildTelegramWebhookPath(state.config.channelExternalId)
+    buildTelegramWebhookPath(state.config)
   );
 
-  if (!token || !expectedUrl) {
+  if (!token || !expectedUrl || !webhookSecretToken) {
     const diagnostics = buildTelegramDiagnostics({
       enabled: state.enabled,
       config: state.config,
@@ -367,12 +449,15 @@ async function runTelegramWebhookSync(
       publicWebhookBaseUrl: options.publicWebhookBaseUrl,
       status: "invalid_config",
       lastErrorCode: "validation.failed",
-      operatorHint: !token
-        ? "Bot token secret could not be resolved."
-        : "Public webhook base URL is not configured.",
+      operatorHint: telegramWebhookInvalidConfigHint({
+        token,
+        expectedUrl,
+        webhookSecretToken
+      }),
       polling: state.response.diagnostics.polling,
       checks: {
         botTokenResolved: Boolean(token),
+        webhookSecretTokenResolved: Boolean(webhookSecretToken),
         botApiReachable: false,
         webhookMatchesConfig: false
       }
@@ -401,7 +486,10 @@ async function runTelegramWebhookSync(
     });
 
     if (options.operation === "set") {
-      await client.setWebhook({ url: expectedUrl });
+      await client.setWebhook({
+        url: expectedUrl,
+        secretToken: webhookSecretToken
+      });
     } else {
       await client.deleteWebhook();
     }
@@ -518,7 +606,7 @@ async function buildTelegramProviderDiagnostics(input: {
     ]);
     const expectedUrl = buildTelegramPublicWebhookUrl(
       input.publicWebhookBaseUrl,
-      buildTelegramWebhookPath(input.config.channelExternalId)
+      buildTelegramWebhookPath(input.config)
     );
     const webhookMatchesConfig =
       expectedUrl === undefined ? false : webhook.url === expectedUrl;
@@ -580,6 +668,37 @@ async function resolveTelegramBotToken(input: {
     tenantId: input.tenantId,
     secretRef: input.config.botTokenSecretRef
   });
+}
+
+async function resolveTelegramWebhookSecretToken(input: {
+  tenantId: TenantId;
+  config: InternalTelegramIntegrationConfig;
+  secretResolver: SecretResolver;
+}): Promise<string | null> {
+  if (!input.config.webhookSecretTokenSecretRef) {
+    return null;
+  }
+
+  return input.secretResolver.resolveSecret({
+    tenantId: input.tenantId,
+    secretRef: input.config.webhookSecretTokenSecretRef
+  });
+}
+
+function telegramWebhookInvalidConfigHint(input: {
+  token: string | null;
+  expectedUrl: string | undefined;
+  webhookSecretToken: string | null;
+}): string {
+  if (!input.token) {
+    return "Bot token secret could not be resolved.";
+  }
+
+  if (!input.webhookSecretToken) {
+    return "Webhook secret token could not be resolved.";
+  }
+
+  return "Public webhook base URL is not configured.";
 }
 
 function telegramProviderFailureDiagnostics(input: {
@@ -659,7 +778,7 @@ function telegramResponseFromConfig(input: {
   publicWebhookBaseUrl?: string;
   diagnostics: InternalTelegramIntegrationDiagnostics;
 }): InternalTelegramIntegrationResponse {
-  const webhookPath = buildTelegramWebhookPath(input.config.channelExternalId);
+  const webhookPath = buildTelegramWebhookPath(input.config);
   const publicWebhookUrl = buildTelegramPublicWebhookUrl(
     input.publicWebhookBaseUrl,
     webhookPath
@@ -688,7 +807,7 @@ function buildTelegramDiagnostics(input: {
   checks?: Partial<InternalTelegramIntegrationDiagnostics["checks"]>;
   polling?: InternalTelegramIntegrationDiagnostics["polling"];
 }): InternalTelegramIntegrationDiagnostics {
-  const webhookPath = buildTelegramWebhookPath(input.config.channelExternalId);
+  const webhookPath = buildTelegramWebhookPath(input.config);
   const expectedWebhookUrl = buildTelegramPublicWebhookUrl(
     input.publicWebhookBaseUrl,
     webhookPath
@@ -727,7 +846,7 @@ function buildTelegramDiagnostics(input: {
 
   const webhookMatchesConfig = input.checks?.webhookMatchesConfig;
   const inboundWebhookReady =
-    input.config.mode === "webhook" ? (webhookMatchesConfig ?? true) : false;
+    input.config.mode === "webhook" ? webhookMatchesConfig === true : false;
 
   return withOptionalTelegramDiagnostics(
     {
@@ -815,12 +934,19 @@ function parseStoredTelegramDiagnostics(
   return result.success ? result.data : null;
 }
 
-function buildTelegramWebhookPath(channelExternalId: string): string {
-  if (!channelExternalId) {
+function buildTelegramWebhookPath(
+  config: Pick<
+    InternalTelegramIntegrationConfig,
+    "channelExternalId" | "webhookConnectorId"
+  >
+): string {
+  const connectorId = config.webhookConnectorId ?? config.channelExternalId;
+
+  if (!connectorId) {
     throw new CoreError("validation.failed");
   }
 
-  return `/webhooks/telegram/${encodeURIComponent(channelExternalId)}`;
+  return `/webhooks/telegram/${encodeURIComponent(connectorId)}`;
 }
 
 function buildTelegramPublicWebhookUrl(

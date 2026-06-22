@@ -124,6 +124,40 @@ describe("SQL tenant module config repository", () => {
     expect(executor.queries).toHaveLength(1);
   });
 
+  it("finds an enabled tenant module config by a JSON string property", async () => {
+    const executor = new RecordingSqlExecutor([
+      {
+        tenant_id: tenantId,
+        module_id: "channel-telegram",
+        enabled: true,
+        config: {
+          channelExternalId: "telegram-local",
+          webhookConnectorId: "telegram-webhook-1"
+        },
+        diagnostics: {}
+      }
+    ]);
+    const repository = createSqlTenantModuleConfigRepository(executor);
+
+    await expect(
+      repository.findEnabledConfigByConfigString({
+        moduleId: "channel-telegram",
+        configKey: "webhookConnectorId",
+        configValue: "telegram-webhook-1"
+      })
+    ).resolves.toEqual({
+      tenantId,
+      moduleId: "channel-telegram",
+      enabled: true,
+      config: {
+        channelExternalId: "telegram-local",
+        webhookConnectorId: "telegram-webhook-1"
+      },
+      diagnostics: {}
+    });
+    expect(executor.queries).toHaveLength(1);
+  });
+
   it("upserts tenant-scoped module config and diagnostics", async () => {
     const executor = new RecordingSqlExecutor([]);
     const repository = createSqlTenantModuleConfigRepository(executor);

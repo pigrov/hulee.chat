@@ -7,14 +7,40 @@ import {
   getPlatformErrorDefinition,
   isPlatformErrorCode
 } from "@hulee/contracts";
-import { createTelegramChannelAdapter } from "@hulee/modules";
+import type { TenantModuleConfigRepository } from "@hulee/db";
+import {
+  createTelegramChannelAdapter,
+  parseTelegramChannelConfig,
+  type TelegramChannelConfig
+} from "@hulee/modules";
 import type { Logger } from "@hulee/observability";
+import { timingSafeEqual } from "node:crypto";
 
 import type { ExternalChannelCommandService } from "../external-channel-command-service";
 import type { ApiHttpRequest, ApiHttpResponse } from "./public-api-handler";
 
+export type TelegramWebhookConnector = {
+  tenantId: TenantId;
+  config: TelegramChannelConfig;
+};
+
+export type TelegramWebhookConnectorResolver = {
+  resolveConnector(input: {
+    connectorId: string;
+  }): Promise<TelegramWebhookConnector | null>;
+};
+
+export type SecretResolver = {
+  resolveSecret(input: {
+    tenantId: TenantId;
+    secretRef: string;
+  }): Promise<string | null>;
+};
+
 export type TelegramWebhookHandlerOptions = {
   commands: ExternalChannelCommandService;
+  connectorResolver: TelegramWebhookConnectorResolver;
+  secretResolver: SecretResolver;
   logger?: Logger;
   requestIdFactory?: () => string;
 };
@@ -24,13 +50,37 @@ export type TelegramWebhookHandler = {
 };
 
 type RouteMatch = {
-  channelExternalId: string;
+  connectorId: string;
 };
 
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8"
 };
-const defaultTenantId = "tenant_local_1" as TenantId;
+const telegramModuleId = "channel-telegram";
+const telegramSecretTokenHeader = "x-telegram-bot-api-secret-token";
+
+export function createTenantModuleTelegramWebhookConnectorResolver(input: {
+  repository: TenantModuleConfigRepository;
+}): TelegramWebhookConnectorResolver {
+  return {
+    async resolveConnector({ connectorId }) {
+      const record = await input.repository.findEnabledConfigByConfigString({
+        moduleId: telegramModuleId,
+        configKey: "webhookConnectorId",
+        configValue: connectorId
+      });
+
+      if (!record) {
+        return null;
+      }
+
+      return {
+        tenantId: record.tenantId,
+        config: parseTelegramChannelConfig(record.config)
+      };
+    }
+  };
+}
 
 export function createTelegramWebhookHandler(
   options: TelegramWebhookHandlerOptions
@@ -47,27 +97,40 @@ export function createTelegramWebhookHandler(
         return errorResponse("validation.failed", requestId, 404);
       }
 
-      const tenantId = resolveTenantId(request);
-
       try {
+        const connector = await options.connectorResolver.resolveConnector({
+          connectorId: route.connectorId
+        });
+
+        if (!connector) {
+          return errorResponse("tenant.not_found", requestId, 404);
+        }
+
+        assertWebhookConnectorReady(connector.config);
+        await assertTelegramSecretToken({
+          request,
+          connector,
+          secretResolver: options.secretResolver
+        });
+
         const normalized = await adapter.normalizeIncoming({
-          tenantId,
-          channelExternalId: route.channelExternalId,
+          tenantId: connector.tenantId,
+          channelExternalId: connector.config.channelExternalId,
           update: request.body
         });
         const response: PublicApiInboundMessageResponse =
           await options.commands.acceptInboundMessage(
             {
               requestId,
-              tenantId,
-              channelId: route.channelExternalId
+              tenantId: connector.tenantId,
+              channelId: connector.config.channelExternalId
             },
             normalized
           );
 
         return jsonResponse(202, {
           ...response,
-          channelExternalId: route.channelExternalId
+          channelExternalId: connector.config.channelExternalId
         });
       } catch (error) {
         const code = platformErrorCodeFromUnknown(error);
@@ -77,7 +140,7 @@ export function createTelegramWebhookHandler(
           "telegram_webhook.request_failed",
           {
             requestId,
-            channelExternalId: route.channelExternalId,
+            connectorId: route.connectorId,
             status: response.status
           },
           error
@@ -96,25 +159,54 @@ function matchRoute(request: ApiHttpRequest): RouteMatch | undefined {
 
   if (request.method === "POST" && match?.[1]) {
     return {
-      channelExternalId: decodeURIComponent(match[1])
+      connectorId: decodeURIComponent(match[1])
     };
   }
 
   return undefined;
 }
 
-function resolveTenantId(request: ApiHttpRequest): TenantId {
-  const url = new URL(request.path, "http://hulee.local");
-  const headerTenantId = headerValue(
-    request.headers,
-    "x-hulee-tenant-id"
-  )?.trim();
-  const queryTenantId = url.searchParams.get("tenantId")?.trim();
+function assertWebhookConnectorReady(config: TelegramChannelConfig): void {
+  if (config.mode !== "webhook") {
+    throw new ErrorWithCode("module.disabled");
+  }
 
-  return (headerTenantId ??
-    queryTenantId ??
-    process.env.HULEE_WEB_TENANT_ID ??
-    defaultTenantId) as TenantId;
+  if (!config.webhookSecretTokenSecretRef) {
+    throw new ErrorWithCode("validation.failed");
+  }
+}
+
+async function assertTelegramSecretToken(input: {
+  request: ApiHttpRequest;
+  connector: TelegramWebhookConnector;
+  secretResolver: SecretResolver;
+}): Promise<void> {
+  const expectedToken = await input.secretResolver.resolveSecret({
+    tenantId: input.connector.tenantId,
+    secretRef: input.connector.config.webhookSecretTokenSecretRef ?? ""
+  });
+  const actualToken = headerValue(
+    input.request.headers,
+    telegramSecretTokenHeader
+  )?.trim();
+
+  if (
+    !expectedToken ||
+    !actualToken ||
+    !constantTimeStringEquals(expectedToken, actualToken)
+  ) {
+    throw new ErrorWithCode("auth.invalid_credentials");
+  }
+}
+
+function constantTimeStringEquals(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+
+  return (
+    leftBuffer.length === rightBuffer.length &&
+    timingSafeEqual(leftBuffer, rightBuffer)
+  );
 }
 
 function normalizePath(path: string): string {
@@ -166,6 +258,15 @@ function platformErrorCodeFromUnknown(error: unknown): PlatformErrorCode {
   }
 
   return "validation.failed";
+}
+
+class ErrorWithCode extends Error {
+  readonly code: PlatformErrorCode;
+
+  constructor(code: PlatformErrorCode) {
+    super(code);
+    this.code = code;
+  }
 }
 
 function errorResponse(

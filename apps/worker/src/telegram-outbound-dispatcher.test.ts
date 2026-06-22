@@ -185,6 +185,10 @@ class InMemoryModuleConfigRepository implements TenantModuleConfigRepository {
     return [this.moduleConfig({ tenantId, moduleId: "channel-telegram" })];
   }
 
+  async findEnabledConfigByConfigString(): Promise<TenantModuleConfigRecord | null> {
+    return null;
+  }
+
   async upsertConfig(_input: UpsertTenantModuleConfigInput): Promise<void> {}
 
   private moduleConfig(input: {

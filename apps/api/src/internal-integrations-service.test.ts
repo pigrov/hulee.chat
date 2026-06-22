@@ -50,7 +50,8 @@ describe("internal integrations service", () => {
     const repository = new InMemoryTenantModuleConfigRepository();
     const service = createInternalIntegrationService({
       repository,
-      now: () => now
+      now: () => now,
+      webhookConnectorIdFactory: () => "tgwh_test"
     });
 
     const response = await service.updateTelegramIntegration(context, {
@@ -68,16 +69,17 @@ describe("internal integrations service", () => {
         channelExternalId: "telegram-local",
         mode: "webhook",
         botTokenSecretRef: "env:HULEE_TELEGRAM_BOT_TOKEN",
+        webhookConnectorId: "tgwh_test",
         outboundEnabled: true
       },
-      webhookPath: "/webhooks/telegram/telegram-local",
+      webhookPath: "/webhooks/telegram/tgwh_test",
       diagnostics: {
         status: "configured",
         checkedAt: now.toISOString(),
         checks: {
           moduleEnabled: true,
           configValid: true,
-          inboundWebhookReady: true,
+          inboundWebhookReady: false,
           outboundEnabled: true,
           botTokenSecretRefConfigured: true
         }
@@ -102,7 +104,9 @@ describe("internal integrations service", () => {
     const service = createInternalIntegrationService({
       repository,
       secretWriter,
-      now: () => now
+      now: () => now,
+      webhookConnectorIdFactory: () => "tgwh_test",
+      webhookSecretTokenFactory: () => "raw-telegram-webhook-secret-value"
     });
 
     const response = await service.updateTelegramIntegration(context, {
@@ -120,12 +124,27 @@ describe("internal integrations service", () => {
         purpose: "telegram.bot_token",
         plainText: "telegram-token-1",
         updatedAt: now
+      },
+      {
+        tenantId,
+        secretRef:
+          "secret:tenant-integrations/channel-telegram/webhook-secret-token",
+        purpose: "telegram.webhook_secret_token",
+        plainText: "raw-telegram-webhook-secret-value",
+        updatedAt: now
       }
     ]);
     expect(response.config?.botTokenSecretRef).toBe(
       "secret:tenant-integrations/channel-telegram/bot-token"
     );
+    expect(response.config?.webhookConnectorId).toBe("tgwh_test");
+    expect(response.config?.webhookSecretTokenSecretRef).toBe(
+      "secret:tenant-integrations/channel-telegram/webhook-secret-token"
+    );
     expect(JSON.stringify(response)).not.toContain("telegram-token-1");
+    expect(JSON.stringify(response)).not.toContain(
+      "raw-telegram-webhook-secret-value"
+    );
     expect(
       JSON.stringify(
         repository.records.get(recordKey(tenantId, "channel-telegram"))
@@ -175,6 +194,7 @@ describe("internal integrations service", () => {
           channelExternalId: "telegram-local",
           mode: "webhook",
           botTokenSecretRef: "env:HULEE_TELEGRAM_BOT_TOKEN",
+          webhookConnectorId: "tgwh_test",
           outboundEnabled: true
         },
         diagnostics: {}
@@ -207,7 +227,7 @@ describe("internal integrations service", () => {
           },
           async getWebhookInfo() {
             return {
-              url: "https://example.test/webhooks/telegram/telegram-local",
+              url: "https://example.test/webhooks/telegram/tgwh_test",
               pendingUpdateCount: 0,
               raw: {}
             };
@@ -224,7 +244,7 @@ describe("internal integrations service", () => {
     const response = await service.refreshTelegramDiagnostics(context);
 
     expect(response).toMatchObject({
-      publicWebhookUrl: "https://example.test/webhooks/telegram/telegram-local",
+      publicWebhookUrl: "https://example.test/webhooks/telegram/tgwh_test",
       diagnostics: {
         status: "configured",
         bot: {
@@ -232,8 +252,8 @@ describe("internal integrations service", () => {
           username: "hulee_test_bot"
         },
         webhook: {
-          expectedUrl: "https://example.test/webhooks/telegram/telegram-local",
-          actualUrl: "https://example.test/webhooks/telegram/telegram-local",
+          expectedUrl: "https://example.test/webhooks/telegram/tgwh_test",
+          actualUrl: "https://example.test/webhooks/telegram/tgwh_test",
           pendingUpdateCount: 0
         },
         checks: {
@@ -261,19 +281,27 @@ describe("internal integrations service", () => {
           channelExternalId: "telegram-local",
           mode: "webhook",
           botTokenSecretRef: "env:HULEE_TELEGRAM_BOT_TOKEN",
+          webhookConnectorId: "tgwh_test",
+          webhookSecretTokenSecretRef:
+            "secret:tenant-integrations/channel-telegram/webhook-secret-token",
           outboundEnabled: true
         },
         diagnostics: {}
       }
     ]);
-    const setWebhookCalls: string[] = [];
+    const setWebhookCalls: {
+      url: string;
+      secretToken: string | undefined;
+    }[] = [];
     const service = createInternalIntegrationService({
       repository,
       now: () => now,
       publicWebhookBaseUrl: "https://example.test/",
       secretResolver: {
-        async resolveSecret() {
-          return "token-1";
+        async resolveSecret({ secretRef }) {
+          return secretRef.includes("webhook-secret-token")
+            ? "webhook-secret"
+            : "token-1";
         }
       },
       botApiClientFactory() {
@@ -293,7 +321,7 @@ describe("internal integrations service", () => {
           },
           async getWebhookInfo() {
             return {
-              url: "https://example.test/webhooks/telegram/telegram-local",
+              url: "https://example.test/webhooks/telegram/tgwh_test",
               pendingUpdateCount: 0,
               raw: {}
             };
@@ -302,7 +330,10 @@ describe("internal integrations service", () => {
             return [];
           },
           async setWebhook(input) {
-            setWebhookCalls.push(input.url);
+            setWebhookCalls.push({
+              url: input.url,
+              secretToken: input.secretToken
+            });
           },
           async deleteWebhook() {}
         };
@@ -312,7 +343,10 @@ describe("internal integrations service", () => {
     const response = await service.setTelegramWebhook(context);
 
     expect(setWebhookCalls).toEqual([
-      "https://example.test/webhooks/telegram/telegram-local"
+      {
+        url: "https://example.test/webhooks/telegram/tgwh_test",
+        secretToken: "webhook-secret"
+      }
     ]);
     expect(response.diagnostics.status).toBe("configured");
   });
@@ -389,6 +423,22 @@ class InMemoryTenantModuleConfigRepository implements TenantModuleConfigReposito
     );
   }
 
+  async findEnabledConfigByConfigString(input: {
+    moduleId: string;
+    configKey: string;
+    configValue: string;
+  }): Promise<TenantModuleConfigRecord | null> {
+    return (
+      [...this.records.values()].find(
+        (record) =>
+          record.moduleId === input.moduleId &&
+          record.enabled &&
+          isRecord(record.config) &&
+          record.config[input.configKey] === input.configValue
+      ) ?? null
+    );
+  }
+
   async upsertConfig(input: UpsertTenantModuleConfigInput): Promise<void> {
     this.records.set(recordKey(input.tenantId, input.moduleId), {
       tenantId: input.tenantId,
@@ -404,7 +454,7 @@ class InMemorySecretWriter {
   readonly upserts: {
     tenantId: TenantId;
     secretRef: string;
-    purpose: "telegram.bot_token";
+    purpose: "telegram.bot_token" | "telegram.webhook_secret_token";
     plainText: string;
     updatedAt: Date;
   }[] = [];
@@ -412,12 +462,16 @@ class InMemorySecretWriter {
   async upsertSecret(input: {
     tenantId: TenantId;
     secretRef: string;
-    purpose: "telegram.bot_token";
+    purpose: "telegram.bot_token" | "telegram.webhook_secret_token";
     plainText: string;
     updatedAt: Date;
   }): Promise<void> {
     this.upserts.push(input);
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function recordKey(tenantIdInput: TenantId, moduleId: string): string {

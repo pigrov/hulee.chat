@@ -86,6 +86,8 @@ export const telegramChannelConfigSchema = z
     channelExternalId: z.string().trim().min(1),
     mode: z.enum(["webhook", "polling"]).default("webhook"),
     botTokenSecretRef: z.string().trim().min(1).optional(),
+    webhookConnectorId: z.string().trim().min(1).optional(),
+    webhookSecretTokenSecretRef: z.string().trim().min(1).optional(),
     outboundEnabled: z.boolean().default(false)
   })
   .strict()
@@ -193,6 +195,8 @@ export const telegramChannelManifest = {
     channelExternalId: "string",
     mode: ["webhook", "polling"],
     botTokenSecretRef: "secret-ref",
+    webhookConnectorId: "string",
+    webhookSecretTokenSecretRef: "secret-ref",
     outboundEnabled: "boolean"
   },
   secretsSchema: {

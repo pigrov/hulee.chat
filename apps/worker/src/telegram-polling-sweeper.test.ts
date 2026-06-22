@@ -236,6 +236,10 @@ class InMemoryModuleConfigRepository implements TenantModuleConfigRepository {
     );
   }
 
+  async findEnabledConfigByConfigString(): Promise<TenantModuleConfigRecord | null> {
+    return null;
+  }
+
   async upsertConfig(input: UpsertTenantModuleConfigInput): Promise<void> {
     this.upserts.push(input);
   }

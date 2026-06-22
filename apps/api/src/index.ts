@@ -36,6 +36,7 @@ import {
 import { createExternalChannelCommandService } from "./external-channel-command-service";
 import { createPublicApiCommandService } from "./public-api-command-service";
 import {
+  createTenantModuleTelegramWebhookConnectorResolver,
   createTelegramWebhookHandler,
   type TelegramWebhookHandler
 } from "./http/telegram-webhook-handler";
@@ -149,6 +150,8 @@ export function createInternalApiDataPlaneHandler(
 
 export type TelegramWebhookDataPlaneHandlerOptions = {
   database: HuleeDatabase;
+  env?: EnvSource;
+  secretEncryptionKey?: string;
   logger?: Logger;
   requestIdFactory?: () => string;
 };
@@ -160,10 +163,28 @@ export function createTelegramWebhookDataPlaneHandler(
     rawExecutor: options.database,
     persistenceExecutor: createDrizzlePersistenceExecutor(options.database)
   });
+  const moduleConfigRepository = createSqlTenantModuleConfigRepository(
+    options.database
+  );
+  const tenantSecrets = options.secretEncryptionKey
+    ? createSqlTenantSecretRepository(
+        options.database,
+        createAesGcmTenantSecretCipher({
+          key: options.secretEncryptionKey
+        })
+      )
+    : undefined;
 
   return createTelegramWebhookHandler({
     commands: createExternalChannelCommandService({
       repository: externalMessageRepository
+    }),
+    connectorResolver: createTenantModuleTelegramWebhookConnectorResolver({
+      repository: moduleConfigRepository
+    }),
+    secretResolver: createTenantSecretResolver({
+      env: options.env,
+      tenantSecrets
     }),
     logger: options.logger,
     requestIdFactory: options.requestIdFactory

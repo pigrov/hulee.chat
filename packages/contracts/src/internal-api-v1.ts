@@ -110,6 +110,8 @@ export const internalTelegramIntegrationConfigSchema = z
     channelExternalId: z.string().trim().min(1).max(200),
     mode: internalTelegramIntegrationModeSchema.default("webhook"),
     botTokenSecretRef: z.string().trim().min(1).max(500).optional(),
+    webhookConnectorId: z.string().trim().min(1).max(200).optional(),
+    webhookSecretTokenSecretRef: z.string().trim().min(1).max(500).optional(),
     outboundEnabled: z.boolean().default(false)
   })
   .strict()
@@ -176,6 +178,7 @@ export const internalTelegramIntegrationDiagnosticsSchema = z
         inboundWebhookReady: z.boolean(),
         outboundEnabled: z.boolean(),
         botTokenSecretRefConfigured: z.boolean(),
+        webhookSecretTokenResolved: z.boolean().optional(),
         botTokenResolved: z.boolean().optional(),
         botApiReachable: z.boolean().optional(),
         webhookMatchesConfig: z.boolean().optional()

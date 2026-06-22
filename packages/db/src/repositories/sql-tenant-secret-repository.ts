@@ -6,7 +6,10 @@ import { sql, type SQL } from "drizzle-orm";
 import type { HuleeDatabase } from "../client";
 import type { RawSqlExecutor } from "./sql-outbox-repository";
 
-export type TenantSecretPurpose = "telegram.bot_token" | (string & {});
+export type TenantSecretPurpose =
+  | "telegram.bot_token"
+  | "telegram.webhook_secret_token"
+  | (string & {});
 
 export type TenantSecretRecord = {
   tenantId: TenantId;

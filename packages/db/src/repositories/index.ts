@@ -12,6 +12,7 @@ export {
   createSqlOutboxRepository
 } from "./sql-outbox-repository";
 export {
+  buildFindEnabledTenantModuleConfigByConfigStringSql,
   buildFindEnabledTenantModuleConfigSql,
   buildFindTenantModuleConfigSql,
   buildListEnabledTenantModuleConfigsSql,
@@ -93,6 +94,7 @@ export type {
   RawSqlQueryResult
 } from "./sql-outbox-repository";
 export type {
+  FindEnabledTenantModuleConfigByConfigStringInput,
   FindEnabledTenantModuleConfigInput,
   FindTenantModuleConfigInput,
   ListEnabledTenantModuleConfigsInput,

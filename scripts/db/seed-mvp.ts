@@ -24,6 +24,11 @@ const seedConfig = {
   telegramBotTokenSecretRef:
     process.env.HULEE_SEED_TELEGRAM_BOT_TOKEN_SECRET_REF ??
     "env:HULEE_TELEGRAM_BOT_TOKEN",
+  telegramWebhookConnectorId:
+    process.env.HULEE_SEED_TELEGRAM_WEBHOOK_CONNECTOR_ID ?? "tgwh_local",
+  telegramWebhookSecretTokenSecretRef:
+    process.env.HULEE_SEED_TELEGRAM_WEBHOOK_SECRET_TOKEN_SECRET_REF ??
+    "secret:tenant_local_1/channel-telegram/webhook-secret-token",
   idSeed: process.env.HULEE_SEED_ID_SEED ?? "local",
   now: process.env.HULEE_SEED_NOW ?? new Date().toISOString()
 };
@@ -50,6 +55,9 @@ try {
         channelExternalId: seedConfig.telegramChannelExternalId,
         mode: "webhook",
         botTokenSecretRef: seedConfig.telegramBotTokenSecretRef,
+        webhookConnectorId: seedConfig.telegramWebhookConnectorId,
+        webhookSecretTokenSecretRef:
+          seedConfig.telegramWebhookSecretTokenSecretRef,
         outboundEnabled: true
       }
     },
@@ -82,6 +90,9 @@ try {
         inboundMessageId: workspace.inboundMessage.id,
         telegramChannelExternalId: seedConfig.telegramChannelExternalId,
         telegramBotTokenSecretRef: seedConfig.telegramBotTokenSecretRef,
+        telegramWebhookConnectorId: seedConfig.telegramWebhookConnectorId,
+        telegramWebhookSecretTokenSecretRef:
+          seedConfig.telegramWebhookSecretTokenSecretRef,
         eventCount: workspace.events.length
       },
       null,
