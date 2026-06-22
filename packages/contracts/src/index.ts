@@ -309,8 +309,30 @@ export type TelephonyProvider = {
   health(): Promise<AdapterHealth>;
 };
 
+export type AuthProviderLoginStartInput = {
+  tenantId?: TenantId;
+  redirectUri?: string;
+};
+
+export type AuthProviderPasswordInput = {
+  tenantId?: TenantId;
+  email: string;
+  password: string;
+};
+
+export type AuthProviderIdentity = {
+  providerId: string;
+  externalSubject: string;
+  email: string;
+  displayName?: string;
+};
+
 export type AuthProvider = {
   manifest: ModuleManifest;
+  startLogin?(input: AuthProviderLoginStartInput): Promise<{ url: string }>;
+  authenticatePassword?(
+    input: AuthProviderPasswordInput
+  ): Promise<AuthProviderIdentity | null>;
   health(): Promise<AdapterHealth>;
 };
 

@@ -24,6 +24,7 @@ export const initialTables = [
   { name: "accounts", scope: "tenant", requiresTenantId: true },
   { name: "employees", scope: "tenant", requiresTenantId: true },
   { name: "employee_roles", scope: "tenant", requiresTenantId: true },
+  { name: "sessions", scope: "global", requiresTenantId: false },
   { name: "teams", scope: "tenant", requiresTenantId: true },
   { name: "clients", scope: "tenant", requiresTenantId: true },
   { name: "client_contacts", scope: "tenant", requiresTenantId: true },

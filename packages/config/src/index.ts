@@ -229,10 +229,15 @@ export function loadLocalEnvFile(input?: {
   cwd?: string;
   fileName?: string;
 }): EnvSource {
-  const filePath = findEnvFile({
-    cwd: input?.cwd ?? process.cwd(),
-    fileName: input?.fileName ?? "env.local"
-  });
+  const cwd = input?.cwd ?? process.cwd();
+  const filePath =
+    input?.fileName === undefined
+      ? (findEnvFile({ cwd, fileName: ".env.local" }) ??
+        findEnvFile({ cwd, fileName: "env.local" }))
+      : findEnvFile({
+          cwd,
+          fileName: input.fileName
+        });
 
   if (filePath === null) {
     return {};

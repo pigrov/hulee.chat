@@ -14,16 +14,17 @@ import { sendReplyAction } from "../src/actions";
 import { AccessDeniedPage } from "../src/access-denied";
 import {
   canTenantPermission,
-  navigationAccessFromSession,
-  resolveWebAccessSession
+  navigationAccessFromSession
 } from "../src/access";
 import { AppFrame, DetailItem, SlotMount } from "../src/app-chrome";
 import { formatDateTime } from "../src/formatting";
+import { resolveCurrentWebAccessSession } from "../src/session";
 import {
   loadInboxViewModel,
   type InboxConversation,
   type InboxMessage
 } from "../src/inbox-api-client";
+import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -33,7 +34,11 @@ export default async function InboxPage({
 }: {
   searchParams?: Promise<{ conversationId?: string }>;
 }): Promise<ReactNode> {
-  const access = resolveWebAccessSession();
+  const access = await resolveCurrentWebAccessSession();
+
+  if (access === null) {
+    redirect("/login");
+  }
 
   if (!canTenantPermission(access, "inbox.read")) {
     return (

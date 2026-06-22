@@ -129,15 +129,24 @@ importers:
       '@hulee/branding':
         specifier: workspace:*
         version: link:../../packages/branding
+      '@hulee/config':
+        specifier: workspace:*
+        version: link:../../packages/config
       '@hulee/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
       '@hulee/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@hulee/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@hulee/i18n':
         specifier: workspace:*
         version: link:../../packages/i18n
+      '@hulee/modules':
+        specifier: workspace:*
+        version: link:../../packages/modules
       '@hulee/ui':
         specifier: workspace:*
         version: link:../../packages/ui

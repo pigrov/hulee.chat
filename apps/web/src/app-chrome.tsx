@@ -1,6 +1,6 @@
 import type { createTranslator } from "@hulee/i18n";
 import { createSlotRegistry, resolveSlotHost, type UiSlotId } from "@hulee/ui";
-import { Inbox, Settings, ShieldCheck } from "lucide-react";
+import { Inbox, LogOut, Settings, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 
@@ -8,6 +8,7 @@ import {
   buildBrandMarkLabel,
   brandProfileToCssProperties
 } from "./brand-style";
+import { logoutAction } from "./auth-actions";
 
 const emptySlotRegistry = createSlotRegistry([]);
 
@@ -80,6 +81,15 @@ export function AppFrame({
             <ShieldCheck size={20} aria-hidden="true" />
           </Link>
         ) : null}
+        <form className="railForm" action={logoutAction}>
+          <button
+            className="railButton"
+            type="submit"
+            aria-label={t("auth.logout")}
+          >
+            <LogOut size={20} aria-hidden="true" />
+          </button>
+        </form>
       </nav>
       {children}
     </main>

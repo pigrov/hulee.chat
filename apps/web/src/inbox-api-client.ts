@@ -1,3 +1,4 @@
+import { loadLocalEnvFile, mergeEnvSources } from "@hulee/config";
 import {
   internalInboxReplyResponseSchema,
   internalInboxViewResponseSchema,
@@ -11,7 +12,7 @@ import {
   type InternalTelegramIntegrationUpdateRequest
 } from "@hulee/contracts";
 
-import { buildInternalApiHeaders } from "./access";
+import { buildInternalApiHeaders } from "./session";
 
 export type InboxConversation = InternalInboxConversation;
 export type InboxMessage = InternalInboxMessage;
@@ -19,6 +20,8 @@ export type InboxViewModel = InternalInboxViewResponse;
 export type TelegramIntegrationViewModel = InternalTelegramIntegrationResponse;
 
 const defaultInternalApiBaseUrl = "http://127.0.0.1:4000";
+const localEnv = loadLocalEnvFile();
+
 export async function loadInboxViewModel(input?: {
   selectedConversationId?: string;
 }): Promise<InboxViewModel> {
@@ -30,7 +33,7 @@ export async function loadInboxViewModel(input?: {
 
   const response = await fetch(url, {
     cache: "no-store",
-    headers: buildInternalApiHeaders()
+    headers: await buildInternalApiHeaders()
   });
 
   if (!response.ok) {
@@ -55,7 +58,7 @@ export async function sendInboxReply(input: {
     method: "POST",
     cache: "no-store",
     headers: {
-      ...buildInternalApiHeaders(),
+      ...(await buildInternalApiHeaders()),
       "content-type": "application/json; charset=utf-8"
     },
     body: JSON.stringify({
@@ -78,7 +81,7 @@ export async function loadTelegramIntegration(): Promise<TelegramIntegrationView
   );
   const response = await fetch(url, {
     cache: "no-store",
-    headers: buildInternalApiHeaders()
+    headers: await buildInternalApiHeaders()
   });
 
   if (!response.ok) {
@@ -102,7 +105,7 @@ export async function updateTelegramIntegration(
     method: "PUT",
     cache: "no-store",
     headers: {
-      ...buildInternalApiHeaders(),
+      ...(await buildInternalApiHeaders()),
       "content-type": "application/json; charset=utf-8"
     },
     body: JSON.stringify(request)
@@ -139,7 +142,7 @@ export async function deleteTelegramWebhook(): Promise<TelegramIntegrationViewMo
   const response = await fetch(url, {
     method: "DELETE",
     cache: "no-store",
-    headers: buildInternalApiHeaders()
+    headers: await buildInternalApiHeaders()
   });
 
   if (!response.ok) {
@@ -159,7 +162,7 @@ async function postTelegramIntegrationCommand(
   const response = await fetch(url, {
     method: "POST",
     cache: "no-store",
-    headers: buildInternalApiHeaders()
+    headers: await buildInternalApiHeaders()
   });
 
   if (!response.ok) {
@@ -170,5 +173,8 @@ async function postTelegramIntegrationCommand(
 }
 
 function resolveInternalApiBaseUrl(): string {
-  return process.env.HULEE_INTERNAL_API_BASE_URL ?? defaultInternalApiBaseUrl;
+  return (
+    mergeEnvSources(localEnv, process.env).HULEE_INTERNAL_API_BASE_URL ??
+    defaultInternalApiBaseUrl
+  );
 }

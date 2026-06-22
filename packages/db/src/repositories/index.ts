@@ -49,6 +49,17 @@ export {
   createSqlTenantApiKeyRepository,
   hashTenantApiKey
 } from "./sql-public-api-access";
+export {
+  buildFindAuthSessionByTokenSql,
+  buildFindPlatformAdminByEmailSql,
+  buildFindTenantAccountByEmailSql,
+  buildInsertAuthSessionSql,
+  buildRevokeAuthSessionSql,
+  buildUpsertTenantAdminAccountSql,
+  buildUpsertPlatformAdminAccountSql,
+  createSqlLocalAuthRepository,
+  hashAuthSessionToken
+} from "./sql-auth-repository";
 export { createTenantWorkspaceRepository } from "./drizzle-tenant-workspace-repository";
 export {
   assertTenantScopedRows,
@@ -125,6 +136,15 @@ export type {
   TenantApiKeyAuthenticator,
   TenantApiKeyWriter
 } from "./sql-public-api-access";
+export type {
+  AuthSessionPrincipal,
+  CreateAuthSessionInput,
+  LocalAuthRepository,
+  PlatformAdminAuthAccount,
+  TenantAuthAccount,
+  UpsertTenantAdminAccountInput,
+  UpsertPlatformAdminAccountInput
+} from "./sql-auth-repository";
 export type { TenantScopedRow } from "./tenant-scope";
 export {
   collectReplyTenantScopedRows,

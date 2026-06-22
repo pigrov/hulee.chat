@@ -84,12 +84,19 @@ export const tenantDomains = pgTable(
   ]
 );
 
-export const platformAdminAccounts = pgTable("platform_admin_accounts", {
-  id: text("id").primaryKey(),
-  email: text("email").notNull(),
-  displayName: text("display_name").notNull(),
-  ...timestamps
-});
+export const platformAdminAccounts = pgTable(
+  "platform_admin_accounts",
+  {
+    id: text("id").primaryKey(),
+    email: text("email").notNull(),
+    displayName: text("display_name").notNull(),
+    passwordHash: text("password_hash"),
+    ...timestamps
+  },
+  (table) => [
+    uniqueIndex("platform_admin_accounts_email_unique").on(table.email)
+  ]
+);
 
 export const moduleCatalog = pgTable(
   "module_catalog",
@@ -305,6 +312,28 @@ export const employeeRoles = pgTable(
   (table) => [
     primaryKey({ columns: [table.tenantId, table.employeeId, table.role] }),
     index("employee_roles_tenant_idx").on(table.tenantId)
+  ]
+);
+
+export const sessions = pgTable(
+  "sessions",
+  {
+    id: text("id").primaryKey(),
+    sessionHash: text("session_hash").notNull(),
+    tenantId: text("tenant_id").references(() => tenants.id),
+    employeeId: text("employee_id").references(() => employees.id),
+    platformAdminAccountId: text("platform_admin_account_id").references(
+      () => platformAdminAccounts.id
+    ),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    ...timestamps
+  },
+  (table) => [
+    uniqueIndex("sessions_session_hash_unique").on(table.sessionHash),
+    index("sessions_tenant_employee_idx").on(table.tenantId, table.employeeId),
+    index("sessions_platform_admin_idx").on(table.platformAdminAccountId),
+    index("sessions_expires_idx").on(table.expiresAt)
   ]
 );
 

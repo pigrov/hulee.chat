@@ -62,6 +62,20 @@ describe("app config", () => {
     });
   });
 
+  it("prefers .env.local over legacy env.local", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "hulee-config-"));
+
+    writeFileSync(join(cwd, "env.local"), "HULEE_LOG_LEVEL=debug");
+    writeFileSync(join(cwd, ".env.local"), "HULEE_LOG_LEVEL=warn");
+
+    expect(loadLocalEnvFile({ cwd })).toMatchObject({
+      HULEE_LOG_LEVEL: "warn"
+    });
+    expect(loadLocalEnvFile({ cwd, fileName: "env.local" })).toMatchObject({
+      HULEE_LOG_LEVEL: "debug"
+    });
+  });
+
   it("parses worker tuning values from environment strings", () => {
     expect(
       loadWorkerConfig({

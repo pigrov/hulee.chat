@@ -8,21 +8,26 @@ import {
   Server,
   ShieldCheck
 } from "lucide-react";
+import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AccessDeniedPage } from "../../src/access-denied";
 import {
   canPlatformAdmin,
-  navigationAccessFromSession,
-  resolveWebAccessSession
+  navigationAccessFromSession
 } from "../../src/access";
 import { AppFrame, DetailItem } from "../../src/app-chrome";
+import { resolveCurrentWebAccessSession } from "../../src/session";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export default function PlatformAdminPage(): ReactNode {
-  const access = resolveWebAccessSession();
+export default async function PlatformAdminPage(): Promise<ReactNode> {
+  const access = await resolveCurrentWebAccessSession();
+
+  if (access === null) {
+    redirect("/login");
+  }
 
   if (!canPlatformAdmin(access)) {
     return (

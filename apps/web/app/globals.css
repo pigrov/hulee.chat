@@ -106,6 +106,16 @@ textarea {
   text-decoration: none;
 }
 
+.railForm {
+  margin: 0;
+}
+
+button.railButton {
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+}
+
 .railButton[aria-current="page"] {
   border-color: var(--hulee-color-border);
   background: var(--hulee-color-surface-muted);
@@ -666,6 +676,31 @@ textarea {
   border: 1px solid var(--hulee-color-border);
   border-radius: var(--hulee-radius-control);
   background: var(--hulee-color-surface-default);
+}
+
+.loginPage {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 24px;
+  background: var(--hulee-color-page);
+}
+
+.loginPanel {
+  display: grid;
+  width: min(420px, 100%);
+  gap: 18px;
+  padding: 22px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-default);
+}
+
+.formError {
+  margin: 0;
+  color: var(--hulee-color-danger);
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 @media (max-width: 1100px) {

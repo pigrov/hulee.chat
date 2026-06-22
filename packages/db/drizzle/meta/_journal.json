@@ -15,6 +15,13 @@
       "when": 1782138338254,
       "tag": "0001_perfect_warpath",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1782155417483,
+      "tag": "0002_slow_naoko",
+      "breakpoints": true
     }
   ]
 }

@@ -1,17 +1,11 @@
 import type { ModuleManifest } from "@hulee/contracts";
 
+import { localAuthManifest } from "./auth-local";
 import { publicApiChannelManifest } from "./public-api-channel";
 import { telegramChannelManifest } from "./telegram-channel";
 
 export const standardModuleManifests: readonly ModuleManifest[] = [
-  {
-    id: "auth-local",
-    type: "auth",
-    name: "Local auth",
-    version: "0.0.0",
-    capabilities: ["auth.email_password"],
-    configSchema: {}
-  },
+  localAuthManifest,
   publicApiChannelManifest,
   telegramChannelManifest,
   {
@@ -33,6 +27,13 @@ export const standardModuleManifests: readonly ModuleManifest[] = [
   }
 ];
 
+export {
+  createLocalAuthProvider,
+  hashLocalPassword,
+  localAuthManifest,
+  verifyLocalPassword
+} from "./auth-local";
+export type { LocalAuthProvider } from "./auth-local";
 export {
   createPublicApiChannelAdapter,
   normalizePublicApiIncomingMessage,
