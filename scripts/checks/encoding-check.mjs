@@ -6,7 +6,8 @@ const mojibakePatterns = [
   new RegExp("\\u0420\\u045F"),
   new RegExp("\\u0420\\u0459"),
   new RegExp("\\u0420\\u00B5\\u0421"),
-  new RegExp("\\u0421\\u040F")
+  new RegExp("\\u0421\\u040F"),
+  /\?{3,}/
 ];
 const files = await walkFiles(cwd(), {
   extensions: new Set([
