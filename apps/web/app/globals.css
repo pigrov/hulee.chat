@@ -1,5 +1,6 @@
 :root {
-  color-scheme: light;
+  color-scheme: var(--hulee-color-scheme);
+  --hulee-color-scheme: light;
   --hulee-color-page: #f4f6f3;
   --hulee-color-surface-default: #ffffff;
   --hulee-color-surface-raised: #fbfcfb;
@@ -21,7 +22,7 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    color-scheme: dark;
+    --hulee-color-scheme: dark;
     --hulee-color-page: #171b19;
     --hulee-color-surface-default: #202622;
     --hulee-color-surface-raised: #252d29;
@@ -62,6 +63,7 @@ textarea {
 }
 
 .appFrame {
+  color-scheme: var(--hulee-color-scheme);
   display: grid;
   min-height: 100vh;
   grid-template-columns: 72px minmax(260px, 340px) minmax(0, 1fr) minmax(
@@ -69,6 +71,7 @@ textarea {
       320px
     );
   background: var(--hulee-color-page);
+  color: var(--hulee-color-text-default);
 }
 
 .navigationRail {
@@ -666,6 +669,7 @@ button.railButton {
 }
 
 .brandPresetButton {
+  color-scheme: var(--hulee-color-scheme);
   display: grid;
   width: 100%;
   min-height: 106px;
@@ -736,6 +740,8 @@ button.railButton {
 
 .brandPreviewPanel {
   background: var(--hulee-color-surface-default);
+  color: var(--hulee-color-text-default);
+  color-scheme: var(--hulee-color-scheme);
 }
 
 .brandPreviewSurface {
@@ -857,11 +863,13 @@ button.managementRow:focus-visible {
 }
 
 .loginPage {
+  color-scheme: var(--hulee-color-scheme);
   display: grid;
   min-height: 100vh;
   place-items: center;
   padding: 24px;
   background: var(--hulee-color-page);
+  color: var(--hulee-color-text-default);
 }
 
 .loginPanel {

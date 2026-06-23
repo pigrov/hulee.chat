@@ -13,6 +13,7 @@ export type DesignTokenName =
   | "color.text.default"
   | "color.text.muted"
   | "color.danger"
+  | "theme.colorScheme"
   | "radius.control"
   | "spacing.control";
 

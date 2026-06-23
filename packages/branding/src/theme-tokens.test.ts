@@ -4,6 +4,7 @@ import {
   brandThemePresets,
   buildBrandThemeTokens,
   normalizeBrandThemeTokens,
+  resolveBrandThemeBasePresetId,
   resolveBrandThemePresetId
 } from "./index";
 
@@ -35,6 +36,17 @@ describe("brand theme tokens", () => {
         "color.brand.foreground": "#fefefe"
       })
     ).toThrow(/low contrast/);
+    expect(() =>
+      normalizeBrandThemeTokens({
+        "color.surface.default": "#ffffff",
+        "color.text.default": "#fefefe"
+      })
+    ).toThrow(/low contrast/);
+    expect(() =>
+      normalizeBrandThemeTokens({
+        "theme.colorScheme": "auto"
+      })
+    ).toThrow(/Invalid brand color scheme token/);
   });
 
   it("builds presets with safe foreground colors for custom primary colors", () => {
@@ -52,6 +64,19 @@ describe("brand theme tokens", () => {
 
     for (const preset of brandThemePresets) {
       expect(resolveBrandThemePresetId(preset.tokens)).toBe(preset.id);
+      expect(preset.tokens["theme.colorScheme"]).toMatch(/^(?:light|dark)$/);
     }
+  });
+
+  it("keeps the base preset when action colors are customized", () => {
+    expect(
+      resolveBrandThemeBasePresetId({
+        ...buildBrandThemeTokens({
+          presetId: "hulee-dark",
+          primaryColor: "#0f766e",
+          accentColor: "#f59e0b"
+        })
+      })
+    ).toBe("hulee-dark");
   });
 });

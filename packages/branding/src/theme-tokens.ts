@@ -11,6 +11,7 @@ export const brandThemeTokenNames = [
   "color.text.default",
   "color.text.muted",
   "color.danger",
+  "theme.colorScheme",
   "radius.control"
 ] as const;
 
@@ -23,7 +24,9 @@ export type BrandThemePresetId =
   | "blue"
   | "green"
   | "graphite"
-  | "high-contrast";
+  | "high-contrast"
+  | "hulee-dark"
+  | "blue-dark";
 
 export type BrandThemePreset = {
   id: BrandThemePresetId;
@@ -55,6 +58,12 @@ const colorTokenNames = new Set<BrandThemeTokenName>([
 const allowedTokenNames = new Set<string>(brandThemeTokenNames);
 const hexColorPattern = /^#[0-9a-f]{6}$/;
 const radiusPattern = /^(?:[4-9]|1[0-6])px$/;
+const colorSchemeValues = new Set(["light", "dark"]);
+const customColorTokenNames = new Set<BrandThemeTokenName>([
+  "color.brand.primary",
+  "color.brand.foreground",
+  "color.accent"
+]);
 
 export const brandThemePresets: readonly BrandThemePreset[] = [
   {
@@ -73,6 +82,7 @@ export const brandThemePresets: readonly BrandThemePreset[] = [
       "color.brand.foreground": "#ffffff",
       "color.accent": "#c9822b",
       "color.danger": "#b5474a",
+      "theme.colorScheme": "light",
       "radius.control": "8px"
     }
   },
@@ -92,6 +102,7 @@ export const brandThemePresets: readonly BrandThemePreset[] = [
       "color.brand.foreground": "#ffffff",
       "color.accent": "#b47b34",
       "color.danger": "#b5474a",
+      "theme.colorScheme": "light",
       "radius.control": "8px"
     }
   },
@@ -111,6 +122,7 @@ export const brandThemePresets: readonly BrandThemePreset[] = [
       "color.brand.foreground": "#ffffff",
       "color.accent": "#0f766e",
       "color.danger": "#b5474a",
+      "theme.colorScheme": "light",
       "radius.control": "8px"
     }
   },
@@ -130,6 +142,7 @@ export const brandThemePresets: readonly BrandThemePreset[] = [
       "color.brand.foreground": "#ffffff",
       "color.accent": "#a16207",
       "color.danger": "#b5474a",
+      "theme.colorScheme": "light",
       "radius.control": "8px"
     }
   },
@@ -149,6 +162,7 @@ export const brandThemePresets: readonly BrandThemePreset[] = [
       "color.brand.foreground": "#ffffff",
       "color.accent": "#b45309",
       "color.danger": "#b5474a",
+      "theme.colorScheme": "light",
       "radius.control": "8px"
     }
   },
@@ -168,7 +182,48 @@ export const brandThemePresets: readonly BrandThemePreset[] = [
       "color.brand.foreground": "#ffffff",
       "color.accent": "#7c2d12",
       "color.danger": "#991b1b",
+      "theme.colorScheme": "light",
       "radius.control": "6px"
+    }
+  },
+  {
+    id: "hulee-dark",
+    label: "Hulee dark",
+    tokens: {
+      "color.page": "#101614",
+      "color.surface.default": "#161d1a",
+      "color.surface.raised": "#1d2622",
+      "color.surface.muted": "#26322d",
+      "color.border": "#35443d",
+      "color.border.strong": "#52645b",
+      "color.text.default": "#f2f7f3",
+      "color.text.muted": "#b8c4bb",
+      "color.brand.primary": "#53c5b9",
+      "color.brand.foreground": "#10211f",
+      "color.accent": "#e0a64c",
+      "color.danger": "#f08a8e",
+      "theme.colorScheme": "dark",
+      "radius.control": "8px"
+    }
+  },
+  {
+    id: "blue-dark",
+    label: "Blue dark",
+    tokens: {
+      "color.page": "#0f172a",
+      "color.surface.default": "#121c31",
+      "color.surface.raised": "#18233a",
+      "color.surface.muted": "#22304c",
+      "color.border": "#31405f",
+      "color.border.strong": "#536482",
+      "color.text.default": "#f4f7fb",
+      "color.text.muted": "#b9c4d6",
+      "color.brand.primary": "#7aa2ff",
+      "color.brand.foreground": "#101828",
+      "color.accent": "#34d399",
+      "color.danger": "#fb7185",
+      "theme.colorScheme": "dark",
+      "radius.control": "8px"
     }
   }
 ];
@@ -239,6 +294,15 @@ export function normalizeBrandThemeTokens(
       }
 
       normalized[tokenName] = value;
+      continue;
+    }
+
+    if (tokenName === "theme.colorScheme") {
+      if (!colorSchemeValues.has(value)) {
+        throw new Error(`Invalid brand color scheme token: ${name}`);
+      }
+
+      normalized[tokenName] = value;
     }
   }
 
@@ -269,12 +333,54 @@ export function resolveBrandThemePresetId(
   })?.id;
 }
 
+export function resolveBrandThemeBasePresetId(
+  tokens: Record<string, string>
+): BrandThemePresetId | undefined {
+  const normalized = normalizeBrandThemeTokens(tokens);
+
+  return brandThemePresets.find((preset) => {
+    return brandThemeTokenNames.every((tokenName) => {
+      return (
+        customColorTokenNames.has(tokenName) ||
+        normalized[tokenName] === preset.tokens[tokenName]
+      );
+    });
+  })?.id;
+}
+
 function assertBrandContrast(tokens: BrandThemeTokens): void {
   const primary = tokens["color.brand.primary"];
   const foreground = tokens["color.brand.foreground"];
 
   if (primary && foreground && contrastRatio(primary, foreground) < 4.5) {
     throw new Error("Brand primary and foreground colors have low contrast.");
+  }
+
+  assertReadableTextContrast(tokens);
+}
+
+function assertReadableTextContrast(tokens: BrandThemeTokens): void {
+  const defaultText = tokens["color.text.default"];
+  const mutedText = tokens["color.text.muted"];
+  const surfaces: BrandThemeTokenName[] = [
+    "color.page",
+    "color.surface.default",
+    "color.surface.raised",
+    "color.surface.muted"
+  ];
+
+  for (const surfaceToken of surfaces) {
+    const surface = tokens[surfaceToken];
+
+    if (defaultText && surface && contrastRatio(defaultText, surface) < 4.5) {
+      throw new Error(
+        "Brand default text and surface colors have low contrast."
+      );
+    }
+
+    if (mutedText && surface && contrastRatio(mutedText, surface) < 3) {
+      throw new Error("Brand muted text and surface colors have low contrast.");
+    }
   }
 }
 

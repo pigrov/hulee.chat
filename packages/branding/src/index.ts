@@ -16,6 +16,7 @@ export {
   isBrandThemePresetId,
   normalizeBrandThemeTokens,
   normalizeHexColor,
+  resolveBrandThemeBasePresetId,
   resolveBrandThemePreset,
   resolveBrandThemePresetId
 } from "./theme-tokens";

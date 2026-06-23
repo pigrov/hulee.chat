@@ -105,6 +105,8 @@
   "admin.branding.preset.green": "Green",
   "admin.branding.preset.graphite": "Graphite",
   "admin.branding.preset.highContrast": "High contrast",
+  "admin.branding.preset.huleeDark": "Hulee dark",
+  "admin.branding.preset.blueDark": "Blue dark",
   "admin.employees.invite": "Invitation",
   "admin.employees.inviteEmployee": "Invite employee",
   "admin.employees.emailInvite": "Email",

@@ -13,6 +13,7 @@ const cssTokenMap = {
   "color.text.default": "--hulee-color-text-default",
   "color.text.muted": "--hulee-color-text-muted",
   "color.danger": "--hulee-color-danger",
+  "theme.colorScheme": "--hulee-color-scheme",
   "radius.control": "--hulee-radius-control"
 } as const;
 

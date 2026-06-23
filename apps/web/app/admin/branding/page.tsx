@@ -1,5 +1,6 @@
 import {
   brandThemePresets,
+  resolveBrandThemeBasePresetId,
   resolveBrandThemePreset,
   resolveBrandThemePresetId,
   type BrandThemePreset,
@@ -73,7 +74,10 @@ export default async function BrandingAdminPage({
   const { t } = createTranslator(model.tenant.locale);
   const brand = model.tenant.brand;
   const currentTokens = resolveCurrentTokens(brand.themeTokens);
-  const currentPresetId = resolveBrandThemePresetId(currentTokens) ?? "hulee";
+  const currentPresetId =
+    resolveBrandThemePresetId(currentTokens) ??
+    resolveBrandThemeBasePresetId(currentTokens) ??
+    "hulee";
   const previewBrand: BrandProfileView = {
     productName: brand.productName,
     shortProductName: brand.shortProductName,
@@ -373,6 +377,10 @@ function presetLabelKey(presetId: BrandThemePreset["id"]): I18nMessageKey {
       return "admin.branding.preset.graphite";
     case "high-contrast":
       return "admin.branding.preset.highContrast";
+    case "hulee-dark":
+      return "admin.branding.preset.huleeDark";
+    case "blue-dark":
+      return "admin.branding.preset.blueDark";
     default:
       return "admin.branding.preset.hulee";
   }

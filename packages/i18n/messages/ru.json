@@ -112,6 +112,8 @@
   "admin.branding.preset.green": "Зеленый",
   "admin.branding.preset.graphite": "Графит",
   "admin.branding.preset.highContrast": "Высокий контраст",
+  "admin.branding.preset.huleeDark": "Hulee темный",
+  "admin.branding.preset.blueDark": "Синий темный",
   "admin.employees.invite": "Приглашение",
   "admin.employees.inviteEmployee": "Пригласить сотрудника",
   "admin.employees.emailInvite": "Email",
