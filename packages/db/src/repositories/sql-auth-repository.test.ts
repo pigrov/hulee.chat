@@ -1,5 +1,6 @@
 import type { EmployeeId, TenantId } from "@hulee/contracts";
 import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
 import type {
@@ -35,7 +36,8 @@ describe("SQL local auth repository", () => {
           email_verified_at: new Date("2026-06-22T10:00:00.000Z"),
           display_name: "Admin",
           password_hash: "scrypt:v1:salt:hash",
-          roles: ["tenant_admin", "unknown"]
+          roles: ["tenant_admin", "unknown"],
+          permissions: ["modules.manage", "message.reply", "unknown"]
         }
       ])
     );
@@ -69,7 +71,8 @@ describe("SQL local auth repository", () => {
           email_verified_at: null,
           display_name: "Admin",
           password_hash: "scrypt:v1:salt:hash",
-          roles: ["tenant_admin"]
+          roles: ["tenant_admin"],
+          permissions: ["tenant.manage"]
         },
         {
           tenant_id: "tenant_other",
@@ -81,7 +84,8 @@ describe("SQL local auth repository", () => {
           email_verified_at: new Date("2026-06-22T10:00:00.000Z"),
           display_name: "Admin Other",
           password_hash: "scrypt:v1:salt:hash",
-          roles: ["agent"]
+          roles: ["agent"],
+          permissions: ["inbox.read"]
         }
       ])
     );
@@ -119,6 +123,7 @@ describe("SQL local auth repository", () => {
           employee_display_name: "Admin",
           employee_password_hash: "scrypt:v1:salt:hash",
           employee_roles: ["tenant_admin"],
+          employee_permissions: ["tenant.manage", "message.reply"],
           platform_admin_account_id: "platform-admin-1",
           platform_admin_email: "platform@example.test",
           platform_admin_display_name: "Platform Admin"
@@ -138,7 +143,8 @@ describe("SQL local auth repository", () => {
         tenantDisplayName: "Local Company",
         employeeId,
         emailVerifiedAt: new Date("2026-06-22T10:00:00.000Z"),
-        roles: ["tenant_admin"]
+        roles: ["tenant_admin"],
+        permissions: ["tenant.manage", "message.reply"]
       },
       platformAdmin: {
         id: "platform-admin-1",
@@ -194,6 +200,11 @@ describe("SQL local auth repository", () => {
       new Date("2026-06-22T11:00:00.000Z")
     );
 
+    const tenantAdminUpsertQuery = renderQuery(executor.queries[2]);
+
+    expect(tenantAdminUpsertQuery.sql).toContain("tenant_roles");
+    expect(tenantAdminUpsertQuery.sql).toContain("tenant_role_permissions");
+    expect(tenantAdminUpsertQuery.sql).toContain("tenant_role_bindings");
     expect(executor.queries).toHaveLength(4);
   });
 });
@@ -212,4 +223,15 @@ class RecordingSqlExecutor implements RawSqlExecutor {
       rows: this.rows as readonly Row[]
     };
   }
+}
+
+function renderQuery(query: SQL | undefined): {
+  sql: string;
+  params: unknown[];
+} {
+  if (query === undefined) {
+    throw new Error("Expected a recorded SQL query.");
+  }
+
+  return new PgDialect().sqlToQuery(query);
 }

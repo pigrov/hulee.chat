@@ -523,6 +523,8 @@ function webAccessSessionFromPrincipal(
   const env = resolveWebEnv();
   const fallback = resolveWebAccessSession(env);
   const tenantRoles = principal.tenantAccount?.roles ?? [];
+  const permissions =
+    principal.tenantAccount?.permissions ?? fallback.permissions;
   const platformRoles: PlatformRole[] =
     principal.platformAdmin === undefined ? [] : ["platform_admin"];
 
@@ -540,7 +542,7 @@ function webAccessSessionFromPrincipal(
         ? undefined
         : (principal.tenantAccount.emailVerifiedAt?.toISOString() ?? null),
     tenantRoles,
-    permissions: permissionsForRoles(tenantRoles),
+    permissions,
     platformRoles
   };
 }

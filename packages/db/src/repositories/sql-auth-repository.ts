@@ -1,6 +1,7 @@
 import type { EmployeeId, TenantId } from "@hulee/contracts";
 import {
   isEmployeeRole,
+  isPermission,
   permissionsForRoles,
   type EmployeeRole,
   type Permission
@@ -102,6 +103,7 @@ type TenantAuthAccountRow = {
   display_name: string;
   password_hash: string | null;
   roles: unknown;
+  permissions: unknown;
 };
 
 type PlatformAdminAccountRow = {
@@ -124,6 +126,7 @@ type AuthSessionRow = {
   employee_display_name: string | null;
   employee_password_hash: string | null;
   employee_roles: unknown;
+  employee_permissions: unknown;
   platform_admin_account_id: string | null;
   platform_admin_email: string | null;
   platform_admin_display_name: string | null;
@@ -209,26 +212,28 @@ export function buildFindTenantAccountByEmailSql(input: {
            accounts.email_verified_at,
            employees.display_name,
            accounts.password_hash,
-           coalesce(json_agg(employee_roles.role order by employee_roles.role)
-             filter (where employee_roles.role is not null), '[]'::json) as roles
+           legacy_roles.roles,
+           tenant_permissions.permissions
     from tenants
     inner join accounts on accounts.tenant_id = tenants.id
     inner join employees on employees.tenant_id = tenants.id
       and employees.account_id = accounts.id
       and employees.deactivated_at is null
-    left join employee_roles on employee_roles.tenant_id = tenants.id
-      and employee_roles.employee_id = employees.id
+    left join lateral (
+      select coalesce(
+               json_agg(employee_roles.role order by employee_roles.role)
+                 filter (where employee_roles.role is not null),
+               '[]'::json
+             ) as roles
+      from employee_roles
+      where employee_roles.tenant_id = tenants.id
+        and employee_roles.employee_id = employees.id
+    ) legacy_roles on true
+    left join lateral (
+      ${buildTenantScopedPermissionAggregationSql(sql`tenants.id`, sql`employees.id`, sql`now()`)}
+    ) tenant_permissions on true
     where tenants.slug = ${input.tenantSlug}
       and lower(accounts.email) = lower(${input.email})
-    group by tenants.id,
-             tenants.slug,
-             tenants.display_name,
-             accounts.id,
-             employees.id,
-             accounts.email,
-             accounts.email_verified_at,
-             employees.display_name,
-             accounts.password_hash
     limit 1
   `;
 }
@@ -244,25 +249,27 @@ export function buildListTenantAccountsByEmailSql(email: string): SQL {
            accounts.email_verified_at,
            employees.display_name,
            accounts.password_hash,
-           coalesce(json_agg(employee_roles.role order by employee_roles.role)
-             filter (where employee_roles.role is not null), '[]'::json) as roles
+           legacy_roles.roles,
+           tenant_permissions.permissions
     from tenants
     inner join accounts on accounts.tenant_id = tenants.id
     inner join employees on employees.tenant_id = tenants.id
       and employees.account_id = accounts.id
       and employees.deactivated_at is null
-    left join employee_roles on employee_roles.tenant_id = tenants.id
-      and employee_roles.employee_id = employees.id
+    left join lateral (
+      select coalesce(
+               json_agg(employee_roles.role order by employee_roles.role)
+                 filter (where employee_roles.role is not null),
+               '[]'::json
+             ) as roles
+      from employee_roles
+      where employee_roles.tenant_id = tenants.id
+        and employee_roles.employee_id = employees.id
+    ) legacy_roles on true
+    left join lateral (
+      ${buildTenantScopedPermissionAggregationSql(sql`tenants.id`, sql`employees.id`, sql`now()`)}
+    ) tenant_permissions on true
     where lower(accounts.email) = lower(${email})
-    group by tenants.id,
-             tenants.slug,
-             tenants.display_name,
-             accounts.id,
-             employees.id,
-             accounts.email,
-             accounts.email_verified_at,
-             employees.display_name,
-             accounts.password_hash
     order by tenants.display_name asc,
              tenants.slug asc
   `;
@@ -318,8 +325,8 @@ export function buildFindAuthSessionByTokenSql(token: string, now: Date): SQL {
            accounts.email_verified_at as employee_email_verified_at,
            employees.display_name as employee_display_name,
            accounts.password_hash as employee_password_hash,
-           coalesce(json_agg(employee_roles.role order by employee_roles.role)
-             filter (where employee_roles.role is not null), '[]'::json) as employee_roles,
+           legacy_roles.roles as employee_roles,
+           tenant_permissions.permissions as employee_permissions,
            platform_admin_accounts.id as platform_admin_account_id,
            platform_admin_accounts.email as platform_admin_email,
            platform_admin_accounts.display_name as platform_admin_display_name
@@ -330,28 +337,25 @@ export function buildFindAuthSessionByTokenSql(token: string, now: Date): SQL {
       and employees.deactivated_at is null
     left join accounts on accounts.id = employees.account_id
       and accounts.tenant_id = sessions.tenant_id
-    left join employee_roles on employee_roles.tenant_id = sessions.tenant_id
-      and employee_roles.employee_id = employees.id
+    left join lateral (
+      select coalesce(
+               json_agg(employee_roles.role order by employee_roles.role)
+                 filter (where employee_roles.role is not null),
+               '[]'::json
+             ) as roles
+      from employee_roles
+      where employee_roles.tenant_id = sessions.tenant_id
+        and employee_roles.employee_id = employees.id
+    ) legacy_roles on true
+    left join lateral (
+      ${buildTenantScopedPermissionAggregationSql(sql`sessions.tenant_id`, sql`employees.id`, sql`${now}`)}
+    ) tenant_permissions on true
     left join platform_admin_accounts
       on platform_admin_accounts.id = sessions.platform_admin_account_id
     where sessions.session_hash = ${hashAuthSessionToken(token)}
       and sessions.revoked_at is null
       and sessions.expires_at > ${now}
       and (sessions.tenant_id is null or employees.id is not null)
-    group by sessions.id,
-             sessions.expires_at,
-             tenants.id,
-             tenants.slug,
-             tenants.display_name,
-             accounts.id,
-             employees.id,
-             employees.email,
-             accounts.email_verified_at,
-             employees.display_name,
-             accounts.password_hash,
-             platform_admin_accounts.id,
-             platform_admin_accounts.email,
-             platform_admin_accounts.display_name
     limit 1
   `;
 }
@@ -445,22 +449,113 @@ export function buildUpsertTenantAdminAccountSql(
           display_name = excluded.display_name,
           updated_at = excluded.updated_at
       returning id
+    ),
+    legacy_role_upsert as (
+      insert into employee_roles (
+        tenant_id,
+        employee_id,
+        role,
+        created_at,
+        updated_at
+      )
+      values (
+        ${input.tenantId},
+        ${input.employeeId},
+        'tenant_admin',
+        ${input.updatedAt},
+        ${input.updatedAt}
+      )
+      on conflict (tenant_id, employee_id, role) do nothing
+      returning role
+    ),
+    tenant_role_upsert as (
+      insert into tenant_roles (
+        id,
+        tenant_id,
+        name,
+        description,
+        status,
+        is_system,
+        created_by_employee_id,
+        archived_at,
+        created_at,
+        updated_at
+      )
+      values (
+        ${tenantRoleIdSql(input.tenantId, "tenant_admin")},
+        ${input.tenantId},
+        'Tenant admin',
+        'System compatibility role for tenant_admin.',
+        'active',
+        true,
+        null,
+        null,
+        ${input.updatedAt},
+        ${input.updatedAt}
+      )
+      on conflict (id) do update
+      set status = 'active',
+          archived_at = null,
+          updated_at = excluded.updated_at
+      returning id
+    ),
+    tenant_role_permission_upsert as (
+      insert into tenant_role_permissions (
+        tenant_id,
+        role_id,
+        permission,
+        created_at,
+        updated_at
+      )
+      select ${input.tenantId},
+             ${tenantRoleIdSql(input.tenantId, "tenant_admin")},
+             permission_rows.permission,
+             ${input.updatedAt},
+             ${input.updatedAt}
+      from jsonb_array_elements_text(${tenantAdminPermissionsJson()}::jsonb)
+        as permission_rows(permission)
+      on conflict (tenant_id, role_id, permission) do nothing
+      returning permission
+    ),
+    tenant_role_binding_upsert as (
+      insert into tenant_role_bindings (
+        id,
+        tenant_id,
+        role_id,
+        subject_type,
+        subject_id,
+        scope_type,
+        scope_id,
+        created_by_employee_id,
+        starts_at,
+        expires_at,
+        revoked_at,
+        created_at,
+        updated_at
+      )
+      values (
+        ${tenantRoleBindingIdSql(input.tenantId, input.employeeId, "tenant_admin")},
+        ${input.tenantId},
+        ${tenantRoleIdSql(input.tenantId, "tenant_admin")},
+        'employee',
+        ${input.employeeId},
+        'tenant',
+        null,
+        null,
+        null,
+        null,
+        null,
+        ${input.updatedAt},
+        ${input.updatedAt}
+      )
+      on conflict (id) do update
+      set revoked_at = null,
+          updated_at = excluded.updated_at
+      returning id
     )
-    insert into employee_roles (
-      tenant_id,
-      employee_id,
-      role,
-      created_at,
-      updated_at
-    )
-    values (
-      ${input.tenantId},
-      ${input.employeeId},
-      'tenant_admin',
-      ${input.updatedAt},
-      ${input.updatedAt}
-    )
-    on conflict (tenant_id, employee_id, role) do nothing
+    select id
+    from tenant_role_binding_upsert
+    limit 1
   `;
 }
 
@@ -470,6 +565,7 @@ export function hashAuthSessionToken(token: string): string {
 
 function mapTenantAccountRow(row: TenantAuthAccountRow): TenantAuthAccount {
   const roles = parseEmployeeRoles(row.roles);
+  const permissions = parsePermissions(row.permissions);
 
   return {
     tenantId: row.tenant_id as TenantId,
@@ -483,7 +579,7 @@ function mapTenantAccountRow(row: TenantAuthAccountRow): TenantAuthAccount {
     displayName: row.display_name,
     passwordHash: row.password_hash,
     roles,
-    permissions: permissionsForRoles(roles)
+    permissions
   };
 }
 
@@ -506,7 +602,8 @@ function mapAuthSessionRow(row: AuthSessionRow): AuthSessionPrincipal {
           email_verified_at: row.employee_email_verified_at,
           display_name: row.employee_display_name,
           password_hash: row.employee_password_hash,
-          roles: row.employee_roles
+          roles: row.employee_roles,
+          permissions: row.employee_permissions
         })
       : undefined;
   const platformAdmin =
@@ -534,6 +631,88 @@ function parseEmployeeRoles(value: unknown): readonly EmployeeRole[] {
   return roles.filter((role): role is EmployeeRole => {
     return typeof role === "string" && isEmployeeRole(role);
   });
+}
+
+function parsePermissions(value: unknown): readonly Permission[] {
+  const permissions = Array.isArray(value) ? value : [];
+
+  return permissions.filter((permission): permission is Permission => {
+    return typeof permission === "string" && isPermission(permission);
+  });
+}
+
+function buildTenantScopedPermissionAggregationSql(
+  tenantId: SQL,
+  employeeId: SQL,
+  at: SQL
+): SQL {
+  return sql`
+    select coalesce(
+             json_agg(permission_rows.permission order by permission_rows.permission),
+             '[]'::json
+           ) as permissions
+    from (
+      select distinct permission_source.permission
+      from (
+        select tenant_role_permissions.permission
+        from tenant_role_bindings
+        inner join tenant_roles
+          on tenant_roles.tenant_id = tenant_role_bindings.tenant_id
+         and tenant_roles.id = tenant_role_bindings.role_id
+         and tenant_roles.status = 'active'
+         and tenant_roles.archived_at is null
+        inner join tenant_role_permissions
+          on tenant_role_permissions.tenant_id = tenant_role_bindings.tenant_id
+         and tenant_role_permissions.role_id = tenant_role_bindings.role_id
+        where tenant_role_bindings.tenant_id = ${tenantId}
+          and tenant_role_bindings.subject_type = 'employee'
+          and tenant_role_bindings.subject_id = ${employeeId}
+          and tenant_role_bindings.scope_type = 'tenant'
+          and tenant_role_bindings.scope_id is null
+          and tenant_role_bindings.revoked_at is null
+          and (
+            tenant_role_bindings.starts_at is null
+            or tenant_role_bindings.starts_at <= ${at}
+          )
+          and (
+            tenant_role_bindings.expires_at is null
+            or tenant_role_bindings.expires_at > ${at}
+          )
+        union all
+        select direct_permission_grants.permission
+        from direct_permission_grants
+        where direct_permission_grants.tenant_id = ${tenantId}
+          and direct_permission_grants.employee_id = ${employeeId}
+          and direct_permission_grants.scope_type = 'tenant'
+          and direct_permission_grants.scope_id is null
+          and direct_permission_grants.revoked_at is null
+          and (
+            direct_permission_grants.starts_at is null
+            or direct_permission_grants.starts_at <= ${at}
+          )
+          and (
+            direct_permission_grants.expires_at is null
+            or direct_permission_grants.expires_at > ${at}
+          )
+      ) permission_source
+    ) permission_rows
+  `;
+}
+
+function tenantRoleIdSql(tenantId: TenantId, role: EmployeeRole): string {
+  return `role:${tenantId}:${role}`;
+}
+
+function tenantRoleBindingIdSql(
+  tenantId: TenantId,
+  employeeId: EmployeeId,
+  role: EmployeeRole
+): string {
+  return `role_binding:${tenantId}:${employeeId}:${role}:tenant`;
+}
+
+function tenantAdminPermissionsJson(): string {
+  return JSON.stringify(permissionsForRoles(["tenant_admin"]));
 }
 
 function normalizeEmail(email: string): string {

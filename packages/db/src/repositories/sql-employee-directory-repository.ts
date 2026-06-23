@@ -1,11 +1,13 @@
 import type { EmployeeId, PlatformEvent, TenantId } from "@hulee/contracts";
 import {
   CoreError,
+  isPermission,
   isEmployeeRole,
   permissionsForRoles,
   type Employee,
   type EmployeeInvitation,
-  type EmployeeRole
+  type EmployeeRole,
+  type Permission
 } from "@hulee/core";
 import { createHash } from "node:crypto";
 import { sql, type SQL } from "drizzle-orm";
@@ -173,6 +175,7 @@ type AcceptedInvitationRow = {
   display_name: string;
   password_hash: string | null;
   roles: unknown;
+  permissions: unknown;
 };
 
 export function createSqlEmployeeDirectoryRepository(
@@ -550,6 +553,16 @@ export function buildAcceptEmployeeInvitationSql(
         and employee_invitations.expires_at > ${input.acceptedAt}
       limit 1
     ),
+    role_template as (
+      select *
+      from jsonb_to_recordset(${serializeEmployeeRoleTemplates([role])}::jsonb)
+        as role_template(
+          role text,
+          name text,
+          description text,
+          permissions jsonb
+        )
+    ),
     inserted_account as (
       insert into accounts (
         id,
@@ -617,6 +630,104 @@ export function buildAcceptEmployeeInvitationSql(
       returning tenant_id,
                 employee_id,
                 role
+    ),
+    tenant_role_upsert as (
+      insert into tenant_roles (
+        id,
+        tenant_id,
+        name,
+        description,
+        status,
+        is_system,
+        created_by_employee_id,
+        archived_at,
+        created_at,
+        updated_at
+      )
+      select concat('role:', pending_invitation.tenant_id, ':', pending_invitation.role),
+             pending_invitation.tenant_id,
+             role_template.name,
+             role_template.description,
+             'active',
+             true,
+             null,
+             null,
+             ${input.acceptedAt},
+             ${input.acceptedAt}
+      from pending_invitation
+      inner join role_template
+        on role_template.role = pending_invitation.role
+      on conflict (id) do update
+      set status = 'active',
+          archived_at = null,
+          updated_at = excluded.updated_at
+      returning id
+    ),
+    tenant_role_permission_upsert as (
+      insert into tenant_role_permissions (
+        tenant_id,
+        role_id,
+        permission,
+        created_at,
+        updated_at
+      )
+      select pending_invitation.tenant_id,
+             concat('role:', pending_invitation.tenant_id, ':', pending_invitation.role),
+             permission_rows.permission,
+             ${input.acceptedAt},
+             ${input.acceptedAt}
+      from pending_invitation
+      inner join role_template
+        on role_template.role = pending_invitation.role
+      cross join jsonb_array_elements_text(role_template.permissions)
+        as permission_rows(permission)
+      on conflict (tenant_id, role_id, permission) do nothing
+      returning permission
+    ),
+    tenant_role_binding_upsert as (
+      insert into tenant_role_bindings (
+        id,
+        tenant_id,
+        role_id,
+        subject_type,
+        subject_id,
+        scope_type,
+        scope_id,
+        created_by_employee_id,
+        starts_at,
+        expires_at,
+        revoked_at,
+        created_at,
+        updated_at
+      )
+      select concat(
+               'role_binding:',
+               pending_invitation.tenant_id,
+               ':',
+               inserted_employee.id,
+               ':',
+               pending_invitation.role,
+               ':tenant'
+             ),
+             pending_invitation.tenant_id,
+             concat('role:', pending_invitation.tenant_id, ':', pending_invitation.role),
+             'employee',
+             inserted_employee.id,
+             'tenant',
+             null,
+             null,
+             null,
+             null,
+             null,
+             ${input.acceptedAt},
+             ${input.acceptedAt}
+      from pending_invitation
+      inner join inserted_employee
+        on inserted_employee.tenant_id = pending_invitation.tenant_id
+      on conflict (id) do update
+      set revoked_at = null,
+          updated_at = excluded.updated_at
+      returning id
     ),
     updated_invitation as (
       update employee_invitations
@@ -699,7 +810,8 @@ export function buildAcceptEmployeeInvitationSql(
            inserted_account.email_verified_at,
            inserted_employee.display_name,
            inserted_account.password_hash,
-           json_build_array(inserted_role.role) as roles
+           json_build_array(inserted_role.role) as roles,
+           role_template.permissions
     from pending_invitation
     inner join inserted_account
       on inserted_account.tenant_id = pending_invitation.tenant_id
@@ -707,6 +819,8 @@ export function buildAcceptEmployeeInvitationSql(
       on inserted_employee.tenant_id = pending_invitation.tenant_id
     inner join inserted_role
       on inserted_role.tenant_id = pending_invitation.tenant_id
+    inner join role_template
+      on role_template.role = inserted_role.role
   `;
 }
 
@@ -722,6 +836,26 @@ export function buildChangeEmployeeRoleSql(
         and id = ${input.employeeId}
         and deactivated_at is null
       limit 1
+    ),
+    role_template as (
+      select *
+      from jsonb_to_recordset(${serializeEmployeeRoleTemplates([input.role])}::jsonb)
+        as role_template(
+          role text,
+          name text,
+          description text,
+          permissions jsonb
+        )
+    ),
+    fixed_role_templates as (
+      select *
+      from jsonb_to_recordset(${serializeEmployeeRoleTemplates(fixedEmployeeRoles)}::jsonb)
+        as role_template(
+          role text,
+          name text,
+          description text,
+          permissions jsonb
+        )
     ),
     deleted_roles as (
       delete from employee_roles
@@ -747,6 +881,120 @@ export function buildChangeEmployeeRoleSql(
       returning tenant_id,
                 employee_id,
                 role
+    ),
+    revoked_tenant_role_bindings as (
+      update tenant_role_bindings
+      set revoked_at = ${input.changedAt},
+          updated_at = ${input.changedAt}
+      from target_employee,
+           fixed_role_templates
+      where tenant_role_bindings.tenant_id = target_employee.tenant_id
+        and tenant_role_bindings.subject_type = 'employee'
+        and tenant_role_bindings.subject_id = target_employee.id
+        and tenant_role_bindings.role_id = concat(
+          'role:',
+          target_employee.tenant_id,
+          ':',
+          fixed_role_templates.role
+        )
+        and tenant_role_bindings.revoked_at is null
+      returning tenant_role_bindings.id
+    ),
+    tenant_role_upsert as (
+      insert into tenant_roles (
+        id,
+        tenant_id,
+        name,
+        description,
+        status,
+        is_system,
+        created_by_employee_id,
+        archived_at,
+        created_at,
+        updated_at
+      )
+      select concat('role:', target_employee.tenant_id, ':', ${input.role}),
+             target_employee.tenant_id,
+             role_template.name,
+             role_template.description,
+             'active',
+             true,
+             null,
+             null,
+             ${input.changedAt},
+             ${input.changedAt}
+      from target_employee
+      inner join role_template
+        on role_template.role = ${input.role}
+      on conflict (id) do update
+      set status = 'active',
+          archived_at = null,
+          updated_at = excluded.updated_at
+      returning id
+    ),
+    tenant_role_permission_upsert as (
+      insert into tenant_role_permissions (
+        tenant_id,
+        role_id,
+        permission,
+        created_at,
+        updated_at
+      )
+      select target_employee.tenant_id,
+             concat('role:', target_employee.tenant_id, ':', ${input.role}),
+             permission_rows.permission,
+             ${input.changedAt},
+             ${input.changedAt}
+      from target_employee
+      inner join role_template
+        on role_template.role = ${input.role}
+      cross join jsonb_array_elements_text(role_template.permissions)
+        as permission_rows(permission)
+      on conflict (tenant_id, role_id, permission) do nothing
+      returning permission
+    ),
+    tenant_role_binding_upsert as (
+      insert into tenant_role_bindings (
+        id,
+        tenant_id,
+        role_id,
+        subject_type,
+        subject_id,
+        scope_type,
+        scope_id,
+        created_by_employee_id,
+        starts_at,
+        expires_at,
+        revoked_at,
+        created_at,
+        updated_at
+      )
+      select concat(
+               'role_binding:',
+               target_employee.tenant_id,
+               ':',
+               target_employee.id,
+               ':',
+               ${input.role},
+               ':tenant'
+             ),
+             target_employee.tenant_id,
+             concat('role:', target_employee.tenant_id, ':', ${input.role}),
+             'employee',
+             target_employee.id,
+             'tenant',
+             null,
+             null,
+             null,
+             null,
+             null,
+             ${input.changedAt},
+             ${input.changedAt}
+      from target_employee
+      on conflict (id) do update
+      set revoked_at = null,
+          updated_at = excluded.updated_at
+      returning id
     ),
     updated_employee as (
       update employees
@@ -1107,6 +1355,42 @@ function serializeEventRows(events: readonly PlatformEvent[]): string {
   );
 }
 
+function serializeEmployeeRoleTemplates(
+  roles: readonly EmployeeRole[]
+): string {
+  return JSON.stringify(
+    roles.map((role) => {
+      return {
+        role,
+        name: tenantRoleName(role),
+        description: tenantRoleDescription(role),
+        permissions: permissionsForRoles([role])
+      };
+    })
+  );
+}
+
+const fixedEmployeeRoles = [
+  "tenant_admin",
+  "supervisor",
+  "agent"
+] as const satisfies readonly EmployeeRole[];
+
+function tenantRoleName(role: EmployeeRole): string {
+  switch (role) {
+    case "tenant_admin":
+      return "Tenant admin";
+    case "supervisor":
+      return "Supervisor";
+    case "agent":
+      return "Agent";
+  }
+}
+
+function tenantRoleDescription(role: EmployeeRole): string {
+  return `System compatibility role for ${role}.`;
+}
+
 function mapEmployeeRow(row: EmployeeRow): TenantEmployeeRecord {
   return {
     tenantId: row.tenant_id as TenantId,
@@ -1154,6 +1438,7 @@ function mapAcceptedInvitationRow(
   row: AcceptedInvitationRow
 ): TenantAuthAccount {
   const roles = parseEmployeeRoles(row.roles);
+  const permissions = parsePermissions(row.permissions);
 
   return {
     tenantId: row.tenant_id as TenantId,
@@ -1167,7 +1452,7 @@ function mapAcceptedInvitationRow(
     displayName: row.display_name,
     passwordHash: row.password_hash,
     roles,
-    permissions: permissionsForRoles(roles)
+    permissions
   };
 }
 
@@ -1184,5 +1469,13 @@ function parseEmployeeRoles(value: unknown): readonly EmployeeRole[] {
 
   return roles.filter((role): role is EmployeeRole => {
     return typeof role === "string" && isEmployeeRole(role);
+  });
+}
+
+function parsePermissions(value: unknown): readonly Permission[] {
+  const permissions = Array.isArray(value) ? value : [];
+
+  return permissions.filter((permission): permission is Permission => {
+    return typeof permission === "string" && isPermission(permission);
   });
 }

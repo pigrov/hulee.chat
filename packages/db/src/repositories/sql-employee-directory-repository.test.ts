@@ -111,7 +111,8 @@ describe("SQL employee directory repository", () => {
         email_verified_at: "2026-06-23T10:00:00.000Z",
         display_name: "Agent",
         password_hash: "scrypt:v1:salt:hash",
-        roles: ["agent"]
+        roles: ["agent"],
+        permissions: ["inbox.read", "message.reply"]
       }
     ]);
     const repository = createSqlEmployeeDirectoryRepository(executor);
@@ -193,6 +194,9 @@ describe("SQL employee directory repository", () => {
     const acceptQuery = renderQuery(executor.queries[1]);
 
     expect(acceptQuery.sql).toMatch(/email_verified_at\s*,/);
+    expect(acceptQuery.sql).toContain("insert into tenant_roles");
+    expect(acceptQuery.sql).toContain("insert into tenant_role_permissions");
+    expect(acceptQuery.sql).toContain("insert into tenant_role_bindings");
     expect(acceptQuery.params).toContainEqual(new Date(now));
     expect(
       acceptQuery.params.some((param) => {
@@ -234,6 +238,12 @@ describe("SQL employee directory repository", () => {
       changedAt: now,
       events
     });
+
+    const changeRoleQuery = renderQuery(executor.queries[0]);
+
+    expect(changeRoleQuery.sql).toContain("update tenant_role_bindings");
+    expect(changeRoleQuery.sql).toContain("insert into tenant_role_bindings");
+
     await repository.deactivateEmployee({
       tenantId,
       employeeId,
