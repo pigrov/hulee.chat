@@ -36,13 +36,21 @@ import {
   type WebAccessSession
 } from "./access";
 import { validatePasswordPolicy } from "./password-policy";
+import {
+  buildWebCookieOptions,
+  resolveWebCookieRuntime
+} from "./session-cookies";
 import { resolveWebConfig, resolveWebEnv } from "./web-config";
 
 export { resolveWebConfig, resolveWebEnv } from "./web-config";
-
-export const authSessionCookieName = "hulee_session";
-export const lastTenantSlugCookieName = "hulee_last_tenant";
-export const tenantLoginChoicesCookieName = "hulee_login_choices";
+export {
+  authSessionCookieName,
+  lastTenantSlugCookieName,
+  productionAuthSessionCookieName,
+  productionLastTenantSlugCookieName,
+  productionTenantLoginChoicesCookieName,
+  tenantLoginChoicesCookieName
+} from "./session-cookies";
 
 const sessionTtlMs = 1000 * 60 * 60 * 24 * 14;
 const lastTenantSlugTtlMs = 1000 * 60 * 60 * 24 * 365;
@@ -326,27 +334,35 @@ export async function writeTenantLoginChoices(input: {
   const now = new Date();
   const expiresAt = new Date(now.getTime() + tenantLoginChoicesTtlMs);
   const cookieStore = await cookies();
+  const config = resolveWebConfig();
+  const cookieRuntime = resolveWebCookieRuntime(config.nodeEnv);
 
   cookieStore.set(
-    tenantLoginChoicesCookieName,
+    cookieRuntime.tenantLoginChoicesCookieName,
     encodeSignedPayload({
       email: normalizeEmail(input.email),
       choices: input.choices,
       expiresAt: expiresAt.toISOString()
     }),
-    {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: resolveWebConfig().nodeEnv === "production",
-      path: "/",
+    buildWebCookieOptions({
+      nodeEnv: config.nodeEnv,
       expires: expiresAt
-    }
+    })
+  );
+  deleteInactiveCookieNames(
+    cookieStore,
+    cookieRuntime.tenantLoginChoicesCookieName,
+    [...cookieRuntime.tenantLoginChoicesCookieReadNames]
   );
 }
 
 export async function readTenantLoginChoices(): Promise<TenantLoginChoices | null> {
   const cookieStore = await cookies();
-  const value = cookieStore.get(tenantLoginChoicesCookieName)?.value;
+  const value = readCookieValue(
+    cookieStore,
+    resolveWebCookieRuntime(resolveWebConfig().nodeEnv)
+      .tenantLoginChoicesCookieReadNames
+  );
   const choices = value ? decodeSignedPayload(value) : null;
 
   if (choices === null || new Date(choices.expiresAt).getTime() <= Date.now()) {
@@ -431,8 +447,12 @@ export async function logoutCurrentWebSession(): Promise<void> {
   }
 
   const cookieStore = await cookies();
-  cookieStore.delete(authSessionCookieName);
-  cookieStore.delete(tenantLoginChoicesCookieName);
+  const cookieRuntime = resolveWebCookieRuntime(resolveWebConfig().nodeEnv);
+
+  deleteCookieNames(cookieStore, [
+    ...cookieRuntime.authSessionCookieReadNames,
+    ...cookieRuntime.tenantLoginChoicesCookieReadNames
+  ]);
 }
 
 function webAccessSessionFromPrincipal(
@@ -480,9 +500,12 @@ export function getWebDatabase(): HuleeDatabase {
 
 async function readSessionToken(): Promise<string | undefined> {
   const cookieStore = await cookies();
-  const token = cookieStore.get(authSessionCookieName)?.value;
 
-  return token && token.length > 0 ? token : undefined;
+  return readCookieValue(
+    cookieStore,
+    resolveWebCookieRuntime(resolveWebConfig().nodeEnv)
+      .authSessionCookieReadNames
+  );
 }
 
 async function writeSessionToken(
@@ -490,39 +513,99 @@ async function writeSessionToken(
   expiresAt: Date
 ): Promise<void> {
   const cookieStore = await cookies();
+  const config = resolveWebConfig();
+  const cookieRuntime = resolveWebCookieRuntime(config.nodeEnv);
 
-  cookieStore.set(authSessionCookieName, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: resolveWebConfig().nodeEnv === "production",
-    path: "/",
-    expires: expiresAt
-  });
+  cookieStore.set(
+    cookieRuntime.authSessionCookieName,
+    token,
+    buildWebCookieOptions({
+      nodeEnv: config.nodeEnv,
+      expires: expiresAt
+    })
+  );
+  deleteInactiveCookieNames(cookieStore, cookieRuntime.authSessionCookieName, [
+    ...cookieRuntime.authSessionCookieReadNames
+  ]);
 }
 
 async function readLastTenantSlug(): Promise<string | undefined> {
   const cookieStore = await cookies();
-  const slug = cookieStore.get(lastTenantSlugCookieName)?.value;
 
-  return slug && slug.length > 0 ? slug : undefined;
+  return readCookieValue(
+    cookieStore,
+    resolveWebCookieRuntime(resolveWebConfig().nodeEnv)
+      .lastTenantSlugCookieReadNames
+  );
 }
 
 async function writeLastTenantSlug(slug: string, now: Date): Promise<void> {
   const cookieStore = await cookies();
+  const config = resolveWebConfig();
+  const cookieRuntime = resolveWebCookieRuntime(config.nodeEnv);
+  const expires = new Date(now.getTime() + lastTenantSlugTtlMs);
 
-  cookieStore.set(lastTenantSlugCookieName, slug, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: resolveWebConfig().nodeEnv === "production",
-    path: "/",
-    expires: new Date(now.getTime() + lastTenantSlugTtlMs)
-  });
+  cookieStore.set(
+    cookieRuntime.lastTenantSlugCookieName,
+    slug,
+    buildWebCookieOptions({
+      nodeEnv: config.nodeEnv,
+      expires
+    })
+  );
+  deleteInactiveCookieNames(
+    cookieStore,
+    cookieRuntime.lastTenantSlugCookieName,
+    [...cookieRuntime.lastTenantSlugCookieReadNames]
+  );
 }
 
 async function clearTenantLoginChoices(): Promise<void> {
   const cookieStore = await cookies();
 
-  cookieStore.delete(tenantLoginChoicesCookieName);
+  deleteCookieNames(
+    cookieStore,
+    resolveWebCookieRuntime(resolveWebConfig().nodeEnv)
+      .tenantLoginChoicesCookieReadNames
+  );
+}
+
+type MutableCookieStore = Awaited<ReturnType<typeof cookies>>;
+
+function readCookieValue(
+  cookieStore: MutableCookieStore,
+  names: readonly string[]
+): string | undefined {
+  for (const name of names) {
+    const value = cookieStore.get(name)?.value;
+
+    if (value !== undefined && value.length > 0) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function deleteCookieNames(
+  cookieStore: MutableCookieStore,
+  names: readonly string[]
+): void {
+  for (const name of names) {
+    cookieStore.delete(name);
+  }
+}
+
+function deleteInactiveCookieNames(
+  cookieStore: MutableCookieStore,
+  activeName: string,
+  names: readonly string[]
+): void {
+  for (const name of names) {
+    if (name !== activeName) {
+      cookieStore.delete(name);
+    }
+  }
 }
 
 export async function resolvePreferredTenantSlug(
