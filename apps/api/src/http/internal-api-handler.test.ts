@@ -1,8 +1,10 @@
 import type {
   EmployeeId,
   InternalInboxViewResponse,
+  InternalOrgUnitUpsertRequest,
   InternalTenantBrandUpdateRequest,
   InternalTelegramIntegrationUpdateRequest,
+  InternalWorkQueueUpsertRequest,
   TenantId
 } from "@hulee/contracts";
 import {
@@ -27,6 +29,7 @@ const session: InternalApiSession = {
   employeeId,
   permissions: [
     "tenant.manage",
+    "employees.manage",
     "inbox.read",
     "message.reply",
     "modules.manage"
@@ -159,6 +162,46 @@ function createHandler(input?: {
       }
     })
   );
+  const loadOrgStructure = vi.fn(async () => ({
+    orgUnits: [
+      {
+        id: "org-sales",
+        parentOrgUnitId: null,
+        name: "Sales",
+        kind: "department" as const,
+        status: "active" as const
+      }
+    ],
+    workQueues: [
+      {
+        id: "queue-sales",
+        name: "Sales queue",
+        kind: "sales" as const,
+        owningOrgUnitId: "org-sales",
+        status: "active" as const,
+        routingConfig: {}
+      }
+    ]
+  }));
+  const upsertOrgUnit = vi.fn(
+    async (_context: unknown, request: InternalOrgUnitUpsertRequest) => ({
+      id: request.id ?? "org-generated",
+      parentOrgUnitId: request.parentOrgUnitId ?? null,
+      name: request.name,
+      kind: request.kind,
+      status: request.status
+    })
+  );
+  const upsertWorkQueue = vi.fn(
+    async (_context: unknown, request: InternalWorkQueueUpsertRequest) => ({
+      id: request.id ?? "queue-generated",
+      name: request.name,
+      kind: request.kind,
+      owningOrgUnitId: request.owningOrgUnitId ?? null,
+      status: request.status,
+      routingConfig: request.routingConfig
+    })
+  );
   const handler = createInternalApiHandler({
     requestIdFactory: () => "request-1",
     sessionResolver: {
@@ -178,6 +221,11 @@ function createHandler(input?: {
     tenantSettings: {
       loadTenantBrand,
       updateTenantBrand
+    },
+    orgStructure: {
+      loadOrgStructure,
+      upsertOrgUnit,
+      upsertWorkQueue
     }
   });
 
@@ -191,7 +239,10 @@ function createHandler(input?: {
     setTelegramWebhook,
     deleteTelegramWebhook,
     loadTenantBrand,
-    updateTenantBrand
+    updateTenantBrand,
+    loadOrgStructure,
+    upsertOrgUnit,
+    upsertWorkQueue
   };
 }
 
@@ -319,6 +370,92 @@ describe("internal API handler", () => {
     const response = await handler.handle({
       method: "GET",
       path: "/internal/v1/tenant/brand"
+    });
+
+    expect(response.status).toBe(403);
+    expect(response.body).toMatchObject({
+      error: {
+        code: "permission.denied"
+      }
+    });
+  });
+
+  it("loads and upserts org structure through employees.manage permission", async () => {
+    const { handler, loadOrgStructure, upsertOrgUnit, upsertWorkQueue } =
+      createHandler();
+    const loadResponse = await handler.handle({
+      method: "GET",
+      path: "/internal/v1/org-structure"
+    });
+    const orgUnitResponse = await handler.handle({
+      method: "PUT",
+      path: "/internal/v1/org-structure/org-units",
+      body: {
+        name: " Sales ",
+        kind: "department"
+      }
+    });
+    const queueResponse = await handler.handle({
+      method: "PUT",
+      path: "/internal/v1/org-structure/work-queues",
+      body: {
+        name: " Claims ",
+        kind: "claims",
+        owningOrgUnitId: "org-sales"
+      }
+    });
+
+    expect(loadResponse.status).toBe(200);
+    expect(loadResponse.body).toMatchObject({
+      orgUnits: [
+        {
+          id: "org-sales"
+        }
+      ],
+      workQueues: [
+        {
+          id: "queue-sales"
+        }
+      ]
+    });
+    expect(orgUnitResponse.status).toBe(200);
+    expect(orgUnitResponse.body).toMatchObject({
+      id: "org-generated",
+      name: "Sales",
+      status: "active"
+    });
+    expect(queueResponse.status).toBe(200);
+    expect(queueResponse.body).toMatchObject({
+      id: "queue-generated",
+      name: "Claims",
+      kind: "claims",
+      owningOrgUnitId: "org-sales"
+    });
+    expect(loadOrgStructure).toHaveBeenCalledWith(session);
+    expect(upsertOrgUnit).toHaveBeenCalledWith(session, {
+      name: "Sales",
+      kind: "department",
+      status: "active"
+    });
+    expect(upsertWorkQueue).toHaveBeenCalledWith(session, {
+      name: "Claims",
+      kind: "claims",
+      owningOrgUnitId: "org-sales",
+      status: "active",
+      routingConfig: {}
+    });
+  });
+
+  it("requires employees.manage for org structure routes", async () => {
+    const { handler } = createHandler({
+      session: {
+        ...session,
+        permissions: ["tenant.manage", "inbox.read", "message.reply"]
+      }
+    });
+    const response = await handler.handle({
+      method: "GET",
+      path: "/internal/v1/org-structure"
     });
 
     expect(response.status).toBe(403);

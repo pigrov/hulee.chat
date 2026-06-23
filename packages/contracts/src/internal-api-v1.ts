@@ -116,6 +116,71 @@ export const internalTenantBrandResponseSchema = z
   })
   .strict();
 
+export const internalOrgStructureStatusSchema = z.enum(["active", "archived"]);
+export const internalOrgUnitKindSchema = z.enum([
+  "department",
+  "branch",
+  "function",
+  "custom"
+]);
+export const internalWorkQueueKindSchema = z.enum([
+  "lead_intake",
+  "sales",
+  "claims",
+  "measurements",
+  "support",
+  "custom"
+]);
+
+export const internalOrgUnitSchema = z
+  .object({
+    id: z.string().trim().min(1).max(200),
+    parentOrgUnitId: z.string().trim().min(1).max(200).nullable(),
+    name: z.string().trim().min(1).max(120),
+    kind: internalOrgUnitKindSchema,
+    status: internalOrgStructureStatusSchema
+  })
+  .strict();
+
+export const internalWorkQueueSchema = z
+  .object({
+    id: z.string().trim().min(1).max(200),
+    name: z.string().trim().min(1).max(120),
+    kind: internalWorkQueueKindSchema,
+    owningOrgUnitId: z.string().trim().min(1).max(200).nullable(),
+    status: internalOrgStructureStatusSchema,
+    routingConfig: z.record(z.string(), z.unknown()).default({})
+  })
+  .strict();
+
+export const internalOrgStructureResponseSchema = z
+  .object({
+    orgUnits: z.array(internalOrgUnitSchema),
+    workQueues: z.array(internalWorkQueueSchema)
+  })
+  .strict();
+
+export const internalOrgUnitUpsertRequestSchema = z
+  .object({
+    id: z.string().trim().min(1).max(200).optional(),
+    parentOrgUnitId: z.string().trim().min(1).max(200).nullable().optional(),
+    name: z.string().trim().min(1).max(120),
+    kind: internalOrgUnitKindSchema.default("department"),
+    status: internalOrgStructureStatusSchema.default("active")
+  })
+  .strict();
+
+export const internalWorkQueueUpsertRequestSchema = z
+  .object({
+    id: z.string().trim().min(1).max(200).optional(),
+    name: z.string().trim().min(1).max(120),
+    kind: internalWorkQueueKindSchema.default("custom"),
+    owningOrgUnitId: z.string().trim().min(1).max(200).nullable().optional(),
+    status: internalOrgStructureStatusSchema.default("active"),
+    routingConfig: z.record(z.string(), z.unknown()).default({})
+  })
+  .strict();
+
 export const internalTelegramIntegrationModeSchema = z.enum([
   "webhook",
   "polling"
@@ -251,6 +316,22 @@ export type InternalTenantBrandUpdateRequest = z.infer<
 >;
 export type InternalTenantBrandResponse = z.infer<
   typeof internalTenantBrandResponseSchema
+>;
+export type InternalOrgStructureStatus = z.infer<
+  typeof internalOrgStructureStatusSchema
+>;
+export type InternalOrgUnitKind = z.infer<typeof internalOrgUnitKindSchema>;
+export type InternalWorkQueueKind = z.infer<typeof internalWorkQueueKindSchema>;
+export type InternalOrgUnit = z.infer<typeof internalOrgUnitSchema>;
+export type InternalWorkQueue = z.infer<typeof internalWorkQueueSchema>;
+export type InternalOrgStructureResponse = z.infer<
+  typeof internalOrgStructureResponseSchema
+>;
+export type InternalOrgUnitUpsertRequest = z.infer<
+  typeof internalOrgUnitUpsertRequestSchema
+>;
+export type InternalWorkQueueUpsertRequest = z.infer<
+  typeof internalWorkQueueUpsertRequestSchema
 >;
 export type InternalTelegramIntegrationConfig = z.infer<
   typeof internalTelegramIntegrationConfigSchema

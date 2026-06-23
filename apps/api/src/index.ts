@@ -4,6 +4,7 @@ import {
   createDrizzlePersistenceExecutor,
   createExternalMessageRepository,
   createSqlPublicApiAuditSink,
+  createSqlOrgStructureRepository,
   createSqlTenantSecretRepository,
   createSqlTenantModuleConfigRepository,
   createSqlTenantApiKeyRepository,
@@ -33,6 +34,7 @@ import {
   createTenantSecretResolver,
   createInternalIntegrationService
 } from "./internal-integrations-service";
+import { createInternalOrgStructureService } from "./internal-org-structure-service";
 import { createInternalTenantSettingsService } from "./internal-tenant-service";
 import { createExternalChannelCommandService } from "./external-channel-command-service";
 import { createPublicApiCommandService } from "./public-api-command-service";
@@ -153,6 +155,9 @@ export function createInternalApiDataPlaneHandler(
     tenantSettings: createInternalTenantSettingsService({
       database: options.database
     }),
+    orgStructure: createInternalOrgStructureService({
+      repository: createSqlOrgStructureRepository(options.database)
+    }),
     logger: options.logger,
     requestIdFactory: options.requestIdFactory
   });
@@ -245,6 +250,7 @@ export {
   createSqlInternalInboxQueryService
 } from "./internal-inbox-service";
 export { createInternalIntegrationService } from "./internal-integrations-service";
+export { createInternalOrgStructureService } from "./internal-org-structure-service";
 export { createInternalTenantSettingsService } from "./internal-tenant-service";
 export { createPublicApiCommandService } from "./public-api-command-service";
 export type {

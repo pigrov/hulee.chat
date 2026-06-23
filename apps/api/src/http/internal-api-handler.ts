@@ -2,6 +2,9 @@ import type {
   EmployeeId,
   InternalInboxReplyResponse,
   InternalInboxViewResponse,
+  InternalOrgStructureResponse,
+  InternalOrgUnit,
+  InternalWorkQueue,
   InternalTenantBrandResponse,
   InternalTelegramIntegrationResponse,
   PlatformErrorCode,
@@ -11,8 +14,10 @@ import {
   getPlatformErrorDefinition,
   internalApiV1Version,
   internalInboxReplyRequestSchema,
+  internalOrgUnitUpsertRequestSchema,
   internalTenantBrandUpdateRequestSchema,
   internalTelegramIntegrationUpdateRequestSchema,
+  internalWorkQueueUpsertRequestSchema,
   isPlatformErrorCode
 } from "@hulee/contracts";
 import {
@@ -30,6 +35,7 @@ import type {
   InternalInboxQueryService
 } from "../internal-inbox-service";
 import type { InternalIntegrationService } from "../internal-integrations-service";
+import type { InternalOrgStructureService } from "../internal-org-structure-service";
 import type { InternalTenantSettingsService } from "../internal-tenant-service";
 import type { ApiHttpRequest, ApiHttpResponse } from "./public-api-handler";
 import { resolveRequestId } from "./request-id";
@@ -54,6 +60,7 @@ export type InternalApiHandlerOptions = {
   inboxCommands: InternalInboxCommandService;
   integrations: InternalIntegrationService;
   tenantSettings: InternalTenantSettingsService;
+  orgStructure: InternalOrgStructureService;
   logger?: Logger;
   requestIdFactory?: () => string;
 };
@@ -79,6 +86,15 @@ type RouteMatch =
     }
   | {
       route: "tenant_brand_update";
+    }
+  | {
+      route: "org_structure_view";
+    }
+  | {
+      route: "org_unit_upsert";
+    }
+  | {
+      route: "work_queue_upsert";
     }
   | {
       route: "telegram_integration_view";
@@ -140,7 +156,8 @@ export function createInternalApiHandler(
           inboxQueries: options.inboxQueries,
           inboxCommands: options.inboxCommands,
           integrations: options.integrations,
-          tenantSettings: options.tenantSettings
+          tenantSettings: options.tenantSettings,
+          orgStructure: options.orgStructure
         });
       } catch (error) {
         const code = platformErrorCodeFromUnknown(error);
@@ -306,6 +323,7 @@ function createFallbackDevSession(
     permissions: input?.permissions ??
       headerPermissions ?? [
         "tenant.manage",
+        "employees.manage",
         "inbox.read",
         "message.reply",
         "modules.manage"
@@ -321,6 +339,7 @@ async function handleAuthenticatedRoute(input: {
   inboxCommands: InternalInboxCommandService;
   integrations: InternalIntegrationService;
   tenantSettings: InternalTenantSettingsService;
+  orgStructure: InternalOrgStructureService;
 }): Promise<ApiHttpResponse> {
   switch (input.route.route) {
     case "inbox_view": {
@@ -360,6 +379,38 @@ async function handleAuthenticatedRoute(input: {
       );
       const response: InternalTenantBrandResponse =
         await input.tenantSettings.updateTenantBrand(input.session, request);
+
+      return jsonResponse(200, response);
+    }
+
+    case "org_structure_view": {
+      assertSessionCan(input.session, "employees.manage");
+      const response: InternalOrgStructureResponse =
+        await input.orgStructure.loadOrgStructure(input.session);
+
+      return jsonResponse(200, response);
+    }
+
+    case "org_unit_upsert": {
+      assertSessionCan(input.session, "employees.manage");
+      const request = internalOrgUnitUpsertRequestSchema.parse(
+        input.request.body
+      );
+      const response: InternalOrgUnit = await input.orgStructure.upsertOrgUnit(
+        input.session,
+        request
+      );
+
+      return jsonResponse(200, response);
+    }
+
+    case "work_queue_upsert": {
+      assertSessionCan(input.session, "employees.manage");
+      const request = internalWorkQueueUpsertRequestSchema.parse(
+        input.request.body
+      );
+      const response: InternalWorkQueue =
+        await input.orgStructure.upsertWorkQueue(input.session, request);
 
       return jsonResponse(200, response);
     }
@@ -437,6 +488,30 @@ function matchRoute(request: ApiHttpRequest): RouteMatch | undefined {
   if (request.method === "PUT" && path === "/internal/v1/tenant/brand") {
     return {
       route: "tenant_brand_update"
+    };
+  }
+
+  if (request.method === "GET" && path === "/internal/v1/org-structure") {
+    return {
+      route: "org_structure_view"
+    };
+  }
+
+  if (
+    request.method === "PUT" &&
+    path === "/internal/v1/org-structure/org-units"
+  ) {
+    return {
+      route: "org_unit_upsert"
+    };
+  }
+
+  if (
+    request.method === "PUT" &&
+    path === "/internal/v1/org-structure/work-queues"
+  ) {
+    return {
+      route: "work_queue_upsert"
     };
   }
 

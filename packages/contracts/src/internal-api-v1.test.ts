@@ -4,10 +4,13 @@ import {
   internalApiErrorResponseSchema,
   internalInboxReplyRequestSchema,
   internalInboxViewResponseSchema,
+  internalOrgStructureResponseSchema,
+  internalOrgUnitUpsertRequestSchema,
   internalTenantBrandResponseSchema,
   internalTenantBrandUpdateRequestSchema,
   internalTelegramIntegrationResponseSchema,
-  internalTelegramIntegrationUpdateRequestSchema
+  internalTelegramIntegrationUpdateRequestSchema,
+  internalWorkQueueUpsertRequestSchema
 } from "./internal-api-v1";
 
 describe("internal API v1 schemas", () => {
@@ -109,6 +112,82 @@ describe("internal API v1 schemas", () => {
         productName: "Acme Desk"
       }
     });
+  });
+
+  it("parses org structure responses and scoped upsert requests", () => {
+    expect(
+      internalOrgStructureResponseSchema.parse({
+        orgUnits: [
+          {
+            id: "org-sales",
+            parentOrgUnitId: null,
+            name: "Sales",
+            kind: "department",
+            status: "active"
+          }
+        ],
+        workQueues: [
+          {
+            id: "queue-sales",
+            name: "Sales queue",
+            kind: "sales",
+            owningOrgUnitId: "org-sales",
+            status: "active",
+            routingConfig: {
+              priority: "normal"
+            }
+          }
+        ]
+      })
+    ).toMatchObject({
+      orgUnits: [
+        {
+          id: "org-sales"
+        }
+      ],
+      workQueues: [
+        {
+          owningOrgUnitId: "org-sales"
+        }
+      ]
+    });
+
+    expect(
+      internalOrgUnitUpsertRequestSchema.parse({
+        name: " Sales ",
+        parentOrgUnitId: null
+      })
+    ).toEqual({
+      name: "Sales",
+      kind: "department",
+      parentOrgUnitId: null,
+      status: "active"
+    });
+
+    expect(
+      internalWorkQueueUpsertRequestSchema.parse({
+        name: " Claims ",
+        kind: "claims"
+      })
+    ).toEqual({
+      name: "Claims",
+      kind: "claims",
+      status: "active",
+      routingConfig: {}
+    });
+
+    expect(() =>
+      internalOrgUnitUpsertRequestSchema.parse({
+        name: "Sales",
+        tenantId: "tenant-1"
+      })
+    ).toThrow();
+    expect(() =>
+      internalWorkQueueUpsertRequestSchema.parse({
+        name: "Sales",
+        kind: "unknown"
+      })
+    ).toThrow();
   });
 
   it("parses Telegram integration responses without raw provider secrets", () => {

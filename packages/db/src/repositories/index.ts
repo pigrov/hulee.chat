@@ -20,6 +20,16 @@ export {
   createSqlTenantModuleConfigRepository
 } from "./sql-module-config-repository";
 export {
+  buildListOrgUnitsSql,
+  buildListWorkQueuesSql,
+  buildUpsertOrgUnitSql,
+  buildUpsertWorkQueueSql,
+  createSqlOrgStructureRepository,
+  orgStructureStatuses,
+  orgUnitKinds,
+  workQueueKinds
+} from "./sql-org-structure-repository";
+export {
   buildFindTenantSecretSql,
   buildUpsertTenantSecretSql,
   createAesGcmTenantSecretCipher,
@@ -173,6 +183,18 @@ export type {
   TenantModuleConfigRepository,
   UpsertTenantModuleConfigInput
 } from "./sql-module-config-repository";
+export type {
+  ListOrgUnitsInput,
+  ListWorkQueuesInput,
+  OrgStructureRepository,
+  OrgStructureStatus,
+  OrgUnitKind,
+  OrgUnitRecord,
+  UpsertOrgUnitInput,
+  UpsertWorkQueueInput,
+  WorkQueueKind,
+  WorkQueueRecord
+} from "./sql-org-structure-repository";
 export type {
   FindTenantSecretInput,
   TenantSecretCipher,

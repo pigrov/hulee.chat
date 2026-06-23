@@ -599,6 +599,55 @@ export const teams = pgTable(
   (table) => [index("teams_tenant_idx").on(table.tenantId)]
 );
 
+export const orgUnits = pgTable(
+  "org_units",
+  {
+    id: text("id").primaryKey(),
+    tenantId: tenantIdColumn().references(() => tenants.id),
+    parentOrgUnitId: text("parent_org_unit_id"),
+    name: text("name").notNull(),
+    kind: text("kind").notNull(),
+    status: text("status").notNull().default("active"),
+    ...timestamps
+  },
+  (table) => [
+    uniqueIndex("org_units_tenant_name_unique").on(table.tenantId, table.name),
+    index("org_units_tenant_idx").on(table.tenantId),
+    index("org_units_tenant_parent_idx").on(
+      table.tenantId,
+      table.parentOrgUnitId
+    ),
+    index("org_units_tenant_status_idx").on(table.tenantId, table.status)
+  ]
+);
+
+export const workQueues = pgTable(
+  "work_queues",
+  {
+    id: text("id").primaryKey(),
+    tenantId: tenantIdColumn().references(() => tenants.id),
+    name: text("name").notNull(),
+    kind: text("kind").notNull(),
+    owningOrgUnitId: text("owning_org_unit_id"),
+    status: text("status").notNull().default("active"),
+    routingConfig: jsonb("routing_config").notNull().default({}),
+    ...timestamps
+  },
+  (table) => [
+    uniqueIndex("work_queues_tenant_name_unique").on(
+      table.tenantId,
+      table.name
+    ),
+    index("work_queues_tenant_idx").on(table.tenantId),
+    index("work_queues_tenant_kind_idx").on(table.tenantId, table.kind),
+    index("work_queues_tenant_org_unit_idx").on(
+      table.tenantId,
+      table.owningOrgUnitId
+    ),
+    index("work_queues_tenant_status_idx").on(table.tenantId, table.status)
+  ]
+);
+
 export const clients = pgTable(
   "clients",
   {
