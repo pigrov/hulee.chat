@@ -30,6 +30,7 @@ import {
 } from "node:crypto";
 
 import {
+  assertWebTenantEmailVerified,
   buildInternalApiHeaders as buildInternalApiHeadersForSession,
   resolveWebAccessSession,
   type PlatformRole,
@@ -63,6 +64,10 @@ export type RegisterLocalTenantInput = {
   adminDisplayName?: string;
   email: string;
   password: string;
+};
+
+export type AssertCurrentWebTenantPermissionOptions = {
+  requireVerifiedEmail?: boolean;
 };
 
 export type LoginLocalWebSessionResult = {
@@ -134,7 +139,8 @@ export async function requireCurrentWebAccessSession(): Promise<WebAccessSession
 }
 
 export async function assertCurrentWebTenantPermission(
-  permission: Permission
+  permission: Permission,
+  options: AssertCurrentWebTenantPermissionOptions = {}
 ): Promise<WebAccessSession> {
   const session = await requireCurrentWebAccessSession();
 
@@ -142,7 +148,15 @@ export async function assertCurrentWebTenantPermission(
     throw new CoreError("permission.denied");
   }
 
+  if (options.requireVerifiedEmail === true) {
+    assertWebTenantEmailVerified(session);
+  }
+
   return session;
+}
+
+export function isEmailNotVerifiedError(error: unknown): boolean {
+  return error instanceof CoreError && error.code === "auth.email_not_verified";
 }
 
 export async function buildInternalApiHeaders(input: {

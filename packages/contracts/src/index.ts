@@ -133,6 +133,7 @@ export type ModuleManifest = {
 
 export type PlatformErrorCode =
   | "auth.invalid_credentials"
+  | "auth.email_not_verified"
   | "entitlement.missing"
   | "license.inactive"
   | "permission.denied"
@@ -177,6 +178,14 @@ export const platformErrorCatalog = {
     retryability: "not_retryable",
     severity: "warn",
     messageKey: "errors.auth.invalidCredentials"
+  },
+  "auth.email_not_verified": {
+    code: "auth.email_not_verified",
+    category: "auth",
+    httpStatus: 403,
+    retryability: "not_retryable",
+    severity: "warn",
+    messageKey: "errors.auth.emailNotVerified"
   },
   "entitlement.missing": {
     code: "entitlement.missing",

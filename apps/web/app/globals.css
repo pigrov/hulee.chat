@@ -361,6 +361,12 @@ button.railButton {
   box-shadow: var(--hulee-shadow-focus);
 }
 
+.sendButton:disabled,
+button.iconButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .clientSection {
   padding: 18px 20px;
   border-bottom: 1px solid var(--hulee-color-border);

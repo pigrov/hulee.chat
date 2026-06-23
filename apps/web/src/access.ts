@@ -53,6 +53,22 @@ export function canPlatformAdmin(session: WebAccessSession): boolean {
   return session.platformRoles.includes("platform_admin");
 }
 
+export function isTenantEmailVerificationRequired(
+  session: WebAccessSession
+): boolean {
+  return session.accountId !== undefined && session.emailVerifiedAt === null;
+}
+
+export function assertWebTenantEmailVerified(
+  session: WebAccessSession
+): WebAccessSession {
+  if (isTenantEmailVerificationRequired(session)) {
+    throw new CoreError("auth.email_not_verified");
+  }
+
+  return session;
+}
+
 export function assertWebTenantPermission(
   permission: Permission,
   session = resolveWebAccessSession()

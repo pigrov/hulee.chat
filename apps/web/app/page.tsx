@@ -15,6 +15,7 @@ import { resendEmailVerificationAction } from "../src/auth-actions";
 import { AccessDeniedPage } from "../src/access-denied";
 import {
   canTenantPermission,
+  isTenantEmailVerificationRequired,
   navigationAccessFromSession
 } from "../src/access";
 import { AppFrame, DetailItem, SlotMount } from "../src/app-chrome";
@@ -59,13 +60,15 @@ export default async function InboxPage({
   });
   const { t, locale } = createTranslator(model.tenant.locale);
   const selectedConversation = model.selectedConversation;
+  const currentInboxPath = selectedConversation
+    ? `/?conversationId=${encodeURIComponent(selectedConversation.id)}`
+    : "/";
   const emailVerificationNotice = resolveEmailVerificationNotice(
     resolvedSearchParams?.emailVerification
   );
+  const isTenantWriteBlocked = isTenantEmailVerificationRequired(access);
   const shouldShowEmailVerificationBanner =
-    emailVerificationNotice === undefined &&
-    access.accountId !== undefined &&
-    access.emailVerifiedAt === null;
+    emailVerificationNotice === undefined && isTenantWriteBlocked;
   const productName = t("app.name", {
     productName: model.tenant.brand.productName
   });
@@ -104,6 +107,11 @@ export default async function InboxPage({
                   className="inlineNoticeForm"
                   action={resendEmailVerificationAction}
                 >
+                  <input
+                    name="returnTo"
+                    type="hidden"
+                    value={currentInboxPath}
+                  />
                   <p className="formNotice">
                     {t("auth.emailVerification.status.pending")}
                   </p>
@@ -189,6 +197,7 @@ export default async function InboxPage({
             <button
               className="iconButton"
               type="button"
+              disabled={isTenantWriteBlocked}
               aria-label={t("inbox.channels")}
             >
               <Paperclip size={17} aria-hidden="true" />
@@ -198,11 +207,13 @@ export default async function InboxPage({
               name="text"
               rows={1}
               placeholder={t("inbox.replyPlaceholder")}
+              disabled={isTenantWriteBlocked}
               required
             />
             <button
               className="sendButton"
               type="submit"
+              disabled={isTenantWriteBlocked}
               aria-label={t("inbox.replySubmit")}
             >
               <Send size={18} aria-hidden="true" />
@@ -264,11 +275,12 @@ export default async function InboxPage({
 
 function resolveEmailVerificationNotice(
   value: string | undefined
-): "sent" | "not_configured" | "provider_failed" | undefined {
+): "sent" | "not_configured" | "provider_failed" | "required" | undefined {
   if (
     value === "sent" ||
     value === "not_configured" ||
-    value === "provider_failed"
+    value === "provider_failed" ||
+    value === "required"
   ) {
     return value;
   }

@@ -9,8 +9,13 @@ import {
 import Link from "next/link";
 import type { ReactNode } from "react";
 
-import { navigationAccessFromSession, type WebAccessSession } from "./access";
+import {
+  isTenantEmailVerificationRequired,
+  navigationAccessFromSession,
+  type WebAccessSession
+} from "./access";
 import { AppFrame, SlotMount } from "./app-chrome";
+import { resendEmailVerificationAction } from "./auth-actions";
 import {
   getVisibleTenantAdminSections,
   type TenantAdminSection,
@@ -47,6 +52,13 @@ export function TenantAdminShell({
   titleId: string;
 }): ReactNode {
   const visibleSections = getVisibleTenantAdminSections(access);
+  const shouldRequireEmailVerification =
+    isTenantEmailVerificationRequired(access);
+  const currentPath =
+    current === "overview"
+      ? "/admin"
+      : (visibleSections.find((section) => section.id === current)?.href ??
+        "/admin");
 
   return (
     <AppFrame
@@ -93,6 +105,21 @@ export function TenantAdminShell({
                   />
                 ))}
               </nav>
+
+              {shouldRequireEmailVerification ? (
+                <form
+                  className="inlineNoticeForm"
+                  action={resendEmailVerificationAction}
+                >
+                  <input name="returnTo" type="hidden" value={currentPath} />
+                  <p className="formNotice">
+                    {t("auth.emailVerification.status.required")}
+                  </p>
+                  <button className="secondaryButton" type="submit">
+                    {t("auth.emailVerification.resend")}
+                  </button>
+                </form>
+              ) : null}
 
               {sidebarContent}
               <SlotMount slot="admin.section" />

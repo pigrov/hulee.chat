@@ -8,6 +8,7 @@ import {
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
+import type { Permission } from "@hulee/core";
 
 import {
   deleteTelegramWebhook,
@@ -17,12 +18,18 @@ import {
   updateTenantBrand,
   updateTelegramIntegration
 } from "./inbox-api-client";
-import { assertCurrentWebTenantPermission } from "./session";
+import {
+  assertCurrentWebTenantPermission,
+  isEmailNotVerifiedError
+} from "./session";
 
 export async function sendReplyAction(formData: FormData): Promise<void> {
-  await assertCurrentWebTenantPermission("message.reply");
-
   const conversationId = readRequiredFormString(formData, "conversationId");
+  await assertVerifiedTenantPermission(
+    "message.reply",
+    `/?conversationId=${encodeURIComponent(conversationId)}`
+  );
+
   const text = readRequiredFormString(formData, "text").trim();
 
   if (text.length === 0) {
@@ -41,7 +48,7 @@ export async function sendReplyAction(formData: FormData): Promise<void> {
 export async function applyBrandPresetAction(
   formData: FormData
 ): Promise<void> {
-  await assertCurrentWebTenantPermission("tenant.manage");
+  await assertVerifiedTenantPermission("tenant.manage", "/admin/branding");
 
   const productName = readRequiredFormString(formData, "productName").trim();
   const shortProductName = normalizeOptionalFormValue(
@@ -69,7 +76,7 @@ export async function applyBrandPresetAction(
 export async function updateTenantBrandAction(
   formData: FormData
 ): Promise<void> {
-  await assertCurrentWebTenantPermission("tenant.manage");
+  await assertVerifiedTenantPermission("tenant.manage", "/admin/branding");
 
   const productName = readRequiredFormString(formData, "productName").trim();
   const shortProductName = normalizeOptionalFormValue(
@@ -103,7 +110,7 @@ export async function updateTenantBrandAction(
 export async function updateTelegramIntegrationAction(
   formData: FormData
 ): Promise<void> {
-  await assertCurrentWebTenantPermission("modules.manage");
+  await assertVerifiedTenantPermission("modules.manage", "/admin/integrations");
 
   const channelExternalId = readRequiredFormString(
     formData,
@@ -136,21 +143,21 @@ export async function updateTelegramIntegrationAction(
 }
 
 export async function refreshTelegramDiagnosticsAction(): Promise<void> {
-  await assertCurrentWebTenantPermission("modules.manage");
+  await assertVerifiedTenantPermission("modules.manage", "/admin/integrations");
 
   await refreshTelegramDiagnostics();
   revalidateTelegramIntegrationPaths();
 }
 
 export async function setTelegramWebhookAction(): Promise<void> {
-  await assertCurrentWebTenantPermission("modules.manage");
+  await assertVerifiedTenantPermission("modules.manage", "/admin/integrations");
 
   await setTelegramWebhook();
   revalidateTelegramIntegrationPaths();
 }
 
 export async function deleteTelegramWebhookAction(): Promise<void> {
-  await assertCurrentWebTenantPermission("modules.manage");
+  await assertVerifiedTenantPermission("modules.manage", "/admin/integrations");
 
   await deleteTelegramWebhook();
   revalidateTelegramIntegrationPaths();
@@ -164,6 +171,32 @@ function readRequiredFormString(formData: FormData, name: string): string {
   }
 
   return value;
+}
+
+async function assertVerifiedTenantPermission(
+  permission: Permission,
+  redirectPath: string
+): ReturnType<typeof assertCurrentWebTenantPermission> {
+  try {
+    return await assertCurrentWebTenantPermission(permission, {
+      requireVerifiedEmail: true
+    });
+  } catch (error) {
+    if (isEmailNotVerifiedError(error)) {
+      redirect(addSearchParam(redirectPath, "emailVerification", "required"));
+    }
+
+    throw error;
+  }
+}
+
+function addSearchParam(path: string, name: string, value: string): string {
+  const [pathname, query = ""] = path.split("?");
+  const params = new URLSearchParams(query);
+
+  params.set(name, value);
+
+  return `${pathname}?${params.toString()}`;
 }
 
 function readOptionalFormString(

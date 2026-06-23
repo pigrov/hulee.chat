@@ -43,6 +43,7 @@
   "auth.emailVerification.unavailable": "This link is unavailable, expired or already used.",
   "auth.emailVerification.status.sent": "Email verification message sent.",
   "auth.emailVerification.status.pending": "Email is not verified yet.",
+  "auth.emailVerification.status.required": "Verify your email to send messages and change settings.",
   "auth.emailVerification.status.not_configured": "Email delivery is not configured. Verification can be retried later.",
   "auth.emailVerification.status.provider_failed": "Could not send the verification email. Try again later.",
   "auth.emailVerification.resend": "Send again",

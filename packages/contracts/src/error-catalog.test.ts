@@ -9,6 +9,7 @@ import {
 
 const platformErrorCodes: PlatformErrorCode[] = [
   "auth.invalid_credentials",
+  "auth.email_not_verified",
   "entitlement.missing",
   "license.inactive",
   "permission.denied",

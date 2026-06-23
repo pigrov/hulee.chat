@@ -132,9 +132,18 @@ export async function resetPasswordAction(formData: FormData): Promise<void> {
   redirect(`/reset-password/${encodeURIComponent(token)}?error=invalid`);
 }
 
-export async function resendEmailVerificationAction(): Promise<void> {
+export async function resendEmailVerificationAction(
+  formData?: FormData
+): Promise<void> {
   const session = await requireCurrentWebAccessSession();
-  let destination = "/?emailVerification=provider_failed";
+  const returnTo = resolveSafeReturnTo(
+    formData ? readOptionalFormString(formData, "returnTo") : undefined
+  );
+  let destination = addSearchParam(
+    returnTo,
+    "emailVerification",
+    "provider_failed"
+  );
 
   if (session.accountId !== undefined) {
     const emailResult = await requestEmailVerificationForAccount({
@@ -143,7 +152,7 @@ export async function resendEmailVerificationAction(): Promise<void> {
     });
     const status = emailResult.sent ? "sent" : emailResult.reason;
 
-    destination = `/?emailVerification=${status}`;
+    destination = addSearchParam(returnTo, "emailVerification", status);
   }
 
   revalidatePath("/");
@@ -175,6 +184,18 @@ function addSearchParam(path: string, name: string, value: string): string {
   params.set(name, value);
 
   return `${pathname}?${params.toString()}`;
+}
+
+function resolveSafeReturnTo(value: string | undefined): string {
+  if (value === undefined || !value.startsWith("/")) {
+    return "/";
+  }
+
+  if (value.startsWith("//")) {
+    return "/";
+  }
+
+  return value;
 }
 
 function createRandomTenantSlug(): string {

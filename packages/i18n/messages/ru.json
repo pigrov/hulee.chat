@@ -43,6 +43,7 @@
   "auth.emailVerification.unavailable": "Эта ссылка недоступна, истекла или уже использована.",
   "auth.emailVerification.status.sent": "Письмо для подтверждения email отправлено.",
   "auth.emailVerification.status.pending": "Email пока не подтвержден.",
+  "auth.emailVerification.status.required": "Подтвердите email, чтобы отправлять сообщения и менять настройки.",
   "auth.emailVerification.status.not_configured": "Email-отправка не настроена. Подтверждение можно повторить позже.",
   "auth.emailVerification.status.provider_failed": "Не удалось отправить письмо подтверждения. Попробуйте позже.",
   "auth.emailVerification.resend": "Отправить еще раз",

@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  assertWebTenantEmailVerified,
   assertWebPlatformAdmin,
   assertWebTenantPermission,
   canPlatformAdmin,
+  isTenantEmailVerificationRequired,
   navigationAccessFromSession,
   resolveWebAccessSession
 } from "./access";
@@ -54,5 +56,28 @@ describe("web access guards", () => {
       /permission.denied/
     );
     expect(() => assertWebPlatformAdmin(session)).toThrow(/permission.denied/);
+  });
+
+  it("requires verified email only for real tenant accounts", () => {
+    const fallbackSession = resolveWebAccessSession({
+      NODE_ENV: "development"
+    });
+    const unverifiedSession = {
+      ...fallbackSession,
+      accountId: "account:test",
+      emailVerifiedAt: null
+    };
+    const verifiedSession = {
+      ...fallbackSession,
+      accountId: "account:test",
+      emailVerifiedAt: "2026-06-23T10:00:00.000Z"
+    };
+
+    expect(isTenantEmailVerificationRequired(fallbackSession)).toBe(false);
+    expect(isTenantEmailVerificationRequired(unverifiedSession)).toBe(true);
+    expect(() => assertWebTenantEmailVerified(unverifiedSession)).toThrow(
+      /auth.email_not_verified/
+    );
+    expect(assertWebTenantEmailVerified(verifiedSession)).toBe(verifiedSession);
   });
 });
