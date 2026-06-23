@@ -55,17 +55,6 @@ export default async function LoginPage({
         </div>
         <form className="settingsForm" action={loginAction}>
           <label className="fieldStack">
-            <span className="detailLabel">{t("auth.tenantSlug")}</span>
-            <input
-              className="textInput"
-              name="tenantSlug"
-              type="text"
-              autoComplete="organization"
-              defaultValue="local"
-              required
-            />
-          </label>
-          <label className="fieldStack">
             <span className="detailLabel">{t("auth.email")}</span>
             <input
               className="textInput"

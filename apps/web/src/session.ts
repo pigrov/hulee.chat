@@ -32,8 +32,10 @@ import {
 } from "./access";
 
 export const authSessionCookieName = "hulee_session";
+export const lastTenantSlugCookieName = "hulee_last_tenant";
 
 const sessionTtlMs = 1000 * 60 * 60 * 24 * 14;
+const lastTenantSlugTtlMs = 1000 * 60 * 60 * 24 * 365;
 const localEnv = loadLocalEnvFile();
 
 let database: HuleeDatabase | undefined;
@@ -152,10 +154,7 @@ export async function loginLocalWebSession(
   input: LoginLocalWebSessionInput
 ): Promise<LoginLocalWebSessionResult> {
   const email = normalizeEmail(input.email);
-  const env = resolveWebEnv();
-  const tenantSlug = normalizeTenantSlug(
-    input.tenantSlug ?? env.HULEE_WEB_TENANT_SLUG ?? "local"
-  );
+  const tenantSlug = await resolvePreferredTenantSlug(input.tenantSlug);
   const repository = getAuthRepository();
   const [tenantAccount, platformAdmin] = await Promise.all([
     repository.findTenantAccount({
@@ -263,6 +262,9 @@ async function createStoredWebSession(input: {
     createdAt: now
   });
   await writeSessionToken(token, expiresAt);
+  if (input.tenantAccount !== undefined) {
+    await writeLastTenantSlug(input.tenantAccount.tenantSlug, now);
+  }
 
   const session = webAccessSessionFromPrincipal({
     sessionId: "new-session",
@@ -348,8 +350,40 @@ async function writeSessionToken(
   });
 }
 
+async function readLastTenantSlug(): Promise<string | undefined> {
+  const cookieStore = await cookies();
+  const slug = cookieStore.get(lastTenantSlugCookieName)?.value;
+
+  return slug && slug.length > 0 ? slug : undefined;
+}
+
+async function writeLastTenantSlug(slug: string, now: Date): Promise<void> {
+  const cookieStore = await cookies();
+
+  cookieStore.set(lastTenantSlugCookieName, slug, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: resolveWebEnv().NODE_ENV === "production",
+    path: "/",
+    expires: new Date(now.getTime() + lastTenantSlugTtlMs)
+  });
+}
+
 export function resolveWebEnv(): NodeJS.ProcessEnv {
   return mergeEnvSources(localEnv, process.env) as NodeJS.ProcessEnv;
+}
+
+export async function resolvePreferredTenantSlug(
+  tenantSlug?: string
+): Promise<string> {
+  const env = resolveWebEnv();
+
+  return normalizeTenantSlug(
+    tenantSlug ??
+      (await readLastTenantSlug()) ??
+      env.HULEE_WEB_TENANT_SLUG ??
+      "local"
+  );
 }
 
 function normalizeEmail(email: string): string {

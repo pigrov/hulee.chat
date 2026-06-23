@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { randomUUID } from "node:crypto";
 
 import {
   requestEmailVerificationForTenantAccount,
@@ -11,7 +12,8 @@ import {
 import {
   loginLocalWebSession,
   logoutCurrentWebSession,
-  registerLocalTenant
+  registerLocalTenant,
+  resolvePreferredTenantSlug
 } from "./session";
 
 export async function loginAction(formData: FormData): Promise<void> {
@@ -35,7 +37,8 @@ export async function loginAction(formData: FormData): Promise<void> {
 }
 
 export async function registerAction(formData: FormData): Promise<void> {
-  const tenantSlug = readRequiredFormString(formData, "tenantSlug");
+  const tenantSlug =
+    readOptionalFormString(formData, "tenantSlug") ?? createRandomTenantSlug();
   const tenantDisplayName = readRequiredFormString(
     formData,
     "tenantDisplayName"
@@ -72,7 +75,9 @@ export async function registerAction(formData: FormData): Promise<void> {
 }
 
 export async function forgotPasswordAction(formData: FormData): Promise<void> {
-  const tenantSlug = readRequiredFormString(formData, "tenantSlug");
+  const tenantSlug = await resolvePreferredTenantSlug(
+    readOptionalFormString(formData, "tenantSlug")
+  );
   const email = readRequiredFormString(formData, "email");
 
   try {
@@ -127,6 +132,10 @@ function addSearchParam(path: string, name: string, value: string): string {
   params.set(name, value);
 
   return `${pathname}?${params.toString()}`;
+}
+
+function createRandomTenantSlug(): string {
+  return randomUUID();
 }
 
 function readOptionalFormString(

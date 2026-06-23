@@ -64,17 +64,6 @@ export default async function RegisterPage({
             />
           </label>
           <label className="fieldStack">
-            <span className="detailLabel">{t("auth.tenantSlug")}</span>
-            <input
-              className="textInput"
-              name="tenantSlug"
-              type="text"
-              autoComplete="organization-title"
-              pattern="[A-Za-z0-9][A-Za-z0-9-]{1,62}"
-              required
-            />
-          </label>
-          <label className="fieldStack">
             <span className="detailLabel">{t("auth.displayName")}</span>
             <input
               className="textInput"
