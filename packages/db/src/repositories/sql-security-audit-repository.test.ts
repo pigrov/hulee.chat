@@ -1,5 +1,7 @@
 import type { EmployeeId, TenantId } from "@hulee/contracts";
+import { CoreError } from "@hulee/core";
 import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
 import { createSqlSecurityAuditRepository } from "./sql-security-audit-repository";
@@ -10,7 +12,7 @@ import type {
 
 describe("SQL security audit repository", () => {
   it("writes tenant-scoped security audit records", async () => {
-    const executor = new RecordingSqlExecutor();
+    const executor = new RecordingSqlExecutor([]);
     const repository = createSqlSecurityAuditRepository(executor);
 
     await repository.record({
@@ -29,18 +31,148 @@ describe("SQL security audit repository", () => {
 
     expect(executor.queries).toHaveLength(1);
   });
+
+  it("writes and lists access audit records", async () => {
+    const tenantId = "tenant-1" as TenantId;
+    const actorEmployeeId = "employee-admin" as EmployeeId;
+    const targetEmployeeId = "employee-agent" as EmployeeId;
+    const executor = new RecordingSqlExecutor([
+      [],
+      [
+        {
+          id: "audit:role-binding-1:created",
+          tenant_id: tenantId,
+          actor_employee_id: actorEmployeeId,
+          action: "role_binding.created",
+          entity_type: "role_binding",
+          entity_id: "role-binding-1",
+          metadata: {
+            roleId: "role-sales",
+            targetEmployeeId,
+            permission: "client.view"
+          },
+          created_at: new Date("2026-06-23T12:00:00.000Z")
+        }
+      ]
+    ]);
+    const repository = createSqlSecurityAuditRepository(executor);
+
+    await repository.record({
+      id: "audit:role-binding-1:created",
+      tenantId,
+      actorEmployeeId,
+      action: "role_binding.created",
+      entityType: "role_binding",
+      entityId: "role-binding-1",
+      metadata: {
+        roleId: "role-sales",
+        targetEmployeeId
+      },
+      occurredAt: new Date("2026-06-23T12:00:00.000Z")
+    });
+
+    await expect(
+      repository.listAccessRecords({
+        tenantId,
+        limit: 25,
+        action: "role_binding.created",
+        targetEmployeeId,
+        roleId: "role-sales",
+        permission: "client.view"
+      })
+    ).resolves.toEqual([
+      {
+        id: "audit:role-binding-1:created",
+        tenantId,
+        actorEmployeeId,
+        action: "role_binding.created",
+        entityType: "role_binding",
+        entityId: "role-binding-1",
+        metadata: {
+          roleId: "role-sales",
+          targetEmployeeId,
+          permission: "client.view"
+        },
+        occurredAt: "2026-06-23T12:00:00.000Z"
+      }
+    ]);
+
+    const writeQuery = renderQuery(executor.queries[0]);
+    const listQuery = renderQuery(executor.queries[1]);
+
+    expect(writeQuery.sql).toContain("insert into audit_log");
+    expect(listQuery.sql).toContain("from audit_log");
+    expect(listQuery.sql).toContain("metadata->>'targetEmployeeId'");
+    expect(listQuery.sql).toContain("metadata->>'roleId'");
+    expect(listQuery.sql).toContain("metadata->>'permission'");
+    expect(listQuery.params).toEqual(
+      expect.arrayContaining([
+        tenantId,
+        "role_binding.created",
+        targetEmployeeId,
+        "role-sales",
+        "client.view"
+      ])
+    );
+  });
+
+  it("rejects cross-tenant access audit rows", async () => {
+    const repository = createSqlSecurityAuditRepository(
+      new RecordingSqlExecutor([
+        [
+          {
+            id: "audit:cross-tenant",
+            tenant_id: "tenant-2",
+            actor_employee_id: "employee-admin",
+            action: "role.created",
+            entity_type: "role",
+            entity_id: "role-sales",
+            metadata: {
+              roleId: "role-sales"
+            },
+            created_at: new Date("2026-06-23T12:00:00.000Z")
+          }
+        ]
+      ])
+    );
+
+    await expect(
+      repository.listAccessRecords({
+        tenantId: "tenant-1" as TenantId,
+        limit: 50
+      })
+    ).rejects.toThrow(new CoreError("tenant.boundary_violation"));
+  });
 });
 
 class RecordingSqlExecutor implements RawSqlExecutor {
   readonly queries: SQL[] = [];
+  private nextResultIndex = 0;
+
+  constructor(
+    private readonly resultSets: readonly (readonly Record<string, unknown>[])[]
+  ) {}
 
   async execute<Row extends Record<string, unknown>>(
     query: SQL
   ): Promise<RawSqlQueryResult<Row>> {
     this.queries.push(query);
+    const rows = this.resultSets[this.nextResultIndex] ?? [];
+    this.nextResultIndex += 1;
 
     return {
-      rows: []
+      rows: rows as readonly Row[]
     };
   }
+}
+
+function renderQuery(query: SQL | undefined): {
+  sql: string;
+  params: unknown[];
+} {
+  if (query === undefined) {
+    throw new Error("Expected a recorded SQL query.");
+  }
+
+  return new PgDialect().sqlToQuery(query);
 }

@@ -732,6 +732,14 @@ a.secondaryButton {
   align-items: end;
 }
 
+.accessAuditFilterForm {
+  grid-template-columns:
+    minmax(160px, 1fr) minmax(180px, 1fr) minmax(180px, 1fr)
+    minmax(200px, 1fr) minmax(140px, 0.8fr) minmax(140px, 0.8fr)
+    auto;
+  align-items: end;
+}
+
 .scopePickerGrid {
   display: grid;
   grid-template-columns: minmax(130px, 1fr) minmax(180px, 1.4fr);
@@ -953,7 +961,20 @@ a.secondaryButton {
   align-items: flex-start;
 }
 
+.managementRow.accessAuditRow {
+  display: grid;
+  grid-template-columns: auto minmax(260px, 1fr) minmax(260px, 1.2fr);
+  align-items: flex-start;
+}
+
 .sourceList {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: var(--hulee-space-inline);
+}
+
+.auditMetadataList {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-start;
@@ -1218,11 +1239,13 @@ button.managementRow:focus-visible {
   .adminOverviewGrid,
   .managementRow.roleDefinitionRow,
   .managementRow.directGrantRow,
+  .managementRow.accessAuditRow,
   .managementRow.effectiveAccessRow,
   .managementRow.roleBindingRow,
   .roleDefinitionRow,
   .roleBindingRow,
   .accessPreviewForm,
+  .accessAuditFilterForm,
   .roleAssignForm,
   .directGrantForm,
   .scopePickerGrid,

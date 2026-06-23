@@ -1,6 +1,6 @@
 "use server";
 
-import type { EmployeeId } from "@hulee/contracts";
+import type { EmployeeId, TenantId } from "@hulee/contracts";
 import {
   assertPermissionScopeAllowed,
   assertPermissionsAllowedForScope,
@@ -14,7 +14,10 @@ import {
 } from "@hulee/core";
 import {
   createSqlEmployeeDirectoryRepository,
+  createSqlSecurityAuditRepository,
   createSqlTenantRbacRepository,
+  type AccessAuditAction,
+  type SecurityAuditEntityType,
   type TenantRoleRecord
 } from "@hulee/db";
 import { revalidatePath } from "next/cache";
@@ -39,6 +42,7 @@ export async function createCustomTenantRoleAction(
   let destination = "/admin/roles?roleActionStatus=invalid";
 
   try {
+    const roleId = `role:${session.tenantId}:custom:${randomUUID()}`;
     const role = prepareCustomTenantRole({
       name: readRequiredFormString(formData, "name"),
       description: readOptionalFormString(formData, "description"),
@@ -46,7 +50,7 @@ export async function createCustomTenantRoleAction(
     });
 
     await repository.createRoleWithPermissions({
-      id: `role:${session.tenantId}:custom:${randomUUID()}`,
+      id: roleId,
       tenantId: session.tenantId,
       name: role.name,
       description: role.description,
@@ -54,6 +58,21 @@ export async function createCustomTenantRoleAction(
       createdByEmployeeId: session.employeeId,
       createdAt: now,
       permissions: role.permissions
+    });
+
+    await recordAccessAudit({
+      tenantId: session.tenantId,
+      actorEmployeeId: session.employeeId,
+      action: "role.created",
+      entityType: "role",
+      entityId: roleId,
+      metadata: {
+        roleId,
+        name: role.name,
+        permissions: role.permissions,
+        permissionCount: role.permissions.length
+      },
+      occurredAt: now
     });
 
     destination = "/admin/roles?roleActionStatus=created";
@@ -105,6 +124,25 @@ export async function updateCustomTenantRoleAction(
       permissions: role.permissions
     });
 
+    await recordAccessAudit({
+      tenantId: session.tenantId,
+      actorEmployeeId: session.employeeId,
+      action: "role.updated",
+      entityType: "role",
+      entityId: roleId,
+      metadata: {
+        roleId,
+        previousName: existingRole.name,
+        nextName: role.name,
+        previousDescription: existingRole.description,
+        nextDescription: role.description,
+        previousPermissions: existingRole.permissions,
+        nextPermissions: role.permissions,
+        ...permissionDiff(existingRole.permissions, role.permissions)
+      },
+      occurredAt: now
+    });
+
     destination = "/admin/roles?roleActionStatus=updated";
   } catch {
     destination = "/admin/roles?roleActionStatus=invalid";
@@ -148,6 +186,20 @@ export async function archiveCustomTenantRoleAction(
       updatedAt: now
     });
 
+    await recordAccessAudit({
+      tenantId: session.tenantId,
+      actorEmployeeId: session.employeeId,
+      action: "role.archived",
+      entityType: "role",
+      entityId: roleId,
+      metadata: {
+        roleId,
+        name: role.name,
+        status: "archived"
+      },
+      occurredAt: now
+    });
+
     destination = "/admin/roles?roleActionStatus=archived";
   } catch {
     destination = "/admin/roles?roleActionStatus=invalid";
@@ -181,6 +233,20 @@ export async function restoreCustomTenantRoleAction(
       roleId,
       status: "active",
       updatedAt: now
+    });
+
+    await recordAccessAudit({
+      tenantId: session.tenantId,
+      actorEmployeeId: session.employeeId,
+      action: "role.restored",
+      entityType: "role",
+      entityId: roleId,
+      metadata: {
+        roleId,
+        name: role.name,
+        status: "active"
+      },
+      occurredAt: now
     });
 
     destination = "/admin/roles?roleActionStatus=restored";
@@ -246,8 +312,10 @@ export async function assignTenantRoleAction(
     assertPermissionsAllowedForScope(role.permissions, scope.type);
 
     if (existingBinding === undefined) {
+      const bindingId = `role_binding:${session.tenantId}:${employeeId}:${randomUUID()}`;
+
       await rbacRepository.createRoleBinding({
-        id: `role_binding:${session.tenantId}:${employeeId}:${randomUUID()}`,
+        id: bindingId,
         tenantId: session.tenantId,
         roleId,
         subject: {
@@ -257,6 +325,22 @@ export async function assignTenantRoleAction(
         scope,
         createdByEmployeeId: session.employeeId,
         createdAt: now
+      });
+
+      await recordAccessAudit({
+        tenantId: session.tenantId,
+        actorEmployeeId: session.employeeId,
+        action: "role_binding.created",
+        entityType: "role_binding",
+        entityId: bindingId,
+        metadata: {
+          roleId,
+          targetEmployeeId: employeeId,
+          subjectType: "employee",
+          subjectId: employeeId,
+          ...scopeMetadata(scope)
+        },
+        occurredAt: now
       });
     }
 
@@ -302,6 +386,24 @@ export async function revokeTenantRoleBindingAction(
       tenantId: session.tenantId,
       bindingId,
       revokedAt: now
+    });
+
+    await recordAccessAudit({
+      tenantId: session.tenantId,
+      actorEmployeeId: session.employeeId,
+      action: "role_binding.revoked",
+      entityType: "role_binding",
+      entityId: bindingId,
+      metadata: {
+        roleId: binding.roleId,
+        subjectType: binding.subject.type,
+        subjectId: binding.subject.id,
+        ...(binding.subject.type === "employee"
+          ? { targetEmployeeId: binding.subject.id }
+          : {}),
+        ...scopeMetadata(binding.scope)
+      },
+      occurredAt: now
     });
 
     destination = "/admin/roles?roleActionStatus=revoked";
@@ -367,8 +469,10 @@ export async function createDirectPermissionGrantAction(
     });
 
     if (existingGrant === undefined) {
+      const grantId = `direct_grant:${session.tenantId}:${employeeId}:${randomUUID()}`;
+
       await rbacRepository.createDirectGrant({
-        id: `direct_grant:${session.tenantId}:${employeeId}:${randomUUID()}`,
+        id: grantId,
         tenantId: session.tenantId,
         employeeId,
         permission,
@@ -377,6 +481,22 @@ export async function createDirectPermissionGrantAction(
         expiresAt: expiresAt?.toISOString(),
         createdByEmployeeId: session.employeeId,
         createdAt: now
+      });
+
+      await recordAccessAudit({
+        tenantId: session.tenantId,
+        actorEmployeeId: session.employeeId,
+        action: "direct_grant.created",
+        entityType: "direct_grant",
+        entityId: grantId,
+        metadata: {
+          targetEmployeeId: employeeId,
+          permission,
+          reason,
+          expiresAt: expiresAt?.toISOString(),
+          ...scopeMetadata(scope)
+        },
+        occurredAt: now
       });
     }
 
@@ -421,6 +541,21 @@ export async function revokeDirectPermissionGrantAction(
       revokedAt: now
     });
 
+    await recordAccessAudit({
+      tenantId: session.tenantId,
+      actorEmployeeId: session.employeeId,
+      action: "direct_grant.revoked",
+      entityType: "direct_grant",
+      entityId: grantId,
+      metadata: {
+        targetEmployeeId: grant.employeeId,
+        permission: grant.permission,
+        reason: grant.reason,
+        ...scopeMetadata(grant.scope)
+      },
+      occurredAt: now
+    });
+
     destination = "/admin/roles?roleActionStatus=direct_grant_revoked";
   } catch {
     destination = "/admin/roles?roleActionStatus=invalid";
@@ -428,6 +563,27 @@ export async function revokeDirectPermissionGrantAction(
 
   revalidateRoleAdminPaths();
   redirect(destination);
+}
+
+async function recordAccessAudit(input: {
+  readonly tenantId: TenantId;
+  readonly actorEmployeeId: EmployeeId;
+  readonly action: AccessAuditAction;
+  readonly entityType: Exclude<SecurityAuditEntityType, "session">;
+  readonly entityId: string;
+  readonly metadata: Record<string, unknown>;
+  readonly occurredAt: Date;
+}): Promise<void> {
+  await createSqlSecurityAuditRepository(getWebDatabase()).record({
+    id: `audit:${input.tenantId}:${input.action}:${randomUUID()}`,
+    tenantId: input.tenantId,
+    actorEmployeeId: input.actorEmployeeId,
+    action: input.action,
+    entityType: input.entityType,
+    entityId: input.entityId,
+    metadata: input.metadata,
+    occurredAt: input.occurredAt
+  });
 }
 
 async function assertVerifiedRolesPermission(): ReturnType<
@@ -483,6 +639,23 @@ function assertRoleUpdateDoesNotRemoveOwnRoleManagement(input: {
   }
 }
 
+function permissionDiff(
+  previousPermissions: readonly Permission[],
+  nextPermissions: readonly Permission[]
+): {
+  readonly addedPermissions: readonly Permission[];
+  readonly removedPermissions: readonly Permission[];
+} {
+  return {
+    addedPermissions: nextPermissions.filter(
+      (permission) => !previousPermissions.includes(permission)
+    ),
+    removedPermissions: previousPermissions.filter(
+      (permission) => !nextPermissions.includes(permission)
+    )
+  };
+}
+
 function isRoleAssignedToEmployee(
   bindings: readonly PermissionRoleBinding[],
   roleId: string,
@@ -510,6 +683,14 @@ function areScopesEqual(
 
 function scopeId(scope: PermissionScope): string | undefined {
   return "id" in scope ? scope.id : undefined;
+}
+
+function scopeMetadata(scope: PermissionScope): Record<string, string> {
+  const id = scopeId(scope);
+
+  return id === undefined
+    ? { scopeType: scope.type }
+    : { scopeType: scope.type, scopeId: id };
 }
 
 function readRequiredFormString(formData: FormData, name: string): string {

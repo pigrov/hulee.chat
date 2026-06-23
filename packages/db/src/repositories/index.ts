@@ -72,7 +72,9 @@ export {
   createSqlPlatformAuditRepository
 } from "./sql-platform-audit-repository";
 export {
+  buildListAccessAuditRecordsSql,
   buildInsertSecurityAuditLogSql,
+  accessAuditActions,
   createSqlSecurityAuditRepository
 } from "./sql-security-audit-repository";
 export {
@@ -222,7 +224,12 @@ export type {
   PlatformAuditRepository
 } from "./sql-platform-audit-repository";
 export type {
+  AccessAuditAction,
+  AccessAuditRecord,
+  AuthSecurityAuditAction,
+  ListAccessAuditRecordsInput,
   SecurityAuditAction,
+  SecurityAuditEntityType,
   SecurityAuditRecord,
   SecurityAuditRepository
 } from "./sql-security-audit-repository";

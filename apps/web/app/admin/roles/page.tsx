@@ -1,5 +1,7 @@
 import {
   getPermissionDefinition,
+  isPermission,
+  isPermissionScopeType,
   permissionCatalog,
   resolveEffectivePermissionGrants,
   type DirectPermissionGrant,
@@ -14,8 +16,12 @@ import {
   type PermissionActor
 } from "@hulee/core";
 import {
+  accessAuditActions,
   createSqlEmployeeDirectoryRepository,
+  createSqlSecurityAuditRepository,
   createSqlTenantRbacRepository,
+  type AccessAuditAction,
+  type AccessAuditRecord,
   type TenantEmployeeRecord,
   type TenantRoleRecord
 } from "@hulee/db";
@@ -95,6 +101,12 @@ export default async function RolesAdminPage({
 }: {
   searchParams?: Promise<{
     accessPreviewEmployeeId?: string;
+    auditAction?: string;
+    auditFrom?: string;
+    auditPermission?: string;
+    auditRoleId?: string;
+    auditTargetEmployeeId?: string;
+    auditTo?: string;
     roleActionStatus?: string;
   }>;
 }): Promise<ReactNode> {
@@ -154,6 +166,18 @@ export default async function RolesAdminPage({
     label: employee.displayName
   }));
   const roleBindingsByRoleId = countBindingsByRoleId(roleBindings);
+  const accessAuditFilters = resolveAccessAuditFilters(
+    resolvedSearchParams,
+    activeEmployees,
+    roles
+  );
+  const accessAuditRecords = await createSqlSecurityAuditRepository(
+    getWebDatabase()
+  ).listAccessRecords({
+    tenantId: access.tenantId,
+    limit: 50,
+    ...accessAuditFilters
+  });
   const accessPreviewEmployee = activeEmployees.find(
     (employee) =>
       employee.employeeId === resolvedSearchParams?.accessPreviewEmployeeId
@@ -443,6 +467,128 @@ export default async function RolesAdminPage({
                   employees={employees}
                   grant={grant}
                   key={grant.id}
+                  t={t}
+                />
+              ))
+            )}
+          </div>
+        </section>
+
+        <section className="settingsPanel" aria-labelledby="access-audit-title">
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.roles.accessAudit")}</p>
+              <h2 className="sectionTitle" id="access-audit-title">
+                {t("admin.roles.accessAuditView")}
+              </h2>
+              <p className="metaText">
+                {t("admin.roles.accessAuditView.description")}
+              </p>
+            </div>
+            <span className="badge">{accessAuditRecords.length}</span>
+          </div>
+
+          <form className="settingsForm accessAuditFilterForm" method="get">
+            <label className="fieldStack">
+              <span className="detailLabel">
+                {t("admin.roles.auditAction")}
+              </span>
+              <select
+                className="selectInput"
+                defaultValue={accessAuditFilters.action ?? ""}
+                name="auditAction"
+              >
+                <option value="">{t("admin.roles.auditAllActions")}</option>
+                {accessAuditActions.map((action) => (
+                  <option key={action} value={action}>
+                    {t(accessAuditActionKey(action))}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="fieldStack">
+              <span className="detailLabel">
+                {t("admin.roles.auditTargetEmployee")}
+              </span>
+              <select
+                className="selectInput"
+                defaultValue={accessAuditFilters.targetEmployeeId ?? ""}
+                name="auditTargetEmployeeId"
+              >
+                <option value="">{t("admin.roles.auditAllEmployees")}</option>
+                {employeeOptions.map((employee) => (
+                  <option key={employee.value} value={employee.value}>
+                    {employee.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="fieldStack">
+              <span className="detailLabel">{t("admin.roles.auditRole")}</span>
+              <select
+                className="selectInput"
+                defaultValue={accessAuditFilters.roleId ?? ""}
+                name="auditRoleId"
+              >
+                <option value="">{t("admin.roles.auditAllRoles")}</option>
+                {roles.map((role) => (
+                  <option key={role.id} value={role.id}>
+                    {roleName(role, t)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="fieldStack">
+              <span className="detailLabel">
+                {t("admin.roles.auditPermission")}
+              </span>
+              <select
+                className="selectInput"
+                defaultValue={accessAuditFilters.permission ?? ""}
+                name="auditPermission"
+              >
+                <option value="">{t("admin.roles.auditAllPermissions")}</option>
+                {permissionCatalog.map((definition) => (
+                  <option key={definition.id} value={definition.id}>
+                    {definition.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="fieldStack">
+              <span className="detailLabel">{t("admin.roles.auditFrom")}</span>
+              <input
+                className="textInput"
+                defaultValue={resolvedSearchParams?.auditFrom ?? ""}
+                name="auditFrom"
+                type="date"
+              />
+            </label>
+            <label className="fieldStack">
+              <span className="detailLabel">{t("admin.roles.auditTo")}</span>
+              <input
+                className="textInput"
+                defaultValue={resolvedSearchParams?.auditTo ?? ""}
+                name="auditTo"
+                type="date"
+              />
+            </label>
+            <button className="primaryButton" type="submit">
+              <Search size={18} aria-hidden="true" />
+              {t("admin.roles.auditFilter")}
+            </button>
+          </form>
+
+          <div className="managementList">
+            {accessAuditRecords.length === 0 ? (
+              <p className="metaText">{t("admin.roles.noAccessAudit")}</p>
+            ) : (
+              accessAuditRecords.map((record) => (
+                <AccessAuditRow
+                  employees={employees}
+                  key={record.id}
+                  record={record}
+                  roles={roles}
                   t={t}
                 />
               ))
@@ -882,6 +1028,106 @@ function EffectiveGrantRow({
   );
 }
 
+function AccessAuditRow({
+  employees,
+  record,
+  roles,
+  t
+}: {
+  employees: readonly TenantEmployeeRecord[];
+  record: AccessAuditRecord;
+  roles: readonly TenantRoleRecord[];
+  t: Translator;
+}): ReactNode {
+  const actor =
+    record.actorEmployeeId === undefined
+      ? undefined
+      : employees.find(
+          (employee) => employee.employeeId === record.actorEmployeeId
+        );
+  const targetEmployeeId = metadataString(record.metadata, "targetEmployeeId");
+  const targetEmployee =
+    targetEmployeeId === undefined
+      ? undefined
+      : employees.find((employee) => employee.employeeId === targetEmployeeId);
+  const roleId = metadataString(record.metadata, "roleId");
+  const role =
+    roleId === undefined
+      ? undefined
+      : roles.find((candidate) => candidate.id === roleId);
+  const permission = metadataString(record.metadata, "permission");
+  const reason = metadataString(record.metadata, "reason");
+  const scope = scopeValueFromAuditMetadata(record.metadata, t);
+
+  return (
+    <article className="managementRow accessAuditRow">
+      <span className="metricIcon">
+        <ListChecks size={18} aria-hidden="true" />
+      </span>
+      <div>
+        <h3 className="listItemTitle">
+          {t(accessAuditActionKey(record.action))}
+        </h3>
+        <p className="metaText">
+          {t("admin.roles.auditOccurredAtValue", {
+            value: record.occurredAt
+          })}
+        </p>
+        <p className="metaText">
+          {t("admin.roles.auditActorValue", {
+            value:
+              record.actorEmployeeId === undefined
+                ? t("admin.roles.auditSystemActor")
+                : employeeValue(record.actorEmployeeId, actor)
+          })}
+        </p>
+        <p className="metaText">
+          {t("admin.roles.auditEntityValue", {
+            value: `${t(accessAuditEntityKey(record.entityType))}:${record.entityId}`
+          })}
+        </p>
+      </div>
+      <div className="auditMetadataList">
+        {targetEmployeeId === undefined ? null : (
+          <span className="badge">
+            {t("admin.roles.auditTargetEmployeeValue", {
+              value: employeeValue(targetEmployeeId, targetEmployee)
+            })}
+          </span>
+        )}
+        {roleId === undefined ? null : (
+          <span className="badge">
+            {t("admin.roles.auditRoleValue", {
+              value: role === undefined ? roleId : roleName(role, t)
+            })}
+          </span>
+        )}
+        {permission === undefined ? null : (
+          <span className="badge">
+            {t("admin.roles.auditPermissionValue", {
+              value: permission
+            })}
+          </span>
+        )}
+        {scope === undefined ? null : (
+          <span className="badge">
+            {t("admin.roles.auditScopeValue", {
+              value: scope
+            })}
+          </span>
+        )}
+        {reason === undefined ? null : (
+          <span className="badge">
+            {t("admin.roles.auditReasonValue", {
+              value: reason
+            })}
+          </span>
+        )}
+      </div>
+    </article>
+  );
+}
+
 function buildEffectiveAccessPreview(input: {
   readonly at: Date;
   readonly directGrants: readonly DirectPermissionGrant[];
@@ -991,6 +1237,106 @@ function roleLabelFromEmployeeRole(role: string, t: Translator): string {
     default:
       return role;
   }
+}
+
+function resolveAccessAuditFilters(
+  searchParams:
+    | {
+        auditAction?: string;
+        auditFrom?: string;
+        auditPermission?: string;
+        auditRoleId?: string;
+        auditTargetEmployeeId?: string;
+        auditTo?: string;
+      }
+    | undefined,
+  employees: readonly TenantEmployeeRecord[],
+  roles: readonly TenantRoleRecord[]
+): {
+  readonly action?: AccessAuditAction;
+  readonly from?: Date;
+  readonly permission?: Permission;
+  readonly roleId?: string;
+  readonly targetEmployeeId?: TenantEmployeeRecord["employeeId"];
+  readonly to?: Date;
+} {
+  const targetEmployee = employees.find(
+    (employee) => employee.employeeId === searchParams?.auditTargetEmployeeId
+  );
+  const roleId =
+    searchParams?.auditRoleId &&
+    roles.some((role) => role.id === searchParams.auditRoleId)
+      ? searchParams.auditRoleId
+      : undefined;
+  const permission =
+    searchParams?.auditPermission && isPermission(searchParams.auditPermission)
+      ? searchParams.auditPermission
+      : undefined;
+
+  return {
+    action: resolveAccessAuditAction(searchParams?.auditAction),
+    from: resolveAuditDate(searchParams?.auditFrom, "start"),
+    permission,
+    roleId,
+    targetEmployeeId: targetEmployee?.employeeId,
+    to: resolveAuditDate(searchParams?.auditTo, "end")
+  };
+}
+
+function resolveAccessAuditAction(
+  value: string | undefined
+): AccessAuditAction | undefined {
+  return accessAuditActions.includes(value as AccessAuditAction)
+    ? (value as AccessAuditAction)
+    : undefined;
+}
+
+function resolveAuditDate(
+  value: string | undefined,
+  boundary: "start" | "end"
+): Date | undefined {
+  if (value === undefined || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return undefined;
+  }
+
+  const date = new Date(`${value}T00:00:00.000Z`);
+
+  if (Number.isNaN(date.getTime())) {
+    return undefined;
+  }
+
+  if (boundary === "end") {
+    date.setUTCHours(23, 59, 59, 999);
+  }
+
+  return date;
+}
+
+function metadataString(
+  metadata: Record<string, unknown>,
+  key: string
+): string | undefined {
+  const value = metadata[key];
+
+  return typeof value === "string" && value.trim().length > 0
+    ? value
+    : undefined;
+}
+
+function scopeValueFromAuditMetadata(
+  metadata: Record<string, unknown>,
+  t: Translator
+): string | undefined {
+  const scopeType = metadataString(metadata, "scopeType");
+  const scopeId = metadataString(metadata, "scopeId");
+
+  if (scopeType === undefined || !isPermissionScopeType(scopeType)) {
+    return undefined;
+  }
+
+  return scopeId === undefined
+    ? t(permissionScopeTypeKey(scopeType))
+    : `${t(permissionScopeTypeKey(scopeType))}:${scopeId}`;
 }
 
 function countBindingsByRoleId(
@@ -1152,6 +1498,40 @@ function roleActionStatusKey(status: string): I18nMessageKey {
       return "auth.emailVerification.status.required";
     default:
       return "admin.roles.actionStatus.invalid";
+  }
+}
+
+function accessAuditActionKey(action: AccessAuditAction): I18nMessageKey {
+  switch (action) {
+    case "role.created":
+      return "admin.roles.auditAction.roleCreated";
+    case "role.updated":
+      return "admin.roles.auditAction.roleUpdated";
+    case "role.archived":
+      return "admin.roles.auditAction.roleArchived";
+    case "role.restored":
+      return "admin.roles.auditAction.roleRestored";
+    case "role_binding.created":
+      return "admin.roles.auditAction.roleBindingCreated";
+    case "role_binding.revoked":
+      return "admin.roles.auditAction.roleBindingRevoked";
+    case "direct_grant.created":
+      return "admin.roles.auditAction.directGrantCreated";
+    case "direct_grant.revoked":
+      return "admin.roles.auditAction.directGrantRevoked";
+  }
+}
+
+function accessAuditEntityKey(
+  entityType: AccessAuditRecord["entityType"]
+): I18nMessageKey {
+  switch (entityType) {
+    case "role":
+      return "admin.roles.auditEntity.role";
+    case "role_binding":
+      return "admin.roles.auditEntity.roleBinding";
+    case "direct_grant":
+      return "admin.roles.auditEntity.directGrant";
   }
 }
 
