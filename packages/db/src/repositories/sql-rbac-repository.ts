@@ -53,6 +53,22 @@ export type CreateTenantRoleWithPermissionsInput = CreateTenantRoleInput & {
   readonly permissions: readonly Permission[];
 };
 
+export type UpdateCustomTenantRoleWithPermissionsInput = {
+  readonly tenantId: TenantId;
+  readonly roleId: string;
+  readonly name: string;
+  readonly description?: string | null;
+  readonly permissions: readonly Permission[];
+  readonly updatedAt: Date;
+};
+
+export type SetCustomTenantRoleStatusInput = {
+  readonly tenantId: TenantId;
+  readonly roleId: string;
+  readonly status: TenantRoleStatus;
+  readonly updatedAt: Date;
+};
+
 export type CreateTenantRoleBindingInput = PermissionRoleBinding & {
   readonly createdByEmployeeId?: EmployeeId | null;
   readonly createdAt: Date;
@@ -116,6 +132,10 @@ export type TenantRbacRepository = {
   createRoleWithPermissions(
     input: CreateTenantRoleWithPermissionsInput
   ): Promise<void>;
+  updateCustomRoleWithPermissions(
+    input: UpdateCustomTenantRoleWithPermissionsInput
+  ): Promise<void>;
+  setCustomRoleStatus(input: SetCustomTenantRoleStatusInput): Promise<void>;
   addRolePermission(input: AddTenantRolePermissionInput): Promise<void>;
   createRoleBinding(input: CreateTenantRoleBindingInput): Promise<void>;
   createDirectGrant(input: CreateDirectPermissionGrantInput): Promise<void>;
@@ -191,6 +211,16 @@ export function createSqlTenantRbacRepository(
 
     async createRoleWithPermissions(input) {
       await rawExecutor.execute(buildCreateTenantRoleWithPermissionsSql(input));
+    },
+
+    async updateCustomRoleWithPermissions(input) {
+      await rawExecutor.execute(
+        buildUpdateCustomTenantRoleWithPermissionsSql(input)
+      );
+    },
+
+    async setCustomRoleStatus(input) {
+      await rawExecutor.execute(buildSetCustomTenantRoleStatusSql(input));
     },
 
     async addRolePermission(input) {
@@ -408,6 +438,84 @@ export function buildCreateTenantRoleWithPermissionsSql(
     )
     select count(*) as inserted_permission_count
     from inserted_permissions
+  `;
+}
+
+export function buildUpdateCustomTenantRoleWithPermissionsSql(
+  input: UpdateCustomTenantRoleWithPermissionsInput
+): SQL {
+  assertNonEmpty(input.tenantId);
+  assertNonEmpty(input.roleId);
+  assertNonEmpty(input.name);
+  assertPermissions(input.permissions);
+
+  return sql`
+    with updated_role as (
+      update tenant_roles
+      set name = ${input.name.trim()},
+          description = ${input.description ?? null},
+          updated_at = ${input.updatedAt}
+      where tenant_id = ${input.tenantId}
+        and id = ${input.roleId}
+        and is_system = false
+      returning id,
+                tenant_id
+    ),
+    deleted_permissions as (
+      delete from tenant_role_permissions rp
+      using updated_role
+      where rp.tenant_id = updated_role.tenant_id
+        and rp.role_id = updated_role.id
+      returning rp.permission
+    ),
+    permission_rows(permission) as (
+      values ${sql.join(
+        input.permissions.map((permission) => sql`(${permission})`),
+        sql`, `
+      )}
+    ),
+    inserted_permissions as (
+      insert into tenant_role_permissions (
+        tenant_id,
+        role_id,
+        permission,
+        created_at,
+        updated_at
+      )
+      select updated_role.tenant_id,
+             updated_role.id,
+             permission_rows.permission,
+             ${input.updatedAt},
+             ${input.updatedAt}
+      from updated_role
+      cross join permission_rows
+      on conflict (tenant_id, role_id, permission) do nothing
+      returning permission
+    )
+    select (select count(*) from updated_role) as updated_role_count,
+           (select count(*) from deleted_permissions) as deleted_permission_count,
+           (select count(*) from inserted_permissions) as inserted_permission_count
+  `;
+}
+
+export function buildSetCustomTenantRoleStatusSql(
+  input: SetCustomTenantRoleStatusInput
+): SQL {
+  assertNonEmpty(input.tenantId);
+  assertNonEmpty(input.roleId);
+  assertRoleStatus(input.status);
+
+  return sql`
+    update tenant_roles
+    set status = ${input.status},
+        archived_at = case
+          when ${input.status} = 'archived' then ${input.updatedAt}
+          else null
+        end,
+        updated_at = ${input.updatedAt}
+    where tenant_id = ${input.tenantId}
+      and id = ${input.roleId}
+      and is_system = false
   `;
 }
 

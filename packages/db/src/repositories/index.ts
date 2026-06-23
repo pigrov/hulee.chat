@@ -40,6 +40,8 @@ export {
   buildListTenantRoleBindingsSql,
   buildRevokeDirectPermissionGrantSql,
   buildRevokeTenantRoleBindingSql,
+  buildSetCustomTenantRoleStatusSql,
+  buildUpdateCustomTenantRoleWithPermissionsSql,
   createSqlTenantRbacRepository
 } from "./sql-rbac-repository";
 export {
@@ -191,9 +193,11 @@ export type {
   ListTenantRoleBindingsInput,
   RevokeDirectPermissionGrantInput,
   RevokeTenantRoleBindingInput,
+  SetCustomTenantRoleStatusInput,
   TenantRbacRepository,
   TenantRoleRecord,
-  TenantRoleStatus
+  TenantRoleStatus,
+  UpdateCustomTenantRoleWithPermissionsInput
 } from "./sql-rbac-repository";
 export type {
   FindQueuedOutboundMessageInput,

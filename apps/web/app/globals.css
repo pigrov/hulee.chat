@@ -903,6 +903,35 @@ a.secondaryButton {
   display: block;
 }
 
+.managementRow.roleDefinitionRow {
+  display: grid;
+  grid-template-columns: auto minmax(160px, 1fr) auto auto;
+  align-items: flex-start;
+}
+
+.roleDefinitionEditor,
+.roleDefinitionReadonly,
+.rolePermissionDomains {
+  grid-column: 1 / -1;
+}
+
+.rolePermissionDomains {
+  justify-content: flex-start;
+}
+
+.roleDefinitionEditor {
+  padding-top: var(--hulee-space-block);
+  border-top: 1px solid var(--hulee-color-border);
+}
+
+.roleDefinitionEditor .primaryButton {
+  justify-self: start;
+}
+
+.roleDefinitionReadonly {
+  margin: 0;
+}
+
 a.managementRow {
   color: inherit;
   text-decoration: none;
@@ -1136,6 +1165,7 @@ button.managementRow:focus-visible {
   .adminGrid,
   .adminIntegrationGrid,
   .adminOverviewGrid,
+  .managementRow.roleDefinitionRow,
   .roleDefinitionRow,
   .roleBindingRow,
   .roleAssignForm,

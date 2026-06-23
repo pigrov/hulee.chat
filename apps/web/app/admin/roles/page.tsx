@@ -15,7 +15,15 @@ import {
   type TenantRoleRecord
 } from "@hulee/db";
 import { createTranslator, type I18nMessageKey } from "@hulee/i18n";
-import { KeyRound, Plus, ShieldCheck, XCircle } from "lucide-react";
+import {
+  Archive,
+  ArchiveRestore,
+  KeyRound,
+  Plus,
+  Save,
+  ShieldCheck,
+  XCircle
+} from "lucide-react";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
@@ -27,8 +35,11 @@ import {
 import { DetailItem } from "../../../src/app-chrome";
 import { loadInboxViewModel } from "../../../src/inbox-api-client";
 import {
+  archiveCustomTenantRoleAction,
   assignTenantRoleAction,
   createCustomTenantRoleAction,
+  restoreCustomTenantRoleAction,
+  updateCustomTenantRoleAction,
   revokeTenantRoleBindingAction
 } from "../../../src/role-actions";
 import {
@@ -164,42 +175,7 @@ export default async function RolesAdminPage({
               </label>
             </div>
 
-            <div className="permissionEditorGrid">
-              {summarizeCatalogDomains().map((summary) => (
-                <fieldset
-                  className="permissionDomainGroup"
-                  key={summary.domain}
-                >
-                  <legend className="listItemTitle">
-                    {t(permissionDomainKey(summary.domain))}
-                  </legend>
-                  <p className="metaText">
-                    {t("admin.roles.permissionCount", {
-                      count: summary.permissions.length
-                    })}
-                  </p>
-                  <div className="permissionCheckboxList">
-                    {summary.permissions.map((permission) => (
-                      <label className="permissionCheckboxRow" key={permission}>
-                        <input
-                          name="permissions"
-                          type="checkbox"
-                          value={permission}
-                        />
-                        <span>
-                          <code className="permissionCode">{permission}</code>
-                          <span className="metaText">
-                            {t("admin.roles.allowedScopes", {
-                              value: allowedScopesText(permission, t)
-                            })}
-                          </span>
-                        </span>
-                      </label>
-                    ))}
-                  </div>
-                </fieldset>
-              ))}
-            </div>
+            <PermissionCheckboxGroups selectedPermissions={[]} t={t} />
 
             <button className="primaryButton" type="submit">
               <Plus size={18} aria-hidden="true" />
@@ -385,6 +361,18 @@ function RoleDefinitionRow({
   t: Translator;
 }): ReactNode {
   const summaries = summarizeRoleDomains(role.permissions);
+  const statusAction =
+    role.status === "archived"
+      ? restoreCustomTenantRoleAction
+      : archiveCustomTenantRoleAction;
+  const statusActionIcon =
+    role.status === "archived" ? (
+      <ArchiveRestore size={14} aria-hidden="true" />
+    ) : (
+      <Archive size={14} aria-hidden="true" />
+    );
+  const statusActionLabel =
+    role.status === "archived" ? "admin.roles.restore" : "admin.roles.archive";
 
   return (
     <article className="managementRow roleDefinitionRow">
@@ -397,6 +385,9 @@ function RoleDefinitionRow({
       </span>
       <div>
         <h3 className="listItemTitle">{roleName(role, t)}</h3>
+        {role.description ? (
+          <p className="metaText">{role.description}</p>
+        ) : null}
         <p className="metaText">
           {t("admin.roles.permissionCount", {
             count: role.permissions.length
@@ -418,6 +409,24 @@ function RoleDefinitionRow({
         </span>
         <span className="badge">{t(roleStatusKey(role.status))}</span>
       </div>
+      <div className="rowActions">
+        {role.isSystem ? (
+          <span className="badge">{t("admin.roles.readOnly")}</span>
+        ) : (
+          <form className="inlineForm" action={statusAction}>
+            <input name="roleId" type="hidden" value={role.id} />
+            <button
+              className={
+                role.status === "archived" ? "secondaryButton" : "dangerButton"
+              }
+              type="submit"
+            >
+              {statusActionIcon}
+              {t(statusActionLabel)}
+            </button>
+          </form>
+        )}
+      </div>
       <div className="badgeRow rolePermissionDomains">
         {summaries.map((summary) => (
           <span className="badge" key={summary.domain}>
@@ -428,7 +437,100 @@ function RoleDefinitionRow({
           </span>
         ))}
       </div>
+      {role.isSystem ? (
+        <p className="metaText roleDefinitionReadonly">
+          {t("admin.roles.systemRoleReadOnly")}
+        </p>
+      ) : (
+        <form
+          className="settingsForm roleDefinitionEditor"
+          action={updateCustomTenantRoleAction}
+        >
+          <input name="roleId" type="hidden" value={role.id} />
+          <div className="roleEditorGrid">
+            <label className="fieldStack">
+              <span className="detailLabel">{t("admin.roles.roleName")}</span>
+              <input
+                className="textInput"
+                name="name"
+                type="text"
+                maxLength={80}
+                defaultValue={role.name}
+                required
+              />
+            </label>
+            <label className="fieldStack">
+              <span className="detailLabel">
+                {t("admin.roles.roleDescription")}
+              </span>
+              <textarea
+                className="textInput roleDescriptionInput"
+                name="description"
+                maxLength={500}
+                defaultValue={role.description ?? ""}
+              />
+            </label>
+          </div>
+
+          <PermissionCheckboxGroups
+            selectedPermissions={role.permissions}
+            t={t}
+          />
+
+          <button className="primaryButton" type="submit">
+            <Save size={18} aria-hidden="true" />
+            {t("admin.roles.saveChanges")}
+          </button>
+        </form>
+      )}
     </article>
+  );
+}
+
+function PermissionCheckboxGroups({
+  selectedPermissions,
+  t
+}: {
+  selectedPermissions: readonly Permission[];
+  t: Translator;
+}): ReactNode {
+  const selected = new Set(selectedPermissions);
+
+  return (
+    <div className="permissionEditorGrid">
+      {summarizeCatalogDomains().map((summary) => (
+        <fieldset className="permissionDomainGroup" key={summary.domain}>
+          <legend className="listItemTitle">
+            {t(permissionDomainKey(summary.domain))}
+          </legend>
+          <p className="metaText">
+            {t("admin.roles.permissionCount", {
+              count: summary.permissions.length
+            })}
+          </p>
+          <div className="permissionCheckboxList">
+            {summary.permissions.map((permission) => (
+              <label className="permissionCheckboxRow" key={permission}>
+                <input
+                  defaultChecked={selected.has(permission)}
+                  name="permissions"
+                  type="checkbox"
+                  value={permission}
+                />
+                <span>
+                  <code className="permissionCode">{permission}</code>
+                  <span className="metaText">
+                    {t("admin.roles.allowedScopes", {
+                      value: allowedScopesText(permission, t)
+                    })}
+                  </span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      ))}
+    </div>
   );
 }
 
@@ -599,6 +701,12 @@ function roleActionStatusKey(status: string): I18nMessageKey {
   switch (status) {
     case "created":
       return "admin.roles.actionStatus.created";
+    case "updated":
+      return "admin.roles.actionStatus.updated";
+    case "archived":
+      return "admin.roles.actionStatus.archived";
+    case "restored":
+      return "admin.roles.actionStatus.restored";
     case "assigned":
       return "admin.roles.actionStatus.assigned";
     case "revoked":

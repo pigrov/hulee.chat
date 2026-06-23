@@ -96,6 +96,49 @@ describe("SQL RBAC repository", () => {
     );
   });
 
+  it("updates and archives custom roles with tenant-scoped custom-only predicates", async () => {
+    const executor = new RecordingSqlExecutor([]);
+    const repository = createSqlTenantRbacRepository(executor);
+
+    await repository.updateCustomRoleWithPermissions({
+      tenantId,
+      roleId: "role-custom-sales",
+      name: "Updated sales",
+      description: "Updated role",
+      permissions: ["client.view", "message.reply"],
+      updatedAt: now
+    });
+    await repository.setCustomRoleStatus({
+      tenantId,
+      roleId: "role-custom-sales",
+      status: "archived",
+      updatedAt: now
+    });
+
+    const updateQuery = renderQuery(executor.queries[0]);
+    const statusQuery = renderQuery(executor.queries[1]);
+
+    expect(updateQuery.sql).toContain("update tenant_roles");
+    expect(updateQuery.sql).toContain("delete from tenant_role_permissions");
+    expect(updateQuery.sql).toContain("insert into tenant_role_permissions");
+    expect(updateQuery.sql).toContain("is_system = false");
+    expect(updateQuery.params).toEqual(
+      expect.arrayContaining([
+        tenantId,
+        "role-custom-sales",
+        "Updated sales",
+        "client.view",
+        "message.reply"
+      ])
+    );
+    expect(statusQuery.sql).toContain("update tenant_roles");
+    expect(statusQuery.sql).toContain("archived_at = case");
+    expect(statusQuery.sql).toContain("is_system = false");
+    expect(statusQuery.params).toEqual(
+      expect.arrayContaining([tenantId, "role-custom-sales", "archived", now])
+    );
+  });
+
   it("rejects invalid permissions and permission-scope pairs before SQL", async () => {
     const executor = new RecordingSqlExecutor([]);
     const repository = createSqlTenantRbacRepository(executor);
@@ -128,6 +171,25 @@ describe("SQL RBAC repository", () => {
         name: "Empty",
         createdAt: now,
         permissions: []
+      })
+    ).rejects.toThrow(new CoreError("validation.failed"));
+
+    await expect(
+      repository.updateCustomRoleWithPermissions({
+        tenantId,
+        roleId: "role-empty",
+        name: "Empty",
+        updatedAt: now,
+        permissions: []
+      })
+    ).rejects.toThrow(new CoreError("validation.failed"));
+
+    await expect(
+      repository.setCustomRoleStatus({
+        tenantId,
+        roleId: "role-invalid-status",
+        status: "deleted" as never,
+        updatedAt: now
       })
     ).rejects.toThrow(new CoreError("validation.failed"));
 

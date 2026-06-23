@@ -1,10 +1,15 @@
 "use server";
 
 import type { EmployeeId } from "@hulee/contracts";
-import { prepareCustomTenantRole } from "@hulee/core";
+import {
+  prepareCustomTenantRole,
+  type PermissionRoleBinding,
+  type PreparedCustomTenantRole
+} from "@hulee/core";
 import {
   createSqlEmployeeDirectoryRepository,
-  createSqlTenantRbacRepository
+  createSqlTenantRbacRepository,
+  type TenantRoleRecord
 } from "@hulee/db";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -46,6 +51,133 @@ export async function createCustomTenantRoleAction(
     });
 
     destination = "/admin/roles?roleActionStatus=created";
+  } catch {
+    destination = "/admin/roles?roleActionStatus=invalid";
+  }
+
+  revalidateRoleAdminPaths();
+  redirect(destination);
+}
+
+export async function updateCustomTenantRoleAction(
+  formData: FormData
+): Promise<void> {
+  await assertWebActionRequest();
+
+  const session = await assertVerifiedRolesPermission();
+  const now = new Date();
+  const repository = createSqlTenantRbacRepository(getWebDatabase());
+  let destination = "/admin/roles?roleActionStatus=invalid";
+
+  try {
+    const roleId = readRequiredFormString(formData, "roleId");
+    const role = prepareCustomTenantRole({
+      name: readRequiredFormString(formData, "name"),
+      description: readOptionalFormString(formData, "description"),
+      permissions: readFormStringList(formData, "permissions")
+    });
+    const [roles, bindings] = await Promise.all([
+      repository.listRoleDefinitions({ tenantId: session.tenantId }),
+      repository.listRoleBindings({ tenantId: session.tenantId, at: now })
+    ]);
+    const existingRole = roles.find((candidate) => candidate.id === roleId);
+
+    assertCustomRole(existingRole);
+    assertRoleUpdateDoesNotRemoveOwnRoleManagement({
+      bindings,
+      currentEmployeeId: session.employeeId,
+      existingRole,
+      nextRole: role
+    });
+
+    await repository.updateCustomRoleWithPermissions({
+      tenantId: session.tenantId,
+      roleId,
+      name: role.name,
+      description: role.description,
+      updatedAt: now,
+      permissions: role.permissions
+    });
+
+    destination = "/admin/roles?roleActionStatus=updated";
+  } catch {
+    destination = "/admin/roles?roleActionStatus=invalid";
+  }
+
+  revalidateRoleAdminPaths();
+  redirect(destination);
+}
+
+export async function archiveCustomTenantRoleAction(
+  formData: FormData
+): Promise<void> {
+  await assertWebActionRequest();
+
+  const session = await assertVerifiedRolesPermission();
+  const now = new Date();
+  const repository = createSqlTenantRbacRepository(getWebDatabase());
+  let destination = "/admin/roles?roleActionStatus=invalid";
+
+  try {
+    const roleId = readRequiredFormString(formData, "roleId");
+    const [roles, bindings] = await Promise.all([
+      repository.listRoleDefinitions({ tenantId: session.tenantId }),
+      repository.listRoleBindings({ tenantId: session.tenantId, at: now })
+    ]);
+    const role = roles.find((candidate) => candidate.id === roleId);
+
+    assertCustomRole(role);
+
+    if (
+      isRoleAssignedToEmployee(bindings, roleId, session.employeeId) &&
+      role.status === "active"
+    ) {
+      throw new Error("Current employee custom role cannot be archived.");
+    }
+
+    await repository.setCustomRoleStatus({
+      tenantId: session.tenantId,
+      roleId,
+      status: "archived",
+      updatedAt: now
+    });
+
+    destination = "/admin/roles?roleActionStatus=archived";
+  } catch {
+    destination = "/admin/roles?roleActionStatus=invalid";
+  }
+
+  revalidateRoleAdminPaths();
+  redirect(destination);
+}
+
+export async function restoreCustomTenantRoleAction(
+  formData: FormData
+): Promise<void> {
+  await assertWebActionRequest();
+
+  const session = await assertVerifiedRolesPermission();
+  const now = new Date();
+  const repository = createSqlTenantRbacRepository(getWebDatabase());
+  let destination = "/admin/roles?roleActionStatus=invalid";
+
+  try {
+    const roleId = readRequiredFormString(formData, "roleId");
+    const roles = await repository.listRoleDefinitions({
+      tenantId: session.tenantId
+    });
+    const role = roles.find((candidate) => candidate.id === roleId);
+
+    assertCustomRole(role);
+
+    await repository.setCustomRoleStatus({
+      tenantId: session.tenantId,
+      roleId,
+      status: "active",
+      updatedAt: now
+    });
+
+    destination = "/admin/roles?roleActionStatus=restored";
   } catch {
     destination = "/admin/roles?roleActionStatus=invalid";
   }
@@ -190,6 +322,52 @@ async function assertVerifiedRolesPermission(): ReturnType<
 function revalidateRoleAdminPaths(): void {
   revalidatePath("/admin/roles");
   revalidatePath("/admin/employees");
+}
+
+function assertCustomRole(
+  role: TenantRoleRecord | undefined
+): asserts role is TenantRoleRecord {
+  if (role === undefined || role.isSystem) {
+    throw new Error("Custom tenant role was not found.");
+  }
+}
+
+function assertRoleUpdateDoesNotRemoveOwnRoleManagement(input: {
+  readonly bindings: readonly PermissionRoleBinding[];
+  readonly currentEmployeeId: EmployeeId;
+  readonly existingRole: TenantRoleRecord;
+  readonly nextRole: PreparedCustomTenantRole;
+}): void {
+  if (
+    !isRoleAssignedToEmployee(
+      input.bindings,
+      input.existingRole.id,
+      input.currentEmployeeId
+    )
+  ) {
+    return;
+  }
+
+  if (
+    input.existingRole.permissions.includes("roles.manage") &&
+    !input.nextRole.permissions.includes("roles.manage")
+  ) {
+    throw new Error("Current employee role management permission is required.");
+  }
+}
+
+function isRoleAssignedToEmployee(
+  bindings: readonly PermissionRoleBinding[],
+  roleId: string,
+  employeeId: EmployeeId
+): boolean {
+  return bindings.some((binding) => {
+    return (
+      binding.roleId === roleId &&
+      binding.subject.type === "employee" &&
+      binding.subject.id === employeeId
+    );
+  });
 }
 
 function readRequiredFormString(formData: FormData, name: string): string {
