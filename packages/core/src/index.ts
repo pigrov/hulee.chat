@@ -1,6 +1,26 @@
 export { assertTenantBoundary, createDomainEvent } from "./domain-events";
 export type { TenantScope } from "./domain-events";
 export {
+  assertCanAccess,
+  can,
+  canAccess,
+  resolveEffectivePermissionGrants
+} from "./access-control";
+export type {
+  CanAccessInput,
+  DirectPermissionGrant,
+  EffectivePermissionGrant,
+  PermissionActor,
+  PermissionDecision,
+  PermissionDecisionReason,
+  PermissionGrantSource,
+  PermissionResourceContext,
+  PermissionRoleBinding,
+  PermissionRoleBindingSubject,
+  PermissionRoleDefinition,
+  ResolveEffectivePermissionGrantsInput
+} from "./access-control";
+export {
   completeAuthEmailToken,
   createAccountEmailVerifiedEvent,
   createAuthEmailToken
