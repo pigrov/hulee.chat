@@ -1,6 +1,17 @@
 export { assertTenantBoundary, createDomainEvent } from "./domain-events";
 export type { TenantScope } from "./domain-events";
 export { CoreError } from "./errors";
+export {
+  acceptEmployeeInvitation,
+  createEmployeeInvitation
+} from "./employee-invitations";
+export type {
+  AcceptedEmployeeInvitation,
+  AcceptEmployeeInvitationInput,
+  CreatedEmployeeInvitation,
+  CreateEmployeeInvitationInput,
+  EmployeeInvitation
+} from "./employee-invitations";
 export { createSequentialIdFactory } from "./ids";
 export type { IdFactory } from "./ids";
 export {

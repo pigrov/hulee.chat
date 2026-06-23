@@ -371,6 +371,40 @@ export const employeeRoles = pgTable(
   ]
 );
 
+export const employeeInvitations = pgTable(
+  "employee_invitations",
+  {
+    id: text("id").primaryKey(),
+    tenantId: tenantIdColumn().references(() => tenants.id),
+    email: text("email").notNull(),
+    displayName: text("display_name"),
+    role: text("role").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    invitedByEmployeeId: text("invited_by_employee_id")
+      .notNull()
+      .references(() => employees.id),
+    acceptedEmployeeId: text("accepted_employee_id").references(
+      () => employees.id
+    ),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    ...timestamps
+  },
+  (table) => [
+    uniqueIndex("employee_invitations_token_unique").on(table.tokenHash),
+    index("employee_invitations_tenant_email_idx").on(
+      table.tenantId,
+      table.email
+    ),
+    index("employee_invitations_tenant_status_idx").on(
+      table.tenantId,
+      table.acceptedAt,
+      table.revokedAt
+    )
+  ]
+);
+
 export const sessions = pgTable(
   "sessions",
   {

@@ -29,6 +29,13 @@
       "when": 1782186611558,
       "tag": "0003_elite_tigra",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1782190203701,
+      "tag": "0004_simple_richard_fisk",
+      "breakpoints": true
     }
   ]
 }

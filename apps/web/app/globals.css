@@ -575,6 +575,12 @@ button.railButton {
   align-items: start;
 }
 
+.adminStack {
+  display: grid;
+  min-width: 0;
+  gap: 18px;
+}
+
 .settingsPanel {
   display: grid;
   min-width: 0;
@@ -607,6 +613,18 @@ button.railButton {
   border: 1px solid var(--hulee-color-border);
   border-radius: var(--hulee-radius-control);
   background: var(--hulee-color-surface-raised);
+}
+
+a.managementRow {
+  color: inherit;
+  text-decoration: none;
+}
+
+a.managementRow:hover,
+a.managementRow:focus-visible {
+  border-color: var(--hulee-color-brand-primary);
+  outline: none;
+  box-shadow: var(--hulee-shadow-focus);
 }
 
 .integrationListItem[aria-current="page"] {

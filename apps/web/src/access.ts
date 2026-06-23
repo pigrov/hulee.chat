@@ -73,7 +73,10 @@ export function navigationAccessFromSession(
   session: WebAccessSession
 ): NavigationAccess {
   return {
-    tenantAdmin: canTenantPermission(session, "modules.manage"),
+    tenantAdmin:
+      canTenantPermission(session, "tenant.manage") ||
+      canTenantPermission(session, "employees.manage") ||
+      canTenantPermission(session, "modules.manage"),
     platformAdmin: canPlatformAdmin(session)
   };
 }

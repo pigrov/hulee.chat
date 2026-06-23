@@ -211,7 +211,7 @@ export async function registerLocalTenant(
   const repository = getAuthRepository();
 
   await createTenantWorkspaceRepository(
-    createDrizzlePersistenceExecutor(getDatabase())
+    createDrizzlePersistenceExecutor(getWebDatabase())
   ).registerTenant({
     registration,
     adminPasswordHash: passwordHash
@@ -230,6 +230,15 @@ export async function registerLocalTenant(
       roles: registration.admin.roles,
       permissions: permissionsForRoles(registration.admin.roles)
     }
+  });
+}
+
+export async function createTenantWebSession(
+  tenantAccount: TenantAuthAccount
+): Promise<LoginLocalWebSessionResult> {
+  return createStoredWebSession({
+    repository: getAuthRepository(),
+    tenantAccount
   });
 }
 
@@ -301,10 +310,10 @@ function webAccessSessionFromPrincipal(
 }
 
 function getAuthRepository(): LocalAuthRepository {
-  return createSqlLocalAuthRepository(getDatabase());
+  return createSqlLocalAuthRepository(getWebDatabase());
 }
 
-function getDatabase(): HuleeDatabase {
+export function getWebDatabase(): HuleeDatabase {
   const env = resolveWebEnv();
 
   database ??= createHuleeDatabase({
@@ -337,7 +346,7 @@ async function writeSessionToken(
   });
 }
 
-function resolveWebEnv(): NodeJS.ProcessEnv {
+export function resolveWebEnv(): NodeJS.ProcessEnv {
   return mergeEnvSources(localEnv, process.env) as NodeJS.ProcessEnv;
 }
 

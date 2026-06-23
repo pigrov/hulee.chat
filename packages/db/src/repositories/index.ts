@@ -60,6 +60,15 @@ export {
   createSqlLocalAuthRepository,
   hashAuthSessionToken
 } from "./sql-auth-repository";
+export {
+  buildAcceptEmployeeInvitationSql,
+  buildCreateEmployeeInvitationSql,
+  buildFindInvitationByTokenHashSql,
+  buildListTenantEmployeesSql,
+  buildListTenantInvitationsSql,
+  createSqlEmployeeDirectoryRepository,
+  hashEmployeeInvitationToken
+} from "./sql-employee-directory-repository";
 export { createTenantWorkspaceRepository } from "./drizzle-tenant-workspace-repository";
 export {
   assertTenantScopedRows,
@@ -145,6 +154,15 @@ export type {
   UpsertTenantAdminAccountInput,
   UpsertPlatformAdminAccountInput
 } from "./sql-auth-repository";
+export type {
+  AcceptEmployeeInvitationPersistenceInput,
+  CreateEmployeeInvitationPersistenceInput,
+  EmployeeDirectoryRepository,
+  EmployeeInvitationPreview,
+  ListTenantEmployeesInput,
+  ListTenantInvitationsInput,
+  TenantEmployeeRecord
+} from "./sql-employee-directory-repository";
 export type { TenantScopedRow } from "./tenant-scope";
 export {
   collectReplyTenantScopedRows,

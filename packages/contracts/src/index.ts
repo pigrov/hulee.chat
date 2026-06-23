@@ -26,6 +26,14 @@ export type EventEnvelope<TType extends string, TPayload> = {
 export type PlatformEvent =
   | EventEnvelope<"tenant.created", { tenantId: TenantId }>
   | EventEnvelope<"employee.created", { employeeId: EmployeeId }>
+  | EventEnvelope<
+      "employee.invited",
+      { invitationId: string; email: string; role: string }
+    >
+  | EventEnvelope<
+      "employee.invitation_accepted",
+      { invitationId: string; employeeId: EmployeeId }
+    >
   | EventEnvelope<"client.created", { clientId: ClientId }>
   | EventEnvelope<"conversation.created", { conversationId: ConversationId }>
   | EventEnvelope<"message.received", { messageId: MessageId }>
