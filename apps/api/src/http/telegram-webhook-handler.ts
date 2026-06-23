@@ -18,6 +18,7 @@ import { timingSafeEqual } from "node:crypto";
 
 import type { ExternalChannelCommandService } from "../external-channel-command-service";
 import type { ApiHttpRequest, ApiHttpResponse } from "./public-api-handler";
+import { resolveRequestId } from "./request-id";
 
 export type TelegramWebhookConnector = {
   tenantId: TenantId;
@@ -90,7 +91,10 @@ export function createTelegramWebhookHandler(
 
   return {
     async handle(request) {
-      const requestId = resolveRequestId(request, requestIdFactory);
+      const requestId = resolveRequestId({
+        headers: request.headers,
+        requestIdFactory
+      });
       const route = matchRoute(request);
 
       if (route === undefined) {
@@ -215,17 +219,6 @@ function normalizePath(path: string): string {
   }
 
   return path;
-}
-
-function resolveRequestId(
-  request: ApiHttpRequest,
-  requestIdFactory: () => string
-): string {
-  const headerRequestId = headerValue(request.headers, "x-request-id")?.trim();
-
-  return headerRequestId && headerRequestId.length > 0
-    ? headerRequestId
-    : requestIdFactory();
 }
 
 function headerValue(

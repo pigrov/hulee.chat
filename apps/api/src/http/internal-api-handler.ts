@@ -32,6 +32,7 @@ import type {
 import type { InternalIntegrationService } from "../internal-integrations-service";
 import type { InternalTenantSettingsService } from "../internal-tenant-service";
 import type { ApiHttpRequest, ApiHttpResponse } from "./public-api-handler";
+import { resolveRequestId } from "./request-id";
 
 export type InternalApiSession = {
   requestId: string;
@@ -108,7 +109,10 @@ export function createInternalApiHandler(
 
   return {
     async handle(request) {
-      const requestId = resolveRequestId(request, requestIdFactory);
+      const requestId = resolveRequestId({
+        headers: request.headers,
+        requestIdFactory
+      });
       const route = matchRoute(request);
 
       if (route === undefined) {
@@ -510,17 +514,6 @@ function normalizePath(path: string): string {
   }
 
   return path;
-}
-
-function resolveRequestId(
-  request: ApiHttpRequest,
-  requestIdFactory: () => string
-): string {
-  const headerRequestId = headerValue(request.headers, "x-request-id")?.trim();
-
-  return headerRequestId && headerRequestId.length > 0
-    ? headerRequestId
-    : requestIdFactory();
 }
 
 function headerValue(

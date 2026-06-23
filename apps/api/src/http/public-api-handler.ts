@@ -23,6 +23,8 @@ import {
 import { createPublicApiChannelAdapter } from "@hulee/modules";
 import type { Logger } from "@hulee/observability";
 
+import { resolveRequestId } from "./request-id";
+
 export type ApiHttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 export type ApiHttpRequest = {
@@ -148,7 +150,10 @@ export function createPublicApiHandler(
 
   return {
     async handle(request) {
-      const requestId = resolveRequestId(request, requestIdFactory);
+      const requestId = resolveRequestId({
+        headers: request.headers,
+        requestIdFactory
+      });
       const route = matchRoute(request);
 
       if (route === undefined) {
@@ -398,17 +403,6 @@ function extractApiKey(
   return explicitHeader && explicitHeader.length > 0
     ? explicitHeader
     : undefined;
-}
-
-function resolveRequestId(
-  request: ApiHttpRequest,
-  requestIdFactory: () => string
-): string {
-  const headerRequestId = headerValue(request.headers, "x-request-id")?.trim();
-
-  return headerRequestId && headerRequestId.length > 0
-    ? headerRequestId
-    : requestIdFactory();
 }
 
 function headerValue(
