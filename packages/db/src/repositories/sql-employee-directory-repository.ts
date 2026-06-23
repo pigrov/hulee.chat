@@ -160,9 +160,11 @@ type InvitationPreviewRow = InvitationRow & {
 type AcceptedInvitationRow = {
   tenant_id: string;
   tenant_slug: string;
+  tenant_display_name: string;
   account_id: string;
   employee_id: string;
   email: string;
+  email_verified_at: Date | null;
   display_name: string;
   password_hash: string | null;
   roles: unknown;
@@ -530,7 +532,8 @@ export function buildAcceptEmployeeInvitationSql(
              employee_invitations.tenant_id,
              employee_invitations.email,
              employee_invitations.role,
-             tenants.slug as tenant_slug
+             tenants.slug as tenant_slug,
+             tenants.display_name as tenant_display_name
       from employee_invitations
       inner join tenants on tenants.id = employee_invitations.tenant_id
       where employee_invitations.token_hash = ${input.tokenHash}
@@ -563,6 +566,7 @@ export function buildAcceptEmployeeInvitationSql(
       returning id,
                 tenant_id,
                 email,
+                email_verified_at,
                 password_hash
     ),
     inserted_employee as (
@@ -683,9 +687,11 @@ export function buildAcceptEmployeeInvitationSql(
     )
     select pending_invitation.tenant_id,
            pending_invitation.tenant_slug,
+           pending_invitation.tenant_display_name,
            inserted_account.id as account_id,
            inserted_employee.id as employee_id,
            inserted_employee.email,
+           inserted_account.email_verified_at,
            inserted_employee.display_name,
            inserted_account.password_hash,
            json_build_array(inserted_role.role) as roles
@@ -1146,9 +1152,11 @@ function mapAcceptedInvitationRow(
   return {
     tenantId: row.tenant_id as TenantId,
     tenantSlug: row.tenant_slug,
+    tenantDisplayName: row.tenant_display_name,
     accountId: row.account_id,
     employeeId: row.employee_id as EmployeeId,
     email: row.email,
+    emailVerifiedAt: row.email_verified_at,
     displayName: row.display_name,
     passwordHash: row.password_hash,
     roles,

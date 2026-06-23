@@ -22,7 +22,12 @@ import {
 } from "@hulee/core";
 import { hashLocalPassword, verifyLocalPassword } from "@hulee/modules";
 import { cookies } from "next/headers";
-import { randomBytes, randomUUID } from "node:crypto";
+import {
+  createHmac,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual
+} from "node:crypto";
 
 import {
   buildInternalApiHeaders as buildInternalApiHeadersForSession,
@@ -33,9 +38,11 @@ import {
 
 export const authSessionCookieName = "hulee_session";
 export const lastTenantSlugCookieName = "hulee_last_tenant";
+export const tenantLoginChoicesCookieName = "hulee_login_choices";
 
 const sessionTtlMs = 1000 * 60 * 60 * 24 * 14;
 const lastTenantSlugTtlMs = 1000 * 60 * 60 * 24 * 365;
+const tenantLoginChoicesTtlMs = 1000 * 60 * 10;
 const localEnv = loadLocalEnvFile();
 
 let database: HuleeDatabase | undefined;
@@ -63,6 +70,29 @@ export type LoginLocalWebSessionResult = {
   redirectPath: string;
   tenantAccount?: TenantAuthAccount;
 };
+
+export type TenantLoginChoice = {
+  tenantSlug: string;
+  tenantDisplayName: string;
+};
+
+export type TenantLoginChoices = {
+  email: string;
+  expiresAt: string;
+  choices: readonly TenantLoginChoice[];
+};
+
+export class TenantLoginChoiceRequiredError extends Error {
+  readonly email: string;
+  readonly choices: readonly TenantLoginChoice[];
+
+  constructor(input: { email: string; choices: readonly TenantLoginChoice[] }) {
+    super("Tenant login choice is required.");
+    this.name = "TenantLoginChoiceRequiredError";
+    this.email = input.email;
+    this.choices = input.choices;
+  }
+}
 
 export async function resolveCurrentWebAccessSession(
   options: ResolveCurrentWebAccessSessionOptions = {}
@@ -154,29 +184,57 @@ export async function loginLocalWebSession(
   input: LoginLocalWebSessionInput
 ): Promise<LoginLocalWebSessionResult> {
   const email = normalizeEmail(input.email);
-  const tenantSlug = await resolvePreferredTenantSlug(input.tenantSlug);
+  const explicitTenantSlug =
+    input.tenantSlug === undefined
+      ? undefined
+      : await resolvePreferredTenantSlug(input.tenantSlug);
   const repository = getAuthRepository();
-  const [tenantAccount, platformAdmin] = await Promise.all([
-    repository.findTenantAccount({
-      tenantSlug,
-      email
-    }),
+  const [tenantAccounts, platformAdmin] = await Promise.all([
+    explicitTenantSlug === undefined
+      ? repository.listTenantAccountsByEmail(email)
+      : repository
+          .findTenantAccount({
+            tenantSlug: explicitTenantSlug,
+            email
+          })
+          .then((account) => (account === null ? [] : [account])),
     repository.findPlatformAdminAccount(email)
   ]);
-  const [tenantPasswordValid, platformPasswordValid] = await Promise.all([
-    verifyLocalPassword(input.password, tenantAccount?.passwordHash),
+  const [tenantPasswordValidity, platformPasswordValid] = await Promise.all([
+    Promise.all(
+      tenantAccounts.map((account) => {
+        return verifyLocalPassword(input.password, account.passwordHash);
+      })
+    ),
     verifyLocalPassword(input.password, platformAdmin?.passwordHash)
   ]);
+  const validTenantAccounts = tenantAccounts.filter((_account, index) => {
+    return tenantPasswordValidity[index] === true;
+  });
 
-  if (!tenantPasswordValid && !platformPasswordValid) {
+  if (validTenantAccounts.length === 0 && !platformPasswordValid) {
     throw new CoreError("auth.invalid_credentials");
+  }
+
+  if (
+    !platformPasswordValid &&
+    explicitTenantSlug === undefined &&
+    validTenantAccounts.length > 1
+  ) {
+    throw new TenantLoginChoiceRequiredError({
+      email,
+      choices: validTenantAccounts.map((account) => {
+        return {
+          tenantSlug: account.tenantSlug,
+          tenantDisplayName: account.tenantDisplayName
+        };
+      })
+    });
   }
 
   return createStoredWebSession({
     repository,
-    tenantAccount: tenantPasswordValid
-      ? (tenantAccount ?? undefined)
-      : undefined,
+    tenantAccount: validTenantAccounts[0],
     platformAdmin:
       platformPasswordValid && platformAdmin
         ? {
@@ -222,9 +280,11 @@ export async function registerLocalTenant(
     tenantAccount: {
       tenantId: registration.tenant.id,
       tenantSlug: registration.tenant.slug,
+      tenantDisplayName: registration.tenant.displayName,
       accountId: `account:${registration.admin.id}`,
       employeeId: registration.admin.id,
       email: registration.admin.email,
+      emailVerifiedAt: null,
       displayName: registration.admin.displayName,
       passwordHash,
       roles: registration.admin.roles,
@@ -240,6 +300,70 @@ export async function createTenantWebSession(
     repository: getAuthRepository(),
     tenantAccount
   });
+}
+
+export async function writeTenantLoginChoices(input: {
+  email: string;
+  choices: readonly TenantLoginChoice[];
+}): Promise<void> {
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + tenantLoginChoicesTtlMs);
+  const cookieStore = await cookies();
+
+  cookieStore.set(
+    tenantLoginChoicesCookieName,
+    encodeSignedPayload({
+      email: normalizeEmail(input.email),
+      choices: input.choices,
+      expiresAt: expiresAt.toISOString()
+    }),
+    {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: resolveWebEnv().NODE_ENV === "production",
+      path: "/",
+      expires: expiresAt
+    }
+  );
+}
+
+export async function readTenantLoginChoices(): Promise<TenantLoginChoices | null> {
+  const cookieStore = await cookies();
+  const value = cookieStore.get(tenantLoginChoicesCookieName)?.value;
+  const choices = value ? decodeSignedPayload(value) : null;
+
+  if (choices === null || new Date(choices.expiresAt).getTime() <= Date.now()) {
+    return null;
+  }
+
+  return choices;
+}
+
+export async function completeTenantLoginChoice(
+  tenantSlug: string
+): Promise<LoginLocalWebSessionResult | null> {
+  const choices = await readTenantLoginChoices();
+  const selectedTenantSlug = normalizeTenantSlug(tenantSlug);
+
+  if (
+    choices === null ||
+    !choices.choices.some((choice) => choice.tenantSlug === selectedTenantSlug)
+  ) {
+    return null;
+  }
+
+  const tenantAccount = await getAuthRepository().findTenantAccount({
+    tenantSlug: selectedTenantSlug,
+    email: choices.email
+  });
+
+  if (tenantAccount === null) {
+    return null;
+  }
+
+  await clearTenantLoginChoices();
+
+  return createTenantWebSession(tenantAccount);
 }
 
 async function createStoredWebSession(input: {
@@ -291,6 +415,7 @@ export async function logoutCurrentWebSession(): Promise<void> {
 
   const cookieStore = await cookies();
   cookieStore.delete(authSessionCookieName);
+  cookieStore.delete(tenantLoginChoicesCookieName);
 }
 
 function webAccessSessionFromPrincipal(
@@ -304,9 +429,17 @@ function webAccessSessionFromPrincipal(
 
   return {
     tenantId: principal.tenantAccount?.tenantId ?? fallback.tenantId,
+    tenantSlug: principal.tenantAccount?.tenantSlug,
+    tenantDisplayName: principal.tenantAccount?.tenantDisplayName,
+    accountId: principal.tenantAccount?.accountId,
     employeeId:
       principal.tenantAccount?.employeeId ??
       (`employee:platform:${principal.platformAdmin?.id ?? "anonymous"}` as EmployeeId),
+    email: principal.tenantAccount?.email ?? principal.platformAdmin?.email,
+    emailVerifiedAt:
+      principal.tenantAccount?.emailVerifiedAt === undefined
+        ? undefined
+        : (principal.tenantAccount.emailVerifiedAt?.toISOString() ?? null),
     tenantRoles,
     permissions: permissionsForRoles(tenantRoles),
     platformRoles
@@ -369,6 +502,12 @@ async function writeLastTenantSlug(slug: string, now: Date): Promise<void> {
   });
 }
 
+async function clearTenantLoginChoices(): Promise<void> {
+  const cookieStore = await cookies();
+
+  cookieStore.delete(tenantLoginChoicesCookieName);
+}
+
 export function resolveWebEnv(): NodeJS.ProcessEnv {
   return mergeEnvSources(localEnv, process.env) as NodeJS.ProcessEnv;
 }
@@ -384,6 +523,107 @@ export async function resolvePreferredTenantSlug(
       env.HULEE_WEB_TENANT_SLUG ??
       "local"
   );
+}
+
+function encodeSignedPayload(payload: TenantLoginChoices): string {
+  const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString(
+    "base64url"
+  );
+  const signature = signPayload(encoded);
+
+  return `${encoded}.${signature}`;
+}
+
+function decodeSignedPayload(value: string): TenantLoginChoices | null {
+  const [encoded, signature] = value.split(".");
+
+  if (
+    encoded === undefined ||
+    signature === undefined ||
+    !isSignatureValid(encoded, signature)
+  ) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(
+      Buffer.from(encoded, "base64url").toString("utf8")
+    ) as unknown;
+
+    return parseTenantLoginChoices(parsed);
+  } catch {
+    return null;
+  }
+}
+
+function signPayload(encoded: string): string {
+  return createHmac("sha256", resolveTenantLoginChoiceSecret())
+    .update(encoded)
+    .digest("base64url");
+}
+
+function isSignatureValid(encoded: string, signature: string): boolean {
+  const expected = Buffer.from(signPayload(encoded), "base64url");
+  const actual = Buffer.from(signature, "base64url");
+
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+function parseTenantLoginChoices(value: unknown): TenantLoginChoices | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+
+  const payload = value as Record<string, unknown>;
+  const choices = payload.choices;
+
+  if (
+    typeof payload.email !== "string" ||
+    typeof payload.expiresAt !== "string" ||
+    Number.isNaN(new Date(payload.expiresAt).getTime()) ||
+    !Array.isArray(choices)
+  ) {
+    return null;
+  }
+
+  const parsedChoices = choices.flatMap((choice): TenantLoginChoice[] => {
+    if (typeof choice !== "object" || choice === null) {
+      return [];
+    }
+
+    const record = choice as Record<string, unknown>;
+
+    return typeof record.tenantSlug === "string" &&
+      typeof record.tenantDisplayName === "string"
+      ? [
+          {
+            tenantSlug: record.tenantSlug,
+            tenantDisplayName: record.tenantDisplayName
+          }
+        ]
+      : [];
+  });
+
+  if (parsedChoices.length === 0) {
+    return null;
+  }
+
+  return {
+    email: normalizeEmail(payload.email),
+    expiresAt: payload.expiresAt,
+    choices: parsedChoices
+  };
+}
+
+function resolveTenantLoginChoiceSecret(): string {
+  const env = resolveWebEnv();
+  const configured =
+    env.HULEE_AUTH_CHOICE_SECRET?.trim() ||
+    env.HULEE_INTERNAL_API_SECRET?.trim();
+
+  return configured && configured.length > 0
+    ? configured
+    : "development-auth-choice-secret";
 }
 
 function normalizeEmail(email: string): string {

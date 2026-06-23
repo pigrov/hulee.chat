@@ -101,9 +101,11 @@ describe("SQL employee directory repository", () => {
       {
         tenant_id: tenantId,
         tenant_slug: "acme",
+        tenant_display_name: "Acme",
         account_id: "account-1",
         employee_id: employeeId,
         email: "agent@example.test",
+        email_verified_at: new Date("2026-06-23T10:00:00.000Z"),
         display_name: "Agent",
         password_hash: "scrypt:v1:salt:hash",
         roles: ["agent"]
@@ -168,7 +170,9 @@ describe("SQL employee directory repository", () => {
     ).resolves.toMatchObject({
       tenantId,
       tenantSlug: "acme",
+      tenantDisplayName: "Acme",
       employeeId,
+      emailVerifiedAt: new Date("2026-06-23T10:00:00.000Z"),
       roles: ["agent"],
       permissions: expect.arrayContaining(["inbox.read", "message.reply"])
     });

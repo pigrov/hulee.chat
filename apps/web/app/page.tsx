@@ -11,6 +11,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { sendReplyAction } from "../src/actions";
+import { resendEmailVerificationAction } from "../src/auth-actions";
 import { AccessDeniedPage } from "../src/access-denied";
 import {
   canTenantPermission,
@@ -61,6 +62,10 @@ export default async function InboxPage({
   const emailVerificationNotice = resolveEmailVerificationNotice(
     resolvedSearchParams?.emailVerification
   );
+  const shouldShowEmailVerificationBanner =
+    emailVerificationNotice === undefined &&
+    access.accountId !== undefined &&
+    access.emailVerifiedAt === null;
   const productName = t("app.name", {
     productName: model.tenant.brand.productName
   });
@@ -93,6 +98,19 @@ export default async function InboxPage({
                     `auth.emailVerification.status.${emailVerificationNotice}`
                   )}
                 </p>
+              ) : null}
+              {shouldShowEmailVerificationBanner ? (
+                <form
+                  className="inlineNoticeForm"
+                  action={resendEmailVerificationAction}
+                >
+                  <p className="formNotice">
+                    {t("auth.emailVerification.status.pending")}
+                  </p>
+                  <button className="secondaryButton" type="submit">
+                    {t("auth.emailVerification.resend")}
+                  </button>
+                </form>
               ) : null}
             </div>
             <Link

@@ -33,6 +33,10 @@ export type FindAuthEmailTokenTargetByEmailInput = {
   email: string;
 };
 
+export type ListAuthEmailTokenTargetsByEmailInput = {
+  email: string;
+};
+
 export type FindAuthEmailTokenTargetByAccountInput = {
   tenantId: TenantId;
   accountId: string;
@@ -66,6 +70,9 @@ export type AuthEmailTokenRepository = {
   findTargetByEmail(
     input: FindAuthEmailTokenTargetByEmailInput
   ): Promise<AuthEmailTokenTarget | null>;
+  listTargetsByEmail(
+    input: ListAuthEmailTokenTargetsByEmailInput
+  ): Promise<readonly AuthEmailTokenTarget[]>;
   findTargetByAccount(
     input: FindAuthEmailTokenTargetByAccountInput
   ): Promise<AuthEmailTokenTarget | null>;
@@ -113,6 +120,14 @@ export function createSqlAuthEmailTokenRepository(
       const row = result.rows[0];
 
       return row === undefined ? null : mapTargetRow(row);
+    },
+
+    async listTargetsByEmail(input) {
+      const result = await rawExecutor.execute<AuthEmailTokenTargetRow>(
+        buildListAuthEmailTokenTargetsByEmailSql(input)
+      );
+
+      return result.rows.map(mapTargetRow);
     },
 
     async findTargetByAccount(input) {
@@ -185,6 +200,35 @@ export function buildFindAuthEmailTokenTargetByEmailSql(
     where tenants.slug = ${input.tenantSlug}
       and lower(accounts.email) = lower(${input.email})
     limit 1
+  `;
+}
+
+export function buildListAuthEmailTokenTargetsByEmailSql(
+  input: ListAuthEmailTokenTargetsByEmailInput
+): SQL {
+  return sql`
+    select tenants.id as tenant_id,
+           tenants.slug as tenant_slug,
+           tenants.display_name as tenant_display_name,
+           brand.product_name,
+           accounts.id as account_id,
+           accounts.email,
+           employees.display_name
+    from tenants
+    inner join accounts on accounts.tenant_id = tenants.id
+    inner join employees on employees.tenant_id = tenants.id
+      and employees.account_id = accounts.id
+      and employees.deactivated_at is null
+    left join lateral (
+      select tenant_brand_profiles.product_name
+      from tenant_brand_profiles
+      where tenant_brand_profiles.tenant_id = tenants.id
+      order by tenant_brand_profiles.created_at desc
+      limit 1
+    ) brand on true
+    where lower(accounts.email) = lower(${input.email})
+    order by tenants.display_name asc,
+             tenants.slug asc
   `;
 }
 

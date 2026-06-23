@@ -56,6 +56,7 @@ export {
   buildFindAuthEmailTokenTargetByAccountSql,
   buildFindAuthEmailTokenTargetByEmailSql,
   buildFindValidAuthEmailTokenSql,
+  buildListAuthEmailTokenTargetsByEmailSql,
   createSqlAuthEmailTokenRepository,
   hashAuthEmailToken
 } from "./sql-auth-email-token-repository";
@@ -64,6 +65,7 @@ export {
   buildFindPlatformAdminByEmailSql,
   buildFindTenantAccountByEmailSql,
   buildInsertAuthSessionSql,
+  buildListTenantAccountsByEmailSql,
   buildRevokeAuthSessionSql,
   buildUpsertTenantAdminAccountSql,
   buildUpsertPlatformAdminAccountSql,
@@ -170,7 +172,8 @@ export type {
   CreateAuthEmailTokenPersistenceInput,
   FindAuthEmailTokenTargetByAccountInput,
   FindAuthEmailTokenTargetByEmailInput,
-  FindValidAuthEmailTokenInput
+  FindValidAuthEmailTokenInput,
+  ListAuthEmailTokenTargetsByEmailInput
 } from "./sql-auth-email-token-repository";
 export type {
   AuthSessionPrincipal,

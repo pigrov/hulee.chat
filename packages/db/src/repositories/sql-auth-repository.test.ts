@@ -28,9 +28,11 @@ describe("SQL local auth repository", () => {
         {
           tenant_id: tenantId,
           tenant_slug: "local",
+          tenant_display_name: "Local Company",
           account_id: "account-1",
           employee_id: employeeId,
           email: "admin@example.test",
+          email_verified_at: new Date("2026-06-22T10:00:00.000Z"),
           display_name: "Admin",
           password_hash: "scrypt:v1:salt:hash",
           roles: ["tenant_admin", "unknown"]
@@ -45,10 +47,60 @@ describe("SQL local auth repository", () => {
       })
     ).resolves.toMatchObject({
       tenantId,
+      tenantSlug: "local",
+      tenantDisplayName: "Local Company",
       employeeId,
+      emailVerifiedAt: new Date("2026-06-22T10:00:00.000Z"),
       roles: ["tenant_admin"],
       permissions: expect.arrayContaining(["modules.manage", "message.reply"])
     });
+  });
+
+  it("lists active tenant auth accounts by email for email-first login", async () => {
+    const repository = createSqlLocalAuthRepository(
+      new RecordingSqlExecutor([
+        {
+          tenant_id: tenantId,
+          tenant_slug: "acme",
+          tenant_display_name: "Acme",
+          account_id: "account-1",
+          employee_id: employeeId,
+          email: "admin@example.test",
+          email_verified_at: null,
+          display_name: "Admin",
+          password_hash: "scrypt:v1:salt:hash",
+          roles: ["tenant_admin"]
+        },
+        {
+          tenant_id: "tenant_other",
+          tenant_slug: "other",
+          tenant_display_name: "Other",
+          account_id: "account-2",
+          employee_id: "employee_other",
+          email: "admin@example.test",
+          email_verified_at: new Date("2026-06-22T10:00:00.000Z"),
+          display_name: "Admin Other",
+          password_hash: "scrypt:v1:salt:hash",
+          roles: ["agent"]
+        }
+      ])
+    );
+
+    await expect(
+      repository.listTenantAccountsByEmail("admin@example.test")
+    ).resolves.toMatchObject([
+      {
+        tenantSlug: "acme",
+        tenantDisplayName: "Acme",
+        emailVerifiedAt: null,
+        roles: ["tenant_admin"]
+      },
+      {
+        tenantSlug: "other",
+        tenantDisplayName: "Other",
+        roles: ["agent"]
+      }
+    ]);
   });
 
   it("maps sessions with tenant and platform principals", async () => {
@@ -59,9 +111,11 @@ describe("SQL local auth repository", () => {
           expires_at: new Date("2026-06-23T10:00:00.000Z"),
           tenant_id: tenantId,
           tenant_slug: "local",
+          tenant_display_name: "Local Company",
           account_id: "account-1",
           employee_id: employeeId,
           employee_email: "admin@example.test",
+          employee_email_verified_at: new Date("2026-06-22T10:00:00.000Z"),
           employee_display_name: "Admin",
           employee_password_hash: "scrypt:v1:salt:hash",
           employee_roles: ["tenant_admin"],
@@ -81,7 +135,9 @@ describe("SQL local auth repository", () => {
       sessionId: "session-1",
       tenantAccount: {
         tenantId,
+        tenantDisplayName: "Local Company",
         employeeId,
+        emailVerifiedAt: new Date("2026-06-22T10:00:00.000Z"),
         roles: ["tenant_admin"]
       },
       platformAdmin: {

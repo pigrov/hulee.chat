@@ -2,6 +2,7 @@ import {
   type AuthEmailTokenPreview,
   createSqlAuthEmailTokenRepository,
   hashAuthEmailToken,
+  type AuthEmailTokenTarget,
   type TenantAuthAccount
 } from "@hulee/db";
 import {
@@ -41,10 +42,20 @@ export type PasswordResetPreviewResult =
 export async function requestEmailVerificationForTenantAccount(
   tenantAccount: TenantAuthAccount
 ): Promise<SendEmailResult> {
-  const repository = createSqlAuthEmailTokenRepository(getWebDatabase());
-  const target = await repository.findTargetByAccount({
+  return requestEmailVerificationForAccount({
     tenantId: tenantAccount.tenantId,
     accountId: tenantAccount.accountId
+  });
+}
+
+export async function requestEmailVerificationForAccount(input: {
+  tenantId: TenantAuthAccount["tenantId"];
+  accountId: string;
+}): Promise<SendEmailResult> {
+  const repository = createSqlAuthEmailTokenRepository(getWebDatabase());
+  const target = await repository.findTargetByAccount({
+    tenantId: input.tenantId,
+    accountId: input.accountId
   });
 
   if (target === null) {
@@ -66,28 +77,28 @@ export async function requestEmailVerificationForTenantAccount(
 }
 
 export async function requestPasswordResetEmail(input: {
-  tenantSlug: string;
   email: string;
+  tenantSlug?: string;
 }): Promise<void> {
-  const repository = createSqlAuthEmailTokenRepository(getWebDatabase());
-  const target = await repository.findTargetByEmail({
-    tenantSlug: input.tenantSlug,
-    email: input.email
-  });
+  const targets = await resolvePasswordResetTargets(input);
 
-  if (target === null) {
+  if (targets.length === 0) {
     return;
   }
 
-  await requestAuthEmail({
-    purpose: "password_reset",
-    ttlMs: passwordResetTtlMs,
-    to: target.email,
-    tenantId: target.tenantId,
-    accountId: target.accountId,
-    tenantDisplayName: target.tenantDisplayName,
-    productName: target.productName
-  });
+  await Promise.all(
+    targets.map((target) => {
+      return requestAuthEmail({
+        purpose: "password_reset",
+        ttlMs: passwordResetTtlMs,
+        to: target.email,
+        tenantId: target.tenantId,
+        accountId: target.accountId,
+        tenantDisplayName: target.tenantDisplayName,
+        productName: target.productName
+      });
+    })
+  );
 }
 
 export async function loadPasswordResetPreview(
@@ -175,6 +186,26 @@ export async function resetPasswordWithToken(input: {
   }
 
   return "complete";
+}
+
+async function resolvePasswordResetTargets(input: {
+  email: string;
+  tenantSlug?: string;
+}): Promise<readonly AuthEmailTokenTarget[]> {
+  const repository = createSqlAuthEmailTokenRepository(getWebDatabase());
+
+  if (input.tenantSlug !== undefined) {
+    const target = await repository.findTargetByEmail({
+      tenantSlug: input.tenantSlug,
+      email: input.email
+    });
+
+    return target === null ? [] : [target];
+  }
+
+  return repository.listTargetsByEmail({
+    email: input.email
+  });
 }
 
 async function requestAuthEmail(input: {

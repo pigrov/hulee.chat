@@ -14,9 +14,11 @@ import type { RawSqlExecutor } from "./sql-outbox-repository";
 export type TenantAuthAccount = {
   tenantId: TenantId;
   tenantSlug: string;
+  tenantDisplayName: string;
   accountId: string;
   employeeId: EmployeeId;
   email: string;
+  emailVerifiedAt: Date | null;
   displayName: string;
   passwordHash: string | null;
   roles: readonly EmployeeRole[];
@@ -70,6 +72,9 @@ export type LocalAuthRepository = {
     tenantSlug: string;
     email: string;
   }): Promise<TenantAuthAccount | null>;
+  listTenantAccountsByEmail(
+    email: string
+  ): Promise<readonly TenantAuthAccount[]>;
   findPlatformAdminAccount(
     email: string
   ): Promise<PlatformAdminAuthAccount | null>;
@@ -88,9 +93,11 @@ export type LocalAuthRepository = {
 type TenantAuthAccountRow = {
   tenant_id: string;
   tenant_slug: string;
+  tenant_display_name: string;
   account_id: string;
   employee_id: string;
   email: string;
+  email_verified_at: Date | null;
   display_name: string;
   password_hash: string | null;
   roles: unknown;
@@ -108,9 +115,11 @@ type AuthSessionRow = {
   expires_at: Date;
   tenant_id: string | null;
   tenant_slug: string | null;
+  tenant_display_name: string | null;
   account_id: string | null;
   employee_id: string | null;
   employee_email: string | null;
+  employee_email_verified_at: Date | null;
   employee_display_name: string | null;
   employee_password_hash: string | null;
   employee_roles: unknown;
@@ -132,6 +141,14 @@ export function createSqlLocalAuthRepository(
       const row = result.rows[0];
 
       return row === undefined ? null : mapTenantAccountRow(row);
+    },
+
+    async listTenantAccountsByEmail(email) {
+      const result = await rawExecutor.execute<TenantAuthAccountRow>(
+        buildListTenantAccountsByEmailSql(email)
+      );
+
+      return result.rows.map(mapTenantAccountRow);
     },
 
     async findPlatformAdminAccount(email) {
@@ -184,9 +201,11 @@ export function buildFindTenantAccountByEmailSql(input: {
   return sql`
     select tenants.id as tenant_id,
            tenants.slug as tenant_slug,
+           tenants.display_name as tenant_display_name,
            accounts.id as account_id,
            employees.id as employee_id,
            accounts.email,
+           accounts.email_verified_at,
            employees.display_name,
            accounts.password_hash,
            coalesce(json_agg(employee_roles.role order by employee_roles.role)
@@ -202,12 +221,49 @@ export function buildFindTenantAccountByEmailSql(input: {
       and lower(accounts.email) = lower(${input.email})
     group by tenants.id,
              tenants.slug,
+             tenants.display_name,
              accounts.id,
              employees.id,
              accounts.email,
+             accounts.email_verified_at,
              employees.display_name,
              accounts.password_hash
     limit 1
+  `;
+}
+
+export function buildListTenantAccountsByEmailSql(email: string): SQL {
+  return sql`
+    select tenants.id as tenant_id,
+           tenants.slug as tenant_slug,
+           tenants.display_name as tenant_display_name,
+           accounts.id as account_id,
+           employees.id as employee_id,
+           accounts.email,
+           accounts.email_verified_at,
+           employees.display_name,
+           accounts.password_hash,
+           coalesce(json_agg(employee_roles.role order by employee_roles.role)
+             filter (where employee_roles.role is not null), '[]'::json) as roles
+    from tenants
+    inner join accounts on accounts.tenant_id = tenants.id
+    inner join employees on employees.tenant_id = tenants.id
+      and employees.account_id = accounts.id
+      and employees.deactivated_at is null
+    left join employee_roles on employee_roles.tenant_id = tenants.id
+      and employee_roles.employee_id = employees.id
+    where lower(accounts.email) = lower(${email})
+    group by tenants.id,
+             tenants.slug,
+             tenants.display_name,
+             accounts.id,
+             employees.id,
+             accounts.email,
+             accounts.email_verified_at,
+             employees.display_name,
+             accounts.password_hash
+    order by tenants.display_name asc,
+             tenants.slug asc
   `;
 }
 
@@ -254,9 +310,11 @@ export function buildFindAuthSessionByTokenSql(token: string, now: Date): SQL {
            sessions.expires_at,
            tenants.id as tenant_id,
            tenants.slug as tenant_slug,
+           tenants.display_name as tenant_display_name,
            accounts.id as account_id,
            employees.id as employee_id,
            employees.email as employee_email,
+           accounts.email_verified_at as employee_email_verified_at,
            employees.display_name as employee_display_name,
            accounts.password_hash as employee_password_hash,
            coalesce(json_agg(employee_roles.role order by employee_roles.role)
@@ -283,9 +341,11 @@ export function buildFindAuthSessionByTokenSql(token: string, now: Date): SQL {
              sessions.expires_at,
              tenants.id,
              tenants.slug,
+             tenants.display_name,
              accounts.id,
              employees.id,
              employees.email,
+             accounts.email_verified_at,
              employees.display_name,
              accounts.password_hash,
              platform_admin_accounts.id,
@@ -413,9 +473,11 @@ function mapTenantAccountRow(row: TenantAuthAccountRow): TenantAuthAccount {
   return {
     tenantId: row.tenant_id as TenantId,
     tenantSlug: row.tenant_slug,
+    tenantDisplayName: row.tenant_display_name,
     accountId: row.account_id,
     employeeId: row.employee_id as EmployeeId,
     email: row.email,
+    emailVerifiedAt: row.email_verified_at,
     displayName: row.display_name,
     passwordHash: row.password_hash,
     roles,
@@ -427,6 +489,7 @@ function mapAuthSessionRow(row: AuthSessionRow): AuthSessionPrincipal {
   const tenantAccount =
     row.tenant_id &&
     row.tenant_slug &&
+    row.tenant_display_name &&
     row.account_id &&
     row.employee_id &&
     row.employee_email &&
@@ -434,9 +497,11 @@ function mapAuthSessionRow(row: AuthSessionRow): AuthSessionPrincipal {
       ? mapTenantAccountRow({
           tenant_id: row.tenant_id,
           tenant_slug: row.tenant_slug,
+          tenant_display_name: row.tenant_display_name,
           account_id: row.account_id,
           employee_id: row.employee_id,
           email: row.employee_email,
+          email_verified_at: row.employee_email_verified_at,
           display_name: row.employee_display_name,
           password_hash: row.employee_password_hash,
           roles: row.employee_roles

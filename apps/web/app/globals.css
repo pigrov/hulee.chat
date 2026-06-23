@@ -458,6 +458,14 @@ button.railButton {
   margin: 0;
 }
 
+.inlineNoticeForm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 .compactSelect {
   min-height: 36px;
   width: auto;
@@ -669,8 +677,20 @@ a.managementRow {
   text-decoration: none;
 }
 
+a.managementRow,
+button.managementRow {
+  width: 100%;
+}
+
+button.managementRow {
+  color: inherit;
+  text-align: left;
+}
+
 a.managementRow:hover,
-a.managementRow:focus-visible {
+a.managementRow:focus-visible,
+button.managementRow:hover,
+button.managementRow:focus-visible {
   border-color: var(--hulee-color-brand-primary);
   outline: none;
   box-shadow: var(--hulee-shadow-focus);

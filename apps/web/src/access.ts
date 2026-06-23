@@ -13,7 +13,12 @@ export type PlatformRole = "platform_admin";
 
 export type WebAccessSession = {
   tenantId: TenantId;
+  tenantSlug?: string;
+  tenantDisplayName?: string;
+  accountId?: string;
   employeeId: EmployeeId;
+  email?: string;
+  emailVerifiedAt?: string | null;
   tenantRoles: readonly EmployeeRole[];
   permissions: readonly Permission[];
   platformRoles: readonly PlatformRole[];

@@ -5,15 +5,19 @@ import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 
 import {
+  requestEmailVerificationForAccount,
   requestEmailVerificationForTenantAccount,
   requestPasswordResetEmail,
   resetPasswordWithToken
 } from "./auth-email";
 import {
+  completeTenantLoginChoice,
   loginLocalWebSession,
   logoutCurrentWebSession,
   registerLocalTenant,
-  resolvePreferredTenantSlug
+  requireCurrentWebAccessSession,
+  TenantLoginChoiceRequiredError,
+  writeTenantLoginChoices
 } from "./session";
 
 export async function loginAction(formData: FormData): Promise<void> {
@@ -29,6 +33,31 @@ export async function loginAction(formData: FormData): Promise<void> {
       password
     });
     destination = result.redirectPath;
+  } catch (error) {
+    if (error instanceof TenantLoginChoiceRequiredError) {
+      await writeTenantLoginChoices({
+        email: error.email,
+        choices: error.choices
+      });
+      destination = "/login/select-company";
+    } else {
+      destination = "/login?error=invalid";
+    }
+  }
+
+  redirect(destination);
+}
+
+export async function selectTenantLoginAction(
+  formData: FormData
+): Promise<void> {
+  const tenantSlug = readRequiredFormString(formData, "tenantSlug");
+  let destination = "/login?error=invalid";
+
+  try {
+    const result = await completeTenantLoginChoice(tenantSlug);
+
+    destination = result?.redirectPath ?? "/login?error=invalid";
   } catch {
     destination = "/login?error=invalid";
   }
@@ -75,14 +104,10 @@ export async function registerAction(formData: FormData): Promise<void> {
 }
 
 export async function forgotPasswordAction(formData: FormData): Promise<void> {
-  const tenantSlug = await resolvePreferredTenantSlug(
-    readOptionalFormString(formData, "tenantSlug")
-  );
   const email = readRequiredFormString(formData, "email");
 
   try {
     await requestPasswordResetEmail({
-      tenantSlug,
       email
     });
   } catch {
@@ -105,6 +130,24 @@ export async function resetPasswordAction(formData: FormData): Promise<void> {
   }
 
   redirect(`/reset-password/${encodeURIComponent(token)}?error=invalid`);
+}
+
+export async function resendEmailVerificationAction(): Promise<void> {
+  const session = await requireCurrentWebAccessSession();
+  let destination = "/?emailVerification=provider_failed";
+
+  if (session.accountId !== undefined) {
+    const emailResult = await requestEmailVerificationForAccount({
+      tenantId: session.tenantId,
+      accountId: session.accountId
+    });
+    const status = emailResult.sent ? "sent" : emailResult.reason;
+
+    destination = `/?emailVerification=${status}`;
+  }
+
+  revalidatePath("/");
+  redirect(destination);
 }
 
 export async function logoutAction(): Promise<void> {

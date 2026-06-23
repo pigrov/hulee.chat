@@ -60,6 +60,22 @@ describe("SQL auth email token repository", () => {
       tenantId,
       accountId: "account-1"
     });
+
+    await expect(
+      repository.listTargetsByEmail({
+        email: "admin@example.test"
+      })
+    ).resolves.toEqual([
+      {
+        tenantId,
+        tenantSlug: "acme",
+        tenantDisplayName: "Acme",
+        productName: "Acme Desk",
+        accountId: "account-1",
+        email: "admin@example.test",
+        displayName: "Admin"
+      }
+    ]);
   });
 
   it("maps a valid token preview", async () => {
