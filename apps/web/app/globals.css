@@ -764,8 +764,21 @@ a.managementRow:focus-visible {
 }
 
 .formError {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   margin: 0;
   color: var(--hulee-color-danger);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.formNotice {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  color: var(--hulee-color-brand-primary);
   font-size: 13px;
   line-height: 1.4;
 }

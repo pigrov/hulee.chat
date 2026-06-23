@@ -1,11 +1,11 @@
 import { defaultBrandProfile } from "@hulee/branding";
 import { createTranslator } from "@hulee/i18n";
-import { LogIn } from "lucide-react";
+import { Mail } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
-import { loginAction } from "../../src/auth-actions";
+import { forgotPasswordAction } from "../../src/auth-actions";
 import {
   brandProfileToCssProperties,
   buildBrandMarkLabel
@@ -15,10 +15,10 @@ import { resolveCurrentWebAccessSession } from "../../src/session";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export default async function LoginPage({
+export default async function ForgotPasswordPage({
   searchParams
 }: {
-  searchParams?: Promise<{ error?: string; reset?: string }>;
+  searchParams?: Promise<{ status?: string }>;
 }): Promise<ReactNode> {
   const existingSession = await resolveCurrentWebAccessSession({
     allowDevelopmentFallback: false
@@ -33,8 +33,7 @@ export default async function LoginPage({
   }
 
   const resolvedSearchParams = await searchParams;
-  const hasInvalidCredentialsError = resolvedSearchParams?.error === "invalid";
-  const hasPasswordResetNotice = resolvedSearchParams?.reset === "complete";
+  const hasSentNotice = resolvedSearchParams?.status === "sent";
   const { t } = createTranslator("ru");
 
   return (
@@ -42,18 +41,18 @@ export default async function LoginPage({
       className="loginPage"
       style={brandProfileToCssProperties(defaultBrandProfile)}
     >
-      <section className="loginPanel" aria-labelledby="login-title">
+      <section className="loginPanel" aria-labelledby="forgot-password-title">
         <div className="brandMark" aria-label={defaultBrandProfile.productName}>
           {buildBrandMarkLabel(defaultBrandProfile)}
         </div>
         <div>
-          <p className="eyebrow">{t("auth.local.eyebrow")}</p>
-          <h1 className="adminTitle" id="login-title">
-            {t("auth.login.title")}
+          <p className="eyebrow">{t("auth.forgotPassword.eyebrow")}</p>
+          <h1 className="adminTitle" id="forgot-password-title">
+            {t("auth.forgotPassword.title")}
           </h1>
-          <p className="metaText">{t("auth.login.description")}</p>
+          <p className="metaText">{t("auth.forgotPassword.description")}</p>
         </div>
-        <form className="settingsForm" action={loginAction}>
+        <form className="settingsForm" action={forgotPasswordAction}>
           <label className="fieldStack">
             <span className="detailLabel">{t("auth.tenantSlug")}</span>
             <input
@@ -75,34 +74,15 @@ export default async function LoginPage({
               required
             />
           </label>
-          <label className="fieldStack">
-            <span className="detailLabel">{t("auth.password")}</span>
-            <input
-              className="textInput"
-              name="password"
-              type="password"
-              autoComplete="current-password"
-              required
-            />
-          </label>
-          {hasInvalidCredentialsError ? (
-            <p className="formError">{t("auth.login.invalidCredentials")}</p>
-          ) : null}
-          {hasPasswordResetNotice ? (
-            <p className="formNotice">
-              {t("auth.login.passwordResetComplete")}
-            </p>
+          {hasSentNotice ? (
+            <p className="formNotice">{t("auth.forgotPassword.sent")}</p>
           ) : null}
           <button className="primaryButton" type="submit">
-            <LogIn size={18} aria-hidden="true" />
-            {t("auth.login.submit")}
+            <Mail size={18} aria-hidden="true" />
+            {t("auth.forgotPassword.submit")}
           </button>
           <p className="authSwitch">
-            <Link href="/forgot-password">{t("auth.forgotPassword.link")}</Link>
-          </p>
-          <p className="authSwitch">
-            {t("auth.login.noAccount")}{" "}
-            <Link href="/register">{t("auth.register.link")}</Link>
+            <Link href="/login">{t("auth.login.link")}</Link>
           </p>
         </form>
       </section>

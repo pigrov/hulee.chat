@@ -25,6 +25,16 @@ export type EventEnvelope<TType extends string, TPayload> = {
 
 export type PlatformEvent =
   | EventEnvelope<"tenant.created", { tenantId: TenantId }>
+  | EventEnvelope<
+      "account.email_verification_requested",
+      { accountId: string; email: string }
+    >
+  | EventEnvelope<"account.email_verified", { accountId: string }>
+  | EventEnvelope<
+      "account.password_reset_requested",
+      { accountId: string; email: string }
+    >
+  | EventEnvelope<"account.password_reset_completed", { accountId: string }>
   | EventEnvelope<"employee.created", { employeeId: EmployeeId }>
   | EventEnvelope<
       "employee.invited",

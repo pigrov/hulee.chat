@@ -4,6 +4,11 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import {
+  requestEmailVerificationForTenantAccount,
+  requestPasswordResetEmail,
+  resetPasswordWithToken
+} from "./auth-email";
+import {
   loginLocalWebSession,
   logoutCurrentWebSession,
   registerLocalTenant
@@ -48,12 +53,53 @@ export async function registerAction(formData: FormData): Promise<void> {
       email,
       password
     });
-    destination = result.redirectPath;
+    const emailResult =
+      result.tenantAccount === undefined
+        ? ({ sent: false, reason: "provider_failed" } as const)
+        : await requestEmailVerificationForTenantAccount(result.tenantAccount);
+    const status = emailResult.sent ? "sent" : emailResult.reason;
+
+    destination = addSearchParam(
+      result.redirectPath,
+      "emailVerification",
+      status
+    );
   } catch {
     destination = "/register?error=invalid";
   }
 
   redirect(destination);
+}
+
+export async function forgotPasswordAction(formData: FormData): Promise<void> {
+  const tenantSlug = readRequiredFormString(formData, "tenantSlug");
+  const email = readRequiredFormString(formData, "email");
+
+  try {
+    await requestPasswordResetEmail({
+      tenantSlug,
+      email
+    });
+  } catch {
+    // Keep password reset responses non-enumerating for tenant accounts.
+  }
+
+  redirect("/forgot-password?status=sent");
+}
+
+export async function resetPasswordAction(formData: FormData): Promise<void> {
+  const token = readRequiredFormString(formData, "token");
+  const password = readRequiredFormString(formData, "password");
+  const status = await resetPasswordWithToken({
+    token,
+    password
+  });
+
+  if (status === "complete") {
+    redirect("/login?reset=complete");
+  }
+
+  redirect(`/reset-password/${encodeURIComponent(token)}?error=invalid`);
 }
 
 export async function logoutAction(): Promise<void> {
@@ -72,6 +118,15 @@ function readRequiredFormString(formData: FormData, name: string): string {
   }
 
   return value;
+}
+
+function addSearchParam(path: string, name: string, value: string): string {
+  const [pathname, query = ""] = path.split("?");
+  const params = new URLSearchParams(query);
+
+  params.set(name, value);
+
+  return `${pathname}?${params.toString()}`;
 }
 
 function readOptionalFormString(

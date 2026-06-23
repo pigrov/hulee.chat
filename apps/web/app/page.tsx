@@ -32,7 +32,10 @@ export const runtime = "nodejs";
 export default async function InboxPage({
   searchParams
 }: {
-  searchParams?: Promise<{ conversationId?: string }>;
+  searchParams?: Promise<{
+    conversationId?: string;
+    emailVerification?: string;
+  }>;
 }): Promise<ReactNode> {
   const access = await resolveCurrentWebAccessSession();
 
@@ -55,6 +58,9 @@ export default async function InboxPage({
   });
   const { t, locale } = createTranslator(model.tenant.locale);
   const selectedConversation = model.selectedConversation;
+  const emailVerificationNotice = resolveEmailVerificationNotice(
+    resolvedSearchParams?.emailVerification
+  );
   const productName = t("app.name", {
     productName: model.tenant.brand.productName
   });
@@ -75,6 +81,19 @@ export default async function InboxPage({
                 {t("inbox.title")}
               </h1>
               <p className="metaText">{model.tenant.displayName}</p>
+              {emailVerificationNotice ? (
+                <p
+                  className={
+                    emailVerificationNotice === "sent"
+                      ? "formNotice"
+                      : "formError"
+                  }
+                >
+                  {t(
+                    `auth.emailVerification.status.${emailVerificationNotice}`
+                  )}
+                </p>
+              ) : null}
             </div>
             <Link
               className="iconButton"
@@ -223,6 +242,20 @@ export default async function InboxPage({
       </aside>
     </AppFrame>
   );
+}
+
+function resolveEmailVerificationNotice(
+  value: string | undefined
+): "sent" | "not_configured" | "provider_failed" | undefined {
+  if (
+    value === "sent" ||
+    value === "not_configured" ||
+    value === "provider_failed"
+  ) {
+    return value;
+  }
+
+  return undefined;
 }
 
 function ConversationListItem({

@@ -59,6 +59,7 @@ export type RegisterLocalTenantInput = {
 export type LoginLocalWebSessionResult = {
   session: WebAccessSession;
   redirectPath: string;
+  tenantAccount?: TenantAuthAccount;
 };
 
 export async function resolveCurrentWebAccessSession(
@@ -272,6 +273,7 @@ async function createStoredWebSession(input: {
 
   return {
     session,
+    tenantAccount: input.tenantAccount,
     redirectPath: session.platformRoles.includes("platform_admin")
       ? "/platform"
       : "/"

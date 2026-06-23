@@ -50,6 +50,16 @@ export {
   hashTenantApiKey
 } from "./sql-public-api-access";
 export {
+  buildCompleteEmailVerificationSql,
+  buildCompletePasswordResetSql,
+  buildCreateAuthEmailTokenSql,
+  buildFindAuthEmailTokenTargetByAccountSql,
+  buildFindAuthEmailTokenTargetByEmailSql,
+  buildFindValidAuthEmailTokenSql,
+  createSqlAuthEmailTokenRepository,
+  hashAuthEmailToken
+} from "./sql-auth-email-token-repository";
+export {
   buildFindAuthSessionByTokenSql,
   buildFindPlatformAdminByEmailSql,
   buildFindTenantAccountByEmailSql,
@@ -151,6 +161,17 @@ export type {
   TenantApiKeyAuthenticator,
   TenantApiKeyWriter
 } from "./sql-public-api-access";
+export type {
+  AuthEmailTokenPreview,
+  AuthEmailTokenRepository,
+  AuthEmailTokenTarget,
+  CompleteEmailVerificationPersistenceInput,
+  CompletePasswordResetPersistenceInput,
+  CreateAuthEmailTokenPersistenceInput,
+  FindAuthEmailTokenTargetByAccountInput,
+  FindAuthEmailTokenTargetByEmailInput,
+  FindValidAuthEmailTokenInput
+} from "./sql-auth-email-token-repository";
 export type {
   AuthSessionPrincipal,
   CreateAuthSessionInput,

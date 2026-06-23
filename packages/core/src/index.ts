@@ -1,5 +1,17 @@
 export { assertTenantBoundary, createDomainEvent } from "./domain-events";
 export type { TenantScope } from "./domain-events";
+export {
+  completeAuthEmailToken,
+  createAuthEmailToken
+} from "./auth-email-tokens";
+export type {
+  AuthEmailToken,
+  AuthEmailTokenPurpose,
+  CompletedAuthEmailToken,
+  CompleteAuthEmailTokenInput,
+  CreatedAuthEmailToken,
+  CreateAuthEmailTokenInput
+} from "./auth-email-tokens";
 export { CoreError } from "./errors";
 export {
   acceptEmployeeInvitation,
