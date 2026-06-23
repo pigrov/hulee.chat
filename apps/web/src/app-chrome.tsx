@@ -64,7 +64,7 @@ export function AppFrame({
         {(navigationAccess?.tenantAdmin ?? true) ? (
           <Link
             className="railButton"
-            href="/admin/integrations"
+            href="/admin"
             aria-label={t("navigation.admin")}
             aria-current={current === "tenant-admin" ? "page" : undefined}
           >
