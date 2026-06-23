@@ -61,9 +61,15 @@ export {
   hashAuthSessionToken
 } from "./sql-auth-repository";
 export {
+  buildChangeEmployeeRoleSql,
+  buildDeactivateEmployeeSql,
   buildAcceptEmployeeInvitationSql,
   buildCreateEmployeeInvitationSql,
+  buildFindInvitationByIdSql,
   buildFindInvitationByTokenHashSql,
+  buildFindTenantEmployeeSql,
+  buildRefreshEmployeeInvitationSql,
+  buildRevokeEmployeeInvitationSql,
   buildListTenantEmployeesSql,
   buildListTenantInvitationsSql,
   createSqlEmployeeDirectoryRepository,
@@ -156,11 +162,17 @@ export type {
 } from "./sql-auth-repository";
 export type {
   AcceptEmployeeInvitationPersistenceInput,
+  ChangeEmployeeRolePersistenceInput,
   CreateEmployeeInvitationPersistenceInput,
+  DeactivateEmployeePersistenceInput,
   EmployeeDirectoryRepository,
   EmployeeInvitationPreview,
+  FindTenantEmployeeInput,
+  FindTenantInvitationInput,
   ListTenantEmployeesInput,
   ListTenantInvitationsInput,
+  RefreshEmployeeInvitationPersistenceInput,
+  RevokeEmployeeInvitationPersistenceInput,
   TenantEmployeeRecord
 } from "./sql-employee-directory-repository";
 export type { TenantScopedRow } from "./tenant-scope";

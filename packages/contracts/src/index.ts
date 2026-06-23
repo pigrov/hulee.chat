@@ -34,6 +34,13 @@ export type PlatformEvent =
       "employee.invitation_accepted",
       { invitationId: string; employeeId: EmployeeId }
     >
+  | EventEnvelope<"employee.invitation_revoked", { invitationId: string }>
+  | EventEnvelope<"employee.invitation_resent", { invitationId: string }>
+  | EventEnvelope<
+      "employee.role_changed",
+      { employeeId: EmployeeId; role: string }
+    >
+  | EventEnvelope<"employee.deactivated", { employeeId: EmployeeId }>
   | EventEnvelope<"client.created", { clientId: ClientId }>
   | EventEnvelope<"conversation.created", { conversationId: ConversationId }>
   | EventEnvelope<"message.received", { messageId: MessageId }>

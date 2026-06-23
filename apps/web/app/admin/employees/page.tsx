@@ -1,8 +1,18 @@
 import { createTranslator, type I18nMessageKey } from "@hulee/i18n";
-import { Mail, ShieldCheck, UserPlus, Users } from "lucide-react";
+import {
+  Ban,
+  Mail,
+  RotateCw,
+  Save,
+  ShieldCheck,
+  UserPlus,
+  Users,
+  XCircle
+} from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
+import { createSqlEmployeeDirectoryRepository } from "@hulee/db";
 
 import { AccessDeniedPage } from "../../../src/access-denied";
 import {
@@ -10,7 +20,13 @@ import {
   navigationAccessFromSession
 } from "../../../src/access";
 import { AppFrame, DetailItem } from "../../../src/app-chrome";
-import { inviteEmployeeAction } from "../../../src/employee-actions";
+import {
+  deactivateEmployeeAction,
+  inviteEmployeeAction,
+  resendEmployeeInviteAction,
+  revokeEmployeeInviteAction,
+  updateEmployeeRoleAction
+} from "../../../src/employee-actions";
 import { resolvePublicBaseUrl } from "../../../src/email";
 import { formatDateTime } from "../../../src/formatting";
 import { loadInboxViewModel } from "../../../src/inbox-api-client";
@@ -18,7 +34,6 @@ import {
   getWebDatabase,
   resolveCurrentWebAccessSession
 } from "../../../src/session";
-import { createSqlEmployeeDirectoryRepository } from "@hulee/db";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -26,7 +41,11 @@ export const runtime = "nodejs";
 export default async function EmployeesAdminPage({
   searchParams
 }: {
-  searchParams?: Promise<{ inviteStatus?: string; inviteToken?: string }>;
+  searchParams?: Promise<{
+    actionStatus?: string;
+    inviteStatus?: string;
+    inviteToken?: string;
+  }>;
 }): Promise<ReactNode> {
   const access = await resolveCurrentWebAccessSession();
 
@@ -133,6 +152,13 @@ export default async function EmployeesAdminPage({
                   </label>
                 </div>
               ) : null}
+
+              {resolvedSearchParams?.actionStatus ? (
+                <DetailItem
+                  label={t("admin.employees.actionStatus")}
+                  value={t(actionStatusKey(resolvedSearchParams.actionStatus))}
+                />
+              ) : null}
             </aside>
 
             <div className="adminStack">
@@ -236,12 +262,80 @@ export default async function EmployeesAdminPage({
                             {employee.displayName}
                           </h3>
                           <p className="metaText">{employee.email}</p>
+                          <span className="badge">
+                            {t(
+                              employee.deactivatedAt
+                                ? "admin.employees.status.deactivated"
+                                : "admin.employees.status.active"
+                            )}
+                          </span>
                         </div>
-                        <span className="badge">
-                          {employee.roles
-                            .map((role) => t(roleLabelKey(role)))
-                            .join(", ")}
-                        </span>
+                        <div className="rowActions">
+                          {employee.deactivatedAt ? (
+                            <span className="badge">
+                              {employee.roles
+                                .map((role) => t(roleLabelKey(role)))
+                                .join(", ")}
+                            </span>
+                          ) : (
+                            <form
+                              className="inlineForm"
+                              action={updateEmployeeRoleAction}
+                            >
+                              <input
+                                name="employeeId"
+                                type="hidden"
+                                value={employee.employeeId}
+                              />
+                              <select
+                                className="selectInput compactSelect"
+                                name="role"
+                                defaultValue={employee.roles[0] ?? "agent"}
+                                aria-label={t("admin.employees.role")}
+                                disabled={
+                                  employee.employeeId === access.employeeId
+                                }
+                              >
+                                <option value="agent">
+                                  {t("admin.employees.role.agent")}
+                                </option>
+                                <option value="supervisor">
+                                  {t("admin.employees.role.supervisor")}
+                                </option>
+                                <option value="tenant_admin">
+                                  {t("admin.employees.role.tenantAdmin")}
+                                </option>
+                              </select>
+                              <button
+                                className="secondaryButton"
+                                type="submit"
+                                disabled={
+                                  employee.employeeId === access.employeeId
+                                }
+                              >
+                                <Save size={14} aria-hidden="true" />
+                                {t("common.save")}
+                              </button>
+                            </form>
+                          )}
+                          {!employee.deactivatedAt &&
+                          employee.employeeId !== access.employeeId ? (
+                            <form
+                              className="inlineForm"
+                              action={deactivateEmployeeAction}
+                            >
+                              <input
+                                name="employeeId"
+                                type="hidden"
+                                value={employee.employeeId}
+                              />
+                              <button className="dangerButton" type="submit">
+                                <Ban size={14} aria-hidden="true" />
+                                {t("admin.employees.deactivate")}
+                              </button>
+                            </form>
+                          ) : null}
+                        </div>
                       </article>
                     ))
                   )}
@@ -284,9 +378,43 @@ export default async function EmployeesAdminPage({
                             })}
                           </p>
                         </div>
-                        <span className="badge">
-                          {t(invitationStatusKey(invitation, new Date()))}
-                        </span>
+                        <div className="rowActions">
+                          <span className="badge">
+                            {t(invitationStatusKey(invitation, new Date()))}
+                          </span>
+                          {!invitation.acceptedAt ? (
+                            <form
+                              className="inlineForm"
+                              action={resendEmployeeInviteAction}
+                            >
+                              <input
+                                name="invitationId"
+                                type="hidden"
+                                value={invitation.id}
+                              />
+                              <button className="secondaryButton" type="submit">
+                                <RotateCw size={14} aria-hidden="true" />
+                                {t("admin.employees.resendInvite")}
+                              </button>
+                            </form>
+                          ) : null}
+                          {!invitation.acceptedAt && !invitation.revokedAt ? (
+                            <form
+                              className="inlineForm"
+                              action={revokeEmployeeInviteAction}
+                            >
+                              <input
+                                name="invitationId"
+                                type="hidden"
+                                value={invitation.id}
+                              />
+                              <button className="dangerButton" type="submit">
+                                <XCircle size={14} aria-hidden="true" />
+                                {t("admin.employees.revokeInvite")}
+                              </button>
+                            </form>
+                          ) : null}
+                        </div>
                       </article>
                     ))
                   )}
@@ -298,6 +426,19 @@ export default async function EmployeesAdminPage({
       </section>
     </AppFrame>
   );
+}
+
+function actionStatusKey(status: string): I18nMessageKey {
+  switch (status) {
+    case "role_changed":
+      return "admin.employees.actionStatus.roleChanged";
+    case "deactivated":
+      return "admin.employees.actionStatus.deactivated";
+    case "invite_revoked":
+      return "admin.employees.actionStatus.inviteRevoked";
+    default:
+      return "admin.employees.actionStatus.invalid";
+  }
 }
 
 function roleLabelKey(role: string): I18nMessageKey {

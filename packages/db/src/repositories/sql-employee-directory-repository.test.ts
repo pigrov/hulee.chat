@@ -33,7 +33,8 @@ describe("SQL employee directory repository", () => {
           email: "agent@example.test",
           display_name: "Agent",
           roles: ["agent", "unknown"],
-          created_at: new Date("2026-06-23T10:00:00.000Z")
+          created_at: new Date("2026-06-23T10:00:00.000Z"),
+          deactivated_at: null
         }
       ])
     );
@@ -50,7 +51,8 @@ describe("SQL employee directory repository", () => {
         email: "agent@example.test",
         displayName: "Agent",
         roles: ["agent"],
-        createdAt: new Date("2026-06-23T10:00:00.000Z")
+        createdAt: new Date("2026-06-23T10:00:00.000Z"),
+        deactivatedAt: null
       }
     ]);
   });
@@ -172,6 +174,99 @@ describe("SQL employee directory repository", () => {
     });
 
     expect(executor.queries).toHaveLength(2);
+  });
+
+  it("writes role, deactivation and invitation lifecycle commands", async () => {
+    const executor = new RecordingSqlExecutor([
+      {
+        employee_id: employeeId,
+        invitation_id: "invitation-1"
+      }
+    ]);
+    const repository = createSqlEmployeeDirectoryRepository(executor);
+    const now = new Date("2026-06-23T10:00:00.000Z");
+    const events = [
+      {
+        id: "event-1" as EventId,
+        type: "employee.role_changed" as const,
+        version: "v1" as const,
+        tenantId,
+        occurredAt: now.toISOString(),
+        payload: {
+          employeeId,
+          role: "supervisor"
+        }
+      }
+    ];
+
+    await repository.changeEmployeeRole({
+      tenantId,
+      employeeId,
+      role: "supervisor",
+      changedAt: now,
+      events
+    });
+    await repository.deactivateEmployee({
+      tenantId,
+      employeeId,
+      deactivatedAt: now,
+      events: [
+        {
+          id: "event-2" as EventId,
+          type: "employee.deactivated",
+          version: "v1",
+          tenantId,
+          occurredAt: now.toISOString(),
+          payload: {
+            employeeId
+          }
+        }
+      ]
+    });
+    await repository.revokeInvitation({
+      tenantId,
+      invitationId: "invitation-1",
+      revokedAt: now,
+      events: [
+        {
+          id: "event-3" as EventId,
+          type: "employee.invitation_revoked",
+          version: "v1",
+          tenantId,
+          occurredAt: now.toISOString(),
+          payload: {
+            invitationId: "invitation-1"
+          }
+        }
+      ]
+    });
+    await repository.refreshInvitation({
+      refreshedAt: now,
+      invitation: {
+        id: "invitation-1",
+        tenantId,
+        email: "agent@example.test",
+        role: "agent",
+        tokenHash: hashEmployeeInvitationToken("new-token"),
+        invitedByEmployeeId: "employee-admin" as EmployeeId,
+        expiresAt: "2026-06-30T10:00:00.000Z",
+        createdAt: now.toISOString()
+      },
+      events: [
+        {
+          id: "event-4" as EventId,
+          type: "employee.invitation_resent",
+          version: "v1",
+          tenantId,
+          occurredAt: now.toISOString(),
+          payload: {
+            invitationId: "invitation-1"
+          }
+        }
+      ]
+    });
+
+    expect(executor.queries).toHaveLength(4);
   });
 });
 

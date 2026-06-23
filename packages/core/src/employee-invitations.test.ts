@@ -3,9 +3,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   acceptEmployeeInvitation,
+  changeEmployeeRole,
   CoreError,
   createEmployeeInvitation,
   createSequentialIdFactory,
+  deactivateEmployee,
+  resendEmployeeInvitation,
+  revokeEmployeeInvitation,
   type Employee
 } from "./index";
 
@@ -142,6 +146,110 @@ describe("employee invitations", () => {
           ...invitation,
           acceptedAt: "2026-06-24T09:00:00.000Z"
         }
+      });
+    }).toThrow(new CoreError("validation.failed"));
+  });
+
+  it("revokes and resends pending invitations", () => {
+    const invitation = createEmployeeInvitation({
+      now,
+      tenantId,
+      actor: tenantAdmin,
+      email: "agent@example.test",
+      role: "agent",
+      tokenHash,
+      expiresAt: "2026-06-30T10:00:00.000Z",
+      idFactory: createSequentialIdFactory("invite-admin")
+    }).invitation;
+    const revoked = revokeEmployeeInvitation({
+      now: "2026-06-24T10:00:00.000Z",
+      tenantId,
+      actor: tenantAdmin,
+      invitation,
+      idFactory: createSequentialIdFactory("invite-revoke")
+    });
+    const resent = resendEmployeeInvitation({
+      now: "2026-06-25T10:00:00.000Z",
+      tenantId,
+      actor: tenantAdmin,
+      invitation: revoked.invitation,
+      tokenHash:
+        "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      expiresAt: "2026-07-02T10:00:00.000Z",
+      idFactory: createSequentialIdFactory("invite-resend")
+    });
+
+    expect(revoked.invitation.revokedAt).toBe("2026-06-24T10:00:00.000Z");
+    expect(revoked.events[0]?.type).toBe("employee.invitation_revoked");
+    expect(resent.invitation.revokedAt).toBeUndefined();
+    expect(resent.invitation.expiresAt).toBe("2026-07-02T10:00:00.000Z");
+    expect(resent.events[0]?.type).toBe("employee.invitation_resent");
+  });
+
+  it("changes another employee role and rejects self role changes", () => {
+    const agent: Employee = {
+      id: "employee_agent" as Employee["id"],
+      tenantId,
+      email: "agent@example.test",
+      displayName: "Agent",
+      roles: ["agent"],
+      createdAt: now
+    };
+    const changed = changeEmployeeRole({
+      now: "2026-06-24T10:00:00.000Z",
+      tenantId,
+      actor: tenantAdmin,
+      employee: agent,
+      role: "supervisor",
+      idFactory: createSequentialIdFactory("role-change")
+    });
+
+    expect(changed.employee.roles).toEqual(["supervisor"]);
+    expect(changed.events[0]).toMatchObject({
+      type: "employee.role_changed",
+      payload: {
+        employeeId: agent.id,
+        role: "supervisor"
+      }
+    });
+
+    expect(() => {
+      changeEmployeeRole({
+        now: "2026-06-24T10:00:00.000Z",
+        tenantId,
+        actor: tenantAdmin,
+        employee: tenantAdmin,
+        role: "agent"
+      });
+    }).toThrow(new CoreError("validation.failed"));
+  });
+
+  it("deactivates another employee and rejects self deactivation", () => {
+    const agent: Employee = {
+      id: "employee_agent" as Employee["id"],
+      tenantId,
+      email: "agent@example.test",
+      displayName: "Agent",
+      roles: ["agent"],
+      createdAt: now
+    };
+    const deactivated = deactivateEmployee({
+      now: "2026-06-24T10:00:00.000Z",
+      tenantId,
+      actor: tenantAdmin,
+      employee: agent,
+      idFactory: createSequentialIdFactory("deactivate")
+    });
+
+    expect(deactivated.employee.deactivatedAt).toBe("2026-06-24T10:00:00.000Z");
+    expect(deactivated.events[0]?.type).toBe("employee.deactivated");
+
+    expect(() => {
+      deactivateEmployee({
+        now: "2026-06-24T10:00:00.000Z",
+        tenantId,
+        actor: tenantAdmin,
+        employee: tenantAdmin
       });
     }).toThrow(new CoreError("validation.failed"));
   });

@@ -3,14 +3,26 @@ export type { TenantScope } from "./domain-events";
 export { CoreError } from "./errors";
 export {
   acceptEmployeeInvitation,
-  createEmployeeInvitation
+  changeEmployeeRole,
+  createEmployeeInvitation,
+  deactivateEmployee,
+  resendEmployeeInvitation,
+  revokeEmployeeInvitation
 } from "./employee-invitations";
 export type {
   AcceptedEmployeeInvitation,
   AcceptEmployeeInvitationInput,
+  ChangedEmployeeRole,
+  ChangeEmployeeRoleInput,
   CreatedEmployeeInvitation,
   CreateEmployeeInvitationInput,
-  EmployeeInvitation
+  DeactivatedEmployee,
+  DeactivateEmployeeInput,
+  EmployeeInvitation,
+  ResentEmployeeInvitation,
+  ResendEmployeeInvitationInput,
+  RevokedEmployeeInvitation,
+  RevokeEmployeeInvitationInput
 } from "./employee-invitations";
 export { createSequentialIdFactory } from "./ids";
 export type { IdFactory } from "./ids";

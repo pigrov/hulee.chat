@@ -350,9 +350,13 @@ export const employees = pgTable(
     accountId: text("account_id").references(() => accounts.id),
     email: text("email").notNull(),
     displayName: text("display_name").notNull(),
+    deactivatedAt: timestamp("deactivated_at", { withTimezone: true }),
     ...timestamps
   },
-  (table) => [index("employees_tenant_idx").on(table.tenantId)]
+  (table) => [
+    index("employees_tenant_idx").on(table.tenantId),
+    index("employees_tenant_status_idx").on(table.tenantId, table.deactivatedAt)
+  ]
 );
 
 export const employeeRoles = pgTable(

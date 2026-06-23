@@ -53,14 +53,65 @@ export type AcceptedEmployeeInvitation = {
   events: readonly PlatformEvent[];
 };
 
+export type RevokeEmployeeInvitationInput = {
+  now: string;
+  tenantId: TenantId;
+  actor: Employee;
+  invitation: EmployeeInvitation;
+  idFactory?: IdFactory;
+};
+
+export type RevokedEmployeeInvitation = {
+  invitation: EmployeeInvitation;
+  events: readonly PlatformEvent[];
+};
+
+export type ResendEmployeeInvitationInput = {
+  now: string;
+  tenantId: TenantId;
+  actor: Employee;
+  invitation: EmployeeInvitation;
+  tokenHash: string;
+  expiresAt: string;
+  idFactory?: IdFactory;
+};
+
+export type ResentEmployeeInvitation = {
+  invitation: EmployeeInvitation;
+  events: readonly PlatformEvent[];
+};
+
+export type ChangeEmployeeRoleInput = {
+  now: string;
+  tenantId: TenantId;
+  actor: Employee;
+  employee: Employee;
+  role: string;
+  idFactory?: IdFactory;
+};
+
+export type ChangedEmployeeRole = {
+  employee: Employee;
+  events: readonly PlatformEvent[];
+};
+
+export type DeactivateEmployeeInput = {
+  now: string;
+  tenantId: TenantId;
+  actor: Employee;
+  employee: Employee;
+  idFactory?: IdFactory;
+};
+
+export type DeactivatedEmployee = {
+  employee: Employee;
+  events: readonly PlatformEvent[];
+};
+
 export function createEmployeeInvitation(
   input: CreateEmployeeInvitationInput
 ): CreatedEmployeeInvitation {
-  if (input.actor.tenantId !== input.tenantId) {
-    throw new CoreError("tenant.boundary_violation");
-  }
-
-  assertEmployeeCan(input.actor, "employees.manage");
+  assertEmployeeManagementActor(input.actor, input.tenantId);
 
   const email = normalizeEmail(input.email);
   const displayName = normalizeOptionalText(input.displayName);
@@ -142,6 +193,181 @@ export function acceptEmployeeInvitation(
       })
     ]
   };
+}
+
+export function revokeEmployeeInvitation(
+  input: RevokeEmployeeInvitationInput
+): RevokedEmployeeInvitation {
+  assertEmployeeManagementActor(input.actor, input.tenantId);
+  assertInvitationTenant(input.invitation, input.tenantId);
+
+  if (
+    input.invitation.acceptedAt !== undefined ||
+    input.invitation.revokedAt !== undefined
+  ) {
+    throw new CoreError("validation.failed");
+  }
+
+  const ids = input.idFactory ?? createSequentialIdFactory(input.tenantId);
+  const invitation: EmployeeInvitation = {
+    ...input.invitation,
+    revokedAt: input.now
+  };
+
+  return {
+    invitation,
+    events: [
+      createDomainEvent({
+        id: ids.eventId("employee.invitation_revoked"),
+        type: "employee.invitation_revoked",
+        tenantId: input.tenantId,
+        occurredAt: input.now,
+        payload: {
+          invitationId: invitation.id
+        }
+      })
+    ]
+  };
+}
+
+export function resendEmployeeInvitation(
+  input: ResendEmployeeInvitationInput
+): ResentEmployeeInvitation {
+  assertEmployeeManagementActor(input.actor, input.tenantId);
+  assertInvitationTenant(input.invitation, input.tenantId);
+
+  if (input.invitation.acceptedAt !== undefined) {
+    throw new CoreError("validation.failed");
+  }
+
+  const tokenHash = requireTokenHash(input.tokenHash);
+  const expiresAt = requireFutureTimestamp(input.expiresAt, input.now);
+  const ids = input.idFactory ?? createSequentialIdFactory(input.tenantId);
+  const invitation: EmployeeInvitation = {
+    ...input.invitation,
+    tokenHash,
+    expiresAt,
+    revokedAt: undefined
+  };
+
+  return {
+    invitation,
+    events: [
+      createDomainEvent({
+        id: ids.eventId("employee.invitation_resent"),
+        type: "employee.invitation_resent",
+        tenantId: input.tenantId,
+        occurredAt: input.now,
+        payload: {
+          invitationId: invitation.id
+        }
+      })
+    ]
+  };
+}
+
+export function changeEmployeeRole(
+  input: ChangeEmployeeRoleInput
+): ChangedEmployeeRole {
+  assertEmployeeManagementActor(input.actor, input.tenantId);
+  assertEmployeeTenant(input.employee, input.tenantId);
+  assertNotSelfTarget(input.actor, input.employee);
+
+  if (input.employee.deactivatedAt !== undefined) {
+    throw new CoreError("validation.failed");
+  }
+
+  const role = parseEmployeeRole(input.role);
+  const ids = input.idFactory ?? createSequentialIdFactory(input.tenantId);
+  const employee: Employee = {
+    ...input.employee,
+    roles: [role]
+  };
+
+  return {
+    employee,
+    events: [
+      createDomainEvent({
+        id: ids.eventId("employee.role_changed"),
+        type: "employee.role_changed",
+        tenantId: input.tenantId,
+        occurredAt: input.now,
+        payload: {
+          employeeId: employee.id,
+          role
+        }
+      })
+    ]
+  };
+}
+
+export function deactivateEmployee(
+  input: DeactivateEmployeeInput
+): DeactivatedEmployee {
+  assertEmployeeManagementActor(input.actor, input.tenantId);
+  assertEmployeeTenant(input.employee, input.tenantId);
+  assertNotSelfTarget(input.actor, input.employee);
+
+  if (input.employee.deactivatedAt !== undefined) {
+    throw new CoreError("validation.failed");
+  }
+
+  const ids = input.idFactory ?? createSequentialIdFactory(input.tenantId);
+  const employee: Employee = {
+    ...input.employee,
+    deactivatedAt: input.now
+  };
+
+  return {
+    employee,
+    events: [
+      createDomainEvent({
+        id: ids.eventId("employee.deactivated"),
+        type: "employee.deactivated",
+        tenantId: input.tenantId,
+        occurredAt: input.now,
+        payload: {
+          employeeId: employee.id
+        }
+      })
+    ]
+  };
+}
+
+function assertEmployeeManagementActor(
+  actor: Employee,
+  tenantId: TenantId
+): void {
+  if (actor.tenantId !== tenantId) {
+    throw new CoreError("tenant.boundary_violation");
+  }
+
+  if (actor.deactivatedAt !== undefined) {
+    throw new CoreError("permission.denied");
+  }
+
+  assertEmployeeCan(actor, "employees.manage");
+}
+
+function assertEmployeeTenant(employee: Employee, tenantId: TenantId): void {
+  if (employee.tenantId !== tenantId) {
+    throw new CoreError("tenant.boundary_violation");
+  }
+}
+
+function assertInvitationTenant(
+  invitation: EmployeeInvitation,
+  tenantId: TenantId
+): void {
+  if (invitation.tenantId !== tenantId) {
+    throw new CoreError("tenant.boundary_violation");
+  }
+}
+
+function assertNotSelfTarget(actor: Employee, employee: Employee): void {
+  if (actor.id === employee.id) {
+    throw new CoreError("validation.failed");
+  }
 }
 
 function assertInvitationPending(

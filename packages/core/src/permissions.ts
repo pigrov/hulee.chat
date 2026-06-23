@@ -39,6 +39,7 @@ export type Employee = {
   displayName: string;
   roles: readonly EmployeeRole[];
   createdAt: string;
+  deactivatedAt?: string;
 };
 
 export function isEmployeeRole(value: string): value is EmployeeRole {

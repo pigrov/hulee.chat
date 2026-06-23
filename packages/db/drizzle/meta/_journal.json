@@ -36,6 +36,13 @@
       "when": 1782190203701,
       "tag": "0004_simple_richard_fisk",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1782193263900,
+      "tag": "0005_brave_barracuda",
+      "breakpoints": true
     }
   ]
 }

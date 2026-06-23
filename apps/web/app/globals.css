@@ -443,6 +443,26 @@ button.railButton {
   gap: 8px;
 }
 
+.rowActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.inlineForm {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.compactSelect {
+  min-height: 36px;
+  width: auto;
+}
+
 .primaryButton {
   display: inline-flex;
   min-height: 40px;
@@ -474,14 +494,43 @@ button.railButton {
   padding: 0 10px;
 }
 
+.dangerButton {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--hulee-color-danger);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-default);
+  color: var(--hulee-color-danger);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0 10px;
+}
+
 .primaryButton:focus-visible,
-.secondaryButton:focus-visible {
+.secondaryButton:focus-visible,
+.dangerButton:focus-visible {
   outline: none;
   box-shadow: var(--hulee-shadow-focus);
 }
 
 .secondaryButton:hover {
   border-color: var(--hulee-color-brand-primary);
+}
+
+.dangerButton:hover {
+  background: var(--hulee-color-surface-muted);
+}
+
+.primaryButton:disabled,
+.secondaryButton:disabled,
+.dangerButton:disabled,
+.selectInput:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .clientIdentity {

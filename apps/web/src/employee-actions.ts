@@ -1,14 +1,21 @@
 "use server";
 
+import type { EmployeeId } from "@hulee/contracts";
 import {
   acceptEmployeeInvitation,
+  changeEmployeeRole,
   createEmployeeInvitation,
   createSequentialIdFactory,
+  deactivateEmployee,
+  resendEmployeeInvitation,
+  revokeEmployeeInvitation,
   type Employee
 } from "@hulee/core";
 import {
   createSqlEmployeeDirectoryRepository,
-  hashEmployeeInvitationToken
+  hashEmployeeInvitationToken,
+  type EmployeeInvitationPreview,
+  type TenantEmployeeRecord
 } from "@hulee/db";
 import { hashLocalPassword } from "@hulee/modules";
 import { revalidatePath } from "next/cache";
@@ -74,6 +81,195 @@ export async function inviteEmployeeAction(formData: FormData): Promise<void> {
   redirect(destination);
 }
 
+export async function updateEmployeeRoleAction(
+  formData: FormData
+): Promise<void> {
+  const session = await assertCurrentWebTenantPermission("employees.manage");
+  const employeeId = readRequiredFormString(
+    formData,
+    "employeeId"
+  ) as EmployeeId;
+  const role = readRequiredFormString(formData, "role");
+  const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
+  let destination = "/admin/employees?actionStatus=invalid";
+
+  try {
+    const target = await repository.findEmployee({
+      tenantId: session.tenantId,
+      employeeId
+    });
+
+    if (target === null) {
+      throw new Error("Employee not found.");
+    }
+
+    const now = new Date();
+    const changed = changeEmployeeRole({
+      now: now.toISOString(),
+      tenantId: session.tenantId,
+      actor: employeeFromSession(session, now.toISOString()),
+      employee: employeeFromRecord(target),
+      role,
+      idFactory: createSequentialIdFactory(`role:${randomUUID()}`)
+    });
+
+    await repository.changeEmployeeRole({
+      tenantId: session.tenantId,
+      employeeId: changed.employee.id,
+      role: changed.employee.roles[0] ?? "agent",
+      changedAt: now,
+      events: changed.events
+    });
+
+    destination = "/admin/employees?actionStatus=role_changed";
+  } catch {
+    destination = "/admin/employees?actionStatus=invalid";
+  }
+
+  revalidatePath("/admin/employees");
+  redirect(destination);
+}
+
+export async function deactivateEmployeeAction(
+  formData: FormData
+): Promise<void> {
+  const session = await assertCurrentWebTenantPermission("employees.manage");
+  const employeeId = readRequiredFormString(
+    formData,
+    "employeeId"
+  ) as EmployeeId;
+  const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
+  let destination = "/admin/employees?actionStatus=invalid";
+
+  try {
+    const target = await repository.findEmployee({
+      tenantId: session.tenantId,
+      employeeId
+    });
+
+    if (target === null) {
+      throw new Error("Employee not found.");
+    }
+
+    const now = new Date();
+    const deactivated = deactivateEmployee({
+      now: now.toISOString(),
+      tenantId: session.tenantId,
+      actor: employeeFromSession(session, now.toISOString()),
+      employee: employeeFromRecord(target),
+      idFactory: createSequentialIdFactory(`deactivate:${randomUUID()}`)
+    });
+
+    await repository.deactivateEmployee({
+      tenantId: session.tenantId,
+      employeeId: deactivated.employee.id,
+      deactivatedAt: now,
+      events: deactivated.events
+    });
+
+    destination = "/admin/employees?actionStatus=deactivated";
+  } catch {
+    destination = "/admin/employees?actionStatus=invalid";
+  }
+
+  revalidatePath("/admin/employees");
+  redirect(destination);
+}
+
+export async function revokeEmployeeInviteAction(
+  formData: FormData
+): Promise<void> {
+  const session = await assertCurrentWebTenantPermission("employees.manage");
+  const invitationId = readRequiredFormString(formData, "invitationId");
+  const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
+  let destination = "/admin/employees?actionStatus=invalid";
+
+  try {
+    const preview = await repository.findInvitation({
+      tenantId: session.tenantId,
+      invitationId
+    });
+
+    if (preview === null) {
+      throw new Error("Invitation not found.");
+    }
+
+    const now = new Date();
+    const revoked = revokeEmployeeInvitation({
+      now: now.toISOString(),
+      tenantId: session.tenantId,
+      actor: employeeFromSession(session, now.toISOString()),
+      invitation: preview.invitation,
+      idFactory: createSequentialIdFactory(`revoke:${randomUUID()}`)
+    });
+
+    await repository.revokeInvitation({
+      tenantId: session.tenantId,
+      invitationId: revoked.invitation.id,
+      revokedAt: now,
+      events: revoked.events
+    });
+
+    destination = "/admin/employees?actionStatus=invite_revoked";
+  } catch {
+    destination = "/admin/employees?actionStatus=invalid";
+  }
+
+  revalidatePath("/admin/employees");
+  redirect(destination);
+}
+
+export async function resendEmployeeInviteAction(
+  formData: FormData
+): Promise<void> {
+  const session = await assertCurrentWebTenantPermission("employees.manage");
+  const invitationId = readRequiredFormString(formData, "invitationId");
+  const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
+  const now = new Date();
+  const token = randomBytes(32).toString("base64url");
+  const tokenHash = hashEmployeeInvitationToken(token);
+  let destination = "/admin/employees?actionStatus=invalid";
+
+  try {
+    const preview = await repository.findInvitation({
+      tenantId: session.tenantId,
+      invitationId
+    });
+
+    if (preview === null) {
+      throw new Error("Invitation not found.");
+    }
+
+    const resent = resendEmployeeInvitation({
+      now: now.toISOString(),
+      tenantId: session.tenantId,
+      actor: employeeFromSession(session, now.toISOString()),
+      invitation: preview.invitation,
+      tokenHash,
+      expiresAt: new Date(now.getTime() + invitationTtlMs).toISOString(),
+      idFactory: createSequentialIdFactory(`resend:${randomUUID()}`)
+    });
+
+    await repository.refreshInvitation({
+      invitation: resent.invitation,
+      refreshedAt: now,
+      events: resent.events
+    });
+
+    const emailResult = await sendInvitationEmail(preview, token);
+    const status = emailResult.sent ? "sent" : emailResult.reason;
+
+    destination = `/admin/employees?inviteStatus=${status}&inviteToken=${encodeURIComponent(
+      token
+    )}`;
+  } catch {
+    destination = "/admin/employees?actionStatus=invalid";
+  }
+
+  revalidatePath("/admin/employees");
+  redirect(destination);
+}
+
 export async function acceptEmployeeInviteAction(
   formData: FormData
 ): Promise<void> {
@@ -120,6 +316,20 @@ export async function acceptEmployeeInviteAction(
   redirect(destination);
 }
 
+async function sendInvitationEmail(
+  preview: EmployeeInvitationPreview,
+  token: string
+): ReturnType<typeof sendEmployeeInvitationEmail> {
+  const inviteUrl = new URL(`/invite/${token}`, resolvePublicBaseUrl()).href;
+
+  return sendEmployeeInvitationEmail({
+    to: preview.invitation.email,
+    productName: preview.productName,
+    tenantDisplayName: preview.tenantDisplayName,
+    inviteUrl
+  });
+}
+
 function employeeFromSession(
   session: Awaited<ReturnType<typeof assertCurrentWebTenantPermission>>,
   now: string
@@ -131,6 +341,18 @@ function employeeFromSession(
     displayName: "",
     roles: session.tenantRoles,
     createdAt: now
+  };
+}
+
+function employeeFromRecord(record: TenantEmployeeRecord): Employee {
+  return {
+    id: record.employeeId,
+    tenantId: record.tenantId,
+    email: record.email,
+    displayName: record.displayName,
+    roles: record.roles,
+    createdAt: record.createdAt.toISOString(),
+    deactivatedAt: record.deactivatedAt?.toISOString()
   };
 }
 

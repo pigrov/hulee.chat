@@ -195,6 +195,7 @@ export function buildFindTenantAccountByEmailSql(input: {
     inner join accounts on accounts.tenant_id = tenants.id
     inner join employees on employees.tenant_id = tenants.id
       and employees.account_id = accounts.id
+      and employees.deactivated_at is null
     left join employee_roles on employee_roles.tenant_id = tenants.id
       and employee_roles.employee_id = employees.id
     where tenants.slug = ${input.tenantSlug}
@@ -267,6 +268,7 @@ export function buildFindAuthSessionByTokenSql(token: string, now: Date): SQL {
     left join tenants on tenants.id = sessions.tenant_id
     left join employees on employees.id = sessions.employee_id
       and employees.tenant_id = sessions.tenant_id
+      and employees.deactivated_at is null
     left join accounts on accounts.id = employees.account_id
       and accounts.tenant_id = sessions.tenant_id
     left join employee_roles on employee_roles.tenant_id = sessions.tenant_id
@@ -276,6 +278,7 @@ export function buildFindAuthSessionByTokenSql(token: string, now: Date): SQL {
     where sessions.session_hash = ${hashAuthSessionToken(token)}
       and sessions.revoked_at is null
       and sessions.expires_at > ${now}
+      and (sessions.tenant_id is null or employees.id is not null)
     group by sessions.id,
              sessions.expires_at,
              tenants.id,
