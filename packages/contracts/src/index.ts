@@ -312,6 +312,7 @@ export type TelephonyProvider = {
 export type AuthProviderLoginStartInput = {
   tenantId?: TenantId;
   redirectUri?: string;
+  state?: string;
 };
 
 export type AuthProviderPasswordInput = {
@@ -320,19 +321,47 @@ export type AuthProviderPasswordInput = {
   password: string;
 };
 
+export type AuthProviderRegistrationInput = AuthProviderPasswordInput & {
+  displayName?: string;
+};
+
+export type AuthProviderCallbackInput = {
+  tenantId?: TenantId;
+  redirectUri?: string;
+  code?: string;
+  state?: string;
+  idToken?: string;
+  rawPayload?: unknown;
+};
+
 export type AuthProviderIdentity = {
   providerId: string;
   externalSubject: string;
   email: string;
+  emailVerified?: boolean;
   displayName?: string;
+  avatarUrl?: string;
+};
+
+export type AuthProviderAccountLinkInput = {
+  tenantId: TenantId;
+  accountId: string;
+  identity: AuthProviderIdentity;
 };
 
 export type AuthProvider = {
   manifest: ModuleManifest;
   startLogin?(input: AuthProviderLoginStartInput): Promise<{ url: string }>;
+  validateCallback?(
+    input: AuthProviderCallbackInput
+  ): Promise<AuthProviderIdentity | null>;
   authenticatePassword?(
     input: AuthProviderPasswordInput
   ): Promise<AuthProviderIdentity | null>;
+  registerPassword?(
+    input: AuthProviderRegistrationInput
+  ): Promise<AuthProviderIdentity | null>;
+  linkIdentity?(input: AuthProviderAccountLinkInput): Promise<void>;
   health(): Promise<AdapterHealth>;
 };
 

@@ -32,6 +32,7 @@ export {
   buildUpsertTenantSecretSql,
   closeHuleeDatabase,
   collectReplyTenantScopedRows,
+  collectTenantRegistrationTenantScopedRows,
   collectTenantBoundaryViolations,
   collectWorkspaceTenantScopedRows,
   createDrizzlePersistenceExecutor,
@@ -54,6 +55,7 @@ export {
   mapExternalOutboundMessageToPersistenceRows,
   mapRegisterExternalClientToPersistenceRows,
   mapReplyToPersistenceRows,
+  mapTenantRegistrationToPersistenceRows,
   mapWorkspaceToPersistenceRows,
   parseTenantSecretRef,
   tableRef
@@ -98,6 +100,7 @@ export type {
   MarkOutboundMessageFailedInput,
   MarkOutboundMessageSentInput,
   ReplyPersistenceRows,
+  TenantRegistrationPersistenceRows,
   OutboundDispatchRepository,
   PersistedMessageSummary,
   QueuedOutboundMessageForDispatch,

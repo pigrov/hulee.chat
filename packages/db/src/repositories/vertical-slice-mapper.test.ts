@@ -3,6 +3,7 @@ import {
   CoreError,
   createMvpTenantWorkspace,
   createSequentialIdFactory,
+  registerTenant,
   sendConversationReply
 } from "@hulee/core";
 import { describe, expect, it } from "vitest";
@@ -10,14 +11,59 @@ import { describe, expect, it } from "vitest";
 import {
   assertTenantScopedRows,
   collectTenantBoundaryViolations,
+  collectTenantRegistrationTenantScopedRows,
   collectWorkspaceTenantScopedRows,
   mapReplyToPersistenceRows,
+  mapTenantRegistrationToPersistenceRows,
   mapWorkspaceToPersistenceRows
 } from "./index";
 
 const now = "2026-06-22T10:00:00.000Z";
 
 describe("vertical slice persistence mapper", () => {
+  it("maps tenant registration without demo client or message rows", () => {
+    const registration = registerTenant({
+      now,
+      tenantSlug: "registered",
+      tenantDisplayName: "Registered",
+      productName: "Registered Desk",
+      adminEmail: "Admin@Example.com",
+      adminDisplayName: "Admin",
+      idFactory: createSequentialIdFactory("registered")
+    });
+
+    const rows = mapTenantRegistrationToPersistenceRows({
+      registration,
+      adminPasswordHash: "scrypt:v1:test"
+    });
+    const scopedRows = collectTenantRegistrationTenantScopedRows(rows);
+
+    expect(rows.tenants[0]).toMatchObject({
+      id: registration.tenant.id,
+      slug: "registered",
+      displayName: "Registered"
+    });
+    expect(rows.accounts[0]).toMatchObject({
+      tenantId: registration.tenant.id,
+      email: "admin@example.com",
+      passwordHash: "scrypt:v1:test",
+      emailVerifiedAt: null
+    });
+    expect(rows.employees[0]).toMatchObject({
+      tenantId: registration.tenant.id,
+      displayName: "Admin"
+    });
+    expect(rows.eventStore.map((row) => row.type)).toEqual([
+      "tenant.created",
+      "employee.created"
+    ]);
+    expect(
+      collectTenantBoundaryViolations(registration.tenant.id, scopedRows)
+    ).toEqual([]);
+    expect("clients" in rows).toBe(false);
+    expect("messages" in rows).toBe(false);
+  });
+
   it("maps MVP workspace into tenant-scoped Drizzle insert rows", () => {
     const workspace = createMvpTenantWorkspace({
       now,

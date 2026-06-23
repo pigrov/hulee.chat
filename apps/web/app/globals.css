@@ -703,6 +703,25 @@ button.railButton {
   line-height: 1.4;
 }
 
+.authSwitch {
+  margin: 0;
+  color: var(--hulee-color-text-muted);
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.authSwitch a {
+  color: var(--hulee-color-brand-primary);
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.authSwitch a:hover,
+.authSwitch a:focus-visible {
+  text-decoration: underline;
+}
+
 @media (max-width: 1100px) {
   .appFrame {
     grid-template-columns: 64px minmax(240px, 320px) minmax(0, 1fr);

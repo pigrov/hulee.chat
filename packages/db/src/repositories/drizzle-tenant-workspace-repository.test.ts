@@ -1,6 +1,7 @@
 import {
   createMvpTenantWorkspace,
   createSequentialIdFactory,
+  registerTenant,
   sendConversationReply
 } from "@hulee/core";
 import { describe, expect, it } from "vitest";
@@ -11,6 +12,88 @@ import { RecordingPersistenceExecutor } from "./recording-persistence-executor.t
 const now = "2026-06-22T10:00:00.000Z";
 
 describe("tenant workspace repository", () => {
+  it("persists tenant registration rows in strict conflict mode", async () => {
+    const registration = registerTenant({
+      now,
+      tenantSlug: "repo-register",
+      tenantDisplayName: "Repo Register",
+      productName: "Register Desk",
+      adminEmail: "admin@example.com",
+      idFactory: createSequentialIdFactory("repo-register")
+    });
+    const executor = new RecordingPersistenceExecutor();
+    const repository = createTenantWorkspaceRepository(executor);
+
+    await repository.registerTenant({
+      registration,
+      adminPasswordHash: "scrypt:v1:test"
+    });
+
+    expect(executor.transactionCount).toBe(1);
+    expect(executor.operations).toEqual([
+      {
+        kind: "insert",
+        tableName: "tenants",
+        rowCount: 1,
+        onConflict: "fail"
+      },
+      {
+        kind: "insert",
+        tableName: "tenant_settings",
+        rowCount: 1,
+        onConflict: "fail"
+      },
+      {
+        kind: "insert",
+        tableName: "tenant_brand_profiles",
+        rowCount: 1,
+        onConflict: "fail"
+      },
+      {
+        kind: "insert",
+        tableName: "tenant_modules",
+        rowCount: 5,
+        onConflict: "fail"
+      },
+      {
+        kind: "insert",
+        tableName: "tenant_entitlements",
+        rowCount: 5,
+        onConflict: "fail"
+      },
+      {
+        kind: "insert",
+        tableName: "accounts",
+        rowCount: 1,
+        onConflict: "fail"
+      },
+      {
+        kind: "insert",
+        tableName: "employees",
+        rowCount: 1,
+        onConflict: "fail"
+      },
+      {
+        kind: "insert",
+        tableName: "employee_roles",
+        rowCount: 1,
+        onConflict: "fail"
+      },
+      {
+        kind: "insert",
+        tableName: "event_store",
+        rowCount: 2,
+        onConflict: "fail"
+      },
+      {
+        kind: "insert",
+        tableName: "outbox",
+        rowCount: 2,
+        onConflict: "fail"
+      }
+    ]);
+  });
+
   it("persists workspace rows in foreign-key-safe order", async () => {
     const workspace = createMvpTenantWorkspace({
       now,

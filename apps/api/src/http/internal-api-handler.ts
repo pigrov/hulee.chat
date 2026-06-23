@@ -13,7 +13,14 @@ import {
   internalTelegramIntegrationUpdateRequestSchema,
   isPlatformErrorCode
 } from "@hulee/contracts";
-import { CoreError, isPermission, type Permission } from "@hulee/core";
+import {
+  CoreError,
+  internalApiSignatureHeader,
+  internalApiTimestampHeader,
+  isPermission,
+  verifyInternalApiSignature,
+  type Permission
+} from "@hulee/core";
 import type { Logger } from "@hulee/observability";
 
 import type {
@@ -147,30 +154,142 @@ export function createLocalDevInternalSessionResolver(input?: {
 }): InternalApiSessionResolver {
   return {
     async resolve(request, requestId) {
-      const tenantId =
-        (headerValue(request.headers, "x-hulee-tenant-id") as
-          | TenantId
-          | undefined) ??
-        input?.tenantId ??
-        ((process.env.HULEE_WEB_TENANT_ID ?? defaultTenantId) as TenantId);
-      const employeeId =
-        (headerValue(request.headers, "x-hulee-employee-id") as
-          | EmployeeId
-          | undefined) ??
-        input?.employeeId ??
-        (`employee:${tenantId}:local-dev` as EmployeeId);
-      const headerPermissions = parsePermissionsHeader(
-        headerValue(request.headers, "x-hulee-permissions")
+      return (
+        resolveHeaderSession(request, requestId, input) ??
+        createFallbackDevSession(request, requestId, input)
+      );
+    }
+  };
+}
+
+export function createSignedInternalSessionResolver(input: {
+  secret?: string;
+  allowUnsignedFallback?: boolean;
+  now?: () => Date;
+  maxAgeMs?: number;
+  fallback?: {
+    tenantId?: TenantId;
+    employeeId?: EmployeeId;
+    permissions?: readonly Permission[];
+  };
+}): InternalApiSessionResolver {
+  const now = input.now ?? (() => new Date());
+
+  return {
+    async resolve(request, requestId) {
+      const headerSession = resolveHeaderSession(
+        request,
+        requestId,
+        input.fallback
       );
 
-      return {
-        requestId,
-        tenantId,
-        employeeId,
-        permissions: input?.permissions ??
-          headerPermissions ?? ["inbox.read", "message.reply", "modules.manage"]
-      };
+      if (headerSession === null) {
+        return input.allowUnsignedFallback
+          ? createFallbackDevSession(request, requestId, input.fallback)
+          : null;
+      }
+
+      if (input.secret === undefined) {
+        return input.allowUnsignedFallback ? headerSession : null;
+      }
+
+      const timestamp = headerValue(
+        request.headers,
+        internalApiTimestampHeader
+      );
+      const signature = headerValue(
+        request.headers,
+        internalApiSignatureHeader
+      );
+
+      if (timestamp === undefined) {
+        return null;
+      }
+
+      const verified = verifyInternalApiSignature({
+        method: request.method,
+        path: request.path,
+        body: request.body,
+        tenantId: headerSession.tenantId,
+        employeeId: headerSession.employeeId,
+        permissions: headerSession.permissions,
+        timestamp,
+        secret: input.secret,
+        signature,
+        now: now(),
+        maxAgeMs: input.maxAgeMs
+      });
+
+      return verified ? headerSession : null;
     }
+  };
+}
+
+function resolveHeaderSession(
+  request: ApiHttpRequest,
+  requestId: string,
+  input?: {
+    tenantId?: TenantId;
+    employeeId?: EmployeeId;
+    permissions?: readonly Permission[];
+  }
+): InternalApiSession | null {
+  const tenantId =
+    (headerValue(request.headers, "x-hulee-tenant-id") as
+      | TenantId
+      | undefined) ?? input?.tenantId;
+  const employeeId =
+    (headerValue(request.headers, "x-hulee-employee-id") as
+      | EmployeeId
+      | undefined) ?? input?.employeeId;
+  const headerPermissions = parsePermissionsHeader(
+    headerValue(request.headers, "x-hulee-permissions")
+  );
+  const permissions = input?.permissions ?? headerPermissions;
+
+  if (tenantId === undefined || employeeId === undefined) {
+    return null;
+  }
+
+  return {
+    requestId,
+    tenantId,
+    employeeId,
+    permissions: permissions ?? []
+  };
+}
+
+function createFallbackDevSession(
+  request: ApiHttpRequest,
+  requestId: string,
+  input?: {
+    tenantId?: TenantId;
+    employeeId?: EmployeeId;
+    permissions?: readonly Permission[];
+  }
+): InternalApiSession {
+  const tenantId =
+    (headerValue(request.headers, "x-hulee-tenant-id") as
+      | TenantId
+      | undefined) ??
+    input?.tenantId ??
+    ((process.env.HULEE_WEB_TENANT_ID ?? defaultTenantId) as TenantId);
+  const employeeId =
+    (headerValue(request.headers, "x-hulee-employee-id") as
+      | EmployeeId
+      | undefined) ??
+    input?.employeeId ??
+    (`employee:${tenantId}:local-dev` as EmployeeId);
+  const headerPermissions = parsePermissionsHeader(
+    headerValue(request.headers, "x-hulee-permissions")
+  );
+
+  return {
+    requestId,
+    tenantId,
+    employeeId,
+    permissions: input?.permissions ??
+      headerPermissions ?? ["inbox.read", "message.reply", "modules.manage"]
   };
 }
 

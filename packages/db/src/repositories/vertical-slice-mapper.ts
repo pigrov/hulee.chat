@@ -3,7 +3,8 @@ import { CoreError } from "@hulee/core";
 import type {
   Message,
   MvpTenantWorkspace,
-  PersistConversationReplyInput
+  PersistConversationReplyInput,
+  RegisteredTenant
 } from "@hulee/core";
 
 import {
@@ -53,6 +54,19 @@ export type WorkspacePersistenceRows = {
   conversations: ConversationInsert[];
   conversationParticipants: ConversationParticipantInsert[];
   messages: MessageInsert[];
+  eventStore: EventStoreInsert[];
+  outbox: OutboxInsert[];
+};
+
+export type TenantRegistrationPersistenceRows = {
+  tenants: TenantInsert[];
+  tenantSettings: TenantSettingsInsert[];
+  tenantBrandProfiles: TenantBrandProfileInsert[];
+  tenantModules: TenantModuleInsert[];
+  tenantEntitlements: TenantEntitlementInsert[];
+  accounts: AccountInsert[];
+  employees: EmployeeInsert[];
+  employeeRoles: EmployeeRoleInsert[];
   eventStore: EventStoreInsert[];
   outbox: OutboxInsert[];
 };
@@ -204,6 +218,118 @@ export function mapWorkspaceToPersistenceRows(
   return rows;
 }
 
+export function mapTenantRegistrationToPersistenceRows(input: {
+  registration: RegisteredTenant;
+  adminPasswordHash: string;
+}): TenantRegistrationPersistenceRows {
+  const createdAt = parseTimestamp(input.registration.tenant.createdAt);
+  const adminAccountId = `account:${input.registration.admin.id}`;
+  const rows: TenantRegistrationPersistenceRows = {
+    tenants: [
+      {
+        id: input.registration.tenant.id,
+        slug: input.registration.tenant.slug,
+        displayName: input.registration.tenant.displayName,
+        deploymentType: "saas_shared",
+        createdAt,
+        updatedAt: createdAt
+      }
+    ],
+    tenantSettings: [
+      {
+        tenantId: input.registration.tenant.id,
+        locale: input.registration.tenant.locale,
+        timezone: input.registration.tenant.timezone,
+        settings: {
+          licenseId: input.registration.license.licenseId,
+          deploymentId: input.registration.license.deploymentId,
+          issuer: input.registration.license.issuer,
+          validFrom: input.registration.license.validFrom,
+          validUntil: input.registration.license.validUntil,
+          offlineGraceUntil: input.registration.license.offlineGraceUntil
+        }
+      }
+    ],
+    tenantBrandProfiles: [
+      {
+        id: input.registration.brandProfile.id,
+        tenantId: input.registration.tenant.id,
+        productName: input.registration.brandProfile.productName,
+        shortProductName: input.registration.brandProfile.shortProductName,
+        assets: input.registration.brandProfile.assets,
+        themeTokens: input.registration.brandProfile.themeTokens,
+        links: input.registration.brandProfile.links ?? {},
+        createdAt,
+        updatedAt: createdAt
+      }
+    ],
+    tenantModules: input.registration.tenant.enabledModules.map((moduleId) => {
+      return {
+        tenantId: input.registration.tenant.id,
+        moduleId,
+        enabled: true,
+        config: input.registration.tenant.moduleConfigs?.[moduleId] ?? {},
+        diagnostics: {},
+        createdAt,
+        updatedAt: createdAt
+      };
+    }),
+    tenantEntitlements: input.registration.license.entitlements.map(
+      (entitlement) => {
+        return {
+          tenantId: input.registration.tenant.id,
+          key: entitlement.key,
+          value: entitlement.value,
+          enabled: entitlement.enabled,
+          source: "license",
+          createdAt,
+          updatedAt: createdAt
+        };
+      }
+    ),
+    accounts: [
+      {
+        id: adminAccountId,
+        tenantId: input.registration.tenant.id,
+        email: input.registration.admin.email,
+        passwordHash: input.adminPasswordHash,
+        emailVerifiedAt: null,
+        createdAt,
+        updatedAt: createdAt
+      }
+    ],
+    employees: [
+      {
+        id: input.registration.admin.id,
+        tenantId: input.registration.tenant.id,
+        accountId: adminAccountId,
+        email: input.registration.admin.email,
+        displayName: input.registration.admin.displayName,
+        createdAt,
+        updatedAt: createdAt
+      }
+    ],
+    employeeRoles: input.registration.admin.roles.map((role) => {
+      return {
+        tenantId: input.registration.tenant.id,
+        employeeId: input.registration.admin.id,
+        role,
+        createdAt,
+        updatedAt: createdAt
+      };
+    }),
+    eventStore: input.registration.events.map(mapEventStoreRow),
+    outbox: input.registration.events.map(mapOutboxRow)
+  };
+
+  assertTenantScopedRows(
+    input.registration.tenant.id,
+    collectTenantRegistrationTenantScopedRows(rows)
+  );
+
+  return rows;
+}
+
 export function mapReplyToPersistenceRows(
   input: PersistConversationReplyInput
 ): ReplyPersistenceRows {
@@ -236,6 +362,22 @@ export function collectWorkspaceTenantScopedRows(
     ...rows.conversations.map(requireTenantScope),
     ...rows.conversationParticipants.map(requireTenantScope),
     ...rows.messages.map(requireTenantScope),
+    ...rows.eventStore.map(requireTenantScope),
+    ...rows.outbox.map(requireTenantScope)
+  ];
+}
+
+export function collectTenantRegistrationTenantScopedRows(
+  rows: TenantRegistrationPersistenceRows
+): TenantScopedRow[] {
+  return [
+    ...rows.tenantSettings.map(requireTenantScope),
+    ...rows.tenantBrandProfiles.map(requireTenantScope),
+    ...rows.tenantModules.map(requireTenantScope),
+    ...rows.tenantEntitlements.map(requireTenantScope),
+    ...rows.accounts.map(requireTenantScope),
+    ...rows.employees.map(requireTenantScope),
+    ...rows.employeeRoles.map(requireTenantScope),
     ...rows.eventStore.map(requireTenantScope),
     ...rows.outbox.map(requireTenantScope)
   ];

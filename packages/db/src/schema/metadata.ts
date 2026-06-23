@@ -22,6 +22,12 @@ export const initialTables = [
   { name: "usage_period_summaries", scope: "tenant", requiresTenantId: true },
   { name: "tenant_api_keys", scope: "tenant", requiresTenantId: true },
   { name: "accounts", scope: "tenant", requiresTenantId: true },
+  {
+    name: "auth_email_verification_tokens",
+    scope: "tenant",
+    requiresTenantId: true
+  },
+  { name: "external_identity_links", scope: "tenant", requiresTenantId: true },
   { name: "employees", scope: "tenant", requiresTenantId: true },
   { name: "employee_roles", scope: "tenant", requiresTenantId: true },
   { name: "sessions", scope: "global", requiresTenantId: false },

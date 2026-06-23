@@ -148,11 +148,14 @@ export type {
 export type { TenantScopedRow } from "./tenant-scope";
 export {
   collectReplyTenantScopedRows,
+  collectTenantRegistrationTenantScopedRows,
   collectWorkspaceTenantScopedRows,
   mapReplyToPersistenceRows,
+  mapTenantRegistrationToPersistenceRows,
   mapWorkspaceToPersistenceRows
 } from "./vertical-slice-mapper";
 export type {
   ReplyPersistenceRows,
+  TenantRegistrationPersistenceRows,
   WorkspacePersistenceRows
 } from "./vertical-slice-mapper";

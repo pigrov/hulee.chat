@@ -33,7 +33,10 @@ export async function loadInboxViewModel(input?: {
 
   const response = await fetch(url, {
     cache: "no-store",
-    headers: await buildInternalApiHeaders()
+    headers: await buildInternalApiHeaders({
+      method: "GET",
+      path: internalPath(url)
+    })
   });
 
   if (!response.ok) {
@@ -54,17 +57,22 @@ export async function sendInboxReply(input: {
     )}/replies`,
     resolveInternalApiBaseUrl()
   );
+  const body = {
+    text: input.text,
+    idempotencyKey: input.idempotencyKey
+  };
   const response = await fetch(url, {
     method: "POST",
     cache: "no-store",
     headers: {
-      ...(await buildInternalApiHeaders()),
+      ...(await buildInternalApiHeaders({
+        method: "POST",
+        path: internalPath(url),
+        body
+      })),
       "content-type": "application/json; charset=utf-8"
     },
-    body: JSON.stringify({
-      text: input.text,
-      idempotencyKey: input.idempotencyKey
-    })
+    body: JSON.stringify(body)
   });
 
   if (!response.ok) {
@@ -81,7 +89,10 @@ export async function loadTelegramIntegration(): Promise<TelegramIntegrationView
   );
   const response = await fetch(url, {
     cache: "no-store",
-    headers: await buildInternalApiHeaders()
+    headers: await buildInternalApiHeaders({
+      method: "GET",
+      path: internalPath(url)
+    })
   });
 
   if (!response.ok) {
@@ -105,7 +116,11 @@ export async function updateTelegramIntegration(
     method: "PUT",
     cache: "no-store",
     headers: {
-      ...(await buildInternalApiHeaders()),
+      ...(await buildInternalApiHeaders({
+        method: "PUT",
+        path: internalPath(url),
+        body: request
+      })),
       "content-type": "application/json; charset=utf-8"
     },
     body: JSON.stringify(request)
@@ -142,7 +157,10 @@ export async function deleteTelegramWebhook(): Promise<TelegramIntegrationViewMo
   const response = await fetch(url, {
     method: "DELETE",
     cache: "no-store",
-    headers: await buildInternalApiHeaders()
+    headers: await buildInternalApiHeaders({
+      method: "DELETE",
+      path: internalPath(url)
+    })
   });
 
   if (!response.ok) {
@@ -162,7 +180,10 @@ async function postTelegramIntegrationCommand(
   const response = await fetch(url, {
     method: "POST",
     cache: "no-store",
-    headers: await buildInternalApiHeaders()
+    headers: await buildInternalApiHeaders({
+      method: "POST",
+      path: internalPath(url)
+    })
   });
 
   if (!response.ok) {
@@ -177,4 +198,8 @@ function resolveInternalApiBaseUrl(): string {
     mergeEnvSources(localEnv, process.env).HULEE_INTERNAL_API_BASE_URL ??
     defaultInternalApiBaseUrl
   );
+}
+
+function internalPath(url: URL): string {
+  return `${url.pathname}${url.search}`;
 }

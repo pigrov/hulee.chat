@@ -46,6 +46,7 @@ export type ApiConfig = BaseAppConfig & {
   appName: "api";
   host: string;
   port: number;
+  internalApiSecret?: string;
   publicBaseUrl?: string;
   publicWebhookBaseUrl?: string;
   sseEnabled: boolean;
@@ -117,6 +118,7 @@ const baseEnvSchema = z.object({
 const apiEnvSchema = baseEnvSchema.extend({
   HULEE_API_HOST: optionalNonEmptyString,
   HULEE_API_PORT: optionalInteger(1, 65_535),
+  HULEE_INTERNAL_API_SECRET: optionalNonEmptyString,
   HULEE_PUBLIC_BASE_URL: optionalUrl,
   HULEE_PUBLIC_WEBHOOK_BASE_URL: optionalUrl,
   HULEE_SSE_ENABLED: optionalBoolean
@@ -137,6 +139,7 @@ const issueMessages: Record<string, string> = {
     "must be a base64, hex or 32-byte UTF-8 encryption key",
   HULEE_API_HOST: "must not be empty",
   HULEE_API_PORT: "must be an integer from 1 to 65535",
+  HULEE_INTERNAL_API_SECRET: "must not be empty",
   HULEE_PUBLIC_BASE_URL: "must be a valid URL",
   HULEE_PUBLIC_WEBHOOK_BASE_URL: "must be a valid URL",
   HULEE_SSE_ENABLED: "must be true, false, 1 or 0",
@@ -193,11 +196,26 @@ export function loadApiConfig(env: EnvSource = process.env): ApiConfig {
     throw new ConfigError("api", zodIssuesToConfigIssues(result.error.issues));
   }
 
+  const baseConfig = buildBaseConfig("api", result.data);
+
+  if (
+    baseConfig.nodeEnv === "production" &&
+    result.data.HULEE_INTERNAL_API_SECRET === undefined
+  ) {
+    throw new ConfigError("api", [
+      {
+        variable: "HULEE_INTERNAL_API_SECRET",
+        message: "must be set in production"
+      }
+    ]);
+  }
+
   return {
-    ...buildBaseConfig("api", result.data),
+    ...baseConfig,
     appName: "api",
     host: result.data.HULEE_API_HOST ?? "0.0.0.0",
     port: result.data.HULEE_API_PORT ?? 3000,
+    internalApiSecret: result.data.HULEE_INTERNAL_API_SECRET,
     publicBaseUrl: result.data.HULEE_PUBLIC_BASE_URL,
     publicWebhookBaseUrl:
       result.data.HULEE_PUBLIC_WEBHOOK_BASE_URL ??

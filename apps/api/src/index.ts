@@ -22,7 +22,7 @@ import {
 } from "./http/public-api-handler";
 import {
   createInternalApiHandler,
-  createLocalDevInternalSessionResolver,
+  createSignedInternalSessionResolver,
   type InternalApiHandler
 } from "./http/internal-api-handler";
 import {
@@ -102,6 +102,7 @@ export function createPublicApiDataPlaneHandler(
 export type InternalApiDataPlaneHandlerOptions = {
   database: HuleeDatabase;
   env?: EnvSource;
+  internalApiSecret?: string;
   secretEncryptionKey?: string;
   publicWebhookBaseUrl?: string;
   telegramApiBaseUrl?: string;
@@ -126,7 +127,12 @@ export function createInternalApiDataPlaneHandler(
     : undefined;
 
   return createInternalApiHandler({
-    sessionResolver: createLocalDevInternalSessionResolver(),
+    sessionResolver: createSignedInternalSessionResolver({
+      secret: options.internalApiSecret,
+      allowUnsignedFallback:
+        options.internalApiSecret === undefined &&
+        (options.env?.NODE_ENV ?? process.env.NODE_ENV) !== "production"
+    }),
     inboxQueries: createSqlInternalInboxQueryService({
       database: options.database
     }),
@@ -195,6 +201,7 @@ export type ApiDataPlaneHandlerOptions = PublicApiDataPlaneHandlerOptions &
   Pick<
     InternalApiDataPlaneHandlerOptions,
     | "env"
+    | "internalApiSecret"
     | "secretEncryptionKey"
     | "publicWebhookBaseUrl"
     | "telegramApiBaseUrl"

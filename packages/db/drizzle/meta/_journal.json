@@ -22,6 +22,13 @@
       "when": 1782155417483,
       "tag": "0002_slow_naoko",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1782186611558,
+      "tag": "0003_elite_tigra",
+      "breakpoints": true
     }
   ]
 }

@@ -23,6 +23,7 @@ describe("app config", () => {
       secretEncryptionKey: undefined,
       host: "0.0.0.0",
       port: 3000,
+      internalApiSecret: undefined,
       publicBaseUrl: undefined,
       publicWebhookBaseUrl: undefined,
       sseEnabled: true
@@ -108,6 +109,16 @@ describe("app config", () => {
     });
   });
 
+  it("loads the internal API signing secret without logging it", () => {
+    expect(
+      loadApiConfig({
+        HULEE_INTERNAL_API_SECRET: "internal-secret"
+      })
+    ).toMatchObject({
+      internalApiSecret: "internal-secret"
+    });
+  });
+
   it("requires an explicit database URL in production", () => {
     expect(() => loadApiConfig({ NODE_ENV: "production" })).toThrow(
       ConfigError
@@ -121,6 +132,30 @@ describe("app config", () => {
         {
           variable: "DATABASE_URL",
           message: "must be a valid URL and is required in production"
+        }
+      ]);
+    }
+  });
+
+  it("requires an internal API signing secret in production", () => {
+    expect(() =>
+      loadApiConfig({
+        NODE_ENV: "production",
+        DATABASE_URL: "postgres://user:pass@example.test:5432/hulee"
+      })
+    ).toThrow(ConfigError);
+
+    try {
+      loadApiConfig({
+        NODE_ENV: "production",
+        DATABASE_URL: "postgres://user:pass@example.test:5432/hulee"
+      });
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigError);
+      expect((error as ConfigError).issues).toEqual([
+        {
+          variable: "HULEE_INTERNAL_API_SECRET",
+          message: "must be set in production"
         }
       ]);
     }

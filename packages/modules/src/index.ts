@@ -1,11 +1,13 @@
 import type { ModuleManifest } from "@hulee/contracts";
 
 import { localAuthManifest } from "./auth-local";
+import { vkAuthManifest } from "./auth-vk";
 import { publicApiChannelManifest } from "./public-api-channel";
 import { telegramChannelManifest } from "./telegram-channel";
 
 export const standardModuleManifests: readonly ModuleManifest[] = [
   localAuthManifest,
+  vkAuthManifest,
   publicApiChannelManifest,
   telegramChannelManifest,
   {
@@ -34,6 +36,8 @@ export {
   verifyLocalPassword
 } from "./auth-local";
 export type { LocalAuthProvider } from "./auth-local";
+export { createVkAuthProviderPlaceholder, vkAuthManifest } from "./auth-vk";
+export type { VkAuthProvider } from "./auth-vk";
 export {
   createPublicApiChannelAdapter,
   normalizePublicApiIncomingMessage,

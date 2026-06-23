@@ -4,11 +4,17 @@ import type {
   InternalTelegramIntegrationUpdateRequest,
   TenantId
 } from "@hulee/contracts";
+import {
+  createInternalApiSignature,
+  internalApiSignatureHeader,
+  internalApiTimestampHeader
+} from "@hulee/core";
 import { describe, expect, it, vi } from "vitest";
 
 import {
   createInternalApiHandler,
   createLocalDevInternalSessionResolver,
+  createSignedInternalSessionResolver,
   type InternalApiSession
 } from "./internal-api-handler";
 
@@ -371,6 +377,109 @@ describe("internal API handler", () => {
         code: "permission.denied"
       }
     });
+  });
+
+  it("resolves signed internal web client headers", async () => {
+    const resolver = createSignedInternalSessionResolver({
+      secret: "internal-secret",
+      now: () => new Date("2026-06-23T10:00:01.000Z")
+    });
+    const request = {
+      method: "POST" as const,
+      path: "/internal/v1/inbox/conversations/conversation-1/replies",
+      headers: {
+        "x-hulee-tenant-id": tenantId,
+        "x-hulee-employee-id": employeeId,
+        "x-hulee-permissions": "inbox.read,message.reply",
+        [internalApiTimestampHeader]: "2026-06-23T10:00:00.000Z"
+      },
+      body: {
+        text: "Hello",
+        idempotencyKey: "reply-1"
+      }
+    };
+    const signedRequest = {
+      ...request,
+      headers: {
+        ...request.headers,
+        [internalApiSignatureHeader]: createInternalApiSignature(
+          "internal-secret",
+          {
+            method: request.method,
+            path: request.path,
+            body: request.body,
+            tenantId,
+            employeeId,
+            permissions: ["inbox.read", "message.reply"],
+            timestamp: request.headers[internalApiTimestampHeader]
+          }
+        )
+      }
+    };
+
+    await expect(
+      resolver.resolve(signedRequest, "request-1")
+    ).resolves.toMatchObject({
+      tenantId,
+      employeeId,
+      permissions: ["inbox.read", "message.reply"]
+    });
+  });
+
+  it("rejects unsigned or tampered internal web client headers when signing is enabled", async () => {
+    const resolver = createSignedInternalSessionResolver({
+      secret: "internal-secret",
+      now: () => new Date("2026-06-23T10:00:01.000Z")
+    });
+    const timestamp = "2026-06-23T10:00:00.000Z";
+    const body = {
+      text: "Hello"
+    };
+    const signature = createInternalApiSignature("internal-secret", {
+      method: "POST",
+      path: "/internal/v1/inbox/conversations/conversation-1/replies",
+      body,
+      tenantId,
+      employeeId,
+      permissions: ["message.reply"],
+      timestamp
+    });
+
+    await expect(
+      resolver.resolve(
+        {
+          method: "POST",
+          path: "/internal/v1/inbox/conversations/conversation-1/replies",
+          headers: {
+            "x-hulee-tenant-id": tenantId,
+            "x-hulee-employee-id": employeeId,
+            "x-hulee-permissions": "message.reply",
+            [internalApiTimestampHeader]: timestamp
+          },
+          body
+        },
+        "request-1"
+      )
+    ).resolves.toBeNull();
+    await expect(
+      resolver.resolve(
+        {
+          method: "POST",
+          path: "/internal/v1/inbox/conversations/conversation-1/replies",
+          headers: {
+            "x-hulee-tenant-id": tenantId,
+            "x-hulee-employee-id": employeeId,
+            "x-hulee-permissions": "message.reply",
+            [internalApiTimestampHeader]: timestamp,
+            [internalApiSignatureHeader]: signature
+          },
+          body: {
+            text: "Changed"
+          }
+        },
+        "request-1"
+      )
+    ).resolves.toBeNull();
   });
 
   it("rejects invalid Telegram integration payloads before command execution", async () => {

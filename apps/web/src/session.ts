@@ -1,14 +1,26 @@
 import { loadLocalEnvFile, mergeEnvSources } from "@hulee/config";
 import type { EmployeeId } from "@hulee/contracts";
 import {
+  createDrizzlePersistenceExecutor,
   createHuleeDatabase,
   createSqlLocalAuthRepository,
+  createTenantWorkspaceRepository,
   type AuthSessionPrincipal,
   type HuleeDatabase,
-  type LocalAuthRepository
+  type LocalAuthRepository,
+  type TenantAuthAccount
 } from "@hulee/db";
-import { CoreError, permissionsForRoles, type Permission } from "@hulee/core";
-import { verifyLocalPassword } from "@hulee/modules";
+import {
+  CoreError,
+  createInternalApiSignature,
+  createSequentialIdFactory,
+  internalApiSignatureHeader,
+  internalApiTimestampHeader,
+  permissionsForRoles,
+  registerTenant,
+  type Permission
+} from "@hulee/core";
+import { hashLocalPassword, verifyLocalPassword } from "@hulee/modules";
 import { cookies } from "next/headers";
 import { randomBytes, randomUUID } from "node:crypto";
 
@@ -31,6 +43,15 @@ export type ResolveCurrentWebAccessSessionOptions = {
 };
 
 export type LoginLocalWebSessionInput = {
+  tenantSlug?: string;
+  email: string;
+  password: string;
+};
+
+export type RegisterLocalTenantInput = {
+  tenantSlug: string;
+  tenantDisplayName: string;
+  adminDisplayName?: string;
   email: string;
   password: string;
 };
@@ -91,12 +112,39 @@ export async function assertCurrentWebTenantPermission(
   return session;
 }
 
-export async function buildInternalApiHeaders(): Promise<
-  Record<string, string>
-> {
-  return buildInternalApiHeadersForSession(
-    await requireCurrentWebAccessSession()
-  );
+export async function buildInternalApiHeaders(input: {
+  method: string;
+  path: string;
+  body?: unknown;
+}): Promise<Record<string, string>> {
+  const session = await requireCurrentWebAccessSession();
+  const headers = buildInternalApiHeadersForSession(session);
+  const env = resolveWebEnv();
+  const secret = env.HULEE_INTERNAL_API_SECRET;
+
+  if (secret === undefined || secret.trim().length === 0) {
+    if (env.NODE_ENV === "production") {
+      throw new CoreError("auth.invalid_credentials");
+    }
+
+    return headers;
+  }
+
+  const timestamp = new Date().toISOString();
+
+  return {
+    ...headers,
+    [internalApiTimestampHeader]: timestamp,
+    [internalApiSignatureHeader]: createInternalApiSignature(secret, {
+      method: input.method,
+      path: input.path,
+      body: input.body,
+      tenantId: session.tenantId,
+      employeeId: session.employeeId,
+      permissions: session.permissions,
+      timestamp
+    })
+  };
 }
 
 export async function loginLocalWebSession(
@@ -104,7 +152,9 @@ export async function loginLocalWebSession(
 ): Promise<LoginLocalWebSessionResult> {
   const email = normalizeEmail(input.email);
   const env = resolveWebEnv();
-  const tenantSlug = env.HULEE_WEB_TENANT_SLUG ?? "local";
+  const tenantSlug = normalizeTenantSlug(
+    input.tenantSlug ?? env.HULEE_WEB_TENANT_SLUG ?? "local"
+  );
   const repository = getAuthRepository();
   const [tenantAccount, platformAdmin] = await Promise.all([
     repository.findTenantAccount({
@@ -122,26 +172,8 @@ export async function loginLocalWebSession(
     throw new CoreError("auth.invalid_credentials");
   }
 
-  const now = new Date();
-  const expiresAt = new Date(now.getTime() + sessionTtlMs);
-  const token = randomBytes(32).toString("base64url");
-
-  await repository.createSession({
-    id: `session:${randomUUID()}`,
-    token,
-    tenantId: tenantPasswordValid ? tenantAccount?.tenantId : undefined,
-    employeeId: tenantPasswordValid ? tenantAccount?.employeeId : undefined,
-    platformAdminAccountId: platformPasswordValid
-      ? platformAdmin?.id
-      : undefined,
-    expiresAt,
-    createdAt: now
-  });
-  await writeSessionToken(token, expiresAt);
-
-  const session = webAccessSessionFromPrincipal({
-    sessionId: "new-session",
-    expiresAt,
+  return createStoredWebSession({
+    repository,
     tenantAccount: tenantPasswordValid
       ? (tenantAccount ?? undefined)
       : undefined,
@@ -152,7 +184,81 @@ export async function loginLocalWebSession(
             email: platformAdmin.email,
             displayName: platformAdmin.displayName
           }
-        : undefined
+        : undefined,
+    platformAdminAccountId: platformPasswordValid
+      ? platformAdmin?.id
+      : undefined
+  });
+}
+
+export async function registerLocalTenant(
+  input: RegisterLocalTenantInput
+): Promise<LoginLocalWebSessionResult> {
+  const tenantSlug = normalizeTenantSlug(input.tenantSlug);
+  const email = normalizeEmail(input.email);
+  const password = requireRegistrationPassword(input.password);
+  const now = new Date();
+  const registration = registerTenant({
+    now: now.toISOString(),
+    tenantSlug,
+    tenantDisplayName: input.tenantDisplayName,
+    productName: input.tenantDisplayName,
+    adminEmail: email,
+    adminDisplayName: input.adminDisplayName,
+    idFactory: createSequentialIdFactory(`tenant:${tenantSlug}`)
+  });
+  const passwordHash = await hashLocalPassword(password);
+  const repository = getAuthRepository();
+
+  await createTenantWorkspaceRepository(
+    createDrizzlePersistenceExecutor(getDatabase())
+  ).registerTenant({
+    registration,
+    adminPasswordHash: passwordHash
+  });
+
+  return createStoredWebSession({
+    repository,
+    tenantAccount: {
+      tenantId: registration.tenant.id,
+      tenantSlug: registration.tenant.slug,
+      accountId: `account:${registration.admin.id}`,
+      employeeId: registration.admin.id,
+      email: registration.admin.email,
+      displayName: registration.admin.displayName,
+      passwordHash,
+      roles: registration.admin.roles,
+      permissions: permissionsForRoles(registration.admin.roles)
+    }
+  });
+}
+
+async function createStoredWebSession(input: {
+  repository: LocalAuthRepository;
+  tenantAccount?: TenantAuthAccount;
+  platformAdmin?: NonNullable<AuthSessionPrincipal["platformAdmin"]>;
+  platformAdminAccountId?: string;
+}): Promise<LoginLocalWebSessionResult> {
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + sessionTtlMs);
+  const token = randomBytes(32).toString("base64url");
+
+  await input.repository.createSession({
+    id: `session:${randomUUID()}`,
+    token,
+    tenantId: input.tenantAccount?.tenantId,
+    employeeId: input.tenantAccount?.employeeId,
+    platformAdminAccountId: input.platformAdminAccountId,
+    expiresAt,
+    createdAt: now
+  });
+  await writeSessionToken(token, expiresAt);
+
+  const session = webAccessSessionFromPrincipal({
+    sessionId: "new-session",
+    expiresAt,
+    tenantAccount: input.tenantAccount,
+    platformAdmin: input.platformAdmin
   });
 
   return {
@@ -195,6 +301,10 @@ function webAccessSessionFromPrincipal(
 }
 
 function getAuthRepository(): LocalAuthRepository {
+  return createSqlLocalAuthRepository(getDatabase());
+}
+
+function getDatabase(): HuleeDatabase {
   const env = resolveWebEnv();
 
   database ??= createHuleeDatabase({
@@ -202,7 +312,7 @@ function getAuthRepository(): LocalAuthRepository {
     logger: env.DATABASE_LOG === "true"
   });
 
-  return createSqlLocalAuthRepository(database);
+  return database;
 }
 
 async function readSessionToken(): Promise<string | undefined> {
@@ -233,6 +343,18 @@ function resolveWebEnv(): NodeJS.ProcessEnv {
 
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
+}
+
+function normalizeTenantSlug(slug: string): string {
+  return slug.trim().toLowerCase();
+}
+
+function requireRegistrationPassword(password: string): string {
+  if (password.length < 8) {
+    throw new CoreError("validation.failed");
+  }
+
+  return password;
 }
 
 function isEnabled(value: string | undefined): boolean {

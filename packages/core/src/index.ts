@@ -4,6 +4,17 @@ export { CoreError } from "./errors";
 export { createSequentialIdFactory } from "./ids";
 export type { IdFactory } from "./ids";
 export {
+  canonicalInternalApiSignaturePayload,
+  createInternalApiSignature,
+  internalApiSignatureHeader,
+  internalApiTimestampHeader,
+  verifyInternalApiSignature
+} from "./internal-api-signing";
+export type {
+  InternalApiSignatureInput,
+  InternalApiSignatureVerificationInput
+} from "./internal-api-signing";
+export {
   assertEmployeeCan,
   hasPermission,
   isEmployeeRole,
@@ -20,9 +31,15 @@ export type {
   PersistedMessageSummary
 } from "./external-channel-command-service";
 export type {
+  PersistTenantRegistrationInput,
   PersistConversationReplyInput,
   TenantWorkspaceRepository
 } from "./repositories";
+export { registerTenant } from "./tenant-registration";
+export type {
+  RegisterTenantInput,
+  RegisteredTenant
+} from "./tenant-registration";
 export {
   buildExternalClientHandle,
   createMvpTenantWorkspace,

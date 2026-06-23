@@ -7,6 +7,10 @@ GitHub Actions should not store tenant/provider secrets.
 tenant-managed provider secrets such as Telegram bot tokens. Keep it in the
 server `.env`; do not add provider tokens or this key to GitHub Secrets.
 
+`HULEE_INTERNAL_API_SECRET` is a deployment-local signing secret shared by web
+and api containers for internal API headers. Keep the same value in both
+containers through the server `.env`.
+
 Initial server preparation:
 
 ```bash

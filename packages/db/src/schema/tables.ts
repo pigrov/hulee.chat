@@ -278,11 +278,67 @@ export const accounts = pgTable(
     tenantId: tenantIdColumn().references(() => tenants.id),
     email: text("email").notNull(),
     passwordHash: text("password_hash"),
+    emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
     ...timestamps
   },
   (table) => [
     uniqueIndex("accounts_tenant_email_unique").on(table.tenantId, table.email),
     index("accounts_tenant_idx").on(table.tenantId)
+  ]
+);
+
+export const authEmailVerificationTokens = pgTable(
+  "auth_email_verification_tokens",
+  {
+    id: text("id").primaryKey(),
+    tenantId: tenantIdColumn().references(() => tenants.id),
+    accountId: text("account_id")
+      .notNull()
+      .references(() => accounts.id),
+    tokenHash: text("token_hash").notNull(),
+    purpose: text("purpose").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    ...timestamps
+  },
+  (table) => [
+    uniqueIndex("auth_email_tokens_tenant_token_unique").on(
+      table.tenantId,
+      table.tokenHash
+    ),
+    index("auth_email_tokens_tenant_account_idx").on(
+      table.tenantId,
+      table.accountId
+    )
+  ]
+);
+
+export const externalIdentityLinks = pgTable(
+  "external_identity_links",
+  {
+    id: text("id").primaryKey(),
+    tenantId: tenantIdColumn().references(() => tenants.id),
+    accountId: text("account_id")
+      .notNull()
+      .references(() => accounts.id),
+    providerId: text("provider_id").notNull(),
+    externalSubject: text("external_subject").notNull(),
+    email: text("email"),
+    displayName: text("display_name"),
+    emailVerified: boolean("email_verified").notNull().default(false),
+    profile: jsonb("profile").notNull().default({}),
+    ...timestamps
+  },
+  (table) => [
+    uniqueIndex("external_identity_tenant_provider_subject_unique").on(
+      table.tenantId,
+      table.providerId,
+      table.externalSubject
+    ),
+    index("external_identity_tenant_account_idx").on(
+      table.tenantId,
+      table.accountId
+    )
   ]
 );
 
