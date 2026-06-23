@@ -21,6 +21,7 @@ export {
   buildFindValidAuthEmailTokenSql,
   buildListAuthEmailTokenTargetsByEmailSql,
   buildFindAuthSessionByTokenSql,
+  buildConsumeAuthRateLimitBucketSql,
   buildFindPlatformAdminByEmailSql,
   buildFindTenantAccountByEmailSql,
   buildFindTenantModuleConfigSql,
@@ -61,6 +62,7 @@ export {
   createAesGcmTenantSecretCipher,
   createExternalMessageRepository,
   createSqlAuthEmailTokenRepository,
+  createSqlAuthRateLimitRepository,
   createSqlEmployeeDirectoryRepository,
   createSqlPublicApiAuditSink,
   createSqlSecurityAuditRepository,
@@ -87,6 +89,9 @@ export {
 } from "./repositories";
 export type {
   AuthEmailTokenPreview,
+  AuthRateLimitBucketDecision,
+  AuthRateLimitBucketInput,
+  AuthRateLimitRepository,
   AuthEmailTokenRepository,
   AuthEmailTokenTarget,
   AuthSessionPrincipal,

@@ -43,6 +43,13 @@
       "when": 1782193263900,
       "tag": "0005_brave_barracuda",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1782226448263,
+      "tag": "0006_volatile_jackal",
+      "breakpoints": true
     }
   ]
 }

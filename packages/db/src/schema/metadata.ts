@@ -32,6 +32,11 @@ export const initialTables = [
   { name: "employee_roles", scope: "tenant", requiresTenantId: true },
   { name: "employee_invitations", scope: "tenant", requiresTenantId: true },
   { name: "sessions", scope: "global", requiresTenantId: false },
+  {
+    name: "auth_rate_limit_buckets",
+    scope: "global",
+    requiresTenantId: false
+  },
   { name: "teams", scope: "tenant", requiresTenantId: true },
   { name: "clients", scope: "tenant", requiresTenantId: true },
   { name: "client_contacts", scope: "tenant", requiresTenantId: true },

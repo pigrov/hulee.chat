@@ -1,6 +1,13 @@
 import { CoreError } from "@hulee/core";
+import {
+  createSqlAuthRateLimitRepository,
+  type AuthRateLimitRepository
+} from "@hulee/db";
 import { createHash } from "node:crypto";
 import { headers } from "next/headers";
+
+import { getWebDatabase } from "./web-database";
+import { resolveWebConfig } from "./web-config";
 
 export type AuthRateLimitAction =
   | "login"
@@ -40,6 +47,18 @@ export type ConsumeAuthRateLimitInput = {
   now?: number;
   policies?: Partial<Record<AuthRateLimitAction, AuthRateLimitPolicy>>;
   store?: AuthRateLimitStore;
+};
+
+export type ConsumePersistentAuthRateLimitInput = Omit<
+  ConsumeAuthRateLimitInput,
+  "store"
+> & {
+  repository: AuthRateLimitRepository;
+};
+
+type AuthRateLimitBucket = {
+  key: string;
+  maxAttempts: number;
 };
 
 type HeaderReader = {
@@ -96,12 +115,11 @@ export function consumeAuthRateLimit(
   const store = input.store ?? defaultStore;
   const policy =
     input.policies?.[input.action] ?? defaultPolicies[input.action];
-  const keys = buildAuthRateLimitKeys(input);
-  const decisions = keys.map((key) => {
+  const buckets = buildAuthRateLimitBuckets(input, policy);
+  const decisions = buckets.map((bucket) => {
     return inspectAuthRateLimitBucket({
       store,
-      key,
-      policy,
+      bucket,
       now
     });
   });
@@ -111,10 +129,10 @@ export function consumeAuthRateLimit(
     return blocked;
   }
 
-  for (const key of keys) {
+  for (const bucket of buckets) {
     incrementAuthRateLimitBucket({
       store,
-      key,
+      bucket,
       policy,
       now
     });
@@ -126,15 +144,52 @@ export function consumeAuthRateLimit(
   };
 }
 
+export async function consumePersistentAuthRateLimit(
+  input: ConsumePersistentAuthRateLimitInput
+): Promise<AuthRateLimitDecision> {
+  const nowMs = input.now ?? Date.now();
+  const now = new Date(nowMs);
+  const policy =
+    input.policies?.[input.action] ?? defaultPolicies[input.action];
+  const buckets = buildAuthRateLimitBuckets(input, policy);
+
+  for (const bucket of buckets) {
+    const decision = await input.repository.consumeBucket({
+      key: bucket.key,
+      windowMs: policy.windowMs,
+      maxAttempts: bucket.maxAttempts,
+      now
+    });
+
+    if (!decision.allowed) {
+      return {
+        allowed: false,
+        retryAfterMs: decision.retryAfterMs
+      };
+    }
+  }
+
+  return {
+    allowed: true
+  };
+}
+
 export async function assertWebAuthRateLimit(
   action: AuthRateLimitAction,
   subject?: string
 ): Promise<void> {
-  const decision = consumeAuthRateLimit({
+  const input = {
     action,
     subject,
     requester: resolveRequester(await headers())
-  });
+  };
+  const decision =
+    resolveWebConfig().nodeEnv === "production"
+      ? await consumePersistentAuthRateLimit({
+          ...input,
+          repository: createSqlAuthRateLimitRepository(getWebDatabase())
+        })
+      : consumeAuthRateLimit(input);
 
   if (!decision.allowed) {
     throw new CoreError("auth.rate_limited");
@@ -155,25 +210,31 @@ export function clearAuthRateLimitStoreForTests(): void {
   defaultStore.clear();
 }
 
-function buildAuthRateLimitKeys(
-  input: Pick<ConsumeAuthRateLimitInput, "action" | "requester" | "subject">
-): readonly string[] {
+function buildAuthRateLimitBuckets(
+  input: Pick<ConsumeAuthRateLimitInput, "action" | "requester" | "subject">,
+  policy: AuthRateLimitPolicy
+): readonly AuthRateLimitBucket[] {
   const requester = normalizeScopeValue(input.requester);
   const subject = normalizeScopeValue(input.subject ?? "none");
 
   return [
-    `auth:${input.action}:requester:${hashScopeValue(requester)}`,
-    `auth:${input.action}:subject:${hashScopeValue(`${requester}\0${subject}`)}`
+    {
+      key: `auth:${input.action}:requester:${hashScopeValue(requester)}`,
+      maxAttempts: policy.requesterMaxAttempts
+    },
+    {
+      key: `auth:${input.action}:subject:${hashScopeValue(`${requester}\0${subject}`)}`,
+      maxAttempts: policy.subjectMaxAttempts
+    }
   ];
 }
 
 function inspectAuthRateLimitBucket(input: {
   store: AuthRateLimitStore;
-  key: string;
-  policy: AuthRateLimitPolicy;
+  bucket: AuthRateLimitBucket;
   now: number;
 }): AuthRateLimitDecision {
-  const entry = input.store.get(input.key);
+  const entry = input.store.get(input.bucket.key);
 
   if (entry === undefined || entry.resetAt <= input.now) {
     return {
@@ -181,11 +242,7 @@ function inspectAuthRateLimitBucket(input: {
     };
   }
 
-  const maxAttempts = input.key.includes(":requester:")
-    ? input.policy.requesterMaxAttempts
-    : input.policy.subjectMaxAttempts;
-
-  if (entry.count >= maxAttempts) {
+  if (entry.count >= input.bucket.maxAttempts) {
     return {
       allowed: false,
       retryAfterMs: entry.resetAt - input.now
@@ -199,21 +256,21 @@ function inspectAuthRateLimitBucket(input: {
 
 function incrementAuthRateLimitBucket(input: {
   store: AuthRateLimitStore;
-  key: string;
+  bucket: AuthRateLimitBucket;
   policy: AuthRateLimitPolicy;
   now: number;
 }): void {
-  const existing = input.store.get(input.key);
+  const existing = input.store.get(input.bucket.key);
 
   if (existing === undefined || existing.resetAt <= input.now) {
-    input.store.set(input.key, {
+    input.store.set(input.bucket.key, {
       count: 1,
       resetAt: input.now + input.policy.windowMs
     });
     return;
   }
 
-  input.store.set(input.key, {
+  input.store.set(input.bucket.key, {
     count: existing.count + 1,
     resetAt: existing.resetAt
   });

@@ -1,12 +1,10 @@
 import type { EmployeeId } from "@hulee/contracts";
 import {
   createDrizzlePersistenceExecutor,
-  createHuleeDatabase,
   createSqlSecurityAuditRepository,
   createSqlLocalAuthRepository,
   createTenantWorkspaceRepository,
   type AuthSessionPrincipal,
-  type HuleeDatabase,
   type LocalAuthRepository,
   type SecurityAuditAction,
   type TenantAuthAccount
@@ -42,9 +40,11 @@ import {
   buildWebCookieOptions,
   resolveWebCookieRuntime
 } from "./session-cookies";
+import { getWebDatabase } from "./web-database";
 import { resolveWebConfig, resolveWebEnv } from "./web-config";
 
 export { resolveWebConfig, resolveWebEnv } from "./web-config";
+export { getWebDatabase } from "./web-database";
 export {
   authSessionCookieName,
   lastTenantSlugCookieName,
@@ -57,8 +57,6 @@ export {
 const sessionTtlMs = 1000 * 60 * 60 * 24 * 14;
 const lastTenantSlugTtlMs = 1000 * 60 * 60 * 24 * 365;
 const tenantLoginChoicesTtlMs = 1000 * 60 * 10;
-
-let database: HuleeDatabase | undefined;
 
 export type ResolveCurrentWebAccessSessionOptions = {
   allowDevelopmentFallback?: boolean;
@@ -543,17 +541,6 @@ async function recordTenantAuthAudit(input: {
     },
     occurredAt: input.occurredAt
   });
-}
-
-export function getWebDatabase(): HuleeDatabase {
-  const config = resolveWebConfig();
-
-  database ??= createHuleeDatabase({
-    connectionString: config.databaseUrl,
-    logger: resolveWebEnv().DATABASE_LOG === "true"
-  });
-
-  return database;
 }
 
 async function readSessionToken(): Promise<string | undefined> {

@@ -2,10 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import {
   consumeAuthRateLimit,
+  consumePersistentAuthRateLimit,
   resolveRequester,
   type AuthRateLimitPolicy,
   type AuthRateLimitStore
 } from "./auth-rate-limit";
+import type {
+  AuthRateLimitBucketInput,
+  AuthRateLimitRepository
+} from "@hulee/db";
 
 const policy: AuthRateLimitPolicy = {
   windowMs: 1_000,
@@ -100,4 +105,68 @@ describe("auth rate limit", () => {
       })
     ).toBe("203.0.113.41");
   });
+
+  it("can consume a persistent repository for production-compatible limits", async () => {
+    const repository = new InMemoryAuthRateLimitRepository();
+    const input = {
+      action: "login" as const,
+      requester: "203.0.113.50",
+      subject: "person@example.test",
+      policies: {
+        login: policy
+      },
+      repository
+    };
+
+    await expect(
+      consumePersistentAuthRateLimit({ ...input, now: 1 })
+    ).resolves.toEqual({ allowed: true });
+    await expect(
+      consumePersistentAuthRateLimit({ ...input, now: 2 })
+    ).resolves.toEqual({ allowed: true });
+    await expect(
+      consumePersistentAuthRateLimit({ ...input, now: 3 })
+    ).resolves.toMatchObject({
+      allowed: false,
+      retryAfterMs: 998
+    });
+  });
 });
+
+class InMemoryAuthRateLimitRepository implements AuthRateLimitRepository {
+  private readonly store = new Map<
+    string,
+    { count: number; resetAt: number }
+  >();
+
+  async consumeBucket(input: AuthRateLimitBucketInput) {
+    const now = input.now.getTime();
+    const resetAt = now + input.windowMs;
+    const existing = this.store.get(input.key);
+    const next =
+      existing === undefined || existing.resetAt <= now
+        ? {
+            count: 1,
+            resetAt
+          }
+        : {
+            count: existing.count + 1,
+            resetAt: existing.resetAt
+          };
+
+    this.store.set(input.key, next);
+
+    return next.count <= input.maxAttempts
+      ? {
+          allowed: true as const,
+          count: next.count,
+          resetAt: new Date(next.resetAt)
+        }
+      : {
+          allowed: false as const,
+          count: next.count,
+          resetAt: new Date(next.resetAt),
+          retryAfterMs: next.resetAt - now
+        };
+  }
+}

@@ -65,6 +65,10 @@ export {
   hashAuthEmailToken
 } from "./sql-auth-email-token-repository";
 export {
+  buildConsumeAuthRateLimitBucketSql,
+  createSqlAuthRateLimitRepository
+} from "./sql-auth-rate-limit-repository";
+export {
   buildFindAuthSessionByTokenSql,
   buildFindPlatformAdminByEmailSql,
   buildFindTenantAccountByEmailSql,
@@ -184,6 +188,11 @@ export type {
   FindValidAuthEmailTokenInput,
   ListAuthEmailTokenTargetsByEmailInput
 } from "./sql-auth-email-token-repository";
+export type {
+  AuthRateLimitBucketDecision,
+  AuthRateLimitBucketInput,
+  AuthRateLimitRepository
+} from "./sql-auth-rate-limit-repository";
 export type {
   AuthSessionPrincipal,
   CreateAuthSessionInput,

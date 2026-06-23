@@ -431,6 +431,19 @@ export const sessions = pgTable(
   ]
 );
 
+export const authRateLimitBuckets = pgTable(
+  "auth_rate_limit_buckets",
+  {
+    key: text("key").primaryKey(),
+    count: integer("count").notNull(),
+    resetAt: timestamp("reset_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+  },
+  (table) => [index("auth_rate_limit_buckets_reset_idx").on(table.resetAt)]
+);
+
 export const teams = pgTable(
   "teams",
   {
