@@ -297,6 +297,34 @@ describe("SQL RBAC repository", () => {
       "where tenant_id = $3"
     );
   });
+
+  it("builds tenant-scoped fixed role backfill SQL", async () => {
+    const executor = new RecordingSqlExecutor([]);
+    const repository = createSqlTenantRbacRepository(executor);
+
+    await repository.backfillFixedEmployeeRoles({
+      tenantId,
+      backfilledAt: now
+    });
+
+    const query = renderQuery(executor.queries[0]);
+
+    expect(query.sql).toContain("insert into tenant_roles");
+    expect(query.sql).toContain("insert into tenant_role_permissions");
+    expect(query.sql).toContain("insert into tenant_role_bindings");
+    expect(query.sql).toContain("employee_roles.tenant_id =");
+    expect(query.sql).toContain("employees.deactivated_at is null");
+    expect(query.params).toContain(tenantId);
+    expect(
+      query.params.some((param) => {
+        return (
+          typeof param === "string" &&
+          param.includes('"role":"tenant_admin"') &&
+          param.includes('"permissions"')
+        );
+      })
+    ).toBe(true);
+  });
 });
 
 class RecordingSqlExecutor implements RawSqlExecutor {

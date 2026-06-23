@@ -1,5 +1,5 @@
 import type { PlatformEvent, TenantId } from "@hulee/contracts";
-import { CoreError } from "@hulee/core";
+import { CoreError, permissionsForRoles, type EmployeeRole } from "@hulee/core";
 import type {
   Message,
   MvpTenantWorkspace,
@@ -17,6 +17,9 @@ import {
   eventStore as eventStoreTable,
   messages as messagesTable,
   outbox as outboxTable,
+  tenantRoleBindings as tenantRoleBindingsTable,
+  tenantRolePermissions as tenantRolePermissionsTable,
+  tenantRoles as tenantRolesTable,
   tenantBrandProfiles as tenantBrandProfilesTable,
   tenantEntitlements as tenantEntitlementsTable,
   tenantModules as tenantModulesTable,
@@ -33,6 +36,10 @@ type TenantEntitlementInsert = typeof tenantEntitlementsTable.$inferInsert;
 type AccountInsert = typeof accountsTable.$inferInsert;
 type EmployeeInsert = typeof employeesTable.$inferInsert;
 type EmployeeRoleInsert = typeof employeeRolesTable.$inferInsert;
+type TenantRoleInsert = typeof tenantRolesTable.$inferInsert;
+type TenantRolePermissionInsert =
+  typeof tenantRolePermissionsTable.$inferInsert;
+type TenantRoleBindingInsert = typeof tenantRoleBindingsTable.$inferInsert;
 type ClientInsert = typeof clientsTable.$inferInsert;
 type ConversationInsert = typeof conversationsTable.$inferInsert;
 type ConversationParticipantInsert =
@@ -50,6 +57,9 @@ export type WorkspacePersistenceRows = {
   accounts: AccountInsert[];
   employees: EmployeeInsert[];
   employeeRoles: EmployeeRoleInsert[];
+  tenantRoles: TenantRoleInsert[];
+  tenantRolePermissions: TenantRolePermissionInsert[];
+  tenantRoleBindings: TenantRoleBindingInsert[];
   clients: ClientInsert[];
   conversations: ConversationInsert[];
   conversationParticipants: ConversationParticipantInsert[];
@@ -67,6 +77,9 @@ export type TenantRegistrationPersistenceRows = {
   accounts: AccountInsert[];
   employees: EmployeeInsert[];
   employeeRoles: EmployeeRoleInsert[];
+  tenantRoles: TenantRoleInsert[];
+  tenantRolePermissions: TenantRolePermissionInsert[];
+  tenantRoleBindings: TenantRoleBindingInsert[];
   eventStore: EventStoreInsert[];
   outbox: OutboxInsert[];
 };
@@ -82,6 +95,12 @@ export function mapWorkspaceToPersistenceRows(
 ): WorkspacePersistenceRows {
   const createdAt = parseTimestamp(workspace.tenant.createdAt);
   const adminAccountId = `account:${workspace.admin.id}`;
+  const tenantRbacRows = mapEmployeeRolesToTenantRbacRows({
+    tenantId: workspace.tenant.id,
+    employeeId: workspace.admin.id,
+    roles: workspace.admin.roles,
+    createdAt
+  });
   const rows: WorkspacePersistenceRows = {
     tenants: [
       {
@@ -172,6 +191,9 @@ export function mapWorkspaceToPersistenceRows(
         updatedAt: createdAt
       };
     }),
+    tenantRoles: tenantRbacRows.tenantRoles,
+    tenantRolePermissions: tenantRbacRows.tenantRolePermissions,
+    tenantRoleBindings: tenantRbacRows.tenantRoleBindings,
     clients: [
       {
         id: workspace.client.id,
@@ -224,6 +246,12 @@ export function mapTenantRegistrationToPersistenceRows(input: {
 }): TenantRegistrationPersistenceRows {
   const createdAt = parseTimestamp(input.registration.tenant.createdAt);
   const adminAccountId = `account:${input.registration.admin.id}`;
+  const tenantRbacRows = mapEmployeeRolesToTenantRbacRows({
+    tenantId: input.registration.tenant.id,
+    employeeId: input.registration.admin.id,
+    roles: input.registration.admin.roles,
+    createdAt
+  });
   const rows: TenantRegistrationPersistenceRows = {
     tenants: [
       {
@@ -318,6 +346,9 @@ export function mapTenantRegistrationToPersistenceRows(input: {
         updatedAt: createdAt
       };
     }),
+    tenantRoles: tenantRbacRows.tenantRoles,
+    tenantRolePermissions: tenantRbacRows.tenantRolePermissions,
+    tenantRoleBindings: tenantRbacRows.tenantRoleBindings,
     eventStore: input.registration.events.map(mapEventStoreRow),
     outbox: input.registration.events.map(mapOutboxRow)
   };
@@ -358,6 +389,9 @@ export function collectWorkspaceTenantScopedRows(
     ...rows.accounts.map(requireTenantScope),
     ...rows.employees.map(requireTenantScope),
     ...rows.employeeRoles.map(requireTenantScope),
+    ...rows.tenantRoles.map(requireTenantScope),
+    ...rows.tenantRolePermissions.map(requireTenantScope),
+    ...rows.tenantRoleBindings.map(requireTenantScope),
     ...rows.clients.map(requireTenantScope),
     ...rows.conversations.map(requireTenantScope),
     ...rows.conversationParticipants.map(requireTenantScope),
@@ -378,6 +412,9 @@ export function collectTenantRegistrationTenantScopedRows(
     ...rows.accounts.map(requireTenantScope),
     ...rows.employees.map(requireTenantScope),
     ...rows.employeeRoles.map(requireTenantScope),
+    ...rows.tenantRoles.map(requireTenantScope),
+    ...rows.tenantRolePermissions.map(requireTenantScope),
+    ...rows.tenantRoleBindings.map(requireTenantScope),
     ...rows.eventStore.map(requireTenantScope),
     ...rows.outbox.map(requireTenantScope)
   ];
@@ -438,6 +475,95 @@ function mapOutboxRow(event: PlatformEvent): OutboxInsert {
     createdAt: occurredAt,
     updatedAt: occurredAt
   };
+}
+
+function mapEmployeeRolesToTenantRbacRows(input: {
+  tenantId: TenantId;
+  employeeId: string;
+  roles: readonly EmployeeRole[];
+  createdAt: Date;
+}): {
+  tenantRoles: TenantRoleInsert[];
+  tenantRolePermissions: TenantRolePermissionInsert[];
+  tenantRoleBindings: TenantRoleBindingInsert[];
+} {
+  const roles = uniqueRoles(input.roles);
+
+  return {
+    tenantRoles: roles.map((role) => {
+      return {
+        id: tenantRoleId(input.tenantId, role),
+        tenantId: input.tenantId,
+        name: tenantRoleName(role),
+        description: tenantRoleDescription(role),
+        status: "active",
+        isSystem: true,
+        createdByEmployeeId: null,
+        archivedAt: null,
+        createdAt: input.createdAt,
+        updatedAt: input.createdAt
+      };
+    }),
+    tenantRolePermissions: roles.flatMap((role) => {
+      return permissionsForRoles([role]).map((permission) => {
+        return {
+          tenantId: input.tenantId,
+          roleId: tenantRoleId(input.tenantId, role),
+          permission,
+          createdAt: input.createdAt,
+          updatedAt: input.createdAt
+        };
+      });
+    }),
+    tenantRoleBindings: roles.map((role) => {
+      return {
+        id: tenantRoleBindingId(input.tenantId, input.employeeId, role),
+        tenantId: input.tenantId,
+        roleId: tenantRoleId(input.tenantId, role),
+        subjectType: "employee",
+        subjectId: input.employeeId,
+        scopeType: "tenant",
+        scopeId: null,
+        createdByEmployeeId: null,
+        startsAt: null,
+        expiresAt: null,
+        revokedAt: null,
+        createdAt: input.createdAt,
+        updatedAt: input.createdAt
+      };
+    })
+  };
+}
+
+function uniqueRoles(roles: readonly EmployeeRole[]): readonly EmployeeRole[] {
+  return [...new Set(roles)];
+}
+
+function tenantRoleId(tenantId: TenantId, role: EmployeeRole): string {
+  return `role:${tenantId}:${role}`;
+}
+
+function tenantRoleBindingId(
+  tenantId: TenantId,
+  employeeId: string,
+  role: EmployeeRole
+): string {
+  return `role_binding:${tenantId}:${employeeId}:${role}:tenant`;
+}
+
+function tenantRoleName(role: EmployeeRole): string {
+  switch (role) {
+    case "tenant_admin":
+      return "Tenant admin";
+    case "supervisor":
+      return "Supervisor";
+    case "agent":
+      return "Agent";
+  }
+}
+
+function tenantRoleDescription(role: EmployeeRole): string {
+  return `System compatibility role for ${role}.`;
 }
 
 function requireTenantScope(row: {

@@ -15,6 +15,9 @@ import {
   eventStore,
   messages,
   outbox,
+  tenantRoleBindings,
+  tenantRolePermissions,
+  tenantRoles,
   tenantBrandProfiles,
   tenantEntitlements,
   tenantModules,
@@ -38,6 +41,12 @@ const tableRefs = {
   accounts: tableRef("accounts", accounts),
   employees: tableRef("employees", employees),
   employeeRoles: tableRef("employee_roles", employeeRoles),
+  tenantRoles: tableRef("tenant_roles", tenantRoles),
+  tenantRolePermissions: tableRef(
+    "tenant_role_permissions",
+    tenantRolePermissions
+  ),
+  tenantRoleBindings: tableRef("tenant_role_bindings", tenantRoleBindings),
   clients: tableRef("clients", clients),
   conversations: tableRef("conversations", conversations),
   conversationParticipants: tableRef(
@@ -91,6 +100,19 @@ export function createTenantWorkspaceRepository(
           rows.employeeRoles,
           { onConflict: "fail" }
         );
+        await transaction.insertRows(tableRefs.tenantRoles, rows.tenantRoles, {
+          onConflict: "fail"
+        });
+        await transaction.insertRows(
+          tableRefs.tenantRolePermissions,
+          rows.tenantRolePermissions,
+          { onConflict: "fail" }
+        );
+        await transaction.insertRows(
+          tableRefs.tenantRoleBindings,
+          rows.tenantRoleBindings,
+          { onConflict: "fail" }
+        );
         await transaction.insertRows(tableRefs.eventStore, rows.eventStore, {
           onConflict: "fail"
         });
@@ -126,6 +148,15 @@ export function createTenantWorkspaceRepository(
         await transaction.insertRows(
           tableRefs.employeeRoles,
           rows.employeeRoles
+        );
+        await transaction.insertRows(tableRefs.tenantRoles, rows.tenantRoles);
+        await transaction.insertRows(
+          tableRefs.tenantRolePermissions,
+          rows.tenantRolePermissions
+        );
+        await transaction.insertRows(
+          tableRefs.tenantRoleBindings,
+          rows.tenantRoleBindings
         );
         await transaction.insertRows(tableRefs.clients, rows.clients);
         await transaction.insertRows(

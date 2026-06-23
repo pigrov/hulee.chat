@@ -1,6 +1,7 @@
 import {
   createMvpTenantWorkspace,
   createSequentialIdFactory,
+  permissionCatalog,
   registerTenant,
   sendConversationReply
 } from "@hulee/core";
@@ -81,6 +82,24 @@ describe("tenant workspace repository", () => {
       },
       {
         kind: "insert",
+        tableName: "tenant_roles",
+        rowCount: 1,
+        onConflict: "fail"
+      },
+      {
+        kind: "insert",
+        tableName: "tenant_role_permissions",
+        rowCount: permissionCatalog.length,
+        onConflict: "fail"
+      },
+      {
+        kind: "insert",
+        tableName: "tenant_role_bindings",
+        rowCount: 1,
+        onConflict: "fail"
+      },
+      {
+        kind: "insert",
         tableName: "event_store",
         rowCount: 2,
         onConflict: "fail"
@@ -121,6 +140,9 @@ describe("tenant workspace repository", () => {
         "accounts",
         "employees",
         "employee_roles",
+        "tenant_roles",
+        "tenant_role_permissions",
+        "tenant_role_bindings",
         "clients",
         "conversations",
         "conversation_participants",

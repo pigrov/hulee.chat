@@ -29,6 +29,7 @@ export {
 } from "./sql-tenant-secret-repository";
 export {
   buildAddTenantRolePermissionSql,
+  buildBackfillFixedEmployeeRolesSql,
   buildCreateDirectPermissionGrantSql,
   buildCreateTenantRoleBindingSql,
   buildCreateTenantRoleSql,
@@ -175,6 +176,7 @@ export type {
 } from "./sql-tenant-secret-repository";
 export type {
   AddTenantRolePermissionInput,
+  BackfillFixedEmployeeRolesInput,
   CreateDirectPermissionGrantInput,
   CreateTenantRoleBindingInput,
   CreateTenantRoleInput,

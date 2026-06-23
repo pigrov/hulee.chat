@@ -53,6 +53,39 @@ describe("vertical slice persistence mapper", () => {
       tenantId: registration.tenant.id,
       displayName: "Admin"
     });
+    expect(rows.tenantRoles).toEqual([
+      expect.objectContaining({
+        id: `role:${registration.tenant.id}:tenant_admin`,
+        tenantId: registration.tenant.id,
+        name: "Tenant admin",
+        isSystem: true
+      })
+    ]);
+    expect(rows.tenantRolePermissions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          tenantId: registration.tenant.id,
+          roleId: `role:${registration.tenant.id}:tenant_admin`,
+          permission: "tenant.manage"
+        }),
+        expect.objectContaining({
+          tenantId: registration.tenant.id,
+          roleId: `role:${registration.tenant.id}:tenant_admin`,
+          permission: "message.reply"
+        })
+      ])
+    );
+    expect(rows.tenantRoleBindings).toEqual([
+      expect.objectContaining({
+        id: `role_binding:${registration.tenant.id}:${registration.admin.id}:tenant_admin:tenant`,
+        tenantId: registration.tenant.id,
+        roleId: `role:${registration.tenant.id}:tenant_admin`,
+        subjectType: "employee",
+        subjectId: registration.admin.id,
+        scopeType: "tenant",
+        scopeId: null
+      })
+    ]);
     expect(rows.eventStore.map((row) => row.type)).toEqual([
       "tenant.created",
       "employee.created"
@@ -110,6 +143,15 @@ describe("vertical slice persistence mapper", () => {
       tenantId: workspace.tenant.id,
       email: "admin@example.com"
     });
+    expect(rows.tenantRoles).toHaveLength(1);
+    expect(rows.tenantRolePermissions.length).toBeGreaterThan(5);
+    expect(rows.tenantRoleBindings).toEqual([
+      expect.objectContaining({
+        tenantId: workspace.tenant.id,
+        subjectId: workspace.admin.id,
+        scopeType: "tenant"
+      })
+    ]);
     expect(rows.messages[0]).toMatchObject({
       tenantId: workspace.tenant.id,
       conversationId: workspace.conversation.id,
