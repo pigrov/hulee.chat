@@ -1,6 +1,7 @@
 import type { EmployeeId, EventId, TenantId } from "@hulee/contracts";
 import type { Employee } from "@hulee/core";
 import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
 import type {
@@ -166,6 +167,16 @@ describe("SQL employee directory repository", () => {
             payload: {
               employeeId
             }
+          },
+          {
+            id: "event-3" as EventId,
+            type: "account.email_verified",
+            version: "v1",
+            tenantId,
+            occurredAt: now,
+            payload: {
+              accountId: "account-1"
+            }
           }
         ]
       })
@@ -179,6 +190,17 @@ describe("SQL employee directory repository", () => {
       permissions: expect.arrayContaining(["inbox.read", "message.reply"])
     });
 
+    const acceptQuery = renderQuery(executor.queries[1]);
+
+    expect(acceptQuery.sql).toMatch(/email_verified_at\s*,/);
+    expect(acceptQuery.params).toContainEqual(new Date(now));
+    expect(
+      acceptQuery.params.some((param) => {
+        return (
+          typeof param === "string" && param.includes("account.email_verified")
+        );
+      })
+    ).toBe(true);
     expect(executor.queries).toHaveLength(2);
   });
 
@@ -290,4 +312,15 @@ class RecordingSqlExecutor implements RawSqlExecutor {
       rows: this.rows as readonly Row[]
     };
   }
+}
+
+function renderQuery(query: SQL | undefined): {
+  sql: string;
+  params: unknown[];
+} {
+  if (query === undefined) {
+    throw new Error("Expected a recorded SQL query.");
+  }
+
+  return new PgDialect().sqlToQuery(query);
 }

@@ -1,6 +1,7 @@
 import type { EventId, TenantId } from "@hulee/contracts";
 import type { AuthEmailToken } from "@hulee/core";
 import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
 import type {
@@ -188,6 +189,13 @@ describe("SQL auth email token repository", () => {
       ]
     });
 
+    const verificationQuery = renderQuery(executor.queries[1]);
+    const resetQuery = renderQuery(executor.queries[2]);
+
+    expect(verificationQuery.sql).toMatch(/email_verified_at\s*=\s*coalesce/);
+    expect(resetQuery.sql).toContain("update sessions");
+    expect(resetQuery.sql).toContain("revoked_at");
+    expect(resetQuery.sql).toContain("password_hash");
     expect(executor.queries).toHaveLength(3);
   });
 });
@@ -206,4 +214,15 @@ class RecordingSqlExecutor implements RawSqlExecutor {
       rows: this.rows as readonly Row[]
     };
   }
+}
+
+function renderQuery(query: SQL | undefined): {
+  sql: string;
+  params: unknown[];
+} {
+  if (query === undefined) {
+    throw new Error("Expected a recorded SQL query.");
+  }
+
+  return new PgDialect().sqlToQuery(query);
 }

@@ -4,6 +4,7 @@ import type { EmployeeId } from "@hulee/contracts";
 import {
   acceptEmployeeInvitation,
   changeEmployeeRole,
+  createAccountEmailVerifiedEvent,
   createEmployeeInvitation,
   createSequentialIdFactory,
   deactivateEmployee,
@@ -298,13 +299,23 @@ export async function acceptEmployeeInviteAction(
       displayName,
       idFactory: createSequentialIdFactory(`accept:${randomUUID()}`)
     });
+    const accountId = `account:${accepted.employee.id}`;
+    const events = [
+      ...accepted.events,
+      createAccountEmailVerifiedEvent({
+        now: now.toISOString(),
+        tenantId: accepted.employee.tenantId,
+        accountId,
+        idFactory: createSequentialIdFactory(`accept-email:${randomUUID()}`)
+      })
+    ];
     const passwordHash = await hashLocalPassword(password);
     const tenantAccount = await repository.acceptInvitation({
       tokenHash,
-      accountId: `account:${accepted.employee.id}`,
+      accountId,
       passwordHash,
       employee: accepted.employee,
-      events: accepted.events,
+      events,
       acceptedAt: now
     });
     const session = await createTenantWebSession(tenantAccount);

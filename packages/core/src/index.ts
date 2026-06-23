@@ -2,6 +2,7 @@ export { assertTenantBoundary, createDomainEvent } from "./domain-events";
 export type { TenantScope } from "./domain-events";
 export {
   completeAuthEmailToken,
+  createAccountEmailVerifiedEvent,
   createAuthEmailToken
 } from "./auth-email-tokens";
 export type {
@@ -9,6 +10,7 @@ export type {
   AuthEmailTokenPurpose,
   CompletedAuthEmailToken,
   CompleteAuthEmailTokenInput,
+  CreateAccountEmailVerifiedEventInput,
   CreatedAuthEmailToken,
   CreateAuthEmailTokenInput
 } from "./auth-email-tokens";

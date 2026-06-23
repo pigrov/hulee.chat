@@ -46,6 +46,13 @@ export type CompletedAuthEmailToken = {
   events: readonly PlatformEvent[];
 };
 
+export type CreateAccountEmailVerifiedEventInput = {
+  now: string;
+  tenantId: TenantId;
+  accountId: string;
+  idFactory?: IdFactory;
+};
+
 export function createAuthEmailToken(
   input: CreateAuthEmailTokenInput
 ): CreatedAuthEmailToken {
@@ -98,17 +105,41 @@ export function completeAuthEmailToken(
   return {
     token,
     events: [
-      createDomainEvent({
-        id: ids.eventId(authEmailTokenCompletedEventType(token.purpose)),
-        type: authEmailTokenCompletedEventType(token.purpose),
-        tenantId: input.tenantId,
-        occurredAt: input.now,
-        payload: {
-          accountId: token.accountId
-        }
-      })
+      token.purpose === "email_verification"
+        ? createAccountEmailVerifiedEvent({
+            now: input.now,
+            tenantId: input.tenantId,
+            accountId: token.accountId,
+            idFactory: ids
+          })
+        : createDomainEvent({
+            id: ids.eventId(authEmailTokenCompletedEventType(token.purpose)),
+            type: authEmailTokenCompletedEventType(token.purpose),
+            tenantId: input.tenantId,
+            occurredAt: input.now,
+            payload: {
+              accountId: token.accountId
+            }
+          })
     ]
   };
+}
+
+export function createAccountEmailVerifiedEvent(
+  input: CreateAccountEmailVerifiedEventInput
+): PlatformEvent {
+  const ids = input.idFactory ?? createSequentialIdFactory(input.tenantId);
+  const accountId = requireNonEmpty(input.accountId);
+
+  return createDomainEvent({
+    id: ids.eventId("account.email_verified"),
+    type: "account.email_verified",
+    tenantId: input.tenantId,
+    occurredAt: input.now,
+    payload: {
+      accountId
+    }
+  });
 }
 
 function authEmailTokenRequestedEventType(

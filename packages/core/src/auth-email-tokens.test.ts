@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   completeAuthEmailToken,
   CoreError,
+  createAccountEmailVerifiedEvent,
   createAuthEmailToken,
   createSequentialIdFactory
 } from "./index";
@@ -80,6 +81,23 @@ describe("auth email tokens", () => {
     expect(completed.token.consumedAt).toBe("2026-06-23T10:05:00.000Z");
     expect(completed.events[0]).toMatchObject({
       type: "account.password_reset_completed",
+      payload: {
+        accountId: "account-1"
+      }
+    });
+  });
+
+  it("creates a reusable account email verified event", () => {
+    const event = createAccountEmailVerifiedEvent({
+      now,
+      tenantId,
+      accountId: "account-1",
+      idFactory: createSequentialIdFactory("account-verified")
+    });
+
+    expect(event).toMatchObject({
+      tenantId,
+      type: "account.email_verified",
       payload: {
         accountId: "account-1"
       }
