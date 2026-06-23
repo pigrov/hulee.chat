@@ -50,6 +50,10 @@ export {
   hashTenantApiKey
 } from "./sql-public-api-access";
 export {
+  buildInsertSecurityAuditLogSql,
+  createSqlSecurityAuditRepository
+} from "./sql-security-audit-repository";
+export {
   buildCompleteEmailVerificationSql,
   buildCompletePasswordResetSql,
   buildCreateAuthEmailTokenSql,
@@ -163,6 +167,11 @@ export type {
   TenantApiKeyAuthenticator,
   TenantApiKeyWriter
 } from "./sql-public-api-access";
+export type {
+  SecurityAuditAction,
+  SecurityAuditRecord,
+  SecurityAuditRepository
+} from "./sql-security-audit-repository";
 export type {
   AuthEmailTokenPreview,
   AuthEmailTokenRepository,

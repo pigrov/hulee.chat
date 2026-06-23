@@ -337,7 +337,9 @@ export async function acceptEmployeeInviteAction(
       events,
       acceptedAt: now
     });
-    const session = await createTenantWebSession(tenantAccount);
+    const session = await createTenantWebSession(tenantAccount, {
+      auditAction: "auth.invite.accepted"
+    });
 
     destination = session.redirectPath;
   } catch {

@@ -2,11 +2,13 @@ import type { EmployeeId } from "@hulee/contracts";
 import {
   createDrizzlePersistenceExecutor,
   createHuleeDatabase,
+  createSqlSecurityAuditRepository,
   createSqlLocalAuthRepository,
   createTenantWorkspaceRepository,
   type AuthSessionPrincipal,
   type HuleeDatabase,
   type LocalAuthRepository,
+  type SecurityAuditAction,
   type TenantAuthAccount
 } from "@hulee/db";
 import {
@@ -260,6 +262,7 @@ export async function loginLocalWebSession(
   return createStoredWebSession({
     repository,
     tenantAccount: validTenantAccounts[0],
+    auditAction: "auth.login.succeeded",
     platformAdmin:
       platformPasswordValid && platformAdmin
         ? {
@@ -302,6 +305,7 @@ export async function registerLocalTenant(
 
   return createStoredWebSession({
     repository,
+    auditAction: "auth.registration.completed",
     tenantAccount: {
       tenantId: registration.tenant.id,
       tenantSlug: registration.tenant.slug,
@@ -319,10 +323,12 @@ export async function registerLocalTenant(
 }
 
 export async function createTenantWebSession(
-  tenantAccount: TenantAuthAccount
+  tenantAccount: TenantAuthAccount,
+  options: { auditAction?: SecurityAuditAction } = {}
 ): Promise<LoginLocalWebSessionResult> {
   return createStoredWebSession({
     repository: getAuthRepository(),
+    auditAction: options.auditAction ?? "auth.login.succeeded",
     tenantAccount
   });
 }
@@ -396,11 +402,14 @@ export async function completeTenantLoginChoice(
 
   await clearTenantLoginChoices();
 
-  return createTenantWebSession(tenantAccount);
+  return createTenantWebSession(tenantAccount, {
+    auditAction: "auth.login.tenant_selected"
+  });
 }
 
 async function createStoredWebSession(input: {
   repository: LocalAuthRepository;
+  auditAction?: SecurityAuditAction;
   tenantAccount?: TenantAuthAccount;
   platformAdmin?: NonNullable<AuthSessionPrincipal["platformAdmin"]>;
   platformAdminAccountId?: string;
@@ -408,9 +417,10 @@ async function createStoredWebSession(input: {
   const now = new Date();
   const expiresAt = new Date(now.getTime() + sessionTtlMs);
   const token = randomBytes(32).toString("base64url");
+  const sessionId = `session:${randomUUID()}`;
 
   await input.repository.createSession({
-    id: `session:${randomUUID()}`,
+    id: sessionId,
     token,
     tenantId: input.tenantAccount?.tenantId,
     employeeId: input.tenantAccount?.employeeId,
@@ -418,13 +428,21 @@ async function createStoredWebSession(input: {
     expiresAt,
     createdAt: now
   });
+  if (input.tenantAccount !== undefined) {
+    await recordTenantAuthAudit({
+      sessionId,
+      action: input.auditAction ?? "auth.login.succeeded",
+      tenantAccount: input.tenantAccount,
+      occurredAt: now
+    });
+  }
   await writeSessionToken(token, expiresAt);
   if (input.tenantAccount !== undefined) {
     await writeLastTenantSlug(input.tenantAccount.tenantSlug, now);
   }
 
   const session = webAccessSessionFromPrincipal({
-    sessionId: "new-session",
+    sessionId,
     expiresAt,
     tenantAccount: input.tenantAccount,
     platformAdmin: input.platformAdmin
@@ -441,9 +459,28 @@ async function createStoredWebSession(input: {
 
 export async function logoutCurrentWebSession(): Promise<void> {
   const token = await readSessionToken();
+  const repository = getAuthRepository();
+  const now = new Date();
+  const principal =
+    token === undefined
+      ? null
+      : await repository.findSessionByToken(token, now);
 
   if (token !== undefined) {
-    await getAuthRepository().revokeSession(token, new Date());
+    await repository.revokeSession(token, now);
+  }
+
+  if (principal?.tenantAccount !== undefined) {
+    try {
+      await recordTenantAuthAudit({
+        sessionId: principal.sessionId,
+        action: "auth.logout.succeeded",
+        tenantAccount: principal.tenantAccount,
+        occurredAt: now
+      });
+    } catch {
+      // Logout must clear the browser session even if the audit sink is unavailable.
+    }
   }
 
   const cookieStore = await cookies();
@@ -485,6 +522,27 @@ function webAccessSessionFromPrincipal(
 
 function getAuthRepository(): LocalAuthRepository {
   return createSqlLocalAuthRepository(getWebDatabase());
+}
+
+async function recordTenantAuthAudit(input: {
+  sessionId: string;
+  action: SecurityAuditAction;
+  tenantAccount: TenantAuthAccount;
+  occurredAt: Date;
+}): Promise<void> {
+  await createSqlSecurityAuditRepository(getWebDatabase()).record({
+    id: `audit:${input.sessionId}:${input.action}`,
+    tenantId: input.tenantAccount.tenantId,
+    actorEmployeeId: input.tenantAccount.employeeId,
+    action: input.action,
+    entityType: "session",
+    entityId: input.sessionId,
+    metadata: {
+      accountId: input.tenantAccount.accountId,
+      surface: "web"
+    },
+    occurredAt: input.occurredAt
+  });
 }
 
 export function getWebDatabase(): HuleeDatabase {
