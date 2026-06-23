@@ -512,6 +512,10 @@ button.iconButton:disabled {
   padding: 0 10px;
 }
 
+a.secondaryButton {
+  text-decoration: none;
+}
+
 .dangerButton {
   display: inline-flex;
   min-height: 36px;
@@ -690,6 +694,42 @@ button.iconButton:disabled {
 
 .adminOverviewCard {
   min-height: 104px;
+}
+
+.roleDefinitionRow {
+  display: grid;
+  grid-template-columns: auto minmax(160px, 1fr) auto minmax(240px, 2fr);
+  align-items: center;
+}
+
+.roleCatalogRow {
+  align-items: flex-start;
+}
+
+.roleDefinitionMeta,
+.rolePermissionDomains,
+.permissionCodeList {
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+.permissionCodeList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.permissionCode {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  padding: 3px 7px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-default);
+  color: var(--hulee-color-text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .brandPresetGrid {
@@ -1036,6 +1076,7 @@ button.managementRow:focus-visible {
   .adminGrid,
   .adminIntegrationGrid,
   .adminOverviewGrid,
+  .roleDefinitionRow,
   .brandPresetGrid,
   .brandColorGrid,
   .platformMetricGrid,

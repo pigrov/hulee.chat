@@ -1,5 +1,6 @@
 import type { createTranslator } from "@hulee/i18n";
 import {
+  KeyRound,
   LayoutDashboard,
   Palette,
   Plug,
@@ -164,6 +165,8 @@ function TenantAdminSectionIcon({
   switch (sectionId) {
     case "employees":
       return <Users size={18} aria-hidden="true" />;
+    case "roles":
+      return <KeyRound size={18} aria-hidden="true" />;
     case "integrations":
       return <Plug size={18} aria-hidden="true" />;
     case "branding":

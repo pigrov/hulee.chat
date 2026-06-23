@@ -1,5 +1,6 @@
 import { createTranslator, type I18nMessageKey } from "@hulee/i18n";
-import { Ban, Mail, RotateCw, Save, UserPlus, XCircle } from "lucide-react";
+import { Ban, KeyRound, Mail, RotateCw, UserPlus, XCircle } from "lucide-react";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 import { createSqlEmployeeDirectoryRepository } from "@hulee/db";
@@ -14,8 +15,7 @@ import {
   deactivateEmployeeAction,
   inviteEmployeeAction,
   resendEmployeeInviteAction,
-  revokeEmployeeInviteAction,
-  updateEmployeeRoleAction
+  revokeEmployeeInviteAction
 } from "../../../src/employee-actions";
 import { resolvePublicBaseUrl } from "../../../src/email";
 import { formatDateTime } from "../../../src/formatting";
@@ -62,6 +62,7 @@ export default async function EmployeesAdminPage({
       searchParams
     ]);
   const { t, locale } = createTranslator(model.tenant.locale);
+  const canManageRoles = canTenantPermission(access, "roles.manage");
   const inviteToken = resolvedSearchParams?.inviteToken;
   const manualInviteUrl = inviteToken
     ? new URL(`/invite/${inviteToken}`, resolvePublicBaseUrl()).href
@@ -148,7 +149,9 @@ export default async function EmployeesAdminPage({
               />
             </label>
             <label className="fieldStack">
-              <span className="detailLabel">{t("admin.employees.role")}</span>
+              <span className="detailLabel">
+                {t("admin.employees.accessTemplate")}
+              </span>
               <select
                 className="selectInput"
                 name="role"
@@ -163,6 +166,9 @@ export default async function EmployeesAdminPage({
                   {t("admin.employees.role.tenantAdmin")}
                 </option>
               </select>
+              <span className="metaText">
+                {t("admin.employees.inviteAccessTemplateDescription")}
+              </span>
             </label>
             {resolvedSearchParams?.inviteStatus === "invalid" ? (
               <p className="formError">{t("admin.employees.inviteInvalid")}</p>
@@ -206,49 +212,23 @@ export default async function EmployeesAdminPage({
                     </span>
                   </div>
                   <div className="rowActions">
-                    {employee.deactivatedAt ? (
+                    <div className="detailItem">
+                      <span className="detailLabel">
+                        {t("admin.employees.accessTemplate")}
+                      </span>
                       <span className="badge">
+                        <KeyRound size={14} aria-hidden="true" />
                         {employee.roles
                           .map((role) => t(roleLabelKey(role)))
                           .join(", ")}
                       </span>
-                    ) : (
-                      <form
-                        className="inlineForm"
-                        action={updateEmployeeRoleAction}
-                      >
-                        <input
-                          name="employeeId"
-                          type="hidden"
-                          value={employee.employeeId}
-                        />
-                        <select
-                          className="selectInput compactSelect"
-                          name="role"
-                          defaultValue={employee.roles[0] ?? "agent"}
-                          aria-label={t("admin.employees.role")}
-                          disabled={employee.employeeId === access.employeeId}
-                        >
-                          <option value="agent">
-                            {t("admin.employees.role.agent")}
-                          </option>
-                          <option value="supervisor">
-                            {t("admin.employees.role.supervisor")}
-                          </option>
-                          <option value="tenant_admin">
-                            {t("admin.employees.role.tenantAdmin")}
-                          </option>
-                        </select>
-                        <button
-                          className="secondaryButton"
-                          type="submit"
-                          disabled={employee.employeeId === access.employeeId}
-                        >
-                          <Save size={14} aria-hidden="true" />
-                          {t("common.save")}
-                        </button>
-                      </form>
-                    )}
+                    </div>
+                    {canManageRoles ? (
+                      <Link className="secondaryButton" href="/admin/roles">
+                        <KeyRound size={14} aria-hidden="true" />
+                        {t("admin.employees.openRoles")}
+                      </Link>
+                    ) : null}
                     {!employee.deactivatedAt &&
                     employee.employeeId !== access.employeeId ? (
                       <form

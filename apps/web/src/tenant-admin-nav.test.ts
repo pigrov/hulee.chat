@@ -9,17 +9,22 @@ describe("tenant admin navigation", () => {
   it("shows every tenant admin section for tenant admins", () => {
     expect(
       getVisibleTenantAdminSections(
-        session(["tenant.manage", "employees.manage", "modules.manage"])
+        session([
+          "tenant.manage",
+          "employees.manage",
+          "roles.manage",
+          "modules.manage"
+        ])
       ).map((section) => section.id)
-    ).toEqual(["employees", "integrations", "branding"]);
+    ).toEqual(["employees", "roles", "integrations", "branding"]);
   });
 
   it("filters navigation sections by permissions", () => {
     expect(
-      getVisibleTenantAdminSections(session(["modules.manage"])).map(
-        (section) => section.id
-      )
-    ).toEqual(["integrations"]);
+      getVisibleTenantAdminSections(
+        session(["roles.manage", "modules.manage"])
+      ).map((section) => section.id)
+    ).toEqual(["roles", "integrations"]);
   });
 
   it("hides tenant admin navigation for regular agents", () => {
