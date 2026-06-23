@@ -2,10 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import { CoreError } from "./errors";
 import {
+  allowedScopesForPermission,
   assertEmployeeCan,
+  assertPermissionScopeAllowed,
+  getPermissionDefinition,
   hasPermission,
   isEmployeeRole,
   isPermission,
+  isPermissionScope,
+  isPermissionScopeAllowed,
+  isPermissionScopeType,
+  permissionCatalog,
   permissionsForRoles,
   type Employee
 } from "./permissions";
@@ -21,23 +28,15 @@ const employee: Employee = {
 
 describe("permissions", () => {
   it("maps tenant admin roles to tenant management permissions", () => {
-    expect(permissionsForRoles(["tenant_admin"])).toEqual([
-      "tenant.manage",
-      "employees.manage",
-      "modules.manage",
-      "inbox.read",
-      "message.reply"
-    ]);
+    expect(permissionsForRoles(["tenant_admin"])).toEqual(
+      permissionCatalog.map(({ id }) => id)
+    );
   });
 
   it("deduplicates permissions from multiple roles", () => {
-    expect(permissionsForRoles(["tenant_admin", "agent"])).toEqual([
-      "tenant.manage",
-      "employees.manage",
-      "modules.manage",
-      "inbox.read",
-      "message.reply"
-    ]);
+    expect(permissionsForRoles(["tenant_admin", "agent"])).toEqual(
+      permissionCatalog.map(({ id }) => id)
+    );
   });
 
   it("checks employee permissions through roles", () => {
@@ -52,6 +51,37 @@ describe("permissions", () => {
     expect(isEmployeeRole("tenant_admin")).toBe(true);
     expect(isEmployeeRole("platform_admin")).toBe(false);
     expect(isPermission("modules.manage")).toBe(true);
+    expect(isPermission("roles.manage")).toBe(true);
     expect(isPermission("platform.admin")).toBe(false);
+  });
+
+  it("keeps permission catalog ids unique", () => {
+    const ids = permissionCatalog.map(({ id }) => id);
+
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("describes allowed permission scopes", () => {
+    expect(getPermissionDefinition("message.reply")).toMatchObject({
+      domain: "messages"
+    });
+    expect(allowedScopesForPermission("message.reply")).toContain("assigned");
+    expect(isPermissionScopeAllowed("message.reply", "conversation")).toBe(
+      true
+    );
+    expect(isPermissionScopeAllowed("roles.manage", "queue")).toBe(false);
+    expect(() => assertPermissionScopeAllowed("roles.manage", "queue")).toThrow(
+      new CoreError("validation.failed")
+    );
+  });
+
+  it("validates permission scope references", () => {
+    expect(isPermissionScopeType("queue")).toBe(true);
+    expect(isPermissionScopeType("provider")).toBe(false);
+    expect(isPermissionScope({ type: "tenant" })).toBe(true);
+    expect(isPermissionScope({ type: "tenant", id: "tenant-1" })).toBe(false);
+    expect(isPermissionScope({ type: "queue", id: "queue-1" })).toBe(true);
+    expect(isPermissionScope({ type: "queue" })).toBe(false);
+    expect(isPermissionScope({ type: "queue", id: "   " })).toBe(false);
   });
 });

@@ -52,13 +52,29 @@ export type {
   InternalApiSignatureVerificationInput
 } from "./internal-api-signing";
 export {
+  allowedScopesForPermission,
   assertEmployeeCan,
+  assertPermissionScopeAllowed,
+  getPermissionDefinition,
   hasPermission,
   isEmployeeRole,
   isPermission,
+  isPermissionScope,
+  isPermissionScopeAllowed,
+  isPermissionScopeType,
+  permissionCatalog,
+  permissionScopeTypes,
   permissionsForRoles
 } from "./permissions";
-export type { Employee, EmployeeRole, Permission } from "./permissions";
+export type {
+  Employee,
+  EmployeeRole,
+  Permission,
+  PermissionDefinition,
+  PermissionDomain,
+  PermissionScope,
+  PermissionScopeType
+} from "./permissions";
 export { createExternalChannelCommandService } from "./external-channel-command-service";
 export type {
   ExternalChannelCommandContext,
