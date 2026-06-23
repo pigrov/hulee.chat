@@ -72,8 +72,11 @@ export type {
   InternalApiSignatureVerificationInput
 } from "./internal-api-signing";
 export {
+  allowedScopeTypesForPermissions,
   allowedScopesForPermission,
+  arePermissionsAllowedForScope,
   assertEmployeeCan,
+  assertPermissionsAllowedForScope,
   assertPermissionScopeAllowed,
   getPermissionDefinition,
   hasPermission,
@@ -82,7 +85,9 @@ export {
   isPermissionScope,
   isPermissionScopeAllowed,
   isPermissionScopeType,
+  normalizePermissionScope,
   permissionCatalog,
+  permissionScopeRequiresReference,
   permissionScopeTypes,
   permissionsForRoles
 } from "./permissions";

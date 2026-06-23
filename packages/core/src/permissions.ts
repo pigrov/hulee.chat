@@ -379,11 +379,34 @@ export function allowedScopesForPermission(
   return getPermissionDefinition(permission).allowedScopes;
 }
 
+export function allowedScopeTypesForPermissions(
+  permissions: readonly Permission[]
+): readonly PermissionScopeType[] {
+  if (permissions.length === 0) {
+    return [];
+  }
+
+  return permissionScopeTypes.filter((scopeType) =>
+    permissions.every((permission) =>
+      isPermissionScopeAllowed(permission, scopeType)
+    )
+  );
+}
+
 export function isPermissionScopeAllowed(
   permission: Permission,
   scopeType: PermissionScopeType
 ): boolean {
   return allowedScopesForPermission(permission).includes(scopeType);
+}
+
+export function arePermissionsAllowedForScope(
+  permissions: readonly Permission[],
+  scopeType: PermissionScopeType
+): boolean {
+  return permissions.every((permission) =>
+    isPermissionScopeAllowed(permission, scopeType)
+  );
 }
 
 export function assertPermissionScopeAllowed(
@@ -393,6 +416,54 @@ export function assertPermissionScopeAllowed(
   if (!isPermissionScopeAllowed(permission, scopeType)) {
     throw new CoreError("validation.failed");
   }
+}
+
+export function assertPermissionsAllowedForScope(
+  permissions: readonly Permission[],
+  scopeType: PermissionScopeType
+): void {
+  if (
+    permissions.length === 0 ||
+    !arePermissionsAllowedForScope(permissions, scopeType)
+  ) {
+    throw new CoreError("validation.failed");
+  }
+}
+
+export function permissionScopeRequiresReference(
+  scopeType: PermissionScopeType
+): boolean {
+  return !isScopeTypeWithoutReference(scopeType);
+}
+
+export function normalizePermissionScope(input: {
+  readonly type: string;
+  readonly id?: string | null;
+}): PermissionScope {
+  if (!isPermissionScopeType(input.type)) {
+    throw new CoreError("validation.failed");
+  }
+
+  const normalizedId = input.id?.trim() ?? "";
+
+  if (isScopeTypeWithoutReference(input.type)) {
+    if (normalizedId.length > 0) {
+      throw new CoreError("validation.failed");
+    }
+
+    return {
+      type: input.type
+    };
+  }
+
+  if (normalizedId.length === 0) {
+    throw new CoreError("validation.failed");
+  }
+
+  return {
+    type: input.type,
+    id: normalizedId
+  };
 }
 
 export function permissionsForRoles(

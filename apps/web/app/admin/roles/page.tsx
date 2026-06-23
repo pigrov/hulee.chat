@@ -46,6 +46,11 @@ import {
   getWebDatabase,
   resolveCurrentWebAccessSession
 } from "../../../src/session";
+import { allowedRoleBindingScopeTypesForPermissions } from "../../../src/rbac-scope";
+import {
+  RoleAssignmentFields,
+  type ScopePickerMessages
+} from "../../../src/rbac-scope-picker";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
 
 export const dynamic = "force-dynamic";
@@ -114,6 +119,17 @@ export default async function RolesAdminPage({
   const activeEmployees = employees.filter(
     (employee) => employee.deactivatedAt === null
   );
+  const roleAssignmentOptions = activeRoles.map((role) => ({
+    id: role.id,
+    label: roleName(role, t),
+    allowedScopeTypes: allowedRoleBindingScopeTypesForPermissions(
+      role.permissions
+    )
+  }));
+  const employeeOptions = activeEmployees.map((employee) => ({
+    value: employee.employeeId,
+    label: employee.displayName
+  }));
   const roleBindingsByRoleId = countBindingsByRoleId(roleBindings);
 
   return (
@@ -202,33 +218,17 @@ export default async function RolesAdminPage({
             className="settingsForm roleAssignForm"
             action={assignTenantRoleAction}
           >
-            <label className="fieldStack">
-              <span className="detailLabel">{t("admin.roles.employee")}</span>
-              <select className="selectInput" name="employeeId" required>
-                <option value="">{t("admin.roles.selectEmployee")}</option>
-                {activeEmployees.map((employee) => (
-                  <option key={employee.employeeId} value={employee.employeeId}>
-                    {employee.displayName}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="fieldStack">
-              <span className="detailLabel">{t("admin.roles.role")}</span>
-              <select className="selectInput" name="roleId" required>
-                <option value="">{t("admin.roles.selectRole")}</option>
-                {activeRoles.map((role) => (
-                  <option key={role.id} value={role.id}>
-                    {roleName(role, t)}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <RoleAssignmentFields
+              employees={employeeOptions}
+              messages={scopePickerMessages(t)}
+              roles={roleAssignmentOptions}
+            />
             <button
               className="primaryButton"
               type="submit"
               disabled={
-                activeEmployees.length === 0 || activeRoles.length === 0
+                employeeOptions.length === 0 ||
+                roleAssignmentOptions.length === 0
               }
             >
               <Plus size={18} aria-hidden="true" />
@@ -630,13 +630,39 @@ function scopeValue(scope: PermissionScope, t: Translator): string {
     return t("admin.roles.scope.tenant");
   }
 
-  return "id" in scope ? `${scope.type}:${scope.id}` : scope.type;
+  return "id" in scope
+    ? `${t(permissionScopeTypeKey(scope.type))}:${scope.id}`
+    : t(permissionScopeTypeKey(scope.type));
 }
 
 function allowedScopesText(permission: Permission, t: Translator): string {
   return getPermissionDefinition(permission)
     .allowedScopes.map((scopeType) => t(permissionScopeTypeKey(scopeType)))
     .join(", ");
+}
+
+function scopePickerMessages(t: Translator): ScopePickerMessages {
+  return {
+    employee: t("admin.roles.employee"),
+    role: t("admin.roles.role"),
+    scopeType: t("admin.roles.scopeType"),
+    scopeReference: t("admin.roles.scopeReference"),
+    scopeReferenceDescription: t("admin.roles.scopeReference.description"),
+    scopeReferencePlaceholder: t("admin.roles.scopeReference.placeholder"),
+    scopeUnavailable: t("admin.roles.scopeUnavailable"),
+    selectEmployee: t("admin.roles.selectEmployee"),
+    selectRole: t("admin.roles.selectRole"),
+    scopeLabels: {
+      tenant: t("admin.roles.scope.tenant"),
+      org_unit: t("admin.roles.scope.orgUnit"),
+      team: t("admin.roles.scope.team"),
+      queue: t("admin.roles.scope.queue"),
+      assigned: t("admin.roles.scope.assigned"),
+      own: t("admin.roles.scope.own"),
+      client: t("admin.roles.scope.client"),
+      conversation: t("admin.roles.scope.conversation")
+    }
+  };
 }
 
 function summarizeRoleDomains(

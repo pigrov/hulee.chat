@@ -709,8 +709,17 @@ a.secondaryButton {
 }
 
 .roleAssignForm {
-  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
+  grid-template-columns:
+    minmax(160px, 1fr) minmax(160px, 1fr) minmax(260px, 2fr)
+    auto;
   align-items: end;
+}
+
+.scopePickerGrid {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) minmax(180px, 1.4fr);
+  gap: var(--hulee-space-block);
+  align-items: start;
 }
 
 .roleEditorGrid {
@@ -1169,6 +1178,7 @@ button.managementRow:focus-visible {
   .roleDefinitionRow,
   .roleBindingRow,
   .roleAssignForm,
+  .scopePickerGrid,
   .roleEditorGrid,
   .permissionEditorGrid,
   .brandPresetGrid,

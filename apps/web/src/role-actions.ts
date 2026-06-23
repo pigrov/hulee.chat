@@ -2,7 +2,10 @@
 
 import type { EmployeeId } from "@hulee/contracts";
 import {
+  assertPermissionsAllowedForScope,
+  normalizePermissionScope,
   prepareCustomTenantRole,
+  type PermissionScope,
   type PermissionRoleBinding,
   type PreparedCustomTenantRole
 } from "@hulee/core";
@@ -197,6 +200,10 @@ export async function assignTenantRoleAction(
     "employeeId"
   ) as EmployeeId;
   const roleId = readRequiredFormString(formData, "roleId");
+  const scope = normalizePermissionScope({
+    type: readRequiredFormString(formData, "scopeType"),
+    id: readOptionalFormString(formData, "scopeId")
+  });
   const now = new Date();
   const rbacRepository = createSqlTenantRbacRepository(getWebDatabase());
   const employeeRepository =
@@ -221,7 +228,7 @@ export async function assignTenantRoleAction(
         binding.roleId === roleId &&
         binding.subject.type === "employee" &&
         binding.subject.id === employeeId &&
-        binding.scope.type === "tenant"
+        areScopesEqual(binding.scope, scope)
       );
     });
 
@@ -233,6 +240,8 @@ export async function assignTenantRoleAction(
       throw new Error("Employee is not assignable.");
     }
 
+    assertPermissionsAllowedForScope(role.permissions, scope.type);
+
     if (existingBinding === undefined) {
       await rbacRepository.createRoleBinding({
         id: `role_binding:${session.tenantId}:${employeeId}:${randomUUID()}`,
@@ -242,9 +251,7 @@ export async function assignTenantRoleAction(
           type: "employee",
           id: employeeId
         },
-        scope: {
-          type: "tenant"
-        },
+        scope,
         createdByEmployeeId: session.employeeId,
         createdAt: now
       });
@@ -368,6 +375,21 @@ function isRoleAssignedToEmployee(
       binding.subject.id === employeeId
     );
   });
+}
+
+function areScopesEqual(
+  left: PermissionScope,
+  right: PermissionScope
+): boolean {
+  if (left.type !== right.type) {
+    return false;
+  }
+
+  return scopeId(left) === scopeId(right);
+}
+
+function scopeId(scope: PermissionScope): string | undefined {
+  return "id" in scope ? scope.id : undefined;
 }
 
 function readRequiredFormString(formData: FormData, name: string): string {

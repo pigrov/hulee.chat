@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import { CoreError } from "./errors";
 import {
+  allowedScopeTypesForPermissions,
   allowedScopesForPermission,
+  assertPermissionsAllowedForScope,
   assertEmployeeCan,
   assertPermissionScopeAllowed,
   getPermissionDefinition,
@@ -12,7 +14,9 @@ import {
   isPermissionScope,
   isPermissionScopeAllowed,
   isPermissionScopeType,
+  normalizePermissionScope,
   permissionCatalog,
+  permissionScopeRequiresReference,
   permissionsForRoles,
   type Employee
 } from "./permissions";
@@ -73,6 +77,15 @@ describe("permissions", () => {
     expect(() => assertPermissionScopeAllowed("roles.manage", "queue")).toThrow(
       new CoreError("validation.failed")
     );
+    expect(
+      allowedScopeTypesForPermissions(["message.reply", "client.view"])
+    ).toEqual(["tenant", "org_unit", "team", "queue", "assigned", "client"]);
+    expect(allowedScopeTypesForPermissions(["roles.manage"])).toEqual([
+      "tenant"
+    ]);
+    expect(() =>
+      assertPermissionsAllowedForScope(["roles.manage"], "queue")
+    ).toThrow(new CoreError("validation.failed"));
   });
 
   it("validates permission scope references", () => {
@@ -83,5 +96,22 @@ describe("permissions", () => {
     expect(isPermissionScope({ type: "queue", id: "queue-1" })).toBe(true);
     expect(isPermissionScope({ type: "queue" })).toBe(false);
     expect(isPermissionScope({ type: "queue", id: "   " })).toBe(false);
+    expect(permissionScopeRequiresReference("queue")).toBe(true);
+    expect(permissionScopeRequiresReference("assigned")).toBe(false);
+    expect(
+      normalizePermissionScope({ type: "queue", id: " queue-1 " })
+    ).toEqual({
+      type: "queue",
+      id: "queue-1"
+    });
+    expect(normalizePermissionScope({ type: "assigned" })).toEqual({
+      type: "assigned"
+    });
+    expect(() =>
+      normalizePermissionScope({ type: "assigned", id: "employee-1" })
+    ).toThrow(new CoreError("validation.failed"));
+    expect(() => normalizePermissionScope({ type: "queue" })).toThrow(
+      new CoreError("validation.failed")
+    );
   });
 });
