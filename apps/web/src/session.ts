@@ -1,11 +1,13 @@
 import type { EmployeeId } from "@hulee/contracts";
 import {
   createDrizzlePersistenceExecutor,
+  createSqlPlatformAuditRepository,
   createSqlSecurityAuditRepository,
   createSqlLocalAuthRepository,
   createTenantWorkspaceRepository,
   type AuthSessionPrincipal,
   type LocalAuthRepository,
+  type PlatformAuditAction,
   type SecurityAuditAction,
   type TenantAuthAccount
 } from "@hulee/db";
@@ -261,6 +263,7 @@ export async function loginLocalWebSession(
     repository,
     tenantAccount: validTenantAccounts[0],
     auditAction: "auth.login.succeeded",
+    platformAuditAction: "platform.auth.login.succeeded",
     platformAdmin:
       platformPasswordValid && platformAdmin
         ? {
@@ -408,6 +411,7 @@ export async function completeTenantLoginChoice(
 async function createStoredWebSession(input: {
   repository: LocalAuthRepository;
   auditAction?: SecurityAuditAction;
+  platformAuditAction?: PlatformAuditAction;
   tenantAccount?: TenantAuthAccount;
   platformAdmin?: NonNullable<AuthSessionPrincipal["platformAdmin"]>;
   platformAdminAccountId?: string;
@@ -431,6 +435,17 @@ async function createStoredWebSession(input: {
       sessionId,
       action: input.auditAction ?? "auth.login.succeeded",
       tenantAccount: input.tenantAccount,
+      occurredAt: now
+    });
+  }
+  if (
+    input.platformAdmin !== undefined &&
+    input.platformAdminAccountId !== undefined
+  ) {
+    await recordPlatformAuthAudit({
+      sessionId,
+      action: input.platformAuditAction ?? "platform.auth.login.succeeded",
+      platformAdminAccountId: input.platformAdminAccountId,
       occurredAt: now
     });
   }
@@ -474,6 +489,18 @@ export async function logoutCurrentWebSession(): Promise<void> {
         sessionId: principal.sessionId,
         action: "auth.logout.succeeded",
         tenantAccount: principal.tenantAccount,
+        occurredAt: now
+      });
+    } catch {
+      // Logout must clear the browser session even if the audit sink is unavailable.
+    }
+  }
+  if (principal?.platformAdmin !== undefined) {
+    try {
+      await recordPlatformAuthAudit({
+        sessionId: principal.sessionId,
+        action: "platform.auth.logout.succeeded",
+        platformAdminAccountId: principal.platformAdmin.id,
         occurredAt: now
       });
     } catch {
@@ -537,6 +564,25 @@ async function recordTenantAuthAudit(input: {
     entityId: input.sessionId,
     metadata: {
       accountId: input.tenantAccount.accountId,
+      surface: "web"
+    },
+    occurredAt: input.occurredAt
+  });
+}
+
+async function recordPlatformAuthAudit(input: {
+  sessionId: string;
+  action: PlatformAuditAction;
+  platformAdminAccountId: string;
+  occurredAt: Date;
+}): Promise<void> {
+  await createSqlPlatformAuditRepository(getWebDatabase()).record({
+    id: `platform-audit:${input.sessionId}:${input.action}`,
+    actorPlatformAdminAccountId: input.platformAdminAccountId,
+    action: input.action,
+    entityType: "session",
+    entityId: input.sessionId,
+    metadata: {
       surface: "web"
     },
     occurredAt: input.occurredAt

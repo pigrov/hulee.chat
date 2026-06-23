@@ -50,6 +50,10 @@ export {
   hashTenantApiKey
 } from "./sql-public-api-access";
 export {
+  buildInsertPlatformAuditLogSql,
+  createSqlPlatformAuditRepository
+} from "./sql-platform-audit-repository";
+export {
   buildInsertSecurityAuditLogSql,
   createSqlSecurityAuditRepository
 } from "./sql-security-audit-repository";
@@ -171,6 +175,11 @@ export type {
   TenantApiKeyAuthenticator,
   TenantApiKeyWriter
 } from "./sql-public-api-access";
+export type {
+  PlatformAuditAction,
+  PlatformAuditRecord,
+  PlatformAuditRepository
+} from "./sql-platform-audit-repository";
 export type {
   SecurityAuditAction,
   SecurityAuditRecord,

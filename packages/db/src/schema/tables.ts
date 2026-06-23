@@ -98,6 +98,28 @@ export const platformAdminAccounts = pgTable(
   ]
 );
 
+export const platformAuditLog = pgTable(
+  "platform_audit_log",
+  {
+    id: text("id").primaryKey(),
+    actorPlatformAdminAccountId: text(
+      "actor_platform_admin_account_id"
+    ).references(() => platformAdminAccounts.id),
+    action: text("action").notNull(),
+    entityType: text("entity_type").notNull(),
+    entityId: text("entity_id").notNull(),
+    metadata: jsonb("metadata").notNull().default({}),
+    ...timestamps
+  },
+  (table) => [
+    index("platform_audit_log_actor_idx").on(
+      table.actorPlatformAdminAccountId,
+      table.createdAt
+    ),
+    index("platform_audit_log_entity_idx").on(table.entityType, table.entityId)
+  ]
+);
+
 export const moduleCatalog = pgTable(
   "module_catalog",
   {

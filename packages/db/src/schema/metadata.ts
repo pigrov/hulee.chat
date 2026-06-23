@@ -10,6 +10,7 @@ export const initialTables = [
   { name: "tenants", scope: "global", requiresTenantId: false },
   { name: "tenant_domains", scope: "global", requiresTenantId: false },
   { name: "platform_admin_accounts", scope: "global", requiresTenantId: false },
+  { name: "platform_audit_log", scope: "global", requiresTenantId: false },
   { name: "module_catalog", scope: "global", requiresTenantId: false },
   { name: "tenant_settings", scope: "tenant", requiresTenantId: true },
   { name: "tenant_brand_profiles", scope: "tenant", requiresTenantId: true },
