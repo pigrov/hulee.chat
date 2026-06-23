@@ -139,10 +139,7 @@ function TenantAdminNavLink({
       <span className="metricIcon">
         <TenantAdminSectionIcon sectionId={section.id} />
       </span>
-      <span>
-        <span className="listItemTitle">{t(section.titleKey)}</span>
-        <span className="metaText">{t(section.descriptionKey)}</span>
-      </span>
+      <span className="listItemTitle">{t(section.titleKey)}</span>
       <span className="badge">
         {t(current ? "admin.current" : "admin.open")}
       </span>
