@@ -2,9 +2,12 @@
 
 import type { EmployeeId } from "@hulee/contracts";
 import {
+  assertPermissionScopeAllowed,
   assertPermissionsAllowedForScope,
+  isPermission,
   normalizePermissionScope,
   prepareCustomTenantRole,
+  type Permission,
   type PermissionScope,
   type PermissionRoleBinding,
   type PreparedCustomTenantRole
@@ -310,6 +313,123 @@ export async function revokeTenantRoleBindingAction(
   redirect(destination);
 }
 
+export async function createDirectPermissionGrantAction(
+  formData: FormData
+): Promise<void> {
+  await assertWebActionRequest();
+
+  const session = await assertVerifiedRolesPermission();
+  const now = new Date();
+  const rbacRepository = createSqlTenantRbacRepository(getWebDatabase());
+  const employeeRepository =
+    createSqlEmployeeDirectoryRepository(getWebDatabase());
+  let destination = "/admin/roles?roleActionStatus=invalid";
+
+  try {
+    const employeeId = readRequiredFormString(
+      formData,
+      "employeeId"
+    ) as EmployeeId;
+    const permission = readPermissionFormValue(formData, "permission");
+    const scope = normalizePermissionScope({
+      type: readRequiredFormString(formData, "scopeType"),
+      id: readOptionalFormString(formData, "scopeId")
+    });
+    const reason = readRequiredLimitedFormString(formData, "reason", 500);
+    const expiresAt = readOptionalFormDate(formData, "expiresAt");
+
+    assertPermissionScopeAllowed(permission, scope.type);
+
+    if (expiresAt !== undefined && expiresAt.getTime() <= now.getTime()) {
+      throw new Error("Direct grant expiry must be in the future.");
+    }
+
+    const [target, grants] = await Promise.all([
+      employeeRepository.findEmployee({
+        tenantId: session.tenantId,
+        employeeId
+      }),
+      rbacRepository.listDirectGrantsForEmployee({
+        tenantId: session.tenantId,
+        employeeId,
+        at: now
+      })
+    ]);
+
+    if (target === null || target.deactivatedAt !== null) {
+      throw new Error("Employee is not assignable.");
+    }
+
+    const existingGrant = grants.find((grant) => {
+      return (
+        grant.permission === permission && areScopesEqual(grant.scope, scope)
+      );
+    });
+
+    if (existingGrant === undefined) {
+      await rbacRepository.createDirectGrant({
+        id: `direct_grant:${session.tenantId}:${employeeId}:${randomUUID()}`,
+        tenantId: session.tenantId,
+        employeeId,
+        permission,
+        scope,
+        reason,
+        expiresAt: expiresAt?.toISOString(),
+        createdByEmployeeId: session.employeeId,
+        createdAt: now
+      });
+    }
+
+    destination = "/admin/roles?roleActionStatus=direct_grant_created";
+  } catch {
+    destination = "/admin/roles?roleActionStatus=invalid";
+  }
+
+  revalidateRoleAdminPaths();
+  redirect(destination);
+}
+
+export async function revokeDirectPermissionGrantAction(
+  formData: FormData
+): Promise<void> {
+  await assertWebActionRequest();
+
+  const session = await assertVerifiedRolesPermission();
+  const grantId = readRequiredFormString(formData, "grantId");
+  const now = new Date();
+  const repository = createSqlTenantRbacRepository(getWebDatabase());
+  let destination = "/admin/roles?roleActionStatus=invalid";
+
+  try {
+    const grants = await repository.listDirectGrants({
+      tenantId: session.tenantId,
+      at: now
+    });
+    const grant = grants.find((candidate) => candidate.id === grantId);
+
+    if (grant === undefined || grant.id === undefined) {
+      throw new Error("Direct grant not found.");
+    }
+
+    if (grant.employeeId === session.employeeId) {
+      throw new Error("Self direct grant revocation is not allowed.");
+    }
+
+    await repository.revokeDirectGrant({
+      tenantId: session.tenantId,
+      grantId,
+      revokedAt: now
+    });
+
+    destination = "/admin/roles?roleActionStatus=direct_grant_revoked";
+  } catch {
+    destination = "/admin/roles?roleActionStatus=invalid";
+  }
+
+  revalidateRoleAdminPaths();
+  redirect(destination);
+}
+
 async function assertVerifiedRolesPermission(): ReturnType<
   typeof assertCurrentWebTenantPermission
 > {
@@ -402,6 +522,20 @@ function readRequiredFormString(formData: FormData, name: string): string {
   return value.trim();
 }
 
+function readRequiredLimitedFormString(
+  formData: FormData,
+  name: string,
+  maxLength: number
+): string {
+  const value = readRequiredFormString(formData, name);
+
+  if (value.length > maxLength) {
+    throw new Error(`Form field ${name} is too long.`);
+  }
+
+  return value;
+}
+
 function readOptionalFormString(
   formData: FormData,
   name: string
@@ -413,6 +547,35 @@ function readOptionalFormString(
   }
 
   return value.trim();
+}
+
+function readPermissionFormValue(formData: FormData, name: string): Permission {
+  const value = readRequiredFormString(formData, name);
+
+  if (!isPermission(value)) {
+    throw new Error(`Form field ${name} must be a known permission.`);
+  }
+
+  return value;
+}
+
+function readOptionalFormDate(
+  formData: FormData,
+  name: string
+): Date | undefined {
+  const value = readOptionalFormString(formData, name);
+
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(`Form field ${name} must be a date.`);
+  }
+
+  return date;
 }
 
 function readFormStringList(formData: FormData, name: string): string[] {

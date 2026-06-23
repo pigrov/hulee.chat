@@ -343,6 +343,52 @@ describe("SQL RBAC repository", () => {
     expect(query.params).toEqual(expect.arrayContaining([tenantId, now]));
   });
 
+  it("lists active direct grants for administration", async () => {
+    const executor = new RecordingSqlExecutor([
+      [
+        {
+          id: "grant-client",
+          tenant_id: tenantId,
+          employee_id: employeeId,
+          permission: "client.view",
+          scope_type: "client",
+          scope_id: "client-1",
+          reason: "temporary coverage",
+          starts_at: null,
+          expires_at: null,
+          revoked_at: null
+        }
+      ]
+    ]);
+    const repository = createSqlTenantRbacRepository(executor);
+
+    await expect(
+      repository.listDirectGrants({
+        tenantId,
+        at: now
+      })
+    ).resolves.toEqual([
+      {
+        id: "grant-client",
+        tenantId,
+        employeeId,
+        permission: "client.view",
+        scope: {
+          type: "client",
+          id: "client-1"
+        },
+        reason: "temporary coverage"
+      }
+    ]);
+
+    const query = renderQuery(executor.queries[0]);
+
+    expect(query.sql).toContain("from direct_permission_grants");
+    expect(query.sql).toContain("where tenant_id = $1");
+    expect(query.sql).toContain("revoked_at is null");
+    expect(query.params).toEqual(expect.arrayContaining([tenantId, now]));
+  });
+
   it("rejects cross-tenant rows returned from role reads", async () => {
     const repository = createSqlTenantRbacRepository(
       new RecordingSqlExecutor([

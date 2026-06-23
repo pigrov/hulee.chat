@@ -116,6 +116,11 @@ export type ListActorDirectPermissionGrantsInput = {
   readonly at: Date;
 };
 
+export type ListTenantDirectPermissionGrantsInput = {
+  readonly tenantId: TenantId;
+  readonly at: Date;
+};
+
 export type ListEffectiveAccessSourcesInput = {
   readonly actor: PermissionActor;
   readonly at?: Date;
@@ -155,6 +160,9 @@ export type TenantRbacRepository = {
   ): Promise<readonly PermissionRoleBinding[]>;
   listDirectGrantsForEmployee(
     input: ListActorDirectPermissionGrantsInput
+  ): Promise<readonly DirectPermissionGrant[]>;
+  listDirectGrants(
+    input: ListTenantDirectPermissionGrantsInput
   ): Promise<readonly DirectPermissionGrant[]>;
   listEffectiveAccessSources(
     input: ListEffectiveAccessSourcesInput
@@ -283,6 +291,17 @@ export function createSqlTenantRbacRepository(
     async listDirectGrantsForEmployee(input) {
       const result = await rawExecutor.execute<DirectPermissionGrantRow>(
         buildListActorDirectPermissionGrantsSql(input)
+      );
+      const grants = result.rows.map(mapDirectPermissionGrantRow);
+
+      assertTenantScopedRows(input.tenantId, grants);
+
+      return grants;
+    },
+
+    async listDirectGrants(input) {
+      const result = await rawExecutor.execute<DirectPermissionGrantRow>(
+        buildListTenantDirectPermissionGrantsSql(input)
       );
       const grants = result.rows.map(mapDirectPermissionGrantRow);
 
@@ -962,6 +981,31 @@ export function buildListActorDirectPermissionGrantsSql(
     from direct_permission_grants
     where tenant_id = ${input.tenantId}
       and employee_id = ${input.employeeId}
+      and revoked_at is null
+      and (starts_at is null or starts_at <= ${input.at})
+      and (expires_at is null or expires_at > ${input.at})
+    order by created_at asc
+  `;
+}
+
+export function buildListTenantDirectPermissionGrantsSql(
+  input: ListTenantDirectPermissionGrantsInput
+): SQL {
+  assertNonEmpty(input.tenantId);
+
+  return sql`
+    select id,
+           tenant_id,
+           employee_id,
+           permission,
+           scope_type,
+           scope_id,
+           reason,
+           starts_at,
+           expires_at,
+           revoked_at
+    from direct_permission_grants
+    where tenant_id = ${input.tenantId}
       and revoked_at is null
       and (starts_at is null or starts_at <= ${input.at})
       and (expires_at is null or expires_at > ${input.at})

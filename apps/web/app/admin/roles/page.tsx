@@ -1,6 +1,7 @@
 import {
   getPermissionDefinition,
   permissionCatalog,
+  type DirectPermissionGrant,
   type Permission,
   type PermissionDomain,
   type PermissionRoleBinding,
@@ -37,8 +38,10 @@ import { loadInboxViewModel } from "../../../src/inbox-api-client";
 import {
   archiveCustomTenantRoleAction,
   assignTenantRoleAction,
+  createDirectPermissionGrantAction,
   createCustomTenantRoleAction,
   restoreCustomTenantRoleAction,
+  revokeDirectPermissionGrantAction,
   updateCustomTenantRoleAction,
   revokeTenantRoleBindingAction
 } from "../../../src/role-actions";
@@ -48,6 +51,7 @@ import {
 } from "../../../src/session";
 import { allowedRoleBindingScopeTypesForPermissions } from "../../../src/rbac-scope";
 import {
+  DirectGrantFields,
   RoleAssignmentFields,
   type ScopePickerMessages
 } from "../../../src/rbac-scope-picker";
@@ -106,14 +110,21 @@ export default async function RolesAdminPage({
   const employeeRepository =
     createSqlEmployeeDirectoryRepository(getWebDatabase());
   const now = new Date();
-  const [model, roles, roleBindings, employees, resolvedSearchParams] =
-    await Promise.all([
-      loadInboxViewModel(),
-      repository.listRoleDefinitions({ tenantId: access.tenantId }),
-      repository.listRoleBindings({ tenantId: access.tenantId, at: now }),
-      employeeRepository.listEmployees({ tenantId: access.tenantId }),
-      searchParams
-    ]);
+  const [
+    model,
+    roles,
+    roleBindings,
+    directGrants,
+    employees,
+    resolvedSearchParams
+  ] = await Promise.all([
+    loadInboxViewModel(),
+    repository.listRoleDefinitions({ tenantId: access.tenantId }),
+    repository.listRoleBindings({ tenantId: access.tenantId, at: now }),
+    repository.listDirectGrants({ tenantId: access.tenantId, at: now }),
+    employeeRepository.listEmployees({ tenantId: access.tenantId }),
+    searchParams
+  ]);
   const { t } = createTranslator(model.tenant.locale);
   const activeRoles = roles.filter((role) => role.status === "active");
   const activeEmployees = employees.filter(
@@ -125,6 +136,11 @@ export default async function RolesAdminPage({
     allowedScopeTypes: allowedRoleBindingScopeTypesForPermissions(
       role.permissions
     )
+  }));
+  const directGrantPermissionOptions = permissionCatalog.map((definition) => ({
+    id: definition.id,
+    label: `${definition.id} - ${t(permissionDomainKey(definition.domain))}`,
+    allowedScopeTypes: definition.allowedScopes
   }));
   const employeeOptions = activeEmployees.map((employee) => ({
     value: employee.employeeId,
@@ -265,6 +281,80 @@ export default async function RolesAdminPage({
                   employees={employees}
                   key={binding.id}
                   roles={roles}
+                  t={t}
+                />
+              ))
+            )}
+          </div>
+        </section>
+
+        <section
+          className="settingsPanel"
+          aria-labelledby="direct-grant-create-title"
+        >
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.roles.directGrants")}</p>
+              <h2 className="sectionTitle" id="direct-grant-create-title">
+                {t("admin.roles.addDirectGrant")}
+              </h2>
+              <p className="metaText">
+                {t("admin.roles.addDirectGrant.description")}
+              </p>
+            </div>
+            <span className="badge">{permissionCatalog.length}</span>
+          </div>
+
+          <form
+            className="settingsForm directGrantForm"
+            action={createDirectPermissionGrantAction}
+          >
+            <DirectGrantFields
+              employees={employeeOptions}
+              messages={scopePickerMessages(t)}
+              permissions={directGrantPermissionOptions}
+            />
+            <button
+              className="primaryButton"
+              type="submit"
+              disabled={
+                employeeOptions.length === 0 ||
+                directGrantPermissionOptions.length === 0
+              }
+            >
+              <Plus size={18} aria-hidden="true" />
+              {t("admin.roles.grantDirectPermission")}
+            </button>
+          </form>
+        </section>
+
+        <section
+          className="settingsPanel"
+          aria-labelledby="direct-grants-title"
+        >
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.roles.directGrants")}</p>
+              <h2 className="sectionTitle" id="direct-grants-title">
+                {t("admin.roles.activeDirectGrants")}
+              </h2>
+              <p className="metaText">
+                {t("admin.roles.activeDirectGrants.description")}
+              </p>
+            </div>
+            <span className="badge">{directGrants.length}</span>
+          </div>
+
+          <div className="managementList">
+            {directGrants.length === 0 ? (
+              <p className="metaText">{t("admin.roles.noDirectGrants")}</p>
+            ) : (
+              directGrants.map((grant) => (
+                <DirectGrantRow
+                  currentEmployeeId={access.employeeId}
+                  employees={employees}
+                  grant={grant}
+                  key={grant.id}
                   t={t}
                 />
               ))
@@ -596,6 +686,72 @@ function RoleBindingRow({
   );
 }
 
+function DirectGrantRow({
+  currentEmployeeId,
+  employees,
+  grant,
+  t
+}: {
+  currentEmployeeId: string;
+  employees: readonly TenantEmployeeRecord[];
+  grant: DirectPermissionGrant;
+  t: Translator;
+}): ReactNode {
+  const employee = employees.find(
+    (candidate) => candidate.employeeId === grant.employeeId
+  );
+  const isCurrentEmployee = grant.employeeId === currentEmployeeId;
+
+  return (
+    <article className="managementRow directGrantRow">
+      <span className="metricIcon">
+        <KeyRound size={18} aria-hidden="true" />
+      </span>
+      <div>
+        <h3 className="listItemTitle">
+          <code className="permissionCode">{grant.permission}</code>
+        </h3>
+        <p className="metaText">
+          {t("admin.roles.directGrantEmployee", {
+            value: employeeValue(grant.employeeId, employee)
+          })}
+        </p>
+        <p className="metaText">
+          {t("admin.roles.assignmentScope", {
+            value: scopeValue(grant.scope, t)
+          })}
+        </p>
+        <p className="metaText">
+          {t("admin.roles.directGrantReason", {
+            value: grant.reason
+          })}
+        </p>
+        <p className="metaText">
+          {t("admin.roles.directGrantExpiresAt", {
+            value: grant.expiresAt ?? t("admin.roles.directGrantNoExpiry")
+          })}
+        </p>
+      </div>
+      <div className="rowActions">
+        {isCurrentEmployee || grant.id === undefined ? (
+          <span className="badge">{t("admin.roles.currentUser")}</span>
+        ) : (
+          <form
+            className="inlineForm"
+            action={revokeDirectPermissionGrantAction}
+          >
+            <input name="grantId" type="hidden" value={grant.id} />
+            <button className="dangerButton" type="submit">
+              <XCircle size={14} aria-hidden="true" />
+              {t("admin.roles.revoke")}
+            </button>
+          </form>
+        )}
+      </div>
+    </article>
+  );
+}
+
 function roleName(role: TenantRoleRecord, t: Translator): string {
   const roleLabelKey = role.isSystem ? fixedRoleLabelKey(role.id) : undefined;
 
@@ -625,6 +781,13 @@ function subjectValue(
   return employee ? `${employee.displayName} (${employee.email})` : subject.id;
 }
 
+function employeeValue(
+  employeeId: string,
+  employee: TenantEmployeeRecord | undefined
+): string {
+  return employee ? `${employee.displayName} (${employee.email})` : employeeId;
+}
+
 function scopeValue(scope: PermissionScope, t: Translator): string {
   if (scope.type === "tenant") {
     return t("admin.roles.scope.tenant");
@@ -644,6 +807,10 @@ function allowedScopesText(permission: Permission, t: Translator): string {
 function scopePickerMessages(t: Translator): ScopePickerMessages {
   return {
     employee: t("admin.roles.employee"),
+    expiresAt: t("admin.roles.directGrantExpiresAtInput"),
+    permission: t("admin.roles.permission"),
+    reason: t("admin.roles.directGrantReasonInput"),
+    reasonPlaceholder: t("admin.roles.directGrantReason.placeholder"),
     role: t("admin.roles.role"),
     scopeType: t("admin.roles.scopeType"),
     scopeReference: t("admin.roles.scopeReference"),
@@ -651,6 +818,7 @@ function scopePickerMessages(t: Translator): ScopePickerMessages {
     scopeReferencePlaceholder: t("admin.roles.scopeReference.placeholder"),
     scopeUnavailable: t("admin.roles.scopeUnavailable"),
     selectEmployee: t("admin.roles.selectEmployee"),
+    selectPermission: t("admin.roles.selectPermission"),
     selectRole: t("admin.roles.selectRole"),
     scopeLabels: {
       tenant: t("admin.roles.scope.tenant"),
@@ -737,6 +905,10 @@ function roleActionStatusKey(status: string): I18nMessageKey {
       return "admin.roles.actionStatus.assigned";
     case "revoked":
       return "admin.roles.actionStatus.revoked";
+    case "direct_grant_created":
+      return "admin.roles.actionStatus.directGrantCreated";
+    case "direct_grant_revoked":
+      return "admin.roles.actionStatus.directGrantRevoked";
     case "email_verification_required":
       return "auth.emailVerification.status.required";
     default:

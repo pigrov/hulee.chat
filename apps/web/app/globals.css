@@ -715,6 +715,18 @@ a.secondaryButton {
   align-items: end;
 }
 
+.directGrantForm {
+  grid-template-columns: minmax(160px, 1fr) minmax(220px, 1.2fr) minmax(
+      300px,
+      2fr
+    );
+  align-items: start;
+}
+
+.directGrantForm .primaryButton {
+  justify-self: start;
+}
+
 .scopePickerGrid {
   display: grid;
   grid-template-columns: minmax(130px, 1fr) minmax(180px, 1.4fr);
@@ -729,6 +741,11 @@ a.secondaryButton {
 }
 
 .roleDescriptionInput {
+  min-height: 82px;
+  resize: vertical;
+}
+
+.directGrantReasonInput {
   min-height: 82px;
   resize: vertical;
 }
@@ -915,6 +932,13 @@ a.secondaryButton {
 .managementRow.roleDefinitionRow {
   display: grid;
   grid-template-columns: auto minmax(160px, 1fr) auto auto;
+  align-items: flex-start;
+}
+
+.managementRow.roleBindingRow,
+.managementRow.directGrantRow {
+  display: grid;
+  grid-template-columns: auto minmax(220px, 1fr) auto;
   align-items: flex-start;
 }
 
@@ -1175,9 +1199,12 @@ button.managementRow:focus-visible {
   .adminIntegrationGrid,
   .adminOverviewGrid,
   .managementRow.roleDefinitionRow,
+  .managementRow.directGrantRow,
+  .managementRow.roleBindingRow,
   .roleDefinitionRow,
   .roleBindingRow,
   .roleAssignForm,
+  .directGrantForm,
   .scopePickerGrid,
   .roleEditorGrid,
   .permissionEditorGrid,
