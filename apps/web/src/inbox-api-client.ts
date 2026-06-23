@@ -2,12 +2,16 @@ import { loadLocalEnvFile, mergeEnvSources } from "@hulee/config";
 import {
   internalInboxReplyResponseSchema,
   internalInboxViewResponseSchema,
+  internalTenantBrandResponseSchema,
+  internalTenantBrandUpdateRequestSchema,
   internalTelegramIntegrationResponseSchema,
   internalTelegramIntegrationUpdateRequestSchema,
   type InternalInboxConversation,
   type InternalInboxMessage,
   type InternalInboxReplyResponse,
   type InternalInboxViewResponse,
+  type InternalTenantBrandResponse,
+  type InternalTenantBrandUpdateRequest,
   type InternalTelegramIntegrationResponse,
   type InternalTelegramIntegrationUpdateRequest
 } from "@hulee/contracts";
@@ -17,6 +21,7 @@ import { buildInternalApiHeaders } from "./session";
 export type InboxConversation = InternalInboxConversation;
 export type InboxMessage = InternalInboxMessage;
 export type InboxViewModel = InternalInboxViewResponse;
+export type TenantBrandViewModel = InternalTenantBrandResponse;
 export type TelegramIntegrationViewModel = InternalTelegramIntegrationResponse;
 
 const defaultInternalApiBaseUrl = "http://127.0.0.1:4000";
@@ -80,6 +85,53 @@ export async function sendInboxReply(input: {
   }
 
   return internalInboxReplyResponseSchema.parse(await response.json());
+}
+
+export async function loadTenantBrand(): Promise<TenantBrandViewModel> {
+  const url = new URL("/internal/v1/tenant/brand", resolveInternalApiBaseUrl());
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: await buildInternalApiHeaders({
+      method: "GET",
+      path: internalPath(url)
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Internal tenant brand API returned HTTP ${response.status}.`
+    );
+  }
+
+  return internalTenantBrandResponseSchema.parse(await response.json());
+}
+
+export async function updateTenantBrand(
+  input: InternalTenantBrandUpdateRequest
+): Promise<TenantBrandViewModel> {
+  const request = internalTenantBrandUpdateRequestSchema.parse(input);
+  const url = new URL("/internal/v1/tenant/brand", resolveInternalApiBaseUrl());
+  const response = await fetch(url, {
+    method: "PUT",
+    cache: "no-store",
+    headers: {
+      ...(await buildInternalApiHeaders({
+        method: "PUT",
+        path: internalPath(url),
+        body: request
+      })),
+      "content-type": "application/json; charset=utf-8"
+    },
+    body: JSON.stringify(request)
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Internal tenant brand update API returned HTTP ${response.status}.`
+    );
+  }
+
+  return internalTenantBrandResponseSchema.parse(await response.json());
 }
 
 export async function loadTelegramIntegration(): Promise<TelegramIntegrationViewModel> {

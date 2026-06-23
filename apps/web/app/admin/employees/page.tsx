@@ -2,6 +2,7 @@ import { createTranslator, type I18nMessageKey } from "@hulee/i18n";
 import {
   Ban,
   Mail,
+  Palette,
   RotateCw,
   Save,
   ShieldCheck,
@@ -128,6 +129,13 @@ export default async function EmployeesAdminPage({
                     {t("admin.integrations")}
                   </span>
                   <span className="badge">{t("admin.open")}</span>
+                </Link>
+                <Link className="managementRow" href="/admin/branding">
+                  <span className="listItemTitle">{t("admin.branding")}</span>
+                  <span className="badge">
+                    <Palette size={14} aria-hidden="true" />
+                    {t("admin.open")}
+                  </span>
                 </Link>
               </div>
 

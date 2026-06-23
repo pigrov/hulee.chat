@@ -1,5 +1,5 @@
 import { createTranslator } from "@hulee/i18n";
-import { Plug, ShieldCheck, Users } from "lucide-react";
+import { Palette, Plug, ShieldCheck, Users } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
@@ -113,6 +113,16 @@ export default async function IntegrationsAdminPage(): Promise<ReactNode> {
               </div>
 
               <div className="managementList">
+                <Link className="managementRow" href="/admin/branding">
+                  <div>
+                    <h3 className="listItemTitle">{t("admin.branding")}</h3>
+                    <p className="metaText">{t("admin.branding.appearance")}</p>
+                  </div>
+                  <span className="badge">
+                    <Palette size={14} aria-hidden="true" />
+                    {t("admin.open")}
+                  </span>
+                </Link>
                 <Link className="managementRow" href="/admin/employees">
                   <div>
                     <h3 className="listItemTitle">{t("admin.employees")}</h3>

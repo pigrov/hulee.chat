@@ -4,6 +4,8 @@ import {
   internalApiErrorResponseSchema,
   internalInboxReplyRequestSchema,
   internalInboxViewResponseSchema,
+  internalTenantBrandResponseSchema,
+  internalTenantBrandUpdateRequestSchema,
   internalTelegramIntegrationResponseSchema,
   internalTelegramIntegrationUpdateRequestSchema
 } from "./internal-api-v1";
@@ -67,6 +69,44 @@ describe("internal API v1 schemas", () => {
     ).toMatchObject({
       error: {
         code: "permission.denied"
+      }
+    });
+  });
+
+  it("parses tenant brand update requests and responses", () => {
+    expect(
+      internalTenantBrandUpdateRequestSchema.parse({
+        productName: " Acme Desk ",
+        shortProductName: " Acme ",
+        themeTokens: {
+          "color.brand.primary": "#177f75"
+        }
+      })
+    ).toEqual({
+      productName: "Acme Desk",
+      shortProductName: "Acme",
+      themeTokens: {
+        "color.brand.primary": "#177f75"
+      }
+    });
+
+    expect(
+      internalTenantBrandResponseSchema.parse({
+        brand: {
+          id: "brand-1",
+          scope: "tenant",
+          tenantId: "tenant-1",
+          productName: "Acme Desk",
+          assets: {},
+          themeTokens: {
+            "color.brand.primary": "#177f75"
+          },
+          links: {}
+        }
+      })
+    ).toMatchObject({
+      brand: {
+        productName: "Acme Desk"
       }
     });
   });

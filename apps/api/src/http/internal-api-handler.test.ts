@@ -1,6 +1,7 @@
 import type {
   EmployeeId,
   InternalInboxViewResponse,
+  InternalTenantBrandUpdateRequest,
   InternalTelegramIntegrationUpdateRequest,
   TenantId
 } from "@hulee/contracts";
@@ -24,7 +25,12 @@ const session: InternalApiSession = {
   requestId: "request-1",
   tenantId,
   employeeId,
-  permissions: ["inbox.read", "message.reply", "modules.manage"]
+  permissions: [
+    "tenant.manage",
+    "inbox.read",
+    "message.reply",
+    "modules.manage"
+  ]
 };
 const inboxView: InternalInboxViewResponse = {
   tenant: {
@@ -140,6 +146,19 @@ function createHandler(input?: {
   }));
   const setTelegramWebhook = vi.fn(refreshTelegramDiagnostics);
   const deleteTelegramWebhook = vi.fn(refreshTelegramDiagnostics);
+  const loadTenantBrand = vi.fn(async () => ({
+    brand: inboxView.tenant.brand
+  }));
+  const updateTenantBrand = vi.fn(
+    async (_context: unknown, request: InternalTenantBrandUpdateRequest) => ({
+      brand: {
+        ...inboxView.tenant.brand,
+        productName: request.productName,
+        shortProductName: request.shortProductName,
+        themeTokens: request.themeTokens
+      }
+    })
+  );
   const handler = createInternalApiHandler({
     requestIdFactory: () => "request-1",
     sessionResolver: {
@@ -155,6 +174,10 @@ function createHandler(input?: {
       refreshTelegramDiagnostics,
       setTelegramWebhook,
       deleteTelegramWebhook
+    },
+    tenantSettings: {
+      loadTenantBrand,
+      updateTenantBrand
     }
   });
 
@@ -166,7 +189,9 @@ function createHandler(input?: {
     updateTelegramIntegration,
     refreshTelegramDiagnostics,
     setTelegramWebhook,
-    deleteTelegramWebhook
+    deleteTelegramWebhook,
+    loadTenantBrand,
+    updateTenantBrand
   };
 }
 
@@ -230,6 +255,70 @@ describe("internal API handler", () => {
     const response = await handler.handle({
       method: "GET",
       path: "/internal/v1/inbox"
+    });
+
+    expect(response.status).toBe(403);
+    expect(response.body).toMatchObject({
+      error: {
+        code: "permission.denied"
+      }
+    });
+  });
+
+  it("loads and updates tenant brand through tenant.manage permission", async () => {
+    const { handler, loadTenantBrand, updateTenantBrand } = createHandler();
+    const loadResponse = await handler.handle({
+      method: "GET",
+      path: "/internal/v1/tenant/brand"
+    });
+    const updateResponse = await handler.handle({
+      method: "PUT",
+      path: "/internal/v1/tenant/brand",
+      body: {
+        productName: "Acme Desk",
+        shortProductName: "Acme",
+        themeTokens: {
+          "color.brand.primary": "#177f75",
+          "color.brand.foreground": "#ffffff"
+        }
+      }
+    });
+
+    expect(loadResponse.status).toBe(200);
+    expect(loadResponse.body).toEqual({
+      brand: inboxView.tenant.brand
+    });
+    expect(updateResponse.status).toBe(200);
+    expect(updateResponse.body).toMatchObject({
+      brand: {
+        productName: "Acme Desk",
+        shortProductName: "Acme",
+        themeTokens: {
+          "color.brand.primary": "#177f75"
+        }
+      }
+    });
+    expect(loadTenantBrand).toHaveBeenCalledWith(session);
+    expect(updateTenantBrand).toHaveBeenCalledWith(session, {
+      productName: "Acme Desk",
+      shortProductName: "Acme",
+      themeTokens: {
+        "color.brand.primary": "#177f75",
+        "color.brand.foreground": "#ffffff"
+      }
+    });
+  });
+
+  it("requires tenant.manage for tenant brand routes", async () => {
+    const { handler } = createHandler({
+      session: {
+        ...session,
+        permissions: ["inbox.read", "message.reply", "modules.manage"]
+      }
+    });
+    const response = await handler.handle({
+      method: "GET",
+      path: "/internal/v1/tenant/brand"
     });
 
     expect(response.status).toBe(403);

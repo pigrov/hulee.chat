@@ -33,6 +33,7 @@ import {
   createTenantSecretResolver,
   createInternalIntegrationService
 } from "./internal-integrations-service";
+import { createInternalTenantSettingsService } from "./internal-tenant-service";
 import { createExternalChannelCommandService } from "./external-channel-command-service";
 import { createPublicApiCommandService } from "./public-api-command-service";
 import {
@@ -149,6 +150,9 @@ export function createInternalApiDataPlaneHandler(
       telegramApiBaseUrl: options.telegramApiBaseUrl,
       publicWebhookBaseUrl: options.publicWebhookBaseUrl
     }),
+    tenantSettings: createInternalTenantSettingsService({
+      database: options.database
+    }),
     logger: options.logger,
     requestIdFactory: options.requestIdFactory
   });
@@ -241,6 +245,7 @@ export {
   createSqlInternalInboxQueryService
 } from "./internal-inbox-service";
 export { createInternalIntegrationService } from "./internal-integrations-service";
+export { createInternalTenantSettingsService } from "./internal-tenant-service";
 export { createPublicApiCommandService } from "./public-api-command-service";
 export type {
   ExternalChannelCommandContext,
@@ -259,6 +264,10 @@ export type {
   InternalIntegrationService,
   InternalIntegrationServiceOptions
 } from "./internal-integrations-service";
+export type {
+  InternalTenantSettingsContext,
+  InternalTenantSettingsService
+} from "./internal-tenant-service";
 export type { PublicApiCommandServiceOptions } from "./public-api-command-service";
 export type {
   TelegramWebhookHandler,

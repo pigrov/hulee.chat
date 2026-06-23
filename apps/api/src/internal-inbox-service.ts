@@ -1,4 +1,7 @@
-import { resolveBrandProfile } from "@hulee/branding";
+import {
+  normalizeBrandThemeTokens,
+  resolveBrandProfile
+} from "@hulee/branding";
 import type {
   ConversationId,
   EmployeeId,
@@ -234,7 +237,7 @@ async function loadTenantContext(
           shortProductName: row.short_product_name ?? undefined,
           companyName: row.display_name,
           assets: row.assets ?? {},
-          themeTokens: row.theme_tokens ?? {},
+          themeTokens: normalizeThemeTokens(row.theme_tokens),
           links: row.links ?? {}
         }
       : undefined;
@@ -345,4 +348,22 @@ function toIsoTimestamp(value: Date | string): string {
   return value instanceof Date
     ? value.toISOString()
     : new Date(value).toISOString();
+}
+
+function normalizeThemeTokens(value: unknown): Record<string, string> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {};
+  }
+
+  const record = Object.fromEntries(
+    Object.entries(value).flatMap(([key, rawValue]) => {
+      return typeof rawValue === "string" ? [[key, rawValue]] : [];
+    })
+  );
+
+  try {
+    return normalizeBrandThemeTokens(record);
+  } catch {
+    return {};
+  }
 }

@@ -3,10 +3,16 @@ import type { CSSProperties } from "react";
 const cssTokenMap = {
   "color.brand.primary": "--hulee-color-brand-primary",
   "color.brand.foreground": "--hulee-color-brand-foreground",
+  "color.accent": "--hulee-color-accent",
+  "color.page": "--hulee-color-page",
   "color.surface.default": "--hulee-color-surface-default",
+  "color.surface.raised": "--hulee-color-surface-raised",
   "color.surface.muted": "--hulee-color-surface-muted",
+  "color.border": "--hulee-color-border",
+  "color.border.strong": "--hulee-color-border-strong",
   "color.text.default": "--hulee-color-text-default",
   "color.text.muted": "--hulee-color-text-muted",
+  "color.danger": "--hulee-color-danger",
   "radius.control": "--hulee-radius-control"
 } as const;
 
@@ -24,9 +30,7 @@ export function brandProfileToCssProperties(
   const style: Record<CssCustomProperty, string> = {};
 
   for (const [token, value] of Object.entries(brand.themeTokens)) {
-    const cssVariable = token.startsWith("--")
-      ? token
-      : cssTokenMap[token as keyof typeof cssTokenMap];
+    const cssVariable = cssTokenMap[token as keyof typeof cssTokenMap];
 
     if (cssVariable) {
       style[cssVariable as CssCustomProperty] = value;

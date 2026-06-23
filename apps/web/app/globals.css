@@ -659,6 +659,97 @@ button.railButton {
   gap: 8px;
 }
 
+.brandPresetGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.brandPresetButton {
+  display: grid;
+  width: 100%;
+  min-height: 106px;
+  gap: 10px;
+  align-content: space-between;
+  padding: 12px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-default);
+  color: var(--hulee-color-text-default);
+  cursor: pointer;
+  text-align: left;
+}
+
+.brandPresetButton:hover,
+.brandPresetButton:focus-visible,
+.brandPresetButton[aria-current="page"] {
+  border-color: var(--hulee-color-brand-primary);
+  outline: none;
+  box-shadow: var(--hulee-shadow-focus);
+}
+
+.brandPresetSwatches {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr;
+  gap: 6px;
+}
+
+.brandPresetSwatch {
+  min-height: 34px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+}
+
+.brandPresetSwatchPrimary {
+  background: var(--hulee-color-brand-primary);
+}
+
+.brandPresetSwatchAccent {
+  background: var(--hulee-color-accent);
+}
+
+.brandPresetSwatchSurface {
+  background: var(--hulee-color-surface-muted);
+}
+
+.brandColorGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.colorInput {
+  min-height: 42px;
+  width: 100%;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-raised);
+  cursor: pointer;
+  padding: 4px;
+}
+
+.colorInput:focus {
+  border-color: var(--hulee-color-brand-primary);
+  outline: none;
+  box-shadow: var(--hulee-shadow-focus);
+}
+
+.brandPreviewPanel {
+  background: var(--hulee-color-surface-default);
+}
+
+.brandPreviewSurface {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-raised);
+}
+
 .integrationListItem,
 .managementRow {
   display: flex;
@@ -887,6 +978,8 @@ button.managementRow:focus-visible {
   }
 
   .adminGrid,
+  .brandPresetGrid,
+  .brandColorGrid,
   .platformMetricGrid,
   .platformGrid {
     grid-template-columns: 1fr;

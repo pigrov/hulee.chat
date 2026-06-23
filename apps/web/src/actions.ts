@@ -1,6 +1,12 @@
 "use server";
 
+import {
+  buildBrandThemeTokens,
+  isBrandThemePresetId,
+  type BrandThemePresetId
+} from "@hulee/branding";
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 
 import {
@@ -8,6 +14,7 @@ import {
   refreshTelegramDiagnostics,
   sendInboxReply,
   setTelegramWebhook,
+  updateTenantBrand,
   updateTelegramIntegration
 } from "./inbox-api-client";
 import { assertCurrentWebTenantPermission } from "./session";
@@ -29,6 +36,68 @@ export async function sendReplyAction(formData: FormData): Promise<void> {
   });
 
   revalidatePath("/");
+}
+
+export async function applyBrandPresetAction(
+  formData: FormData
+): Promise<void> {
+  await assertCurrentWebTenantPermission("tenant.manage");
+
+  const productName = readRequiredFormString(formData, "productName").trim();
+  const shortProductName = normalizeOptionalFormValue(
+    readOptionalFormString(formData, "shortProductName")
+  );
+  const presetId = resolvePresetId(
+    readRequiredFormString(formData, "presetId")
+  );
+  let destination = "/admin/branding?brandStatus=saved";
+
+  try {
+    await updateTenantBrand({
+      productName,
+      shortProductName,
+      themeTokens: buildBrandThemeTokens({ presetId })
+    });
+  } catch {
+    destination = "/admin/branding?brandStatus=invalid";
+  }
+
+  revalidateBrandPaths();
+  redirect(destination);
+}
+
+export async function updateTenantBrandAction(
+  formData: FormData
+): Promise<void> {
+  await assertCurrentWebTenantPermission("tenant.manage");
+
+  const productName = readRequiredFormString(formData, "productName").trim();
+  const shortProductName = normalizeOptionalFormValue(
+    readOptionalFormString(formData, "shortProductName")
+  );
+  const presetId = resolvePresetId(
+    readOptionalFormString(formData, "presetId") ?? "hulee"
+  );
+  const primaryColor = readRequiredFormString(formData, "primaryColor").trim();
+  const accentColor = readRequiredFormString(formData, "accentColor").trim();
+  let destination = "/admin/branding?brandStatus=saved";
+
+  try {
+    await updateTenantBrand({
+      productName,
+      shortProductName,
+      themeTokens: buildBrandThemeTokens({
+        presetId,
+        primaryColor,
+        accentColor
+      })
+    });
+  } catch {
+    destination = "/admin/branding?brandStatus=invalid";
+  }
+
+  revalidateBrandPaths();
+  redirect(destination);
 }
 
 export async function updateTelegramIntegrationAction(
@@ -106,8 +175,27 @@ function readOptionalFormString(
   return typeof value === "string" ? value : undefined;
 }
 
+function normalizeOptionalFormValue(
+  value: string | undefined
+): string | undefined {
+  const normalized = value?.trim();
+
+  return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+function resolvePresetId(value: string): BrandThemePresetId {
+  return isBrandThemePresetId(value) ? value : "hulee";
+}
+
 function readFormCheckbox(formData: FormData, name: string): boolean {
   return formData.get(name) === "on";
+}
+
+function revalidateBrandPaths(): void {
+  revalidatePath("/");
+  revalidatePath("/admin/branding");
+  revalidatePath("/admin/integrations");
+  revalidatePath("/admin/employees");
 }
 
 function revalidateTelegramIntegrationPaths(): void {

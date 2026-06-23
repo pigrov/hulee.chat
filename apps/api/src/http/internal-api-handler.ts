@@ -2,6 +2,7 @@ import type {
   EmployeeId,
   InternalInboxReplyResponse,
   InternalInboxViewResponse,
+  InternalTenantBrandResponse,
   InternalTelegramIntegrationResponse,
   PlatformErrorCode,
   TenantId
@@ -10,6 +11,7 @@ import {
   getPlatformErrorDefinition,
   internalApiV1Version,
   internalInboxReplyRequestSchema,
+  internalTenantBrandUpdateRequestSchema,
   internalTelegramIntegrationUpdateRequestSchema,
   isPlatformErrorCode
 } from "@hulee/contracts";
@@ -28,6 +30,7 @@ import type {
   InternalInboxQueryService
 } from "../internal-inbox-service";
 import type { InternalIntegrationService } from "../internal-integrations-service";
+import type { InternalTenantSettingsService } from "../internal-tenant-service";
 import type { ApiHttpRequest, ApiHttpResponse } from "./public-api-handler";
 
 export type InternalApiSession = {
@@ -49,6 +52,7 @@ export type InternalApiHandlerOptions = {
   inboxQueries: InternalInboxQueryService;
   inboxCommands: InternalInboxCommandService;
   integrations: InternalIntegrationService;
+  tenantSettings: InternalTenantSettingsService;
   logger?: Logger;
   requestIdFactory?: () => string;
 };
@@ -68,6 +72,12 @@ type RouteMatch =
   | {
       route: "inbox_reply";
       conversationId: string;
+    }
+  | {
+      route: "tenant_brand_view";
+    }
+  | {
+      route: "tenant_brand_update";
     }
   | {
       route: "telegram_integration_view";
@@ -125,7 +135,8 @@ export function createInternalApiHandler(
           session,
           inboxQueries: options.inboxQueries,
           inboxCommands: options.inboxCommands,
-          integrations: options.integrations
+          integrations: options.integrations,
+          tenantSettings: options.tenantSettings
         });
       } catch (error) {
         const code = platformErrorCodeFromUnknown(error);
@@ -289,7 +300,12 @@ function createFallbackDevSession(
     tenantId,
     employeeId,
     permissions: input?.permissions ??
-      headerPermissions ?? ["inbox.read", "message.reply", "modules.manage"]
+      headerPermissions ?? [
+        "tenant.manage",
+        "inbox.read",
+        "message.reply",
+        "modules.manage"
+      ]
   };
 }
 
@@ -300,6 +316,7 @@ async function handleAuthenticatedRoute(input: {
   inboxQueries: InternalInboxQueryService;
   inboxCommands: InternalInboxCommandService;
   integrations: InternalIntegrationService;
+  tenantSettings: InternalTenantSettingsService;
 }): Promise<ApiHttpResponse> {
   switch (input.route.route) {
     case "inbox_view": {
@@ -322,6 +339,25 @@ async function handleAuthenticatedRoute(input: {
         });
 
       return jsonResponse(202, response);
+    }
+
+    case "tenant_brand_view": {
+      assertSessionCan(input.session, "tenant.manage");
+      const response: InternalTenantBrandResponse =
+        await input.tenantSettings.loadTenantBrand(input.session);
+
+      return jsonResponse(200, response);
+    }
+
+    case "tenant_brand_update": {
+      assertSessionCan(input.session, "tenant.manage");
+      const request = internalTenantBrandUpdateRequestSchema.parse(
+        input.request.body
+      );
+      const response: InternalTenantBrandResponse =
+        await input.tenantSettings.updateTenantBrand(input.session, request);
+
+      return jsonResponse(200, response);
     }
 
     case "telegram_integration_view": {
@@ -385,6 +421,18 @@ function matchRoute(request: ApiHttpRequest): RouteMatch | undefined {
       route: "inbox_view",
       selectedConversationId:
         url.searchParams.get("conversationId") ?? undefined
+    };
+  }
+
+  if (request.method === "GET" && path === "/internal/v1/tenant/brand") {
+    return {
+      route: "tenant_brand_view"
+    };
+  }
+
+  if (request.method === "PUT" && path === "/internal/v1/tenant/brand") {
+    return {
+      route: "tenant_brand_update"
     };
   }
 

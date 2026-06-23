@@ -100,6 +100,20 @@ export const internalInboxReplyResponseSchema = z
   })
   .strict();
 
+export const internalTenantBrandUpdateRequestSchema = z
+  .object({
+    productName: z.string().trim().min(1).max(120),
+    shortProductName: z.string().trim().min(1).max(40).optional(),
+    themeTokens: z.record(z.string(), z.string()).default({})
+  })
+  .strict();
+
+export const internalTenantBrandResponseSchema = z
+  .object({
+    brand: internalInboxBrandProfileSchema
+  })
+  .strict();
+
 export const internalTelegramIntegrationModeSchema = z.enum([
   "webhook",
   "polling"
@@ -229,6 +243,12 @@ export type InternalInboxReplyRequest = z.infer<
 >;
 export type InternalInboxReplyResponse = z.infer<
   typeof internalInboxReplyResponseSchema
+>;
+export type InternalTenantBrandUpdateRequest = z.infer<
+  typeof internalTenantBrandUpdateRequestSchema
+>;
+export type InternalTenantBrandResponse = z.infer<
+  typeof internalTenantBrandResponseSchema
 >;
 export type InternalTelegramIntegrationConfig = z.infer<
   typeof internalTelegramIntegrationConfigSchema
