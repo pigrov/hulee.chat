@@ -397,6 +397,128 @@ export const employeeRoles = pgTable(
   ]
 );
 
+export const tenantRoles = pgTable(
+  "tenant_roles",
+  {
+    id: text("id").primaryKey(),
+    tenantId: tenantIdColumn().references(() => tenants.id),
+    name: text("name").notNull(),
+    description: text("description"),
+    status: text("status").notNull().default("active"),
+    isSystem: boolean("is_system").notNull().default(false),
+    createdByEmployeeId: text("created_by_employee_id").references(
+      () => employees.id
+    ),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    ...timestamps
+  },
+  (table) => [
+    uniqueIndex("tenant_roles_tenant_name_unique").on(
+      table.tenantId,
+      table.name
+    ),
+    index("tenant_roles_tenant_idx").on(table.tenantId),
+    index("tenant_roles_tenant_status_idx").on(table.tenantId, table.status)
+  ]
+);
+
+export const tenantRolePermissions = pgTable(
+  "tenant_role_permissions",
+  {
+    tenantId: tenantIdColumn().references(() => tenants.id),
+    roleId: text("role_id")
+      .notNull()
+      .references(() => tenantRoles.id),
+    permission: text("permission").notNull(),
+    ...timestamps
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.roleId, table.permission] }),
+    index("tenant_role_permissions_tenant_idx").on(table.tenantId),
+    index("tenant_role_permissions_tenant_role_idx").on(
+      table.tenantId,
+      table.roleId
+    )
+  ]
+);
+
+export const tenantRoleBindings = pgTable(
+  "tenant_role_bindings",
+  {
+    id: text("id").primaryKey(),
+    tenantId: tenantIdColumn().references(() => tenants.id),
+    roleId: text("role_id")
+      .notNull()
+      .references(() => tenantRoles.id),
+    subjectType: text("subject_type").notNull(),
+    subjectId: text("subject_id").notNull(),
+    scopeType: text("scope_type").notNull(),
+    scopeId: text("scope_id"),
+    createdByEmployeeId: text("created_by_employee_id").references(
+      () => employees.id
+    ),
+    startsAt: timestamp("starts_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    ...timestamps
+  },
+  (table) => [
+    index("tenant_role_bindings_tenant_idx").on(table.tenantId),
+    index("tenant_role_bindings_tenant_role_idx").on(
+      table.tenantId,
+      table.roleId
+    ),
+    index("tenant_role_bindings_tenant_subject_idx").on(
+      table.tenantId,
+      table.subjectType,
+      table.subjectId
+    ),
+    index("tenant_role_bindings_tenant_active_idx").on(
+      table.tenantId,
+      table.revokedAt,
+      table.expiresAt
+    )
+  ]
+);
+
+export const directPermissionGrants = pgTable(
+  "direct_permission_grants",
+  {
+    id: text("id").primaryKey(),
+    tenantId: tenantIdColumn().references(() => tenants.id),
+    employeeId: text("employee_id")
+      .notNull()
+      .references(() => employees.id),
+    permission: text("permission").notNull(),
+    scopeType: text("scope_type").notNull(),
+    scopeId: text("scope_id"),
+    reason: text("reason").notNull(),
+    createdByEmployeeId: text("created_by_employee_id").references(
+      () => employees.id
+    ),
+    startsAt: timestamp("starts_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    ...timestamps
+  },
+  (table) => [
+    index("direct_permission_grants_tenant_idx").on(table.tenantId),
+    index("direct_permission_grants_tenant_employee_idx").on(
+      table.tenantId,
+      table.employeeId
+    ),
+    index("direct_permission_grants_tenant_permission_idx").on(
+      table.tenantId,
+      table.permission
+    ),
+    index("direct_permission_grants_tenant_active_idx").on(
+      table.tenantId,
+      table.revokedAt,
+      table.expiresAt
+    )
+  ]
+);
+
 export const employeeInvitations = pgTable(
   "employee_invitations",
   {

@@ -57,6 +57,13 @@
       "when": 1782229759347,
       "tag": "0007_gigantic_scarlet_witch",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1782233101872,
+      "tag": "0008_brown_zzzax",
+      "breakpoints": true
     }
   ]
 }

@@ -31,6 +31,14 @@ export const initialTables = [
   { name: "external_identity_links", scope: "tenant", requiresTenantId: true },
   { name: "employees", scope: "tenant", requiresTenantId: true },
   { name: "employee_roles", scope: "tenant", requiresTenantId: true },
+  { name: "tenant_roles", scope: "tenant", requiresTenantId: true },
+  { name: "tenant_role_permissions", scope: "tenant", requiresTenantId: true },
+  { name: "tenant_role_bindings", scope: "tenant", requiresTenantId: true },
+  {
+    name: "direct_permission_grants",
+    scope: "tenant",
+    requiresTenantId: true
+  },
   { name: "employee_invitations", scope: "tenant", requiresTenantId: true },
   { name: "sessions", scope: "global", requiresTenantId: false },
   {

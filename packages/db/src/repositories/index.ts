@@ -28,6 +28,18 @@ export {
   parseTenantSecretRef
 } from "./sql-tenant-secret-repository";
 export {
+  buildAddTenantRolePermissionSql,
+  buildCreateDirectPermissionGrantSql,
+  buildCreateTenantRoleBindingSql,
+  buildCreateTenantRoleSql,
+  buildListActorDirectPermissionGrantsSql,
+  buildListActorRoleBindingsSql,
+  buildListTenantRoleDefinitionsSql,
+  buildRevokeDirectPermissionGrantSql,
+  buildRevokeTenantRoleBindingSql,
+  createSqlTenantRbacRepository
+} from "./sql-rbac-repository";
+export {
   buildFindQueuedOutboundMessageSql,
   buildMarkOutboundMessageFailedSql,
   buildMarkOutboundMessageSentSql,
@@ -161,6 +173,22 @@ export type {
   TenantSecretRepository,
   UpsertTenantSecretInput
 } from "./sql-tenant-secret-repository";
+export type {
+  AddTenantRolePermissionInput,
+  CreateDirectPermissionGrantInput,
+  CreateTenantRoleBindingInput,
+  CreateTenantRoleInput,
+  EffectiveAccessSources,
+  ListActorDirectPermissionGrantsInput,
+  ListActorRoleBindingsInput,
+  ListEffectiveAccessSourcesInput,
+  ListTenantRoleDefinitionsInput,
+  RevokeDirectPermissionGrantInput,
+  RevokeTenantRoleBindingInput,
+  TenantRbacRepository,
+  TenantRoleRecord,
+  TenantRoleStatus
+} from "./sql-rbac-repository";
 export type {
   FindQueuedOutboundMessageInput,
   MarkOutboundMessageFailedInput,
