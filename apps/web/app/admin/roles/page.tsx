@@ -1,13 +1,17 @@
 import {
   getPermissionDefinition,
   permissionCatalog,
+  resolveEffectivePermissionGrants,
   type DirectPermissionGrant,
+  type EffectivePermissionGrant,
   type Permission,
   type PermissionDomain,
+  type PermissionGrantSource,
   type PermissionRoleBinding,
   type PermissionRoleBindingSubject,
   type PermissionScope,
-  type PermissionScopeType
+  type PermissionScopeType,
+  type PermissionActor
 } from "@hulee/core";
 import {
   createSqlEmployeeDirectoryRepository,
@@ -20,8 +24,10 @@ import {
   Archive,
   ArchiveRestore,
   KeyRound,
+  ListChecks,
   Plus,
   Save,
+  Search,
   ShieldCheck,
   XCircle
 } from "lucide-react";
@@ -88,6 +94,7 @@ export default async function RolesAdminPage({
   searchParams
 }: {
   searchParams?: Promise<{
+    accessPreviewEmployeeId?: string;
     roleActionStatus?: string;
   }>;
 }): Promise<ReactNode> {
@@ -147,6 +154,21 @@ export default async function RolesAdminPage({
     label: employee.displayName
   }));
   const roleBindingsByRoleId = countBindingsByRoleId(roleBindings);
+  const accessPreviewEmployee = activeEmployees.find(
+    (employee) =>
+      employee.employeeId === resolvedSearchParams?.accessPreviewEmployeeId
+  );
+  const effectiveAccessPreview =
+    accessPreviewEmployee === undefined
+      ? undefined
+      : buildEffectiveAccessPreview({
+          at: now,
+          directGrants,
+          employee: accessPreviewEmployee,
+          roleBindings,
+          roles,
+          tenantId: access.tenantId
+        });
 
   return (
     <TenantAdminShell
@@ -251,6 +273,72 @@ export default async function RolesAdminPage({
               {t("admin.roles.assign")}
             </button>
           </form>
+        </section>
+
+        <section
+          className="settingsPanel"
+          aria-labelledby="access-preview-title"
+        >
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.roles.accessPreview")}</p>
+              <h2 className="sectionTitle" id="access-preview-title">
+                {t("admin.roles.effectiveAccessPreview")}
+              </h2>
+              <p className="metaText">
+                {t("admin.roles.effectiveAccessPreview.description")}
+              </p>
+            </div>
+            <span className="badge">
+              {effectiveAccessPreview?.length ?? activeEmployees.length}
+            </span>
+          </div>
+
+          <form className="settingsForm accessPreviewForm" method="get">
+            <label className="fieldStack">
+              <span className="detailLabel">
+                {t("admin.roles.previewEmployee")}
+              </span>
+              <select
+                className="selectInput"
+                defaultValue={accessPreviewEmployee?.employeeId ?? ""}
+                name="accessPreviewEmployeeId"
+                required
+              >
+                <option value="">{t("admin.roles.selectEmployee")}</option>
+                {employeeOptions.map((employee) => (
+                  <option key={employee.value} value={employee.value}>
+                    {employee.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              className="primaryButton"
+              disabled={employeeOptions.length === 0}
+              type="submit"
+            >
+              <Search size={18} aria-hidden="true" />
+              {t("admin.roles.previewAccess")}
+            </button>
+          </form>
+
+          {effectiveAccessPreview === undefined ? (
+            <p className="metaText">{t("admin.roles.noAccessPreview")}</p>
+          ) : effectiveAccessPreview.length === 0 ? (
+            <p className="metaText">{t("admin.roles.noEffectiveAccess")}</p>
+          ) : (
+            <div className="managementList">
+              {effectiveAccessPreview.map((grant) => (
+                <EffectiveGrantRow
+                  grant={grant}
+                  key={effectiveGrantKey(grant)}
+                  roles={roles}
+                  t={t}
+                />
+              ))}
+            </div>
+          )}
         </section>
 
         <section
@@ -752,10 +840,157 @@ function DirectGrantRow({
   );
 }
 
+function EffectiveGrantRow({
+  grant,
+  roles,
+  t
+}: {
+  grant: EffectivePermissionGrant;
+  roles: readonly TenantRoleRecord[];
+  t: Translator;
+}): ReactNode {
+  const definition = getPermissionDefinition(grant.permission);
+
+  return (
+    <article className="managementRow effectiveAccessRow">
+      <span className="metricIcon">
+        <ListChecks size={18} aria-hidden="true" />
+      </span>
+      <div>
+        <h3 className="listItemTitle">
+          <code className="permissionCode">{grant.permission}</code>
+        </h3>
+        <p className="metaText">
+          {t("admin.roles.effectiveGrantDomain", {
+            value: t(permissionDomainKey(definition.domain))
+          })}
+        </p>
+        <p className="metaText">
+          {t("admin.roles.assignmentScope", {
+            value: scopeValue(grant.scope, t)
+          })}
+        </p>
+      </div>
+      <div className="sourceList">
+        {grant.sources.map((source, index) => (
+          <span className="badge" key={effectiveGrantSourceKey(source, index)}>
+            {sourceLabel(source, roles, t)}
+          </span>
+        ))}
+      </div>
+    </article>
+  );
+}
+
+function buildEffectiveAccessPreview(input: {
+  readonly at: Date;
+  readonly directGrants: readonly DirectPermissionGrant[];
+  readonly employee: TenantEmployeeRecord;
+  readonly roleBindings: readonly PermissionRoleBinding[];
+  readonly roles: readonly TenantRoleRecord[];
+  readonly tenantId: PermissionActor["tenantId"];
+}): readonly EffectivePermissionGrant[] {
+  const actor: PermissionActor = {
+    tenantId: input.tenantId,
+    employeeId: input.employee.employeeId,
+    roles: input.employee.roles
+  };
+
+  return [
+    ...resolveEffectivePermissionGrants({
+      actor,
+      roles: input.roles,
+      roleBindings: input.roleBindings,
+      directGrants: input.directGrants,
+      at: input.at
+    })
+  ].sort(compareEffectiveGrants);
+}
+
+function compareEffectiveGrants(
+  left: EffectivePermissionGrant,
+  right: EffectivePermissionGrant
+): number {
+  const leftDefinition = getPermissionDefinition(left.permission);
+  const rightDefinition = getPermissionDefinition(right.permission);
+  const domainComparison =
+    domainOrder.indexOf(leftDefinition.domain) -
+    domainOrder.indexOf(rightDefinition.domain);
+
+  if (domainComparison !== 0) {
+    return domainComparison;
+  }
+
+  const permissionComparison = left.permission.localeCompare(right.permission);
+
+  if (permissionComparison !== 0) {
+    return permissionComparison;
+  }
+
+  return permissionScopeKey(left.scope).localeCompare(
+    permissionScopeKey(right.scope)
+  );
+}
+
+function effectiveGrantKey(grant: EffectivePermissionGrant): string {
+  return [grant.permission, permissionScopeKey(grant.scope)].join(":");
+}
+
+function effectiveGrantSourceKey(
+  source: PermissionGrantSource,
+  index: number
+): string {
+  switch (source.type) {
+    case "fixed_role":
+      return `${index}:fixed_role:${source.role}`;
+    case "role_binding":
+      return `${index}:role_binding:${source.bindingId ?? source.roleId}`;
+    case "direct_grant":
+      return `${index}:direct_grant:${source.grantId ?? source.reason}`;
+  }
+}
+
+function sourceLabel(
+  source: PermissionGrantSource,
+  roles: readonly TenantRoleRecord[],
+  t: Translator
+): string {
+  switch (source.type) {
+    case "fixed_role":
+      return t("admin.roles.source.fixedRole", {
+        value: roleLabelFromEmployeeRole(source.role, t)
+      });
+    case "role_binding": {
+      const role = roles.find((candidate) => candidate.id === source.roleId);
+
+      return t("admin.roles.source.roleBinding", {
+        value: role === undefined ? source.roleId : roleName(role, t)
+      });
+    }
+    case "direct_grant":
+      return t("admin.roles.source.directGrant", {
+        value: source.reason
+      });
+  }
+}
+
 function roleName(role: TenantRoleRecord, t: Translator): string {
   const roleLabelKey = role.isSystem ? fixedRoleLabelKey(role.id) : undefined;
 
   return roleLabelKey ? t(roleLabelKey) : role.name;
+}
+
+function roleLabelFromEmployeeRole(role: string, t: Translator): string {
+  switch (role) {
+    case "tenant_admin":
+      return t("admin.employees.role.tenantAdmin");
+    case "supervisor":
+      return t("admin.employees.role.supervisor");
+    case "agent":
+      return t("admin.employees.role.agent");
+    default:
+      return role;
+  }
 }
 
 function countBindingsByRoleId(
@@ -796,6 +1031,10 @@ function scopeValue(scope: PermissionScope, t: Translator): string {
   return "id" in scope
     ? `${t(permissionScopeTypeKey(scope.type))}:${scope.id}`
     : t(permissionScopeTypeKey(scope.type));
+}
+
+function permissionScopeKey(scope: PermissionScope): string {
+  return "id" in scope ? `${scope.type}:${scope.id}` : scope.type;
 }
 
 function allowedScopesText(permission: Permission, t: Translator): string {

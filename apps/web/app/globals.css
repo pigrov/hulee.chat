@@ -727,6 +727,11 @@ a.secondaryButton {
   justify-self: start;
 }
 
+.accessPreviewForm {
+  grid-template-columns: minmax(220px, 1fr) auto;
+  align-items: end;
+}
+
 .scopePickerGrid {
   display: grid;
   grid-template-columns: minmax(130px, 1fr) minmax(180px, 1.4fr);
@@ -940,6 +945,19 @@ a.secondaryButton {
   display: grid;
   grid-template-columns: auto minmax(220px, 1fr) auto;
   align-items: flex-start;
+}
+
+.managementRow.effectiveAccessRow {
+  display: grid;
+  grid-template-columns: auto minmax(220px, 1fr) minmax(240px, 1fr);
+  align-items: flex-start;
+}
+
+.sourceList {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: var(--hulee-space-inline);
 }
 
 .roleDefinitionEditor,
@@ -1200,9 +1218,11 @@ button.managementRow:focus-visible {
   .adminOverviewGrid,
   .managementRow.roleDefinitionRow,
   .managementRow.directGrantRow,
+  .managementRow.effectiveAccessRow,
   .managementRow.roleBindingRow,
   .roleDefinitionRow,
   .roleBindingRow,
+  .accessPreviewForm,
   .roleAssignForm,
   .directGrantForm,
   .scopePickerGrid,
