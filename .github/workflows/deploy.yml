@@ -87,9 +87,17 @@ jobs:
           set -euo pipefail
           cd '${{ vars.DEPLOY_PATH }}'
           printf '%s' '${{ secrets.GHCR_TOKEN }}' | docker login ghcr.io -u '${{ github.repository_owner }}' --password-stdin >/dev/null
+          expected_image='${{ env.IMAGE_NAME }}:${{ github.sha }}'
           docker compose --env-file .env --env-file .release.env -f docker-compose.yml pull
-          docker compose --env-file .env --env-file .release.env -f docker-compose.yml run --rm migrate
+          docker compose --env-file .env --env-file .release.env -f docker-compose.yml run --rm -T migrate
           docker compose --env-file .env --env-file .release.env -f docker-compose.yml up -d --force-recreate --wait --wait-timeout 180 postgres api worker web
+          for container in hulee_chat_api hulee_chat_web hulee_chat_worker; do
+            actual_image=$(docker inspect --format '{{.Config.Image}}' "$container")
+            if [ "$actual_image" != "$expected_image" ]; then
+              echo "$container is running $actual_image, expected $expected_image" >&2
+              exit 1
+            fi
+          done
           docker compose --env-file .env --env-file .release.env -f docker-compose.yml ps
           EOF
 
