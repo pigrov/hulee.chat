@@ -140,6 +140,8 @@ type RouteMatch =
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8"
 };
+const maximumApiKeyLength = 256;
+const apiKeyPattern = /^[A-Za-z0-9._~:-]+$/;
 
 export function createPublicApiHandler(
   options: PublicApiHandlerOptions
@@ -393,16 +395,25 @@ function extractApiKey(
   const authorization = headerValue(headers, "authorization");
 
   if (authorization?.startsWith("Bearer ")) {
-    const value = authorization.slice("Bearer ".length).trim();
-
-    return value.length > 0 ? value : undefined;
+    return normalizeApiKey(authorization.slice("Bearer ".length));
   }
 
-  const explicitHeader = headerValue(headers, "x-hulee-api-key")?.trim();
+  return normalizeApiKey(headerValue(headers, "x-hulee-api-key"));
+}
 
-  return explicitHeader && explicitHeader.length > 0
-    ? explicitHeader
-    : undefined;
+function normalizeApiKey(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+
+  if (
+    normalized === undefined ||
+    normalized.length === 0 ||
+    normalized.length > maximumApiKeyLength ||
+    !apiKeyPattern.test(normalized)
+  ) {
+    return undefined;
+  }
+
+  return normalized;
 }
 
 function headerValue(

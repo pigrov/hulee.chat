@@ -1,4 +1,5 @@
 import type {
+  ApiKeyAuthenticator,
   PublicApiCommandContext,
   PublicApiCommandService,
   PublicApiAuditRecord
@@ -48,10 +49,11 @@ function createCommands(): PublicApiCommandService {
 function createHandler(input?: {
   commands?: PublicApiCommandService;
   auditRecords?: PublicApiAuditRecord[];
+  authenticator?: ApiKeyAuthenticator;
 }) {
   return createPublicApiHandler({
     requestIdFactory: () => "request-1",
-    authenticator: {
+    authenticator: input?.authenticator ?? {
       async authenticate(rawApiKey) {
         if (rawApiKey !== "valid-key") {
           return null;
@@ -110,6 +112,43 @@ describe("public API handler", () => {
         requestId: "request-1"
       }
     });
+  });
+
+  it("rejects malformed API keys before authenticator work", async () => {
+    const authenticate = vi.fn(async () => null);
+    const oversizedKey = "a".repeat(257);
+    const handler = createHandler({
+      authenticator: {
+        authenticate
+      }
+    });
+
+    const oversizedResponse = await handler.handle({
+      method: "POST",
+      path: "/v1/clients",
+      headers: {
+        authorization: `Bearer ${oversizedKey}`
+      },
+      body: {
+        externalId: "client-1",
+        displayName: "Alice"
+      }
+    });
+    const controlCharacterResponse = await handler.handle({
+      method: "POST",
+      path: "/v1/clients",
+      headers: {
+        "x-hulee-api-key": "valid-key\ninjected"
+      },
+      body: {
+        externalId: "client-1",
+        displayName: "Alice"
+      }
+    });
+
+    expect(oversizedResponse.status).toBe(401);
+    expect(controlCharacterResponse.status).toBe(401);
+    expect(authenticate).not.toHaveBeenCalled();
   });
 
   it("registers clients under the tenant resolved from the API key", async () => {
