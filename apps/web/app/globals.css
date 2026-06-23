@@ -727,6 +727,22 @@ a.secondaryButton {
   justify-self: start;
 }
 
+.employeeAccessAssignForm {
+  grid-template-columns: minmax(180px, 1fr) minmax(260px, 2fr) auto;
+  align-items: end;
+}
+
+.employeeAccessGrantForm {
+  grid-template-columns:
+    minmax(220px, 1.2fr) minmax(300px, 2fr) minmax(220px, 1.3fr)
+    minmax(160px, 1fr) auto;
+  align-items: start;
+}
+
+.employeeAccessGrantForm .primaryButton {
+  justify-self: start;
+}
+
 .accessPreviewForm {
   grid-template-columns: minmax(220px, 1fr) auto;
   align-items: end;
@@ -1248,6 +1264,8 @@ button.managementRow:focus-visible {
   .accessAuditFilterForm,
   .roleAssignForm,
   .directGrantForm,
+  .employeeAccessAssignForm,
+  .employeeAccessGrantForm,
   .scopePickerGrid,
   .roleEditorGrid,
   .permissionEditorGrid,

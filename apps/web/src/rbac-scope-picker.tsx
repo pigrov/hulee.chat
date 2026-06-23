@@ -125,11 +125,13 @@ export function ScopePickerFields({
 export function RoleAssignmentFields({
   employees,
   messages,
-  roles
+  roles,
+  selectedEmployeeId
 }: {
   readonly employees: readonly SelectOption[];
   readonly messages: ScopePickerMessages;
   readonly roles: readonly RoleAssignmentOption[];
+  readonly selectedEmployeeId?: string;
 }): ReactNode {
   const [roleId, setRoleId] = useState("");
   const selectedRole = useMemo(
@@ -140,17 +142,21 @@ export function RoleAssignmentFields({
 
   return (
     <>
-      <label className="fieldStack">
-        <span className="detailLabel">{messages.employee}</span>
-        <select className="selectInput" name="employeeId" required>
-          <option value="">{messages.selectEmployee}</option>
-          {employees.map((employee) => (
-            <option key={employee.value} value={employee.value}>
-              {employee.label}
-            </option>
-          ))}
-        </select>
-      </label>
+      {selectedEmployeeId === undefined ? (
+        <label className="fieldStack">
+          <span className="detailLabel">{messages.employee}</span>
+          <select className="selectInput" name="employeeId" required>
+            <option value="">{messages.selectEmployee}</option>
+            {employees.map((employee) => (
+              <option key={employee.value} value={employee.value}>
+                {employee.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : (
+        <input name="employeeId" type="hidden" value={selectedEmployeeId} />
+      )}
       <label className="fieldStack">
         <span className="detailLabel">{messages.role}</span>
         <select
@@ -180,11 +186,13 @@ export function RoleAssignmentFields({
 export function DirectGrantFields({
   employees,
   messages,
-  permissions
+  permissions,
+  selectedEmployeeId
 }: {
   readonly employees: readonly SelectOption[];
   readonly messages: ScopePickerMessages;
   readonly permissions: readonly DirectGrantPermissionOption[];
+  readonly selectedEmployeeId?: string;
 }): ReactNode {
   const [permissionId, setPermissionId] = useState("");
   const selectedPermission = useMemo(
@@ -195,17 +203,21 @@ export function DirectGrantFields({
 
   return (
     <>
-      <label className="fieldStack">
-        <span className="detailLabel">{messages.employee}</span>
-        <select className="selectInput" name="employeeId" required>
-          <option value="">{messages.selectEmployee}</option>
-          {employees.map((employee) => (
-            <option key={employee.value} value={employee.value}>
-              {employee.label}
-            </option>
-          ))}
-        </select>
-      </label>
+      {selectedEmployeeId === undefined ? (
+        <label className="fieldStack">
+          <span className="detailLabel">{messages.employee}</span>
+          <select className="selectInput" name="employeeId" required>
+            <option value="">{messages.selectEmployee}</option>
+            {employees.map((employee) => (
+              <option key={employee.value} value={employee.value}>
+                {employee.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : (
+        <input name="employeeId" type="hidden" value={selectedEmployeeId} />
+      )}
       <label className="fieldStack">
         <span className="detailLabel">{messages.permission}</span>
         <select

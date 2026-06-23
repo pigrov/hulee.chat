@@ -39,7 +39,7 @@ export async function createCustomTenantRoleAction(
   const session = await assertVerifiedRolesPermission();
   const now = new Date();
   const repository = createSqlTenantRbacRepository(getWebDatabase());
-  let destination = "/admin/roles?roleActionStatus=invalid";
+  let destination = roleActionDestination(formData, "invalid");
 
   try {
     const roleId = `role:${session.tenantId}:custom:${randomUUID()}`;
@@ -75,9 +75,9 @@ export async function createCustomTenantRoleAction(
       occurredAt: now
     });
 
-    destination = "/admin/roles?roleActionStatus=created";
+    destination = roleActionDestination(formData, "created");
   } catch {
-    destination = "/admin/roles?roleActionStatus=invalid";
+    destination = roleActionDestination(formData, "invalid");
   }
 
   revalidateRoleAdminPaths();
@@ -92,7 +92,7 @@ export async function updateCustomTenantRoleAction(
   const session = await assertVerifiedRolesPermission();
   const now = new Date();
   const repository = createSqlTenantRbacRepository(getWebDatabase());
-  let destination = "/admin/roles?roleActionStatus=invalid";
+  let destination = roleActionDestination(formData, "invalid");
 
   try {
     const roleId = readRequiredFormString(formData, "roleId");
@@ -143,9 +143,9 @@ export async function updateCustomTenantRoleAction(
       occurredAt: now
     });
 
-    destination = "/admin/roles?roleActionStatus=updated";
+    destination = roleActionDestination(formData, "updated");
   } catch {
-    destination = "/admin/roles?roleActionStatus=invalid";
+    destination = roleActionDestination(formData, "invalid");
   }
 
   revalidateRoleAdminPaths();
@@ -160,7 +160,7 @@ export async function archiveCustomTenantRoleAction(
   const session = await assertVerifiedRolesPermission();
   const now = new Date();
   const repository = createSqlTenantRbacRepository(getWebDatabase());
-  let destination = "/admin/roles?roleActionStatus=invalid";
+  let destination = roleActionDestination(formData, "invalid");
 
   try {
     const roleId = readRequiredFormString(formData, "roleId");
@@ -200,9 +200,9 @@ export async function archiveCustomTenantRoleAction(
       occurredAt: now
     });
 
-    destination = "/admin/roles?roleActionStatus=archived";
+    destination = roleActionDestination(formData, "archived");
   } catch {
-    destination = "/admin/roles?roleActionStatus=invalid";
+    destination = roleActionDestination(formData, "invalid");
   }
 
   revalidateRoleAdminPaths();
@@ -217,7 +217,7 @@ export async function restoreCustomTenantRoleAction(
   const session = await assertVerifiedRolesPermission();
   const now = new Date();
   const repository = createSqlTenantRbacRepository(getWebDatabase());
-  let destination = "/admin/roles?roleActionStatus=invalid";
+  let destination = roleActionDestination(formData, "invalid");
 
   try {
     const roleId = readRequiredFormString(formData, "roleId");
@@ -249,9 +249,9 @@ export async function restoreCustomTenantRoleAction(
       occurredAt: now
     });
 
-    destination = "/admin/roles?roleActionStatus=restored";
+    destination = roleActionDestination(formData, "restored");
   } catch {
-    destination = "/admin/roles?roleActionStatus=invalid";
+    destination = roleActionDestination(formData, "invalid");
   }
 
   revalidateRoleAdminPaths();
@@ -277,7 +277,7 @@ export async function assignTenantRoleAction(
   const rbacRepository = createSqlTenantRbacRepository(getWebDatabase());
   const employeeRepository =
     createSqlEmployeeDirectoryRepository(getWebDatabase());
-  let destination = "/admin/roles?roleActionStatus=invalid";
+  let destination = roleActionDestination(formData, "invalid");
 
   try {
     const [roles, target, bindings] = await Promise.all([
@@ -344,9 +344,9 @@ export async function assignTenantRoleAction(
       });
     }
 
-    destination = "/admin/roles?roleActionStatus=assigned";
+    destination = roleActionDestination(formData, "assigned");
   } catch {
-    destination = "/admin/roles?roleActionStatus=invalid";
+    destination = roleActionDestination(formData, "invalid");
   }
 
   revalidateRoleAdminPaths();
@@ -362,7 +362,7 @@ export async function revokeTenantRoleBindingAction(
   const bindingId = readRequiredFormString(formData, "bindingId");
   const now = new Date();
   const repository = createSqlTenantRbacRepository(getWebDatabase());
-  let destination = "/admin/roles?roleActionStatus=invalid";
+  let destination = roleActionDestination(formData, "invalid");
 
   try {
     const bindings = await repository.listRoleBindings({
@@ -406,9 +406,9 @@ export async function revokeTenantRoleBindingAction(
       occurredAt: now
     });
 
-    destination = "/admin/roles?roleActionStatus=revoked";
+    destination = roleActionDestination(formData, "revoked");
   } catch {
-    destination = "/admin/roles?roleActionStatus=invalid";
+    destination = roleActionDestination(formData, "invalid");
   }
 
   revalidateRoleAdminPaths();
@@ -425,7 +425,7 @@ export async function createDirectPermissionGrantAction(
   const rbacRepository = createSqlTenantRbacRepository(getWebDatabase());
   const employeeRepository =
     createSqlEmployeeDirectoryRepository(getWebDatabase());
-  let destination = "/admin/roles?roleActionStatus=invalid";
+  let destination = roleActionDestination(formData, "invalid");
 
   try {
     const employeeId = readRequiredFormString(
@@ -500,9 +500,9 @@ export async function createDirectPermissionGrantAction(
       });
     }
 
-    destination = "/admin/roles?roleActionStatus=direct_grant_created";
+    destination = roleActionDestination(formData, "direct_grant_created");
   } catch {
-    destination = "/admin/roles?roleActionStatus=invalid";
+    destination = roleActionDestination(formData, "invalid");
   }
 
   revalidateRoleAdminPaths();
@@ -518,7 +518,7 @@ export async function revokeDirectPermissionGrantAction(
   const grantId = readRequiredFormString(formData, "grantId");
   const now = new Date();
   const repository = createSqlTenantRbacRepository(getWebDatabase());
-  let destination = "/admin/roles?roleActionStatus=invalid";
+  let destination = roleActionDestination(formData, "invalid");
 
   try {
     const grants = await repository.listDirectGrants({
@@ -556,9 +556,9 @@ export async function revokeDirectPermissionGrantAction(
       occurredAt: now
     });
 
-    destination = "/admin/roles?roleActionStatus=direct_grant_revoked";
+    destination = roleActionDestination(formData, "direct_grant_revoked");
   } catch {
-    destination = "/admin/roles?roleActionStatus=invalid";
+    destination = roleActionDestination(formData, "invalid");
   }
 
   revalidateRoleAdminPaths();
@@ -605,6 +605,24 @@ async function assertVerifiedRolesPermission(): ReturnType<
 function revalidateRoleAdminPaths(): void {
   revalidatePath("/admin/roles");
   revalidatePath("/admin/employees");
+  revalidatePath("/admin/employees/[employeeId]/access", "page");
+}
+
+function roleActionDestination(formData: FormData, status: string): string {
+  const returnTo = readOptionalFormString(formData, "returnTo");
+  const path = isSafeRoleActionReturnTo(returnTo) ? returnTo : "/admin/roles";
+
+  return `${path}?roleActionStatus=${encodeURIComponent(status)}`;
+}
+
+function isSafeRoleActionReturnTo(path: string | undefined): path is string {
+  if (path === "/admin/roles") {
+    return true;
+  }
+
+  return (
+    path !== undefined && /^\/admin\/employees\/[^/?#]+\/access$/.test(path)
+  );
 }
 
 function assertCustomRole(

@@ -224,7 +224,10 @@ export default async function EmployeesAdminPage({
                       </span>
                     </div>
                     {canManageRoles ? (
-                      <Link className="secondaryButton" href="/admin/roles">
+                      <Link
+                        className="secondaryButton"
+                        href={`/admin/employees/${encodeURIComponent(employee.employeeId)}/access`}
+                      >
                         <KeyRound size={14} aria-hidden="true" />
                         {t("admin.employees.openRoles")}
                       </Link>
