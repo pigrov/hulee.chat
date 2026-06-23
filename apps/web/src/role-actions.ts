@@ -14,6 +14,7 @@ import {
 } from "@hulee/core";
 import {
   createSqlEmployeeDirectoryRepository,
+  createSqlOrgStructureRepository,
   createSqlSecurityAuditRepository,
   createSqlTenantRbacRepository,
   type AccessAuditAction,
@@ -310,6 +311,7 @@ export async function assignTenantRoleAction(
     }
 
     assertPermissionsAllowedForScope(role.permissions, scope.type);
+    await assertKnownScopeReference(session.tenantId, scope);
 
     if (existingBinding === undefined) {
       const bindingId = `role_binding:${session.tenantId}:${employeeId}:${randomUUID()}`;
@@ -441,6 +443,7 @@ export async function createDirectPermissionGrantAction(
     const expiresAt = readOptionalFormDate(formData, "expiresAt");
 
     assertPermissionScopeAllowed(permission, scope.type);
+    await assertKnownScopeReference(session.tenantId, scope);
 
     if (expiresAt !== undefined && expiresAt.getTime() <= now.getTime()) {
       throw new Error("Direct grant expiry must be in the future.");
@@ -654,6 +657,43 @@ function assertRoleUpdateDoesNotRemoveOwnRoleManagement(input: {
     !input.nextRole.permissions.includes("roles.manage")
   ) {
     throw new Error("Current employee role management permission is required.");
+  }
+}
+
+async function assertKnownScopeReference(
+  tenantId: TenantId,
+  scope: PermissionScope
+): Promise<void> {
+  if (!("id" in scope)) {
+    return;
+  }
+
+  if (scope.type !== "org_unit" && scope.type !== "queue") {
+    return;
+  }
+
+  const repository = createSqlOrgStructureRepository(getWebDatabase());
+
+  if (scope.type === "org_unit") {
+    const orgUnits = await repository.listOrgUnits({
+      tenantId,
+      activeOnly: true
+    });
+
+    if (!orgUnits.some((orgUnit) => orgUnit.id === scope.id)) {
+      throw new Error("Org unit scope reference was not found.");
+    }
+  }
+
+  if (scope.type === "queue") {
+    const workQueues = await repository.listWorkQueues({
+      tenantId,
+      activeOnly: true
+    });
+
+    if (!workQueues.some((workQueue) => workQueue.id === scope.id)) {
+      throw new Error("Work queue scope reference was not found.");
+    }
   }
 }
 

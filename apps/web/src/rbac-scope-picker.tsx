@@ -11,6 +11,15 @@ type SelectOption = {
   readonly label: string;
 };
 
+type ScopeReferenceOption = {
+  readonly value: string;
+  readonly label: string;
+};
+
+export type ScopeReferenceOptions = Partial<
+  Record<PermissionScopeType, readonly ScopeReferenceOption[]>
+>;
+
 export type RoleAssignmentOption = {
   readonly id: string;
   readonly label: string;
@@ -45,11 +54,13 @@ export function ScopePickerFields({
   allowedScopeTypes,
   disabled = false,
   messages,
+  scopeReferenceOptions = {},
   unavailableMessage
 }: {
   readonly allowedScopeTypes: readonly PermissionScopeType[];
   readonly disabled?: boolean;
   readonly messages: ScopePickerMessages;
+  readonly scopeReferenceOptions?: ScopeReferenceOptions;
   readonly unavailableMessage?: string;
 }): ReactNode {
   const [scopeType, setScopeType] = useState<PermissionScopeType>("tenant");
@@ -61,6 +72,11 @@ export function ScopePickerFields({
   const requiresReference =
     selectedScopeType !== undefined &&
     permissionScopeRequiresReference(selectedScopeType);
+  const selectedReferenceOptions =
+    selectedScopeType === undefined
+      ? []
+      : (scopeReferenceOptions[selectedScopeType] ?? []);
+  const hasReferenceOptions = selectedReferenceOptions.length > 0;
 
   useEffect(() => {
     if (selectedScopeType === undefined) {
@@ -75,8 +91,23 @@ export function ScopePickerFields({
   useEffect(() => {
     if (!requiresReference && scopeId.length > 0) {
       setScopeId("");
+      return;
     }
-  }, [requiresReference, scopeId]);
+
+    if (
+      requiresReference &&
+      hasReferenceOptions &&
+      scopeId.length > 0 &&
+      !selectedReferenceOptions.some((option) => option.value === scopeId)
+    ) {
+      setScopeId("");
+    }
+  }, [
+    hasReferenceOptions,
+    requiresReference,
+    scopeId,
+    selectedReferenceOptions
+  ]);
 
   return (
     <div className="scopePickerGrid">
@@ -106,16 +137,34 @@ export function ScopePickerFields({
       </label>
       <label className="fieldStack">
         <span className="detailLabel">{messages.scopeReference}</span>
-        <input
-          className="textInput"
-          disabled={isDisabled || !requiresReference}
-          name="scopeId"
-          onChange={(event) => setScopeId(event.currentTarget.value)}
-          placeholder={messages.scopeReferencePlaceholder}
-          required={requiresReference}
-          type="text"
-          value={scopeId}
-        />
+        {hasReferenceOptions ? (
+          <select
+            className="selectInput"
+            disabled={isDisabled || !requiresReference}
+            name="scopeId"
+            onChange={(event) => setScopeId(event.currentTarget.value)}
+            required={requiresReference}
+            value={scopeId}
+          >
+            <option value="">{messages.scopeReferencePlaceholder}</option>
+            {selectedReferenceOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            className="textInput"
+            disabled={isDisabled || !requiresReference}
+            name="scopeId"
+            onChange={(event) => setScopeId(event.currentTarget.value)}
+            placeholder={messages.scopeReferencePlaceholder}
+            required={requiresReference}
+            type="text"
+            value={scopeId}
+          />
+        )}
         <span className="metaText">{messages.scopeReferenceDescription}</span>
       </label>
     </div>
@@ -126,11 +175,13 @@ export function RoleAssignmentFields({
   employees,
   messages,
   roles,
+  scopeReferenceOptions,
   selectedEmployeeId
 }: {
   readonly employees: readonly SelectOption[];
   readonly messages: ScopePickerMessages;
   readonly roles: readonly RoleAssignmentOption[];
+  readonly scopeReferenceOptions?: ScopeReferenceOptions;
   readonly selectedEmployeeId?: string;
 }): ReactNode {
   const [roleId, setRoleId] = useState("");
@@ -178,6 +229,7 @@ export function RoleAssignmentFields({
         allowedScopeTypes={allowedScopeTypes}
         disabled={selectedRole === undefined}
         messages={messages}
+        scopeReferenceOptions={scopeReferenceOptions}
       />
     </>
   );
@@ -187,11 +239,13 @@ export function DirectGrantFields({
   employees,
   messages,
   permissions,
+  scopeReferenceOptions,
   selectedEmployeeId
 }: {
   readonly employees: readonly SelectOption[];
   readonly messages: ScopePickerMessages;
   readonly permissions: readonly DirectGrantPermissionOption[];
+  readonly scopeReferenceOptions?: ScopeReferenceOptions;
   readonly selectedEmployeeId?: string;
 }): ReactNode {
   const [permissionId, setPermissionId] = useState("");
@@ -239,6 +293,7 @@ export function DirectGrantFields({
         allowedScopeTypes={allowedScopeTypes}
         disabled={selectedPermission === undefined}
         messages={messages}
+        scopeReferenceOptions={scopeReferenceOptions}
         unavailableMessage={messages.selectPermission}
       />
       <label className="fieldStack">

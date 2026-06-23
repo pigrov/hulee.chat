@@ -8,6 +8,7 @@ apps/*/.next/
 env.local
 !.env.example
 *.log
+*.tsbuildinfo
 
 # Local internal planning documents.
 docs/internal/

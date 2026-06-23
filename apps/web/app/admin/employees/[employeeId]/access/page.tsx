@@ -15,6 +15,7 @@ import {
 } from "@hulee/core";
 import {
   createSqlEmployeeDirectoryRepository,
+  createSqlOrgStructureRepository,
   createSqlTenantRbacRepository,
   type TenantEmployeeRecord,
   type TenantRoleRecord
@@ -33,6 +34,7 @@ import {
 import { DetailItem } from "../../../../../src/app-chrome";
 import { loadInboxViewModel } from "../../../../../src/inbox-api-client";
 import { allowedRoleBindingScopeTypesForPermissions } from "../../../../../src/rbac-scope";
+import { buildScopeReferenceOptions } from "../../../../../src/rbac-scope-options";
 import {
   DirectGrantFields,
   RoleAssignmentFields,
@@ -104,18 +106,36 @@ export default async function EmployeeAccessAdminPage({
   const rbacRepository = createSqlTenantRbacRepository(getWebDatabase());
   const employeeRepository =
     createSqlEmployeeDirectoryRepository(getWebDatabase());
-  const [model, employee, roles, roleBindings, directGrants, resolvedSearch] =
-    await Promise.all([
-      loadInboxViewModel(),
-      employeeRepository.findEmployee({
-        tenantId: access.tenantId,
-        employeeId
-      }),
-      rbacRepository.listRoleDefinitions({ tenantId: access.tenantId }),
-      rbacRepository.listRoleBindings({ tenantId: access.tenantId, at: now }),
-      rbacRepository.listDirectGrants({ tenantId: access.tenantId, at: now }),
-      searchParams
-    ]);
+  const orgStructureRepository =
+    createSqlOrgStructureRepository(getWebDatabase());
+  const [
+    model,
+    employee,
+    roles,
+    roleBindings,
+    directGrants,
+    orgUnits,
+    workQueues,
+    resolvedSearch
+  ] = await Promise.all([
+    loadInboxViewModel(),
+    employeeRepository.findEmployee({
+      tenantId: access.tenantId,
+      employeeId
+    }),
+    rbacRepository.listRoleDefinitions({ tenantId: access.tenantId }),
+    rbacRepository.listRoleBindings({ tenantId: access.tenantId, at: now }),
+    rbacRepository.listDirectGrants({ tenantId: access.tenantId, at: now }),
+    orgStructureRepository.listOrgUnits({
+      tenantId: access.tenantId,
+      activeOnly: true
+    }),
+    orgStructureRepository.listWorkQueues({
+      tenantId: access.tenantId,
+      activeOnly: true
+    }),
+    searchParams
+  ]);
 
   if (employee === null) {
     redirect("/admin/employees");
@@ -142,6 +162,10 @@ export default async function EmployeeAccessAdminPage({
       label: employee.displayName
     }
   ];
+  const scopeReferenceOptions = buildScopeReferenceOptions({
+    orgUnits,
+    workQueues
+  });
   const employeeRoleBindings = roleBindings
     .filter(
       (binding) =>
@@ -254,6 +278,7 @@ export default async function EmployeeAccessAdminPage({
               employees={employeeOptions}
               messages={scopePickerMessages(t)}
               roles={roleAssignmentOptions}
+              scopeReferenceOptions={scopeReferenceOptions}
               selectedEmployeeId={employee.employeeId}
             />
             <button
@@ -293,6 +318,7 @@ export default async function EmployeeAccessAdminPage({
               employees={employeeOptions}
               messages={scopePickerMessages(t)}
               permissions={directGrantPermissionOptions}
+              scopeReferenceOptions={scopeReferenceOptions}
               selectedEmployeeId={employee.employeeId}
             />
             <button

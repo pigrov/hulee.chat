@@ -18,6 +18,7 @@ import {
 import {
   accessAuditActions,
   createSqlEmployeeDirectoryRepository,
+  createSqlOrgStructureRepository,
   createSqlSecurityAuditRepository,
   createSqlTenantRbacRepository,
   type AccessAuditAction,
@@ -62,6 +63,7 @@ import {
   resolveCurrentWebAccessSession
 } from "../../../src/session";
 import { allowedRoleBindingScopeTypesForPermissions } from "../../../src/rbac-scope";
+import { buildScopeReferenceOptions } from "../../../src/rbac-scope-options";
 import {
   DirectGrantFields,
   RoleAssignmentFields,
@@ -128,6 +130,8 @@ export default async function RolesAdminPage({
   const repository = createSqlTenantRbacRepository(getWebDatabase());
   const employeeRepository =
     createSqlEmployeeDirectoryRepository(getWebDatabase());
+  const orgStructureRepository =
+    createSqlOrgStructureRepository(getWebDatabase());
   const now = new Date();
   const [
     model,
@@ -135,6 +139,8 @@ export default async function RolesAdminPage({
     roleBindings,
     directGrants,
     employees,
+    orgUnits,
+    workQueues,
     resolvedSearchParams
   ] = await Promise.all([
     loadInboxViewModel(),
@@ -142,6 +148,14 @@ export default async function RolesAdminPage({
     repository.listRoleBindings({ tenantId: access.tenantId, at: now }),
     repository.listDirectGrants({ tenantId: access.tenantId, at: now }),
     employeeRepository.listEmployees({ tenantId: access.tenantId }),
+    orgStructureRepository.listOrgUnits({
+      tenantId: access.tenantId,
+      activeOnly: true
+    }),
+    orgStructureRepository.listWorkQueues({
+      tenantId: access.tenantId,
+      activeOnly: true
+    }),
     searchParams
   ]);
   const { t } = createTranslator(model.tenant.locale);
@@ -165,6 +179,10 @@ export default async function RolesAdminPage({
     value: employee.employeeId,
     label: employee.displayName
   }));
+  const scopeReferenceOptions = buildScopeReferenceOptions({
+    orgUnits,
+    workQueues
+  });
   const roleBindingsByRoleId = countBindingsByRoleId(roleBindings);
   const accessAuditFilters = resolveAccessAuditFilters(
     resolvedSearchParams,
@@ -284,6 +302,7 @@ export default async function RolesAdminPage({
               employees={employeeOptions}
               messages={scopePickerMessages(t)}
               roles={roleAssignmentOptions}
+              scopeReferenceOptions={scopeReferenceOptions}
             />
             <button
               className="primaryButton"
@@ -425,6 +444,7 @@ export default async function RolesAdminPage({
               employees={employeeOptions}
               messages={scopePickerMessages(t)}
               permissions={directGrantPermissionOptions}
+              scopeReferenceOptions={scopeReferenceOptions}
             />
             <button
               className="primaryButton"
