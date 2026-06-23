@@ -10,6 +10,7 @@ import {
   requestPasswordResetEmail,
   resetPasswordWithToken
 } from "./auth-email";
+import { assertWebAuthRateLimit } from "./auth-rate-limit";
 import {
   completeTenantLoginChoice,
   loginLocalWebSession,
@@ -27,6 +28,7 @@ export async function loginAction(formData: FormData): Promise<void> {
   let destination = "/login?error=invalid";
 
   try {
+    await assertWebAuthRateLimit("login", `${tenantSlug ?? "*"}:${email}`);
     const result = await loginLocalWebSession({
       tenantSlug,
       email,
@@ -55,6 +57,7 @@ export async function selectTenantLoginAction(
   let destination = "/login?error=invalid";
 
   try {
+    await assertWebAuthRateLimit("select_company", tenantSlug);
     const result = await completeTenantLoginChoice(tenantSlug);
 
     destination = result?.redirectPath ?? "/login?error=invalid";
@@ -78,6 +81,7 @@ export async function registerAction(formData: FormData): Promise<void> {
   let destination = "/register?error=invalid";
 
   try {
+    await assertWebAuthRateLimit("register", email);
     const result = await registerLocalTenant({
       tenantSlug,
       tenantDisplayName,
@@ -107,6 +111,7 @@ export async function forgotPasswordAction(formData: FormData): Promise<void> {
   const email = readRequiredFormString(formData, "email");
 
   try {
+    await assertWebAuthRateLimit("forgot_password", email);
     await requestPasswordResetEmail({
       email
     });
@@ -120,16 +125,23 @@ export async function forgotPasswordAction(formData: FormData): Promise<void> {
 export async function resetPasswordAction(formData: FormData): Promise<void> {
   const token = readRequiredFormString(formData, "token");
   const password = readRequiredFormString(formData, "password");
-  const status = await resetPasswordWithToken({
-    token,
-    password
-  });
+  let destination = `/reset-password/${encodeURIComponent(token)}?error=invalid`;
 
-  if (status === "complete") {
-    redirect("/login?reset=complete");
+  try {
+    await assertWebAuthRateLimit("reset_password", token);
+    const status = await resetPasswordWithToken({
+      token,
+      password
+    });
+
+    if (status === "complete") {
+      destination = "/login?reset=complete";
+    }
+  } catch {
+    destination = `/reset-password/${encodeURIComponent(token)}?error=invalid`;
   }
 
-  redirect(`/reset-password/${encodeURIComponent(token)}?error=invalid`);
+  redirect(destination);
 }
 
 export async function resendEmailVerificationAction(
@@ -146,13 +158,25 @@ export async function resendEmailVerificationAction(
   );
 
   if (session.accountId !== undefined) {
-    const emailResult = await requestEmailVerificationForAccount({
-      tenantId: session.tenantId,
-      accountId: session.accountId
-    });
-    const status = emailResult.sent ? "sent" : emailResult.reason;
+    try {
+      await assertWebAuthRateLimit(
+        "resend_email_verification",
+        `${session.tenantId}:${session.accountId}`
+      );
+      const emailResult = await requestEmailVerificationForAccount({
+        tenantId: session.tenantId,
+        accountId: session.accountId
+      });
+      const status = emailResult.sent ? "sent" : emailResult.reason;
 
-    destination = addSearchParam(returnTo, "emailVerification", status);
+      destination = addSearchParam(returnTo, "emailVerification", status);
+    } catch {
+      destination = addSearchParam(
+        returnTo,
+        "emailVerification",
+        "provider_failed"
+      );
+    }
   }
 
   revalidatePath("/");

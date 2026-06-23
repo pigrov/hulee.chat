@@ -25,6 +25,7 @@ import { redirect } from "next/navigation";
 import { randomBytes, randomUUID } from "node:crypto";
 
 import { resolvePublicBaseUrl, sendEmployeeInvitationEmail } from "./email";
+import { assertWebAuthRateLimit } from "./auth-rate-limit";
 import {
   assertCurrentWebTenantPermission,
   createTenantWebSession,
@@ -284,6 +285,7 @@ export async function acceptEmployeeInviteAction(
   let destination = "/invite/invalid";
 
   try {
+    await assertWebAuthRateLimit("accept_employee_invite", token);
     requirePassword(password);
 
     const preview = await repository.findInvitationByTokenHash(tokenHash);

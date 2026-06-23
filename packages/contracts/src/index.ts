@@ -134,6 +134,7 @@ export type ModuleManifest = {
 export type PlatformErrorCode =
   | "auth.invalid_credentials"
   | "auth.email_not_verified"
+  | "auth.rate_limited"
   | "entitlement.missing"
   | "license.inactive"
   | "permission.denied"
@@ -186,6 +187,14 @@ export const platformErrorCatalog = {
     retryability: "not_retryable",
     severity: "warn",
     messageKey: "errors.auth.emailNotVerified"
+  },
+  "auth.rate_limited": {
+    code: "auth.rate_limited",
+    category: "auth",
+    httpStatus: 429,
+    retryability: "not_retryable",
+    severity: "warn",
+    messageKey: "errors.auth.rateLimited"
   },
   "entitlement.missing": {
     code: "entitlement.missing",

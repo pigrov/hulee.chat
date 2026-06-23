@@ -7,6 +7,7 @@ export const internalApiV1Version = "v1";
 export const internalApiPlatformErrorCodeSchema = z.enum([
   "auth.invalid_credentials",
   "auth.email_not_verified",
+  "auth.rate_limited",
   "entitlement.missing",
   "license.inactive",
   "permission.denied",
