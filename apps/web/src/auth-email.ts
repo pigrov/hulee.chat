@@ -19,6 +19,7 @@ import {
   sendPasswordResetEmail,
   type SendEmailResult
 } from "./email";
+import { validatePasswordPolicy } from "./password-policy";
 import { getWebDatabase } from "./session";
 
 const emailVerificationTtlMs = 1000 * 60 * 60 * 24 * 7;
@@ -154,14 +155,18 @@ export async function resetPasswordWithToken(input: {
   token: string;
   password: string;
 }): Promise<"complete" | "invalid"> {
-  if (input.password.length < 8) {
-    return "invalid";
-  }
-
   const repository = createSqlAuthEmailTokenRepository(getWebDatabase());
   const preview = await findValidAuthEmailToken(input.token, "password_reset");
 
   if (preview === null) {
+    return "invalid";
+  }
+
+  const passwordResult = validatePasswordPolicy(input.password, {
+    email: preview.token.email
+  });
+
+  if (!passwordResult.valid) {
     return "invalid";
   }
 
@@ -172,7 +177,7 @@ export async function resetPasswordWithToken(input: {
     token: preview.token,
     idFactory: createSequentialIdFactory(`reset-password:${randomUUID()}`)
   });
-  const passwordHash = await hashLocalPassword(input.password);
+  const passwordHash = await hashLocalPassword(passwordResult.password);
 
   try {
     await repository.completePasswordReset({

@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 const scryptAsync = promisify(scrypt);
 const hashVersion = "scrypt:v1";
 const passwordHashBytes = 64;
+const maximumPasswordInputLength = 1024;
 
 export const localAuthManifest = {
   id: "auth-local",
@@ -45,6 +46,10 @@ export async function hashLocalPassword(
     throw new Error("Password must not be empty.");
   }
 
+  if (password.length > maximumPasswordInputLength) {
+    throw new Error("Password input is too long.");
+  }
+
   const derivedKey = (await scryptAsync(
     password,
     salt,
@@ -58,6 +63,10 @@ export async function verifyLocalPassword(
   password: string,
   passwordHash: string | null | undefined
 ): Promise<boolean> {
+  if (password.length === 0 || password.length > maximumPasswordInputLength) {
+    return false;
+  }
+
   const parsed = parseLocalPasswordHash(passwordHash);
 
   if (parsed === null) {

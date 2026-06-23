@@ -27,6 +27,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { resolvePublicBaseUrl, sendEmployeeInvitationEmail } from "./email";
 import { assertWebActionRequest } from "./action-security";
 import { assertWebAuthRateLimit } from "./auth-rate-limit";
+import { requireValidPassword } from "./password-policy";
 import {
   assertCurrentWebTenantPermission,
   createTenantWebSession,
@@ -299,13 +300,16 @@ export async function acceptEmployeeInviteAction(
 
   try {
     await assertWebAuthRateLimit("accept_employee_invite", token);
-    requirePassword(password);
 
     const preview = await repository.findInvitationByTokenHash(tokenHash);
 
     if (preview === null) {
       throw new Error("Invitation not found.");
     }
+
+    const acceptedPassword = requireValidPassword(password, {
+      email: preview.invitation.email
+    });
 
     const now = new Date();
     const accepted = acceptEmployeeInvitation({
@@ -324,7 +328,7 @@ export async function acceptEmployeeInviteAction(
         idFactory: createSequentialIdFactory(`accept-email:${randomUUID()}`)
       })
     ];
-    const passwordHash = await hashLocalPassword(password);
+    const passwordHash = await hashLocalPassword(acceptedPassword);
     const tenantAccount = await repository.acceptInvitation({
       tokenHash,
       accountId,
@@ -421,10 +425,4 @@ function readOptionalFormString(
   }
 
   return value.trim();
-}
-
-function requirePassword(password: string): void {
-  if (password.length < 8) {
-    throw new Error("Password is too short.");
-  }
 }

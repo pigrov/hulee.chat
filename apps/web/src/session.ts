@@ -35,6 +35,7 @@ import {
   type PlatformRole,
   type WebAccessSession
 } from "./access";
+import { validatePasswordPolicy } from "./password-policy";
 import { resolveWebConfig, resolveWebEnv } from "./web-config";
 
 export { resolveWebConfig, resolveWebEnv } from "./web-config";
@@ -270,7 +271,7 @@ export async function registerLocalTenant(
 ): Promise<LoginLocalWebSessionResult> {
   const tenantSlug = normalizeTenantSlug(input.tenantSlug);
   const email = normalizeEmail(input.email);
-  const password = requireRegistrationPassword(input.password);
+  const password = requireRegistrationPassword(input.password, email);
   const now = new Date();
   const registration = registerTenant({
     now: now.toISOString(),
@@ -645,10 +646,12 @@ function normalizeTenantSlug(slug: string): string {
   return slug.trim().toLowerCase();
 }
 
-function requireRegistrationPassword(password: string): string {
-  if (password.length < 8) {
+function requireRegistrationPassword(password: string, email: string): string {
+  const result = validatePasswordPolicy(password, { email });
+
+  if (!result.valid) {
     throw new CoreError("validation.failed");
   }
 
-  return password;
+  return result.password;
 }

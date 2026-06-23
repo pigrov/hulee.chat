@@ -29,6 +29,21 @@ describe("local auth module", () => {
     );
   });
 
+  it("rejects oversized password inputs before scrypt work", async () => {
+    const oversizedPassword = "A".repeat(1025);
+    const passwordHash = await hashLocalPassword(
+      "CorrectHorse12",
+      "fixed-salt"
+    );
+
+    await expect(hashLocalPassword(oversizedPassword)).rejects.toThrow(
+      /too long/
+    );
+    await expect(
+      verifyLocalPassword(oversizedPassword, passwordHash)
+    ).resolves.toBe(false);
+  });
+
   it("exposes the local auth provider manifest", async () => {
     const provider = createLocalAuthProvider();
 
