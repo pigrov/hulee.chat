@@ -36,6 +36,7 @@ export {
   buildListActorDirectPermissionGrantsSql,
   buildListActorRoleBindingsSql,
   buildListTenantRoleDefinitionsSql,
+  buildListTenantRoleBindingsSql,
   buildRevokeDirectPermissionGrantSql,
   buildRevokeTenantRoleBindingSql,
   createSqlTenantRbacRepository
@@ -185,6 +186,7 @@ export type {
   ListActorRoleBindingsInput,
   ListEffectiveAccessSourcesInput,
   ListTenantRoleDefinitionsInput,
+  ListTenantRoleBindingsInput,
   RevokeDirectPermissionGrantInput,
   RevokeTenantRoleBindingInput,
   TenantRbacRepository,

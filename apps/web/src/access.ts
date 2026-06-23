@@ -97,6 +97,7 @@ export function navigationAccessFromSession(
     tenantAdmin:
       canTenantPermission(session, "tenant.manage") ||
       canTenantPermission(session, "employees.manage") ||
+      canTenantPermission(session, "roles.manage") ||
       canTenantPermission(session, "modules.manage"),
     platformAdmin: canPlatformAdmin(session)
   };

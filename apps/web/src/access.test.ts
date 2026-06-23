@@ -47,6 +47,17 @@ describe("web access guards", () => {
     expect(canPlatformAdmin(session)).toBe(true);
   });
 
+  it("shows tenant admin navigation for role managers", () => {
+    const session = {
+      ...resolveWebAccessSession({
+        NODE_ENV: "production"
+      }),
+      permissions: ["roles.manage" as const]
+    };
+
+    expect(navigationAccessFromSession(session).tenantAdmin).toBe(true);
+  });
+
   it("throws when required access is missing", () => {
     const session = resolveWebAccessSession({
       NODE_ENV: "production"

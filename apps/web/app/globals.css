@@ -702,6 +702,17 @@ a.secondaryButton {
   align-items: center;
 }
 
+.roleBindingRow {
+  display: grid;
+  grid-template-columns: auto minmax(220px, 1fr) auto;
+  align-items: center;
+}
+
+.roleAssignForm {
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
+  align-items: end;
+}
+
 .roleCatalogRow {
   align-items: flex-start;
 }
@@ -1077,6 +1088,8 @@ button.managementRow:focus-visible {
   .adminIntegrationGrid,
   .adminOverviewGrid,
   .roleDefinitionRow,
+  .roleBindingRow,
+  .roleAssignForm,
   .brandPresetGrid,
   .brandColorGrid,
   .platformMetricGrid,

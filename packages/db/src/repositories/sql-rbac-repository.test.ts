@@ -192,6 +192,53 @@ describe("SQL RBAC repository", () => {
     );
   });
 
+  it("lists active tenant role bindings for administration", async () => {
+    const executor = new RecordingSqlExecutor([
+      [
+        {
+          id: "binding-sales",
+          tenant_id: tenantId,
+          role_id: "role-sales",
+          subject_type: "employee",
+          subject_id: employeeId,
+          scope_type: "tenant",
+          scope_id: null,
+          starts_at: null,
+          expires_at: null,
+          revoked_at: null
+        }
+      ]
+    ]);
+    const repository = createSqlTenantRbacRepository(executor);
+
+    await expect(
+      repository.listRoleBindings({
+        tenantId,
+        at: now
+      })
+    ).resolves.toEqual([
+      {
+        id: "binding-sales",
+        tenantId,
+        roleId: "role-sales",
+        subject: {
+          type: "employee",
+          id: employeeId
+        },
+        scope: {
+          type: "tenant"
+        }
+      }
+    ]);
+
+    const query = renderQuery(executor.queries[0]);
+
+    expect(query.sql).toContain("from tenant_role_bindings");
+    expect(query.sql).toContain("where tenant_id = $1");
+    expect(query.sql).toContain("revoked_at is null");
+    expect(query.params).toEqual(expect.arrayContaining([tenantId, now]));
+  });
+
   it("rejects cross-tenant rows returned from role reads", async () => {
     const repository = createSqlTenantRbacRepository(
       new RecordingSqlExecutor([
@@ -214,6 +261,34 @@ describe("SQL RBAC repository", () => {
     await expect(
       repository.listRoleDefinitions({
         tenantId
+      })
+    ).rejects.toThrow(new CoreError("tenant.boundary_violation"));
+  });
+
+  it("rejects cross-tenant rows returned from tenant binding reads", async () => {
+    const repository = createSqlTenantRbacRepository(
+      new RecordingSqlExecutor([
+        [
+          {
+            id: "binding-cross-tenant",
+            tenant_id: otherTenantId,
+            role_id: "role-sales",
+            subject_type: "employee",
+            subject_id: employeeId,
+            scope_type: "tenant",
+            scope_id: null,
+            starts_at: null,
+            expires_at: null,
+            revoked_at: null
+          }
+        ]
+      ])
+    );
+
+    await expect(
+      repository.listRoleBindings({
+        tenantId,
+        at: now
       })
     ).rejects.toThrow(new CoreError("tenant.boundary_violation"));
   });

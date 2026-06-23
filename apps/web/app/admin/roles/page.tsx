@@ -2,14 +2,19 @@ import {
   getPermissionDefinition,
   permissionCatalog,
   type Permission,
-  type PermissionDomain
+  type PermissionDomain,
+  type PermissionRoleBinding,
+  type PermissionRoleBindingSubject,
+  type PermissionScope
 } from "@hulee/core";
 import {
+  createSqlEmployeeDirectoryRepository,
   createSqlTenantRbacRepository,
+  type TenantEmployeeRecord,
   type TenantRoleRecord
 } from "@hulee/db";
 import { createTranslator, type I18nMessageKey } from "@hulee/i18n";
-import { KeyRound, ShieldCheck } from "lucide-react";
+import { KeyRound, Plus, ShieldCheck, XCircle } from "lucide-react";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
@@ -18,7 +23,12 @@ import {
   canTenantPermission,
   navigationAccessFromSession
 } from "../../../src/access";
+import { DetailItem } from "../../../src/app-chrome";
 import { loadInboxViewModel } from "../../../src/inbox-api-client";
+import {
+  assignTenantRoleAction,
+  revokeTenantRoleBindingAction
+} from "../../../src/role-actions";
 import {
   getWebDatabase,
   resolveCurrentWebAccessSession
@@ -52,7 +62,13 @@ type DomainSummary = {
   permissions: readonly Permission[];
 };
 
-export default async function RolesAdminPage(): Promise<ReactNode> {
+export default async function RolesAdminPage({
+  searchParams
+}: {
+  searchParams?: Promise<{
+    roleActionStatus?: string;
+  }>;
+}): Promise<ReactNode> {
   const access = await resolveCurrentWebAccessSession();
 
   if (access === null) {
@@ -69,23 +85,133 @@ export default async function RolesAdminPage(): Promise<ReactNode> {
   }
 
   const repository = createSqlTenantRbacRepository(getWebDatabase());
-  const [model, roles] = await Promise.all([
-    loadInboxViewModel(),
-    repository.listRoleDefinitions({ tenantId: access.tenantId })
-  ]);
+  const employeeRepository =
+    createSqlEmployeeDirectoryRepository(getWebDatabase());
+  const now = new Date();
+  const [model, roles, roleBindings, employees, resolvedSearchParams] =
+    await Promise.all([
+      loadInboxViewModel(),
+      repository.listRoleDefinitions({ tenantId: access.tenantId }),
+      repository.listRoleBindings({ tenantId: access.tenantId, at: now }),
+      employeeRepository.listEmployees({ tenantId: access.tenantId }),
+      searchParams
+    ]);
   const { t } = createTranslator(model.tenant.locale);
+  const activeRoles = roles.filter((role) => role.status === "active");
+  const activeEmployees = employees.filter(
+    (employee) => employee.deactivatedAt === null
+  );
+  const roleBindingsByRoleId = countBindingsByRoleId(roleBindings);
 
   return (
     <TenantAdminShell
       access={access}
       brand={model.tenant.brand}
       current="roles"
+      sidebarContent={
+        resolvedSearchParams?.roleActionStatus ? (
+          <DetailItem
+            label={t("admin.roles.actionStatus")}
+            value={t(
+              roleActionStatusKey(resolvedSearchParams.roleActionStatus)
+            )}
+          />
+        ) : null
+      }
       t={t}
       tenantDisplayName={model.tenant.displayName}
       title={t("admin.roles")}
       titleId="roles-title"
     >
       <div className="adminStack">
+        <section className="settingsPanel" aria-labelledby="role-assign-title">
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.roles.assignments")}</p>
+              <h2 className="sectionTitle" id="role-assign-title">
+                {t("admin.roles.assignRole")}
+              </h2>
+              <p className="metaText">
+                {t("admin.roles.assignRole.description")}
+              </p>
+            </div>
+            <span className="badge">{activeEmployees.length}</span>
+          </div>
+
+          <form
+            className="settingsForm roleAssignForm"
+            action={assignTenantRoleAction}
+          >
+            <label className="fieldStack">
+              <span className="detailLabel">{t("admin.roles.employee")}</span>
+              <select className="selectInput" name="employeeId" required>
+                <option value="">{t("admin.roles.selectEmployee")}</option>
+                {activeEmployees.map((employee) => (
+                  <option key={employee.employeeId} value={employee.employeeId}>
+                    {employee.displayName}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="fieldStack">
+              <span className="detailLabel">{t("admin.roles.role")}</span>
+              <select className="selectInput" name="roleId" required>
+                <option value="">{t("admin.roles.selectRole")}</option>
+                {activeRoles.map((role) => (
+                  <option key={role.id} value={role.id}>
+                    {roleName(role, t)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              className="primaryButton"
+              type="submit"
+              disabled={
+                activeEmployees.length === 0 || activeRoles.length === 0
+              }
+            >
+              <Plus size={18} aria-hidden="true" />
+              {t("admin.roles.assign")}
+            </button>
+          </form>
+        </section>
+
+        <section
+          className="settingsPanel"
+          aria-labelledby="role-bindings-title"
+        >
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.roles.assignments")}</p>
+              <h2 className="sectionTitle" id="role-bindings-title">
+                {t("admin.roles.activeAssignments")}
+              </h2>
+              <p className="metaText">
+                {t("admin.roles.activeAssignments.description")}
+              </p>
+            </div>
+            <span className="badge">{roleBindings.length}</span>
+          </div>
+
+          <div className="managementList">
+            {roleBindings.length === 0 ? (
+              <p className="metaText">{t("admin.roles.noAssignments")}</p>
+            ) : (
+              roleBindings.map((binding) => (
+                <RoleBindingRow
+                  binding={binding}
+                  currentEmployeeId={access.employeeId}
+                  employees={employees}
+                  key={binding.id}
+                  roles={roles}
+                  t={t}
+                />
+              ))
+            )}
+          </div>
+        </section>
+
         <section className="settingsPanel" aria-labelledby="roles-list-title">
           <div className="sectionHeader">
             <div>
@@ -105,7 +231,12 @@ export default async function RolesAdminPage(): Promise<ReactNode> {
               <p className="metaText">{t("admin.roles.empty")}</p>
             ) : (
               roles.map((role) => (
-                <RoleDefinitionRow key={role.id} role={role} t={t} />
+                <RoleDefinitionRow
+                  bindingCount={roleBindingsByRoleId.get(role.id) ?? 0}
+                  key={role.id}
+                  role={role}
+                  t={t}
+                />
               ))
             )}
           </div>
@@ -161,14 +292,15 @@ export default async function RolesAdminPage(): Promise<ReactNode> {
 }
 
 function RoleDefinitionRow({
+  bindingCount,
   role,
   t
 }: {
+  bindingCount: number;
   role: TenantRoleRecord;
   t: Translator;
 }): ReactNode {
   const summaries = summarizeRoleDomains(role.permissions);
-  const roleLabelKey = role.isSystem ? fixedRoleLabelKey(role.id) : undefined;
 
   return (
     <article className="managementRow roleDefinitionRow">
@@ -180,12 +312,15 @@ function RoleDefinitionRow({
         )}
       </span>
       <div>
-        <h3 className="listItemTitle">
-          {roleLabelKey ? t(roleLabelKey) : role.name}
-        </h3>
+        <h3 className="listItemTitle">{roleName(role, t)}</h3>
         <p className="metaText">
           {t("admin.roles.permissionCount", {
             count: role.permissions.length
+          })}
+        </p>
+        <p className="metaText">
+          {t("admin.roles.assignmentCount", {
+            count: bindingCount
           })}
         </p>
       </div>
@@ -211,6 +346,105 @@ function RoleDefinitionRow({
       </div>
     </article>
   );
+}
+
+function RoleBindingRow({
+  binding,
+  currentEmployeeId,
+  employees,
+  roles,
+  t
+}: {
+  binding: PermissionRoleBinding;
+  currentEmployeeId: string;
+  employees: readonly TenantEmployeeRecord[];
+  roles: readonly TenantRoleRecord[];
+  t: Translator;
+}): ReactNode {
+  const role = roles.find((candidate) => candidate.id === binding.roleId);
+  const employee =
+    binding.subject.type === "employee"
+      ? employees.find(
+          (candidate) => candidate.employeeId === binding.subject.id
+        )
+      : undefined;
+  const isCurrentEmployee =
+    binding.subject.type === "employee" &&
+    binding.subject.id === currentEmployeeId;
+
+  return (
+    <article className="managementRow roleBindingRow">
+      <span className="metricIcon">
+        <KeyRound size={18} aria-hidden="true" />
+      </span>
+      <div>
+        <h3 className="listItemTitle">
+          {role ? roleName(role, t) : binding.roleId}
+        </h3>
+        <p className="metaText">
+          {t("admin.roles.assignmentSubject", {
+            subject: t(subjectTypeKey(binding.subject)),
+            value: subjectValue(binding.subject, employee)
+          })}
+        </p>
+        <p className="metaText">
+          {t("admin.roles.assignmentScope", {
+            value: scopeValue(binding.scope, t)
+          })}
+        </p>
+      </div>
+      <div className="rowActions">
+        {isCurrentEmployee ? (
+          <span className="badge">{t("admin.roles.currentUser")}</span>
+        ) : (
+          <form className="inlineForm" action={revokeTenantRoleBindingAction}>
+            <input name="bindingId" type="hidden" value={binding.id} />
+            <button className="dangerButton" type="submit">
+              <XCircle size={14} aria-hidden="true" />
+              {t("admin.roles.revoke")}
+            </button>
+          </form>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function roleName(role: TenantRoleRecord, t: Translator): string {
+  const roleLabelKey = role.isSystem ? fixedRoleLabelKey(role.id) : undefined;
+
+  return roleLabelKey ? t(roleLabelKey) : role.name;
+}
+
+function countBindingsByRoleId(
+  bindings: readonly PermissionRoleBinding[]
+): Map<string, number> {
+  const counts = new Map<string, number>();
+
+  for (const binding of bindings) {
+    counts.set(binding.roleId, (counts.get(binding.roleId) ?? 0) + 1);
+  }
+
+  return counts;
+}
+
+function subjectValue(
+  subject: PermissionRoleBindingSubject,
+  employee: TenantEmployeeRecord | undefined
+): string {
+  if (subject.type !== "employee") {
+    return subject.id;
+  }
+
+  return employee ? `${employee.displayName} (${employee.email})` : subject.id;
+}
+
+function scopeValue(scope: PermissionScope, t: Translator): string {
+  if (scope.type === "tenant") {
+    return t("admin.roles.scope.tenant");
+  }
+
+  return "id" in scope ? `${scope.type}:${scope.id}` : scope.type;
 }
 
 function summarizeRoleDomains(
@@ -268,6 +502,30 @@ function roleStatusKey(status: TenantRoleRecord["status"]): I18nMessageKey {
       return "admin.roles.status.archived";
     default:
       return "admin.roles.status.active";
+  }
+}
+
+function roleActionStatusKey(status: string): I18nMessageKey {
+  switch (status) {
+    case "assigned":
+      return "admin.roles.actionStatus.assigned";
+    case "revoked":
+      return "admin.roles.actionStatus.revoked";
+    case "email_verification_required":
+      return "auth.emailVerification.status.required";
+    default:
+      return "admin.roles.actionStatus.invalid";
+  }
+}
+
+function subjectTypeKey(subject: PermissionRoleBindingSubject): I18nMessageKey {
+  switch (subject.type) {
+    case "team":
+      return "admin.roles.subject.team";
+    case "org_unit":
+      return "admin.roles.subject.orgUnit";
+    default:
+      return "admin.roles.subject.employee";
   }
 }
 

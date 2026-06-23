@@ -80,6 +80,11 @@ export type ListTenantRoleDefinitionsInput = {
   readonly tenantId: TenantId;
 };
 
+export type ListTenantRoleBindingsInput = {
+  readonly tenantId: TenantId;
+  readonly at: Date;
+};
+
 export type ListActorRoleBindingsInput = {
   readonly actor: PermissionActor;
   readonly at: Date;
@@ -115,6 +120,9 @@ export type TenantRbacRepository = {
   listRoleDefinitions(
     input: ListTenantRoleDefinitionsInput
   ): Promise<readonly TenantRoleRecord[]>;
+  listRoleBindings(
+    input: ListTenantRoleBindingsInput
+  ): Promise<readonly PermissionRoleBinding[]>;
   listRoleBindingsForActor(
     input: ListActorRoleBindingsInput
   ): Promise<readonly PermissionRoleBinding[]>;
@@ -207,6 +215,17 @@ export function createSqlTenantRbacRepository(
       assertTenantScopedRows(input.tenantId, roles);
 
       return roles;
+    },
+
+    async listRoleBindings(input) {
+      const result = await rawExecutor.execute<TenantRoleBindingRow>(
+        buildListTenantRoleBindingsSql(input)
+      );
+      const bindings = result.rows.map(mapTenantRoleBindingRow);
+
+      assertTenantScopedRows(input.tenantId, bindings);
+
+      return bindings;
     },
 
     async listRoleBindingsForActor(input) {
@@ -665,6 +684,31 @@ export function buildListTenantRoleDefinitionsSql(
              r.created_by_employee_id,
              r.archived_at
     order by r.name asc
+  `;
+}
+
+export function buildListTenantRoleBindingsSql(
+  input: ListTenantRoleBindingsInput
+): SQL {
+  assertNonEmpty(input.tenantId);
+
+  return sql`
+    select id,
+           tenant_id,
+           role_id,
+           subject_type,
+           subject_id,
+           scope_type,
+           scope_id,
+           starts_at,
+           expires_at,
+           revoked_at
+    from tenant_role_bindings
+    where tenant_id = ${input.tenantId}
+      and revoked_at is null
+      and (starts_at is null or starts_at <= ${input.at})
+      and (expires_at is null or expires_at > ${input.at})
+    order by created_at asc
   `;
 }
 
