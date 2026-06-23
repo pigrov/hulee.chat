@@ -10,6 +10,7 @@ import { sql, type SQL } from "drizzle-orm";
 
 import type { HuleeDatabase } from "../client";
 import type { RawSqlExecutor } from "./sql-outbox-repository";
+import type { SqlTimestamp } from "./sql-timestamp";
 
 export type TenantAuthAccount = {
   tenantId: TenantId;
@@ -97,7 +98,7 @@ type TenantAuthAccountRow = {
   account_id: string;
   employee_id: string;
   email: string;
-  email_verified_at: Date | null;
+  email_verified_at: SqlTimestamp | null;
   display_name: string;
   password_hash: string | null;
   roles: unknown;
@@ -112,14 +113,14 @@ type PlatformAdminAccountRow = {
 
 type AuthSessionRow = {
   session_id: string;
-  expires_at: Date;
+  expires_at: SqlTimestamp;
   tenant_id: string | null;
   tenant_slug: string | null;
   tenant_display_name: string | null;
   account_id: string | null;
   employee_id: string | null;
   employee_email: string | null;
-  employee_email_verified_at: Date | null;
+  employee_email_verified_at: SqlTimestamp | null;
   employee_display_name: string | null;
   employee_password_hash: string | null;
   employee_roles: unknown;
@@ -477,7 +478,8 @@ function mapTenantAccountRow(row: TenantAuthAccountRow): TenantAuthAccount {
     accountId: row.account_id,
     employeeId: row.employee_id as EmployeeId,
     email: row.email,
-    emailVerifiedAt: row.email_verified_at,
+    emailVerifiedAt:
+      row.email_verified_at === null ? null : new Date(row.email_verified_at),
     displayName: row.display_name,
     passwordHash: row.password_hash,
     roles,
@@ -520,7 +522,7 @@ function mapAuthSessionRow(row: AuthSessionRow): AuthSessionPrincipal {
 
   return {
     sessionId: row.session_id,
-    expiresAt: row.expires_at,
+    expiresAt: new Date(row.expires_at),
     tenantAccount,
     platformAdmin
   };

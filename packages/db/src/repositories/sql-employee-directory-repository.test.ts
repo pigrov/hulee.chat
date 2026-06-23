@@ -33,7 +33,7 @@ describe("SQL employee directory repository", () => {
           email: "agent@example.test",
           display_name: "Agent",
           roles: ["agent", "unknown"],
-          created_at: new Date("2026-06-23T10:00:00.000Z"),
+          created_at: "2026-06-23T10:00:00.000Z",
           deactivated_at: null
         }
       ])
@@ -70,10 +70,10 @@ describe("SQL employee directory repository", () => {
           token_hash: tokenHash,
           invited_by_employee_id: "employee-admin",
           accepted_employee_id: null,
-          expires_at: new Date("2026-06-30T10:00:00.000Z"),
+          expires_at: "2026-06-30T10:00:00.000Z",
           accepted_at: null,
           revoked_at: null,
-          created_at: new Date("2026-06-23T10:00:00.000Z"),
+          created_at: "2026-06-23T10:00:00.000Z",
           tenant_slug: "acme",
           tenant_display_name: "Acme",
           product_name: "Acme Desk"
@@ -91,7 +91,9 @@ describe("SQL employee directory repository", () => {
         id: "invitation-1",
         tenantId,
         email: "agent@example.test",
-        role: "agent"
+        role: "agent",
+        expiresAt: "2026-06-30T10:00:00.000Z",
+        createdAt: "2026-06-23T10:00:00.000Z"
       }
     });
   });
@@ -105,7 +107,7 @@ describe("SQL employee directory repository", () => {
         account_id: "account-1",
         employee_id: employeeId,
         email: "agent@example.test",
-        email_verified_at: new Date("2026-06-23T10:00:00.000Z"),
+        email_verified_at: "2026-06-23T10:00:00.000Z",
         display_name: "Agent",
         password_hash: "scrypt:v1:salt:hash",
         roles: ["agent"]

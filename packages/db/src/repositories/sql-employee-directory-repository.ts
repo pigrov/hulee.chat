@@ -13,6 +13,11 @@ import { sql, type SQL } from "drizzle-orm";
 import type { HuleeDatabase } from "../client";
 import type { RawSqlExecutor } from "./sql-outbox-repository";
 import type { TenantAuthAccount } from "./sql-auth-repository";
+import {
+  mapOptionalSqlTimestamp,
+  mapSqlTimestamp,
+  type SqlTimestamp
+} from "./sql-timestamp";
 
 export type TenantEmployeeRecord = {
   tenantId: TenantId;
@@ -132,8 +137,8 @@ type EmployeeRow = {
   email: string;
   display_name: string;
   roles: unknown;
-  created_at: Date;
-  deactivated_at: Date | null;
+  created_at: SqlTimestamp;
+  deactivated_at: SqlTimestamp | null;
 };
 
 type InvitationRow = {
@@ -145,10 +150,10 @@ type InvitationRow = {
   token_hash: string;
   invited_by_employee_id: string;
   accepted_employee_id: string | null;
-  expires_at: Date;
-  accepted_at: Date | null;
-  revoked_at: Date | null;
-  created_at: Date;
+  expires_at: SqlTimestamp;
+  accepted_at: SqlTimestamp | null;
+  revoked_at: SqlTimestamp | null;
+  created_at: SqlTimestamp;
 };
 
 type InvitationPreviewRow = InvitationRow & {
@@ -164,7 +169,7 @@ type AcceptedInvitationRow = {
   account_id: string;
   employee_id: string;
   email: string;
-  email_verified_at: Date | null;
+  email_verified_at: SqlTimestamp | null;
   display_name: string;
   password_hash: string | null;
   roles: unknown;
@@ -1110,8 +1115,9 @@ function mapEmployeeRow(row: EmployeeRow): TenantEmployeeRecord {
     email: row.email,
     displayName: row.display_name,
     roles: parseEmployeeRoles(row.roles),
-    createdAt: row.created_at,
-    deactivatedAt: row.deactivated_at
+    createdAt: new Date(row.created_at),
+    deactivatedAt:
+      row.deactivated_at === null ? null : new Date(row.deactivated_at)
   };
 }
 
@@ -1137,10 +1143,10 @@ function mapInvitationRow(row: InvitationRow): EmployeeInvitation {
     role,
     tokenHash: row.token_hash,
     invitedByEmployeeId: row.invited_by_employee_id as EmployeeId,
-    expiresAt: row.expires_at.toISOString(),
-    acceptedAt: row.accepted_at?.toISOString(),
-    revokedAt: row.revoked_at?.toISOString(),
-    createdAt: row.created_at.toISOString()
+    expiresAt: mapSqlTimestamp(row.expires_at),
+    acceptedAt: mapOptionalSqlTimestamp(row.accepted_at) ?? undefined,
+    revokedAt: mapOptionalSqlTimestamp(row.revoked_at) ?? undefined,
+    createdAt: mapSqlTimestamp(row.created_at)
   };
 }
 
@@ -1156,7 +1162,8 @@ function mapAcceptedInvitationRow(
     accountId: row.account_id,
     employeeId: row.employee_id as EmployeeId,
     email: row.email,
-    emailVerifiedAt: row.email_verified_at,
+    emailVerifiedAt:
+      row.email_verified_at === null ? null : new Date(row.email_verified_at),
     displayName: row.display_name,
     passwordHash: row.password_hash,
     roles,

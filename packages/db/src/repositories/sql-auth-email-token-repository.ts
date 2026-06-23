@@ -9,6 +9,11 @@ import { sql, type SQL } from "drizzle-orm";
 
 import type { HuleeDatabase } from "../client";
 import type { RawSqlExecutor } from "./sql-outbox-repository";
+import {
+  mapOptionalSqlTimestamp,
+  mapSqlTimestamp,
+  type SqlTimestamp
+} from "./sql-timestamp";
 
 export type AuthEmailTokenTarget = {
   tenantId: TenantId;
@@ -102,9 +107,9 @@ type AuthEmailTokenPreviewRow = AuthEmailTokenTargetRow & {
   token_id: string;
   token_hash: string;
   purpose: string;
-  expires_at: Date;
-  consumed_at: Date | null;
-  created_at: Date;
+  expires_at: SqlTimestamp;
+  consumed_at: SqlTimestamp | null;
+  created_at: SqlTimestamp;
 };
 
 export function createSqlAuthEmailTokenRepository(
@@ -654,9 +659,9 @@ function mapPreviewRow(row: AuthEmailTokenPreviewRow): AuthEmailTokenPreview {
       email: row.email,
       purpose,
       tokenHash: row.token_hash,
-      expiresAt: row.expires_at.toISOString(),
-      consumedAt: row.consumed_at?.toISOString(),
-      createdAt: row.created_at.toISOString()
+      expiresAt: mapSqlTimestamp(row.expires_at),
+      consumedAt: mapOptionalSqlTimestamp(row.consumed_at) ?? undefined,
+      createdAt: mapSqlTimestamp(row.created_at)
     },
     tenantSlug: row.tenant_slug,
     tenantDisplayName: row.tenant_display_name,

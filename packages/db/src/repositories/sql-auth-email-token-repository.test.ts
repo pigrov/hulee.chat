@@ -93,9 +93,9 @@ describe("SQL auth email token repository", () => {
           display_name: "Admin",
           token_hash: tokenHash,
           purpose: "password_reset",
-          expires_at: new Date("2026-06-24T10:00:00.000Z"),
+          expires_at: "2026-06-24T10:00:00.000Z",
           consumed_at: null,
-          created_at: now
+          created_at: now.toISOString()
         }
       ])
     );
@@ -113,7 +113,9 @@ describe("SQL auth email token repository", () => {
         tenantId,
         accountId: "account-1",
         purpose: "password_reset",
-        tokenHash
+        tokenHash,
+        expiresAt: "2026-06-24T10:00:00.000Z",
+        createdAt: now.toISOString()
       }
     });
   });
