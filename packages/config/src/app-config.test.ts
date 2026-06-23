@@ -8,6 +8,7 @@ import {
   defaultLocalDatabaseUrl,
   loadLocalEnvFile,
   loadApiConfig,
+  loadWebConfig,
   mergeEnvSources,
   loadWorkerConfig
 } from "./index";
@@ -99,6 +100,37 @@ describe("app config", () => {
     });
   });
 
+  it("loads development web defaults", () => {
+    expect(loadWebConfig({})).toEqual({
+      appName: "web",
+      nodeEnv: "development",
+      deploymentType: "on_prem",
+      logLevel: "info",
+      databaseUrl: defaultLocalDatabaseUrl,
+      secretEncryptionKey: undefined,
+      internalApiBaseUrl: "http://127.0.0.1:4000",
+      internalApiSecret: undefined,
+      publicBaseUrl: undefined,
+      publicWebhookBaseUrl: undefined,
+      authChoiceSecret: undefined,
+      webAllowedOrigins: [],
+      webAuthRequired: false,
+      resendToken: undefined,
+      emailFrom: undefined
+    });
+  });
+
+  it("normalizes web allowed origins", () => {
+    expect(
+      loadWebConfig({
+        HULEE_WEB_ALLOWED_ORIGINS:
+          "https://chat.example.test/path, https://chat.example.test, http://localhost:3001"
+      })
+    ).toMatchObject({
+      webAllowedOrigins: ["https://chat.example.test", "http://localhost:3001"]
+    });
+  });
+
   it("loads the deployment secret encryption key without logging it", () => {
     expect(
       loadApiConfig({
@@ -156,6 +188,59 @@ describe("app config", () => {
         {
           variable: "HULEE_INTERNAL_API_SECRET",
           message: "must be set in production"
+        }
+      ]);
+    }
+  });
+
+  it("requires web production security settings", () => {
+    expect(() =>
+      loadWebConfig({
+        NODE_ENV: "production",
+        DATABASE_URL: "postgres://user:pass@example.test:5432/hulee"
+      })
+    ).toThrow(ConfigError);
+
+    try {
+      loadWebConfig({
+        NODE_ENV: "production",
+        DATABASE_URL: "postgres://user:pass@example.test:5432/hulee"
+      });
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigError);
+      expect((error as ConfigError).issues).toEqual([
+        {
+          variable: "HULEE_INTERNAL_API_SECRET",
+          message: "must be set in production"
+        },
+        {
+          variable: "HULEE_PUBLIC_BASE_URL",
+          message: "must be set in production"
+        }
+      ]);
+    }
+  });
+
+  it("rejects invalid web allowed origins without echoing values", () => {
+    expect(() =>
+      loadWebConfig({
+        HULEE_WEB_ALLOWED_ORIGINS:
+          "https://valid.example, ftp://files.example, not-a-url"
+      })
+    ).toThrow(ConfigError);
+
+    try {
+      loadWebConfig({
+        HULEE_WEB_ALLOWED_ORIGINS:
+          "https://valid.example, ftp://files.example, not-a-url"
+      });
+    } catch (error) {
+      expect(String(error)).not.toContain("not-a-url");
+      expect(String(error)).not.toContain("ftp://files.example");
+      expect((error as ConfigError).issues).toEqual([
+        {
+          variable: "HULEE_WEB_ALLOWED_ORIGINS",
+          message: "must be a comma-separated list of valid URL origins"
         }
       ]);
     }

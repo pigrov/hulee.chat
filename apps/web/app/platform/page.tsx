@@ -17,7 +17,10 @@ import {
   navigationAccessFromSession
 } from "../../src/access";
 import { AppFrame, DetailItem } from "../../src/app-chrome";
-import { resolveCurrentWebAccessSession } from "../../src/session";
+import {
+  resolveCurrentWebAccessSession,
+  resolveWebConfig
+} from "../../src/session";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -39,9 +42,9 @@ export default async function PlatformAdminPage(): Promise<ReactNode> {
   }
 
   const { t } = createTranslator("ru");
-  const deploymentType = process.env.HULEE_DEPLOYMENT_TYPE ?? "saas_shared";
-  const publicBaseUrl =
-    process.env.HULEE_PUBLIC_BASE_URL ?? "http://127.0.0.1:3001";
+  const webConfig = resolveWebConfig();
+  const deploymentType = webConfig.deploymentType;
+  const publicBaseUrl = webConfig.publicBaseUrl ?? "http://127.0.0.1:3001";
 
   return (
     <AppFrame

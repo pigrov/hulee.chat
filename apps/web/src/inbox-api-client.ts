@@ -1,4 +1,3 @@
-import { loadLocalEnvFile, mergeEnvSources } from "@hulee/config";
 import {
   internalInboxReplyResponseSchema,
   internalInboxViewResponseSchema,
@@ -17,15 +16,13 @@ import {
 } from "@hulee/contracts";
 
 import { buildInternalApiHeaders } from "./session";
+import { resolveWebConfig } from "./web-config";
 
 export type InboxConversation = InternalInboxConversation;
 export type InboxMessage = InternalInboxMessage;
 export type InboxViewModel = InternalInboxViewResponse;
 export type TenantBrandViewModel = InternalTenantBrandResponse;
 export type TelegramIntegrationViewModel = InternalTelegramIntegrationResponse;
-
-const defaultInternalApiBaseUrl = "http://127.0.0.1:4000";
-const localEnv = loadLocalEnvFile();
 
 export async function loadInboxViewModel(input?: {
   selectedConversationId?: string;
@@ -246,10 +243,7 @@ async function postTelegramIntegrationCommand(
 }
 
 function resolveInternalApiBaseUrl(): string {
-  return (
-    mergeEnvSources(localEnv, process.env).HULEE_INTERNAL_API_BASE_URL ??
-    defaultInternalApiBaseUrl
-  );
+  return resolveWebConfig().internalApiBaseUrl;
 }
 
 function internalPath(url: URL): string {

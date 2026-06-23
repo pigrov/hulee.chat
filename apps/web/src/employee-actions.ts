@@ -25,6 +25,7 @@ import { redirect } from "next/navigation";
 import { randomBytes, randomUUID } from "node:crypto";
 
 import { resolvePublicBaseUrl, sendEmployeeInvitationEmail } from "./email";
+import { assertWebActionRequest } from "./action-security";
 import { assertWebAuthRateLimit } from "./auth-rate-limit";
 import {
   assertCurrentWebTenantPermission,
@@ -36,6 +37,8 @@ import {
 const invitationTtlMs = 1000 * 60 * 60 * 24 * 14;
 
 export async function inviteEmployeeAction(formData: FormData): Promise<void> {
+  await assertWebActionRequest();
+
   const session = await assertVerifiedTenantPermission("employees.manage");
   const email = readRequiredFormString(formData, "email");
   const displayName = readOptionalFormString(formData, "displayName");
@@ -88,6 +91,8 @@ export async function inviteEmployeeAction(formData: FormData): Promise<void> {
 export async function updateEmployeeRoleAction(
   formData: FormData
 ): Promise<void> {
+  await assertWebActionRequest();
+
   const session = await assertVerifiedTenantPermission("employees.manage");
   const employeeId = readRequiredFormString(
     formData,
@@ -137,6 +142,8 @@ export async function updateEmployeeRoleAction(
 export async function deactivateEmployeeAction(
   formData: FormData
 ): Promise<void> {
+  await assertWebActionRequest();
+
   const session = await assertVerifiedTenantPermission("employees.manage");
   const employeeId = readRequiredFormString(
     formData,
@@ -183,6 +190,8 @@ export async function deactivateEmployeeAction(
 export async function revokeEmployeeInviteAction(
   formData: FormData
 ): Promise<void> {
+  await assertWebActionRequest();
+
   const session = await assertVerifiedTenantPermission("employees.manage");
   const invitationId = readRequiredFormString(formData, "invitationId");
   const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
@@ -226,6 +235,8 @@ export async function revokeEmployeeInviteAction(
 export async function resendEmployeeInviteAction(
   formData: FormData
 ): Promise<void> {
+  await assertWebActionRequest();
+
   const session = await assertVerifiedTenantPermission("employees.manage");
   const invitationId = readRequiredFormString(formData, "invitationId");
   const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
@@ -277,6 +288,8 @@ export async function resendEmployeeInviteAction(
 export async function acceptEmployeeInviteAction(
   formData: FormData
 ): Promise<void> {
+  await assertWebActionRequest();
+
   const token = readRequiredFormString(formData, "token");
   const displayName = readRequiredFormString(formData, "displayName");
   const password = readRequiredFormString(formData, "password");

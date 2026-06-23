@@ -8,7 +8,7 @@ export const defaultLocalDatabaseUrl =
   "postgres://hulee:hulee@localhost:5432/hulee";
 
 export type RuntimeEnvironment = "development" | "test" | "production";
-export type HuleeAppName = "api" | "worker";
+export type HuleeAppName = "api" | "web" | "worker";
 
 export type EnvSource = Record<string, string | undefined>;
 
@@ -52,6 +52,19 @@ export type ApiConfig = BaseAppConfig & {
   sseEnabled: boolean;
 };
 
+export type WebConfig = BaseAppConfig & {
+  appName: "web";
+  internalApiBaseUrl: string;
+  internalApiSecret?: string;
+  publicBaseUrl?: string;
+  publicWebhookBaseUrl?: string;
+  authChoiceSecret?: string;
+  webAllowedOrigins: readonly string[];
+  webAuthRequired: boolean;
+  resendToken?: string;
+  emailFrom?: string;
+};
+
 export type WorkerConfig = BaseAppConfig & {
   appName: "worker";
   pollIntervalMs: number;
@@ -78,6 +91,15 @@ const emptyToUndefined = (value: unknown): unknown => {
 };
 
 const optionalUrl = z.preprocess(emptyToUndefined, z.string().url().optional());
+
+const optionalHttpUrl = z.preprocess(
+  emptyToUndefined,
+  z
+    .string()
+    .url()
+    .refine((value) => isHttpUrl(value))
+    .optional()
+);
 
 const optionalNonEmptyString = z.preprocess(
   emptyToUndefined,
@@ -119,9 +141,21 @@ const apiEnvSchema = baseEnvSchema.extend({
   HULEE_API_HOST: optionalNonEmptyString,
   HULEE_API_PORT: optionalInteger(1, 65_535),
   HULEE_INTERNAL_API_SECRET: optionalNonEmptyString,
-  HULEE_PUBLIC_BASE_URL: optionalUrl,
-  HULEE_PUBLIC_WEBHOOK_BASE_URL: optionalUrl,
+  HULEE_PUBLIC_BASE_URL: optionalHttpUrl,
+  HULEE_PUBLIC_WEBHOOK_BASE_URL: optionalHttpUrl,
   HULEE_SSE_ENABLED: optionalBoolean
+});
+
+const webEnvSchema = baseEnvSchema.extend({
+  HULEE_INTERNAL_API_BASE_URL: optionalHttpUrl,
+  HULEE_INTERNAL_API_SECRET: optionalNonEmptyString,
+  HULEE_PUBLIC_BASE_URL: optionalHttpUrl,
+  HULEE_PUBLIC_WEBHOOK_BASE_URL: optionalHttpUrl,
+  HULEE_AUTH_CHOICE_SECRET: optionalNonEmptyString,
+  HULEE_WEB_ALLOWED_ORIGINS: optionalNonEmptyString,
+  HULEE_WEB_AUTH_REQUIRED: optionalBoolean,
+  HULEE_RESEND_TOKEN: optionalNonEmptyString,
+  HULEE_EMAIL_FROM: optionalNonEmptyString
 });
 
 const workerEnvSchema = baseEnvSchema.extend({
@@ -140,9 +174,16 @@ const issueMessages: Record<string, string> = {
   HULEE_API_HOST: "must not be empty",
   HULEE_API_PORT: "must be an integer from 1 to 65535",
   HULEE_INTERNAL_API_SECRET: "must not be empty",
-  HULEE_PUBLIC_BASE_URL: "must be a valid URL",
-  HULEE_PUBLIC_WEBHOOK_BASE_URL: "must be a valid URL",
+  HULEE_PUBLIC_BASE_URL: "must be a valid HTTP(S) URL",
+  HULEE_PUBLIC_WEBHOOK_BASE_URL: "must be a valid HTTP(S) URL",
   HULEE_SSE_ENABLED: "must be true, false, 1 or 0",
+  HULEE_INTERNAL_API_BASE_URL: "must be a valid HTTP(S) URL",
+  HULEE_AUTH_CHOICE_SECRET: "must not be empty",
+  HULEE_WEB_ALLOWED_ORIGINS:
+    "must be a comma-separated list of valid URL origins",
+  HULEE_WEB_AUTH_REQUIRED: "must be true, false, 1 or 0",
+  HULEE_RESEND_TOKEN: "must not be empty",
+  HULEE_EMAIL_FROM: "must not be empty",
   HULEE_WORKER_POLL_INTERVAL_MS:
     "must be an integer from 100 to 60000 milliseconds",
   HULEE_OUTBOX_BATCH_SIZE: "must be an integer from 1 to 500",
@@ -221,6 +262,66 @@ export function loadApiConfig(env: EnvSource = process.env): ApiConfig {
       result.data.HULEE_PUBLIC_WEBHOOK_BASE_URL ??
       result.data.HULEE_PUBLIC_BASE_URL,
     sseEnabled: result.data.HULEE_SSE_ENABLED ?? true
+  };
+}
+
+export function loadWebConfig(env: EnvSource = process.env): WebConfig {
+  const result = webEnvSchema.safeParse(env);
+
+  if (!result.success) {
+    throw new ConfigError("web", zodIssuesToConfigIssues(result.error.issues));
+  }
+
+  const baseConfig = buildBaseConfig("web", result.data);
+  const issues: ConfigIssue[] = [];
+  const publicBaseUrl = result.data.HULEE_PUBLIC_BASE_URL;
+
+  if (
+    baseConfig.nodeEnv === "production" &&
+    result.data.HULEE_INTERNAL_API_SECRET === undefined
+  ) {
+    issues.push({
+      variable: "HULEE_INTERNAL_API_SECRET",
+      message: "must be set in production"
+    });
+  }
+
+  if (baseConfig.nodeEnv === "production" && publicBaseUrl === undefined) {
+    issues.push({
+      variable: "HULEE_PUBLIC_BASE_URL",
+      message: "must be set in production"
+    });
+  }
+
+  const webAllowedOrigins = parseAllowedOrigins(
+    result.data.HULEE_WEB_ALLOWED_ORIGINS
+  );
+
+  if (webAllowedOrigins === null) {
+    issues.push({
+      variable: "HULEE_WEB_ALLOWED_ORIGINS",
+      message: "must be a comma-separated list of valid URL origins"
+    });
+  }
+
+  if (issues.length > 0) {
+    throw new ConfigError("web", issues);
+  }
+
+  return {
+    ...baseConfig,
+    appName: "web",
+    internalApiBaseUrl:
+      result.data.HULEE_INTERNAL_API_BASE_URL ?? "http://127.0.0.1:4000",
+    internalApiSecret: result.data.HULEE_INTERNAL_API_SECRET,
+    publicBaseUrl,
+    publicWebhookBaseUrl:
+      result.data.HULEE_PUBLIC_WEBHOOK_BASE_URL ?? publicBaseUrl,
+    authChoiceSecret: result.data.HULEE_AUTH_CHOICE_SECRET,
+    webAllowedOrigins: webAllowedOrigins ?? [],
+    webAuthRequired: result.data.HULEE_WEB_AUTH_REQUIRED ?? false,
+    resendToken: result.data.HULEE_RESEND_TOKEN,
+    emailFrom: result.data.HULEE_EMAIL_FROM
   };
 }
 
@@ -324,4 +425,46 @@ function stripEnvQuotes(value: string): string {
   }
 
   return value;
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const protocol = new URL(value).protocol;
+
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function parseAllowedOrigins(
+  value: string | undefined
+): readonly string[] | null {
+  if (value === undefined) {
+    return [];
+  }
+
+  const origins: string[] = [];
+
+  for (const rawOrigin of value.split(",")) {
+    const origin = rawOrigin.trim();
+
+    if (origin.length === 0) {
+      continue;
+    }
+
+    try {
+      const url = new URL(origin);
+
+      if (!isHttpUrl(origin) || url.origin === "null") {
+        return null;
+      }
+
+      origins.push(url.origin);
+    } catch {
+      return null;
+    }
+  }
+
+  return [...new Set(origins)];
 }

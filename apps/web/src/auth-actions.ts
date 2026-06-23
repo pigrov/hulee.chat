@@ -10,6 +10,7 @@ import {
   requestPasswordResetEmail,
   resetPasswordWithToken
 } from "./auth-email";
+import { assertWebActionRequest } from "./action-security";
 import { assertWebAuthRateLimit } from "./auth-rate-limit";
 import {
   completeTenantLoginChoice,
@@ -22,12 +23,14 @@ import {
 } from "./session";
 
 export async function loginAction(formData: FormData): Promise<void> {
-  const tenantSlug = readOptionalFormString(formData, "tenantSlug");
-  const email = readRequiredFormString(formData, "email");
-  const password = readRequiredFormString(formData, "password");
   let destination = "/login?error=invalid";
 
   try {
+    await assertWebActionRequest();
+    const tenantSlug = readOptionalFormString(formData, "tenantSlug");
+    const email = readRequiredFormString(formData, "email");
+    const password = readRequiredFormString(formData, "password");
+
     await assertWebAuthRateLimit("login", `${tenantSlug ?? "*"}:${email}`);
     const result = await loginLocalWebSession({
       tenantSlug,
@@ -53,10 +56,12 @@ export async function loginAction(formData: FormData): Promise<void> {
 export async function selectTenantLoginAction(
   formData: FormData
 ): Promise<void> {
-  const tenantSlug = readRequiredFormString(formData, "tenantSlug");
   let destination = "/login?error=invalid";
 
   try {
+    await assertWebActionRequest();
+    const tenantSlug = readRequiredFormString(formData, "tenantSlug");
+
     await assertWebAuthRateLimit("select_company", tenantSlug);
     const result = await completeTenantLoginChoice(tenantSlug);
 
@@ -69,18 +74,24 @@ export async function selectTenantLoginAction(
 }
 
 export async function registerAction(formData: FormData): Promise<void> {
-  const tenantSlug =
-    readOptionalFormString(formData, "tenantSlug") ?? createRandomTenantSlug();
-  const tenantDisplayName = readRequiredFormString(
-    formData,
-    "tenantDisplayName"
-  );
-  const adminDisplayName = readOptionalFormString(formData, "adminDisplayName");
-  const email = readRequiredFormString(formData, "email");
-  const password = readRequiredFormString(formData, "password");
   let destination = "/register?error=invalid";
 
   try {
+    await assertWebActionRequest();
+    const tenantSlug =
+      readOptionalFormString(formData, "tenantSlug") ??
+      createRandomTenantSlug();
+    const tenantDisplayName = readRequiredFormString(
+      formData,
+      "tenantDisplayName"
+    );
+    const adminDisplayName = readOptionalFormString(
+      formData,
+      "adminDisplayName"
+    );
+    const email = readRequiredFormString(formData, "email");
+    const password = readRequiredFormString(formData, "password");
+
     await assertWebAuthRateLimit("register", email);
     const result = await registerLocalTenant({
       tenantSlug,
@@ -108,9 +119,10 @@ export async function registerAction(formData: FormData): Promise<void> {
 }
 
 export async function forgotPasswordAction(formData: FormData): Promise<void> {
-  const email = readRequiredFormString(formData, "email");
-
   try {
+    await assertWebActionRequest();
+    const email = readRequiredFormString(formData, "email");
+
     await assertWebAuthRateLimit("forgot_password", email);
     await requestPasswordResetEmail({
       email
@@ -123,11 +135,15 @@ export async function forgotPasswordAction(formData: FormData): Promise<void> {
 }
 
 export async function resetPasswordAction(formData: FormData): Promise<void> {
-  const token = readRequiredFormString(formData, "token");
-  const password = readRequiredFormString(formData, "password");
-  let destination = `/reset-password/${encodeURIComponent(token)}?error=invalid`;
+  let token: string | undefined;
+  let destination = "/forgot-password?status=sent";
 
   try {
+    await assertWebActionRequest();
+    token = readRequiredFormString(formData, "token");
+    const password = readRequiredFormString(formData, "password");
+
+    destination = `/reset-password/${encodeURIComponent(token)}?error=invalid`;
     await assertWebAuthRateLimit("reset_password", token);
     const status = await resetPasswordWithToken({
       token,
@@ -138,7 +154,10 @@ export async function resetPasswordAction(formData: FormData): Promise<void> {
       destination = "/login?reset=complete";
     }
   } catch {
-    destination = `/reset-password/${encodeURIComponent(token)}?error=invalid`;
+    destination =
+      token === undefined
+        ? "/forgot-password?status=sent"
+        : `/reset-password/${encodeURIComponent(token)}?error=invalid`;
   }
 
   redirect(destination);
@@ -147,6 +166,8 @@ export async function resetPasswordAction(formData: FormData): Promise<void> {
 export async function resendEmailVerificationAction(
   formData?: FormData
 ): Promise<void> {
+  await assertWebActionRequest();
+
   const session = await requireCurrentWebAccessSession();
   const returnTo = resolveSafeReturnTo(
     formData ? readOptionalFormString(formData, "returnTo") : undefined
@@ -184,6 +205,8 @@ export async function resendEmailVerificationAction(
 }
 
 export async function logoutAction(): Promise<void> {
+  await assertWebActionRequest();
+
   await logoutCurrentWebSession();
   revalidatePath("/");
   revalidatePath("/admin/integrations");

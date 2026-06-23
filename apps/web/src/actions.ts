@@ -18,12 +18,15 @@ import {
   updateTenantBrand,
   updateTelegramIntegration
 } from "./inbox-api-client";
+import { assertWebActionRequest } from "./action-security";
 import {
   assertCurrentWebTenantPermission,
   isEmailNotVerifiedError
 } from "./session";
 
 export async function sendReplyAction(formData: FormData): Promise<void> {
+  await assertWebActionRequest();
+
   const conversationId = readRequiredFormString(formData, "conversationId");
   await assertVerifiedTenantPermission(
     "message.reply",
@@ -48,6 +51,7 @@ export async function sendReplyAction(formData: FormData): Promise<void> {
 export async function applyBrandPresetAction(
   formData: FormData
 ): Promise<void> {
+  await assertWebActionRequest();
   await assertVerifiedTenantPermission("tenant.manage", "/admin/branding");
 
   const productName = readRequiredFormString(formData, "productName").trim();
@@ -76,6 +80,7 @@ export async function applyBrandPresetAction(
 export async function updateTenantBrandAction(
   formData: FormData
 ): Promise<void> {
+  await assertWebActionRequest();
   await assertVerifiedTenantPermission("tenant.manage", "/admin/branding");
 
   const productName = readRequiredFormString(formData, "productName").trim();
@@ -110,6 +115,7 @@ export async function updateTenantBrandAction(
 export async function updateTelegramIntegrationAction(
   formData: FormData
 ): Promise<void> {
+  await assertWebActionRequest();
   await assertVerifiedTenantPermission("modules.manage", "/admin/integrations");
 
   const channelExternalId = readRequiredFormString(
@@ -143,6 +149,7 @@ export async function updateTelegramIntegrationAction(
 }
 
 export async function refreshTelegramDiagnosticsAction(): Promise<void> {
+  await assertWebActionRequest();
   await assertVerifiedTenantPermission("modules.manage", "/admin/integrations");
 
   await refreshTelegramDiagnostics();
@@ -150,6 +157,7 @@ export async function refreshTelegramDiagnosticsAction(): Promise<void> {
 }
 
 export async function setTelegramWebhookAction(): Promise<void> {
+  await assertWebActionRequest();
   await assertVerifiedTenantPermission("modules.manage", "/admin/integrations");
 
   await setTelegramWebhook();
@@ -157,6 +165,7 @@ export async function setTelegramWebhookAction(): Promise<void> {
 }
 
 export async function deleteTelegramWebhookAction(): Promise<void> {
+  await assertWebActionRequest();
   await assertVerifiedTenantPermission("modules.manage", "/admin/integrations");
 
   await deleteTelegramWebhook();

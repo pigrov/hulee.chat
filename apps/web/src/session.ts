@@ -1,4 +1,3 @@
-import { loadLocalEnvFile, mergeEnvSources } from "@hulee/config";
 import type { EmployeeId } from "@hulee/contracts";
 import {
   createDrizzlePersistenceExecutor,
@@ -36,6 +35,9 @@ import {
   type PlatformRole,
   type WebAccessSession
 } from "./access";
+import { resolveWebConfig, resolveWebEnv } from "./web-config";
+
+export { resolveWebConfig, resolveWebEnv } from "./web-config";
 
 export const authSessionCookieName = "hulee_session";
 export const lastTenantSlugCookieName = "hulee_last_tenant";
@@ -44,7 +46,6 @@ export const tenantLoginChoicesCookieName = "hulee_login_choices";
 const sessionTtlMs = 1000 * 60 * 60 * 24 * 14;
 const lastTenantSlugTtlMs = 1000 * 60 * 60 * 24 * 365;
 const tenantLoginChoicesTtlMs = 1000 * 60 * 10;
-const localEnv = loadLocalEnvFile();
 
 let database: HuleeDatabase | undefined;
 
@@ -103,6 +104,7 @@ export async function resolveCurrentWebAccessSession(
   options: ResolveCurrentWebAccessSessionOptions = {}
 ): Promise<WebAccessSession | null> {
   const env = resolveWebEnv();
+  const config = resolveWebConfig();
   const allowDevelopmentFallback = options.allowDevelopmentFallback ?? true;
   const token = await readSessionToken();
 
@@ -119,8 +121,8 @@ export async function resolveCurrentWebAccessSession(
 
   if (
     allowDevelopmentFallback &&
-    env.NODE_ENV !== "production" &&
-    !isEnabled(env.HULEE_WEB_AUTH_REQUIRED)
+    config.nodeEnv !== "production" &&
+    !config.webAuthRequired
   ) {
     return resolveWebAccessSession(env);
   }
@@ -166,11 +168,11 @@ export async function buildInternalApiHeaders(input: {
 }): Promise<Record<string, string>> {
   const session = await requireCurrentWebAccessSession();
   const headers = buildInternalApiHeadersForSession(session);
-  const env = resolveWebEnv();
-  const secret = env.HULEE_INTERNAL_API_SECRET;
+  const config = resolveWebConfig();
+  const secret = config.internalApiSecret;
 
   if (secret === undefined || secret.trim().length === 0) {
-    if (env.NODE_ENV === "production") {
+    if (config.nodeEnv === "production") {
       throw new CoreError("auth.invalid_credentials");
     }
 
@@ -334,7 +336,7 @@ export async function writeTenantLoginChoices(input: {
     {
       httpOnly: true,
       sameSite: "lax",
-      secure: resolveWebEnv().NODE_ENV === "production",
+      secure: resolveWebConfig().nodeEnv === "production",
       path: "/",
       expires: expiresAt
     }
@@ -465,11 +467,11 @@ function getAuthRepository(): LocalAuthRepository {
 }
 
 export function getWebDatabase(): HuleeDatabase {
-  const env = resolveWebEnv();
+  const config = resolveWebConfig();
 
   database ??= createHuleeDatabase({
-    connectionString: env.DATABASE_URL,
-    logger: env.DATABASE_LOG === "true"
+    connectionString: config.databaseUrl,
+    logger: resolveWebEnv().DATABASE_LOG === "true"
   });
 
   return database;
@@ -491,7 +493,7 @@ async function writeSessionToken(
   cookieStore.set(authSessionCookieName, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: resolveWebEnv().NODE_ENV === "production",
+    secure: resolveWebConfig().nodeEnv === "production",
     path: "/",
     expires: expiresAt
   });
@@ -510,7 +512,7 @@ async function writeLastTenantSlug(slug: string, now: Date): Promise<void> {
   cookieStore.set(lastTenantSlugCookieName, slug, {
     httpOnly: true,
     sameSite: "lax",
-    secure: resolveWebEnv().NODE_ENV === "production",
+    secure: resolveWebConfig().nodeEnv === "production",
     path: "/",
     expires: new Date(now.getTime() + lastTenantSlugTtlMs)
   });
@@ -520,10 +522,6 @@ async function clearTenantLoginChoices(): Promise<void> {
   const cookieStore = await cookies();
 
   cookieStore.delete(tenantLoginChoicesCookieName);
-}
-
-export function resolveWebEnv(): NodeJS.ProcessEnv {
-  return mergeEnvSources(localEnv, process.env) as NodeJS.ProcessEnv;
 }
 
 export async function resolvePreferredTenantSlug(
@@ -630,10 +628,9 @@ function parseTenantLoginChoices(value: unknown): TenantLoginChoices | null {
 }
 
 function resolveTenantLoginChoiceSecret(): string {
-  const env = resolveWebEnv();
+  const config = resolveWebConfig();
   const configured =
-    env.HULEE_AUTH_CHOICE_SECRET?.trim() ||
-    env.HULEE_INTERNAL_API_SECRET?.trim();
+    config.authChoiceSecret?.trim() || config.internalApiSecret?.trim();
 
   return configured && configured.length > 0
     ? configured
@@ -654,8 +651,4 @@ function requireRegistrationPassword(password: string): string {
   }
 
   return password;
-}
-
-function isEnabled(value: string | undefined): boolean {
-  return value === "1" || value === "true" || value === "yes";
 }
