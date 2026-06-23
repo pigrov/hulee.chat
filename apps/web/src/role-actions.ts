@@ -1,6 +1,7 @@
 "use server";
 
 import type { EmployeeId } from "@hulee/contracts";
+import { prepareCustomTenantRole } from "@hulee/core";
 import {
   createSqlEmployeeDirectoryRepository,
   createSqlTenantRbacRepository
@@ -15,6 +16,43 @@ import {
   getWebDatabase,
   isEmailNotVerifiedError
 } from "./session";
+
+export async function createCustomTenantRoleAction(
+  formData: FormData
+): Promise<void> {
+  await assertWebActionRequest();
+
+  const session = await assertVerifiedRolesPermission();
+  const now = new Date();
+  const repository = createSqlTenantRbacRepository(getWebDatabase());
+  let destination = "/admin/roles?roleActionStatus=invalid";
+
+  try {
+    const role = prepareCustomTenantRole({
+      name: readRequiredFormString(formData, "name"),
+      description: readOptionalFormString(formData, "description"),
+      permissions: readFormStringList(formData, "permissions")
+    });
+
+    await repository.createRoleWithPermissions({
+      id: `role:${session.tenantId}:custom:${randomUUID()}`,
+      tenantId: session.tenantId,
+      name: role.name,
+      description: role.description,
+      isSystem: false,
+      createdByEmployeeId: session.employeeId,
+      createdAt: now,
+      permissions: role.permissions
+    });
+
+    destination = "/admin/roles?roleActionStatus=created";
+  } catch {
+    destination = "/admin/roles?roleActionStatus=invalid";
+  }
+
+  revalidateRoleAdminPaths();
+  redirect(destination);
+}
 
 export async function assignTenantRoleAction(
   formData: FormData
@@ -162,4 +200,25 @@ function readRequiredFormString(formData: FormData, name: string): string {
   }
 
   return value.trim();
+}
+
+function readOptionalFormString(
+  formData: FormData,
+  name: string
+): string | undefined {
+  const value = formData.get(name);
+
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return undefined;
+  }
+
+  return value.trim();
+}
+
+function readFormStringList(formData: FormData, name: string): string[] {
+  return formData
+    .getAll(name)
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
 }

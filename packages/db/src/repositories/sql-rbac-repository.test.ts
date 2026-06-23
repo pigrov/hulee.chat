@@ -64,6 +64,38 @@ describe("SQL RBAC repository", () => {
     expect(grantQuery.params).toContain("temporary coverage");
   });
 
+  it("creates custom roles with permissions in one command", async () => {
+    const executor = new RecordingSqlExecutor([]);
+    const repository = createSqlTenantRbacRepository(executor);
+
+    await repository.createRoleWithPermissions({
+      id: "role-custom-sales",
+      tenantId,
+      name: "Custom sales",
+      description: "Custom role",
+      isSystem: false,
+      createdByEmployeeId: adminEmployeeId,
+      createdAt: now,
+      permissions: ["client.view", "message.reply"]
+    });
+
+    const query = renderQuery(executor.queries[0]);
+
+    expect(query.sql).toContain("insert into tenant_roles");
+    expect(query.sql).toContain("insert into tenant_role_permissions");
+    expect(query.sql).toContain("permission_rows(permission)");
+    expect(query.params).toEqual(
+      expect.arrayContaining([
+        "role-custom-sales",
+        tenantId,
+        "Custom sales",
+        adminEmployeeId,
+        "client.view",
+        "message.reply"
+      ])
+    );
+  });
+
   it("rejects invalid permissions and permission-scope pairs before SQL", async () => {
     const executor = new RecordingSqlExecutor([]);
     const repository = createSqlTenantRbacRepository(executor);
@@ -87,6 +119,16 @@ describe("SQL RBAC repository", () => {
           }
         })
       )
+    ).rejects.toThrow(new CoreError("validation.failed"));
+
+    await expect(
+      repository.createRoleWithPermissions({
+        id: "role-empty",
+        tenantId,
+        name: "Empty",
+        createdAt: now,
+        permissions: []
+      })
     ).rejects.toThrow(new CoreError("validation.failed"));
 
     expect(executor.queries).toHaveLength(0);

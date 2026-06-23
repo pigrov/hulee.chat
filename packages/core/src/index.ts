@@ -113,6 +113,11 @@ export type {
   RegisterTenantInput,
   RegisteredTenant
 } from "./tenant-registration";
+export { prepareCustomTenantRole } from "./tenant-roles";
+export type {
+  PreparedCustomTenantRole,
+  PrepareCustomTenantRoleInput
+} from "./tenant-roles";
 export {
   buildExternalClientHandle,
   createMvpTenantWorkspace,

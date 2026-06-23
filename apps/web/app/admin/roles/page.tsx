@@ -5,7 +5,8 @@ import {
   type PermissionDomain,
   type PermissionRoleBinding,
   type PermissionRoleBindingSubject,
-  type PermissionScope
+  type PermissionScope,
+  type PermissionScopeType
 } from "@hulee/core";
 import {
   createSqlEmployeeDirectoryRepository,
@@ -27,6 +28,7 @@ import { DetailItem } from "../../../src/app-chrome";
 import { loadInboxViewModel } from "../../../src/inbox-api-client";
 import {
   assignTenantRoleAction,
+  createCustomTenantRoleAction,
   revokeTenantRoleBindingAction
 } from "../../../src/role-actions";
 import {
@@ -124,6 +126,88 @@ export default async function RolesAdminPage({
       titleId="roles-title"
     >
       <div className="adminStack">
+        <section className="settingsPanel" aria-labelledby="role-create-title">
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.roles.editor")}</p>
+              <h2 className="sectionTitle" id="role-create-title">
+                {t("admin.roles.createRole")}
+              </h2>
+              <p className="metaText">
+                {t("admin.roles.createRole.description")}
+              </p>
+            </div>
+            <span className="badge">{permissionCatalog.length}</span>
+          </div>
+
+          <form className="settingsForm" action={createCustomTenantRoleAction}>
+            <div className="roleEditorGrid">
+              <label className="fieldStack">
+                <span className="detailLabel">{t("admin.roles.roleName")}</span>
+                <input
+                  className="textInput"
+                  name="name"
+                  type="text"
+                  maxLength={80}
+                  required
+                />
+              </label>
+              <label className="fieldStack">
+                <span className="detailLabel">
+                  {t("admin.roles.roleDescription")}
+                </span>
+                <textarea
+                  className="textInput roleDescriptionInput"
+                  name="description"
+                  maxLength={500}
+                />
+              </label>
+            </div>
+
+            <div className="permissionEditorGrid">
+              {summarizeCatalogDomains().map((summary) => (
+                <fieldset
+                  className="permissionDomainGroup"
+                  key={summary.domain}
+                >
+                  <legend className="listItemTitle">
+                    {t(permissionDomainKey(summary.domain))}
+                  </legend>
+                  <p className="metaText">
+                    {t("admin.roles.permissionCount", {
+                      count: summary.permissions.length
+                    })}
+                  </p>
+                  <div className="permissionCheckboxList">
+                    {summary.permissions.map((permission) => (
+                      <label className="permissionCheckboxRow" key={permission}>
+                        <input
+                          name="permissions"
+                          type="checkbox"
+                          value={permission}
+                        />
+                        <span>
+                          <code className="permissionCode">{permission}</code>
+                          <span className="metaText">
+                            {t("admin.roles.allowedScopes", {
+                              value: allowedScopesText(permission, t)
+                            })}
+                          </span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+              ))}
+            </div>
+
+            <button className="primaryButton" type="submit">
+              <Plus size={18} aria-hidden="true" />
+              {t("admin.roles.create")}
+            </button>
+          </form>
+        </section>
+
         <section className="settingsPanel" aria-labelledby="role-assign-title">
           <div className="sectionHeader">
             <div>
@@ -447,6 +531,12 @@ function scopeValue(scope: PermissionScope, t: Translator): string {
   return "id" in scope ? `${scope.type}:${scope.id}` : scope.type;
 }
 
+function allowedScopesText(permission: Permission, t: Translator): string {
+  return getPermissionDefinition(permission)
+    .allowedScopes.map((scopeType) => t(permissionScopeTypeKey(scopeType)))
+    .join(", ");
+}
+
 function summarizeRoleDomains(
   permissions: readonly Permission[]
 ): readonly DomainSummary[] {
@@ -507,6 +597,8 @@ function roleStatusKey(status: TenantRoleRecord["status"]): I18nMessageKey {
 
 function roleActionStatusKey(status: string): I18nMessageKey {
   switch (status) {
+    case "created":
+      return "admin.roles.actionStatus.created";
     case "assigned":
       return "admin.roles.actionStatus.assigned";
     case "revoked":
@@ -515,6 +607,29 @@ function roleActionStatusKey(status: string): I18nMessageKey {
       return "auth.emailVerification.status.required";
     default:
       return "admin.roles.actionStatus.invalid";
+  }
+}
+
+function permissionScopeTypeKey(
+  scopeType: PermissionScopeType
+): I18nMessageKey {
+  switch (scopeType) {
+    case "tenant":
+      return "admin.roles.scope.tenant";
+    case "org_unit":
+      return "admin.roles.scope.orgUnit";
+    case "team":
+      return "admin.roles.scope.team";
+    case "queue":
+      return "admin.roles.scope.queue";
+    case "assigned":
+      return "admin.roles.scope.assigned";
+    case "own":
+      return "admin.roles.scope.own";
+    case "client":
+      return "admin.roles.scope.client";
+    case "conversation":
+      return "admin.roles.scope.conversation";
   }
 }
 

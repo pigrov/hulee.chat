@@ -49,6 +49,10 @@ export type AddTenantRolePermissionInput = {
   readonly createdAt: Date;
 };
 
+export type CreateTenantRoleWithPermissionsInput = CreateTenantRoleInput & {
+  readonly permissions: readonly Permission[];
+};
+
 export type CreateTenantRoleBindingInput = PermissionRoleBinding & {
   readonly createdByEmployeeId?: EmployeeId | null;
   readonly createdAt: Date;
@@ -109,6 +113,9 @@ export type EffectiveAccessSources = {
 
 export type TenantRbacRepository = {
   createRole(input: CreateTenantRoleInput): Promise<void>;
+  createRoleWithPermissions(
+    input: CreateTenantRoleWithPermissionsInput
+  ): Promise<void>;
   addRolePermission(input: AddTenantRolePermissionInput): Promise<void>;
   createRoleBinding(input: CreateTenantRoleBindingInput): Promise<void>;
   createDirectGrant(input: CreateDirectPermissionGrantInput): Promise<void>;
@@ -180,6 +187,10 @@ export function createSqlTenantRbacRepository(
   return {
     async createRole(input) {
       await rawExecutor.execute(buildCreateTenantRoleSql(input));
+    },
+
+    async createRoleWithPermissions(input) {
+      await rawExecutor.execute(buildCreateTenantRoleWithPermissionsSql(input));
     },
 
     async addRolePermission(input) {
@@ -313,6 +324,90 @@ export function buildCreateTenantRoleSql(input: CreateTenantRoleInput): SQL {
           and id = ${createdByEmployeeId}
       )
     on conflict (id) do nothing
+  `;
+}
+
+export function buildCreateTenantRoleWithPermissionsSql(
+  input: CreateTenantRoleWithPermissionsInput
+): SQL {
+  assertNonEmpty(input.id);
+  assertNonEmpty(input.tenantId);
+  assertNonEmpty(input.name);
+  assertRoleStatus(input.status ?? "active");
+  assertPermissions(input.permissions);
+  const createdByEmployeeId = input.createdByEmployeeId ?? null;
+
+  return sql`
+    with inserted_role as (
+      insert into tenant_roles (
+        id,
+        tenant_id,
+        name,
+        description,
+        status,
+        is_system,
+        created_by_employee_id,
+        created_at,
+        updated_at
+      )
+      select
+        ${input.id},
+        ${input.tenantId},
+        ${input.name.trim()},
+        ${input.description ?? null},
+        ${input.status ?? "active"},
+        ${input.isSystem ?? false},
+        ${createdByEmployeeId},
+        ${input.createdAt},
+        ${input.createdAt}
+      where ${createdByEmployeeId} is null
+         or exists (
+          select 1
+          from employees
+          where tenant_id = ${input.tenantId}
+            and id = ${createdByEmployeeId}
+        )
+      on conflict (id) do nothing
+      returning id,
+                tenant_id
+    ),
+    role_scope as (
+      select id,
+             tenant_id
+      from inserted_role
+      union all
+      select id,
+             tenant_id
+      from tenant_roles
+      where tenant_id = ${input.tenantId}
+        and id = ${input.id}
+    ),
+    permission_rows(permission) as (
+      values ${sql.join(
+        input.permissions.map((permission) => sql`(${permission})`),
+        sql`, `
+      )}
+    ),
+    inserted_permissions as (
+      insert into tenant_role_permissions (
+        tenant_id,
+        role_id,
+        permission,
+        created_at,
+        updated_at
+      )
+      select role_scope.tenant_id,
+             role_scope.id,
+             permission_rows.permission,
+             ${input.createdAt},
+             ${input.createdAt}
+      from role_scope
+      cross join permission_rows
+      on conflict (tenant_id, role_id, permission) do nothing
+      returning permission
+    )
+    select count(*) as inserted_permission_count
+    from inserted_permissions
   `;
 }
 
@@ -952,6 +1047,18 @@ function tenantRoleDescription(role: EmployeeRole): string {
 function assertPermission(value: string): asserts value is Permission {
   if (!isPermission(value)) {
     throw new CoreError("validation.failed");
+  }
+}
+
+function assertPermissions(
+  values: readonly string[]
+): asserts values is readonly Permission[] {
+  if (values.length === 0) {
+    throw new CoreError("validation.failed");
+  }
+
+  for (const value of values) {
+    assertPermission(value);
   }
 }
 
