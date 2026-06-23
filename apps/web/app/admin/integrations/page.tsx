@@ -1,5 +1,6 @@
 import { createTranslator } from "@hulee/i18n";
 import { Plug } from "lucide-react";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
@@ -8,12 +9,8 @@ import {
   canTenantPermission,
   navigationAccessFromSession
 } from "../../../src/access";
-import { DetailItem, SlotMount } from "../../../src/app-chrome";
-import {
-  formatBoolean,
-  formatOptionalValue,
-  telegramStatusKey
-} from "../../../src/formatting";
+import { SlotMount } from "../../../src/app-chrome";
+import { telegramStatusKey } from "../../../src/formatting";
 import {
   loadInboxViewModel,
   loadTelegramIntegration
@@ -52,16 +49,37 @@ export default async function IntegrationsAdminPage(): Promise<ReactNode> {
       access={access}
       brand={model.tenant.brand}
       current="integrations"
-      sidebarBadge={
-        <span className="badge">
-          <Plug size={14} aria-hidden="true" />
-          {formatBoolean(telegramIntegration.enabled, t)}
-        </span>
-      }
-      sidebarContent={
-        <>
-          <div className="integrationList">
-            <article className="integrationListItem" aria-current="page">
+      t={t}
+      tenantDisplayName={model.tenant.displayName}
+      title={t("admin.integrations")}
+      titleId="admin-title"
+    >
+      <div className="adminIntegrationGrid">
+        <aside
+          className="settingsPanel integrationCatalog"
+          aria-labelledby="integration-channel-list-title"
+        >
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.integrations.channels")}</p>
+              <h2 className="sectionTitle" id="integration-channel-list-title">
+                {t("admin.integrations.channelList")}
+              </h2>
+            </div>
+          </div>
+
+          <nav
+            className="integrationList"
+            aria-label={t("admin.integrations.channelList")}
+          >
+            <Link
+              className="integrationListItem integrationNavLink"
+              href="/admin/integrations"
+              aria-current="page"
+            >
+              <span className="metricIcon">
+                <Plug size={18} aria-hidden="true" />
+              </span>
               <div>
                 <h3 className="listItemTitle">
                   {t("integrations.telegram.title")}
@@ -70,54 +88,19 @@ export default async function IntegrationsAdminPage(): Promise<ReactNode> {
                   {t(telegramStatusKey(telegramIntegration.diagnostics.status))}
                 </p>
               </div>
-              <span className="badge">
-                {telegramIntegration.config?.mode
-                  ? t(
-                      `integrations.telegram.mode.${telegramIntegration.config.mode}`
-                    )
-                  : t("common.unknown")}
-              </span>
-            </article>
-          </div>
+            </Link>
+          </nav>
+        </aside>
 
-          <div className="detailGrid">
-            <DetailItem
-              label={t("integrations.telegram.webhookPath")}
-              value={formatOptionalValue(telegramIntegration.webhookPath, t)}
-            />
-            <DetailItem
-              label={t("integrations.telegram.publicWebhookUrl")}
-              value={formatOptionalValue(
-                telegramIntegration.publicWebhookUrl,
-                t
-              )}
-            />
-            <DetailItem
-              label={t("integrations.telegram.botIdentity")}
-              value={
-                telegramIntegration.diagnostics.bot?.username
-                  ? `@${telegramIntegration.diagnostics.bot.username}`
-                  : formatOptionalValue(
-                      telegramIntegration.diagnostics.bot?.id,
-                      t
-                    )
-              }
-            />
-          </div>
-
+        <div className="adminStack">
+          <TelegramIntegrationPanel
+            integration={telegramIntegration}
+            locale={locale}
+            t={t}
+          />
           <SlotMount slot="integration.settings.section" />
-        </>
-      }
-      t={t}
-      tenantDisplayName={model.tenant.displayName}
-      title={t("admin.integrations")}
-      titleId="admin-title"
-    >
-      <TelegramIntegrationPanel
-        integration={telegramIntegration}
-        locale={locale}
-        t={t}
-      />
+        </div>
+      </div>
     </TenantAdminShell>
   );
 }

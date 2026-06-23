@@ -50,12 +50,6 @@ export default async function TenantAdminPage(): Promise<ReactNode> {
       access={access}
       brand={model.tenant.brand}
       current="overview"
-      sidebarBadge={
-        <span className="badge">
-          <LayoutDashboard size={14} aria-hidden="true" />
-          {visibleSections.length}
-        </span>
-      }
       t={t}
       tenantDisplayName={model.tenant.displayName}
       title={t("admin.overview")}

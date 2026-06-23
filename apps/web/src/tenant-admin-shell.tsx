@@ -30,7 +30,6 @@ export function TenantAdminShell({
   brand,
   children,
   current,
-  sidebarBadge,
   sidebarContent,
   t,
   tenantDisplayName,
@@ -41,7 +40,6 @@ export function TenantAdminShell({
   brand: BrandProfileView;
   children: ReactNode;
   current: TenantAdminSectionId;
-  sidebarBadge?: ReactNode;
   sidebarContent?: ReactNode;
   t: Translator;
   tenantDisplayName: string;
@@ -49,9 +47,6 @@ export function TenantAdminShell({
   titleId: string;
 }): ReactNode {
   const visibleSections = getVisibleTenantAdminSections(access);
-  const currentSection =
-    visibleSections.find((section) => section.id === current) ??
-    visibleSections[0];
 
   return (
     <AppFrame
@@ -77,23 +72,13 @@ export function TenantAdminShell({
 
         <div className="adminContent">
           <div className="adminGrid">
-            <aside className="settingsPanel" aria-labelledby="admin-nav-title">
-              <div className="sectionHeader">
-                <div>
-                  <p className="eyebrow">{t("admin.sections")}</p>
-                  <h2 className="sectionTitle" id="admin-nav-title">
-                    {currentSection
-                      ? t(currentSection.titleKey)
-                      : t("admin.overview")}
-                  </h2>
-                </div>
-                {sidebarBadge ?? (
-                  <span className="badge">
-                    <LayoutDashboard size={14} aria-hidden="true" />
-                    {visibleSections.length}
-                  </span>
-                )}
-              </div>
+            <aside
+              className="settingsPanel adminNavPanel"
+              aria-labelledby="admin-nav-title"
+            >
+              <h2 className="sectionTitle" id="admin-nav-title">
+                {t("admin.sections")}
+              </h2>
 
               <nav
                 className="managementList"
@@ -132,7 +117,7 @@ function TenantAdminNavLink({
 }): ReactNode {
   return (
     <Link
-      className="managementRow"
+      className="managementRow adminNavLink"
       href={section.href}
       aria-current={current ? "page" : undefined}
     >
@@ -140,9 +125,6 @@ function TenantAdminNavLink({
         <TenantAdminSectionIcon sectionId={section.id} />
       </span>
       <span className="listItemTitle">{t(section.titleKey)}</span>
-      <span className="badge">
-        {t(current ? "admin.current" : "admin.open")}
-      </span>
     </Link>
   );
 }

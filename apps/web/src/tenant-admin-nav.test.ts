@@ -11,15 +11,15 @@ describe("tenant admin navigation", () => {
       getVisibleTenantAdminSections(
         session(["tenant.manage", "employees.manage", "modules.manage"])
       ).map((section) => section.id)
-    ).toEqual(["overview", "employees", "integrations", "branding"]);
+    ).toEqual(["employees", "integrations", "branding"]);
   });
 
-  it("keeps overview but filters sections by permissions", () => {
+  it("filters navigation sections by permissions", () => {
     expect(
       getVisibleTenantAdminSections(session(["modules.manage"])).map(
         (section) => section.id
       )
-    ).toEqual(["overview", "integrations"]);
+    ).toEqual(["integrations"]);
   });
 
   it("hides tenant admin navigation for regular agents", () => {

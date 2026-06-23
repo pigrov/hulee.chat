@@ -1,13 +1,5 @@
 import { createTranslator, type I18nMessageKey } from "@hulee/i18n";
-import {
-  Ban,
-  Mail,
-  RotateCw,
-  Save,
-  UserPlus,
-  Users,
-  XCircle
-} from "lucide-react";
+import { Ban, Mail, RotateCw, Save, UserPlus, XCircle } from "lucide-react";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 import { createSqlEmployeeDirectoryRepository } from "@hulee/db";
@@ -80,12 +72,6 @@ export default async function EmployeesAdminPage({
       access={access}
       brand={model.tenant.brand}
       current="employees"
-      sidebarBadge={
-        <span className="badge">
-          <Users size={14} aria-hidden="true" />
-          {employees.length}
-        </span>
-      }
       sidebarContent={
         <>
           {manualInviteUrl ? (

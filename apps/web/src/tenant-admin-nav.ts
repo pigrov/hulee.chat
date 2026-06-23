@@ -57,10 +57,14 @@ export const tenantAdminSections: readonly TenantAdminSection[] = [
   }
 ];
 
+const tenantAdminNavigationSections = tenantAdminSections.filter(
+  (section) => section.id !== "overview"
+);
+
 export function getVisibleTenantAdminSections(
   access: WebAccessSession
 ): readonly TenantAdminSection[] {
-  return tenantAdminSections.filter((section) =>
+  return tenantAdminNavigationSections.filter((section) =>
     canAccessTenantAdminSection(access, section)
   );
 }

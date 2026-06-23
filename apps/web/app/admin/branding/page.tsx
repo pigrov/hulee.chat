@@ -8,7 +8,7 @@ import {
   type BrandThemeTokens
 } from "@hulee/branding";
 import { createTranslator, type I18nMessageKey } from "@hulee/i18n";
-import { Paintbrush, Palette, Save, SlidersHorizontal } from "lucide-react";
+import { Paintbrush, Save, SlidersHorizontal } from "lucide-react";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
@@ -84,12 +84,6 @@ export default async function BrandingAdminPage({
       access={access}
       brand={model.tenant.brand}
       current="branding"
-      sidebarBadge={
-        <span className="badge">
-          <Palette size={14} aria-hidden="true" />
-          {t(presetLabelKey(currentPresetId))}
-        </span>
-      }
       sidebarContent={
         <>
           {statusKey ? (
