@@ -130,10 +130,13 @@ describe("auth rate limit", () => {
       allowed: false,
       retryAfterMs: 998
     });
+    expect(repository.cleanupCalls).toBe(3);
   });
 });
 
 class InMemoryAuthRateLimitRepository implements AuthRateLimitRepository {
+  cleanupCalls = 0;
+
   private readonly store = new Map<
     string,
     { count: number; resetAt: number }
@@ -168,5 +171,26 @@ class InMemoryAuthRateLimitRepository implements AuthRateLimitRepository {
           resetAt: new Date(next.resetAt),
           retryAfterMs: next.resetAt - now
         };
+  }
+
+  async deleteExpiredBuckets(input: { now: Date; batchSize: number }) {
+    this.cleanupCalls += 1;
+    let deletedCount = 0;
+    const now = input.now.getTime();
+
+    for (const [key, entry] of this.store) {
+      if (deletedCount >= input.batchSize) {
+        break;
+      }
+
+      if (entry.resetAt <= now) {
+        this.store.delete(key);
+        deletedCount += 1;
+      }
+    }
+
+    return {
+      deletedCount
+    };
   }
 }

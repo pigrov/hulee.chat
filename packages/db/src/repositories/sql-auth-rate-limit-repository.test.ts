@@ -53,6 +53,25 @@ describe("SQL auth rate limit repository", () => {
       retryAfterMs: 300_000
     });
   });
+
+  it("deletes expired buckets in bounded batches", async () => {
+    const executor = new RecordingSqlExecutor([
+      {
+        deleted_count: 2
+      }
+    ]);
+    const repository = createSqlAuthRateLimitRepository(executor);
+
+    await expect(
+      repository.deleteExpiredBuckets({
+        now: new Date("2026-06-23T12:00:00.000Z"),
+        batchSize: 100
+      })
+    ).resolves.toEqual({
+      deletedCount: 2
+    });
+    expect(executor.queries).toHaveLength(1);
+  });
 });
 
 class RecordingSqlExecutor implements RawSqlExecutor {

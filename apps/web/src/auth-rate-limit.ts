@@ -67,6 +67,7 @@ type HeaderReader = {
 
 const minuteMs = 60_000;
 const maxStoreEntries = 5_000;
+const persistentCleanupBatchSize = 100;
 
 const defaultPolicies: Record<AuthRateLimitAction, AuthRateLimitPolicy> = {
   login: {
@@ -152,6 +153,9 @@ export async function consumePersistentAuthRateLimit(
   const policy =
     input.policies?.[input.action] ?? defaultPolicies[input.action];
   const buckets = buildAuthRateLimitBuckets(input, policy);
+  let result: AuthRateLimitDecision = {
+    allowed: true
+  };
 
   for (const bucket of buckets) {
     const decision = await input.repository.consumeBucket({
@@ -162,16 +166,17 @@ export async function consumePersistentAuthRateLimit(
     });
 
     if (!decision.allowed) {
-      return {
+      result = {
         allowed: false,
         retryAfterMs: decision.retryAfterMs
       };
+      break;
     }
   }
 
-  return {
-    allowed: true
-  };
+  await cleanupPersistentAuthRateLimit(input.repository, now);
+
+  return result;
 }
 
 export async function assertWebAuthRateLimit(
@@ -274,6 +279,20 @@ function incrementAuthRateLimitBucket(input: {
     count: existing.count + 1,
     resetAt: existing.resetAt
   });
+}
+
+async function cleanupPersistentAuthRateLimit(
+  repository: AuthRateLimitRepository,
+  now: Date
+): Promise<void> {
+  try {
+    await repository.deleteExpiredBuckets({
+      now,
+      batchSize: persistentCleanupBatchSize
+    });
+  } catch {
+    // Cleanup must not bypass a completed rate-limit decision.
+  }
 }
 
 function cleanupAuthRateLimitStore(

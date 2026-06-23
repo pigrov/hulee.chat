@@ -70,6 +70,7 @@ export {
 } from "./sql-auth-email-token-repository";
 export {
   buildConsumeAuthRateLimitBucketSql,
+  buildDeleteExpiredAuthRateLimitBucketsSql,
   createSqlAuthRateLimitRepository
 } from "./sql-auth-rate-limit-repository";
 export {
@@ -200,7 +201,9 @@ export type {
 export type {
   AuthRateLimitBucketDecision,
   AuthRateLimitBucketInput,
-  AuthRateLimitRepository
+  AuthRateLimitRepository,
+  DeleteExpiredAuthRateLimitBucketsInput,
+  DeleteExpiredAuthRateLimitBucketsResult
 } from "./sql-auth-rate-limit-repository";
 export type {
   AuthSessionPrincipal,

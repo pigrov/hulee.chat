@@ -11,6 +11,15 @@ export type AuthRateLimitBucketInput = {
   now: Date;
 };
 
+export type DeleteExpiredAuthRateLimitBucketsInput = {
+  now: Date;
+  batchSize: number;
+};
+
+export type DeleteExpiredAuthRateLimitBucketsResult = {
+  deletedCount: number;
+};
+
 export type AuthRateLimitBucketDecision =
   | {
       allowed: true;
@@ -28,11 +37,18 @@ export type AuthRateLimitRepository = {
   consumeBucket(
     input: AuthRateLimitBucketInput
   ): Promise<AuthRateLimitBucketDecision>;
+  deleteExpiredBuckets(
+    input: DeleteExpiredAuthRateLimitBucketsInput
+  ): Promise<DeleteExpiredAuthRateLimitBucketsResult>;
 };
 
 type AuthRateLimitBucketRow = {
   count: number;
   reset_at: SqlTimestamp;
+};
+
+type DeletedAuthRateLimitBucketCountRow = {
+  deleted_count: number | string;
 };
 
 export function createSqlAuthRateLimitRepository(
@@ -56,6 +72,20 @@ export function createSqlAuthRateLimitRepository(
       }
 
       return mapAuthRateLimitBucketDecision(input, row);
+    },
+
+    async deleteExpiredBuckets(
+      input
+    ): Promise<DeleteExpiredAuthRateLimitBucketsResult> {
+      const result =
+        await rawExecutor.execute<DeletedAuthRateLimitBucketCountRow>(
+          buildDeleteExpiredAuthRateLimitBucketsSql(input)
+        );
+      const deletedCount = result.rows[0]?.deleted_count ?? 0;
+
+      return {
+        deletedCount: Number(deletedCount)
+      };
     }
   };
 }
@@ -90,6 +120,27 @@ export function buildConsumeAuthRateLimitBucketSql(
         updated_at = ${input.now}
     returning count,
               reset_at
+  `;
+}
+
+export function buildDeleteExpiredAuthRateLimitBucketsSql(
+  input: DeleteExpiredAuthRateLimitBucketsInput
+): SQL {
+  return sql`
+    with expired as (
+      select key
+      from auth_rate_limit_buckets
+      where reset_at <= ${input.now}
+      order by reset_at asc
+      limit ${input.batchSize}
+    ),
+    deleted as (
+      delete from auth_rate_limit_buckets
+      where key in (select key from expired)
+      returning key
+    )
+    select count(*)::int as deleted_count
+    from deleted
   `;
 }
 
