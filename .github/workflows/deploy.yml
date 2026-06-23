@@ -89,7 +89,7 @@ jobs:
           printf '%s' '${{ secrets.GHCR_TOKEN }}' | docker login ghcr.io -u '${{ github.repository_owner }}' --password-stdin >/dev/null
           docker compose --env-file .env --env-file .release.env -f docker-compose.yml pull
           docker compose --env-file .env --env-file .release.env -f docker-compose.yml run --rm migrate
-          docker compose --env-file .env --env-file .release.env -f docker-compose.yml up -d --wait --wait-timeout 180 postgres api worker web
+          docker compose --env-file .env --env-file .release.env -f docker-compose.yml up -d --force-recreate --wait --wait-timeout 180 postgres api worker web
           docker compose --env-file .env --env-file .release.env -f docker-compose.yml ps
           EOF
 
