@@ -114,9 +114,11 @@ describe("internal org structure service", () => {
 
 function repositoryStub(input?: {
   orgUnits?: Awaited<ReturnType<OrgStructureRepository["listOrgUnits"]>>;
+  teams?: Awaited<ReturnType<OrgStructureRepository["listTeams"]>>;
   workQueues?: Awaited<ReturnType<OrgStructureRepository["listWorkQueues"]>>;
 }): OrgStructureRepository {
   const orgUnits = input?.orgUnits ?? [];
+  const teams = input?.teams ?? [];
   const workQueues = input?.workQueues ?? [];
 
   return {
@@ -128,6 +130,11 @@ function repositoryStub(input?: {
       kind: request.kind,
       status: request.status ?? "active"
     })),
+    upsertTeam: vi.fn(async (request) => ({
+      id: request.id,
+      tenantId: request.tenantId,
+      name: request.name
+    })),
     upsertWorkQueue: vi.fn(async (request) => ({
       id: request.id,
       tenantId: request.tenantId,
@@ -138,8 +145,10 @@ function repositoryStub(input?: {
       routingConfig: request.routingConfig ?? {}
     })),
     listOrgUnits: vi.fn(async () => orgUnits),
+    listTeams: vi.fn(async () => teams),
     listWorkQueues: vi.fn(async () => workQueues),
     setEmployeeOrgUnitMemberships: vi.fn(async () => undefined),
+    setEmployeeTeamMemberships: vi.fn(async () => undefined),
     setEmployeeWorkQueueMemberships: vi.fn(async () => undefined)
   };
 }

@@ -59,6 +59,11 @@ export const initialTables = [
     scope: "tenant",
     requiresTenantId: true
   },
+  {
+    name: "employee_team_memberships",
+    scope: "tenant",
+    requiresTenantId: true
+  },
   { name: "clients", scope: "tenant", requiresTenantId: true },
   { name: "client_contacts", scope: "tenant", requiresTenantId: true },
   { name: "conversations", scope: "tenant", requiresTenantId: true },

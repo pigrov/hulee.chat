@@ -189,14 +189,18 @@ export type {
 } from "./sql-module-config-repository";
 export type {
   ListOrgUnitsInput,
+  ListTeamsInput,
   ListWorkQueuesInput,
   OrgStructureRepository,
   OrgStructureStatus,
   OrgUnitKind,
   OrgUnitRecord,
   SetEmployeeOrgUnitMembershipsInput,
+  SetEmployeeTeamMembershipsInput,
   SetEmployeeWorkQueueMembershipsInput,
+  TeamRecord,
   UpsertOrgUnitInput,
+  UpsertTeamInput,
   UpsertWorkQueueInput,
   WorkQueueKind,
   WorkQueueRecord

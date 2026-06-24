@@ -25,22 +25,22 @@ describe("SQL employee directory repository", () => {
   });
 
   it("maps employees with valid roles and permissions", async () => {
-    const repository = createSqlEmployeeDirectoryRepository(
-      new RecordingSqlExecutor([
-        {
-          tenant_id: tenantId,
-          employee_id: employeeId,
-          account_id: "account-1",
-          email: "agent@example.test",
-          display_name: "Agent",
-          roles: ["agent", "unknown"],
-          org_unit_ids: ["org-sales"],
-          queue_ids: ["queue-sales"],
-          created_at: "2026-06-23T10:00:00.000Z",
-          deactivated_at: null
-        }
-      ])
-    );
+    const executor = new RecordingSqlExecutor([
+      {
+        tenant_id: tenantId,
+        employee_id: employeeId,
+        account_id: "account-1",
+        email: "agent@example.test",
+        display_name: "Agent",
+        roles: ["agent", "unknown"],
+        team_ids: ["team-sales"],
+        org_unit_ids: ["org-sales"],
+        queue_ids: ["queue-sales"],
+        created_at: "2026-06-23T10:00:00.000Z",
+        deactivated_at: null
+      }
+    ]);
+    const repository = createSqlEmployeeDirectoryRepository(executor);
 
     await expect(
       repository.listEmployees({
@@ -54,12 +54,17 @@ describe("SQL employee directory repository", () => {
         email: "agent@example.test",
         displayName: "Agent",
         roles: ["agent"],
+        teamIds: ["team-sales"],
         orgUnitIds: ["org-sales"],
         queueIds: ["queue-sales"],
         createdAt: new Date("2026-06-23T10:00:00.000Z"),
         deactivatedAt: null
       }
     ]);
+
+    expect(renderQuery(executor.queries[0]).sql).toContain(
+      "employee_team_memberships"
+    );
   });
 
   it("maps invitation preview without requiring tenant input", async () => {

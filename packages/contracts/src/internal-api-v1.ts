@@ -66,6 +66,7 @@ export const internalInboxConversationSchema = z
     assignedEmployeeId: z.string().trim().min(1).optional(),
     assignedEmployeeDisplayName: z.string().trim().min(1).optional(),
     assignedTeamId: z.string().trim().min(1).optional(),
+    assignedTeamName: z.string().trim().min(1).optional(),
     messageCount: z.number().int().nonnegative(),
     queuedCount: z.number().int().nonnegative(),
     lastMessageText: z.string().optional(),

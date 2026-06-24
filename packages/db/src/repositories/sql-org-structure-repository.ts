@@ -35,6 +35,12 @@ export type OrgUnitRecord = {
   readonly status: OrgStructureStatus;
 };
 
+export type TeamRecord = {
+  readonly id: string;
+  readonly tenantId: TenantId;
+  readonly name: string;
+};
+
 export type WorkQueueRecord = {
   readonly id: string;
   readonly tenantId: TenantId;
@@ -55,6 +61,13 @@ export type UpsertOrgUnitInput = {
   readonly updatedAt: Date;
 };
 
+export type UpsertTeamInput = {
+  readonly id: string;
+  readonly tenantId: TenantId;
+  readonly name: string;
+  readonly updatedAt: Date;
+};
+
 export type UpsertWorkQueueInput = {
   readonly id: string;
   readonly tenantId: TenantId;
@@ -71,6 +84,10 @@ export type ListOrgUnitsInput = {
   readonly activeOnly?: boolean;
 };
 
+export type ListTeamsInput = {
+  readonly tenantId: TenantId;
+};
+
 export type ListWorkQueuesInput = {
   readonly tenantId: TenantId;
   readonly activeOnly?: boolean;
@@ -83,6 +100,13 @@ export type SetEmployeeOrgUnitMembershipsInput = {
   readonly updatedAt: Date;
 };
 
+export type SetEmployeeTeamMembershipsInput = {
+  readonly tenantId: TenantId;
+  readonly employeeId: EmployeeId;
+  readonly teamIds: readonly string[];
+  readonly updatedAt: Date;
+};
+
 export type SetEmployeeWorkQueueMembershipsInput = {
   readonly tenantId: TenantId;
   readonly employeeId: EmployeeId;
@@ -92,13 +116,18 @@ export type SetEmployeeWorkQueueMembershipsInput = {
 
 export type OrgStructureRepository = {
   upsertOrgUnit(input: UpsertOrgUnitInput): Promise<OrgUnitRecord>;
+  upsertTeam(input: UpsertTeamInput): Promise<TeamRecord>;
   upsertWorkQueue(input: UpsertWorkQueueInput): Promise<WorkQueueRecord>;
   listOrgUnits(input: ListOrgUnitsInput): Promise<readonly OrgUnitRecord[]>;
+  listTeams(input: ListTeamsInput): Promise<readonly TeamRecord[]>;
   listWorkQueues(
     input: ListWorkQueuesInput
   ): Promise<readonly WorkQueueRecord[]>;
   setEmployeeOrgUnitMemberships(
     input: SetEmployeeOrgUnitMembershipsInput
+  ): Promise<void>;
+  setEmployeeTeamMemberships(
+    input: SetEmployeeTeamMembershipsInput
   ): Promise<void>;
   setEmployeeWorkQueueMemberships(
     input: SetEmployeeWorkQueueMembershipsInput
@@ -112,6 +141,12 @@ type OrgUnitRow = {
   name: string;
   kind: string;
   status: string;
+};
+
+type TeamRow = {
+  id: string;
+  tenant_id: string;
+  name: string;
 };
 
 type WorkQueueRow = {
@@ -148,6 +183,19 @@ export function createSqlOrgStructureRepository(
       return mapOrgUnitRow(row);
     },
 
+    async upsertTeam(input) {
+      const result = await rawExecutor.execute<TeamRow>(
+        buildUpsertTeamSql(input)
+      );
+      const row = result.rows[0];
+
+      if (row === undefined) {
+        throw new CoreError("tenant.boundary_violation");
+      }
+
+      return mapTeamRow(row);
+    },
+
     async upsertWorkQueue(input) {
       const result = await rawExecutor.execute<WorkQueueRow>(
         buildUpsertWorkQueueSql(input)
@@ -172,6 +220,17 @@ export function createSqlOrgStructureRepository(
       return rows;
     },
 
+    async listTeams(input) {
+      const result = await rawExecutor.execute<TeamRow>(
+        buildListTeamsSql(input)
+      );
+      const rows = result.rows.map(mapTeamRow);
+
+      assertTenantScopedRows(input.tenantId, rows);
+
+      return rows;
+    },
+
     async listWorkQueues(input) {
       const result = await rawExecutor.execute<WorkQueueRow>(
         buildListWorkQueuesSql(input)
@@ -186,6 +245,14 @@ export function createSqlOrgStructureRepository(
     async setEmployeeOrgUnitMemberships(input) {
       const result = await rawExecutor.execute<MembershipUpdateValidationRow>(
         buildSetEmployeeOrgUnitMembershipsSql(input)
+      );
+
+      assertMembershipUpdateResult(result.rows[0]);
+    },
+
+    async setEmployeeTeamMemberships(input) {
+      const result = await rawExecutor.execute<MembershipUpdateValidationRow>(
+        buildSetEmployeeTeamMembershipsSql(input)
       );
 
       assertMembershipUpdateResult(result.rows[0]);
@@ -266,6 +333,36 @@ export function buildUpsertOrgUnitSql(input: UpsertOrgUnitInput): SQL {
               name,
               kind,
               status
+  `;
+}
+
+export function buildUpsertTeamSql(input: UpsertTeamInput): SQL {
+  assertNonEmpty(input.id);
+  assertNonEmpty(input.tenantId);
+  assertNonEmpty(input.name);
+
+  return sql`
+    insert into teams (
+      id,
+      tenant_id,
+      name,
+      created_at,
+      updated_at
+    )
+    values (
+      ${input.id},
+      ${input.tenantId},
+      ${input.name},
+      ${input.updatedAt},
+      ${input.updatedAt}
+    )
+    on conflict (id) do update
+    set name = excluded.name,
+        updated_at = excluded.updated_at
+    where teams.tenant_id = excluded.tenant_id
+    returning id,
+              tenant_id,
+              name
   `;
 }
 
@@ -350,6 +447,17 @@ export function buildListOrgUnitsSql(input: ListOrgUnitsInput): SQL {
     from org_units
     where tenant_id = ${input.tenantId}
       ${input.activeOnly ? sql`and status = 'active'` : sql``}
+    order by name asc, id asc
+  `;
+}
+
+export function buildListTeamsSql(input: ListTeamsInput): SQL {
+  return sql`
+    select id,
+           tenant_id,
+           name
+    from teams
+    where tenant_id = ${input.tenantId}
     order by name asc, id asc
   `;
 }
@@ -441,6 +549,82 @@ export function buildSetEmployeeOrgUnitMembershipsSql(
   `;
 }
 
+export function buildSetEmployeeTeamMembershipsSql(
+  input: SetEmployeeTeamMembershipsInput
+): SQL {
+  assertNonEmpty(input.tenantId);
+  assertNonEmpty(input.employeeId);
+  const teamIds = uniqueMembershipIds(input.teamIds);
+
+  return sql`
+    with requested as (
+      select distinct value as team_id
+      from jsonb_array_elements_text(${JSON.stringify(teamIds)}::jsonb)
+    ),
+    target_employee as (
+      select id,
+             tenant_id
+      from employees
+      where tenant_id = ${input.tenantId}
+        and id = ${input.employeeId}
+        and deactivated_at is null
+      limit 1
+    ),
+    valid_requested as (
+      select requested.team_id
+      from requested
+      inner join teams on teams.tenant_id = ${input.tenantId}
+        and teams.id = requested.team_id
+    ),
+    validation as (
+      select exists (select 1 from target_employee) as employee_exists,
+             (select count(*) from requested) =
+               (select count(*) from valid_requested) as references_valid
+    ),
+    deleted as (
+      delete from employee_team_memberships memberships
+      using target_employee,
+            validation
+      where memberships.tenant_id = target_employee.tenant_id
+        and memberships.employee_id = target_employee.id
+        and validation.employee_exists
+        and validation.references_valid
+      returning memberships.team_id
+    ),
+    inserted as (
+      insert into employee_team_memberships (
+        tenant_id,
+        employee_id,
+        team_id,
+        status,
+        role_label,
+        created_at,
+        updated_at
+      )
+      select target_employee.tenant_id,
+             target_employee.id,
+             valid_requested.team_id,
+             'active',
+             null,
+             ${input.updatedAt},
+             ${input.updatedAt}
+      from target_employee
+      cross join valid_requested
+      cross join validation
+      where validation.employee_exists
+        and validation.references_valid
+      on conflict (tenant_id, employee_id, team_id) do update
+      set status = 'active',
+          role_label = excluded.role_label,
+          updated_at = excluded.updated_at
+      returning team_id
+    )
+    select employee_exists,
+           references_valid
+    from validation
+  `;
+}
+
 export function buildSetEmployeeWorkQueueMembershipsSql(
   input: SetEmployeeWorkQueueMembershipsInput
 ): SQL {
@@ -523,6 +707,14 @@ function mapOrgUnitRow(row: OrgUnitRow): OrgUnitRecord {
     name: row.name,
     kind: row.kind,
     status: row.status
+  };
+}
+
+function mapTeamRow(row: TeamRow): TeamRecord {
+  return {
+    id: row.id,
+    tenantId: row.tenant_id as TenantId,
+    name: row.name
   };
 }
 

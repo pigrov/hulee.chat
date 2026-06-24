@@ -3,6 +3,7 @@ import {
   orgUnitKinds,
   workQueueKinds,
   type OrgUnitRecord,
+  type TeamRecord,
   type WorkQueueRecord
 } from "@hulee/db";
 import { createTranslator, type I18nMessageKey } from "@hulee/i18n";
@@ -12,7 +13,8 @@ import {
   Building2,
   ListChecks,
   Plus,
-  Save
+  Save,
+  UsersRound
 } from "lucide-react";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
@@ -33,6 +35,7 @@ import {
   setOrgUnitStatusAction,
   setWorkQueueStatusAction,
   upsertOrgUnitAction,
+  upsertTeamAction,
   upsertWorkQueueAction
 } from "../../../src/org-structure-actions";
 import {
@@ -69,14 +72,14 @@ export default async function OrgStructureAdminPage({
   }
 
   const repository = createSqlOrgStructureRepository(getWebDatabase());
-  const [model, orgUnits, workQueues, resolvedSearchParams] = await Promise.all(
-    [
+  const [model, orgUnits, teams, workQueues, resolvedSearchParams] =
+    await Promise.all([
       loadInboxViewModel(),
       repository.listOrgUnits({ tenantId: access.tenantId }),
+      repository.listTeams({ tenantId: access.tenantId }),
       repository.listWorkQueues({ tenantId: access.tenantId }),
       searchParams
-    ]
-  );
+    ]);
   const { t } = createTranslator(model.tenant.locale);
   const activeOrgUnits = orgUnits.filter(
     (orgUnit) => orgUnit.status === "active"
@@ -165,6 +168,55 @@ export default async function OrgStructureAdminPage({
                   t={t}
                 />
               ))
+            )}
+          </div>
+        </section>
+
+        <section className="settingsPanel" aria-labelledby="team-create-title">
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.orgStructure.teams")}</p>
+              <h2 className="sectionTitle" id="team-create-title">
+                {t("admin.orgStructure.createTeam")}
+              </h2>
+              <p className="metaText">
+                {t("admin.orgStructure.createTeam.description")}
+              </p>
+            </div>
+            <span className="badge">{teams.length}</span>
+          </div>
+
+          <form
+            className="settingsForm orgStructureCreateForm"
+            action={upsertTeamAction}
+          >
+            <TeamNameField t={t} />
+            <button className="primaryButton" type="submit">
+              <Plus size={18} aria-hidden="true" />
+              {t("admin.orgStructure.create")}
+            </button>
+          </form>
+        </section>
+
+        <section className="settingsPanel" aria-labelledby="teams-title">
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.directory")}</p>
+              <h2 className="sectionTitle" id="teams-title">
+                {t("admin.orgStructure.teams")}
+              </h2>
+              <p className="metaText">
+                {t("admin.orgStructure.teams.description")}
+              </p>
+            </div>
+            <span className="badge">{teams.length}</span>
+          </div>
+
+          <div className="managementList">
+            {teams.length === 0 ? (
+              <p className="metaText">{t("admin.orgStructure.noTeams")}</p>
+            ) : (
+              teams.map((team) => <TeamRow key={team.id} t={t} team={team} />)
             )}
           </div>
         </section>
@@ -298,6 +350,33 @@ function OrgUnitRow({
   );
 }
 
+function TeamRow({
+  t,
+  team
+}: {
+  readonly t: Translator;
+  readonly team: TeamRecord;
+}): ReactNode {
+  return (
+    <article className="managementRow orgStructureRow">
+      <span className="metricIcon">
+        <UsersRound size={18} aria-hidden="true" />
+      </span>
+      <form
+        className="settingsForm orgStructureInlineForm"
+        action={upsertTeamAction}
+      >
+        <input name="id" type="hidden" value={team.id} />
+        <TeamNameField defaultValue={team.name} t={t} />
+        <button className="secondaryButton" type="submit">
+          <Save size={14} aria-hidden="true" />
+          {t("common.save")}
+        </button>
+      </form>
+    </article>
+  );
+}
+
 function WorkQueueRow({
   orgUnits,
   t,
@@ -371,6 +450,28 @@ function OrgUnitNameField({
   return (
     <label className="fieldStack">
       <span className="detailLabel">{t("admin.orgStructure.name")}</span>
+      <input
+        className="textInput"
+        defaultValue={defaultValue}
+        maxLength={120}
+        name="name"
+        required
+        type="text"
+      />
+    </label>
+  );
+}
+
+function TeamNameField({
+  defaultValue,
+  t
+}: {
+  readonly defaultValue?: string;
+  readonly t: Translator;
+}): ReactNode {
+  return (
+    <label className="fieldStack">
+      <span className="detailLabel">{t("admin.orgStructure.teamName")}</span>
       <input
         className="textInput"
         defaultValue={defaultValue}
@@ -537,6 +638,8 @@ function orgStructureActionStatusKey(status: string): I18nMessageKey {
       return "admin.orgStructure.actionStatus.orgUnitArchived";
     case "org_unit_restored":
       return "admin.orgStructure.actionStatus.orgUnitRestored";
+    case "team_saved":
+      return "admin.orgStructure.actionStatus.teamSaved";
     case "work_queue_saved":
       return "admin.orgStructure.actionStatus.workQueueSaved";
     case "work_queue_archived":

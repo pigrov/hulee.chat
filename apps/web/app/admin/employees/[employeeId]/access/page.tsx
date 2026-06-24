@@ -20,6 +20,7 @@ import {
   type OrgUnitRecord,
   type TenantEmployeeRecord,
   type TenantRoleRecord,
+  type TeamRecord,
   type WorkQueueRecord
 } from "@hulee/db";
 import { createTranslator, type I18nMessageKey } from "@hulee/i18n";
@@ -31,6 +32,7 @@ import {
   ListChecks,
   Plus,
   Save,
+  UsersRound,
   XCircle
 } from "lucide-react";
 import Link from "next/link";
@@ -45,6 +47,7 @@ import {
 import { DetailItem } from "../../../../../src/app-chrome";
 import {
   setEmployeeOrgUnitMembershipsAction,
+  setEmployeeTeamMembershipsAction,
   setEmployeeWorkQueueMembershipsAction
 } from "../../../../../src/employee-membership-actions";
 import { loadInboxViewModel } from "../../../../../src/inbox-api-client";
@@ -130,6 +133,7 @@ export default async function EmployeeAccessAdminPage({
     roleBindings,
     directGrants,
     orgUnits,
+    teams,
     workQueues,
     resolvedSearch
   ] = await Promise.all([
@@ -144,6 +148,9 @@ export default async function EmployeeAccessAdminPage({
     orgStructureRepository.listOrgUnits({
       tenantId: access.tenantId,
       activeOnly: true
+    }),
+    orgStructureRepository.listTeams({
+      tenantId: access.tenantId
     }),
     orgStructureRepository.listWorkQueues({
       tenantId: access.tenantId,
@@ -179,6 +186,7 @@ export default async function EmployeeAccessAdminPage({
   ];
   const scopeReferenceOptions = buildScopeReferenceOptions({
     orgUnits,
+    teams,
     workQueues
   });
   const employeeRoleBindings = roleBindings
@@ -282,7 +290,9 @@ export default async function EmployeeAccessAdminPage({
               </p>
             </div>
             <span className="badge">
-              {employee.orgUnitIds.length + employee.queueIds.length}
+              {employee.orgUnitIds.length +
+                employee.teamIds.length +
+                employee.queueIds.length}
             </span>
           </div>
 
@@ -307,6 +317,37 @@ export default async function EmployeeAccessAdminPage({
                 name="orgUnitId"
                 selectedIds={employee.orgUnitIds}
                 title={t("admin.employeeAccess.orgUnitMemberships")}
+              />
+              <button
+                className="primaryButton"
+                disabled={isDeactivated}
+                type="submit"
+              >
+                <Save size={18} aria-hidden="true" />
+                {t("admin.employeeAccess.saveMemberships")}
+              </button>
+            </form>
+
+            <form
+              action={setEmployeeTeamMembershipsAction}
+              className="settingsForm employeeMembershipForm"
+            >
+              <input name="returnTo" type="hidden" value={returnPath} />
+              <input
+                name="employeeId"
+                type="hidden"
+                value={employee.employeeId}
+              />
+              <MembershipCheckboxGroup
+                emptyLabel={t("admin.employeeAccess.noTeamsAvailable")}
+                icon={<UsersRound size={18} aria-hidden="true" />}
+                items={teams.map((team) => ({
+                  id: team.id,
+                  label: team.name
+                }))}
+                name="teamId"
+                selectedIds={employee.teamIds}
+                title={t("admin.employeeAccess.teamMemberships")}
               />
               <button
                 className="primaryButton"
@@ -544,6 +585,7 @@ export default async function EmployeeAccessAdminPage({
                   roleBindings={roleBindings}
                   roles={roles}
                   t={t}
+                  teams={teams}
                   workQueues={workQueues}
                 />
               ))
@@ -719,6 +761,7 @@ function EffectiveGrantRow({
   roleBindings,
   roles,
   t,
+  teams,
   workQueues
 }: {
   readonly employee: TenantEmployeeRecord;
@@ -727,6 +770,7 @@ function EffectiveGrantRow({
   readonly roleBindings: readonly PermissionRoleBinding[];
   readonly roles: readonly TenantRoleRecord[];
   readonly t: Translator;
+  readonly teams: readonly TeamRecord[];
   readonly workQueues: readonly WorkQueueRecord[];
 }): ReactNode {
   const definition = getPermissionDefinition(grant.permission);
@@ -760,6 +804,7 @@ function EffectiveGrantRow({
               roleBindings,
               roles,
               t,
+              teams,
               workQueues
             })}
           </span>
@@ -781,6 +826,7 @@ function buildEffectiveAccessPreview(input: {
     tenantId: input.tenantId,
     employeeId: input.employee.employeeId,
     roles: input.employee.roles,
+    teamIds: input.employee.teamIds,
     orgUnitIds: input.employee.orgUnitIds,
     queueIds: input.employee.queueIds
   };
@@ -872,6 +918,7 @@ function sourceLabel(
     readonly roleBindings: readonly PermissionRoleBinding[];
     readonly roles: readonly TenantRoleRecord[];
     readonly t: Translator;
+    readonly teams: readonly TeamRecord[];
     readonly workQueues: readonly WorkQueueRecord[];
   }
 ): string {
@@ -917,6 +964,7 @@ function roleBindingSubjectValue(
   references: {
     readonly employees: readonly TenantEmployeeRecord[];
     readonly orgUnits: readonly OrgUnitRecord[];
+    readonly teams: readonly TeamRecord[];
     readonly workQueues: readonly WorkQueueRecord[];
   }
 ): string {
@@ -941,7 +989,10 @@ function roleBindingSubjectValue(
           ?.name ?? subject.id
       );
     case "team":
-      return subject.id;
+      return (
+        references.teams.find((team) => team.id === subject.id)?.name ??
+        subject.id
+      );
   }
 }
 
@@ -1003,6 +1054,7 @@ function scopePickerMessages(t: Translator): ScopePickerMessages {
     subjectLabels: {
       employee: t("admin.roles.subject.employee"),
       org_unit: t("admin.roles.subject.orgUnit"),
+      team: t("admin.roles.subject.team"),
       queue: t("admin.roles.subject.queue")
     },
     scopeLabels: {

@@ -12,6 +12,7 @@ import {
   type OrgStructureStatus,
   type OrgUnitKind,
   type OrgUnitRecord,
+  type TeamRecord,
   type WorkQueueKind,
   type WorkQueueRecord
 } from "@hulee/db";
@@ -130,6 +131,56 @@ export async function setOrgUnitStatusAction(
     destination = orgStructureDestination(
       status === "active" ? "org_unit_restored" : "org_unit_archived"
     );
+  } catch {
+    destination = orgStructureDestination("invalid");
+  }
+
+  revalidateOrgStructurePaths();
+  redirect(destination);
+}
+
+export async function upsertTeamAction(formData: FormData): Promise<void> {
+  await assertWebActionRequest();
+
+  const session = await assertVerifiedOrgStructurePermission();
+  const repository = createSqlOrgStructureRepository(getWebDatabase());
+  const now = new Date();
+  let destination = orgStructureDestination("invalid");
+
+  try {
+    const requestedId = readOptionalFormString(formData, "id");
+    const existing =
+      requestedId === undefined
+        ? undefined
+        : await findTeam(repository, session.tenantId, requestedId);
+
+    if (requestedId !== undefined && existing === undefined) {
+      throw new Error("Team not found.");
+    }
+
+    const id = existing?.id ?? `team:${session.tenantId}:${randomUUID()}`;
+    const team = await repository.upsertTeam({
+      id,
+      tenantId: session.tenantId,
+      name: readRequiredLimitedFormString(formData, "name", 120),
+      updatedAt: now
+    });
+    const action: OrgStructureAuditAction =
+      existing === undefined ? "team.created" : "team.updated";
+
+    await recordOrgStructureAudit({
+      tenantId: session.tenantId,
+      actorEmployeeId: session.employeeId,
+      action,
+      entityType: "team",
+      entityId: team.id,
+      metadata: {
+        name: team.name
+      },
+      occurredAt: now
+    });
+
+    destination = orgStructureDestination("team_saved");
   } catch {
     destination = orgStructureDestination("invalid");
   }
@@ -299,11 +350,21 @@ async function findWorkQueue(
   return workQueues.find((workQueue) => workQueue.id === id);
 }
 
+async function findTeam(
+  repository: OrgStructureRepository,
+  tenantId: TenantId,
+  id: string
+): Promise<TeamRecord | undefined> {
+  const teams = await repository.listTeams({ tenantId });
+
+  return teams.find((team) => team.id === id);
+}
+
 async function recordOrgStructureAudit(input: {
   readonly tenantId: TenantId;
   readonly actorEmployeeId: EmployeeId;
   readonly action: OrgStructureAuditAction;
-  readonly entityType: "org_unit" | "work_queue";
+  readonly entityType: "org_unit" | "team" | "work_queue";
   readonly entityId: string;
   readonly metadata: Record<string, unknown>;
   readonly occurredAt: Date;

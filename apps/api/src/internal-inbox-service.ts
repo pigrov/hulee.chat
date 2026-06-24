@@ -156,6 +156,7 @@ type ConversationRow = {
   assigned_employee_id: string | null;
   assigned_employee_display_name: string | null;
   assigned_team_id: string | null;
+  assigned_team_name: string | null;
   message_count: number | string;
   queued_count: number | string;
   last_message_text: string | null;
@@ -502,6 +503,7 @@ function permissionActorFromEmployee(
     tenantId: employee.tenantId,
     employeeId: employee.employeeId,
     roles: employee.roles,
+    teamIds: employee.teamIds,
     orgUnitIds: employee.orgUnitIds,
     queueIds: employee.queueIds
   };
@@ -661,6 +663,7 @@ async function loadConversations(
       c.assigned_employee_id,
       ae.display_name as assigned_employee_display_name,
       c.assigned_team_id,
+      assigned_team.name as assigned_team_name,
       count(m.id)::int as message_count,
       count(m.id) filter (where m.status = 'queued')::int as queued_count,
       (
@@ -678,6 +681,9 @@ async function loadConversations(
     left join employees ae
       on ae.tenant_id = c.tenant_id
      and ae.id = c.assigned_employee_id
+    left join teams assigned_team
+      on assigned_team.tenant_id = c.tenant_id
+     and assigned_team.id = c.assigned_team_id
     left join messages m
       on m.tenant_id = c.tenant_id
      and m.conversation_id = c.id
@@ -695,7 +701,8 @@ async function loadConversations(
              wq.owning_org_unit_id,
              c.assigned_employee_id,
              ae.display_name,
-             c.assigned_team_id
+             c.assigned_team_id,
+             assigned_team.name
     order by max(m.created_at) desc nulls last, c.created_at desc, c.id desc
     limit 50
   `);
@@ -717,6 +724,7 @@ async function loadConversations(
     assignedEmployeeDisplayName:
       row.assigned_employee_display_name ?? undefined,
     assignedTeamId: row.assigned_team_id ?? undefined,
+    assignedTeamName: row.assigned_team_name ?? undefined,
     messageCount: Number(row.message_count),
     queuedCount: Number(row.queued_count),
     lastMessageText: row.last_message_text ?? undefined,

@@ -671,6 +671,22 @@ function buildAccessiblePermissionAggregationSql(
               and tenant_role_bindings.subject_id = ${employeeId}
             )
             or (
+              tenant_role_bindings.subject_type = 'team'
+              and exists (
+                select 1
+                from employee_team_memberships
+                inner join teams
+                  on teams.tenant_id =
+                      employee_team_memberships.tenant_id
+                 and teams.id = employee_team_memberships.team_id
+                where employee_team_memberships.tenant_id = ${tenantId}
+                  and employee_team_memberships.employee_id = ${employeeId}
+                  and employee_team_memberships.team_id =
+                      tenant_role_bindings.subject_id
+                  and employee_team_memberships.status = 'active'
+              )
+            )
+            or (
               tenant_role_bindings.subject_type = 'org_unit'
               and exists (
                 select 1

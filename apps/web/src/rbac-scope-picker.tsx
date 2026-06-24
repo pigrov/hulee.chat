@@ -13,7 +13,11 @@ type SelectOption = {
   readonly label: string;
 };
 
-export type RoleAssignmentSubjectType = "employee" | "org_unit" | "queue";
+export type RoleAssignmentSubjectType =
+  | "employee"
+  | "org_unit"
+  | "team"
+  | "queue";
 
 export type RoleAssignmentSubject = {
   readonly type: RoleAssignmentSubjectType;
@@ -222,7 +226,7 @@ export function RoleAssignmentFields({
       employee: employees
     } satisfies RoleAssignmentSubjectOptions);
   const availableSubjectTypes = (
-    ["employee", "org_unit", "queue"] as const
+    ["employee", "org_unit", "team", "queue"] as const
   ).filter((candidate) => (effectiveSubjectOptions[candidate] ?? []).length);
   const selectedSubjectType = availableSubjectTypes.includes(subjectType)
     ? subjectType

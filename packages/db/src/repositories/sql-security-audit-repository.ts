@@ -31,11 +31,14 @@ export type OrgStructureAuditAction =
   | "org_unit.updated"
   | "org_unit.archived"
   | "org_unit.restored"
+  | "team.created"
+  | "team.updated"
   | "work_queue.created"
   | "work_queue.updated"
   | "work_queue.archived"
   | "work_queue.restored"
   | "employee_org_membership.updated"
+  | "employee_team_membership.updated"
   | "employee_queue_membership.updated";
 
 export type SecurityAuditAction =
@@ -50,6 +53,7 @@ export type SecurityAuditEntityType =
   | AccessAuditEntityType
   | "employee"
   | "org_unit"
+  | "team"
   | "work_queue";
 
 export type SecurityAuditRecord = {

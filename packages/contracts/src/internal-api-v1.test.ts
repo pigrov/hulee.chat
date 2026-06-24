@@ -46,6 +46,8 @@ describe("internal API v1 schemas", () => {
             currentQueueName: "Sales",
             assignedEmployeeId: "employee-1",
             assignedEmployeeDisplayName: "Agent",
+            assignedTeamId: "team-sales",
+            assignedTeamName: "Sales team",
             messageCount: 2,
             queuedCount: 0
           }
@@ -62,7 +64,8 @@ describe("internal API v1 schemas", () => {
       conversations: [
         {
           currentQueueName: "Sales",
-          assignedEmployeeDisplayName: "Agent"
+          assignedEmployeeDisplayName: "Agent",
+          assignedTeamName: "Sales team"
         }
       ]
     });

@@ -704,6 +704,40 @@ export const employeeWorkQueueMemberships = pgTable(
   ]
 );
 
+export const employeeTeamMemberships = pgTable(
+  "employee_team_memberships",
+  {
+    tenantId: tenantIdColumn().references(() => tenants.id),
+    employeeId: text("employee_id")
+      .notNull()
+      .references(() => employees.id),
+    teamId: text("team_id")
+      .notNull()
+      .references(() => teams.id),
+    status: text("status").notNull().default("active"),
+    roleLabel: text("role_label"),
+    ...timestamps
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.tenantId, table.employeeId, table.teamId]
+    }),
+    index("employee_team_memberships_tenant_idx").on(table.tenantId),
+    index("employee_team_memberships_tenant_employee_idx").on(
+      table.tenantId,
+      table.employeeId
+    ),
+    index("employee_team_memberships_tenant_team_idx").on(
+      table.tenantId,
+      table.teamId
+    ),
+    index("employee_team_memberships_tenant_status_idx").on(
+      table.tenantId,
+      table.status
+    )
+  ]
+);
+
 export const clients = pgTable(
   "clients",
   {

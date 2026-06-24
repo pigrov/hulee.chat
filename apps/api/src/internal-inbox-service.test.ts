@@ -53,6 +53,7 @@ const employee: TenantEmployeeRecord = {
   email: "agent@example.com",
   displayName: "Agent",
   roles: [],
+  teamIds: ["team-sales"],
   orgUnitIds: ["org-sales"],
   queueIds: ["queue-sales"],
   createdAt: now,
@@ -277,6 +278,50 @@ describe("internal inbox command service", () => {
         permission: "message.reply"
       })
     ).rejects.toEqual(new CoreError("permission.denied"));
+  });
+
+  it("allows assigned replies for active team members", async () => {
+    const authorization = createInternalInboxAuthorizationService({
+      employeeRepository: createEmployeeRepository(employee),
+      rbacRepository: {
+        async listEffectiveAccessSources() {
+          return {
+            roles: [
+              {
+                id: "role-assigned-reply",
+                tenantId,
+                permissions: ["message.reply"]
+              }
+            ],
+            roleBindings: [
+              {
+                tenantId,
+                roleId: "role-assigned-reply",
+                subject: {
+                  type: "employee",
+                  id: context.employeeId
+                },
+                scope: {
+                  type: "assigned"
+                }
+              }
+            ],
+            directGrants: []
+          };
+        }
+      },
+      now: () => now
+    });
+
+    await expect(
+      authorization.assertConversationAccess(context, {
+        conversation: {
+          ...conversation,
+          assignedTeamId: "team-sales"
+        },
+        permission: "message.reply"
+      })
+    ).resolves.toBeUndefined();
   });
 
   it("updates conversation routing when the current queue scope is assignable", async () => {

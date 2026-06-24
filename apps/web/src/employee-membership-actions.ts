@@ -152,6 +152,72 @@ export async function setEmployeeWorkQueueMembershipsAction(
   redirect(destination);
 }
 
+export async function setEmployeeTeamMembershipsAction(
+  formData: FormData
+): Promise<void> {
+  await assertWebActionRequest();
+
+  const employeeId = readRequiredFormString(
+    formData,
+    "employeeId"
+  ) as EmployeeId;
+  const session = await assertVerifiedRolesPermission(employeeId);
+  const now = new Date();
+  let destination = employeeAccessDestination(formData, employeeId, "invalid");
+
+  try {
+    const repository = createSqlOrgStructureRepository(getWebDatabase());
+    const employeeRepository =
+      createSqlEmployeeDirectoryRepository(getWebDatabase());
+    const teamIds = uniqueFormStringList(formData, "teamId");
+    const [employee, teams] = await Promise.all([
+      employeeRepository.findEmployee({
+        tenantId: session.tenantId,
+        employeeId
+      }),
+      repository.listTeams({
+        tenantId: session.tenantId
+      })
+    ]);
+
+    assertActiveEmployee(employee);
+    assertKnownIds(
+      teamIds,
+      teams.map((team) => team.id)
+    );
+
+    await repository.setEmployeeTeamMemberships({
+      tenantId: session.tenantId,
+      employeeId,
+      teamIds,
+      updatedAt: now
+    });
+
+    await recordMembershipAudit({
+      tenantId: session.tenantId,
+      actorEmployeeId: session.employeeId,
+      action: "employee_team_membership.updated",
+      employeeId,
+      metadata: {
+        employeeId,
+        teamIds
+      },
+      occurredAt: now
+    });
+
+    destination = employeeAccessDestination(
+      formData,
+      employeeId,
+      "memberships_updated"
+    );
+  } catch {
+    destination = employeeAccessDestination(formData, employeeId, "invalid");
+  }
+
+  revalidateEmployeeAccessPaths();
+  redirect(destination);
+}
+
 async function assertVerifiedRolesPermission(
   employeeId: EmployeeId
 ): ReturnType<typeof assertCurrentWebTenantPermission> {

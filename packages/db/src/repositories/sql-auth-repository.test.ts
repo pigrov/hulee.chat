@@ -165,6 +165,7 @@ describe("SQL local auth repository", () => {
     const query = renderQuery(executor.queries[0]).sql;
 
     expect(query).toContain("employee_org_unit_memberships");
+    expect(query).toContain("employee_team_memberships");
     expect(query).toContain("employee_work_queue_memberships");
     expect(query).not.toContain("tenant_role_bindings.scope_type = 'tenant'");
     expect(query).not.toContain(

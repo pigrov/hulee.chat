@@ -19,6 +19,13 @@ describe("RBAC scope reference options", () => {
             status: "active"
           }
         ],
+        teams: [
+          {
+            id: "team-1",
+            tenantId,
+            name: "Sales team"
+          }
+        ],
         workQueues: [
           {
             id: "queue-1",
@@ -36,6 +43,12 @@ describe("RBAC scope reference options", () => {
         {
           value: "org-unit-1",
           label: "Sales"
+        }
+      ],
+      team: [
+        {
+          value: "team-1",
+          label: "Sales team"
         }
       ],
       queue: [

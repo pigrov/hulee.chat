@@ -811,8 +811,17 @@ async function assertAssignableRoleBindingSubject(input: {
 
       return;
     }
-    case "team":
-      throw new Error("Team role assignments are not supported yet.");
+    case "team": {
+      const teams = await input.orgStructureRepository.listTeams({
+        tenantId: input.tenantId
+      });
+
+      if (!teams.some((team) => team.id === input.subject.id)) {
+        throw new Error("Team subject is not assignable.");
+      }
+
+      return;
+    }
   }
 }
 
@@ -903,6 +912,11 @@ function readRoleBindingSubject(
     case "org_unit":
       return {
         type: "org_unit",
+        id: subjectId
+      };
+    case "team":
+      return {
+        type: "team",
         id: subjectId
       };
     case "queue":

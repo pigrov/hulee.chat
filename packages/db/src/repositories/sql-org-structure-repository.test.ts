@@ -30,6 +30,13 @@ describe("SQL org structure repository", () => {
       ],
       [
         {
+          id: "team-sales",
+          tenant_id: tenantId,
+          name: "Sales team"
+        }
+      ],
+      [
+        {
           id: "queue-sales",
           tenant_id: tenantId,
           name: "Sales queue",
@@ -51,6 +58,12 @@ describe("SQL org structure repository", () => {
       kind: "department",
       updatedAt: now
     });
+    await repository.upsertTeam({
+      id: "team-sales",
+      tenantId,
+      name: "Sales team",
+      updatedAt: now
+    });
     await repository.upsertWorkQueue({
       id: "queue-sales",
       tenantId,
@@ -63,13 +76,19 @@ describe("SQL org structure repository", () => {
       updatedAt: now
     });
 
-    expect(executor.queries).toHaveLength(2);
+    expect(executor.queries).toHaveLength(3);
     const orgUnitQuery = renderQuery(executor.queries[0]);
-    const queueQuery = renderQuery(executor.queries[1]);
+    const teamQuery = renderQuery(executor.queries[1]);
+    const queueQuery = renderQuery(executor.queries[2]);
 
     expect(orgUnitQuery.sql).toContain("insert into org_units");
     expect(orgUnitQuery.sql).toContain("where org_units.tenant_id");
     expect(orgUnitQuery.params).toContain(tenantId);
+    expect(teamQuery.sql).toContain("insert into teams");
+    expect(teamQuery.sql).toContain("where teams.tenant_id");
+    expect(teamQuery.params).toEqual(
+      expect.arrayContaining([tenantId, "team-sales", "Sales team"])
+    );
     expect(queueQuery.sql).toContain("insert into work_queues");
     expect(queueQuery.sql).toContain("owning_org_unit");
     expect(queueQuery.sql).toContain("where work_queues.tenant_id");
@@ -100,6 +119,13 @@ describe("SQL org structure repository", () => {
           status: "active",
           routing_config: {}
         }
+      ],
+      [
+        {
+          id: "team-other",
+          tenant_id: otherTenantId,
+          name: "Other team"
+        }
       ]
     ]);
     const repository = createSqlOrgStructureRepository(executor);
@@ -117,6 +143,9 @@ describe("SQL org structure repository", () => {
       }
     ]);
     await expect(repository.listWorkQueues({ tenantId })).rejects.toThrow(
+      new CoreError("tenant.boundary_violation")
+    );
+    await expect(repository.listTeams({ tenantId })).rejects.toThrow(
       new CoreError("tenant.boundary_violation")
     );
 
@@ -139,6 +168,12 @@ describe("SQL org structure repository", () => {
           employee_exists: true,
           references_valid: true
         }
+      ],
+      [
+        {
+          employee_exists: true,
+          references_valid: true
+        }
       ]
     ]);
     const repository = createSqlOrgStructureRepository(executor);
@@ -149,6 +184,12 @@ describe("SQL org structure repository", () => {
       orgUnitIds: ["org-sales"],
       updatedAt: now
     });
+    await repository.setEmployeeTeamMemberships({
+      tenantId,
+      employeeId: "employee-sales" as EmployeeId,
+      teamIds: ["team-sales"],
+      updatedAt: now
+    });
     await repository.setEmployeeWorkQueueMemberships({
       tenantId,
       employeeId: "employee-sales" as EmployeeId,
@@ -156,14 +197,20 @@ describe("SQL org structure repository", () => {
       updatedAt: now
     });
 
-    expect(executor.queries).toHaveLength(2);
+    expect(executor.queries).toHaveLength(3);
     const orgUnitQuery = renderQuery(executor.queries[0]);
-    const workQueueQuery = renderQuery(executor.queries[1]);
+    const teamQuery = renderQuery(executor.queries[1]);
+    const workQueueQuery = renderQuery(executor.queries[2]);
 
     expect(orgUnitQuery.sql).toContain("employee_org_unit_memberships");
     expect(orgUnitQuery.sql).toContain("org_units.status = 'active'");
     expect(orgUnitQuery.params).toEqual(
       expect.arrayContaining([tenantId, "employee-sales", '["org-sales"]'])
+    );
+    expect(teamQuery.sql).toContain("employee_team_memberships");
+    expect(teamQuery.sql).toContain("teams");
+    expect(teamQuery.params).toEqual(
+      expect.arrayContaining([tenantId, "employee-sales", '["team-sales"]'])
     );
     expect(workQueueQuery.sql).toContain("employee_work_queue_memberships");
     expect(workQueueQuery.sql).toContain("work_queues.status = 'active'");
@@ -186,6 +233,12 @@ describe("SQL org structure repository", () => {
             employee_exists: true,
             references_valid: false
           }
+        ],
+        [
+          {
+            employee_exists: true,
+            references_valid: false
+          }
         ]
       ])
     );
@@ -198,6 +251,14 @@ describe("SQL org structure repository", () => {
         updatedAt: now
       })
     ).rejects.toThrow(new CoreError("tenant.boundary_violation"));
+    await expect(
+      repository.setEmployeeTeamMemberships({
+        tenantId,
+        employeeId: "employee-sales" as EmployeeId,
+        teamIds: ["team-missing"],
+        updatedAt: now
+      })
+    ).rejects.toThrow(new CoreError("validation.failed"));
     await expect(
       repository.setEmployeeWorkQueueMemberships({
         tenantId,

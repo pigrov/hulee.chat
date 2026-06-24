@@ -9,7 +9,8 @@ import {
   Save,
   Send,
   ShieldCheck,
-  UserRound
+  UserRound,
+  UsersRound
 } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -17,6 +18,7 @@ import {
   createSqlEmployeeDirectoryRepository,
   createSqlOrgStructureRepository,
   type TenantEmployeeRecord,
+  type TeamRecord,
   type WorkQueueRecord
 } from "@hulee/db";
 
@@ -84,7 +86,7 @@ export default async function InboxPage({
   const assignedToMe = isAssignedToMeInboxFilter(
     resolvedSearchParams?.assigned
   );
-  const [model, employees, workQueues] = await Promise.all([
+  const [model, employees, teams, workQueues] = await Promise.all([
     loadInboxViewModel({
       selectedConversationId: resolvedSearchParams?.conversationId,
       queueId: activeQueueId,
@@ -93,6 +95,9 @@ export default async function InboxPage({
     canAssignConversations
       ? employeeRepository.listEmployees({ tenantId: access.tenantId })
       : Promise.resolve<readonly TenantEmployeeRecord[]>([]),
+    orgStructureRepository.listTeams({
+      tenantId: access.tenantId
+    }),
     orgStructureRepository.listWorkQueues({
       tenantId: access.tenantId,
       activeOnly: true
@@ -325,6 +330,7 @@ export default async function InboxPage({
             currentEmployeeId={access.employeeId}
             employees={employees}
             selectedConversation={selectedConversation}
+            teams={teams}
             t={t}
             workQueues={workQueues}
           />
@@ -389,12 +395,14 @@ function ConversationRoutingPanel({
   currentEmployeeId,
   employees,
   selectedConversation,
+  teams,
   t,
   workQueues
 }: {
   readonly currentEmployeeId: TenantEmployeeRecord["employeeId"];
   readonly employees: readonly TenantEmployeeRecord[];
   readonly selectedConversation: InboxConversation;
+  readonly teams: readonly TeamRecord[];
   readonly t: ReturnType<typeof createTranslator>["t"];
   readonly workQueues: readonly WorkQueueRecord[];
 }): ReactNode {
@@ -407,12 +415,20 @@ function ConversationRoutingPanel({
   )
     ? undefined
     : selectedConversation.assignedEmployeeId;
+  const assignedTeamOption = teams.some(
+    (team) => team.id === selectedConversation.assignedTeamId
+  )
+    ? undefined
+    : selectedConversation.assignedTeamId;
   const currentQueue = workQueues.find(
     (workQueue) => workQueue.id === selectedConversation.currentQueueId
   );
   const assignedEmployee = activeEmployees.find(
     (employee) =>
       employee.employeeId === selectedConversation.assignedEmployeeId
+  );
+  const assignedTeam = teams.find(
+    (team) => team.id === selectedConversation.assignedTeamId
   );
   const currentEmployeeIsAssignable = activeEmployees.some(
     (employee) => employee.employeeId === currentEmployeeId
@@ -450,6 +466,14 @@ function ConversationRoutingPanel({
             assignedEmployee?.displayName ??
             selectedConversation.assignedEmployeeId ??
             t("inbox.routing.noAssignee")
+          }
+        />
+        <DetailItem
+          label={t("inbox.routing.team")}
+          value={
+            assignedTeam?.name ??
+            selectedConversation.assignedTeamId ??
+            t("inbox.routing.noTeam")
           }
         />
       </div>
@@ -505,7 +529,6 @@ function ConversationRoutingPanel({
           type="hidden"
           value={selectedConversation.id}
         />
-        <input name="assignedTeamId" type="hidden" value="" />
         <label className="fieldStack">
           <span className="detailLabel">{t("inbox.routing.queue")}</span>
           <select
@@ -537,6 +560,24 @@ function ConversationRoutingPanel({
             {activeEmployees.map((employee) => (
               <option key={employee.employeeId} value={employee.employeeId}>
                 {employee.displayName}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="fieldStack">
+          <span className="detailLabel">{t("inbox.routing.team")}</span>
+          <select
+            className="selectInput"
+            defaultValue={selectedConversation.assignedTeamId ?? ""}
+            name="assignedTeamId"
+          >
+            <option value="">{t("inbox.routing.noTeam")}</option>
+            {assignedTeamOption ? (
+              <option value={assignedTeamOption}>{assignedTeamOption}</option>
+            ) : null}
+            {teams.map((team) => (
+              <option key={team.id} value={team.id}>
+                {team.name}
               </option>
             ))}
           </select>
@@ -622,6 +663,8 @@ function ConversationListItem({
     conversation.currentQueueName ?? conversation.currentQueueId;
   const assigneeLabel =
     conversation.assignedEmployeeDisplayName ?? conversation.assignedEmployeeId;
+  const assignedTeamLabel =
+    conversation.assignedTeamName ?? conversation.assignedTeamId;
 
   return (
     <Link
@@ -661,6 +704,12 @@ function ConversationListItem({
           <span className="badge">
             <UserRound size={13} aria-hidden="true" />
             {assigneeLabel}
+          </span>
+        ) : null}
+        {assignedTeamLabel ? (
+          <span className="badge">
+            <UsersRound size={13} aria-hidden="true" />
+            {assignedTeamLabel}
           </span>
         ) : null}
         {conversation.queuedCount > 0 ? (

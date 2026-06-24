@@ -28,6 +28,7 @@ export type TenantEmployeeRecord = {
   email: string;
   displayName: string;
   roles: readonly EmployeeRole[];
+  teamIds: readonly string[];
   orgUnitIds: readonly string[];
   queueIds: readonly string[];
   createdAt: Date;
@@ -141,6 +142,7 @@ type EmployeeRow = {
   email: string;
   display_name: string;
   roles: unknown;
+  team_ids: unknown;
   org_unit_ids: unknown;
   queue_ids: unknown;
   created_at: SqlTimestamp;
@@ -303,6 +305,10 @@ export function buildListTenantEmployeesSql(
            employees.deactivated_at,
            coalesce(employee_role_rows.roles, '[]'::json) as roles,
            coalesce(
+             team_membership_rows.team_ids,
+             '[]'::json
+           ) as team_ids,
+           coalesce(
              org_unit_membership_rows.org_unit_ids,
              '[]'::json
            ) as org_unit_ids,
@@ -317,6 +323,19 @@ export function buildListTenantEmployeesSql(
       where employee_roles.tenant_id = employees.tenant_id
         and employee_roles.employee_id = employees.id
     ) employee_role_rows on true
+    left join lateral (
+      select json_agg(
+               employee_team_memberships.team_id
+               order by employee_team_memberships.team_id
+             ) as team_ids
+      from employee_team_memberships
+      inner join teams on teams.tenant_id =
+          employee_team_memberships.tenant_id
+        and teams.id = employee_team_memberships.team_id
+      where employee_team_memberships.tenant_id = employees.tenant_id
+        and employee_team_memberships.employee_id = employees.id
+        and employee_team_memberships.status = 'active'
+    ) team_membership_rows on true
     left join lateral (
       select json_agg(
                employee_org_unit_memberships.org_unit_id
@@ -361,6 +380,10 @@ export function buildFindTenantEmployeeSql(
            employees.deactivated_at,
            coalesce(employee_role_rows.roles, '[]'::json) as roles,
            coalesce(
+             team_membership_rows.team_ids,
+             '[]'::json
+           ) as team_ids,
+           coalesce(
              org_unit_membership_rows.org_unit_ids,
              '[]'::json
            ) as org_unit_ids,
@@ -375,6 +398,19 @@ export function buildFindTenantEmployeeSql(
       where employee_roles.tenant_id = employees.tenant_id
         and employee_roles.employee_id = employees.id
     ) employee_role_rows on true
+    left join lateral (
+      select json_agg(
+               employee_team_memberships.team_id
+               order by employee_team_memberships.team_id
+             ) as team_ids
+      from employee_team_memberships
+      inner join teams on teams.tenant_id =
+          employee_team_memberships.tenant_id
+        and teams.id = employee_team_memberships.team_id
+      where employee_team_memberships.tenant_id = employees.tenant_id
+        and employee_team_memberships.employee_id = employees.id
+        and employee_team_memberships.status = 'active'
+    ) team_membership_rows on true
     left join lateral (
       select json_agg(
                employee_org_unit_memberships.org_unit_id
@@ -1463,6 +1499,7 @@ function mapEmployeeRow(row: EmployeeRow): TenantEmployeeRecord {
     email: row.email,
     displayName: row.display_name,
     roles: parseEmployeeRoles(row.roles),
+    teamIds: parseStringIds(row.team_ids),
     orgUnitIds: parseStringIds(row.org_unit_ids),
     queueIds: parseStringIds(row.queue_ids),
     createdAt: new Date(row.created_at),

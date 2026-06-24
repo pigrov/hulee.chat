@@ -26,6 +26,7 @@ import {
   type OrgUnitRecord,
   type TenantEmployeeRecord,
   type TenantRoleRecord,
+  type TeamRecord,
   type WorkQueueRecord
 } from "@hulee/db";
 import { createTranslator, type I18nMessageKey } from "@hulee/i18n";
@@ -148,6 +149,7 @@ export default async function RolesAdminPage({
     directGrants,
     employees,
     orgUnits,
+    teams,
     workQueues,
     resolvedSearchParams
   ] = await Promise.all([
@@ -159,6 +161,9 @@ export default async function RolesAdminPage({
     orgStructureRepository.listOrgUnits({
       tenantId: access.tenantId,
       activeOnly: true
+    }),
+    orgStructureRepository.listTeams({
+      tenantId: access.tenantId
     }),
     orgStructureRepository.listWorkQueues({
       tenantId: access.tenantId,
@@ -193,6 +198,10 @@ export default async function RolesAdminPage({
       value: orgUnit.id,
       label: orgUnit.name
     })),
+    team: teams.map((team) => ({
+      value: team.id,
+      label: team.name
+    })),
     queue: workQueues.map((workQueue) => ({
       value: workQueue.id,
       label: workQueue.name
@@ -203,6 +212,7 @@ export default async function RolesAdminPage({
   ).reduce((count, options) => count + options.length, 0);
   const scopeReferenceOptions = buildScopeReferenceOptions({
     orgUnits,
+    teams,
     workQueues
   });
   const roleBindingsByRoleId = countBindingsByRoleId(roleBindings);
@@ -433,6 +443,7 @@ export default async function RolesAdminPage({
                   roleBindings={roleBindings}
                   roles={roles}
                   t={t}
+                  teams={teams}
                   workQueues={workQueues}
                 />
               ))}
@@ -470,6 +481,7 @@ export default async function RolesAdminPage({
                   orgUnits={orgUnits}
                   roles={roles}
                   t={t}
+                  teams={teams}
                   workQueues={workQueues}
                 />
               ))
@@ -982,6 +994,7 @@ function RoleBindingRow({
   employees,
   roles,
   t,
+  teams,
   orgUnits,
   workQueues
 }: {
@@ -990,6 +1003,7 @@ function RoleBindingRow({
   employees: readonly TenantEmployeeRecord[];
   roles: readonly TenantRoleRecord[];
   t: Translator;
+  teams: readonly TeamRecord[];
   orgUnits: readonly OrgUnitRecord[];
   workQueues: readonly WorkQueueRecord[];
 }): ReactNode {
@@ -1019,6 +1033,7 @@ function RoleBindingRow({
             value: subjectValue(binding.subject, {
               employee,
               orgUnits,
+              teams,
               workQueues
             })
           })}
@@ -1119,6 +1134,7 @@ function EffectiveGrantRow({
   roleBindings,
   roles,
   t,
+  teams,
   workQueues
 }: {
   employees: readonly TenantEmployeeRecord[];
@@ -1127,6 +1143,7 @@ function EffectiveGrantRow({
   roleBindings: readonly PermissionRoleBinding[];
   roles: readonly TenantRoleRecord[];
   t: Translator;
+  teams: readonly TeamRecord[];
   workQueues: readonly WorkQueueRecord[];
 }): ReactNode {
   const definition = getPermissionDefinition(grant.permission);
@@ -1160,6 +1177,7 @@ function EffectiveGrantRow({
               roleBindings,
               roles,
               t,
+              teams,
               workQueues
             })}
           </span>
@@ -1281,6 +1299,7 @@ function buildEffectiveAccessPreview(input: {
     tenantId: input.tenantId,
     employeeId: input.employee.employeeId,
     roles: input.employee.roles,
+    teamIds: input.employee.teamIds,
     orgUnitIds: input.employee.orgUnitIds,
     queueIds: input.employee.queueIds
   };
@@ -1347,6 +1366,7 @@ function sourceLabel(
     readonly roleBindings: readonly PermissionRoleBinding[];
     readonly roles: readonly TenantRoleRecord[];
     readonly t: Translator;
+    readonly teams: readonly TeamRecord[];
     readonly workQueues: readonly WorkQueueRecord[];
   }
 ): string {
@@ -1386,6 +1406,7 @@ function sourceLabel(
         value: subjectValue(binding.subject, {
           employee,
           orgUnits: references.orgUnits,
+          teams: references.teams,
           workQueues: references.workQueues
         })
       });
@@ -1533,6 +1554,7 @@ function subjectValue(
   references: {
     readonly employee?: TenantEmployeeRecord;
     readonly orgUnits: readonly OrgUnitRecord[];
+    readonly teams: readonly TeamRecord[];
     readonly workQueues: readonly WorkQueueRecord[];
   }
 ): string {
@@ -1552,7 +1574,10 @@ function subjectValue(
           ?.name ?? subject.id
       );
     case "team":
-      return subject.id;
+      return (
+        references.teams.find((team) => team.id === subject.id)?.name ??
+        subject.id
+      );
   }
 }
 
@@ -1609,6 +1634,7 @@ function scopePickerMessages(t: Translator): ScopePickerMessages {
     subjectLabels: {
       employee: t("admin.roles.subject.employee"),
       org_unit: t("admin.roles.subject.orgUnit"),
+      team: t("admin.roles.subject.team"),
       queue: t("admin.roles.subject.queue")
     },
     scopeLabels: {
