@@ -87,6 +87,8 @@
   "inbox.routing.noQueue": "No queue",
   "inbox.routing.noAssignee": "Unassigned",
   "inbox.routing.save": "Save routing",
+  "inbox.routing.assignToMe": "Assign to me",
+  "inbox.routing.clearAssignee": "Clear assignee",
   "admin.integrations": "Integrations",
   "admin.employees": "Employees",
   "admin.sections": "Sections",

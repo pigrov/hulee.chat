@@ -87,6 +87,8 @@
   "inbox.routing.noQueue": "Без очереди",
   "inbox.routing.noAssignee": "Не назначен",
   "inbox.routing.save": "Сохранить маршрут",
+  "inbox.routing.assignToMe": "Назначить на меня",
+  "inbox.routing.clearAssignee": "Снять назначение",
   "message.direction.inbound": "Входящее",
   "message.direction.outbound": "Исходящее",
   "message.status.received": "Получено",

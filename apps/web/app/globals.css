@@ -380,6 +380,15 @@ button.iconButton:disabled {
   gap: 10px;
 }
 
+.routingCurrentGrid {
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.routingQuickActions {
+  margin-bottom: 12px;
+}
+
 .adminSection {
   display: grid;
   gap: 16px;

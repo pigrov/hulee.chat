@@ -1,5 +1,6 @@
 import { createTranslator } from "@hulee/i18n";
 import {
+  CheckCircle2,
   MessageSquare,
   Paperclip,
   RefreshCw,
@@ -299,6 +300,7 @@ export default async function InboxPage({
         </section>
         {selectedConversation && canAssignConversations ? (
           <ConversationRoutingPanel
+            currentEmployeeId={access.employeeId}
             employees={employees}
             selectedConversation={selectedConversation}
             t={t}
@@ -312,11 +314,13 @@ export default async function InboxPage({
 }
 
 function ConversationRoutingPanel({
+  currentEmployeeId,
   employees,
   selectedConversation,
   t,
   workQueues
 }: {
+  readonly currentEmployeeId: TenantEmployeeRecord["employeeId"];
   readonly employees: readonly TenantEmployeeRecord[];
   readonly selectedConversation: InboxConversation;
   readonly t: ReturnType<typeof createTranslator>["t"];
@@ -331,6 +335,21 @@ function ConversationRoutingPanel({
   )
     ? undefined
     : selectedConversation.assignedEmployeeId;
+  const currentQueue = workQueues.find(
+    (workQueue) => workQueue.id === selectedConversation.currentQueueId
+  );
+  const assignedEmployee = activeEmployees.find(
+    (employee) =>
+      employee.employeeId === selectedConversation.assignedEmployeeId
+  );
+  const currentEmployeeIsAssignable = activeEmployees.some(
+    (employee) => employee.employeeId === currentEmployeeId
+  );
+  const isAssignedToCurrentEmployee =
+    selectedConversation.assignedEmployeeId === currentEmployeeId;
+  const hasAssignee =
+    selectedConversation.assignedEmployeeId !== undefined ||
+    selectedConversation.assignedTeamId !== undefined;
 
   return (
     <section className="clientSection" aria-labelledby="routing-title">
@@ -346,6 +365,63 @@ function ConversationRoutingPanel({
           <Route size={14} aria-hidden="true" />
           {t("inbox.routing.current")}
         </span>
+      </div>
+
+      <div className="detailGrid routingCurrentGrid">
+        <DetailItem
+          label={t("inbox.routing.queue")}
+          value={currentQueue?.name ?? t("inbox.routing.noQueue")}
+        />
+        <DetailItem
+          label={t("inbox.routing.assignee")}
+          value={
+            assignedEmployee?.displayName ??
+            selectedConversation.assignedEmployeeId ??
+            t("inbox.routing.noAssignee")
+          }
+        />
+      </div>
+
+      <div className="buttonRow routingQuickActions">
+        <form className="inlineForm" action={updateConversationRoutingAction}>
+          <input
+            name="conversationId"
+            type="hidden"
+            value={selectedConversation.id}
+          />
+          <input
+            name="assignedEmployeeId"
+            type="hidden"
+            value={currentEmployeeId}
+          />
+          <input name="assignedTeamId" type="hidden" value="" />
+          <button
+            className="secondaryButton"
+            disabled={
+              !currentEmployeeIsAssignable || isAssignedToCurrentEmployee
+            }
+            type="submit"
+          >
+            <CheckCircle2 size={14} aria-hidden="true" />
+            {t("inbox.routing.assignToMe")}
+          </button>
+        </form>
+        <form className="inlineForm" action={updateConversationRoutingAction}>
+          <input
+            name="conversationId"
+            type="hidden"
+            value={selectedConversation.id}
+          />
+          <input name="assignedEmployeeId" type="hidden" value="" />
+          <input name="assignedTeamId" type="hidden" value="" />
+          <button
+            className="secondaryButton"
+            disabled={!hasAssignee}
+            type="submit"
+          >
+            {t("inbox.routing.clearAssignee")}
+          </button>
+        </form>
       </div>
 
       <form
