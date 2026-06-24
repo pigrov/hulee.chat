@@ -22,7 +22,7 @@ import { randomUUID } from "node:crypto";
 
 import { assertWebActionRequest } from "./action-security";
 import {
-  assertCurrentWebTenantPermission,
+  assertCurrentWebEffectiveTenantPermission,
   getWebDatabase,
   isEmailNotVerifiedError
 } from "./session";
@@ -315,10 +315,10 @@ function revalidateOrgStructurePaths(): void {
 }
 
 async function assertVerifiedOrgStructurePermission(): ReturnType<
-  typeof assertCurrentWebTenantPermission
+  typeof assertCurrentWebEffectiveTenantPermission
 > {
   try {
-    return await assertCurrentWebTenantPermission("employees.manage", {
+    return await assertCurrentWebEffectiveTenantPermission("employees.manage", {
       requireVerifiedEmail: true
     });
   } catch (error) {

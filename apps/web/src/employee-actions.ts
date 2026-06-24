@@ -29,7 +29,7 @@ import { assertWebActionRequest } from "./action-security";
 import { assertWebAuthRateLimit } from "./auth-rate-limit";
 import { requireValidPassword } from "./password-policy";
 import {
-  assertCurrentWebTenantPermission,
+  assertCurrentWebEffectiveTenantPermission,
   createTenantWebSession,
   getWebDatabase,
   isEmailNotVerifiedError
@@ -365,7 +365,9 @@ async function sendInvitationEmail(
 }
 
 function employeeFromSession(
-  session: Awaited<ReturnType<typeof assertCurrentWebTenantPermission>>,
+  session: Awaited<
+    ReturnType<typeof assertCurrentWebEffectiveTenantPermission>
+  >,
   now: string
 ): Employee {
   return {
@@ -402,9 +404,9 @@ function readRequiredFormString(formData: FormData, name: string): string {
 
 async function assertVerifiedTenantPermission(
   permission: Permission
-): ReturnType<typeof assertCurrentWebTenantPermission> {
+): ReturnType<typeof assertCurrentWebEffectiveTenantPermission> {
   try {
-    return await assertCurrentWebTenantPermission(permission, {
+    return await assertCurrentWebEffectiveTenantPermission(permission, {
       requireVerifiedEmail: true
     });
   } catch (error) {

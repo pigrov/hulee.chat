@@ -38,7 +38,7 @@ import { randomUUID } from "node:crypto";
 
 import { assertWebActionRequest } from "./action-security";
 import {
-  assertCurrentWebTenantPermission,
+  assertCurrentWebEffectiveTenantPermission,
   getWebDatabase,
   isEmailNotVerifiedError
 } from "./session";
@@ -802,10 +802,10 @@ async function recordAccessAudit(input: {
 }
 
 async function assertVerifiedRolesPermission(): ReturnType<
-  typeof assertCurrentWebTenantPermission
+  typeof assertCurrentWebEffectiveTenantPermission
 > {
   try {
-    return await assertCurrentWebTenantPermission("roles.manage", {
+    return await assertCurrentWebEffectiveTenantPermission("roles.manage", {
       requireVerifiedEmail: true
     });
   } catch (error) {
