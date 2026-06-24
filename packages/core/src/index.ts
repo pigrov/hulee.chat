@@ -105,6 +105,13 @@ export type {
   PermissionScope,
   PermissionScopeType
 } from "./permissions";
+export { createRbacEvent, rbacEventTypes } from "./rbac-events";
+export type {
+  CreateRbacEventInput,
+  RbacEvent,
+  RbacEventPayload,
+  RbacEventType
+} from "./rbac-events";
 export { createExternalChannelCommandService } from "./external-channel-command-service";
 export type {
   ExternalChannelCommandContext,

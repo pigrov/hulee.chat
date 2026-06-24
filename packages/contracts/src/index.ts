@@ -86,6 +86,98 @@ export type PlatformEvent =
   | EventEnvelope<
       "integration.failed",
       { moduleId: string; errorCode: PlatformErrorCode }
+    >
+  | EventEnvelope<
+      "role.created",
+      {
+        roleId: string;
+        actorEmployeeId: EmployeeId;
+        name: string;
+        description?: string | null;
+        permissions: readonly string[];
+        permissionCount: number;
+        isSystem: boolean;
+        templateId?: string;
+        recommendedScopeType?: string;
+      }
+    >
+  | EventEnvelope<
+      "role.updated",
+      {
+        roleId: string;
+        actorEmployeeId: EmployeeId;
+        previousName: string;
+        nextName: string;
+        previousDescription?: string | null;
+        nextDescription?: string | null;
+        previousPermissions: readonly string[];
+        nextPermissions: readonly string[];
+        addedPermissions: readonly string[];
+        removedPermissions: readonly string[];
+      }
+    >
+  | EventEnvelope<
+      "role.archived",
+      {
+        roleId: string;
+        actorEmployeeId: EmployeeId;
+        name: string;
+        status: "archived";
+      }
+    >
+  | EventEnvelope<
+      "role.restored",
+      {
+        roleId: string;
+        actorEmployeeId: EmployeeId;
+        name: string;
+        status: "active";
+      }
+    >
+  | EventEnvelope<
+      "role_binding.created",
+      {
+        bindingId: string;
+        roleId: string;
+        actorEmployeeId: EmployeeId;
+        subject: { type: string; id: string };
+        scope: { type: string; id?: string };
+        targetEmployeeId?: EmployeeId;
+      }
+    >
+  | EventEnvelope<
+      "role_binding.revoked",
+      {
+        bindingId: string;
+        roleId: string;
+        actorEmployeeId: EmployeeId;
+        subject: { type: string; id: string };
+        scope: { type: string; id?: string };
+        targetEmployeeId?: EmployeeId;
+      }
+    >
+  | EventEnvelope<
+      "direct_grant.created",
+      {
+        grantId: string;
+        actorEmployeeId: EmployeeId;
+        targetEmployeeId: EmployeeId;
+        permission: string;
+        scope: { type: string; id?: string };
+        reason: string;
+        expiresAt?: string;
+      }
+    >
+  | EventEnvelope<
+      "direct_grant.revoked",
+      {
+        grantId: string;
+        actorEmployeeId: EmployeeId;
+        targetEmployeeId: EmployeeId;
+        permission: string;
+        scope: { type: string; id?: string };
+        reason: string;
+      }
     >;
 
 export type ModuleType =

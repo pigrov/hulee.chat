@@ -12,6 +12,14 @@ export {
   createSqlOutboxRepository
 } from "./sql-outbox-repository";
 export {
+  buildAppendTenantEventsSql,
+  createSqlDomainEventRepository
+} from "./sql-domain-event-repository";
+export type {
+  AppendTenantEventsInput,
+  DomainEventRepository
+} from "./sql-domain-event-repository";
+export {
   buildFindEnabledTenantModuleConfigByConfigStringSql,
   buildFindEnabledTenantModuleConfigSql,
   buildFindTenantModuleConfigSql,

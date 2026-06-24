@@ -4,11 +4,14 @@ import type {
   ClientId,
   ConversationId,
   EmployeeId,
+  EventId,
+  PlatformEvent,
   TenantId
 } from "@hulee/contracts";
 import {
   assertPermissionScopeAllowed,
   assertPermissionsAllowedForScope,
+  createRbacEvent,
   isPermission,
   normalizePermissionScope,
   prepareCustomTenantRole,
@@ -20,10 +23,12 @@ import {
   type PermissionScope,
   type PermissionRoleBinding,
   type PermissionRoleBindingSubject,
-  type PreparedCustomTenantRole
+  type PreparedCustomTenantRole,
+  type RbacEventType
 } from "@hulee/core";
 import {
   createSqlEmployeeDirectoryRepository,
+  createSqlDomainEventRepository,
   createSqlOrgStructureRepository,
   createSqlSecurityAuditRepository,
   createSqlTenantRbacRepository,
@@ -79,7 +84,7 @@ export async function createCustomTenantRoleAction(
       permissions: role.permissions
     });
 
-    await recordAccessAudit({
+    await recordAccessMutation({
       tenantId: session.tenantId,
       actorEmployeeId: session.employeeId,
       action: "role.created",
@@ -91,7 +96,22 @@ export async function createCustomTenantRoleAction(
         permissions: role.permissions,
         permissionCount: role.permissions.length
       },
-      occurredAt: now
+      occurredAt: now,
+      event: createRbacEvent({
+        id: createRbacEventId(session.tenantId, "role.created"),
+        tenantId: session.tenantId,
+        type: "role.created",
+        occurredAt: now.toISOString(),
+        payload: {
+          roleId,
+          actorEmployeeId: session.employeeId,
+          name: role.name,
+          description: role.description,
+          permissions: role.permissions,
+          permissionCount: role.permissions.length,
+          isSystem: false
+        }
+      })
     });
 
     destination = roleActionDestination(formData, "created");
@@ -152,7 +172,7 @@ export async function createRoleFromTemplateAction(
       permissions: role.permissions
     });
 
-    await recordAccessAudit({
+    await recordAccessMutation({
       tenantId: session.tenantId,
       actorEmployeeId: session.employeeId,
       action: "role.created",
@@ -166,7 +186,24 @@ export async function createRoleFromTemplateAction(
         permissions: role.permissions,
         permissionCount: role.permissions.length
       },
-      occurredAt: now
+      occurredAt: now,
+      event: createRbacEvent({
+        id: createRbacEventId(session.tenantId, "role.created"),
+        tenantId: session.tenantId,
+        type: "role.created",
+        occurredAt: now.toISOString(),
+        payload: {
+          roleId,
+          actorEmployeeId: session.employeeId,
+          name: role.name,
+          description: role.description,
+          permissions: role.permissions,
+          permissionCount: role.permissions.length,
+          isSystem: false,
+          templateId: template.id,
+          recommendedScopeType: template.recommendedScopeType
+        }
+      })
     });
 
     destination = roleActionDestination(formData, "template_created");
@@ -211,6 +248,10 @@ export async function updateCustomTenantRoleAction(
       existingRole,
       nextRole: role
     });
+    const permissionsDelta = permissionDiff(
+      existingRole.permissions,
+      role.permissions
+    );
 
     await repository.updateCustomRoleWithPermissions({
       tenantId: session.tenantId,
@@ -221,7 +262,7 @@ export async function updateCustomTenantRoleAction(
       permissions: role.permissions
     });
 
-    await recordAccessAudit({
+    await recordAccessMutation({
       tenantId: session.tenantId,
       actorEmployeeId: session.employeeId,
       action: "role.updated",
@@ -235,9 +276,27 @@ export async function updateCustomTenantRoleAction(
         nextDescription: role.description,
         previousPermissions: existingRole.permissions,
         nextPermissions: role.permissions,
-        ...permissionDiff(existingRole.permissions, role.permissions)
+        ...permissionsDelta
       },
-      occurredAt: now
+      occurredAt: now,
+      event: createRbacEvent({
+        id: createRbacEventId(session.tenantId, "role.updated"),
+        tenantId: session.tenantId,
+        type: "role.updated",
+        occurredAt: now.toISOString(),
+        payload: {
+          roleId,
+          actorEmployeeId: session.employeeId,
+          previousName: existingRole.name,
+          nextName: role.name,
+          previousDescription: existingRole.description,
+          nextDescription: role.description,
+          previousPermissions: existingRole.permissions,
+          nextPermissions: role.permissions,
+          addedPermissions: permissionsDelta.addedPermissions,
+          removedPermissions: permissionsDelta.removedPermissions
+        }
+      })
     });
 
     destination = roleActionDestination(formData, "updated");
@@ -286,7 +345,7 @@ export async function archiveCustomTenantRoleAction(
       updatedAt: now
     });
 
-    await recordAccessAudit({
+    await recordAccessMutation({
       tenantId: session.tenantId,
       actorEmployeeId: session.employeeId,
       action: "role.archived",
@@ -297,7 +356,19 @@ export async function archiveCustomTenantRoleAction(
         name: role.name,
         status: "archived"
       },
-      occurredAt: now
+      occurredAt: now,
+      event: createRbacEvent({
+        id: createRbacEventId(session.tenantId, "role.archived"),
+        tenantId: session.tenantId,
+        type: "role.archived",
+        occurredAt: now.toISOString(),
+        payload: {
+          roleId,
+          actorEmployeeId: session.employeeId,
+          name: role.name,
+          status: "archived"
+        }
+      })
     });
 
     destination = roleActionDestination(formData, "archived");
@@ -338,7 +409,7 @@ export async function restoreCustomTenantRoleAction(
       updatedAt: now
     });
 
-    await recordAccessAudit({
+    await recordAccessMutation({
       tenantId: session.tenantId,
       actorEmployeeId: session.employeeId,
       action: "role.restored",
@@ -349,7 +420,19 @@ export async function restoreCustomTenantRoleAction(
         name: role.name,
         status: "active"
       },
-      occurredAt: now
+      occurredAt: now,
+      event: createRbacEvent({
+        id: createRbacEventId(session.tenantId, "role.restored"),
+        tenantId: session.tenantId,
+        type: "role.restored",
+        occurredAt: now.toISOString(),
+        payload: {
+          roleId,
+          actorEmployeeId: session.employeeId,
+          name: role.name,
+          status: "active"
+        }
+      })
     });
 
     destination = roleActionDestination(formData, "restored");
@@ -447,7 +530,7 @@ export async function assignTenantRoleAction(
         createdAt: now
       });
 
-      await recordAccessAudit({
+      await recordAccessMutation({
         tenantId: session.tenantId,
         actorEmployeeId: session.employeeId,
         action: "role_binding.created",
@@ -458,7 +541,23 @@ export async function assignTenantRoleAction(
           ...roleBindingSubjectMetadata(subject),
           ...scopeMetadata(scope)
         },
-        occurredAt: now
+        occurredAt: now,
+        event: createRbacEvent({
+          id: createRbacEventId(session.tenantId, "role_binding.created"),
+          tenantId: session.tenantId,
+          type: "role_binding.created",
+          occurredAt: now.toISOString(),
+          payload: {
+            bindingId,
+            roleId,
+            actorEmployeeId: session.employeeId,
+            subject: roleBindingSubjectEventPayload(subject),
+            scope: permissionScopeEventPayload(scope),
+            ...(subject.type === "employee"
+              ? { targetEmployeeId: subject.id }
+              : {})
+          }
+        })
       });
     }
 
@@ -536,7 +635,7 @@ export async function revokeTenantRoleBindingAction(
       revokedAt: now
     });
 
-    await recordAccessAudit({
+    await recordAccessMutation({
       tenantId: session.tenantId,
       actorEmployeeId: session.employeeId,
       action: "role_binding.revoked",
@@ -551,7 +650,23 @@ export async function revokeTenantRoleBindingAction(
           : {}),
         ...scopeMetadata(binding.scope)
       },
-      occurredAt: now
+      occurredAt: now,
+      event: createRbacEvent({
+        id: createRbacEventId(session.tenantId, "role_binding.revoked"),
+        tenantId: session.tenantId,
+        type: "role_binding.revoked",
+        occurredAt: now.toISOString(),
+        payload: {
+          bindingId,
+          roleId: binding.roleId,
+          actorEmployeeId: session.employeeId,
+          subject: roleBindingSubjectEventPayload(binding.subject),
+          scope: permissionScopeEventPayload(binding.scope),
+          ...(binding.subject.type === "employee"
+            ? { targetEmployeeId: binding.subject.id }
+            : {})
+        }
+      })
     });
 
     destination = roleActionDestination(formData, "revoked");
@@ -661,7 +776,7 @@ export async function createDirectPermissionGrantAction(
         createdAt: now
       });
 
-      await recordAccessAudit({
+      await recordAccessMutation({
         tenantId: session.tenantId,
         actorEmployeeId: session.employeeId,
         action: "direct_grant.created",
@@ -674,7 +789,22 @@ export async function createDirectPermissionGrantAction(
           expiresAt: expiresAt?.toISOString(),
           ...scopeMetadata(scope)
         },
-        occurredAt: now
+        occurredAt: now,
+        event: createRbacEvent({
+          id: createRbacEventId(session.tenantId, "direct_grant.created"),
+          tenantId: session.tenantId,
+          type: "direct_grant.created",
+          occurredAt: now.toISOString(),
+          payload: {
+            grantId,
+            actorEmployeeId: session.employeeId,
+            targetEmployeeId: employeeId,
+            permission,
+            scope: permissionScopeEventPayload(scope),
+            reason,
+            expiresAt: expiresAt?.toISOString()
+          }
+        })
       });
     }
 
@@ -753,7 +883,7 @@ export async function revokeDirectPermissionGrantAction(
       revokedAt: now
     });
 
-    await recordAccessAudit({
+    await recordAccessMutation({
       tenantId: session.tenantId,
       actorEmployeeId: session.employeeId,
       action: "direct_grant.revoked",
@@ -765,7 +895,21 @@ export async function revokeDirectPermissionGrantAction(
         reason: grant.reason,
         ...scopeMetadata(grant.scope)
       },
-      occurredAt: now
+      occurredAt: now,
+      event: createRbacEvent({
+        id: createRbacEventId(session.tenantId, "direct_grant.revoked"),
+        tenantId: session.tenantId,
+        type: "direct_grant.revoked",
+        occurredAt: now.toISOString(),
+        payload: {
+          grantId,
+          actorEmployeeId: session.employeeId,
+          targetEmployeeId: grant.employeeId,
+          permission: grant.permission,
+          scope: permissionScopeEventPayload(grant.scope),
+          reason: grant.reason
+        }
+      })
     });
 
     destination = roleActionDestination(formData, "direct_grant_revoked");
@@ -780,7 +924,7 @@ export async function revokeDirectPermissionGrantAction(
   redirect(destination);
 }
 
-async function recordAccessAudit(input: {
+async function recordAccessMutation(input: {
   readonly tenantId: TenantId;
   readonly actorEmployeeId: EmployeeId;
   readonly action: AccessAuditAction;
@@ -788,8 +932,11 @@ async function recordAccessAudit(input: {
   readonly entityId: string;
   readonly metadata: Record<string, unknown>;
   readonly occurredAt: Date;
+  readonly event: PlatformEvent;
 }): Promise<void> {
-  await createSqlSecurityAuditRepository(getWebDatabase()).record({
+  const database = getWebDatabase();
+
+  await createSqlSecurityAuditRepository(database).record({
     id: `audit:${input.tenantId}:${input.action}:${randomUUID()}`,
     tenantId: input.tenantId,
     actorEmployeeId: input.actorEmployeeId,
@@ -798,6 +945,10 @@ async function recordAccessAudit(input: {
     entityId: input.entityId,
     metadata: input.metadata,
     occurredAt: input.occurredAt
+  });
+  await createSqlDomainEventRepository(database).append({
+    tenantId: input.tenantId,
+    events: [input.event]
   });
 }
 
@@ -1133,6 +1284,36 @@ function roleBindingSubjectMetadata(
         subjectType: subject.type,
         subjectId: subject.id
       };
+}
+
+function permissionScopeEventPayload(scope: PermissionScope): {
+  readonly type: string;
+  readonly id?: string;
+} {
+  const id = scopeId(scope);
+
+  return id === undefined
+    ? { type: scope.type }
+    : {
+        type: scope.type,
+        id
+      };
+}
+
+function roleBindingSubjectEventPayload(
+  subject: PermissionRoleBindingSubject
+): { readonly type: string; readonly id: string } {
+  return {
+    type: subject.type,
+    id: subject.id
+  };
+}
+
+function createRbacEventId(
+  tenantId: TenantId,
+  eventType: RbacEventType
+): EventId {
+  return `event:${tenantId}:${eventType}:${randomUUID()}` as EventId;
 }
 
 function readRoleBindingSubject(
