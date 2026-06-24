@@ -329,6 +329,7 @@ describe("internal inbox command service", () => {
       ...conversation,
       currentQueueId: "queue-sales"
     };
+    const auditRecords: unknown[] = [];
     const repository = new InMemoryExternalMessageRepository([
       routedConversation
     ]);
@@ -336,7 +337,12 @@ describe("internal inbox command service", () => {
       repository,
       authorization: createAssignAuthorization(),
       now: () => now,
-      idFactory: () => createSequentialIdFactory("assign")
+      idFactory: () => createSequentialIdFactory("assign"),
+      audit: {
+        async record(record) {
+          auditRecords.push(record);
+        }
+      }
     });
 
     await expect(
@@ -364,6 +370,25 @@ describe("internal inbox command service", () => {
           currentQueueId: "queue-claims",
           assignedEmployeeId: "employee-2"
         }
+      }
+    ]);
+    expect(auditRecords).toMatchObject([
+      {
+        tenantId,
+        actorEmployeeId: context.employeeId,
+        action: "conversation.routing.updated",
+        entityType: "conversation",
+        entityId: routedConversation.id,
+        metadata: {
+          conversationId: routedConversation.id,
+          previousCurrentQueueId: "queue-sales",
+          currentQueueId: "queue-claims",
+          previousAssignedEmployeeId: null,
+          assignedEmployeeId: "employee-2",
+          previousAssignedTeamId: null,
+          assignedTeamId: null
+        },
+        occurredAt: now
       }
     ]);
   });

@@ -32,6 +32,7 @@ import type {
   EmployeeDirectoryRepository,
   ExternalMessageRepository,
   HuleeDatabase,
+  SecurityAuditRepository,
   TenantEmployeeRecord,
   TenantRbacRepository
 } from "@hulee/db";
@@ -121,6 +122,7 @@ export type InternalInboxAuthorizationServiceOptions = {
 export type InternalInboxCommandServiceOptions = {
   repository: ExternalMessageRepository;
   authorization: InternalInboxAuthorizationService;
+  audit?: Pick<SecurityAuditRepository, "record">;
   now?: () => Date;
   idFactory?: (context: InternalInboxCommandContext) => IdFactory;
   idempotencyKeyFactory?: (input: {
@@ -285,6 +287,20 @@ export function createInternalInboxCommandService(
       if (updatedConversation === null) {
         throw new CoreError("validation.failed");
       }
+
+      await options.audit?.record({
+        id: `audit:${context.tenantId}:conversation.routing.updated:${input.conversationId}:${randomUUID()}`,
+        tenantId: context.tenantId,
+        actorEmployeeId: context.employeeId,
+        action: "conversation.routing.updated",
+        entityType: "conversation",
+        entityId: updatedConversation.id,
+        metadata: conversationRoutingAuditMetadata({
+          previousConversation: conversation,
+          nextConversation: updatedConversation
+        }),
+        occurredAt: assignedAt
+      });
 
       return toConversationRoutingResponse(updatedConversation);
     }
@@ -456,6 +472,22 @@ function toConversationRoutingResponse(
     currentQueueId: conversation.currentQueueId,
     assignedEmployeeId: conversation.assignedEmployeeId,
     assignedTeamId: conversation.assignedTeamId
+  };
+}
+
+function conversationRoutingAuditMetadata(input: {
+  previousConversation: InternalInboxConversationAccessResource;
+  nextConversation: InternalInboxConversationAccessResource;
+}): Record<string, string | null> {
+  return {
+    conversationId: input.nextConversation.id,
+    previousCurrentQueueId: input.previousConversation.currentQueueId ?? null,
+    currentQueueId: input.nextConversation.currentQueueId ?? null,
+    previousAssignedEmployeeId:
+      input.previousConversation.assignedEmployeeId ?? null,
+    assignedEmployeeId: input.nextConversation.assignedEmployeeId ?? null,
+    previousAssignedTeamId: input.previousConversation.assignedTeamId ?? null,
+    assignedTeamId: input.nextConversation.assignedTeamId ?? null
   };
 }
 

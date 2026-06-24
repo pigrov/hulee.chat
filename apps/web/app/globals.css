@@ -413,6 +413,38 @@ button.iconButton:disabled {
   margin-bottom: 12px;
 }
 
+.routingAuditBlock {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.routingAuditList {
+  display: grid;
+  gap: 8px;
+}
+
+.routingAuditItem {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-raised);
+}
+
+.routingAuditHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.routingAuditGrid {
+  gap: 8px;
+}
+
 .adminSection {
   display: grid;
   gap: 16px;

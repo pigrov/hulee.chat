@@ -17,6 +17,8 @@ import type { ReactNode } from "react";
 import {
   createSqlEmployeeDirectoryRepository,
   createSqlOrgStructureRepository,
+  createSqlSecurityAuditRepository,
+  type ConversationRoutingAuditRecord,
   type TenantEmployeeRecord,
   type TeamRecord,
   type WorkQueueRecord
@@ -119,6 +121,16 @@ export default async function InboxPage({
   const productName = t("app.name", {
     productName: model.tenant.brand.productName
   });
+  const routingAuditRecords =
+    selectedConversation && canAssignConversations
+      ? await createSqlSecurityAuditRepository(
+          getWebDatabase()
+        ).listConversationRoutingRecords({
+          tenantId: access.tenantId,
+          conversationId: selectedConversation.id,
+          limit: 3
+        })
+      : [];
 
   return (
     <AppFrame
@@ -329,6 +341,8 @@ export default async function InboxPage({
           <ConversationRoutingPanel
             currentEmployeeId={access.employeeId}
             employees={employees}
+            locale={locale}
+            routingAuditRecords={routingAuditRecords}
             selectedConversation={selectedConversation}
             teams={teams}
             t={t}
@@ -394,6 +408,8 @@ function InboxFilterBar({
 function ConversationRoutingPanel({
   currentEmployeeId,
   employees,
+  locale,
+  routingAuditRecords,
   selectedConversation,
   teams,
   t,
@@ -401,6 +417,8 @@ function ConversationRoutingPanel({
 }: {
   readonly currentEmployeeId: TenantEmployeeRecord["employeeId"];
   readonly employees: readonly TenantEmployeeRecord[];
+  readonly locale: string;
+  readonly routingAuditRecords: readonly ConversationRoutingAuditRecord[];
   readonly selectedConversation: InboxConversation;
   readonly teams: readonly TeamRecord[];
   readonly t: ReturnType<typeof createTranslator>["t"];
@@ -476,6 +494,74 @@ function ConversationRoutingPanel({
             t("inbox.routing.noTeam")
           }
         />
+      </div>
+
+      <div className="routingAuditBlock" aria-labelledby="routing-audit-title">
+        <div className="sectionHeader compactSectionHeader">
+          <h3 className="sectionTitle" id="routing-audit-title">
+            {t("inbox.routing.audit.title")}
+          </h3>
+          <span className="badge">{routingAuditRecords.length}</span>
+        </div>
+        {routingAuditRecords.length === 0 ? (
+          <p className="metaText">{t("inbox.routing.audit.empty")}</p>
+        ) : (
+          <div className="routingAuditList">
+            {routingAuditRecords.map((record) => (
+              <div className="routingAuditItem" key={record.id}>
+                <div className="routingAuditHeader">
+                  <time className="detailValue" dateTime={record.occurredAt}>
+                    {formatDateTime(record.occurredAt, locale)}
+                  </time>
+                  <span className="detailLabel">
+                    {t("inbox.routing.audit.changedBy", {
+                      actor: formatRoutingAuditActor(
+                        record.actorEmployeeId,
+                        activeEmployees,
+                        t
+                      )
+                    })}
+                  </span>
+                </div>
+                <div className="detailGrid routingAuditGrid">
+                  <DetailItem
+                    label={t("inbox.routing.queue")}
+                    value={formatRoutingAuditTransition({
+                      metadata: record.metadata,
+                      previousKey: "previousCurrentQueueId",
+                      nextKey: "currentQueueId",
+                      emptyLabel: t("inbox.routing.noQueue"),
+                      resolveLabel: (queueId) =>
+                        formatRoutingQueueLabel(queueId, workQueues)
+                    })}
+                  />
+                  <DetailItem
+                    label={t("inbox.routing.assignee")}
+                    value={formatRoutingAuditTransition({
+                      metadata: record.metadata,
+                      previousKey: "previousAssignedEmployeeId",
+                      nextKey: "assignedEmployeeId",
+                      emptyLabel: t("inbox.routing.noAssignee"),
+                      resolveLabel: (employeeId) =>
+                        formatRoutingEmployeeLabel(employeeId, activeEmployees)
+                    })}
+                  />
+                  <DetailItem
+                    label={t("inbox.routing.team")}
+                    value={formatRoutingAuditTransition({
+                      metadata: record.metadata,
+                      previousKey: "previousAssignedTeamId",
+                      nextKey: "assignedTeamId",
+                      emptyLabel: t("inbox.routing.noTeam"),
+                      resolveLabel: (teamId) =>
+                        formatRoutingTeamLabel(teamId, teams)
+                    })}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="buttonRow routingQuickActions">
@@ -589,6 +675,63 @@ function ConversationRoutingPanel({
       </form>
     </section>
   );
+}
+
+function formatRoutingAuditActor(
+  actorEmployeeId: string | undefined,
+  employees: readonly TenantEmployeeRecord[],
+  t: ReturnType<typeof createTranslator>["t"]
+): string {
+  if (actorEmployeeId === undefined) {
+    return t("common.unknown");
+  }
+
+  return formatRoutingEmployeeLabel(actorEmployeeId, employees);
+}
+
+function formatRoutingAuditTransition(input: {
+  readonly metadata: Record<string, unknown>;
+  readonly previousKey: string;
+  readonly nextKey: string;
+  readonly emptyLabel: string;
+  readonly resolveLabel: (id: string) => string;
+}): string {
+  const previousValue = metadataString(input.metadata[input.previousKey]);
+  const nextValue = metadataString(input.metadata[input.nextKey]);
+
+  return `${previousValue ? input.resolveLabel(previousValue) : input.emptyLabel} -> ${
+    nextValue ? input.resolveLabel(nextValue) : input.emptyLabel
+  }`;
+}
+
+function formatRoutingQueueLabel(
+  queueId: string,
+  workQueues: readonly WorkQueueRecord[]
+): string {
+  return (
+    workQueues.find((workQueue) => workQueue.id === queueId)?.name ?? queueId
+  );
+}
+
+function formatRoutingEmployeeLabel(
+  employeeId: string,
+  employees: readonly TenantEmployeeRecord[]
+): string {
+  return (
+    employees.find((employee) => employee.employeeId === employeeId)
+      ?.displayName ?? employeeId
+  );
+}
+
+function formatRoutingTeamLabel(
+  teamId: string,
+  teams: readonly TeamRecord[]
+): string {
+  return teams.find((team) => team.id === teamId)?.name ?? teamId;
+}
+
+function metadataString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function resolveEmailVerificationNotice(

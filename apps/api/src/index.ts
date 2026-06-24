@@ -5,6 +5,7 @@ import {
   createExternalMessageRepository,
   createSqlPublicApiAuditSink,
   createSqlOrgStructureRepository,
+  createSqlSecurityAuditRepository,
   createSqlTenantSecretRepository,
   createSqlTenantModuleConfigRepository,
   createSqlTenantApiKeyRepository,
@@ -146,7 +147,8 @@ export function createInternalApiDataPlaneHandler(
     }),
     inboxCommands: createInternalInboxCommandService({
       repository: externalMessageRepository,
-      authorization: inboxAuthorization
+      authorization: inboxAuthorization,
+      audit: createSqlSecurityAuditRepository(options.database)
     }),
     integrations: createInternalIntegrationService({
       repository: createSqlTenantModuleConfigRepository(options.database),
