@@ -34,6 +34,13 @@ export const defaultBrandProfile: BrandProfile = {
   scope: "platform",
   productName: "Hulee",
   shortProductName: "Hulee",
-  assets: {},
+  assets: {
+    logoLight: "/brand/hulee-logo-512.png",
+    logoDark: "/brand/hulee-logo-512.png",
+    mark: "/brand/hulee-logo-512.png",
+    favicon: "/favicon.ico",
+    pwaIcon: "/icons/icon-512x512.png",
+    appIcon: "/icons/icon-512x512.png"
+  },
   themeTokens: {}
 };
