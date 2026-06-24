@@ -25,8 +25,10 @@ import {
   type WorkQueueRecord
 } from "@hulee/db";
 import {
+  CoreError,
   resolveEffectivePermissionGrants,
   type EffectivePermissionGrant,
+  type Permission,
   type PermissionActor
 } from "@hulee/core";
 
@@ -37,7 +39,6 @@ import {
 import { resendEmailVerificationAction } from "../src/auth-actions";
 import { AccessDeniedPage } from "../src/access-denied";
 import {
-  canTenantPermission,
   isTenantEmailVerificationRequired,
   navigationAccessFromSession,
   type WebAccessSession
@@ -87,20 +88,7 @@ export default async function InboxPage({
     redirect("/login");
   }
 
-  if (!canTenantPermission(access, "inbox.read")) {
-    return (
-      <AccessDeniedPage
-        current="inbox"
-        navigationAccess={navigationAccessFromSession(access)}
-      />
-    );
-  }
-
   const resolvedSearchParams = await searchParams;
-  const canAssignConversations = canTenantPermission(
-    access,
-    "conversation.assign"
-  );
   const employeeRepository =
     createSqlEmployeeDirectoryRepository(getWebDatabase());
   const orgStructureRepository =
@@ -111,10 +99,7 @@ export default async function InboxPage({
   const assignedToMe = isAssignedToMeInboxFilter(
     resolvedSearchParams?.assigned
   );
-  const [employees, currentEmployee, teams, workQueues] = await Promise.all([
-    canAssignConversations
-      ? employeeRepository.listEmployees({ tenantId: access.tenantId })
-      : Promise.resolve<readonly TenantEmployeeRecord[]>([]),
+  const [currentEmployee, teams, workQueues] = await Promise.all([
     employeeRepository.findEmployee({
       tenantId: access.tenantId,
       employeeId: access.employeeId
@@ -130,6 +115,16 @@ export default async function InboxPage({
   const accessSnapshot = await resolveWebAccessSnapshot({
     currentEmployee
   });
+
+  if (!hasEffectivePermission(accessSnapshot, "inbox.read")) {
+    return (
+      <AccessDeniedPage
+        current="inbox"
+        navigationAccess={navigationAccessFromSession(access)}
+      />
+    );
+  }
+
   const readableWorkQueues =
     accessSnapshot === undefined
       ? []
@@ -142,13 +137,33 @@ export default async function InboxPage({
     queueId: requestedQueueId,
     workQueues: readableWorkQueues
   });
-  const model = await loadInboxViewModel({
-    selectedConversationId: resolvedSearchParams?.conversationId,
-    queueId: activeQueueId,
-    assignedToMe
-  });
+  let model: Awaited<ReturnType<typeof loadInboxViewModel>>;
+
+  try {
+    model = await loadInboxViewModel({
+      selectedConversationId: resolvedSearchParams?.conversationId,
+      queueId: activeQueueId,
+      assignedToMe
+    });
+  } catch (error) {
+    if (error instanceof CoreError && error.code === "permission.denied") {
+      return (
+        <AccessDeniedPage
+          current="inbox"
+          navigationAccess={navigationAccessFromSession(access)}
+        />
+      );
+    }
+
+    throw error;
+  }
+
   const { t, locale } = createTranslator(model.tenant.locale);
   const selectedConversation = model.selectedConversation;
+  const employees =
+    selectedConversation !== undefined && accessSnapshot !== undefined
+      ? await employeeRepository.listEmployees({ tenantId: access.tenantId })
+      : [];
   const currentInboxPath = buildInboxHref({
     conversationId: selectedConversation?.id,
     queueId: activeQueueId,
@@ -170,7 +185,7 @@ export default async function InboxPage({
     productName: model.tenant.brand.productName
   });
   const routingOptions =
-    selectedConversation && canAssignConversations && accessSnapshot
+    selectedConversation && accessSnapshot
       ? resolveConversationRoutingOptions({
           access,
           accessSnapshot,
@@ -183,7 +198,6 @@ export default async function InboxPage({
   const canReplyToSelectedConversation =
     selectedConversation !== undefined &&
     accessSnapshot !== undefined &&
-    canTenantPermission(access, "message.reply") &&
     canReplyToConversation({
       tenantId: access.tenantId,
       actor: accessSnapshot.actor,
@@ -505,6 +519,17 @@ type WebAccessSnapshot = {
   readonly actor: PermissionActor;
   readonly effectiveGrants: readonly EffectivePermissionGrant[];
 };
+
+function hasEffectivePermission(
+  accessSnapshot: WebAccessSnapshot | undefined,
+  permission: Permission
+): boolean {
+  return (
+    accessSnapshot?.effectiveGrants.some(
+      (grant) => grant.permission === permission
+    ) ?? false
+  );
+}
 
 async function resolveWebAccessSnapshot(input: {
   readonly currentEmployee: TenantEmployeeRecord | null;

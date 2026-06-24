@@ -20,9 +20,11 @@ import {
   updateTelegramIntegration
 } from "./inbox-api-client";
 import { assertWebActionRequest } from "./action-security";
+import { assertWebTenantEmailVerified } from "./access";
 import {
   assertCurrentWebTenantPermission,
-  isEmailNotVerifiedError
+  isEmailNotVerifiedError,
+  requireCurrentWebAccessSession
 } from "./session";
 import {
   inboxReplyActionFailureStatus,
@@ -38,9 +40,7 @@ export async function sendReplyAction(formData: FormData): Promise<void> {
   const redirectPath = inboxActionReturnTo(formData, conversationId);
 
   try {
-    await assertCurrentWebTenantPermission("message.reply", {
-      requireVerifiedEmail: true
-    });
+    assertWebTenantEmailVerified(await requireCurrentWebAccessSession());
   } catch (error) {
     if (isEmailNotVerifiedError(error)) {
       redirect(addSearchParam(redirectPath, "emailVerification", "required"));
@@ -88,9 +88,7 @@ export async function updateConversationRoutingAction(
   const redirectPath = inboxActionReturnTo(formData, conversationId);
 
   try {
-    await assertCurrentWebTenantPermission("conversation.assign", {
-      requireVerifiedEmail: true
-    });
+    assertWebTenantEmailVerified(await requireCurrentWebAccessSession());
   } catch (error) {
     if (isEmailNotVerifiedError(error)) {
       redirect(addSearchParam(redirectPath, "emailVerification", "required"));

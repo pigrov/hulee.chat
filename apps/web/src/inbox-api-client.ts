@@ -57,7 +57,10 @@ export async function loadInboxViewModel(input?: {
   });
 
   if (!response.ok) {
-    throw new Error(`Internal inbox API returned HTTP ${response.status}.`);
+    await throwInternalApiErrorResponse({
+      response,
+      message: "Internal inbox API returned"
+    });
   }
 
   return internalInboxViewResponseSchema.parse(await response.json());
