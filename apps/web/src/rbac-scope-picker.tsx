@@ -1,10 +1,12 @@
 "use client";
 
-import {
-  permissionScopeRequiresReference,
-  type PermissionScopeType
-} from "@hulee/core";
+import type { PermissionScopeType } from "@hulee/core";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+
+import {
+  resolveScopePickerState,
+  type ScopeReferenceOptions
+} from "./rbac-scope-picker-state";
 
 type SelectOption = {
   readonly value: string;
@@ -20,15 +22,6 @@ export type RoleAssignmentSubject = {
 
 export type RoleAssignmentSubjectOptions = Partial<
   Record<RoleAssignmentSubjectType, readonly SelectOption[]>
->;
-
-type ScopeReferenceOption = {
-  readonly value: string;
-  readonly label: string;
-};
-
-export type ScopeReferenceOptions = Partial<
-  Record<PermissionScopeType, readonly ScopeReferenceOption[]>
 >;
 
 export type RoleAssignmentOption = {
@@ -55,6 +48,8 @@ export type ScopePickerMessages = {
   readonly scopeType: string;
   readonly scopeReference: string;
   readonly scopeReferenceDescription: string;
+  readonly scopeReferenceManualDescription: string;
+  readonly scopeReferenceNotRequired: string;
   readonly scopeReferencePlaceholder: string;
   readonly scopeUnavailable: string;
   readonly selectEmployee: string;
@@ -80,18 +75,17 @@ export function ScopePickerFields({
 }): ReactNode {
   const [scopeType, setScopeType] = useState<PermissionScopeType>("tenant");
   const [scopeId, setScopeId] = useState("");
-  const selectedScopeType = allowedScopeTypes.includes(scopeType)
-    ? scopeType
-    : allowedScopeTypes[0];
   const isDisabled = disabled || allowedScopeTypes.length === 0;
-  const requiresReference =
-    selectedScopeType !== undefined &&
-    permissionScopeRequiresReference(selectedScopeType);
-  const selectedReferenceOptions =
-    selectedScopeType === undefined
-      ? []
-      : (scopeReferenceOptions[selectedScopeType] ?? []);
-  const hasReferenceOptions = selectedReferenceOptions.length > 0;
+  const {
+    referenceMode,
+    referenceOptions: selectedReferenceOptions,
+    requiresReference,
+    selectedScopeType
+  } = resolveScopePickerState({
+    allowedScopeTypes,
+    requestedScopeType: scopeType,
+    scopeReferenceOptions
+  });
 
   useEffect(() => {
     if (selectedScopeType === undefined) {
@@ -111,18 +105,13 @@ export function ScopePickerFields({
 
     if (
       requiresReference &&
-      hasReferenceOptions &&
+      referenceMode === "select" &&
       scopeId.length > 0 &&
       !selectedReferenceOptions.some((option) => option.value === scopeId)
     ) {
       setScopeId("");
     }
-  }, [
-    hasReferenceOptions,
-    requiresReference,
-    scopeId,
-    selectedReferenceOptions
-  ]);
+  }, [referenceMode, requiresReference, scopeId, selectedReferenceOptions]);
 
   return (
     <div className="scopePickerGrid">
@@ -152,7 +141,7 @@ export function ScopePickerFields({
       </label>
       <label className="fieldStack">
         <span className="detailLabel">{messages.scopeReference}</span>
-        {hasReferenceOptions ? (
+        {referenceMode === "select" ? (
           <select
             className="selectInput"
             disabled={isDisabled || !requiresReference}
@@ -174,13 +163,21 @@ export function ScopePickerFields({
             disabled={isDisabled || !requiresReference}
             name="scopeId"
             onChange={(event) => setScopeId(event.currentTarget.value)}
-            placeholder={messages.scopeReferencePlaceholder}
+            placeholder={
+              requiresReference
+                ? messages.scopeReferencePlaceholder
+                : messages.scopeReferenceNotRequired
+            }
             required={requiresReference}
             type="text"
             value={scopeId}
           />
         )}
-        <span className="metaText">{messages.scopeReferenceDescription}</span>
+        <span className="metaText">
+          {referenceMode === "manual"
+            ? messages.scopeReferenceManualDescription
+            : messages.scopeReferenceDescription}
+        </span>
       </label>
     </div>
   );

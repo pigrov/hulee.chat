@@ -1596,6 +1596,10 @@ function scopePickerMessages(t: Translator): ScopePickerMessages {
     scopeType: t("admin.roles.scopeType"),
     scopeReference: t("admin.roles.scopeReference"),
     scopeReferenceDescription: t("admin.roles.scopeReference.description"),
+    scopeReferenceManualDescription: t(
+      "admin.roles.scopeReference.manualDescription"
+    ),
+    scopeReferenceNotRequired: t("admin.roles.scopeReference.notRequired"),
     scopeReferencePlaceholder: t("admin.roles.scopeReference.placeholder"),
     scopeUnavailable: t("admin.roles.scopeUnavailable"),
     selectEmployee: t("admin.roles.selectEmployee"),

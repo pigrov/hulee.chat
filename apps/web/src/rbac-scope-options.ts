@@ -1,6 +1,6 @@
 import type { OrgUnitRecord, WorkQueueRecord } from "@hulee/db";
 
-import type { ScopeReferenceOptions } from "./rbac-scope-picker";
+import type { ScopeReferenceOptions } from "./rbac-scope-picker-state";
 
 export function buildScopeReferenceOptions(input: {
   readonly orgUnits: readonly OrgUnitRecord[];

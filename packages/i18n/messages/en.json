@@ -282,6 +282,8 @@
   "admin.roles.scopeReference": "Scope reference",
   "admin.roles.scopeReference.placeholder": "org-unit, team, queue, client or conversation id",
   "admin.roles.scopeReference.description": "Required only for scopes with a concrete reference.",
+  "admin.roles.scopeReference.manualDescription": "Use a concrete id until this scope has a connected selector.",
+  "admin.roles.scopeReference.notRequired": "No reference required",
   "admin.roles.scopeUnavailable": "Select a role first",
   "admin.roles.assign": "Assign",
   "admin.roles.revoke": "Revoke",
