@@ -352,7 +352,6 @@ async function handleAuthenticatedRoute(input: {
 }): Promise<ApiHttpResponse> {
   switch (input.route.route) {
     case "inbox_view": {
-      assertSessionCan(input.session, "inbox.read");
       const response: InternalInboxViewResponse =
         await input.inboxQueries.loadInboxView(input.session, {
           selectedConversationId: input.route.selectedConversationId,
@@ -366,7 +365,6 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "inbox_reply": {
-      assertSessionCan(input.session, "message.reply");
       const request = internalInboxReplyRequestSchema.parse(input.request.body);
       const response: InternalInboxReplyResponse =
         await input.inboxCommands.sendReply(input.session, {
@@ -378,7 +376,6 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "inbox_routing_update": {
-      assertSessionCan(input.session, "conversation.assign");
       const request = internalInboxConversationRoutingUpdateRequestSchema.parse(
         input.request.body
       );

@@ -8,6 +8,7 @@ import type {
   TenantId
 } from "@hulee/contracts";
 import {
+  CoreError,
   createInternalApiSignature,
   internalApiSignatureHeader,
   internalApiTimestampHeader
@@ -307,13 +308,40 @@ describe("internal API handler", () => {
     });
   });
 
-  it("requires inbox.read permission for the inbox view", async () => {
-    const { handler } = createHandler({
-      session: {
-        ...session,
-        permissions: ["message.reply", "modules.manage"]
+  it("delegates inbox authorization to the query service", async () => {
+    const scopedSession: InternalApiSession = {
+      ...session,
+      permissions: ["message.reply", "modules.manage"]
+    };
+    const { handler, loadInboxView } = createHandler({
+      session: scopedSession
+    });
+    const response = await handler.handle({
+      method: "GET",
+      path: "/internal/v1/inbox"
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual(inboxView);
+    expect(loadInboxView).toHaveBeenCalledWith(scopedSession, {
+      selectedConversationId: undefined,
+      filters: {
+        queueId: undefined,
+        assignedToMe: false
       }
     });
+  });
+
+  it("returns inbox permission errors from the query service", async () => {
+    const scopedSession: InternalApiSession = {
+      ...session,
+      permissions: []
+    };
+    const { handler, loadInboxView } = createHandler({
+      session: scopedSession
+    });
+    loadInboxView.mockRejectedValueOnce(new CoreError("permission.denied"));
+
     const response = await handler.handle({
       method: "GET",
       path: "/internal/v1/inbox"
@@ -323,6 +351,13 @@ describe("internal API handler", () => {
     expect(response.body).toMatchObject({
       error: {
         code: "permission.denied"
+      }
+    });
+    expect(loadInboxView).toHaveBeenCalledWith(scopedSession, {
+      selectedConversationId: undefined,
+      filters: {
+        queueId: undefined,
+        assignedToMe: false
       }
     });
   });
@@ -503,6 +538,40 @@ describe("internal API handler", () => {
     });
   });
 
+  it("returns reply permission errors from the command service", async () => {
+    const scopedSession: InternalApiSession = {
+      ...session,
+      permissions: ["inbox.read"]
+    };
+    const { handler, sendReply } = createHandler({
+      session: scopedSession
+    });
+    sendReply.mockRejectedValueOnce(new CoreError("permission.denied"));
+
+    const response = await handler.handle({
+      method: "POST",
+      path: "/internal/v1/inbox/conversations/conversation-1/replies",
+      body: {
+        text: " Hello ",
+        idempotencyKey: "reply-1"
+      }
+    });
+
+    expect(response.status).toBe(403);
+    expect(response.body).toMatchObject({
+      error: {
+        code: "permission.denied"
+      }
+    });
+    expect(sendReply).toHaveBeenCalledWith(scopedSession, {
+      conversationId: "conversation-1",
+      request: {
+        text: "Hello",
+        idempotencyKey: "reply-1"
+      }
+    });
+  });
+
   it("rejects empty reply bodies before command execution", async () => {
     const { handler, sendReply } = createHandler();
     const response = await handler.handle({
@@ -517,7 +586,7 @@ describe("internal API handler", () => {
     expect(sendReply).not.toHaveBeenCalled();
   });
 
-  it("validates and updates conversation routing through conversation.assign", async () => {
+  it("validates and updates conversation routing through the command service", async () => {
     const { handler, updateConversationRouting } = createHandler();
     const response = await handler.handle({
       method: "PATCH",
@@ -545,13 +614,18 @@ describe("internal API handler", () => {
     });
   });
 
-  it("requires conversation.assign for conversation routing updates", async () => {
+  it("returns routing permission errors from the command service", async () => {
+    const scopedSession: InternalApiSession = {
+      ...session,
+      permissions: ["inbox.read", "message.reply"]
+    };
     const { handler, updateConversationRouting } = createHandler({
-      session: {
-        ...session,
-        permissions: ["inbox.read", "message.reply"]
-      }
+      session: scopedSession
     });
+    updateConversationRouting.mockRejectedValueOnce(
+      new CoreError("permission.denied")
+    );
+
     const response = await handler.handle({
       method: "PATCH",
       path: "/internal/v1/inbox/conversations/conversation-1/routing",
@@ -566,7 +640,12 @@ describe("internal API handler", () => {
         code: "permission.denied"
       }
     });
-    expect(updateConversationRouting).not.toHaveBeenCalled();
+    expect(updateConversationRouting).toHaveBeenCalledWith(scopedSession, {
+      conversationId: "conversation-1",
+      request: {
+        currentQueueId: "queue-sales"
+      }
+    });
   });
 
   it("loads Telegram integration config through modules.manage permission", async () => {
