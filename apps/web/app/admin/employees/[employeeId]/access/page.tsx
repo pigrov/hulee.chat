@@ -17,8 +17,10 @@ import {
   createSqlEmployeeDirectoryRepository,
   createSqlOrgStructureRepository,
   createSqlTenantRbacRepository,
+  type OrgUnitRecord,
   type TenantEmployeeRecord,
-  type TenantRoleRecord
+  type TenantRoleRecord,
+  type WorkQueueRecord
 } from "@hulee/db";
 import { createTranslator, type I18nMessageKey } from "@hulee/i18n";
 import {
@@ -535,10 +537,14 @@ export default async function EmployeeAccessAdminPage({
             ) : (
               effectiveAccess.map((grant) => (
                 <EffectiveGrantRow
+                  employee={employee}
                   grant={grant}
                   key={effectiveGrantKey(grant)}
+                  orgUnits={orgUnits}
+                  roleBindings={roleBindings}
                   roles={roles}
                   t={t}
+                  workQueues={workQueues}
                 />
               ))
             )}
@@ -707,13 +713,21 @@ function EmployeeDirectGrantRow({
 }
 
 function EffectiveGrantRow({
+  employee,
   grant,
+  orgUnits,
+  roleBindings,
   roles,
-  t
+  t,
+  workQueues
 }: {
+  readonly employee: TenantEmployeeRecord;
   readonly grant: EffectivePermissionGrant;
+  readonly orgUnits: readonly OrgUnitRecord[];
+  readonly roleBindings: readonly PermissionRoleBinding[];
   readonly roles: readonly TenantRoleRecord[];
   readonly t: Translator;
+  readonly workQueues: readonly WorkQueueRecord[];
 }): ReactNode {
   const definition = getPermissionDefinition(grant.permission);
 
@@ -740,7 +754,14 @@ function EffectiveGrantRow({
       <div className="sourceList">
         {grant.sources.map((source, index) => (
           <span className="badge" key={effectiveGrantSourceKey(source, index)}>
-            {sourceLabel(source, roles, t)}
+            {sourceLabel(source, {
+              employees: [employee],
+              orgUnits,
+              roleBindings,
+              roles,
+              t,
+              workQueues
+            })}
           </span>
         ))}
       </div>
@@ -845,25 +866,82 @@ function fixedRoleLabelKey(roleId: string): I18nMessageKey | undefined {
 
 function sourceLabel(
   source: PermissionGrantSource,
-  roles: readonly TenantRoleRecord[],
-  t: Translator
+  references: {
+    readonly employees: readonly TenantEmployeeRecord[];
+    readonly orgUnits: readonly OrgUnitRecord[];
+    readonly roleBindings: readonly PermissionRoleBinding[];
+    readonly roles: readonly TenantRoleRecord[];
+    readonly t: Translator;
+    readonly workQueues: readonly WorkQueueRecord[];
+  }
 ): string {
   switch (source.type) {
     case "fixed_role":
-      return t("admin.roles.source.fixedRole", {
-        value: roleLabelFromEmployeeRole(source.role, t)
+      return references.t("admin.roles.source.fixedRole", {
+        value: roleLabelFromEmployeeRole(source.role, references.t)
       });
     case "role_binding": {
-      const role = roles.find((candidate) => candidate.id === source.roleId);
+      const role = references.roles.find(
+        (candidate) => candidate.id === source.roleId
+      );
+      const roleLabel =
+        role === undefined ? source.roleId : roleName(role, references.t);
+      const binding =
+        source.bindingId === undefined
+          ? undefined
+          : references.roleBindings.find(
+              (candidate) => candidate.id === source.bindingId
+            );
 
-      return t("admin.roles.source.roleBinding", {
-        value: role === undefined ? source.roleId : roleName(role, t)
+      if (binding === undefined) {
+        return references.t("admin.roles.source.roleBinding", {
+          value: roleLabel
+        });
+      }
+
+      return references.t("admin.roles.source.roleBindingWithSubject", {
+        role: roleLabel,
+        subject: references.t(subjectTypeKey(binding.subject)),
+        value: roleBindingSubjectValue(binding.subject, references)
       });
     }
     case "direct_grant":
-      return t("admin.roles.source.directGrant", {
+      return references.t("admin.roles.source.directGrant", {
         value: source.reason
       });
+  }
+}
+
+function roleBindingSubjectValue(
+  subject: PermissionRoleBinding["subject"],
+  references: {
+    readonly employees: readonly TenantEmployeeRecord[];
+    readonly orgUnits: readonly OrgUnitRecord[];
+    readonly workQueues: readonly WorkQueueRecord[];
+  }
+): string {
+  switch (subject.type) {
+    case "employee": {
+      const employee = references.employees.find(
+        (candidate) => candidate.employeeId === subject.id
+      );
+
+      return employee === undefined
+        ? subject.id
+        : `${employee.displayName} (${employee.email})`;
+    }
+    case "org_unit":
+      return (
+        references.orgUnits.find((orgUnit) => orgUnit.id === subject.id)
+          ?.name ?? subject.id
+      );
+    case "queue":
+      return (
+        references.workQueues.find((workQueue) => workQueue.id === subject.id)
+          ?.name ?? subject.id
+      );
+    case "team":
+      return subject.id;
   }
 }
 
@@ -975,6 +1053,21 @@ function permissionScopeTypeKey(
       return "admin.roles.scope.client";
     case "conversation":
       return "admin.roles.scope.conversation";
+  }
+}
+
+function subjectTypeKey(
+  subject: PermissionRoleBinding["subject"]
+): I18nMessageKey {
+  switch (subject.type) {
+    case "team":
+      return "admin.roles.subject.team";
+    case "org_unit":
+      return "admin.roles.subject.orgUnit";
+    case "queue":
+      return "admin.roles.subject.queue";
+    case "employee":
+      return "admin.roles.subject.employee";
   }
 }
 

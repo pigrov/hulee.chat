@@ -207,6 +207,7 @@
   "admin.roles.effectiveGrantDomain": "Domain: {value}",
   "admin.roles.source.fixedRole": "Fixed role: {value}",
   "admin.roles.source.roleBinding": "Role binding: {value}",
+  "admin.roles.source.roleBindingWithSubject": "Role binding: {role} / {subject}: {value}",
   "admin.roles.source.directGrant": "Direct grant: {value}",
   "admin.roles.accessAudit": "Access audit",
   "admin.roles.accessAuditView": "Access audit",

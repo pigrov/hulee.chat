@@ -214,6 +214,7 @@
   "admin.roles.effectiveGrantDomain": "Домен: {value}",
   "admin.roles.source.fixedRole": "Фиксированная роль: {value}",
   "admin.roles.source.roleBinding": "Назначение роли: {value}",
+  "admin.roles.source.roleBindingWithSubject": "Назначение роли: {role} / {subject}: {value}",
   "admin.roles.source.directGrant": "Прямой грант: {value}",
   "admin.roles.accessAudit": "Аудит доступа",
   "admin.roles.accessAuditView": "Аудит доступа",
