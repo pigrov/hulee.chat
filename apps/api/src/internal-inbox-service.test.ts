@@ -226,6 +226,62 @@ describe("internal inbox command service", () => {
     ).resolves.toEqual([conversations[0]]);
   });
 
+  it("filters conversations by assigned team scope", async () => {
+    const authorization = createInternalInboxAuthorizationService({
+      employeeRepository: createEmployeeRepository(employee),
+      rbacRepository: {
+        async listEffectiveAccessSources() {
+          return {
+            roles: [
+              {
+                id: "role-team-inbox",
+                tenantId,
+                permissions: ["inbox.read"]
+              }
+            ],
+            roleBindings: [
+              {
+                tenantId,
+                roleId: "role-team-inbox",
+                subject: {
+                  type: "employee",
+                  id: context.employeeId
+                },
+                scope: {
+                  type: "team",
+                  id: "team-sales"
+                }
+              }
+            ],
+            directGrants: []
+          };
+        }
+      },
+      now: () => now
+    });
+    const conversations: readonly InternalInboxConversationAccessResource[] = [
+      {
+        id: "conversation-sales",
+        tenantId,
+        clientId: "client-sales",
+        assignedTeamId: "team-sales"
+      },
+      {
+        id: "conversation-claims",
+        tenantId,
+        clientId: "client-claims",
+        assignedTeamId: "team-claims"
+      }
+    ];
+
+    await expect(
+      authorization.filterConversations(context, {
+        conversations,
+        permission: "inbox.read"
+      })
+    ).resolves.toEqual([conversations[0]]);
+  });
+
   it("allows assigned replies only for the current assignee", async () => {
     const authorization = createInternalInboxAuthorizationService({
       employeeRepository: createEmployeeRepository(employee),
@@ -324,7 +380,7 @@ describe("internal inbox command service", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("updates conversation routing when the current queue scope is assignable", async () => {
+  it("updates conversation routing when source and target stay in the actor queue scope", async () => {
     const routedConversation: Conversation = {
       ...conversation,
       currentQueueId: "queue-sales"
@@ -349,25 +405,25 @@ describe("internal inbox command service", () => {
       service.updateConversationRouting(context, {
         conversationId: routedConversation.id,
         request: {
-          currentQueueId: "queue-claims",
+          currentQueueId: "queue-sales",
           assignedEmployeeId: "employee-2"
         }
       })
     ).resolves.toEqual({
       conversationId: routedConversation.id,
-      currentQueueId: "queue-claims",
+      currentQueueId: "queue-sales",
       assignedEmployeeId: "employee-2",
       assignedTeamId: undefined
     });
     expect(repository.conversations[0]).toMatchObject({
-      currentQueueId: "queue-claims",
+      currentQueueId: "queue-sales",
       assignedEmployeeId: "employee-2"
     });
     expect(repository.routingEvents).toMatchObject([
       {
         type: "conversation.assigned",
         payload: {
-          currentQueueId: "queue-claims",
+          currentQueueId: "queue-sales",
           assignedEmployeeId: "employee-2"
         }
       }
@@ -382,7 +438,7 @@ describe("internal inbox command service", () => {
         metadata: {
           conversationId: routedConversation.id,
           previousCurrentQueueId: "queue-sales",
-          currentQueueId: "queue-claims",
+          currentQueueId: "queue-sales",
           previousAssignedEmployeeId: null,
           assignedEmployeeId: "employee-2",
           previousAssignedTeamId: null,
@@ -417,6 +473,30 @@ describe("internal inbox command service", () => {
     expect(repository.routingEvents).toHaveLength(0);
   });
 
+  it("rejects conversation routing into a target queue outside the actor scope", async () => {
+    const repository = new InMemoryExternalMessageRepository([
+      {
+        ...conversation,
+        currentQueueId: "queue-sales"
+      }
+    ]);
+    const service = createInternalInboxCommandService({
+      repository,
+      authorization: createAssignAuthorization(),
+      now: () => now
+    });
+
+    await expect(
+      service.updateConversationRouting(context, {
+        conversationId: conversation.id,
+        request: {
+          currentQueueId: "queue-claims"
+        }
+      })
+    ).rejects.toEqual(new CoreError("permission.denied"));
+    expect(repository.routingEvents).toHaveLength(0);
+  });
+
   it("reports invalid routing targets when persistence rejects the update", async () => {
     const repository = new RejectingRoutingExternalMessageRepository([
       {
@@ -434,7 +514,8 @@ describe("internal inbox command service", () => {
       service.updateConversationRouting(context, {
         conversationId: conversation.id,
         request: {
-          currentQueueId: "queue-missing"
+          currentQueueId: "queue-sales",
+          assignedEmployeeId: "employee-missing"
         }
       })
     ).rejects.toEqual(new CoreError("validation.failed"));

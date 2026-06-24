@@ -276,6 +276,12 @@ export function createInternalInboxCommandService(
           | undefined,
         assignedTeamId: input.request.assignedTeamId
       });
+
+      await options.authorization.assertConversationAccess(context, {
+        conversation: result.conversation,
+        permission: "conversation.assign"
+      });
+
       const updatedConversation =
         await options.repository.updateConversationRouting({
           tenantId: context.tenantId,
@@ -575,6 +581,11 @@ function conversationResourceContext(
     conversationId:
       conversation.id as PermissionResourceContext["conversationId"],
     orgUnitId: conversation.currentQueueOwningOrgUnitId,
+    teamId: conversation.assignedTeamId,
+    teamIds:
+      conversation.assignedTeamId === undefined
+        ? undefined
+        : [conversation.assignedTeamId],
     queueId: conversation.currentQueueId,
     assignedEmployeeId: conversation.assignedEmployeeId,
     assignedTeamIds:
