@@ -39,10 +39,7 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AccessDeniedPage } from "../../../src/access-denied";
-import {
-  canTenantPermission,
-  navigationAccessFromSession
-} from "../../../src/access";
+import { navigationAccessFromSession } from "../../../src/access";
 import { DetailItem } from "../../../src/app-chrome";
 import { loadInboxViewModel } from "../../../src/inbox-api-client";
 import {
@@ -72,6 +69,10 @@ import {
   roleTemplateCatalog,
   type RoleTemplateDefinition
 } from "../../../src/role-templates";
+import {
+  hasEffectivePermission,
+  resolveEmployeeEffectiveAccess
+} from "../../../src/rbac-effective-access";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
 
 export const dynamic = "force-dynamic";
@@ -115,7 +116,19 @@ export default async function RolesAdminPage({
     redirect("/login");
   }
 
-  if (!canTenantPermission(access, "roles.manage")) {
+  const repository = createSqlTenantRbacRepository(getWebDatabase());
+  const employeeRepository =
+    createSqlEmployeeDirectoryRepository(getWebDatabase());
+  const now = new Date();
+  const accessSnapshot = await resolveEmployeeEffectiveAccess({
+    tenantId: access.tenantId,
+    employeeId: access.employeeId,
+    employeeRepository,
+    rbacRepository: repository,
+    at: now
+  });
+
+  if (!hasEffectivePermission(accessSnapshot, "roles.manage")) {
     return (
       <AccessDeniedPage
         current="tenant-admin"
@@ -124,12 +137,8 @@ export default async function RolesAdminPage({
     );
   }
 
-  const repository = createSqlTenantRbacRepository(getWebDatabase());
-  const employeeRepository =
-    createSqlEmployeeDirectoryRepository(getWebDatabase());
   const orgStructureRepository =
     createSqlOrgStructureRepository(getWebDatabase());
-  const now = new Date();
   const [
     model,
     roles,

@@ -40,10 +40,7 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AccessDeniedPage } from "../../../../../src/access-denied";
-import {
-  canTenantPermission,
-  navigationAccessFromSession
-} from "../../../../../src/access";
+import { navigationAccessFromSession } from "../../../../../src/access";
 import { DetailItem } from "../../../../../src/app-chrome";
 import {
   setEmployeeOrgUnitMembershipsAction,
@@ -68,6 +65,10 @@ import {
   getWebDatabase,
   resolveCurrentWebAccessSession
 } from "../../../../../src/session";
+import {
+  hasEffectivePermission,
+  resolveEmployeeEffectiveAccess
+} from "../../../../../src/rbac-effective-access";
 import { TenantAdminShell } from "../../../../../src/tenant-admin-shell";
 
 export const dynamic = "force-dynamic";
@@ -109,7 +110,19 @@ export default async function EmployeeAccessAdminPage({
     redirect("/login");
   }
 
-  if (!canTenantPermission(access, "roles.manage")) {
+  const now = new Date();
+  const rbacRepository = createSqlTenantRbacRepository(getWebDatabase());
+  const employeeRepository =
+    createSqlEmployeeDirectoryRepository(getWebDatabase());
+  const accessSnapshot = await resolveEmployeeEffectiveAccess({
+    tenantId: access.tenantId,
+    employeeId: access.employeeId,
+    employeeRepository,
+    rbacRepository,
+    at: now
+  });
+
+  if (!hasEffectivePermission(accessSnapshot, "roles.manage")) {
     return (
       <AccessDeniedPage
         current="tenant-admin"
@@ -118,12 +131,8 @@ export default async function EmployeeAccessAdminPage({
     );
   }
 
-  const now = new Date();
   const { employeeId: employeeIdParam } = await params;
   const employeeId = decodeURIComponent(employeeIdParam) as EmployeeId;
-  const rbacRepository = createSqlTenantRbacRepository(getWebDatabase());
-  const employeeRepository =
-    createSqlEmployeeDirectoryRepository(getWebDatabase());
   const orgStructureRepository =
     createSqlOrgStructureRepository(getWebDatabase());
   const [
