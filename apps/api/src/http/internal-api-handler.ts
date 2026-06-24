@@ -47,6 +47,7 @@ export type InternalApiSession = {
   tenantId: TenantId;
   employeeId: EmployeeId;
   permissions: readonly Permission[];
+  authMode: "signed" | "local_dev";
 };
 
 export type InternalApiSessionResolver = {
@@ -195,7 +196,7 @@ export function createLocalDevInternalSessionResolver(input?: {
   return {
     async resolve(request, requestId) {
       return (
-        resolveHeaderSession(request, requestId, input) ??
+        resolveHeaderSession(request, requestId, "local_dev", input) ??
         createFallbackDevSession(request, requestId, input)
       );
     }
@@ -220,6 +221,7 @@ export function createSignedInternalSessionResolver(input: {
       const headerSession = resolveHeaderSession(
         request,
         requestId,
+        "signed",
         input.fallback
       );
 
@@ -230,7 +232,12 @@ export function createSignedInternalSessionResolver(input: {
       }
 
       if (input.secret === undefined) {
-        return input.allowUnsignedFallback ? headerSession : null;
+        return input.allowUnsignedFallback
+          ? {
+              ...headerSession,
+              authMode: "local_dev"
+            }
+          : null;
       }
 
       const timestamp = headerValue(
@@ -268,6 +275,7 @@ export function createSignedInternalSessionResolver(input: {
 function resolveHeaderSession(
   request: ApiHttpRequest,
   requestId: string,
+  authMode: InternalApiSession["authMode"],
   input?: {
     tenantId?: TenantId;
     employeeId?: EmployeeId;
@@ -295,7 +303,8 @@ function resolveHeaderSession(
     requestId,
     tenantId,
     employeeId,
-    permissions: permissions ?? []
+    permissions: permissions ?? [],
+    authMode
   };
 }
 
@@ -336,7 +345,8 @@ function createFallbackDevSession(
         "message.reply",
         "conversation.assign",
         "modules.manage"
-      ]
+      ],
+    authMode: "local_dev"
   };
 }
 
@@ -389,7 +399,7 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "tenant_brand_view": {
-      assertSessionCan(input.session, "tenant.manage");
+      assertSignedEffectivePermissionOverride(input.session, "tenant.manage");
       const response: InternalTenantBrandResponse =
         await input.tenantSettings.loadTenantBrand(input.session);
 
@@ -397,7 +407,7 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "tenant_brand_update": {
-      assertSessionCan(input.session, "tenant.manage");
+      assertSignedEffectivePermissionOverride(input.session, "tenant.manage");
       const request = internalTenantBrandUpdateRequestSchema.parse(
         input.request.body
       );
@@ -408,7 +418,10 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "org_structure_view": {
-      assertSessionCan(input.session, "employees.manage");
+      assertSignedEffectivePermissionOverride(
+        input.session,
+        "employees.manage"
+      );
       const response: InternalOrgStructureResponse =
         await input.orgStructure.loadOrgStructure(input.session);
 
@@ -416,7 +429,10 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "org_unit_upsert": {
-      assertSessionCan(input.session, "employees.manage");
+      assertSignedEffectivePermissionOverride(
+        input.session,
+        "employees.manage"
+      );
       const request = internalOrgUnitUpsertRequestSchema.parse(
         input.request.body
       );
@@ -429,7 +445,10 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "work_queue_upsert": {
-      assertSessionCan(input.session, "employees.manage");
+      assertSignedEffectivePermissionOverride(
+        input.session,
+        "employees.manage"
+      );
       const request = internalWorkQueueUpsertRequestSchema.parse(
         input.request.body
       );
@@ -440,7 +459,7 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "telegram_integration_view": {
-      assertSessionCan(input.session, "modules.manage");
+      assertSignedEffectivePermissionOverride(input.session, "modules.manage");
       const response: InternalTelegramIntegrationResponse =
         await input.integrations.loadTelegramIntegration(input.session);
 
@@ -448,7 +467,7 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "telegram_integration_update": {
-      assertSessionCan(input.session, "modules.manage");
+      assertSignedEffectivePermissionOverride(input.session, "modules.manage");
       const request = internalTelegramIntegrationUpdateRequestSchema.parse(
         input.request.body
       );
@@ -462,7 +481,7 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "telegram_integration_diagnostics": {
-      assertSessionCan(input.session, "modules.manage");
+      assertSignedEffectivePermissionOverride(input.session, "modules.manage");
       const response: InternalTelegramIntegrationResponse =
         await input.integrations.refreshTelegramDiagnostics(input.session);
 
@@ -470,7 +489,7 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "telegram_integration_webhook_set": {
-      assertSessionCan(input.session, "modules.manage");
+      assertSignedEffectivePermissionOverride(input.session, "modules.manage");
       const response: InternalTelegramIntegrationResponse =
         await input.integrations.setTelegramWebhook(input.session);
 
@@ -478,7 +497,7 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "telegram_integration_webhook_delete": {
-      assertSessionCan(input.session, "modules.manage");
+      assertSignedEffectivePermissionOverride(input.session, "modules.manage");
       const response: InternalTelegramIntegrationResponse =
         await input.integrations.deleteTelegramWebhook(input.session);
 
@@ -616,6 +635,24 @@ function assertSessionCan(
   permission: Permission
 ): void {
   if (!session.permissions.includes(permission)) {
+    throw new CoreError("permission.denied");
+  }
+}
+
+function assertSignedEffectivePermissionOverride(
+  session: InternalApiSession,
+  permission: Permission
+): void {
+  assertSessionCan(session, permission);
+
+  if (session.authMode === "local_dev") {
+    return;
+  }
+
+  if (
+    session.permissions.length !== 1 ||
+    session.permissions[0] !== permission
+  ) {
     throw new CoreError("permission.denied");
   }
 }

@@ -35,7 +35,8 @@ const session: InternalApiSession = {
     "message.reply",
     "conversation.assign",
     "modules.manage"
-  ]
+  ],
+  authMode: "signed"
 };
 const inboxView: InternalInboxViewResponse = {
   tenant: {
@@ -363,7 +364,10 @@ describe("internal API handler", () => {
   });
 
   it("loads and updates tenant brand through tenant.manage permission", async () => {
-    const { handler, loadTenantBrand, updateTenantBrand } = createHandler();
+    const tenantManageSession = sessionWithPermissions(["tenant.manage"]);
+    const { handler, loadTenantBrand, updateTenantBrand } = createHandler({
+      session: tenantManageSession
+    });
     const loadResponse = await handler.handle({
       method: "GET",
       path: "/internal/v1/tenant/brand"
@@ -395,8 +399,8 @@ describe("internal API handler", () => {
         }
       }
     });
-    expect(loadTenantBrand).toHaveBeenCalledWith(session);
-    expect(updateTenantBrand).toHaveBeenCalledWith(session, {
+    expect(loadTenantBrand).toHaveBeenCalledWith(tenantManageSession);
+    expect(updateTenantBrand).toHaveBeenCalledWith(tenantManageSession, {
       productName: "Acme Desk",
       shortProductName: "Acme",
       themeTokens: {
@@ -408,10 +412,11 @@ describe("internal API handler", () => {
 
   it("requires tenant.manage for tenant brand routes", async () => {
     const { handler } = createHandler({
-      session: {
-        ...session,
-        permissions: ["inbox.read", "message.reply", "modules.manage"]
-      }
+      session: sessionWithPermissions([
+        "inbox.read",
+        "message.reply",
+        "modules.manage"
+      ])
     });
     const response = await handler.handle({
       method: "GET",
@@ -426,9 +431,30 @@ describe("internal API handler", () => {
     });
   });
 
+  it("requires signed narrow effective permission override for admin settings routes", async () => {
+    const { handler, loadTenantBrand } = createHandler({
+      session
+    });
+    const response = await handler.handle({
+      method: "GET",
+      path: "/internal/v1/tenant/brand"
+    });
+
+    expect(response.status).toBe(403);
+    expect(response.body).toMatchObject({
+      error: {
+        code: "permission.denied"
+      }
+    });
+    expect(loadTenantBrand).not.toHaveBeenCalled();
+  });
+
   it("loads and upserts org structure through employees.manage permission", async () => {
+    const employeesManageSession = sessionWithPermissions(["employees.manage"]);
     const { handler, loadOrgStructure, upsertOrgUnit, upsertWorkQueue } =
-      createHandler();
+      createHandler({
+        session: employeesManageSession
+      });
     const loadResponse = await handler.handle({
       method: "GET",
       path: "/internal/v1/org-structure"
@@ -477,13 +503,13 @@ describe("internal API handler", () => {
       kind: "claims",
       owningOrgUnitId: "org-sales"
     });
-    expect(loadOrgStructure).toHaveBeenCalledWith(session);
-    expect(upsertOrgUnit).toHaveBeenCalledWith(session, {
+    expect(loadOrgStructure).toHaveBeenCalledWith(employeesManageSession);
+    expect(upsertOrgUnit).toHaveBeenCalledWith(employeesManageSession, {
       name: "Sales",
       kind: "department",
       status: "active"
     });
-    expect(upsertWorkQueue).toHaveBeenCalledWith(session, {
+    expect(upsertWorkQueue).toHaveBeenCalledWith(employeesManageSession, {
       name: "Claims",
       kind: "claims",
       owningOrgUnitId: "org-sales",
@@ -494,10 +520,11 @@ describe("internal API handler", () => {
 
   it("requires employees.manage for org structure routes", async () => {
     const { handler } = createHandler({
-      session: {
-        ...session,
-        permissions: ["tenant.manage", "inbox.read", "message.reply"]
-      }
+      session: sessionWithPermissions([
+        "tenant.manage",
+        "inbox.read",
+        "message.reply"
+      ])
     });
     const response = await handler.handle({
       method: "GET",
@@ -649,7 +676,10 @@ describe("internal API handler", () => {
   });
 
   it("loads Telegram integration config through modules.manage permission", async () => {
-    const { handler, loadTelegramIntegration } = createHandler();
+    const modulesManageSession = sessionWithPermissions(["modules.manage"]);
+    const { handler, loadTelegramIntegration } = createHandler({
+      session: modulesManageSession
+    });
     const response = await handler.handle({
       method: "GET",
       path: "/internal/v1/integrations/telegram"
@@ -661,11 +691,14 @@ describe("internal API handler", () => {
       enabled: true,
       webhookPath: "/webhooks/telegram/telegram-local"
     });
-    expect(loadTelegramIntegration).toHaveBeenCalledWith(session);
+    expect(loadTelegramIntegration).toHaveBeenCalledWith(modulesManageSession);
   });
 
   it("updates Telegram integration config after request validation", async () => {
-    const { handler, updateTelegramIntegration } = createHandler();
+    const modulesManageSession = sessionWithPermissions(["modules.manage"]);
+    const { handler, updateTelegramIntegration } = createHandler({
+      session: modulesManageSession
+    });
     const response = await handler.handle({
       method: "PUT",
       path: "/internal/v1/integrations/telegram",
@@ -686,21 +719,21 @@ describe("internal API handler", () => {
         outboundEnabled: true
       }
     });
-    expect(updateTelegramIntegration).toHaveBeenCalledWith(session, {
-      enabled: true,
-      channelExternalId: "telegram-local",
-      mode: "webhook",
-      botTokenSecretRef: "env:HULEE_TELEGRAM_BOT_TOKEN",
-      outboundEnabled: true
-    });
+    expect(updateTelegramIntegration).toHaveBeenCalledWith(
+      modulesManageSession,
+      {
+        enabled: true,
+        channelExternalId: "telegram-local",
+        mode: "webhook",
+        botTokenSecretRef: "env:HULEE_TELEGRAM_BOT_TOKEN",
+        outboundEnabled: true
+      }
+    );
   });
 
   it("requires modules.manage for Telegram integration routes", async () => {
     const { handler } = createHandler({
-      session: {
-        ...session,
-        permissions: ["inbox.read", "message.reply"]
-      }
+      session: sessionWithPermissions(["inbox.read", "message.reply"])
     });
     const response = await handler.handle({
       method: "GET",
@@ -790,7 +823,8 @@ describe("internal API handler", () => {
     ).resolves.toMatchObject({
       tenantId,
       employeeId,
-      permissions: ["inbox.read", "message.reply"]
+      permissions: ["inbox.read", "message.reply"],
+      authMode: "signed"
     });
   });
 
@@ -851,7 +885,9 @@ describe("internal API handler", () => {
   });
 
   it("rejects invalid Telegram integration payloads before command execution", async () => {
-    const { handler, updateTelegramIntegration } = createHandler();
+    const { handler, updateTelegramIntegration } = createHandler({
+      session: sessionWithPermissions(["modules.manage"])
+    });
     const response = await handler.handle({
       method: "PUT",
       path: "/internal/v1/integrations/telegram",
@@ -867,7 +903,10 @@ describe("internal API handler", () => {
   });
 
   it("refreshes Telegram diagnostics through modules.manage permission", async () => {
-    const { handler, refreshTelegramDiagnostics } = createHandler();
+    const modulesManageSession = sessionWithPermissions(["modules.manage"]);
+    const { handler, refreshTelegramDiagnostics } = createHandler({
+      session: modulesManageSession
+    });
     const response = await handler.handle({
       method: "POST",
       path: "/internal/v1/integrations/telegram/diagnostics"
@@ -881,12 +920,17 @@ describe("internal API handler", () => {
         }
       }
     });
-    expect(refreshTelegramDiagnostics).toHaveBeenCalledWith(session);
+    expect(refreshTelegramDiagnostics).toHaveBeenCalledWith(
+      modulesManageSession
+    );
   });
 
   it("syncs Telegram webhook through modules.manage permission", async () => {
+    const modulesManageSession = sessionWithPermissions(["modules.manage"]);
     const { handler, setTelegramWebhook, deleteTelegramWebhook } =
-      createHandler();
+      createHandler({
+        session: modulesManageSession
+      });
     const setResponse = await handler.handle({
       method: "POST",
       path: "/internal/v1/integrations/telegram/webhook"
@@ -898,7 +942,18 @@ describe("internal API handler", () => {
 
     expect(setResponse.status).toBe(200);
     expect(deleteResponse.status).toBe(200);
-    expect(setTelegramWebhook).toHaveBeenCalledWith(session);
-    expect(deleteTelegramWebhook).toHaveBeenCalledWith(session);
+    expect(setTelegramWebhook).toHaveBeenCalledWith(modulesManageSession);
+    expect(deleteTelegramWebhook).toHaveBeenCalledWith(modulesManageSession);
   });
 });
+
+function sessionWithPermissions(
+  permissions: InternalApiSession["permissions"],
+  authMode: InternalApiSession["authMode"] = "signed"
+): InternalApiSession {
+  return {
+    ...session,
+    permissions,
+    authMode
+  };
+}

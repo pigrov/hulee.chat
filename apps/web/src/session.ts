@@ -84,7 +84,7 @@ export type RegisterLocalTenantInput = {
   password: string;
 };
 
-export type AssertCurrentWebTenantPermissionOptions = {
+export type AssertCurrentWebEffectiveTenantPermissionOptions = {
   requireVerifiedEmail?: boolean;
 };
 
@@ -157,26 +157,9 @@ export async function requireCurrentWebAccessSession(): Promise<WebAccessSession
   return session;
 }
 
-export async function assertCurrentWebTenantPermission(
-  permission: Permission,
-  options: AssertCurrentWebTenantPermissionOptions = {}
-): Promise<WebAccessSession> {
-  const session = await requireCurrentWebAccessSession();
-
-  if (!session.permissions.includes(permission)) {
-    throw new CoreError("permission.denied");
-  }
-
-  if (options.requireVerifiedEmail === true) {
-    assertWebTenantEmailVerified(session);
-  }
-
-  return session;
-}
-
 export async function assertCurrentWebEffectiveTenantPermission(
   permission: Permission,
-  options: AssertCurrentWebTenantPermissionOptions = {}
+  options: AssertCurrentWebEffectiveTenantPermissionOptions = {}
 ): Promise<WebAccessSession> {
   const session = await requireCurrentWebAccessSession();
 
