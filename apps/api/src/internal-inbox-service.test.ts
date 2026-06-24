@@ -145,6 +145,86 @@ describe("internal inbox command service", () => {
     expect(repository.messages).toHaveLength(1);
   });
 
+  it("queues replies when the actor message scope covers the conversation queue", async () => {
+    const repository = new InMemoryExternalMessageRepository([
+      {
+        ...conversation,
+        currentQueueId: "queue-sales"
+      }
+    ]);
+    const service = createInternalInboxCommandService({
+      repository,
+      authorization: createQueueReplyAuthorization(),
+      now: () => now,
+      idempotencyKeyFactory: () => "reply-queue"
+    });
+
+    await expect(
+      service.sendReply(context, {
+        conversationId: conversation.id,
+        request: {
+          text: "Hello"
+        }
+      })
+    ).resolves.toMatchObject({
+      status: "queued",
+      idempotencyKey: "reply-queue"
+    });
+    expect(repository.messages).toHaveLength(1);
+  });
+
+  it("rejects replies outside the actor message queue scope", async () => {
+    const repository = new InMemoryExternalMessageRepository([
+      {
+        ...conversation,
+        currentQueueId: "queue-claims"
+      }
+    ]);
+    const service = createInternalInboxCommandService({
+      repository,
+      authorization: createQueueReplyAuthorization(),
+      now: () => now
+    });
+
+    await expect(
+      service.sendReply(context, {
+        conversationId: conversation.id,
+        request: {
+          text: "Hello"
+        }
+      })
+    ).rejects.toEqual(new CoreError("permission.denied"));
+    expect(repository.messages).toHaveLength(0);
+  });
+
+  it("queues assigned-team replies for active team members", async () => {
+    const repository = new InMemoryExternalMessageRepository([
+      {
+        ...conversation,
+        assignedTeamId: "team-sales"
+      }
+    ]);
+    const service = createInternalInboxCommandService({
+      repository,
+      authorization: createAssignedReplyAuthorization(),
+      now: () => now,
+      idempotencyKeyFactory: () => "reply-team"
+    });
+
+    await expect(
+      service.sendReply(context, {
+        conversationId: conversation.id,
+        request: {
+          text: "Hello"
+        }
+      })
+    ).resolves.toMatchObject({
+      status: "queued",
+      idempotencyKey: "reply-team"
+    });
+    expect(repository.messages).toHaveLength(1);
+  });
+
   it("rejects conversations outside the tenant context", async () => {
     const repository = new InMemoryExternalMessageRepository([
       {
@@ -545,6 +625,75 @@ function createReplyAuthorization(): InternalInboxAuthorizationService {
               },
               scope: {
                 type: "tenant"
+              }
+            }
+          ],
+          directGrants: []
+        };
+      }
+    },
+    now: () => now
+  });
+}
+
+function createQueueReplyAuthorization(): InternalInboxAuthorizationService {
+  return createInternalInboxAuthorizationService({
+    employeeRepository: createEmployeeRepository(employee),
+    rbacRepository: {
+      async listEffectiveAccessSources() {
+        return {
+          roles: [
+            {
+              id: "role-queue-reply",
+              tenantId,
+              permissions: ["message.reply"]
+            }
+          ],
+          roleBindings: [
+            {
+              tenantId,
+              roleId: "role-queue-reply",
+              subject: {
+                type: "queue",
+                id: "queue-sales"
+              },
+              scope: {
+                type: "queue",
+                id: "queue-sales"
+              }
+            }
+          ],
+          directGrants: []
+        };
+      }
+    },
+    now: () => now
+  });
+}
+
+function createAssignedReplyAuthorization(): InternalInboxAuthorizationService {
+  return createInternalInboxAuthorizationService({
+    employeeRepository: createEmployeeRepository(employee),
+    rbacRepository: {
+      async listEffectiveAccessSources() {
+        return {
+          roles: [
+            {
+              id: "role-assigned-reply",
+              tenantId,
+              permissions: ["message.reply"]
+            }
+          ],
+          roleBindings: [
+            {
+              tenantId,
+              roleId: "role-assigned-reply",
+              subject: {
+                type: "employee",
+                id: context.employeeId
+              },
+              scope: {
+                type: "assigned"
               }
             }
           ],

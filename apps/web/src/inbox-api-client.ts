@@ -93,7 +93,10 @@ export async function sendInboxReply(input: {
   });
 
   if (!response.ok) {
-    throw new Error(`Internal reply API returned HTTP ${response.status}.`);
+    await throwInternalApiErrorResponse({
+      response,
+      message: "Internal reply API returned"
+    });
   }
 
   return internalInboxReplyResponseSchema.parse(await response.json());

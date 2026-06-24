@@ -351,6 +351,10 @@ button.railButton {
   background: var(--hulee-color-surface-default);
 }
 
+.composerNotice {
+  grid-column: 1 / -1;
+}
+
 .composerTextarea {
   min-height: 44px;
   max-height: 140px;

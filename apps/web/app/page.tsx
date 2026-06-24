@@ -48,8 +48,12 @@ import {
   permissionActorFromTenantEmployee,
   type ConversationRoutingOptions
 } from "../src/conversation-routing-options";
+import { canReplyToConversation } from "../src/conversation-reply-options";
 import { formatDateTime } from "../src/formatting";
-import type { InboxRoutingActionStatus } from "../src/inbox-action-status";
+import type {
+  InboxReplyActionStatus,
+  InboxRoutingActionStatus
+} from "../src/inbox-action-status";
 import {
   buildReadableInboxQueueOptions,
   resolveReadableInboxQueueFilter
@@ -73,6 +77,7 @@ export default async function InboxPage({
     emailVerification?: string;
     queueId?: string;
     assigned?: string;
+    replyStatus?: string;
     routingStatus?: string;
   }>;
 }): Promise<ReactNode> {
@@ -155,6 +160,9 @@ export default async function InboxPage({
   const routingActionStatus = resolveRoutingActionStatus(
     resolvedSearchParams?.routingStatus
   );
+  const replyActionStatus = resolveReplyActionStatus(
+    resolvedSearchParams?.replyStatus
+  );
   const isTenantWriteBlocked = isTenantEmailVerificationRequired(access);
   const shouldShowEmailVerificationBanner =
     emailVerificationNotice === undefined && isTenantWriteBlocked;
@@ -172,6 +180,16 @@ export default async function InboxPage({
           workQueues
         })
       : undefined;
+  const canReplyToSelectedConversation =
+    selectedConversation !== undefined &&
+    accessSnapshot !== undefined &&
+    canTenantPermission(access, "message.reply") &&
+    canReplyToConversation({
+      tenantId: access.tenantId,
+      actor: accessSnapshot.actor,
+      effectiveGrants: accessSnapshot.effectiveGrants,
+      conversation: selectedConversation
+    });
   const routingAuditRecords =
     selectedConversation && routingOptions?.canRouteConversation
       ? await createSqlSecurityAuditRepository(
@@ -237,6 +255,15 @@ export default async function InboxPage({
                   }
                 >
                   {t(routingActionStatusKey(routingActionStatus))}
+                </p>
+              ) : null}
+              {replyActionStatus ? (
+                <p
+                  className={
+                    replyActionStatus === "sent" ? "formNotice" : "formError"
+                  }
+                >
+                  {t(replyActionStatusKey(replyActionStatus))}
                 </p>
               ) : null}
             </div>
@@ -317,13 +344,14 @@ export default async function InboxPage({
           )}
         </div>
 
-        {selectedConversation ? (
+        {selectedConversation && canReplyToSelectedConversation ? (
           <form className="composer" action={sendReplyAction}>
             <input
               type="hidden"
               name="conversationId"
               value={selectedConversation.id}
             />
+            <input name="returnTo" type="hidden" value={currentInboxPath} />
             <button
               className="iconButton"
               type="button"
@@ -350,6 +378,12 @@ export default async function InboxPage({
             </button>
             <SlotMount slot="conversation.composer.tool" />
           </form>
+        ) : selectedConversation ? (
+          <div className="composer" aria-live="polite">
+            <p className="formError composerNotice">
+              {t("inbox.replyUnavailable")}
+            </p>
+          </div>
         ) : null}
       </section>
 
@@ -906,6 +940,20 @@ function resolveRoutingActionStatus(
   return undefined;
 }
 
+function resolveReplyActionStatus(
+  value: string | undefined
+): InboxReplyActionStatus | undefined {
+  if (
+    value === "sent" ||
+    value === "invalid" ||
+    value === "permission_denied"
+  ) {
+    return value;
+  }
+
+  return undefined;
+}
+
 function routingActionStatusKey(
   status: InboxRoutingActionStatus
 ): I18nMessageKey {
@@ -916,6 +964,17 @@ function routingActionStatusKey(
       return "inbox.routing.status.permissionDenied";
     default:
       return "inbox.routing.status.invalid";
+  }
+}
+
+function replyActionStatusKey(status: InboxReplyActionStatus): I18nMessageKey {
+  switch (status) {
+    case "sent":
+      return "inbox.reply.status.sent";
+    case "permission_denied":
+      return "inbox.reply.status.permissionDenied";
+    default:
+      return "inbox.reply.status.invalid";
   }
 }
 

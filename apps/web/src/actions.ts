@@ -25,6 +25,8 @@ import {
   isEmailNotVerifiedError
 } from "./session";
 import {
+  inboxReplyActionFailureStatus,
+  type InboxReplyActionStatus,
   inboxRoutingActionFailureStatus,
   type InboxRoutingActionStatus
 } from "./inbox-action-status";
@@ -33,24 +35,48 @@ export async function sendReplyAction(formData: FormData): Promise<void> {
   await assertWebActionRequest();
 
   const conversationId = readRequiredFormString(formData, "conversationId");
-  await assertVerifiedTenantPermission(
-    "message.reply",
-    `/?conversationId=${encodeURIComponent(conversationId)}`
-  );
+  const redirectPath = inboxActionReturnTo(formData, conversationId);
+
+  try {
+    await assertCurrentWebTenantPermission("message.reply", {
+      requireVerifiedEmail: true
+    });
+  } catch (error) {
+    if (isEmailNotVerifiedError(error)) {
+      redirect(addSearchParam(redirectPath, "emailVerification", "required"));
+    }
+
+    redirect(
+      inboxReplyActionDestination(
+        redirectPath,
+        inboxReplyActionFailureStatus(error)
+      )
+    );
+  }
 
   const text = readRequiredFormString(formData, "text").trim();
 
   if (text.length === 0) {
-    return;
+    redirect(inboxReplyActionDestination(redirectPath, "invalid"));
   }
 
-  await sendInboxReply({
-    conversationId,
-    text,
-    idempotencyKey: `web-reply:${conversationId}:${randomUUID()}`
-  });
+  let replyStatus: InboxReplyActionStatus = "sent";
 
-  revalidatePath("/");
+  try {
+    await sendInboxReply({
+      conversationId,
+      text,
+      idempotencyKey: `web-reply:${conversationId}:${randomUUID()}`
+    });
+  } catch (error) {
+    replyStatus = inboxReplyActionFailureStatus(error);
+  }
+
+  if (replyStatus === "sent") {
+    revalidatePath("/");
+  }
+
+  redirect(inboxReplyActionDestination(redirectPath, replyStatus));
 }
 
 export async function updateConversationRoutingAction(
@@ -59,7 +85,7 @@ export async function updateConversationRoutingAction(
   await assertWebActionRequest();
 
   const conversationId = readRequiredFormString(formData, "conversationId");
-  const redirectPath = inboxRoutingActionReturnTo(formData, conversationId);
+  const redirectPath = inboxActionReturnTo(formData, conversationId);
 
   try {
     await assertCurrentWebTenantPermission("conversation.assign", {
@@ -276,7 +302,14 @@ function inboxRoutingActionDestination(
   return addSearchParam(path, "routingStatus", status);
 }
 
-function inboxRoutingActionReturnTo(
+function inboxReplyActionDestination(
+  path: string,
+  status: InboxReplyActionStatus
+): string {
+  return addSearchParam(path, "replyStatus", status);
+}
+
+function inboxActionReturnTo(
   formData: FormData,
   conversationId: string
 ): string {
