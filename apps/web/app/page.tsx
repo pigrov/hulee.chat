@@ -40,7 +40,6 @@ import { resendEmailVerificationAction } from "../src/auth-actions";
 import { AccessDeniedPage } from "../src/access-denied";
 import {
   isTenantEmailVerificationRequired,
-  navigationAccessFromSession,
   type WebAccessSession
 } from "../src/access";
 import { AppFrame, DetailItem, SlotMount } from "../src/app-chrome";
@@ -65,6 +64,7 @@ import {
   type InboxConversation,
   type InboxMessage
 } from "../src/inbox-api-client";
+import { navigationAccessFromTenantAdminAccess } from "../src/tenant-admin-nav";
 import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
@@ -120,7 +120,10 @@ export default async function InboxPage({
     return (
       <AccessDeniedPage
         current="inbox"
-        navigationAccess={navigationAccessFromSession(access)}
+        navigationAccess={navigationAccessFromTenantAdminAccess({
+          session: access,
+          effectiveAccess: accessSnapshot
+        })}
       />
     );
   }
@@ -150,7 +153,10 @@ export default async function InboxPage({
       return (
         <AccessDeniedPage
           current="inbox"
-          navigationAccess={navigationAccessFromSession(access)}
+          navigationAccess={navigationAccessFromTenantAdminAccess({
+            session: access,
+            effectiveAccess: accessSnapshot
+          })}
         />
       );
     }
@@ -219,7 +225,10 @@ export default async function InboxPage({
     <AppFrame
       brand={model.tenant.brand}
       current="inbox"
-      navigationAccess={navigationAccessFromSession(access)}
+      navigationAccess={navigationAccessFromTenantAdminAccess({
+        session: access,
+        effectiveAccess: accessSnapshot
+      })}
       t={t}
     >
       <section className="queuePane" aria-labelledby="inbox-title">

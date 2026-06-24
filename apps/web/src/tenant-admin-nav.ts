@@ -1,7 +1,15 @@
 import type { Permission } from "@hulee/core";
 import type { I18nMessageKey } from "@hulee/i18n";
 
-import { canTenantPermission, type WebAccessSession } from "./access";
+import {
+  canTenantPermission,
+  navigationAccessFromSession,
+  type WebAccessSession
+} from "./access";
+import {
+  hasEffectivePermission,
+  type WebEffectiveAccessSnapshot
+} from "./rbac-effective-access";
 
 export type TenantAdminSectionId =
   | "overview"
@@ -20,6 +28,15 @@ export type TenantAdminSection = {
   requiredPermissions: readonly Permission[];
   permissionMode: "any" | "all";
 };
+
+export type TenantAdminAccessContext = {
+  readonly session: WebAccessSession;
+  readonly effectiveAccess?: WebEffectiveAccessSnapshot | undefined;
+};
+
+export type TenantAdminAccessInput =
+  | WebAccessSession
+  | TenantAdminAccessContext;
 
 export const tenantAdminSections: readonly TenantAdminSection[] = [
   {
@@ -89,7 +106,7 @@ const tenantAdminNavigationSections = tenantAdminSections.filter(
 );
 
 export function getVisibleTenantAdminSections(
-  access: WebAccessSession
+  access: TenantAdminAccessInput
 ): readonly TenantAdminSection[] {
   return tenantAdminNavigationSections.filter((section) =>
     canAccessTenantAdminSection(access, section)
@@ -97,16 +114,52 @@ export function getVisibleTenantAdminSections(
 }
 
 export function canAccessTenantAdminSection(
-  access: WebAccessSession,
+  access: TenantAdminAccessInput,
   section: TenantAdminSection
 ): boolean {
   if (section.permissionMode === "any") {
     return section.requiredPermissions.some((permission) =>
-      canTenantPermission(access, permission)
+      hasTenantAdminPermission(access, permission)
     );
   }
 
   return section.requiredPermissions.every((permission) =>
-    canTenantPermission(access, permission)
+    hasTenantAdminPermission(access, permission)
   );
+}
+
+export function navigationAccessFromTenantAdminAccess(
+  access: TenantAdminAccessInput
+): ReturnType<typeof navigationAccessFromSession> {
+  const context = normalizeTenantAdminAccess(access);
+
+  return {
+    ...navigationAccessFromSession(context.session),
+    tenantAdmin: getVisibleTenantAdminSections(access).length > 0
+  };
+}
+
+function hasTenantAdminPermission(
+  access: TenantAdminAccessInput,
+  permission: Permission
+): boolean {
+  const context = normalizeTenantAdminAccess(access);
+
+  if ("effectiveAccess" in context) {
+    return hasEffectivePermission(context.effectiveAccess, permission);
+  }
+
+  return canTenantPermission(context.session, permission);
+}
+
+function normalizeTenantAdminAccess(
+  access: TenantAdminAccessInput
+): TenantAdminAccessContext {
+  if ("session" in access) {
+    return access;
+  }
+
+  return {
+    session: access
+  };
 }

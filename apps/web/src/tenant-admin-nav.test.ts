@@ -1,9 +1,16 @@
 import type { EmployeeId, TenantId } from "@hulee/contracts";
-import type { EmployeeRole, Permission } from "@hulee/core";
+import type {
+  EffectivePermissionGrant,
+  EmployeeRole,
+  Permission
+} from "@hulee/core";
 import { describe, expect, it } from "vitest";
 
 import type { PlatformRole, WebAccessSession } from "./access";
-import { getVisibleTenantAdminSections } from "./tenant-admin-nav";
+import {
+  getVisibleTenantAdminSections,
+  navigationAccessFromTenantAdminAccess
+} from "./tenant-admin-nav";
 
 describe("tenant admin navigation", () => {
   it("shows every tenant admin section for tenant admins", () => {
@@ -38,6 +45,50 @@ describe("tenant admin navigation", () => {
   it("hides tenant admin navigation for regular agents", () => {
     expect(getVisibleTenantAdminSections(session([]))).toEqual([]);
   });
+
+  it("shows navigation sections from effective access grants", () => {
+    const access = session([]);
+
+    expect(
+      getVisibleTenantAdminSections({
+        session: access,
+        effectiveAccess: {
+          actor: {
+            tenantId: access.tenantId,
+            employeeId: access.employeeId
+          },
+          effectiveGrants: [
+            grant(access, "roles.manage"),
+            grant(access, "audit.view")
+          ]
+        }
+      }).map((section) => section.id)
+    ).toEqual(["roles", "audit"]);
+  });
+
+  it("uses explicit effective access for top-level navigation", () => {
+    const access = session(["roles.manage"]);
+
+    expect(
+      navigationAccessFromTenantAdminAccess({
+        session: access,
+        effectiveAccess: undefined
+      }).tenantAdmin
+    ).toBe(false);
+
+    expect(
+      navigationAccessFromTenantAdminAccess({
+        session: access,
+        effectiveAccess: {
+          actor: {
+            tenantId: access.tenantId,
+            employeeId: access.employeeId
+          },
+          effectiveGrants: [grant(access, "roles.manage")]
+        }
+      }).tenantAdmin
+    ).toBe(true);
+  });
 });
 
 function session(permissions: readonly Permission[]): WebAccessSession {
@@ -47,5 +98,18 @@ function session(permissions: readonly Permission[]): WebAccessSession {
     tenantRoles: ["agent"] satisfies readonly EmployeeRole[],
     permissions,
     platformRoles: [] satisfies readonly PlatformRole[]
+  };
+}
+
+function grant(
+  session: WebAccessSession,
+  permission: Permission
+): EffectivePermissionGrant {
+  return {
+    tenantId: session.tenantId,
+    employeeId: session.employeeId,
+    permission,
+    scope: { type: "tenant" },
+    sources: []
   };
 }

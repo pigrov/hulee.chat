@@ -14,16 +14,17 @@ import type { ReactNode } from "react";
 
 import {
   isTenantEmailVerificationRequired,
-  navigationAccessFromSession,
   type WebAccessSession
 } from "./access";
 import { AppFrame, SlotMount } from "./app-chrome";
 import { resendEmailVerificationAction } from "./auth-actions";
 import {
   getVisibleTenantAdminSections,
+  navigationAccessFromTenantAdminAccess,
   type TenantAdminSection,
   type TenantAdminSectionId
 } from "./tenant-admin-nav";
+import type { WebEffectiveAccessSnapshot } from "./rbac-effective-access";
 
 type Translator = ReturnType<typeof createTranslator>["t"];
 
@@ -38,6 +39,7 @@ export function TenantAdminShell({
   brand,
   children,
   current,
+  effectiveAccess,
   sidebarContent,
   t,
   tenantDisplayName,
@@ -48,13 +50,21 @@ export function TenantAdminShell({
   brand: BrandProfileView;
   children: ReactNode;
   current: TenantAdminSectionId;
+  effectiveAccess?: WebEffectiveAccessSnapshot | undefined;
   sidebarContent?: ReactNode;
   t: Translator;
   tenantDisplayName: string;
   title: string;
   titleId: string;
 }): ReactNode {
-  const visibleSections = getVisibleTenantAdminSections(access);
+  const adminAccess =
+    effectiveAccess === undefined
+      ? access
+      : {
+          session: access,
+          effectiveAccess
+        };
+  const visibleSections = getVisibleTenantAdminSections(adminAccess);
   const shouldRequireEmailVerification =
     isTenantEmailVerificationRequired(access);
   const currentPath =
@@ -68,7 +78,7 @@ export function TenantAdminShell({
       brand={brand}
       current="tenant-admin"
       frameClassName="adminFrame"
-      navigationAccess={navigationAccessFromSession(access)}
+      navigationAccess={navigationAccessFromTenantAdminAccess(adminAccess)}
       t={t}
     >
       <section className="adminWorkspace" aria-labelledby={titleId}>

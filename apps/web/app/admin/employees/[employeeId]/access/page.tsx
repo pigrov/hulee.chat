@@ -40,7 +40,6 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AccessDeniedPage } from "../../../../../src/access-denied";
-import { navigationAccessFromSession } from "../../../../../src/access";
 import { DetailItem } from "../../../../../src/app-chrome";
 import {
   setEmployeeOrgUnitMembershipsAction,
@@ -70,6 +69,7 @@ import {
   resolveEmployeeEffectiveAccess
 } from "../../../../../src/rbac-effective-access";
 import { TenantAdminShell } from "../../../../../src/tenant-admin-shell";
+import { navigationAccessFromTenantAdminAccess } from "../../../../../src/tenant-admin-nav";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -123,10 +123,15 @@ export default async function EmployeeAccessAdminPage({
   });
 
   if (!hasEffectivePermission(accessSnapshot, "roles.manage")) {
+    const adminAccess = {
+      session: access,
+      effectiveAccess: accessSnapshot
+    };
+
     return (
       <AccessDeniedPage
         current="tenant-admin"
-        navigationAccess={navigationAccessFromSession(access)}
+        navigationAccess={navigationAccessFromTenantAdminAccess(adminAccess)}
       />
     );
   }
@@ -227,6 +232,7 @@ export default async function EmployeeAccessAdminPage({
       access={access}
       brand={model.tenant.brand}
       current="employees"
+      effectiveAccess={accessSnapshot}
       sidebarContent={
         resolvedSearch?.roleActionStatus ? (
           <DetailItem

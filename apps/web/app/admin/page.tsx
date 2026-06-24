@@ -1,5 +1,9 @@
 import { createTranslator } from "@hulee/i18n";
 import {
+  createSqlEmployeeDirectoryRepository,
+  createSqlTenantRbacRepository
+} from "@hulee/db";
+import {
   ArrowRight,
   KeyRound,
   LayoutDashboard,
@@ -14,12 +18,16 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AccessDeniedPage } from "../../src/access-denied";
-import { navigationAccessFromSession } from "../../src/access";
 import { loadInboxViewModel } from "../../src/inbox-api-client";
-import { resolveCurrentWebAccessSession } from "../../src/session";
+import {
+  getWebDatabase,
+  resolveCurrentWebAccessSession
+} from "../../src/session";
+import { resolveEmployeeEffectiveAccess } from "../../src/rbac-effective-access";
 import { TenantAdminShell } from "../../src/tenant-admin-shell";
 import {
   getVisibleTenantAdminSections,
+  navigationAccessFromTenantAdminAccess,
   type TenantAdminSection,
   type TenantAdminSectionId
 } from "../../src/tenant-admin-nav";
@@ -34,13 +42,26 @@ export default async function TenantAdminPage(): Promise<ReactNode> {
     redirect("/login");
   }
 
-  const visibleSections = getVisibleTenantAdminSections(access);
+  const database = getWebDatabase();
+  const employeeRepository = createSqlEmployeeDirectoryRepository(database);
+  const rbacRepository = createSqlTenantRbacRepository(database);
+  const accessSnapshot = await resolveEmployeeEffectiveAccess({
+    tenantId: access.tenantId,
+    employeeId: access.employeeId,
+    employeeRepository,
+    rbacRepository
+  });
+  const adminAccess = {
+    session: access,
+    effectiveAccess: accessSnapshot
+  };
+  const visibleSections = getVisibleTenantAdminSections(adminAccess);
 
   if (visibleSections.length === 0) {
     return (
       <AccessDeniedPage
         current="tenant-admin"
-        navigationAccess={navigationAccessFromSession(access)}
+        navigationAccess={navigationAccessFromTenantAdminAccess(adminAccess)}
       />
     );
   }
@@ -53,6 +74,7 @@ export default async function TenantAdminPage(): Promise<ReactNode> {
       access={access}
       brand={model.tenant.brand}
       current="overview"
+      effectiveAccess={accessSnapshot}
       t={t}
       tenantDisplayName={model.tenant.displayName}
       title={t("admin.overview")}
