@@ -1,4 +1,4 @@
-import { createTranslator } from "@hulee/i18n";
+import { createTranslator, type I18nMessageKey } from "@hulee/i18n";
 import {
   CheckCircle2,
   ListFilter,
@@ -49,6 +49,7 @@ import {
   type ConversationRoutingOptions
 } from "../src/conversation-routing-options";
 import { formatDateTime } from "../src/formatting";
+import type { InboxRoutingActionStatus } from "../src/inbox-action-status";
 import {
   buildReadableInboxQueueOptions,
   resolveReadableInboxQueueFilter
@@ -72,6 +73,7 @@ export default async function InboxPage({
     emailVerification?: string;
     queueId?: string;
     assigned?: string;
+    routingStatus?: string;
   }>;
 }): Promise<ReactNode> {
   const access = await resolveCurrentWebAccessSession();
@@ -150,6 +152,9 @@ export default async function InboxPage({
   const emailVerificationNotice = resolveEmailVerificationNotice(
     resolvedSearchParams?.emailVerification
   );
+  const routingActionStatus = resolveRoutingActionStatus(
+    resolvedSearchParams?.routingStatus
+  );
   const isTenantWriteBlocked = isTenantEmailVerificationRequired(access);
   const shouldShowEmailVerificationBanner =
     emailVerificationNotice === undefined && isTenantWriteBlocked;
@@ -224,6 +229,15 @@ export default async function InboxPage({
                     {t("auth.emailVerification.resend")}
                   </button>
                 </form>
+              ) : null}
+              {routingActionStatus ? (
+                <p
+                  className={
+                    routingActionStatus === "saved" ? "formNotice" : "formError"
+                  }
+                >
+                  {t(routingActionStatusKey(routingActionStatus))}
+                </p>
               ) : null}
             </div>
             <Link
@@ -390,6 +404,7 @@ export default async function InboxPage({
             locale={locale}
             routingAuditRecords={routingAuditRecords}
             routingOptions={routingOptions}
+            returnTo={currentInboxPath}
             selectedConversation={selectedConversation}
             teams={teams}
             t={t}
@@ -513,6 +528,7 @@ function ConversationRoutingPanel({
   locale,
   routingAuditRecords,
   routingOptions,
+  returnTo,
   selectedConversation,
   teams,
   t,
@@ -523,6 +539,7 @@ function ConversationRoutingPanel({
   readonly locale: string;
   readonly routingAuditRecords: readonly ConversationRoutingAuditRecord[];
   readonly routingOptions: ConversationRoutingOptions;
+  readonly returnTo: string;
   readonly selectedConversation: InboxConversation;
   readonly teams: readonly TeamRecord[];
   readonly t: ReturnType<typeof createTranslator>["t"];
@@ -683,6 +700,7 @@ function ConversationRoutingPanel({
             type="hidden"
             value={selectedConversation.id}
           />
+          <input name="returnTo" type="hidden" value={returnTo} />
           <input
             name="assignedEmployeeId"
             type="hidden"
@@ -708,6 +726,7 @@ function ConversationRoutingPanel({
             type="hidden"
             value={selectedConversation.id}
           />
+          <input name="returnTo" type="hidden" value={returnTo} />
           <input name="assignedEmployeeId" type="hidden" value="" />
           <input name="assignedTeamId" type="hidden" value="" />
           <button
@@ -729,6 +748,7 @@ function ConversationRoutingPanel({
           type="hidden"
           value={selectedConversation.id}
         />
+        <input name="returnTo" type="hidden" value={returnTo} />
         <label className="fieldStack">
           <span className="detailLabel">{t("inbox.routing.queue")}</span>
           <select
@@ -870,6 +890,33 @@ function resolveEmailVerificationNotice(
   }
 
   return undefined;
+}
+
+function resolveRoutingActionStatus(
+  value: string | undefined
+): InboxRoutingActionStatus | undefined {
+  if (
+    value === "saved" ||
+    value === "invalid" ||
+    value === "permission_denied"
+  ) {
+    return value;
+  }
+
+  return undefined;
+}
+
+function routingActionStatusKey(
+  status: InboxRoutingActionStatus
+): I18nMessageKey {
+  switch (status) {
+    case "saved":
+      return "inbox.routing.status.saved";
+    case "permission_denied":
+      return "inbox.routing.status.permissionDenied";
+    default:
+      return "inbox.routing.status.invalid";
+  }
 }
 
 function normalizeInboxQueueFilter(

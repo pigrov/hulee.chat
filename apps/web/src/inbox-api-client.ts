@@ -20,6 +20,7 @@ import {
 } from "@hulee/contracts";
 
 import { buildInternalApiHeaders } from "./session";
+import { throwInternalApiErrorResponse } from "./internal-api-errors";
 import { resolveWebConfig } from "./web-config";
 
 export type InboxConversation = InternalInboxConversation;
@@ -126,9 +127,10 @@ export async function updateInboxConversationRouting(input: {
   });
 
   if (!response.ok) {
-    throw new Error(
-      `Internal conversation routing API returned HTTP ${response.status}.`
-    );
+    await throwInternalApiErrorResponse({
+      response,
+      message: "Internal conversation routing API returned"
+    });
   }
 
   return internalInboxConversationRoutingUpdateResponseSchema.parse(

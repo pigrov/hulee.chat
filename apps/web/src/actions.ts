@@ -24,6 +24,10 @@ import {
   assertCurrentWebTenantPermission,
   isEmailNotVerifiedError
 } from "./session";
+import {
+  inboxRoutingActionFailureStatus,
+  type InboxRoutingActionStatus
+} from "./inbox-action-status";
 
 export async function sendReplyAction(formData: FormData): Promise<void> {
   await assertWebActionRequest();
@@ -55,27 +59,54 @@ export async function updateConversationRoutingAction(
   await assertWebActionRequest();
 
   const conversationId = readRequiredFormString(formData, "conversationId");
-  await assertVerifiedTenantPermission(
-    "conversation.assign",
-    `/?conversationId=${encodeURIComponent(conversationId)}`
-  );
+  const redirectPath = inboxRoutingActionReturnTo(formData, conversationId);
 
-  await updateInboxConversationRouting({
-    conversationId,
-    request: {
-      currentQueueId: readNullableOptionalFormString(
-        formData,
-        "currentQueueId"
-      ),
-      assignedEmployeeId: readNullableOptionalFormString(
-        formData,
-        "assignedEmployeeId"
-      ),
-      assignedTeamId: readNullableOptionalFormString(formData, "assignedTeamId")
+  try {
+    await assertCurrentWebTenantPermission("conversation.assign", {
+      requireVerifiedEmail: true
+    });
+  } catch (error) {
+    if (isEmailNotVerifiedError(error)) {
+      redirect(addSearchParam(redirectPath, "emailVerification", "required"));
     }
-  });
 
-  revalidatePath("/");
+    redirect(
+      inboxRoutingActionDestination(
+        redirectPath,
+        inboxRoutingActionFailureStatus(error)
+      )
+    );
+  }
+
+  let routingStatus: InboxRoutingActionStatus = "saved";
+
+  try {
+    await updateInboxConversationRouting({
+      conversationId,
+      request: {
+        currentQueueId: readNullableOptionalFormString(
+          formData,
+          "currentQueueId"
+        ),
+        assignedEmployeeId: readNullableOptionalFormString(
+          formData,
+          "assignedEmployeeId"
+        ),
+        assignedTeamId: readNullableOptionalFormString(
+          formData,
+          "assignedTeamId"
+        )
+      }
+    });
+  } catch (error) {
+    routingStatus = inboxRoutingActionFailureStatus(error);
+  }
+
+  if (routingStatus === "saved") {
+    revalidatePath("/");
+  }
+
+  redirect(inboxRoutingActionDestination(redirectPath, routingStatus));
 }
 
 export async function applyBrandPresetAction(
@@ -236,6 +267,30 @@ function addSearchParam(path: string, name: string, value: string): string {
   params.set(name, value);
 
   return `${pathname}?${params.toString()}`;
+}
+
+function inboxRoutingActionDestination(
+  path: string,
+  status: InboxRoutingActionStatus
+): string {
+  return addSearchParam(path, "routingStatus", status);
+}
+
+function inboxRoutingActionReturnTo(
+  formData: FormData,
+  conversationId: string
+): string {
+  const returnTo = readOptionalFormString(formData, "returnTo");
+
+  if (isSafeInboxActionReturnTo(returnTo)) {
+    return returnTo;
+  }
+
+  return `/?conversationId=${encodeURIComponent(conversationId)}`;
+}
+
+function isSafeInboxActionReturnTo(path: string | undefined): path is string {
+  return path === "/" || path?.startsWith("/?") === true;
 }
 
 function readOptionalFormString(
