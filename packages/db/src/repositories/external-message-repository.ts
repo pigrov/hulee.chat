@@ -352,14 +352,56 @@ export function buildUpdateConversationRoutingSql(
   input: UpdateConversationRoutingInput
 ): SQL {
   return sql`
-    with updated_conversation as (
+    with input_row as (
+      select ${input.conversation.currentQueueId ?? null}::text as current_queue_id,
+             ${input.conversation.assignedEmployeeId ?? null}::text as assigned_employee_id,
+             ${input.conversation.assignedTeamId ?? null}::text as assigned_team_id
+    ),
+    validation as (
+      select (
+               input_row.current_queue_id is null
+               or exists (
+                 select 1
+                 from work_queues
+                 where tenant_id = ${input.tenantId}
+                   and id = input_row.current_queue_id
+                   and status = 'active'
+               )
+             ) as queue_valid,
+             (
+               input_row.assigned_employee_id is null
+               or exists (
+                 select 1
+                 from employees
+                 where tenant_id = ${input.tenantId}
+                   and id = input_row.assigned_employee_id
+                   and deactivated_at is null
+               )
+             ) as employee_valid,
+             (
+               input_row.assigned_team_id is null
+               or exists (
+                 select 1
+                 from teams
+                 where tenant_id = ${input.tenantId}
+                   and id = input_row.assigned_team_id
+               )
+             ) as team_valid
+      from input_row
+    ),
+    updated_conversation as (
       update conversations
-      set current_queue_id = ${input.conversation.currentQueueId ?? null},
-          assigned_employee_id = ${input.conversation.assignedEmployeeId ?? null},
-          assigned_team_id = ${input.conversation.assignedTeamId ?? null},
+      set current_queue_id = input_row.current_queue_id,
+          assigned_employee_id = input_row.assigned_employee_id,
+          assigned_team_id = input_row.assigned_team_id,
           updated_at = ${input.updatedAt}
+      from input_row,
+           validation
       where tenant_id = ${input.tenantId}
         and id = ${input.conversation.id}
+        and validation.queue_valid
+        and validation.employee_valid
+        and validation.team_valid
       returning id,
                 tenant_id,
                 type,

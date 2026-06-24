@@ -372,6 +372,14 @@ button.iconButton:disabled {
   border-bottom: 1px solid var(--hulee-color-border);
 }
 
+.compactSectionHeader {
+  margin-bottom: 12px;
+}
+
+.routingForm {
+  gap: 10px;
+}
+
 .adminSection {
   display: grid;
   gap: 16px;

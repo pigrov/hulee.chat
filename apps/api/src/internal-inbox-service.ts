@@ -272,7 +272,7 @@ export function createInternalInboxCommandService(
         });
 
       if (updatedConversation === null) {
-        throw new CoreError("tenant.not_found");
+        throw new CoreError("validation.failed");
       }
 
       return toConversationRoutingResponse(updatedConversation);

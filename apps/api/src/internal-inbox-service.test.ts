@@ -310,6 +310,29 @@ describe("internal inbox command service", () => {
     ).rejects.toEqual(new CoreError("permission.denied"));
     expect(repository.routingEvents).toHaveLength(0);
   });
+
+  it("reports invalid routing targets when persistence rejects the update", async () => {
+    const repository = new RejectingRoutingExternalMessageRepository([
+      {
+        ...conversation,
+        currentQueueId: "queue-sales"
+      }
+    ]);
+    const service = createInternalInboxCommandService({
+      repository,
+      authorization: createAssignAuthorization(),
+      now: () => now
+    });
+
+    await expect(
+      service.updateConversationRouting(context, {
+        conversationId: conversation.id,
+        request: {
+          currentQueueId: "queue-missing"
+        }
+      })
+    ).rejects.toEqual(new CoreError("validation.failed"));
+  });
 });
 
 function createReplyAuthorization(): InternalInboxAuthorizationService {
@@ -485,5 +508,11 @@ class InMemoryExternalMessageRepository implements ExternalMessageRepository {
     this.routingEvents.push(...input.events);
 
     return input.conversation;
+  }
+}
+
+class RejectingRoutingExternalMessageRepository extends InMemoryExternalMessageRepository {
+  override async updateConversationRouting(): Promise<Conversation | null> {
+    return null;
   }
 }

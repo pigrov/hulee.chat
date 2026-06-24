@@ -3,14 +3,25 @@ import {
   MessageSquare,
   Paperclip,
   RefreshCw,
+  Route,
+  Save,
   Send,
   ShieldCheck,
   UserRound
 } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
+import {
+  createSqlEmployeeDirectoryRepository,
+  createSqlOrgStructureRepository,
+  type TenantEmployeeRecord,
+  type WorkQueueRecord
+} from "@hulee/db";
 
-import { sendReplyAction } from "../src/actions";
+import {
+  sendReplyAction,
+  updateConversationRoutingAction
+} from "../src/actions";
 import { resendEmailVerificationAction } from "../src/auth-actions";
 import { AccessDeniedPage } from "../src/access-denied";
 import {
@@ -20,7 +31,7 @@ import {
 } from "../src/access";
 import { AppFrame, DetailItem, SlotMount } from "../src/app-chrome";
 import { formatDateTime } from "../src/formatting";
-import { resolveCurrentWebAccessSession } from "../src/session";
+import { getWebDatabase, resolveCurrentWebAccessSession } from "../src/session";
 import {
   loadInboxViewModel,
   type InboxConversation,
@@ -55,9 +66,28 @@ export default async function InboxPage({
   }
 
   const resolvedSearchParams = await searchParams;
-  const model = await loadInboxViewModel({
-    selectedConversationId: resolvedSearchParams?.conversationId
-  });
+  const canAssignConversations = canTenantPermission(
+    access,
+    "conversation.assign"
+  );
+  const employeeRepository =
+    createSqlEmployeeDirectoryRepository(getWebDatabase());
+  const orgStructureRepository =
+    createSqlOrgStructureRepository(getWebDatabase());
+  const [model, employees, workQueues] = await Promise.all([
+    loadInboxViewModel({
+      selectedConversationId: resolvedSearchParams?.conversationId
+    }),
+    canAssignConversations
+      ? employeeRepository.listEmployees({ tenantId: access.tenantId })
+      : Promise.resolve<readonly TenantEmployeeRecord[]>([]),
+    canAssignConversations
+      ? orgStructureRepository.listWorkQueues({
+          tenantId: access.tenantId,
+          activeOnly: true
+        })
+      : Promise.resolve<readonly WorkQueueRecord[]>([])
+  ]);
   const { t, locale } = createTranslator(model.tenant.locale);
   const selectedConversation = model.selectedConversation;
   const currentInboxPath = selectedConversation
@@ -267,9 +297,108 @@ export default async function InboxPage({
             value={model.tenant.displayName}
           />
         </section>
+        {selectedConversation && canAssignConversations ? (
+          <ConversationRoutingPanel
+            employees={employees}
+            selectedConversation={selectedConversation}
+            t={t}
+            workQueues={workQueues}
+          />
+        ) : null}
         <SlotMount slot="client.profile.card" />
       </aside>
     </AppFrame>
+  );
+}
+
+function ConversationRoutingPanel({
+  employees,
+  selectedConversation,
+  t,
+  workQueues
+}: {
+  readonly employees: readonly TenantEmployeeRecord[];
+  readonly selectedConversation: InboxConversation;
+  readonly t: ReturnType<typeof createTranslator>["t"];
+  readonly workQueues: readonly WorkQueueRecord[];
+}): ReactNode {
+  const activeEmployees = employees.filter(
+    (employee) => employee.deactivatedAt === null
+  );
+  const assignedEmployeeOption = activeEmployees.some(
+    (employee) =>
+      employee.employeeId === selectedConversation.assignedEmployeeId
+  )
+    ? undefined
+    : selectedConversation.assignedEmployeeId;
+
+  return (
+    <section className="clientSection" aria-labelledby="routing-title">
+      <div className="sectionHeader compactSectionHeader">
+        <div>
+          <p className="eyebrow">{t("inbox.routing.eyebrow")}</p>
+          <h2 className="sectionTitle" id="routing-title">
+            {t("inbox.routing.title")}
+          </h2>
+          <p className="metaText">{t("inbox.routing.description")}</p>
+        </div>
+        <span className="badge">
+          <Route size={14} aria-hidden="true" />
+          {t("inbox.routing.current")}
+        </span>
+      </div>
+
+      <form
+        className="settingsForm routingForm"
+        action={updateConversationRoutingAction}
+      >
+        <input
+          name="conversationId"
+          type="hidden"
+          value={selectedConversation.id}
+        />
+        <input name="assignedTeamId" type="hidden" value="" />
+        <label className="fieldStack">
+          <span className="detailLabel">{t("inbox.routing.queue")}</span>
+          <select
+            className="selectInput"
+            defaultValue={selectedConversation.currentQueueId ?? ""}
+            name="currentQueueId"
+          >
+            <option value="">{t("inbox.routing.noQueue")}</option>
+            {workQueues.map((workQueue) => (
+              <option key={workQueue.id} value={workQueue.id}>
+                {workQueue.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="fieldStack">
+          <span className="detailLabel">{t("inbox.routing.assignee")}</span>
+          <select
+            className="selectInput"
+            defaultValue={selectedConversation.assignedEmployeeId ?? ""}
+            name="assignedEmployeeId"
+          >
+            <option value="">{t("inbox.routing.noAssignee")}</option>
+            {assignedEmployeeOption ? (
+              <option value={assignedEmployeeOption}>
+                {assignedEmployeeOption}
+              </option>
+            ) : null}
+            {activeEmployees.map((employee) => (
+              <option key={employee.employeeId} value={employee.employeeId}>
+                {employee.displayName}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button className="secondaryButton" type="submit">
+          <Save size={14} aria-hidden="true" />
+          {t("inbox.routing.save")}
+        </button>
+      </form>
+    </section>
   );
 }
 
