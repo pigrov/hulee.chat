@@ -160,8 +160,7 @@ describe("SQL RBAC repository", () => {
         directGrant({
           permission: "roles.manage",
           scope: {
-            type: "queue",
-            id: "queue-sales"
+            type: "assigned"
           }
         })
       )

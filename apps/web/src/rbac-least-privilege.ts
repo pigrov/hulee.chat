@@ -1,0 +1,64 @@
+import {
+  CoreError,
+  canAccess,
+  type EffectivePermissionGrant,
+  type Permission,
+  type PermissionActor,
+  type PermissionResourceContext
+} from "@hulee/core";
+
+export type LeastPrivilegeTarget = {
+  readonly permissions: readonly Permission[];
+  readonly resource: PermissionResourceContext;
+};
+
+export function assertCanGrantScopedPermissions(input: {
+  readonly actor: PermissionActor;
+  readonly effectiveGrants: readonly EffectivePermissionGrant[];
+  readonly target: LeastPrivilegeTarget;
+}): void {
+  assertCanManageTargetScope(input);
+
+  if (hasTenantRoleManagement(input)) {
+    return;
+  }
+
+  for (const permission of input.target.permissions) {
+    const decision = canAccess({
+      actor: input.actor,
+      effectiveGrants: input.effectiveGrants,
+      permission,
+      resource: input.target.resource
+    });
+
+    if (!decision.allowed) {
+      throw new CoreError("permission.denied");
+    }
+  }
+}
+
+function assertCanManageTargetScope(input: {
+  readonly actor: PermissionActor;
+  readonly effectiveGrants: readonly EffectivePermissionGrant[];
+  readonly target: LeastPrivilegeTarget;
+}): void {
+  const decision = canAccess({
+    actor: input.actor,
+    effectiveGrants: input.effectiveGrants,
+    permission: "roles.manage",
+    resource: input.target.resource
+  });
+
+  if (!decision.allowed) {
+    throw new CoreError("permission.denied");
+  }
+}
+
+function hasTenantRoleManagement(input: {
+  readonly effectiveGrants: readonly EffectivePermissionGrant[];
+}): boolean {
+  return input.effectiveGrants.some(
+    (grant) =>
+      grant.permission === "roles.manage" && grant.scope.type === "tenant"
+  );
+}

@@ -237,8 +237,7 @@ describe("access-control", () => {
           directGrant({
             permission: "roles.manage",
             scope: {
-              type: "queue",
-              id: "queue-sales"
+              type: "assigned"
             }
           })
         ]

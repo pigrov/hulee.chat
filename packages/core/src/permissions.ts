@@ -68,7 +68,7 @@ export const permissionCatalog = [
   {
     id: "roles.manage",
     domain: "roles",
-    allowedScopes: ["tenant"]
+    allowedScopes: ["tenant", "org_unit", "team", "queue"]
   },
   {
     id: "modules.manage",

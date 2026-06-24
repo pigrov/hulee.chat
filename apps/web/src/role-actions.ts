@@ -1,13 +1,22 @@
 "use server";
 
-import type { EmployeeId, TenantId } from "@hulee/contracts";
+import type {
+  ClientId,
+  ConversationId,
+  EmployeeId,
+  TenantId
+} from "@hulee/contracts";
 import {
   assertPermissionScopeAllowed,
   assertPermissionsAllowedForScope,
   isPermission,
   normalizePermissionScope,
   prepareCustomTenantRole,
+  resolveEffectivePermissionGrants,
+  type EffectivePermissionGrant,
   type Permission,
+  type PermissionActor,
+  type PermissionResourceContext,
   type PermissionScope,
   type PermissionRoleBinding,
   type PermissionRoleBindingSubject,
@@ -33,6 +42,8 @@ import {
   getWebDatabase,
   isEmailNotVerifiedError
 } from "./session";
+import type { WebAccessSession } from "./access";
+import { assertCanGrantScopedPermissions } from "./rbac-least-privilege";
 import { findRoleTemplate, uniqueRoleTemplateName } from "./role-templates";
 
 export async function createCustomTenantRoleAction(
@@ -383,7 +394,26 @@ export async function assignTenantRoleAction(
       employeeRepository,
       orgStructureRepository
     });
-    await assertKnownScopeReference(session.tenantId, scope);
+    const [targetResource, actorPrivilege] = await Promise.all([
+      resolveKnownScopeResource(session.tenantId, scope),
+      resolveRoleManagementActorPrivilege({
+        session,
+        employeeRepository,
+        rbacRepository,
+        roles,
+        roleBindings: bindings,
+        now
+      })
+    ]);
+
+    assertCanGrantScopedPermissions({
+      actor: actorPrivilege.actor,
+      effectiveGrants: actorPrivilege.effectiveGrants,
+      target: {
+        permissions: role.permissions,
+        resource: targetResource
+      }
+    });
 
     if (existingBinding === undefined) {
       const bindingId = `role_binding:${session.tenantId}:${subject.type}:${randomUUID()}`;
@@ -510,13 +540,16 @@ export async function createDirectPermissionGrantAction(
     const expiresAt = readOptionalFormDate(formData, "expiresAt");
 
     assertPermissionScopeAllowed(permission, scope.type);
-    await assertKnownScopeReference(session.tenantId, scope);
+    const targetResource = await resolveKnownScopeResource(
+      session.tenantId,
+      scope
+    );
 
     if (expiresAt !== undefined && expiresAt.getTime() <= now.getTime()) {
       throw new Error("Direct grant expiry must be in the future.");
     }
 
-    const [target, grants] = await Promise.all([
+    const [target, grants, roles, roleBindings] = await Promise.all([
       employeeRepository.findEmployee({
         tenantId: session.tenantId,
         employeeId
@@ -525,12 +558,35 @@ export async function createDirectPermissionGrantAction(
         tenantId: session.tenantId,
         employeeId,
         at: now
+      }),
+      rbacRepository.listRoleDefinitions({ tenantId: session.tenantId }),
+      rbacRepository.listRoleBindings({
+        tenantId: session.tenantId,
+        at: now
       })
     ]);
 
     if (target === null || target.deactivatedAt !== null) {
       throw new Error("Employee is not assignable.");
     }
+
+    const actorPrivilege = await resolveRoleManagementActorPrivilege({
+      session,
+      employeeRepository,
+      rbacRepository,
+      roles,
+      roleBindings,
+      now
+    });
+
+    assertCanGrantScopedPermissions({
+      actor: actorPrivilege.actor,
+      effectiveGrants: actorPrivilege.effectiveGrants,
+      target: {
+        permissions: [permission],
+        resource: targetResource
+      }
+    });
 
     const existingGrant = grants.find((grant) => {
       return (
@@ -727,16 +783,28 @@ function assertRoleUpdateDoesNotRemoveOwnRoleManagement(input: {
   }
 }
 
-async function assertKnownScopeReference(
+async function resolveKnownScopeResource(
   tenantId: TenantId,
   scope: PermissionScope
-): Promise<void> {
+): Promise<PermissionResourceContext> {
   if (!("id" in scope)) {
-    return;
+    return {
+      tenantId
+    };
   }
 
-  if (scope.type !== "org_unit" && scope.type !== "queue") {
-    return;
+  if (scope.type === "client") {
+    return {
+      tenantId,
+      clientId: scope.id as ClientId
+    };
+  }
+
+  if (scope.type === "conversation") {
+    return {
+      tenantId,
+      conversationId: scope.id as ConversationId
+    };
   }
 
   const repository = createSqlOrgStructureRepository(getWebDatabase());
@@ -750,6 +818,28 @@ async function assertKnownScopeReference(
     if (!orgUnits.some((orgUnit) => orgUnit.id === scope.id)) {
       throw new Error("Org unit scope reference was not found.");
     }
+
+    return {
+      tenantId,
+      orgUnitId: scope.id,
+      orgUnitIds: [scope.id]
+    };
+  }
+
+  if (scope.type === "team") {
+    const teams = await repository.listTeams({
+      tenantId
+    });
+
+    if (!teams.some((team) => team.id === scope.id)) {
+      throw new Error("Team scope reference was not found.");
+    }
+
+    return {
+      tenantId,
+      teamId: scope.id,
+      teamIds: [scope.id]
+    };
   }
 
   if (scope.type === "queue") {
@@ -757,11 +847,72 @@ async function assertKnownScopeReference(
       tenantId,
       activeOnly: true
     });
+    const workQueue = workQueues.find((candidate) => candidate.id === scope.id);
 
-    if (!workQueues.some((workQueue) => workQueue.id === scope.id)) {
+    if (workQueue === undefined) {
       throw new Error("Work queue scope reference was not found.");
     }
+
+    return {
+      tenantId,
+      orgUnitId: workQueue.owningOrgUnitId ?? undefined,
+      queueId: scope.id
+    };
   }
+
+  return {
+    tenantId
+  };
+}
+
+async function resolveRoleManagementActorPrivilege(input: {
+  readonly session: WebAccessSession;
+  readonly employeeRepository: ReturnType<
+    typeof createSqlEmployeeDirectoryRepository
+  >;
+  readonly rbacRepository: ReturnType<typeof createSqlTenantRbacRepository>;
+  readonly roles: readonly TenantRoleRecord[];
+  readonly roleBindings: readonly PermissionRoleBinding[];
+  readonly now: Date;
+}): Promise<{
+  readonly actor: PermissionActor;
+  readonly effectiveGrants: readonly EffectivePermissionGrant[];
+}> {
+  const [employee, directGrants] = await Promise.all([
+    input.employeeRepository.findEmployee({
+      tenantId: input.session.tenantId,
+      employeeId: input.session.employeeId
+    }),
+    input.rbacRepository.listDirectGrantsForEmployee({
+      tenantId: input.session.tenantId,
+      employeeId: input.session.employeeId,
+      at: input.now
+    })
+  ]);
+
+  if (employee === null || employee.deactivatedAt !== null) {
+    throw new Error("Current employee is not active.");
+  }
+
+  const actor: PermissionActor = {
+    tenantId: input.session.tenantId,
+    employeeId: input.session.employeeId,
+    roles: employee.roles,
+    orgUnitIds: employee.orgUnitIds,
+    queueIds: employee.queueIds,
+    teamIds: employee.teamIds
+  };
+
+  return {
+    actor,
+    effectiveGrants: resolveEffectivePermissionGrants({
+      actor,
+      roles: input.roles,
+      roleBindings: input.roleBindings,
+      directGrants,
+      at: input.now
+    })
+  };
 }
 
 async function assertAssignableRoleBindingSubject(input: {

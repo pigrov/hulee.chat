@@ -73,18 +73,22 @@ describe("permissions", () => {
     expect(isPermissionScopeAllowed("message.reply", "conversation")).toBe(
       true
     );
-    expect(isPermissionScopeAllowed("roles.manage", "queue")).toBe(false);
-    expect(() => assertPermissionScopeAllowed("roles.manage", "queue")).toThrow(
-      new CoreError("validation.failed")
-    );
+    expect(isPermissionScopeAllowed("roles.manage", "queue")).toBe(true);
+    expect(isPermissionScopeAllowed("roles.manage", "assigned")).toBe(false);
+    expect(() =>
+      assertPermissionScopeAllowed("roles.manage", "assigned")
+    ).toThrow(new CoreError("validation.failed"));
     expect(
       allowedScopeTypesForPermissions(["message.reply", "client.view"])
     ).toEqual(["tenant", "org_unit", "team", "queue", "assigned", "client"]);
     expect(allowedScopeTypesForPermissions(["roles.manage"])).toEqual([
-      "tenant"
+      "tenant",
+      "org_unit",
+      "team",
+      "queue"
     ]);
     expect(() =>
-      assertPermissionsAllowedForScope(["roles.manage"], "queue")
+      assertPermissionsAllowedForScope(["roles.manage"], "assigned")
     ).toThrow(new CoreError("validation.failed"));
   });
 

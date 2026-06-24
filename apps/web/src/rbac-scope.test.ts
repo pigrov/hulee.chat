@@ -6,7 +6,7 @@ describe("RBAC scope helpers", () => {
   it("limits role binding scopes to the scopes shared by role permissions", () => {
     expect(
       allowedRoleBindingScopeTypesForPermissions(["roles.manage"])
-    ).toEqual(["tenant"]);
+    ).toEqual(["tenant", "org_unit", "team", "queue"]);
     expect(
       allowedRoleBindingScopeTypesForPermissions([
         "message.reply",
