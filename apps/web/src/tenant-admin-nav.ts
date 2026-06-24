@@ -6,6 +6,7 @@ import { canTenantPermission, type WebAccessSession } from "./access";
 export type TenantAdminSectionId =
   | "overview"
   | "employees"
+  | "orgStructure"
   | "roles"
   | "integrations"
   | "branding";
@@ -37,6 +38,14 @@ export const tenantAdminSections: readonly TenantAdminSection[] = [
     href: "/admin/employees",
     titleKey: "admin.employees",
     descriptionKey: "admin.employees.description",
+    requiredPermissions: ["employees.manage"],
+    permissionMode: "all"
+  },
+  {
+    id: "orgStructure",
+    href: "/admin/org-structure",
+    titleKey: "admin.orgStructure",
+    descriptionKey: "admin.orgStructure.description",
     requiredPermissions: ["employees.manage"],
     permissionMode: "all"
   },

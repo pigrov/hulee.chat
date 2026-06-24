@@ -16,7 +16,13 @@ describe("tenant admin navigation", () => {
           "modules.manage"
         ])
       ).map((section) => section.id)
-    ).toEqual(["employees", "roles", "integrations", "branding"]);
+    ).toEqual([
+      "employees",
+      "orgStructure",
+      "roles",
+      "integrations",
+      "branding"
+    ]);
   });
 
   it("filters navigation sections by permissions", () => {

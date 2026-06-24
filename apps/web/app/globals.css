@@ -769,6 +769,14 @@ a.secondaryButton {
   gap: var(--hulee-space-block);
 }
 
+.orgStructureCreateForm,
+.orgStructureInlineForm {
+  grid-template-columns:
+    minmax(180px, 1.3fr) minmax(150px, 0.9fr) minmax(190px, 1.1fr)
+    auto;
+  align-items: end;
+}
+
 .roleDescriptionInput {
   min-height: 82px;
   resize: vertical;
@@ -980,6 +988,12 @@ a.secondaryButton {
 .managementRow.accessAuditRow {
   display: grid;
   grid-template-columns: auto minmax(260px, 1fr) minmax(260px, 1.2fr);
+  align-items: flex-start;
+}
+
+.managementRow.orgStructureRow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: flex-start;
 }
 
@@ -1266,6 +1280,9 @@ button.managementRow:focus-visible {
   .directGrantForm,
   .employeeAccessAssignForm,
   .employeeAccessGrantForm,
+  .orgStructureCreateForm,
+  .orgStructureInlineForm,
+  .managementRow.orgStructureRow,
   .scopePickerGrid,
   .roleEditorGrid,
   .permissionEditorGrid,

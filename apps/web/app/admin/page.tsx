@@ -3,6 +3,7 @@ import {
   ArrowRight,
   KeyRound,
   LayoutDashboard,
+  Network,
   Palette,
   Plug,
   Users
@@ -112,6 +113,8 @@ function AdminOverviewIcon({
   switch (sectionId) {
     case "employees":
       return <Users size={18} aria-hidden="true" />;
+    case "orgStructure":
+      return <Network size={18} aria-hidden="true" />;
     case "roles":
       return <KeyRound size={18} aria-hidden="true" />;
     case "integrations":

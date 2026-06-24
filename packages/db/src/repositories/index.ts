@@ -247,8 +247,10 @@ export type {
 } from "./sql-platform-audit-repository";
 export type {
   AccessAuditAction,
+  AccessAuditEntityType,
   AccessAuditRecord,
   AuthSecurityAuditAction,
+  OrgStructureAuditAction,
   ListAccessAuditRecordsInput,
   SecurityAuditAction,
   SecurityAuditEntityType,

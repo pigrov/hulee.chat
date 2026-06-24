@@ -26,13 +26,28 @@ export const accessAuditActions = [
 
 export type AccessAuditAction = (typeof accessAuditActions)[number];
 
-export type SecurityAuditAction = AuthSecurityAuditAction | AccessAuditAction;
+export type OrgStructureAuditAction =
+  | "org_unit.created"
+  | "org_unit.updated"
+  | "org_unit.archived"
+  | "org_unit.restored"
+  | "work_queue.created"
+  | "work_queue.updated"
+  | "work_queue.archived"
+  | "work_queue.restored";
+
+export type SecurityAuditAction =
+  | AuthSecurityAuditAction
+  | AccessAuditAction
+  | OrgStructureAuditAction;
+
+export type AccessAuditEntityType = "role" | "role_binding" | "direct_grant";
 
 export type SecurityAuditEntityType =
   | "session"
-  | "role"
-  | "role_binding"
-  | "direct_grant";
+  | AccessAuditEntityType
+  | "org_unit"
+  | "work_queue";
 
 export type SecurityAuditRecord = {
   id: string;
@@ -50,7 +65,7 @@ export type AccessAuditRecord = {
   tenantId: TenantId;
   actorEmployeeId?: EmployeeId;
   action: AccessAuditAction;
-  entityType: Exclude<SecurityAuditEntityType, "session">;
+  entityType: AccessAuditEntityType;
   entityId: string;
   metadata: Record<string, unknown>;
   occurredAt: string;
@@ -226,7 +241,7 @@ function isAccessAuditAction(action: string): action is AccessAuditAction {
 
 function isAccessAuditEntity(
   entityType: string
-): entityType is AccessAuditRecord["entityType"] {
+): entityType is AccessAuditEntityType {
   return (
     entityType === "role" ||
     entityType === "role_binding" ||
