@@ -339,6 +339,7 @@
   "admin.roles.actionStatus.revoked": "Role assignment revoked",
   "admin.roles.actionStatus.directGrantCreated": "Direct grant added",
   "admin.roles.actionStatus.directGrantRevoked": "Direct grant revoked",
+  "admin.roles.actionStatus.permissionDenied": "Access change is outside your admin scope",
   "admin.roles.actionStatus.invalid": "Role action was not completed",
   "admin.roles.assignmentSubject": "{subject}: {value}",
   "admin.roles.assignmentScope": "Scope: {value}",

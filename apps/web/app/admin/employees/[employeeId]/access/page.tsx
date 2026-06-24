@@ -1080,6 +1080,8 @@ function roleActionStatusKey(status: string): I18nMessageKey {
       return "admin.roles.actionStatus.directGrantCreated";
     case "direct_grant_revoked":
       return "admin.roles.actionStatus.directGrantRevoked";
+    case "permission_denied":
+      return "admin.roles.actionStatus.permissionDenied";
     case "memberships_updated":
       return "admin.employeeAccess.actionStatus.membershipsUpdated";
     case "email_verification_required":

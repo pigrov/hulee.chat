@@ -47,6 +47,7 @@ import {
   assertCanGrantScopedPermissions,
   assertCanManageScopedAccess
 } from "./rbac-least-privilege";
+import { roleActionFailureStatus } from "./role-action-status";
 import { findRoleTemplate, uniqueRoleTemplateName } from "./role-templates";
 
 export async function createCustomTenantRoleAction(
@@ -94,8 +95,11 @@ export async function createCustomTenantRoleAction(
     });
 
     destination = roleActionDestination(formData, "created");
-  } catch {
-    destination = roleActionDestination(formData, "invalid");
+  } catch (error) {
+    destination = roleActionDestination(
+      formData,
+      roleActionFailureStatus(error)
+    );
   }
 
   revalidateRoleAdminPaths();
@@ -166,8 +170,11 @@ export async function createRoleFromTemplateAction(
     });
 
     destination = roleActionDestination(formData, "template_created");
-  } catch {
-    destination = roleActionDestination(formData, "invalid");
+  } catch (error) {
+    destination = roleActionDestination(
+      formData,
+      roleActionFailureStatus(error)
+    );
   }
 
   revalidateRoleAdminPaths();
@@ -234,8 +241,11 @@ export async function updateCustomTenantRoleAction(
     });
 
     destination = roleActionDestination(formData, "updated");
-  } catch {
-    destination = roleActionDestination(formData, "invalid");
+  } catch (error) {
+    destination = roleActionDestination(
+      formData,
+      roleActionFailureStatus(error)
+    );
   }
 
   revalidateRoleAdminPaths();
@@ -291,8 +301,11 @@ export async function archiveCustomTenantRoleAction(
     });
 
     destination = roleActionDestination(formData, "archived");
-  } catch {
-    destination = roleActionDestination(formData, "invalid");
+  } catch (error) {
+    destination = roleActionDestination(
+      formData,
+      roleActionFailureStatus(error)
+    );
   }
 
   revalidateRoleAdminPaths();
@@ -340,8 +353,11 @@ export async function restoreCustomTenantRoleAction(
     });
 
     destination = roleActionDestination(formData, "restored");
-  } catch {
-    destination = roleActionDestination(formData, "invalid");
+  } catch (error) {
+    destination = roleActionDestination(
+      formData,
+      roleActionFailureStatus(error)
+    );
   }
 
   revalidateRoleAdminPaths();
@@ -447,8 +463,11 @@ export async function assignTenantRoleAction(
     }
 
     destination = roleActionDestination(formData, "assigned");
-  } catch {
-    destination = roleActionDestination(formData, "invalid");
+  } catch (error) {
+    destination = roleActionDestination(
+      formData,
+      roleActionFailureStatus(error)
+    );
   }
 
   revalidateRoleAdminPaths();
@@ -536,8 +555,11 @@ export async function revokeTenantRoleBindingAction(
     });
 
     destination = roleActionDestination(formData, "revoked");
-  } catch {
-    destination = roleActionDestination(formData, "invalid");
+  } catch (error) {
+    destination = roleActionDestination(
+      formData,
+      roleActionFailureStatus(error)
+    );
   }
 
   revalidateRoleAdminPaths();
@@ -657,8 +679,11 @@ export async function createDirectPermissionGrantAction(
     }
 
     destination = roleActionDestination(formData, "direct_grant_created");
-  } catch {
-    destination = roleActionDestination(formData, "invalid");
+  } catch (error) {
+    destination = roleActionDestination(
+      formData,
+      roleActionFailureStatus(error)
+    );
   }
 
   revalidateRoleAdminPaths();
@@ -744,8 +769,11 @@ export async function revokeDirectPermissionGrantAction(
     });
 
     destination = roleActionDestination(formData, "direct_grant_revoked");
-  } catch {
-    destination = roleActionDestination(formData, "invalid");
+  } catch (error) {
+    destination = roleActionDestination(
+      formData,
+      roleActionFailureStatus(error)
+    );
   }
 
   revalidateRoleAdminPaths();

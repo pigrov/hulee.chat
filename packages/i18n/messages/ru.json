@@ -346,6 +346,7 @@
   "admin.roles.actionStatus.revoked": "Назначение роли отозвано",
   "admin.roles.actionStatus.directGrantCreated": "Прямой грант добавлен",
   "admin.roles.actionStatus.directGrantRevoked": "Прямой грант отозван",
+  "admin.roles.actionStatus.permissionDenied": "Изменение доступа вне вашей области администрирования",
   "admin.roles.actionStatus.invalid": "Действие с ролью не выполнено",
   "admin.roles.assignmentSubject": "{subject}: {value}",
   "admin.roles.assignmentScope": "Область: {value}",
