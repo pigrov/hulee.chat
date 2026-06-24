@@ -3,13 +3,12 @@ import { Ban, KeyRound, Mail, RotateCw, UserPlus, XCircle } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
-import { createSqlEmployeeDirectoryRepository } from "@hulee/db";
+import {
+  createSqlEmployeeDirectoryRepository,
+  createSqlTenantRbacRepository
+} from "@hulee/db";
 
 import { AccessDeniedPage } from "../../../src/access-denied";
-import {
-  canTenantPermission,
-  navigationAccessFromSession
-} from "../../../src/access";
 import { DetailItem } from "../../../src/app-chrome";
 import {
   deactivateEmployeeAction,
@@ -24,7 +23,12 @@ import {
   getWebDatabase,
   resolveCurrentWebAccessSession
 } from "../../../src/session";
+import {
+  hasEffectivePermission,
+  resolveEmployeeEffectiveAccess
+} from "../../../src/rbac-effective-access";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
+import { navigationAccessFromTenantAdminAccess } from "../../../src/tenant-admin-nav";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -44,16 +48,30 @@ export default async function EmployeesAdminPage({
     redirect("/login");
   }
 
-  if (!canTenantPermission(access, "employees.manage")) {
+  const database = getWebDatabase();
+  const repository = createSqlEmployeeDirectoryRepository(database);
+  const rbacRepository = createSqlTenantRbacRepository(database);
+  const accessSnapshot = await resolveEmployeeEffectiveAccess({
+    tenantId: access.tenantId,
+    employeeId: access.employeeId,
+    employeeRepository: repository,
+    rbacRepository
+  });
+
+  if (!hasEffectivePermission(accessSnapshot, "employees.manage")) {
+    const adminAccess = {
+      session: access,
+      effectiveAccess: accessSnapshot
+    };
+
     return (
       <AccessDeniedPage
         current="tenant-admin"
-        navigationAccess={navigationAccessFromSession(access)}
+        navigationAccess={navigationAccessFromTenantAdminAccess(adminAccess)}
       />
     );
   }
 
-  const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
   const [model, employees, invitations, resolvedSearchParams] =
     await Promise.all([
       loadInboxViewModel(),
@@ -62,7 +80,7 @@ export default async function EmployeesAdminPage({
       searchParams
     ]);
   const { t, locale } = createTranslator(model.tenant.locale);
-  const canManageRoles = canTenantPermission(access, "roles.manage");
+  const canManageRoles = hasEffectivePermission(accessSnapshot, "roles.manage");
   const inviteToken = resolvedSearchParams?.inviteToken;
   const manualInviteUrl = inviteToken
     ? new URL(`/invite/${inviteToken}`, resolvePublicBaseUrl()).href
@@ -73,6 +91,7 @@ export default async function EmployeesAdminPage({
       access={access}
       brand={model.tenant.brand}
       current="employees"
+      effectiveAccess={accessSnapshot}
       sidebarContent={
         <>
           {manualInviteUrl ? (

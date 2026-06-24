@@ -25,17 +25,18 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AccessDeniedPage } from "../../../src/access-denied";
-import {
-  canTenantPermission,
-  navigationAccessFromSession
-} from "../../../src/access";
 import { formatDateTime } from "../../../src/formatting";
 import { loadInboxViewModel } from "../../../src/inbox-api-client";
 import {
   getWebDatabase,
   resolveCurrentWebAccessSession
 } from "../../../src/session";
+import {
+  hasEffectivePermission,
+  resolveEmployeeEffectiveAccess
+} from "../../../src/rbac-effective-access";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
+import { navigationAccessFromTenantAdminAccess } from "../../../src/tenant-admin-nav";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -79,20 +80,32 @@ export default async function AuditAdminPage({
     redirect("/login");
   }
 
-  if (!canTenantPermission(access, "audit.view")) {
+  const database = getWebDatabase();
+  const employeeRepository = createSqlEmployeeDirectoryRepository(database);
+  const rbacRepository = createSqlTenantRbacRepository(database);
+  const accessSnapshot = await resolveEmployeeEffectiveAccess({
+    tenantId: access.tenantId,
+    employeeId: access.employeeId,
+    employeeRepository,
+    rbacRepository
+  });
+
+  if (!hasEffectivePermission(accessSnapshot, "audit.view")) {
+    const adminAccess = {
+      session: access,
+      effectiveAccess: accessSnapshot
+    };
+
     return (
       <AccessDeniedPage
         current="tenant-admin"
-        navigationAccess={navigationAccessFromSession(access)}
+        navigationAccess={navigationAccessFromTenantAdminAccess(adminAccess)}
       />
     );
   }
 
-  const database = getWebDatabase();
   const securityAuditRepository = createSqlSecurityAuditRepository(database);
-  const employeeRepository = createSqlEmployeeDirectoryRepository(database);
   const orgStructureRepository = createSqlOrgStructureRepository(database);
-  const rbacRepository = createSqlTenantRbacRepository(database);
   const [model, employees, roles, teams, workQueues, resolvedSearchParams] =
     await Promise.all([
       loadInboxViewModel(),
@@ -141,6 +154,7 @@ export default async function AuditAdminPage({
       access={access}
       brand={model.tenant.brand}
       current="audit"
+      effectiveAccess={accessSnapshot}
       t={t}
       tenantDisplayName={model.tenant.displayName}
       title={t("admin.audit")}

@@ -1,5 +1,7 @@
 import {
+  createSqlEmployeeDirectoryRepository,
   createSqlOrgStructureRepository,
+  createSqlTenantRbacRepository,
   orgUnitKinds,
   workQueueKinds,
   type OrgUnitRecord,
@@ -20,10 +22,6 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AccessDeniedPage } from "../../../src/access-denied";
-import {
-  canTenantPermission,
-  navigationAccessFromSession
-} from "../../../src/access";
 import { DetailItem } from "../../../src/app-chrome";
 import { loadInboxViewModel } from "../../../src/inbox-api-client";
 import {
@@ -42,7 +40,12 @@ import {
   getWebDatabase,
   resolveCurrentWebAccessSession
 } from "../../../src/session";
+import {
+  hasEffectivePermission,
+  resolveEmployeeEffectiveAccess
+} from "../../../src/rbac-effective-access";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
+import { navigationAccessFromTenantAdminAccess } from "../../../src/tenant-admin-nav";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -62,16 +65,31 @@ export default async function OrgStructureAdminPage({
     redirect("/login");
   }
 
-  if (!canTenantPermission(access, "employees.manage")) {
+  const database = getWebDatabase();
+  const employeeRepository = createSqlEmployeeDirectoryRepository(database);
+  const rbacRepository = createSqlTenantRbacRepository(database);
+  const accessSnapshot = await resolveEmployeeEffectiveAccess({
+    tenantId: access.tenantId,
+    employeeId: access.employeeId,
+    employeeRepository,
+    rbacRepository
+  });
+
+  if (!hasEffectivePermission(accessSnapshot, "employees.manage")) {
+    const adminAccess = {
+      session: access,
+      effectiveAccess: accessSnapshot
+    };
+
     return (
       <AccessDeniedPage
         current="tenant-admin"
-        navigationAccess={navigationAccessFromSession(access)}
+        navigationAccess={navigationAccessFromTenantAdminAccess(adminAccess)}
       />
     );
   }
 
-  const repository = createSqlOrgStructureRepository(getWebDatabase());
+  const repository = createSqlOrgStructureRepository(database);
   const [model, orgUnits, teams, workQueues, resolvedSearchParams] =
     await Promise.all([
       loadInboxViewModel(),
@@ -93,6 +111,7 @@ export default async function OrgStructureAdminPage({
       access={access}
       brand={model.tenant.brand}
       current="orgStructure"
+      effectiveAccess={accessSnapshot}
       sidebarContent={
         resolvedSearchParams?.orgStructureStatus ? (
           <DetailItem
