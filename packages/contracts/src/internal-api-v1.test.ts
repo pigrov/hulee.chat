@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   internalApiErrorResponseSchema,
+  internalAccessDecisionRequestSchema,
+  internalAccessDecisionResponseSchema,
   internalInboxConversationRoutingUpdateRequestSchema,
   internalInboxConversationRoutingUpdateResponseSchema,
   internalInboxReplyRequestSchema,
@@ -242,6 +244,102 @@ describe("internal API v1 schemas", () => {
       internalWorkQueueUpsertRequestSchema.parse({
         name: "Sales",
         kind: "unknown"
+      })
+    ).toThrow();
+  });
+
+  it("parses access decision requests and safe diagnostics", () => {
+    expect(
+      internalAccessDecisionRequestSchema.parse({
+        employeeId: " employee-2 ",
+        permission: " conversation.read ",
+        resource: {
+          queueId: " queue-sales ",
+          assignedEmployeeId: "employee-2"
+        },
+        at: "2026-06-24T10:00:00.000Z"
+      })
+    ).toEqual({
+      employeeId: "employee-2",
+      permission: "conversation.read",
+      resource: {
+        queueId: "queue-sales",
+        assignedEmployeeId: "employee-2"
+      },
+      at: "2026-06-24T10:00:00.000Z"
+    });
+
+    expect(
+      internalAccessDecisionResponseSchema.parse({
+        employeeId: "employee-2",
+        permission: "conversation.read",
+        resource: {
+          queueId: "queue-sales",
+          assignedEmployeeId: "employee-2"
+        },
+        evaluatedAt: "2026-06-24T10:00:00.000Z",
+        decision: {
+          allowed: true,
+          reason: "allowed",
+          matchedGrant: {
+            permission: "conversation.read",
+            scope: {
+              type: "assigned"
+            },
+            sources: [
+              {
+                type: "role_binding",
+                roleId: "role-sales",
+                bindingId: "binding-1"
+              }
+            ]
+          }
+        },
+        candidateGrants: [
+          {
+            permission: "conversation.read",
+            scope: {
+              type: "assigned"
+            },
+            sources: [
+              {
+                type: "role_binding",
+                roleId: "role-sales"
+              }
+            ]
+          }
+        ],
+        effectiveGrantCount: 3
+      })
+    ).toMatchObject({
+      decision: {
+        allowed: true,
+        reason: "allowed"
+      },
+      candidateGrants: [
+        {
+          scope: {
+            type: "assigned"
+          }
+        }
+      ]
+    });
+
+    expect(() =>
+      internalAccessDecisionRequestSchema.parse({
+        employeeId: "employee-2",
+        permission: "conversation.read",
+        tenantId: "tenant-1"
+      })
+    ).toThrow();
+    expect(() =>
+      internalAccessDecisionRequestSchema.parse({
+        employeeId: "employee-2",
+        permission: "conversation.read",
+        resource: {
+          queueId: "queue-sales",
+          tenantId: "tenant-1"
+        }
       })
     ).toThrow();
   });

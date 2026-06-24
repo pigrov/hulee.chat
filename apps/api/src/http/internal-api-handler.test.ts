@@ -1,5 +1,7 @@
 import type {
   EmployeeId,
+  InternalAccessDecisionRequest,
+  InternalAccessDecisionResponse,
   InternalInboxViewResponse,
   InternalOrgUnitUpsertRequest,
   InternalTenantBrandUpdateRequest,
@@ -74,6 +76,23 @@ function createHandler(input?: {
     currentQueueId: "queue-sales",
     assignedEmployeeId: "employee-2"
   }));
+  const inspectAccessDecision = vi.fn(
+    async (
+      _context: unknown,
+      request: InternalAccessDecisionRequest
+    ): Promise<InternalAccessDecisionResponse> => ({
+      employeeId: request.employeeId,
+      permission: request.permission,
+      resource: request.resource,
+      evaluatedAt: "2026-06-24T10:00:00.000Z",
+      decision: {
+        allowed: false,
+        reason: "missing_permission"
+      },
+      candidateGrants: [],
+      effectiveGrantCount: 0
+    })
+  );
   const loadTelegramIntegration = vi.fn(async () => ({
     moduleId: "channel-telegram" as const,
     enabled: true,
@@ -234,6 +253,9 @@ function createHandler(input?: {
       loadOrgStructure,
       upsertOrgUnit,
       upsertWorkQueue
+    },
+    accessDecisions: {
+      inspectAccessDecision
     }
   });
 
@@ -251,7 +273,8 @@ function createHandler(input?: {
     updateTenantBrand,
     loadOrgStructure,
     upsertOrgUnit,
-    upsertWorkQueue
+    upsertWorkQueue,
+    inspectAccessDecision
   };
 }
 
@@ -537,6 +560,84 @@ describe("internal API handler", () => {
         code: "permission.denied"
       }
     });
+  });
+
+  it("inspects access decisions through roles.manage permission", async () => {
+    const rolesManageSession = sessionWithPermissions(["roles.manage"]);
+    const { handler, inspectAccessDecision } = createHandler({
+      session: rolesManageSession
+    });
+    const response = await handler.handle({
+      method: "POST",
+      path: "/internal/v1/access/decision",
+      body: {
+        employeeId: "employee-2",
+        permission: "conversation.read",
+        resource: {
+          queueId: " queue-sales "
+        },
+        at: "2026-06-24T10:00:00.000Z"
+      }
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      employeeId: "employee-2",
+      permission: "conversation.read",
+      decision: {
+        allowed: false,
+        reason: "missing_permission"
+      }
+    });
+    expect(inspectAccessDecision).toHaveBeenCalledWith(rolesManageSession, {
+      employeeId: "employee-2",
+      permission: "conversation.read",
+      resource: {
+        queueId: "queue-sales"
+      },
+      at: "2026-06-24T10:00:00.000Z"
+    });
+  });
+
+  it("requires a signed narrow roles.manage override for access decisions", async () => {
+    const { handler, inspectAccessDecision } = createHandler({
+      session: sessionWithPermissions(["roles.manage", "tenant.manage"])
+    });
+    const response = await handler.handle({
+      method: "POST",
+      path: "/internal/v1/access/decision",
+      body: {
+        employeeId: "employee-2",
+        permission: "conversation.read",
+        resource: {}
+      }
+    });
+
+    expect(response.status).toBe(403);
+    expect(response.body).toMatchObject({
+      error: {
+        code: "permission.denied"
+      }
+    });
+    expect(inspectAccessDecision).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid access decision payloads before service execution", async () => {
+    const { handler, inspectAccessDecision } = createHandler({
+      session: sessionWithPermissions(["roles.manage"])
+    });
+    const response = await handler.handle({
+      method: "POST",
+      path: "/internal/v1/access/decision",
+      body: {
+        employeeId: "",
+        permission: "conversation.read",
+        resource: {}
+      }
+    });
+
+    expect(response.status).toBe(400);
+    expect(inspectAccessDecision).not.toHaveBeenCalled();
   });
 
   it("validates and queues replies through the command service", async () => {

@@ -211,6 +211,132 @@ export const internalWorkQueueUpsertRequestSchema = z
   })
   .strict();
 
+const internalAccessDecisionIdSchema = z.string().trim().min(1).max(200);
+const internalAccessDecisionPermissionSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200);
+const internalAccessDecisionResourceIdListSchema = z
+  .array(internalAccessDecisionIdSchema)
+  .max(100);
+
+export const internalAccessDecisionResourceContextSchema = z
+  .object({
+    orgUnitId: internalAccessDecisionIdSchema.optional(),
+    orgUnitIds: internalAccessDecisionResourceIdListSchema.optional(),
+    teamId: internalAccessDecisionIdSchema.optional(),
+    teamIds: internalAccessDecisionResourceIdListSchema.optional(),
+    queueId: internalAccessDecisionIdSchema.optional(),
+    assignedEmployeeId: internalAccessDecisionIdSchema.optional(),
+    assignedEmployeeIds: internalAccessDecisionResourceIdListSchema.optional(),
+    assignedTeamIds: internalAccessDecisionResourceIdListSchema.optional(),
+    ownerEmployeeId: internalAccessDecisionIdSchema.optional(),
+    clientId: internalAccessDecisionIdSchema.optional(),
+    conversationId: internalAccessDecisionIdSchema.optional()
+  })
+  .strict();
+
+export const internalAccessDecisionRequestSchema = z
+  .object({
+    employeeId: internalAccessDecisionIdSchema,
+    permission: internalAccessDecisionPermissionSchema,
+    resource: internalAccessDecisionResourceContextSchema.default({}),
+    at: z.string().datetime({ offset: true }).optional()
+  })
+  .strict();
+
+export const internalAccessDecisionReasonSchema = z.enum([
+  "allowed",
+  "missing_permission",
+  "scope_mismatch"
+]);
+
+export const internalAccessDecisionScopeSchema = z.union([
+  z.object({ type: z.literal("tenant") }).strict(),
+  z.object({ type: z.literal("assigned") }).strict(),
+  z.object({ type: z.literal("own") }).strict(),
+  z
+    .object({
+      type: z.literal("org_unit"),
+      id: internalAccessDecisionIdSchema
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("team"),
+      id: internalAccessDecisionIdSchema
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("queue"),
+      id: internalAccessDecisionIdSchema
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("client"),
+      id: internalAccessDecisionIdSchema
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("conversation"),
+      id: internalAccessDecisionIdSchema
+    })
+    .strict()
+]);
+
+export const internalAccessDecisionGrantSourceSchema = z.union([
+  z
+    .object({
+      type: z.literal("fixed_role"),
+      role: z.enum(["tenant_admin", "supervisor", "agent"])
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("role_binding"),
+      roleId: internalAccessDecisionIdSchema,
+      bindingId: internalAccessDecisionIdSchema.optional()
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("direct_grant"),
+      grantId: internalAccessDecisionIdSchema.optional(),
+      reason: z.string().trim().min(1).max(1000)
+    })
+    .strict()
+]);
+
+export const internalAccessDecisionGrantSchema = z
+  .object({
+    permission: internalAccessDecisionPermissionSchema,
+    scope: internalAccessDecisionScopeSchema,
+    sources: z.array(internalAccessDecisionGrantSourceSchema).min(1)
+  })
+  .strict();
+
+export const internalAccessDecisionResponseSchema = z
+  .object({
+    employeeId: internalAccessDecisionIdSchema,
+    permission: internalAccessDecisionPermissionSchema,
+    resource: internalAccessDecisionResourceContextSchema,
+    evaluatedAt: z.string().datetime({ offset: true }),
+    decision: z
+      .object({
+        allowed: z.boolean(),
+        reason: internalAccessDecisionReasonSchema,
+        matchedGrant: internalAccessDecisionGrantSchema.optional()
+      })
+      .strict(),
+    candidateGrants: z.array(internalAccessDecisionGrantSchema),
+    effectiveGrantCount: z.number().int().nonnegative()
+  })
+  .strict();
+
 export const internalTelegramIntegrationModeSchema = z.enum([
   "webhook",
   "polling"
@@ -368,6 +494,27 @@ export type InternalOrgUnitUpsertRequest = z.infer<
 >;
 export type InternalWorkQueueUpsertRequest = z.infer<
   typeof internalWorkQueueUpsertRequestSchema
+>;
+export type InternalAccessDecisionResourceContext = z.infer<
+  typeof internalAccessDecisionResourceContextSchema
+>;
+export type InternalAccessDecisionRequest = z.infer<
+  typeof internalAccessDecisionRequestSchema
+>;
+export type InternalAccessDecisionReason = z.infer<
+  typeof internalAccessDecisionReasonSchema
+>;
+export type InternalAccessDecisionScope = z.infer<
+  typeof internalAccessDecisionScopeSchema
+>;
+export type InternalAccessDecisionGrantSource = z.infer<
+  typeof internalAccessDecisionGrantSourceSchema
+>;
+export type InternalAccessDecisionGrant = z.infer<
+  typeof internalAccessDecisionGrantSchema
+>;
+export type InternalAccessDecisionResponse = z.infer<
+  typeof internalAccessDecisionResponseSchema
 >;
 export type InternalTelegramIntegrationConfig = z.infer<
   typeof internalTelegramIntegrationConfigSchema

@@ -4,11 +4,13 @@ import {
   createDrizzlePersistenceExecutor,
   createExternalMessageRepository,
   createSqlPublicApiAuditSink,
+  createSqlEmployeeDirectoryRepository,
   createSqlOrgStructureRepository,
   createSqlSecurityAuditRepository,
   createSqlTenantSecretRepository,
   createSqlTenantModuleConfigRepository,
   createSqlTenantApiKeyRepository,
+  createSqlTenantRbacRepository,
   type HuleeDatabase
 } from "@hulee/db";
 import {
@@ -32,6 +34,7 @@ import {
   createSqlInternalInboxAuthorizationService,
   createSqlInternalInboxQueryService
 } from "./internal-inbox-service";
+import { createInternalAccessDecisionService } from "./internal-access-decision-service";
 import {
   createTenantSecretResolver,
   createInternalIntegrationService
@@ -166,6 +169,12 @@ export function createInternalApiDataPlaneHandler(
     orgStructure: createInternalOrgStructureService({
       repository: createSqlOrgStructureRepository(options.database)
     }),
+    accessDecisions: createInternalAccessDecisionService({
+      employeeRepository: createSqlEmployeeDirectoryRepository(
+        options.database
+      ),
+      rbacRepository: createSqlTenantRbacRepository(options.database)
+    }),
     logger: options.logger,
     requestIdFactory: options.requestIdFactory
   });
@@ -253,6 +262,7 @@ export { createInternalApiHandler } from "./http/internal-api-handler";
 export { createPublicApiHandler } from "./http/public-api-handler";
 export { createTelegramWebhookHandler } from "./http/telegram-webhook-handler";
 export { createExternalChannelCommandService } from "./external-channel-command-service";
+export { createInternalAccessDecisionService } from "./internal-access-decision-service";
 export {
   createInternalInboxAuthorizationService,
   createInternalInboxCommandService,
@@ -268,6 +278,11 @@ export type {
   ExternalChannelCommandService,
   ExternalChannelCommandServiceOptions
 } from "./external-channel-command-service";
+export type {
+  InternalAccessDecisionContext,
+  InternalAccessDecisionService,
+  InternalAccessDecisionServiceOptions
+} from "./internal-access-decision-service";
 export type {
   InternalInboxAuthorizationService,
   InternalInboxAuthorizationServiceOptions,

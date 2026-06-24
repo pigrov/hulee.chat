@@ -1,5 +1,6 @@
 import type {
   EmployeeId,
+  InternalAccessDecisionResponse,
   InternalInboxConversationRoutingUpdateResponse,
   InternalInboxReplyResponse,
   InternalInboxViewResponse,
@@ -13,6 +14,7 @@ import type {
 } from "@hulee/contracts";
 import {
   getPlatformErrorDefinition,
+  internalAccessDecisionRequestSchema,
   internalInboxConversationRoutingUpdateRequestSchema,
   internalApiV1Version,
   internalInboxReplyRequestSchema,
@@ -36,6 +38,7 @@ import type {
   InternalInboxCommandService,
   InternalInboxQueryService
 } from "../internal-inbox-service";
+import type { InternalAccessDecisionService } from "../internal-access-decision-service";
 import type { InternalIntegrationService } from "../internal-integrations-service";
 import type { InternalOrgStructureService } from "../internal-org-structure-service";
 import type { InternalTenantSettingsService } from "../internal-tenant-service";
@@ -64,6 +67,7 @@ export type InternalApiHandlerOptions = {
   integrations: InternalIntegrationService;
   tenantSettings: InternalTenantSettingsService;
   orgStructure: InternalOrgStructureService;
+  accessDecisions: InternalAccessDecisionService;
   logger?: Logger;
   requestIdFactory?: () => string;
 };
@@ -104,6 +108,9 @@ type RouteMatch =
     }
   | {
       route: "work_queue_upsert";
+    }
+  | {
+      route: "access_decision";
     }
   | {
       route: "telegram_integration_view";
@@ -166,7 +173,8 @@ export function createInternalApiHandler(
           inboxCommands: options.inboxCommands,
           integrations: options.integrations,
           tenantSettings: options.tenantSettings,
-          orgStructure: options.orgStructure
+          orgStructure: options.orgStructure,
+          accessDecisions: options.accessDecisions
         });
       } catch (error) {
         const code = platformErrorCodeFromUnknown(error);
@@ -344,7 +352,8 @@ function createFallbackDevSession(
         "inbox.read",
         "message.reply",
         "conversation.assign",
-        "modules.manage"
+        "modules.manage",
+        "roles.manage"
       ],
     authMode: "local_dev"
   };
@@ -359,6 +368,7 @@ async function handleAuthenticatedRoute(input: {
   integrations: InternalIntegrationService;
   tenantSettings: InternalTenantSettingsService;
   orgStructure: InternalOrgStructureService;
+  accessDecisions: InternalAccessDecisionService;
 }): Promise<ApiHttpResponse> {
   switch (input.route.route) {
     case "inbox_view": {
@@ -454,6 +464,20 @@ async function handleAuthenticatedRoute(input: {
       );
       const response: InternalWorkQueue =
         await input.orgStructure.upsertWorkQueue(input.session, request);
+
+      return jsonResponse(200, response);
+    }
+
+    case "access_decision": {
+      assertSignedEffectivePermissionOverride(input.session, "roles.manage");
+      const request = internalAccessDecisionRequestSchema.parse(
+        input.request.body
+      );
+      const response: InternalAccessDecisionResponse =
+        await input.accessDecisions.inspectAccessDecision(
+          input.session,
+          request
+        );
 
       return jsonResponse(200, response);
     }
@@ -557,6 +581,12 @@ function matchRoute(request: ApiHttpRequest): RouteMatch | undefined {
   ) {
     return {
       route: "work_queue_upsert"
+    };
+  }
+
+  if (request.method === "POST" && path === "/internal/v1/access/decision") {
+    return {
+      route: "access_decision"
     };
   }
 
