@@ -5,6 +5,7 @@ import {
   Network,
   Palette,
   Plug,
+  ScrollText,
   ShieldCheck,
   Users
 } from "lucide-react";
@@ -170,6 +171,8 @@ function TenantAdminSectionIcon({
       return <Network size={18} aria-hidden="true" />;
     case "roles":
       return <KeyRound size={18} aria-hidden="true" />;
+    case "audit":
+      return <ScrollText size={18} aria-hidden="true" />;
     case "integrations":
       return <Plug size={18} aria-hidden="true" />;
     case "branding":

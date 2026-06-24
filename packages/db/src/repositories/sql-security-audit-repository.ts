@@ -105,8 +105,11 @@ export type ConversationRoutingAuditRecord = {
 
 export type ListConversationRoutingAuditRecordsInput = {
   tenantId: TenantId;
-  conversationId: string;
+  conversationId?: string;
   limit: number;
+  actorEmployeeId?: EmployeeId;
+  from?: Date;
+  to?: Date;
 };
 
 export type SecurityAuditRepository = {
@@ -190,6 +193,12 @@ export function buildInsertSecurityAuditLogSql(
 export function buildListConversationRoutingAuditRecordsSql(
   input: ListConversationRoutingAuditRecordsInput
 ): SQL {
+  const actorEmployeeId = input.actorEmployeeId ?? null;
+  const conversationId = normalizeOptionalFilter(input.conversationId);
+  const from = input.from ?? null;
+  const to = input.to ?? null;
+  const limit = normalizeLimit(input.limit);
+
   return sql`
     select id,
            tenant_id,
@@ -201,9 +210,12 @@ export function buildListConversationRoutingAuditRecordsSql(
     where tenant_id = ${input.tenantId}
       and action = 'conversation.routing.updated'
       and entity_type = 'conversation'
-      and entity_id = ${input.conversationId}
+      and (${actorEmployeeId}::text is null or actor_employee_id = ${actorEmployeeId})
+      and (${conversationId}::text is null or entity_id = ${conversationId})
+      and (${from}::timestamptz is null or created_at >= ${from})
+      and (${to}::timestamptz is null or created_at <= ${to})
     order by created_at desc
-    limit ${normalizeLimit(input.limit)}
+    limit ${limit}
   `;
 }
 
@@ -360,7 +372,8 @@ function assertTenantScopedConversationRoutingAuditRows(
     records.some(
       (record) =>
         record.tenantId !== input.tenantId ||
-        record.conversationId !== input.conversationId
+        (input.conversationId !== undefined &&
+          record.conversationId !== input.conversationId)
     )
   ) {
     throw new CoreError("tenant.boundary_violation");

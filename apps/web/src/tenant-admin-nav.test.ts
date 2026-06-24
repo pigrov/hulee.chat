@@ -13,6 +13,7 @@ describe("tenant admin navigation", () => {
           "tenant.manage",
           "employees.manage",
           "roles.manage",
+          "audit.view",
           "modules.manage"
         ])
       ).map((section) => section.id)
@@ -20,6 +21,7 @@ describe("tenant admin navigation", () => {
       "employees",
       "orgStructure",
       "roles",
+      "audit",
       "integrations",
       "branding"
     ]);
@@ -28,9 +30,9 @@ describe("tenant admin navigation", () => {
   it("filters navigation sections by permissions", () => {
     expect(
       getVisibleTenantAdminSections(
-        session(["roles.manage", "modules.manage"])
+        session(["roles.manage", "audit.view", "modules.manage"])
       ).map((section) => section.id)
-    ).toEqual(["roles", "integrations"]);
+    ).toEqual(["roles", "audit", "integrations"]);
   });
 
   it("hides tenant admin navigation for regular agents", () => {

@@ -8,6 +8,7 @@ export type TenantAdminSectionId =
   | "employees"
   | "orgStructure"
   | "roles"
+  | "audit"
   | "integrations"
   | "branding";
 
@@ -55,6 +56,14 @@ export const tenantAdminSections: readonly TenantAdminSection[] = [
     titleKey: "admin.roles",
     descriptionKey: "admin.roles.description",
     requiredPermissions: ["roles.manage"],
+    permissionMode: "all"
+  },
+  {
+    id: "audit",
+    href: "/admin/audit",
+    titleKey: "admin.audit",
+    descriptionKey: "admin.audit.description",
+    requiredPermissions: ["audit.view"],
     permissionMode: "all"
   },
   {

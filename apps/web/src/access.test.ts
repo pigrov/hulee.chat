@@ -58,6 +58,17 @@ describe("web access guards", () => {
     expect(navigationAccessFromSession(session).tenantAdmin).toBe(true);
   });
 
+  it("shows tenant admin navigation for audit viewers", () => {
+    const session = {
+      ...resolveWebAccessSession({
+        NODE_ENV: "production"
+      }),
+      permissions: ["audit.view" as const]
+    };
+
+    expect(navigationAccessFromSession(session).tenantAdmin).toBe(true);
+  });
+
   it("throws when required access is missing", () => {
     const session = resolveWebAccessSession({
       NODE_ENV: "production"

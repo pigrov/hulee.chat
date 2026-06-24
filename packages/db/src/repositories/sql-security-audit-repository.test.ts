@@ -180,6 +180,70 @@ describe("SQL security audit repository", () => {
     );
   });
 
+  it("lists tenant conversation routing audit records with optional filters", async () => {
+    const tenantId = "tenant-1" as TenantId;
+    const actorEmployeeId = "employee-admin" as EmployeeId;
+    const from = new Date("2026-06-23T00:00:00.000Z");
+    const to = new Date("2026-06-23T23:59:59.999Z");
+    const executor = new RecordingSqlExecutor([
+      [
+        {
+          id: "audit:conversation-1:routing",
+          tenant_id: tenantId,
+          actor_employee_id: actorEmployeeId,
+          entity_id: "conversation-1",
+          metadata: {
+            currentQueueId: "queue-sales"
+          },
+          created_at: new Date("2026-06-23T12:00:00.000Z")
+        },
+        {
+          id: "audit:conversation-2:routing",
+          tenant_id: tenantId,
+          actor_employee_id: actorEmployeeId,
+          entity_id: "conversation-2",
+          metadata: {
+            currentQueueId: "queue-claims"
+          },
+          created_at: new Date("2026-06-23T13:00:00.000Z")
+        }
+      ]
+    ]);
+    const repository = createSqlSecurityAuditRepository(executor);
+
+    await expect(
+      repository.listConversationRoutingRecords({
+        tenantId,
+        actorEmployeeId,
+        from,
+        to,
+        limit: 25
+      })
+    ).resolves.toMatchObject([
+      {
+        id: "audit:conversation-1:routing",
+        tenantId,
+        actorEmployeeId,
+        conversationId: "conversation-1"
+      },
+      {
+        id: "audit:conversation-2:routing",
+        tenantId,
+        actorEmployeeId,
+        conversationId: "conversation-2"
+      }
+    ]);
+
+    const listQuery = renderQuery(executor.queries[0]);
+
+    expect(listQuery.sql).toContain("actor_employee_id");
+    expect(listQuery.sql).toContain("created_at >=");
+    expect(listQuery.sql).toContain("created_at <=");
+    expect(listQuery.params).toEqual(
+      expect.arrayContaining([tenantId, actorEmployeeId, from, to, 25])
+    );
+  });
+
   it("rejects cross-tenant conversation routing audit rows", async () => {
     const repository = createSqlSecurityAuditRepository(
       new RecordingSqlExecutor([

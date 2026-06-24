@@ -6,6 +6,7 @@ import {
   Network,
   Palette,
   Plug,
+  ScrollText,
   Users
 } from "lucide-react";
 import Link from "next/link";
@@ -117,6 +118,8 @@ function AdminOverviewIcon({
       return <Network size={18} aria-hidden="true" />;
     case "roles":
       return <KeyRound size={18} aria-hidden="true" />;
+    case "audit":
+      return <ScrollText size={18} aria-hidden="true" />;
     case "integrations":
       return <Plug size={18} aria-hidden="true" />;
     case "branding":
