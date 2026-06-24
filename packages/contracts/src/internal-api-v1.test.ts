@@ -35,7 +35,21 @@ describe("internal API v1 schemas", () => {
             links: {}
           }
         },
-        conversations: [],
+        conversations: [
+          {
+            id: "conversation-1",
+            clientId: "client-1",
+            clientDisplayName: "Alice",
+            status: "open",
+            source: "telegram",
+            currentQueueId: "queue-sales",
+            currentQueueName: "Sales",
+            assignedEmployeeId: "employee-1",
+            assignedEmployeeDisplayName: "Agent",
+            messageCount: 2,
+            queuedCount: 0
+          }
+        ],
         messages: []
       })
     ).toMatchObject({
@@ -44,7 +58,13 @@ describe("internal API v1 schemas", () => {
         brand: {
           productName: "Acme Desk"
         }
-      }
+      },
+      conversations: [
+        {
+          currentQueueName: "Sales",
+          assignedEmployeeDisplayName: "Agent"
+        }
+      ]
     });
   });
 

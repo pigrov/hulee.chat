@@ -201,6 +201,30 @@ button.railButton {
   flex-direction: column;
 }
 
+.inboxFilterBar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px;
+  border-bottom: 1px solid var(--hulee-color-border);
+  background: var(--hulee-color-surface-default);
+}
+
+.compactSelectInput {
+  min-height: 34px;
+  padding: 7px 9px;
+}
+
+.compactToggleRow {
+  min-height: 34px;
+  padding: 0 2px;
+  font-size: 13px;
+}
+
+.compactButton {
+  min-height: 34px;
+}
+
 .conversationLink {
   display: grid;
   gap: 8px;

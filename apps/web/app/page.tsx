@@ -1,6 +1,7 @@
 import { createTranslator } from "@hulee/i18n";
 import {
   CheckCircle2,
+  ListFilter,
   MessageSquare,
   Paperclip,
   RefreshCw,
@@ -49,6 +50,8 @@ export default async function InboxPage({
   searchParams?: Promise<{
     conversationId?: string;
     emailVerification?: string;
+    queueId?: string;
+    assigned?: string;
   }>;
 }): Promise<ReactNode> {
   const access = await resolveCurrentWebAccessSession();
@@ -75,25 +78,33 @@ export default async function InboxPage({
     createSqlEmployeeDirectoryRepository(getWebDatabase());
   const orgStructureRepository =
     createSqlOrgStructureRepository(getWebDatabase());
+  const activeQueueId = normalizeInboxQueueFilter(
+    resolvedSearchParams?.queueId
+  );
+  const assignedToMe = isAssignedToMeInboxFilter(
+    resolvedSearchParams?.assigned
+  );
   const [model, employees, workQueues] = await Promise.all([
     loadInboxViewModel({
-      selectedConversationId: resolvedSearchParams?.conversationId
+      selectedConversationId: resolvedSearchParams?.conversationId,
+      queueId: activeQueueId,
+      assignedToMe
     }),
     canAssignConversations
       ? employeeRepository.listEmployees({ tenantId: access.tenantId })
       : Promise.resolve<readonly TenantEmployeeRecord[]>([]),
-    canAssignConversations
-      ? orgStructureRepository.listWorkQueues({
-          tenantId: access.tenantId,
-          activeOnly: true
-        })
-      : Promise.resolve<readonly WorkQueueRecord[]>([])
+    orgStructureRepository.listWorkQueues({
+      tenantId: access.tenantId,
+      activeOnly: true
+    })
   ]);
   const { t, locale } = createTranslator(model.tenant.locale);
   const selectedConversation = model.selectedConversation;
-  const currentInboxPath = selectedConversation
-    ? `/?conversationId=${encodeURIComponent(selectedConversation.id)}`
-    : "/";
+  const currentInboxPath = buildInboxHref({
+    conversationId: selectedConversation?.id,
+    queueId: activeQueueId,
+    assignedToMe
+  });
   const emailVerificationNotice = resolveEmailVerificationNotice(
     resolvedSearchParams?.emailVerification
   );
@@ -154,13 +165,22 @@ export default async function InboxPage({
             </div>
             <Link
               className="iconButton"
-              href="/"
+              href={buildInboxHref({
+                queueId: activeQueueId,
+                assignedToMe
+              })}
               aria-label={t("inbox.refresh")}
             >
               <RefreshCw size={17} aria-hidden="true" />
             </Link>
           </div>
         </div>
+        <InboxFilterBar
+          activeQueueId={activeQueueId}
+          assignedToMe={assignedToMe}
+          t={t}
+          workQueues={workQueues}
+        />
         <div className="conversationList">
           {model.conversations.length === 0 ? (
             <div className="emptyState">{t("inbox.emptyConversations")}</div>
@@ -170,6 +190,8 @@ export default async function InboxPage({
                 key={conversation.id}
                 conversation={conversation}
                 current={conversation.id === selectedConversation?.id}
+                queueId={activeQueueId}
+                assignedToMe={assignedToMe}
                 locale={locale}
                 t={t}
               />
@@ -310,6 +332,56 @@ export default async function InboxPage({
         <SlotMount slot="client.profile.card" />
       </aside>
     </AppFrame>
+  );
+}
+
+function InboxFilterBar({
+  activeQueueId,
+  assignedToMe,
+  t,
+  workQueues
+}: {
+  readonly activeQueueId?: string;
+  readonly assignedToMe: boolean;
+  readonly t: ReturnType<typeof createTranslator>["t"];
+  readonly workQueues: readonly WorkQueueRecord[];
+}): ReactNode {
+  const hasActiveFilter = activeQueueId !== undefined || assignedToMe;
+
+  return (
+    <form className="inboxFilterBar" action="/" method="get">
+      <select
+        className="selectInput compactSelectInput"
+        name="queueId"
+        defaultValue={activeQueueId ?? ""}
+        aria-label={t("inbox.routing.queue")}
+      >
+        <option value="">{t("inbox.filters.allQueues")}</option>
+        {workQueues.map((queue) => (
+          <option key={queue.id} value={queue.id}>
+            {queue.name}
+          </option>
+        ))}
+      </select>
+      <label className="toggleRow compactToggleRow">
+        <input
+          type="checkbox"
+          name="assigned"
+          value="me"
+          defaultChecked={assignedToMe}
+        />
+        {t("inbox.filters.assignedToMe")}
+      </label>
+      <button className="secondaryButton compactButton" type="submit">
+        <ListFilter size={14} aria-hidden="true" />
+        {t("inbox.filters.apply")}
+      </button>
+      {hasActiveFilter ? (
+        <Link className="secondaryButton compactButton" href="/">
+          {t("inbox.filters.clear")}
+        </Link>
+      ) : null}
+    </form>
   );
 }
 
@@ -493,21 +565,72 @@ function resolveEmailVerificationNotice(
   return undefined;
 }
 
+function normalizeInboxQueueFilter(
+  value: string | undefined
+): string | undefined {
+  const trimmedValue = value?.trim();
+
+  return trimmedValue === undefined || trimmedValue === ""
+    ? undefined
+    : trimmedValue;
+}
+
+function isAssignedToMeInboxFilter(value: string | undefined): boolean {
+  return value === "me";
+}
+
+function buildInboxHref(input: {
+  readonly conversationId?: string;
+  readonly queueId?: string;
+  readonly assignedToMe?: boolean;
+}): string {
+  const searchParams = new URLSearchParams();
+
+  if (input.conversationId) {
+    searchParams.set("conversationId", input.conversationId);
+  }
+
+  if (input.queueId) {
+    searchParams.set("queueId", input.queueId);
+  }
+
+  if (input.assignedToMe === true) {
+    searchParams.set("assigned", "me");
+  }
+
+  const queryString = searchParams.toString();
+
+  return queryString === "" ? "/" : `/?${queryString}`;
+}
+
 function ConversationListItem({
   conversation,
   current,
+  queueId,
+  assignedToMe,
   locale,
   t
 }: {
   conversation: InboxConversation;
   current: boolean;
+  queueId?: string;
+  assignedToMe: boolean;
   locale: string;
   t: ReturnType<typeof createTranslator>["t"];
 }): ReactNode {
+  const queueLabel =
+    conversation.currentQueueName ?? conversation.currentQueueId;
+  const assigneeLabel =
+    conversation.assignedEmployeeDisplayName ?? conversation.assignedEmployeeId;
+
   return (
     <Link
       className="conversationLink"
-      href={`/?conversationId=${encodeURIComponent(conversation.id)}`}
+      href={buildInboxHref({
+        conversationId: conversation.id,
+        queueId,
+        assignedToMe
+      })}
       aria-current={current ? "page" : undefined}
     >
       <div className="conversationLinkTop">
@@ -528,6 +651,18 @@ function ConversationListItem({
           <MessageSquare size={13} aria-hidden="true" />
           {conversation.messageCount}
         </span>
+        {queueLabel ? (
+          <span className="badge">
+            <Route size={13} aria-hidden="true" />
+            {queueLabel}
+          </span>
+        ) : null}
+        {assigneeLabel ? (
+          <span className="badge">
+            <UserRound size={13} aria-hidden="true" />
+            {assigneeLabel}
+          </span>
+        ) : null}
         {conversation.queuedCount > 0 ? (
           <span className="badge">
             {t("message.status.queued")} {conversation.queuedCount}

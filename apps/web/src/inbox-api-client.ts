@@ -30,11 +30,21 @@ export type TelegramIntegrationViewModel = InternalTelegramIntegrationResponse;
 
 export async function loadInboxViewModel(input?: {
   selectedConversationId?: string;
+  queueId?: string;
+  assignedToMe?: boolean;
 }): Promise<InboxViewModel> {
   const url = new URL("/internal/v1/inbox", resolveInternalApiBaseUrl());
 
   if (input?.selectedConversationId) {
     url.searchParams.set("conversationId", input.selectedConversationId);
+  }
+
+  if (input?.queueId) {
+    url.searchParams.set("queueId", input.queueId);
+  }
+
+  if (input?.assignedToMe === true) {
+    url.searchParams.set("assigned", "me");
   }
 
   const response = await fetch(url, {

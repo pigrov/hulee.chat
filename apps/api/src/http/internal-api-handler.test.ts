@@ -293,13 +293,17 @@ describe("internal API handler", () => {
     const { handler, loadInboxView } = createHandler();
     const response = await handler.handle({
       method: "GET",
-      path: "/internal/v1/inbox?conversationId=conversation-1"
+      path: "/internal/v1/inbox?conversationId=conversation-1&queueId=queue-sales&assigned=me"
     });
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual(inboxView);
     expect(loadInboxView).toHaveBeenCalledWith(session, {
-      selectedConversationId: "conversation-1"
+      selectedConversationId: "conversation-1",
+      filters: {
+        queueId: "queue-sales",
+        assignedToMe: true
+      }
     });
   });
 

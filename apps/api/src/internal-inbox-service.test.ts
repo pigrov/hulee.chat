@@ -25,6 +25,7 @@ import { describe, expect, it } from "vitest";
 import {
   createInternalInboxAuthorizationService,
   createInternalInboxCommandService,
+  filterInboxConversations,
   type InternalInboxAuthorizationService,
   type InternalInboxConversationAccessResource,
   type InternalInboxCommandContext
@@ -57,6 +58,41 @@ const employee: TenantEmployeeRecord = {
   createdAt: now,
   deactivatedAt: null
 };
+
+describe("internal inbox query filters", () => {
+  it("filters readable conversations by queue and current assignee", () => {
+    const conversations: readonly InternalInboxConversationAccessResource[] = [
+      {
+        id: "conversation-mine",
+        tenantId,
+        clientId: "client-1",
+        currentQueueId: "queue-sales",
+        assignedEmployeeId: context.employeeId
+      },
+      {
+        id: "conversation-other-assignee",
+        tenantId,
+        clientId: "client-2",
+        currentQueueId: "queue-sales",
+        assignedEmployeeId: "employee-2" as EmployeeId
+      },
+      {
+        id: "conversation-other-queue",
+        tenantId,
+        clientId: "client-3",
+        currentQueueId: "queue-claims",
+        assignedEmployeeId: context.employeeId
+      }
+    ];
+
+    expect(
+      filterInboxConversations(context, conversations, {
+        queueId: "queue-sales",
+        assignedToMe: true
+      })
+    ).toEqual([conversations[0]]);
+  });
+});
 
 describe("internal inbox command service", () => {
   it("queues replies against tenant-owned conversations", async () => {

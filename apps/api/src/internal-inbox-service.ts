@@ -50,10 +50,18 @@ export type InternalInboxCommandContext = {
 
 export type InternalInboxQueryContext = InternalInboxCommandContext;
 
+export type InternalInboxConversationFilters = {
+  queueId?: string;
+  assignedToMe?: boolean;
+};
+
 export type InternalInboxQueryService = {
   loadInboxView(
     context: InternalInboxQueryContext,
-    input?: { selectedConversationId?: string }
+    input?: {
+      selectedConversationId?: string;
+      filters?: InternalInboxConversationFilters;
+    }
   ): Promise<InternalInboxViewResponse>;
 };
 
@@ -143,8 +151,10 @@ type ConversationRow = {
   status: string;
   source: string;
   current_queue_id: string | null;
+  current_queue_name: string | null;
   current_queue_owning_org_unit_id: string | null;
   assigned_employee_id: string | null;
+  assigned_employee_display_name: string | null;
   assigned_team_id: string | null;
   message_count: number | string;
   queued_count: number | string;
@@ -360,12 +370,17 @@ export function createSqlInternalInboxQueryService(input: {
           conversations: conversationRecords,
           permission: "inbox.read"
         });
+      const filteredConversationRecords = filterInboxConversations(
+        context,
+        readableConversationRecords,
+        queryInput?.filters
+      );
       const selectedConversationRecord =
-        readableConversationRecords.find(
+        filteredConversationRecords.find(
           (conversation) =>
             conversation.id === queryInput?.selectedConversationId
-        ) ?? readableConversationRecords[0];
-      const conversations = readableConversationRecords.map(
+        ) ?? filteredConversationRecords[0];
+      const conversations = filteredConversationRecords.map(
         toInternalInboxConversation
       );
       const selectedConversation =
@@ -388,6 +403,40 @@ export function createSqlInternalInboxQueryService(input: {
       };
     }
   };
+}
+
+export function filterInboxConversations<
+  TConversation extends InternalInboxConversationAccessResource
+>(
+  context: InternalInboxQueryContext,
+  conversations: readonly TConversation[],
+  filters?: InternalInboxConversationFilters
+): readonly TConversation[] {
+  if (
+    (filters?.queueId === undefined || filters.queueId === "") &&
+    filters?.assignedToMe !== true
+  ) {
+    return conversations;
+  }
+
+  return conversations.filter((conversation) => {
+    if (
+      filters?.queueId !== undefined &&
+      filters.queueId !== "" &&
+      conversation.currentQueueId !== filters.queueId
+    ) {
+      return false;
+    }
+
+    if (
+      filters?.assignedToMe === true &&
+      conversation.assignedEmployeeId !== context.employeeId
+    ) {
+      return false;
+    }
+
+    return true;
+  });
 }
 
 function toInternalInboxConversation(
@@ -607,8 +656,10 @@ async function loadConversations(
       c.status,
       cl.source,
       c.current_queue_id,
+      wq.name as current_queue_name,
       wq.owning_org_unit_id as current_queue_owning_org_unit_id,
       c.assigned_employee_id,
+      ae.display_name as assigned_employee_display_name,
       c.assigned_team_id,
       count(m.id)::int as message_count,
       count(m.id) filter (where m.status = 'queued')::int as queued_count,
@@ -624,6 +675,9 @@ async function loadConversations(
     left join work_queues wq
       on wq.tenant_id = c.tenant_id
      and wq.id = c.current_queue_id
+    left join employees ae
+      on ae.tenant_id = c.tenant_id
+     and ae.id = c.assigned_employee_id
     left join messages m
       on m.tenant_id = c.tenant_id
      and m.conversation_id = c.id
@@ -637,8 +691,10 @@ async function loadConversations(
              c.status,
              cl.source,
              c.current_queue_id,
+             wq.name,
              wq.owning_org_unit_id,
              c.assigned_employee_id,
+             ae.display_name,
              c.assigned_team_id
     order by max(m.created_at) desc nulls last, c.created_at desc, c.id desc
     limit 50
@@ -652,11 +708,14 @@ async function loadConversations(
     status: row.status,
     source: row.source,
     currentQueueId: row.current_queue_id ?? undefined,
+    currentQueueName: row.current_queue_name ?? undefined,
     currentQueueOwningOrgUnitId:
       row.current_queue_owning_org_unit_id ?? undefined,
     assignedEmployeeId: row.assigned_employee_id
       ? (row.assigned_employee_id as EmployeeId)
       : undefined,
+    assignedEmployeeDisplayName:
+      row.assigned_employee_display_name ?? undefined,
     assignedTeamId: row.assigned_team_id ?? undefined,
     messageCount: Number(row.message_count),
     queuedCount: Number(row.queued_count),

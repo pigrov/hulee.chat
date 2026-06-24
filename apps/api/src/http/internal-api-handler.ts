@@ -78,6 +78,8 @@ type RouteMatch =
   | {
       route: "inbox_view";
       selectedConversationId?: string;
+      queueId?: string;
+      assignedToMe?: boolean;
     }
   | {
       route: "inbox_reply";
@@ -353,7 +355,11 @@ async function handleAuthenticatedRoute(input: {
       assertSessionCan(input.session, "inbox.read");
       const response: InternalInboxViewResponse =
         await input.inboxQueries.loadInboxView(input.session, {
-          selectedConversationId: input.route.selectedConversationId
+          selectedConversationId: input.route.selectedConversationId,
+          filters: {
+            queueId: input.route.queueId,
+            assignedToMe: input.route.assignedToMe
+          }
         });
 
       return jsonResponse(200, response);
@@ -496,7 +502,9 @@ function matchRoute(request: ApiHttpRequest): RouteMatch | undefined {
     return {
       route: "inbox_view",
       selectedConversationId:
-        url.searchParams.get("conversationId") ?? undefined
+        url.searchParams.get("conversationId") ?? undefined,
+      queueId: nonEmptyQueryValue(url.searchParams.get("queueId")),
+      assignedToMe: url.searchParams.get("assigned") === "me"
     };
   }
 
@@ -621,6 +629,14 @@ function normalizePath(path: string): string {
   }
 
   return path;
+}
+
+function nonEmptyQueryValue(value: string | null): string | undefined {
+  const trimmedValue = value?.trim();
+
+  return trimmedValue === undefined || trimmedValue === ""
+    ? undefined
+    : trimmedValue;
 }
 
 function headerValue(
