@@ -18,6 +18,7 @@ import {
   type InternalTelegramIntegrationResponse,
   type InternalTelegramIntegrationUpdateRequest
 } from "@hulee/contracts";
+import type { Permission } from "@hulee/core";
 
 import { buildInternalApiHeaders } from "./session";
 import { throwInternalApiErrorResponse } from "./internal-api-errors";
@@ -28,6 +29,9 @@ export type InboxMessage = InternalInboxMessage;
 export type InboxViewModel = InternalInboxViewResponse;
 export type TenantBrandViewModel = InternalTenantBrandResponse;
 export type TelegramIntegrationViewModel = InternalTelegramIntegrationResponse;
+export type InternalApiAccessOptions = {
+  readonly permissions?: readonly Permission[];
+};
 
 export async function loadInboxViewModel(input?: {
   selectedConversationId?: string;
@@ -144,13 +148,16 @@ export async function updateInboxConversationRouting(input: {
   );
 }
 
-export async function loadTenantBrand(): Promise<TenantBrandViewModel> {
+export async function loadTenantBrand(
+  options: InternalApiAccessOptions = {}
+): Promise<TenantBrandViewModel> {
   const url = new URL("/internal/v1/tenant/brand", resolveInternalApiBaseUrl());
   const response = await fetch(url, {
     cache: "no-store",
     headers: await buildInternalApiHeaders({
       method: "GET",
-      path: internalPath(url)
+      path: internalPath(url),
+      permissions: options.permissions
     })
   });
 
@@ -164,7 +171,8 @@ export async function loadTenantBrand(): Promise<TenantBrandViewModel> {
 }
 
 export async function updateTenantBrand(
-  input: InternalTenantBrandUpdateRequest
+  input: InternalTenantBrandUpdateRequest,
+  options: InternalApiAccessOptions = {}
 ): Promise<TenantBrandViewModel> {
   const request = internalTenantBrandUpdateRequestSchema.parse(input);
   const url = new URL("/internal/v1/tenant/brand", resolveInternalApiBaseUrl());
@@ -175,7 +183,8 @@ export async function updateTenantBrand(
       ...(await buildInternalApiHeaders({
         method: "PUT",
         path: internalPath(url),
-        body: request
+        body: request,
+        permissions: options.permissions
       })),
       "content-type": "application/json; charset=utf-8"
     },
@@ -191,7 +200,9 @@ export async function updateTenantBrand(
   return internalTenantBrandResponseSchema.parse(await response.json());
 }
 
-export async function loadTelegramIntegration(): Promise<TelegramIntegrationViewModel> {
+export async function loadTelegramIntegration(
+  options: InternalApiAccessOptions = {}
+): Promise<TelegramIntegrationViewModel> {
   const url = new URL(
     "/internal/v1/integrations/telegram",
     resolveInternalApiBaseUrl()
@@ -200,7 +211,8 @@ export async function loadTelegramIntegration(): Promise<TelegramIntegrationView
     cache: "no-store",
     headers: await buildInternalApiHeaders({
       method: "GET",
-      path: internalPath(url)
+      path: internalPath(url),
+      permissions: options.permissions
     })
   });
 
@@ -214,7 +226,8 @@ export async function loadTelegramIntegration(): Promise<TelegramIntegrationView
 }
 
 export async function updateTelegramIntegration(
-  input: InternalTelegramIntegrationUpdateRequest
+  input: InternalTelegramIntegrationUpdateRequest,
+  options: InternalApiAccessOptions = {}
 ): Promise<TelegramIntegrationViewModel> {
   const request = internalTelegramIntegrationUpdateRequestSchema.parse(input);
   const url = new URL(
@@ -228,7 +241,8 @@ export async function updateTelegramIntegration(
       ...(await buildInternalApiHeaders({
         method: "PUT",
         path: internalPath(url),
-        body: request
+        body: request,
+        permissions: options.permissions
       })),
       "content-type": "application/json; charset=utf-8"
     },
@@ -244,21 +258,29 @@ export async function updateTelegramIntegration(
   return internalTelegramIntegrationResponseSchema.parse(await response.json());
 }
 
-export async function refreshTelegramDiagnostics(): Promise<TelegramIntegrationViewModel> {
+export async function refreshTelegramDiagnostics(
+  options: InternalApiAccessOptions = {}
+): Promise<TelegramIntegrationViewModel> {
   return postTelegramIntegrationCommand(
     "/internal/v1/integrations/telegram/diagnostics",
-    "Internal Telegram diagnostics API returned"
+    "Internal Telegram diagnostics API returned",
+    options
   );
 }
 
-export async function setTelegramWebhook(): Promise<TelegramIntegrationViewModel> {
+export async function setTelegramWebhook(
+  options: InternalApiAccessOptions = {}
+): Promise<TelegramIntegrationViewModel> {
   return postTelegramIntegrationCommand(
     "/internal/v1/integrations/telegram/webhook",
-    "Internal Telegram webhook sync API returned"
+    "Internal Telegram webhook sync API returned",
+    options
   );
 }
 
-export async function deleteTelegramWebhook(): Promise<TelegramIntegrationViewModel> {
+export async function deleteTelegramWebhook(
+  options: InternalApiAccessOptions = {}
+): Promise<TelegramIntegrationViewModel> {
   const url = new URL(
     "/internal/v1/integrations/telegram/webhook",
     resolveInternalApiBaseUrl()
@@ -268,7 +290,8 @@ export async function deleteTelegramWebhook(): Promise<TelegramIntegrationViewMo
     cache: "no-store",
     headers: await buildInternalApiHeaders({
       method: "DELETE",
-      path: internalPath(url)
+      path: internalPath(url),
+      permissions: options.permissions
     })
   });
 
@@ -283,7 +306,8 @@ export async function deleteTelegramWebhook(): Promise<TelegramIntegrationViewMo
 
 async function postTelegramIntegrationCommand(
   path: string,
-  errorPrefix: string
+  errorPrefix: string,
+  options: InternalApiAccessOptions = {}
 ): Promise<TelegramIntegrationViewModel> {
   const url = new URL(path, resolveInternalApiBaseUrl());
   const response = await fetch(url, {
@@ -291,7 +315,8 @@ async function postTelegramIntegrationCommand(
     cache: "no-store",
     headers: await buildInternalApiHeaders({
       method: "POST",
-      path: internalPath(url)
+      path: internalPath(url),
+      permissions: options.permissions
     })
   });
 

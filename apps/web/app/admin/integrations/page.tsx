@@ -1,23 +1,29 @@
 import { createTranslator } from "@hulee/i18n";
+import {
+  createSqlEmployeeDirectoryRepository,
+  createSqlTenantRbacRepository
+} from "@hulee/db";
 import { Plug } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AccessDeniedPage } from "../../../src/access-denied";
-import {
-  canTenantPermission,
-  navigationAccessFromSession
-} from "../../../src/access";
 import { SlotMount } from "../../../src/app-chrome";
 import { telegramStatusKey } from "../../../src/formatting";
+import { loadTenantAdminViewModel } from "../../../src/admin-view-model";
+import { loadTelegramIntegration } from "../../../src/inbox-api-client";
 import {
-  loadInboxViewModel,
-  loadTelegramIntegration
-} from "../../../src/inbox-api-client";
-import { resolveCurrentWebAccessSession } from "../../../src/session";
+  getWebDatabase,
+  resolveCurrentWebAccessSession
+} from "../../../src/session";
+import {
+  hasEffectivePermission,
+  resolveEmployeeEffectiveAccess
+} from "../../../src/rbac-effective-access";
 import { TelegramIntegrationPanel } from "../../../src/telegram-integration-panel";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
+import { navigationAccessFromTenantAdminAccess } from "../../../src/tenant-admin-nav";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -29,18 +35,36 @@ export default async function IntegrationsAdminPage(): Promise<ReactNode> {
     redirect("/login");
   }
 
-  if (!canTenantPermission(access, "modules.manage")) {
+  const database = getWebDatabase();
+  const employeeRepository = createSqlEmployeeDirectoryRepository(database);
+  const rbacRepository = createSqlTenantRbacRepository(database);
+  const accessSnapshot = await resolveEmployeeEffectiveAccess({
+    tenantId: access.tenantId,
+    employeeId: access.employeeId,
+    employeeRepository,
+    rbacRepository
+  });
+
+  if (!hasEffectivePermission(accessSnapshot, "modules.manage")) {
+    const adminAccess = {
+      session: access,
+      effectiveAccess: accessSnapshot
+    };
+
     return (
       <AccessDeniedPage
         current="tenant-admin"
-        navigationAccess={navigationAccessFromSession(access)}
+        navigationAccess={navigationAccessFromTenantAdminAccess(adminAccess)}
       />
     );
   }
 
+  const internalApiAccess = {
+    permissions: ["modules.manage"] as const
+  };
   const [model, telegramIntegration] = await Promise.all([
-    loadInboxViewModel(),
-    loadTelegramIntegration()
+    loadTenantAdminViewModel({ tenantId: access.tenantId, database }),
+    loadTelegramIntegration(internalApiAccess)
   ]);
   const { t, locale } = createTranslator(model.tenant.locale);
 
@@ -49,6 +73,7 @@ export default async function IntegrationsAdminPage(): Promise<ReactNode> {
       access={access}
       brand={model.tenant.brand}
       current="integrations"
+      effectiveAccess={accessSnapshot}
       t={t}
       tenantDisplayName={model.tenant.displayName}
       title={t("admin.integrations")}

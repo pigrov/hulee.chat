@@ -7,28 +7,36 @@ import {
   type BrandThemeTokenName,
   type BrandThemeTokens
 } from "@hulee/branding";
+import {
+  createSqlEmployeeDirectoryRepository,
+  createSqlTenantRbacRepository
+} from "@hulee/db";
 import { createTranslator, type I18nMessageKey } from "@hulee/i18n";
 import { Paintbrush, Save, SlidersHorizontal } from "lucide-react";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AccessDeniedPage } from "../../../src/access-denied";
-import {
-  canTenantPermission,
-  navigationAccessFromSession
-} from "../../../src/access";
 import { DetailItem, SlotMount } from "../../../src/app-chrome";
 import {
   applyBrandPresetAction,
   updateTenantBrandAction
 } from "../../../src/actions";
+import { loadTenantAdminViewModel } from "../../../src/admin-view-model";
 import {
   buildBrandMarkLabel,
   brandProfileToCssProperties
 } from "../../../src/brand-style";
-import { loadInboxViewModel } from "../../../src/inbox-api-client";
-import { resolveCurrentWebAccessSession } from "../../../src/session";
+import {
+  getWebDatabase,
+  resolveCurrentWebAccessSession
+} from "../../../src/session";
+import {
+  hasEffectivePermission,
+  resolveEmployeeEffectiveAccess
+} from "../../../src/rbac-effective-access";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
+import { navigationAccessFromTenantAdminAccess } from "../../../src/tenant-admin-nav";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -52,17 +60,32 @@ export default async function BrandingAdminPage({
     redirect("/login");
   }
 
-  if (!canTenantPermission(access, "tenant.manage")) {
+  const database = getWebDatabase();
+  const employeeRepository = createSqlEmployeeDirectoryRepository(database);
+  const rbacRepository = createSqlTenantRbacRepository(database);
+  const accessSnapshot = await resolveEmployeeEffectiveAccess({
+    tenantId: access.tenantId,
+    employeeId: access.employeeId,
+    employeeRepository,
+    rbacRepository
+  });
+
+  if (!hasEffectivePermission(accessSnapshot, "tenant.manage")) {
+    const adminAccess = {
+      session: access,
+      effectiveAccess: accessSnapshot
+    };
+
     return (
       <AccessDeniedPage
         current="tenant-admin"
-        navigationAccess={navigationAccessFromSession(access)}
+        navigationAccess={navigationAccessFromTenantAdminAccess(adminAccess)}
       />
     );
   }
 
   const [model, resolvedSearchParams] = await Promise.all([
-    loadInboxViewModel(),
+    loadTenantAdminViewModel({ tenantId: access.tenantId, database }),
     searchParams
   ]);
   const { t } = createTranslator(model.tenant.locale);
@@ -84,6 +107,7 @@ export default async function BrandingAdminPage({
       access={access}
       brand={model.tenant.brand}
       current="branding"
+      effectiveAccess={accessSnapshot}
       sidebarContent={
         <>
           {statusKey ? (

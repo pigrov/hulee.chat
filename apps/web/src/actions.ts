@@ -17,12 +17,13 @@ import {
   setTelegramWebhook,
   updateInboxConversationRouting,
   updateTenantBrand,
-  updateTelegramIntegration
+  updateTelegramIntegration,
+  type InternalApiAccessOptions
 } from "./inbox-api-client";
 import { assertWebActionRequest } from "./action-security";
 import { assertWebTenantEmailVerified } from "./access";
 import {
-  assertCurrentWebTenantPermission,
+  assertCurrentWebEffectiveTenantPermission,
   isEmailNotVerifiedError,
   requireCurrentWebAccessSession
 } from "./session";
@@ -137,7 +138,10 @@ export async function applyBrandPresetAction(
   formData: FormData
 ): Promise<void> {
   await assertWebActionRequest();
-  await assertVerifiedTenantPermission("tenant.manage", "/admin/branding");
+  const internalApiAccess = await assertVerifiedTenantPermission(
+    "tenant.manage",
+    "/admin/branding"
+  );
 
   const productName = readRequiredFormString(formData, "productName").trim();
   const shortProductName = normalizeOptionalFormValue(
@@ -149,11 +153,14 @@ export async function applyBrandPresetAction(
   let destination = "/admin/branding?brandStatus=saved";
 
   try {
-    await updateTenantBrand({
-      productName,
-      shortProductName,
-      themeTokens: buildBrandThemeTokens({ presetId })
-    });
+    await updateTenantBrand(
+      {
+        productName,
+        shortProductName,
+        themeTokens: buildBrandThemeTokens({ presetId })
+      },
+      internalApiAccess
+    );
   } catch {
     destination = "/admin/branding?brandStatus=invalid";
   }
@@ -166,7 +173,10 @@ export async function updateTenantBrandAction(
   formData: FormData
 ): Promise<void> {
   await assertWebActionRequest();
-  await assertVerifiedTenantPermission("tenant.manage", "/admin/branding");
+  const internalApiAccess = await assertVerifiedTenantPermission(
+    "tenant.manage",
+    "/admin/branding"
+  );
 
   const productName = readRequiredFormString(formData, "productName").trim();
   const shortProductName = normalizeOptionalFormValue(
@@ -180,15 +190,18 @@ export async function updateTenantBrandAction(
   let destination = "/admin/branding?brandStatus=saved";
 
   try {
-    await updateTenantBrand({
-      productName,
-      shortProductName,
-      themeTokens: buildBrandThemeTokens({
-        presetId,
-        primaryColor,
-        accentColor
-      })
-    });
+    await updateTenantBrand(
+      {
+        productName,
+        shortProductName,
+        themeTokens: buildBrandThemeTokens({
+          presetId,
+          primaryColor,
+          accentColor
+        })
+      },
+      internalApiAccess
+    );
   } catch {
     destination = "/admin/branding?brandStatus=invalid";
   }
@@ -201,7 +214,10 @@ export async function updateTelegramIntegrationAction(
   formData: FormData
 ): Promise<void> {
   await assertWebActionRequest();
-  await assertVerifiedTenantPermission("modules.manage", "/admin/integrations");
+  const internalApiAccess = await assertVerifiedTenantPermission(
+    "modules.manage",
+    "/admin/integrations"
+  );
 
   const channelExternalId = readRequiredFormString(
     formData,
@@ -214,46 +230,58 @@ export async function updateTelegramIntegrationAction(
   );
   const botToken = readOptionalFormString(formData, "botToken");
 
-  await updateTelegramIntegration({
-    enabled: readFormCheckbox(formData, "enabled"),
-    channelExternalId,
-    mode: mode === "polling" ? "polling" : "webhook",
-    botTokenSecretRef:
-      botTokenSecretRef === undefined || botTokenSecretRef.trim().length === 0
-        ? undefined
-        : botTokenSecretRef.trim(),
-    botToken:
-      botToken === undefined || botToken.trim().length === 0
-        ? undefined
-        : botToken.trim(),
-    outboundEnabled: readFormCheckbox(formData, "outboundEnabled")
-  });
-  await refreshTelegramDiagnostics();
+  await updateTelegramIntegration(
+    {
+      enabled: readFormCheckbox(formData, "enabled"),
+      channelExternalId,
+      mode: mode === "polling" ? "polling" : "webhook",
+      botTokenSecretRef:
+        botTokenSecretRef === undefined || botTokenSecretRef.trim().length === 0
+          ? undefined
+          : botTokenSecretRef.trim(),
+      botToken:
+        botToken === undefined || botToken.trim().length === 0
+          ? undefined
+          : botToken.trim(),
+      outboundEnabled: readFormCheckbox(formData, "outboundEnabled")
+    },
+    internalApiAccess
+  );
+  await refreshTelegramDiagnostics(internalApiAccess);
 
   revalidateTelegramIntegrationPaths();
 }
 
 export async function refreshTelegramDiagnosticsAction(): Promise<void> {
   await assertWebActionRequest();
-  await assertVerifiedTenantPermission("modules.manage", "/admin/integrations");
+  const internalApiAccess = await assertVerifiedTenantPermission(
+    "modules.manage",
+    "/admin/integrations"
+  );
 
-  await refreshTelegramDiagnostics();
+  await refreshTelegramDiagnostics(internalApiAccess);
   revalidateTelegramIntegrationPaths();
 }
 
 export async function setTelegramWebhookAction(): Promise<void> {
   await assertWebActionRequest();
-  await assertVerifiedTenantPermission("modules.manage", "/admin/integrations");
+  const internalApiAccess = await assertVerifiedTenantPermission(
+    "modules.manage",
+    "/admin/integrations"
+  );
 
-  await setTelegramWebhook();
+  await setTelegramWebhook(internalApiAccess);
   revalidateTelegramIntegrationPaths();
 }
 
 export async function deleteTelegramWebhookAction(): Promise<void> {
   await assertWebActionRequest();
-  await assertVerifiedTenantPermission("modules.manage", "/admin/integrations");
+  const internalApiAccess = await assertVerifiedTenantPermission(
+    "modules.manage",
+    "/admin/integrations"
+  );
 
-  await deleteTelegramWebhook();
+  await deleteTelegramWebhook(internalApiAccess);
   revalidateTelegramIntegrationPaths();
 }
 
@@ -270,11 +298,15 @@ function readRequiredFormString(formData: FormData, name: string): string {
 async function assertVerifiedTenantPermission(
   permission: Permission,
   redirectPath: string
-): ReturnType<typeof assertCurrentWebTenantPermission> {
+): Promise<InternalApiAccessOptions> {
   try {
-    return await assertCurrentWebTenantPermission(permission, {
+    await assertCurrentWebEffectiveTenantPermission(permission, {
       requireVerifiedEmail: true
     });
+
+    return {
+      permissions: [permission]
+    };
   } catch (error) {
     if (isEmailNotVerifiedError(error)) {
       redirect(addSearchParam(redirectPath, "emailVerification", "required"));

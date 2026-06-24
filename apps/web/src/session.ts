@@ -1,9 +1,11 @@
 import type { EmployeeId } from "@hulee/contracts";
 import {
   createDrizzlePersistenceExecutor,
+  createSqlEmployeeDirectoryRepository,
   createSqlPlatformAuditRepository,
   createSqlSecurityAuditRepository,
   createSqlLocalAuthRepository,
+  createSqlTenantRbacRepository,
   createTenantWorkspaceRepository,
   type AuthSessionPrincipal,
   type LocalAuthRepository,
@@ -42,6 +44,10 @@ import {
   buildWebCookieOptions,
   resolveWebCookieRuntime
 } from "./session-cookies";
+import {
+  hasEffectivePermission,
+  resolveEmployeeEffectiveAccess
+} from "./rbac-effective-access";
 import { getWebDatabase } from "./web-database";
 import { resolveWebConfig, resolveWebEnv } from "./web-config";
 
@@ -168,6 +174,31 @@ export async function assertCurrentWebTenantPermission(
   return session;
 }
 
+export async function assertCurrentWebEffectiveTenantPermission(
+  permission: Permission,
+  options: AssertCurrentWebTenantPermissionOptions = {}
+): Promise<WebAccessSession> {
+  const session = await requireCurrentWebAccessSession();
+
+  if (options.requireVerifiedEmail === true) {
+    assertWebTenantEmailVerified(session);
+  }
+
+  const database = getWebDatabase();
+  const accessSnapshot = await resolveEmployeeEffectiveAccess({
+    tenantId: session.tenantId,
+    employeeId: session.employeeId,
+    employeeRepository: createSqlEmployeeDirectoryRepository(database),
+    rbacRepository: createSqlTenantRbacRepository(database)
+  });
+
+  if (!hasEffectivePermission(accessSnapshot, permission)) {
+    throw new CoreError("permission.denied");
+  }
+
+  return session;
+}
+
 export function isEmailNotVerifiedError(error: unknown): boolean {
   return error instanceof CoreError && error.code === "auth.email_not_verified";
 }
@@ -176,9 +207,17 @@ export async function buildInternalApiHeaders(input: {
   method: string;
   path: string;
   body?: unknown;
+  permissions?: readonly Permission[];
 }): Promise<Record<string, string>> {
   const session = await requireCurrentWebAccessSession();
-  const headers = buildInternalApiHeadersForSession(session);
+  const internalSession =
+    input.permissions === undefined
+      ? session
+      : {
+          ...session,
+          permissions: input.permissions
+        };
+  const headers = buildInternalApiHeadersForSession(internalSession);
   const config = resolveWebConfig();
   const secret = config.internalApiSecret;
 
@@ -199,9 +238,9 @@ export async function buildInternalApiHeaders(input: {
       method: input.method,
       path: input.path,
       body: input.body,
-      tenantId: session.tenantId,
-      employeeId: session.employeeId,
-      permissions: session.permissions,
+      tenantId: internalSession.tenantId,
+      employeeId: internalSession.employeeId,
+      permissions: internalSession.permissions,
       timestamp
     })
   };
