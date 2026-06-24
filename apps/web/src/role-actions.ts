@@ -22,6 +22,7 @@ import {
   type SecurityAuditEntityType,
   type TenantRoleRecord
 } from "@hulee/db";
+import { createTranslator, resolveLocale } from "@hulee/i18n";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
@@ -32,6 +33,7 @@ import {
   getWebDatabase,
   isEmailNotVerifiedError
 } from "./session";
+import { findRoleTemplate, uniqueRoleTemplateName } from "./role-templates";
 
 export async function createCustomTenantRoleAction(
   formData: FormData
@@ -78,6 +80,78 @@ export async function createCustomTenantRoleAction(
     });
 
     destination = roleActionDestination(formData, "created");
+  } catch {
+    destination = roleActionDestination(formData, "invalid");
+  }
+
+  revalidateRoleAdminPaths();
+  redirect(destination);
+}
+
+export async function createRoleFromTemplateAction(
+  formData: FormData
+): Promise<void> {
+  await assertWebActionRequest();
+
+  const session = await assertVerifiedRolesPermission();
+  const now = new Date();
+  const repository = createSqlTenantRbacRepository(getWebDatabase());
+  let destination = roleActionDestination(formData, "invalid");
+
+  try {
+    const templateId = readRequiredFormString(formData, "templateId");
+    const template = findRoleTemplate(templateId);
+
+    if (template === undefined) {
+      throw new Error("Role template was not found.");
+    }
+
+    const { t } = createTranslator(
+      resolveLocale(readOptionalFormString(formData, "locale"))
+    );
+    const roles = await repository.listRoleDefinitions({
+      tenantId: session.tenantId
+    });
+    const roleName = uniqueRoleTemplateName(
+      roles.map((role) => role.name),
+      t(template.nameKey)
+    );
+    const role = prepareCustomTenantRole({
+      name: roleName,
+      description: t(template.descriptionKey),
+      permissions: template.permissions
+    });
+    const roleId = `role:${session.tenantId}:template:${template.id}:${randomUUID()}`;
+
+    await repository.createRoleWithPermissions({
+      id: roleId,
+      tenantId: session.tenantId,
+      name: role.name,
+      description: role.description,
+      isSystem: false,
+      createdByEmployeeId: session.employeeId,
+      createdAt: now,
+      permissions: role.permissions
+    });
+
+    await recordAccessAudit({
+      tenantId: session.tenantId,
+      actorEmployeeId: session.employeeId,
+      action: "role.created",
+      entityType: "role",
+      entityId: roleId,
+      metadata: {
+        roleId,
+        name: role.name,
+        templateId: template.id,
+        recommendedScopeType: template.recommendedScopeType,
+        permissions: role.permissions,
+        permissionCount: role.permissions.length
+      },
+      occurredAt: now
+    });
+
+    destination = roleActionDestination(formData, "template_created");
   } catch {
     destination = roleActionDestination(formData, "invalid");
   }

@@ -1008,7 +1008,8 @@ a.secondaryButton {
 }
 
 .managementRow.roleBindingRow,
-.managementRow.directGrantRow {
+.managementRow.directGrantRow,
+.managementRow.roleTemplateRow {
   display: grid;
   grid-template-columns: auto minmax(220px, 1fr) auto;
   align-items: flex-start;

@@ -55,6 +55,7 @@ import {
   assignTenantRoleAction,
   createDirectPermissionGrantAction,
   createCustomTenantRoleAction,
+  createRoleFromTemplateAction,
   restoreCustomTenantRoleAction,
   revokeDirectPermissionGrantAction,
   updateCustomTenantRoleAction,
@@ -72,6 +73,10 @@ import {
   type RoleAssignmentSubjectOptions,
   type ScopePickerMessages
 } from "../../../src/rbac-scope-picker";
+import {
+  roleTemplateCatalog,
+  type RoleTemplateDefinition
+} from "../../../src/role-templates";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
 
 export const dynamic = "force-dynamic";
@@ -161,7 +166,7 @@ export default async function RolesAdminPage({
     }),
     searchParams
   ]);
-  const { t } = createTranslator(model.tenant.locale);
+  const { t, locale } = createTranslator(model.tenant.locale);
   const activeRoles = roles.filter((role) => role.status === "active");
   const activeEmployees = employees.filter(
     (employee) => employee.deactivatedAt === null
@@ -295,6 +300,35 @@ export default async function RolesAdminPage({
               {t("admin.roles.create")}
             </button>
           </form>
+        </section>
+
+        <section
+          className="settingsPanel"
+          aria-labelledby="role-templates-title"
+        >
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.roles.templates")}</p>
+              <h2 className="sectionTitle" id="role-templates-title">
+                {t("admin.roles.createFromTemplate")}
+              </h2>
+              <p className="metaText">
+                {t("admin.roles.createFromTemplate.description")}
+              </p>
+            </div>
+            <span className="badge">{roleTemplateCatalog.length}</span>
+          </div>
+
+          <div className="managementList">
+            {roleTemplateCatalog.map((template) => (
+              <RoleTemplateRow
+                key={template.id}
+                locale={locale}
+                t={t}
+                template={template}
+              />
+            ))}
+          </div>
         </section>
 
         <section className="settingsPanel" aria-labelledby="role-assign-title">
@@ -851,6 +885,46 @@ function RoleDefinitionRow({
           </button>
         </form>
       )}
+    </article>
+  );
+}
+
+function RoleTemplateRow({
+  locale,
+  t,
+  template
+}: {
+  locale: string;
+  t: Translator;
+  template: RoleTemplateDefinition;
+}): ReactNode {
+  return (
+    <article className="managementRow roleTemplateRow">
+      <span className="metricIcon">
+        <ShieldCheck size={18} aria-hidden="true" />
+      </span>
+      <div>
+        <h3 className="listItemTitle">{t(template.nameKey)}</h3>
+        <p className="metaText">{t(template.descriptionKey)}</p>
+        <p className="metaText">
+          {t("admin.roles.templateRecommendedScope", {
+            value: t(permissionScopeTypeKey(template.recommendedScopeType))
+          })}
+        </p>
+        <p className="metaText">
+          {t("admin.roles.permissionCount", {
+            count: template.permissions.length
+          })}
+        </p>
+      </div>
+      <form className="inlineForm" action={createRoleFromTemplateAction}>
+        <input name="templateId" type="hidden" value={template.id} />
+        <input name="locale" type="hidden" value={locale} />
+        <button className="primaryButton" type="submit">
+          <Plus size={14} aria-hidden="true" />
+          {t("admin.roles.createFromTemplate.action")}
+        </button>
+      </form>
     </article>
   );
 }
@@ -1608,6 +1682,8 @@ function roleActionStatusKey(status: string): I18nMessageKey {
   switch (status) {
     case "created":
       return "admin.roles.actionStatus.created";
+    case "template_created":
+      return "admin.roles.actionStatus.templateCreated";
     case "updated":
       return "admin.roles.actionStatus.updated";
     case "archived":
