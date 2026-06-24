@@ -24,7 +24,11 @@ import {
   type TeamRecord,
   type WorkQueueRecord
 } from "@hulee/db";
-import { resolveEffectivePermissionGrants } from "@hulee/core";
+import {
+  resolveEffectivePermissionGrants,
+  type EffectivePermissionGrant,
+  type PermissionActor
+} from "@hulee/core";
 
 import {
   sendReplyAction,
@@ -45,6 +49,10 @@ import {
   type ConversationRoutingOptions
 } from "../src/conversation-routing-options";
 import { formatDateTime } from "../src/formatting";
+import {
+  buildReadableInboxQueueOptions,
+  resolveReadableInboxQueueFilter
+} from "../src/inbox-queue-options";
 import { getWebDatabase, resolveCurrentWebAccessSession } from "../src/session";
 import {
   loadInboxViewModel,
@@ -90,21 +98,20 @@ export default async function InboxPage({
     createSqlEmployeeDirectoryRepository(getWebDatabase());
   const orgStructureRepository =
     createSqlOrgStructureRepository(getWebDatabase());
-  const activeQueueId = normalizeInboxQueueFilter(
+  const requestedQueueId = normalizeInboxQueueFilter(
     resolvedSearchParams?.queueId
   );
   const assignedToMe = isAssignedToMeInboxFilter(
     resolvedSearchParams?.assigned
   );
-  const [model, employees, teams, workQueues] = await Promise.all([
-    loadInboxViewModel({
-      selectedConversationId: resolvedSearchParams?.conversationId,
-      queueId: activeQueueId,
-      assignedToMe
-    }),
+  const [employees, currentEmployee, teams, workQueues] = await Promise.all([
     canAssignConversations
       ? employeeRepository.listEmployees({ tenantId: access.tenantId })
       : Promise.resolve<readonly TenantEmployeeRecord[]>([]),
+    employeeRepository.findEmployee({
+      tenantId: access.tenantId,
+      employeeId: access.employeeId
+    }),
     orgStructureRepository.listTeams({
       tenantId: access.tenantId
     }),
@@ -113,6 +120,26 @@ export default async function InboxPage({
       activeOnly: true
     })
   ]);
+  const accessSnapshot = await resolveWebAccessSnapshot({
+    currentEmployee
+  });
+  const readableWorkQueues =
+    accessSnapshot === undefined
+      ? []
+      : buildReadableInboxQueueOptions({
+          actor: accessSnapshot.actor,
+          effectiveGrants: accessSnapshot.effectiveGrants,
+          workQueues
+        });
+  const activeQueueId = resolveReadableInboxQueueFilter({
+    queueId: requestedQueueId,
+    workQueues: readableWorkQueues
+  });
+  const model = await loadInboxViewModel({
+    selectedConversationId: resolvedSearchParams?.conversationId,
+    queueId: activeQueueId,
+    assignedToMe
+  });
   const { t, locale } = createTranslator(model.tenant.locale);
   const selectedConversation = model.selectedConversation;
   const currentInboxPath = buildInboxHref({
@@ -130,9 +157,10 @@ export default async function InboxPage({
     productName: model.tenant.brand.productName
   });
   const routingOptions =
-    selectedConversation && canAssignConversations
-      ? await resolveConversationRoutingOptions({
+    selectedConversation && canAssignConversations && accessSnapshot
+      ? resolveConversationRoutingOptions({
           access,
+          accessSnapshot,
           employees,
           selectedConversation,
           teams,
@@ -214,7 +242,7 @@ export default async function InboxPage({
           activeQueueId={activeQueueId}
           assignedToMe={assignedToMe}
           t={t}
-          workQueues={workQueues}
+          workQueues={readableWorkQueues}
         />
         <div className="conversationList">
           {model.conversations.length === 0 ? (
@@ -424,24 +452,22 @@ function InboxFilterBar({
   );
 }
 
-async function resolveConversationRoutingOptions(input: {
-  readonly access: WebAccessSession;
-  readonly employees: readonly TenantEmployeeRecord[];
-  readonly selectedConversation: InboxConversation;
-  readonly teams: readonly TeamRecord[];
-  readonly workQueues: readonly WorkQueueRecord[];
-}): Promise<ConversationRoutingOptions | undefined> {
-  const currentEmployee = input.employees.find(
-    (employee) =>
-      employee.employeeId === input.access.employeeId &&
-      employee.deactivatedAt === null
-  );
+type WebAccessSnapshot = {
+  readonly actor: PermissionActor;
+  readonly effectiveGrants: readonly EffectivePermissionGrant[];
+};
 
-  if (currentEmployee === undefined) {
+async function resolveWebAccessSnapshot(input: {
+  readonly currentEmployee: TenantEmployeeRecord | null;
+}): Promise<WebAccessSnapshot | undefined> {
+  if (
+    input.currentEmployee === null ||
+    input.currentEmployee.deactivatedAt !== null
+  ) {
     return undefined;
   }
 
-  const actor = permissionActorFromTenantEmployee(currentEmployee);
+  const actor = permissionActorFromTenantEmployee(input.currentEmployee);
   const now = new Date();
   const sources = await createSqlTenantRbacRepository(
     getWebDatabase()
@@ -450,17 +476,31 @@ async function resolveConversationRoutingOptions(input: {
     at: now
   });
 
-  return buildConversationRoutingOptions({
-    tenantId: input.access.tenantId,
+  return {
     actor,
-    conversation: input.selectedConversation,
     effectiveGrants: resolveEffectivePermissionGrants({
       actor,
       roles: sources.roles,
       roleBindings: sources.roleBindings,
       directGrants: sources.directGrants,
       at: now
-    }),
+    })
+  };
+}
+
+function resolveConversationRoutingOptions(input: {
+  readonly access: WebAccessSession;
+  readonly accessSnapshot: WebAccessSnapshot;
+  readonly employees: readonly TenantEmployeeRecord[];
+  readonly selectedConversation: InboxConversation;
+  readonly teams: readonly TeamRecord[];
+  readonly workQueues: readonly WorkQueueRecord[];
+}): ConversationRoutingOptions {
+  return buildConversationRoutingOptions({
+    tenantId: input.access.tenantId,
+    actor: input.accessSnapshot.actor,
+    conversation: input.selectedConversation,
+    effectiveGrants: input.accessSnapshot.effectiveGrants,
     employees: input.employees,
     teams: input.teams,
     workQueues: input.workQueues
