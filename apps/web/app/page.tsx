@@ -18,11 +18,13 @@ import {
   createSqlEmployeeDirectoryRepository,
   createSqlOrgStructureRepository,
   createSqlSecurityAuditRepository,
+  createSqlTenantRbacRepository,
   type ConversationRoutingAuditRecord,
   type TenantEmployeeRecord,
   type TeamRecord,
   type WorkQueueRecord
 } from "@hulee/db";
+import { resolveEffectivePermissionGrants } from "@hulee/core";
 
 import {
   sendReplyAction,
@@ -33,9 +35,15 @@ import { AccessDeniedPage } from "../src/access-denied";
 import {
   canTenantPermission,
   isTenantEmailVerificationRequired,
-  navigationAccessFromSession
+  navigationAccessFromSession,
+  type WebAccessSession
 } from "../src/access";
 import { AppFrame, DetailItem, SlotMount } from "../src/app-chrome";
+import {
+  buildConversationRoutingOptions,
+  permissionActorFromTenantEmployee,
+  type ConversationRoutingOptions
+} from "../src/conversation-routing-options";
 import { formatDateTime } from "../src/formatting";
 import { getWebDatabase, resolveCurrentWebAccessSession } from "../src/session";
 import {
@@ -121,8 +129,18 @@ export default async function InboxPage({
   const productName = t("app.name", {
     productName: model.tenant.brand.productName
   });
-  const routingAuditRecords =
+  const routingOptions =
     selectedConversation && canAssignConversations
+      ? await resolveConversationRoutingOptions({
+          access,
+          employees,
+          selectedConversation,
+          teams,
+          workQueues
+        })
+      : undefined;
+  const routingAuditRecords =
+    selectedConversation && routingOptions?.canRouteConversation
       ? await createSqlSecurityAuditRepository(
           getWebDatabase()
         ).listConversationRoutingRecords({
@@ -337,12 +355,13 @@ export default async function InboxPage({
             value={model.tenant.displayName}
           />
         </section>
-        {selectedConversation && canAssignConversations ? (
+        {selectedConversation && routingOptions?.canRouteConversation ? (
           <ConversationRoutingPanel
             currentEmployeeId={access.employeeId}
             employees={employees}
             locale={locale}
             routingAuditRecords={routingAuditRecords}
+            routingOptions={routingOptions}
             selectedConversation={selectedConversation}
             teams={teams}
             t={t}
@@ -405,11 +424,55 @@ function InboxFilterBar({
   );
 }
 
+async function resolveConversationRoutingOptions(input: {
+  readonly access: WebAccessSession;
+  readonly employees: readonly TenantEmployeeRecord[];
+  readonly selectedConversation: InboxConversation;
+  readonly teams: readonly TeamRecord[];
+  readonly workQueues: readonly WorkQueueRecord[];
+}): Promise<ConversationRoutingOptions | undefined> {
+  const currentEmployee = input.employees.find(
+    (employee) =>
+      employee.employeeId === input.access.employeeId &&
+      employee.deactivatedAt === null
+  );
+
+  if (currentEmployee === undefined) {
+    return undefined;
+  }
+
+  const actor = permissionActorFromTenantEmployee(currentEmployee);
+  const now = new Date();
+  const sources = await createSqlTenantRbacRepository(
+    getWebDatabase()
+  ).listEffectiveAccessSources({
+    actor,
+    at: now
+  });
+
+  return buildConversationRoutingOptions({
+    tenantId: input.access.tenantId,
+    actor,
+    conversation: input.selectedConversation,
+    effectiveGrants: resolveEffectivePermissionGrants({
+      actor,
+      roles: sources.roles,
+      roleBindings: sources.roleBindings,
+      directGrants: sources.directGrants,
+      at: now
+    }),
+    employees: input.employees,
+    teams: input.teams,
+    workQueues: input.workQueues
+  });
+}
+
 function ConversationRoutingPanel({
   currentEmployeeId,
   employees,
   locale,
   routingAuditRecords,
+  routingOptions,
   selectedConversation,
   teams,
   t,
@@ -419,6 +482,7 @@ function ConversationRoutingPanel({
   readonly employees: readonly TenantEmployeeRecord[];
   readonly locale: string;
   readonly routingAuditRecords: readonly ConversationRoutingAuditRecord[];
+  readonly routingOptions: ConversationRoutingOptions;
   readonly selectedConversation: InboxConversation;
   readonly teams: readonly TeamRecord[];
   readonly t: ReturnType<typeof createTranslator>["t"];
@@ -438,6 +502,11 @@ function ConversationRoutingPanel({
   )
     ? undefined
     : selectedConversation.assignedTeamId;
+  const currentQueueOption = workQueues.some(
+    (workQueue) => workQueue.id === selectedConversation.currentQueueId
+  )
+    ? undefined
+    : selectedConversation.currentQueueId;
   const currentQueue = workQueues.find(
     (workQueue) => workQueue.id === selectedConversation.currentQueueId
   );
@@ -456,6 +525,9 @@ function ConversationRoutingPanel({
   const hasAssignee =
     selectedConversation.assignedEmployeeId !== undefined ||
     selectedConversation.assignedTeamId !== undefined;
+  const assignableEmployees = routingOptions.employees;
+  const assignableTeams = routingOptions.teams;
+  const assignableWorkQueues = routingOptions.workQueues;
 
   return (
     <section className="clientSection" aria-labelledby="routing-title">
@@ -580,7 +652,9 @@ function ConversationRoutingPanel({
           <button
             className="secondaryButton"
             disabled={
-              !currentEmployeeIsAssignable || isAssignedToCurrentEmployee
+              !currentEmployeeIsAssignable ||
+              !routingOptions.canAssignToCurrentEmployee ||
+              isAssignedToCurrentEmployee
             }
             type="submit"
           >
@@ -598,7 +672,7 @@ function ConversationRoutingPanel({
           <input name="assignedTeamId" type="hidden" value="" />
           <button
             className="secondaryButton"
-            disabled={!hasAssignee}
+            disabled={!hasAssignee || !routingOptions.canClearAssignment}
             type="submit"
           >
             {t("inbox.routing.clearAssignee")}
@@ -622,8 +696,13 @@ function ConversationRoutingPanel({
             defaultValue={selectedConversation.currentQueueId ?? ""}
             name="currentQueueId"
           >
-            <option value="">{t("inbox.routing.noQueue")}</option>
-            {workQueues.map((workQueue) => (
+            <option value="" disabled={!routingOptions.canClearQueue}>
+              {t("inbox.routing.noQueue")}
+            </option>
+            {currentQueueOption ? (
+              <option value={currentQueueOption}>{currentQueueOption}</option>
+            ) : null}
+            {assignableWorkQueues.map((workQueue) => (
               <option key={workQueue.id} value={workQueue.id}>
                 {workQueue.name}
               </option>
@@ -637,13 +716,15 @@ function ConversationRoutingPanel({
             defaultValue={selectedConversation.assignedEmployeeId ?? ""}
             name="assignedEmployeeId"
           >
-            <option value="">{t("inbox.routing.noAssignee")}</option>
+            <option value="" disabled={!routingOptions.canClearAssignee}>
+              {t("inbox.routing.noAssignee")}
+            </option>
             {assignedEmployeeOption ? (
               <option value={assignedEmployeeOption}>
                 {assignedEmployeeOption}
               </option>
             ) : null}
-            {activeEmployees.map((employee) => (
+            {assignableEmployees.map((employee) => (
               <option key={employee.employeeId} value={employee.employeeId}>
                 {employee.displayName}
               </option>
@@ -657,11 +738,13 @@ function ConversationRoutingPanel({
             defaultValue={selectedConversation.assignedTeamId ?? ""}
             name="assignedTeamId"
           >
-            <option value="">{t("inbox.routing.noTeam")}</option>
+            <option value="" disabled={!routingOptions.canClearTeam}>
+              {t("inbox.routing.noTeam")}
+            </option>
             {assignedTeamOption ? (
               <option value={assignedTeamOption}>{assignedTeamOption}</option>
             ) : null}
-            {teams.map((team) => (
+            {assignableTeams.map((team) => (
               <option key={team.id} value={team.id}>
                 {team.name}
               </option>
