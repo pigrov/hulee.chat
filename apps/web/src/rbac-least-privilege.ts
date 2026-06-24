@@ -17,7 +17,7 @@ export function assertCanGrantScopedPermissions(input: {
   readonly effectiveGrants: readonly EffectivePermissionGrant[];
   readonly target: LeastPrivilegeTarget;
 }): void {
-  assertCanManageTargetScope(input);
+  assertCanManageScopedAccess(input);
 
   if (hasTenantRoleManagement(input)) {
     return;
@@ -37,10 +37,10 @@ export function assertCanGrantScopedPermissions(input: {
   }
 }
 
-function assertCanManageTargetScope(input: {
+export function assertCanManageScopedAccess(input: {
   readonly actor: PermissionActor;
   readonly effectiveGrants: readonly EffectivePermissionGrant[];
-  readonly target: LeastPrivilegeTarget;
+  readonly target: Pick<LeastPrivilegeTarget, "resource">;
 }): void {
   const decision = canAccess({
     actor: input.actor,

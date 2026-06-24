@@ -43,7 +43,10 @@ import {
   isEmailNotVerifiedError
 } from "./session";
 import type { WebAccessSession } from "./access";
-import { assertCanGrantScopedPermissions } from "./rbac-least-privilege";
+import {
+  assertCanGrantScopedPermissions,
+  assertCanManageScopedAccess
+} from "./rbac-least-privilege";
 import { findRoleTemplate, uniqueRoleTemplateName } from "./role-templates";
 
 export async function createCustomTenantRoleAction(
@@ -460,14 +463,19 @@ export async function revokeTenantRoleBindingAction(
   const session = await assertVerifiedRolesPermission();
   const bindingId = readRequiredFormString(formData, "bindingId");
   const now = new Date();
-  const repository = createSqlTenantRbacRepository(getWebDatabase());
+  const rbacRepository = createSqlTenantRbacRepository(getWebDatabase());
+  const employeeRepository =
+    createSqlEmployeeDirectoryRepository(getWebDatabase());
   let destination = roleActionDestination(formData, "invalid");
 
   try {
-    const bindings = await repository.listRoleBindings({
-      tenantId: session.tenantId,
-      at: now
-    });
+    const [roles, bindings] = await Promise.all([
+      rbacRepository.listRoleDefinitions({ tenantId: session.tenantId }),
+      rbacRepository.listRoleBindings({
+        tenantId: session.tenantId,
+        at: now
+      })
+    ]);
     const binding = bindings.find((candidate) => candidate.id === bindingId);
 
     if (binding === undefined) {
@@ -481,7 +489,29 @@ export async function revokeTenantRoleBindingAction(
       throw new Error("Self role revocation is not allowed.");
     }
 
-    await repository.revokeRoleBinding({
+    const [targetResource, actorPrivilege] = await Promise.all([
+      resolveKnownScopeResource(session.tenantId, binding.scope, {
+        activeOnly: false
+      }),
+      resolveRoleManagementActorPrivilege({
+        session,
+        employeeRepository,
+        rbacRepository,
+        roles,
+        roleBindings: bindings,
+        now
+      })
+    ]);
+
+    assertCanManageScopedAccess({
+      actor: actorPrivilege.actor,
+      effectiveGrants: actorPrivilege.effectiveGrants,
+      target: {
+        resource: targetResource
+      }
+    });
+
+    await rbacRepository.revokeRoleBinding({
       tenantId: session.tenantId,
       bindingId,
       revokedAt: now
@@ -643,14 +673,23 @@ export async function revokeDirectPermissionGrantAction(
   const session = await assertVerifiedRolesPermission();
   const grantId = readRequiredFormString(formData, "grantId");
   const now = new Date();
-  const repository = createSqlTenantRbacRepository(getWebDatabase());
+  const rbacRepository = createSqlTenantRbacRepository(getWebDatabase());
+  const employeeRepository =
+    createSqlEmployeeDirectoryRepository(getWebDatabase());
   let destination = roleActionDestination(formData, "invalid");
 
   try {
-    const grants = await repository.listDirectGrants({
-      tenantId: session.tenantId,
-      at: now
-    });
+    const [grants, roles, roleBindings] = await Promise.all([
+      rbacRepository.listDirectGrants({
+        tenantId: session.tenantId,
+        at: now
+      }),
+      rbacRepository.listRoleDefinitions({ tenantId: session.tenantId }),
+      rbacRepository.listRoleBindings({
+        tenantId: session.tenantId,
+        at: now
+      })
+    ]);
     const grant = grants.find((candidate) => candidate.id === grantId);
 
     if (grant === undefined || grant.id === undefined) {
@@ -661,7 +700,29 @@ export async function revokeDirectPermissionGrantAction(
       throw new Error("Self direct grant revocation is not allowed.");
     }
 
-    await repository.revokeDirectGrant({
+    const [targetResource, actorPrivilege] = await Promise.all([
+      resolveKnownScopeResource(session.tenantId, grant.scope, {
+        activeOnly: false
+      }),
+      resolveRoleManagementActorPrivilege({
+        session,
+        employeeRepository,
+        rbacRepository,
+        roles,
+        roleBindings,
+        now
+      })
+    ]);
+
+    assertCanManageScopedAccess({
+      actor: actorPrivilege.actor,
+      effectiveGrants: actorPrivilege.effectiveGrants,
+      target: {
+        resource: targetResource
+      }
+    });
+
+    await rbacRepository.revokeDirectGrant({
       tenantId: session.tenantId,
       grantId,
       revokedAt: now
@@ -785,7 +846,8 @@ function assertRoleUpdateDoesNotRemoveOwnRoleManagement(input: {
 
 async function resolveKnownScopeResource(
   tenantId: TenantId,
-  scope: PermissionScope
+  scope: PermissionScope,
+  options: { readonly activeOnly?: boolean } = {}
 ): Promise<PermissionResourceContext> {
   if (!("id" in scope)) {
     return {
@@ -812,7 +874,7 @@ async function resolveKnownScopeResource(
   if (scope.type === "org_unit") {
     const orgUnits = await repository.listOrgUnits({
       tenantId,
-      activeOnly: true
+      activeOnly: options.activeOnly ?? true
     });
 
     if (!orgUnits.some((orgUnit) => orgUnit.id === scope.id)) {
@@ -845,7 +907,7 @@ async function resolveKnownScopeResource(
   if (scope.type === "queue") {
     const workQueues = await repository.listWorkQueues({
       tenantId,
-      activeOnly: true
+      activeOnly: options.activeOnly ?? true
     });
     const workQueue = workQueues.find((candidate) => candidate.id === scope.id);
 

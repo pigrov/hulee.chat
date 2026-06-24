@@ -2,7 +2,10 @@ import type { EmployeeId, TenantId } from "@hulee/contracts";
 import { CoreError, type EffectivePermissionGrant } from "@hulee/core";
 import { describe, expect, it } from "vitest";
 
-import { assertCanGrantScopedPermissions } from "./rbac-least-privilege";
+import {
+  assertCanGrantScopedPermissions,
+  assertCanManageScopedAccess
+} from "./rbac-least-privilege";
 
 const tenantId = "tenant-1" as TenantId;
 const employeeId = "employee-admin" as EmployeeId;
@@ -85,6 +88,40 @@ describe("RBAC least privilege", () => {
           resource: {
             tenantId,
             orgUnitId: "org-sales"
+          }
+        }
+      })
+    ).toThrow(new CoreError("permission.denied"));
+  });
+
+  it("allows scoped role managers to revoke access in their managed scope", () => {
+    expect(() =>
+      assertCanManageScopedAccess({
+        actor,
+        effectiveGrants: [
+          grant("roles.manage", { type: "org_unit", id: "org-sales" })
+        ],
+        target: {
+          resource: {
+            tenantId,
+            orgUnitId: "org-sales",
+            queueId: "queue-sales"
+          }
+        }
+      })
+    ).not.toThrow();
+  });
+
+  it("rejects scoped role managers revoking tenant-wide access", () => {
+    expect(() =>
+      assertCanManageScopedAccess({
+        actor,
+        effectiveGrants: [
+          grant("roles.manage", { type: "org_unit", id: "org-sales" })
+        ],
+        target: {
+          resource: {
+            tenantId
           }
         }
       })
