@@ -69,6 +69,7 @@ export {
   buildFindDeliveryStatusSql,
   buildFindMessageByIdempotencyKeySql,
   buildFindOpenConversationByClientSql,
+  buildUpdateConversationRoutingSql,
   createExternalMessageRepository
 } from "./external-message-repository";
 export {
@@ -152,7 +153,8 @@ export type {
   FindDeliveryStatusInput,
   FindMessageByIdempotencyKeyInput,
   FindOpenConversationByClientInput,
-  PersistedMessageSummary
+  PersistedMessageSummary,
+  UpdateConversationRoutingInput
 } from "./external-message-repository";
 export type {
   ExternalMessageIngestionPersistenceRows,

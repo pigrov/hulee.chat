@@ -1,4 +1,6 @@
 import {
+  internalInboxConversationRoutingUpdateRequestSchema,
+  internalInboxConversationRoutingUpdateResponseSchema,
   internalInboxReplyResponseSchema,
   internalInboxViewResponseSchema,
   internalTenantBrandResponseSchema,
@@ -6,6 +8,8 @@ import {
   internalTelegramIntegrationResponseSchema,
   internalTelegramIntegrationUpdateRequestSchema,
   type InternalInboxConversation,
+  type InternalInboxConversationRoutingUpdateRequest,
+  type InternalInboxConversationRoutingUpdateResponse,
   type InternalInboxMessage,
   type InternalInboxReplyResponse,
   type InternalInboxViewResponse,
@@ -82,6 +86,44 @@ export async function sendInboxReply(input: {
   }
 
   return internalInboxReplyResponseSchema.parse(await response.json());
+}
+
+export async function updateInboxConversationRouting(input: {
+  conversationId: string;
+  request: InternalInboxConversationRoutingUpdateRequest;
+}): Promise<InternalInboxConversationRoutingUpdateResponse> {
+  const request = internalInboxConversationRoutingUpdateRequestSchema.parse(
+    input.request
+  );
+  const url = new URL(
+    `/internal/v1/inbox/conversations/${encodeURIComponent(
+      input.conversationId
+    )}/routing`,
+    resolveInternalApiBaseUrl()
+  );
+  const response = await fetch(url, {
+    method: "PATCH",
+    cache: "no-store",
+    headers: {
+      ...(await buildInternalApiHeaders({
+        method: "PATCH",
+        path: internalPath(url),
+        body: request
+      })),
+      "content-type": "application/json; charset=utf-8"
+    },
+    body: JSON.stringify(request)
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Internal conversation routing API returned HTTP ${response.status}.`
+    );
+  }
+
+  return internalInboxConversationRoutingUpdateResponseSchema.parse(
+    await response.json()
+  );
 }
 
 export async function loadTenantBrand(): Promise<TenantBrandViewModel> {

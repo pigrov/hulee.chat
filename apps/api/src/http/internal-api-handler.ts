@@ -1,5 +1,6 @@
 import type {
   EmployeeId,
+  InternalInboxConversationRoutingUpdateResponse,
   InternalInboxReplyResponse,
   InternalInboxViewResponse,
   InternalOrgStructureResponse,
@@ -12,6 +13,7 @@ import type {
 } from "@hulee/contracts";
 import {
   getPlatformErrorDefinition,
+  internalInboxConversationRoutingUpdateRequestSchema,
   internalApiV1Version,
   internalInboxReplyRequestSchema,
   internalOrgUnitUpsertRequestSchema,
@@ -79,6 +81,10 @@ type RouteMatch =
     }
   | {
       route: "inbox_reply";
+      conversationId: string;
+    }
+  | {
+      route: "inbox_routing_update";
       conversationId: string;
     }
   | {
@@ -326,6 +332,7 @@ function createFallbackDevSession(
         "employees.manage",
         "inbox.read",
         "message.reply",
+        "conversation.assign",
         "modules.manage"
       ]
   };
@@ -362,6 +369,20 @@ async function handleAuthenticatedRoute(input: {
         });
 
       return jsonResponse(202, response);
+    }
+
+    case "inbox_routing_update": {
+      assertSessionCan(input.session, "conversation.assign");
+      const request = internalInboxConversationRoutingUpdateRequestSchema.parse(
+        input.request.body
+      );
+      const response: InternalInboxConversationRoutingUpdateResponse =
+        await input.inboxCommands.updateConversationRouting(input.session, {
+          conversationId: input.route.conversationId,
+          request
+        });
+
+      return jsonResponse(200, response);
     }
 
     case "tenant_brand_view": {
@@ -523,6 +544,17 @@ function matchRoute(request: ApiHttpRequest): RouteMatch | undefined {
     return {
       route: "inbox_reply",
       conversationId: decodeURIComponent(replyMatch[1])
+    };
+  }
+
+  const routingUpdateMatch = path.match(
+    /^\/internal\/v1\/inbox\/conversations\/([^/]+)\/routing$/
+  );
+
+  if (request.method === "PATCH" && routingUpdateMatch?.[1]) {
+    return {
+      route: "inbox_routing_update",
+      conversationId: decodeURIComponent(routingUpdateMatch[1])
     };
   }
 

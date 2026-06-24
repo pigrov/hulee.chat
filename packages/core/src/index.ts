@@ -34,6 +34,11 @@ export type {
   CreatedAuthEmailToken,
   CreateAuthEmailTokenInput
 } from "./auth-email-tokens";
+export { assignConversationRouting } from "./conversation-routing";
+export type {
+  AssignConversationRoutingInput,
+  AssignConversationRoutingResult
+} from "./conversation-routing";
 export { CoreError } from "./errors";
 export {
   acceptEmployeeInvitation,

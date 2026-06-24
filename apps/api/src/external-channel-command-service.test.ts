@@ -6,7 +6,8 @@ import type {
 } from "@hulee/contracts";
 import type {
   ExternalMessageRepository,
-  PersistedMessageSummary
+  PersistedMessageSummary,
+  UpdateConversationRoutingInput
 } from "@hulee/db";
 import {
   buildExternalClientHandle,
@@ -218,4 +219,22 @@ class InMemoryExternalMessageRepository implements ExternalMessageRepository {
   async saveExternalOutboundMessage(
     _result: QueueExternalOutboundMessageResult
   ): Promise<void> {}
+
+  async updateConversationRouting(
+    input: UpdateConversationRoutingInput
+  ): Promise<Conversation | null> {
+    const index = this.conversations.findIndex(
+      (conversation) =>
+        conversation.tenantId === input.tenantId &&
+        conversation.id === input.conversation.id
+    );
+
+    if (index === -1) {
+      return null;
+    }
+
+    this.conversations[index] = input.conversation;
+
+    return input.conversation;
+  }
 }

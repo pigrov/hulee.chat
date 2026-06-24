@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   internalApiErrorResponseSchema,
+  internalInboxConversationRoutingUpdateRequestSchema,
+  internalInboxConversationRoutingUpdateResponseSchema,
   internalInboxReplyRequestSchema,
   internalInboxViewResponseSchema,
   internalOrgStructureResponseSchema,
@@ -56,6 +58,37 @@ describe("internal API v1 schemas", () => {
     });
     expect(() =>
       internalInboxReplyRequestSchema.parse({ text: " " })
+    ).toThrow();
+  });
+
+  it("parses conversation routing updates with nullable clear fields", () => {
+    expect(
+      internalInboxConversationRoutingUpdateRequestSchema.parse({
+        currentQueueId: " queue-sales ",
+        assignedEmployeeId: null
+      })
+    ).toEqual({
+      currentQueueId: "queue-sales",
+      assignedEmployeeId: null
+    });
+
+    expect(
+      internalInboxConversationRoutingUpdateResponseSchema.parse({
+        conversationId: "conversation-1",
+        currentQueueId: "queue-sales"
+      })
+    ).toEqual({
+      conversationId: "conversation-1",
+      currentQueueId: "queue-sales"
+    });
+
+    expect(() =>
+      internalInboxConversationRoutingUpdateRequestSchema.parse({})
+    ).toThrow();
+    expect(() =>
+      internalInboxConversationRoutingUpdateRequestSchema.parse({
+        currentQueueId: ""
+      })
     ).toThrow();
   });
 

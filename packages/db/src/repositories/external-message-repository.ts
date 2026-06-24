@@ -4,6 +4,7 @@ import type {
   EmployeeId,
   MessageId,
   PlatformErrorCode,
+  PlatformEvent,
   TenantId
 } from "@hulee/contracts";
 import type {
@@ -14,6 +15,7 @@ import type {
   QueueExternalOutboundMessageResult,
   RegisterExternalClientResult
 } from "@hulee/core";
+import { CoreError } from "@hulee/core";
 import { sql, type SQL } from "drizzle-orm";
 
 import type { HuleeDatabase } from "../client";
@@ -59,6 +61,13 @@ export type FindDeliveryStatusInput = {
   messageId: MessageId | string;
 };
 
+export type UpdateConversationRoutingInput = {
+  tenantId: TenantId;
+  conversation: Conversation;
+  events: readonly PlatformEvent[];
+  updatedAt: Date;
+};
+
 export type PersistedMessageSummary = {
   message: Message;
   clientId: ClientId;
@@ -83,6 +92,9 @@ export type ExternalMessageRepository = {
   findDeliveryStatus(
     input: FindDeliveryStatusInput
   ): Promise<PersistedMessageSummary | null>;
+  updateConversationRouting(
+    input: UpdateConversationRoutingInput
+  ): Promise<Conversation | null>;
   saveRegisteredClient(result: RegisterExternalClientResult): Promise<void>;
   saveExternalMessageIngestion(
     result: IngestExternalIncomingMessageResult
@@ -191,6 +203,18 @@ export function createExternalMessageRepository(input: {
       );
 
       return result.rows[0] ? mapMessageSummaryRow(result.rows[0]) : null;
+    },
+
+    async updateConversationRouting(
+      updateInput: UpdateConversationRoutingInput
+    ): Promise<Conversation | null> {
+      assertConversationRoutingTenantScoped(updateInput);
+
+      const result = await rawExecutor.execute<ConversationRow>(
+        buildUpdateConversationRoutingSql(updateInput)
+      );
+
+      return result.rows[0] ? mapConversationRow(result.rows[0]) : null;
     },
 
     async saveRegisteredClient(
@@ -324,6 +348,107 @@ export function buildFindDeliveryStatusSql(
   `);
 }
 
+export function buildUpdateConversationRoutingSql(
+  input: UpdateConversationRoutingInput
+): SQL {
+  return sql`
+    with updated_conversation as (
+      update conversations
+      set current_queue_id = ${input.conversation.currentQueueId ?? null},
+          assigned_employee_id = ${input.conversation.assignedEmployeeId ?? null},
+          assigned_team_id = ${input.conversation.assignedTeamId ?? null},
+          updated_at = ${input.updatedAt}
+      where tenant_id = ${input.tenantId}
+        and id = ${input.conversation.id}
+      returning id,
+                tenant_id,
+                type,
+                client_id,
+                current_queue_id,
+                assigned_employee_id,
+                assigned_team_id,
+                created_at
+    ),
+    event_rows as (
+      select *
+      from jsonb_to_recordset(${serializeEventRows(input.events)}::jsonb)
+        as event_row(
+          id text,
+          tenant_id text,
+          type text,
+          version text,
+          occurred_at timestamptz,
+          idempotency_key text,
+          payload jsonb,
+          outbox_payload jsonb
+        )
+    ),
+    inserted_events as (
+      insert into event_store (
+        id,
+        tenant_id,
+        type,
+        version,
+        occurred_at,
+        idempotency_key,
+        payload,
+        created_at,
+        updated_at
+      )
+      select er.id,
+             er.tenant_id,
+             er.type,
+             er.version,
+             er.occurred_at,
+             er.idempotency_key,
+             er.payload,
+             er.occurred_at,
+             er.occurred_at
+      from event_rows er
+      inner join updated_conversation uc
+        on uc.tenant_id = er.tenant_id
+      on conflict (id) do nothing
+      returning id,
+                tenant_id,
+                occurred_at
+    ),
+    inserted_outbox as (
+      insert into outbox (
+        id,
+        tenant_id,
+        event_id,
+        status,
+        attempts,
+        payload,
+        created_at,
+        updated_at
+      )
+      select concat('outbox:', er.id),
+             er.tenant_id,
+             er.id,
+             'pending',
+             0,
+             er.outbox_payload,
+             er.occurred_at,
+             er.occurred_at
+      from event_rows er
+      inner join inserted_events ie
+        on ie.id = er.id
+      on conflict (id) do nothing
+      returning id
+    )
+    select id,
+           tenant_id,
+           type,
+           client_id,
+           current_queue_id,
+           assigned_employee_id,
+           assigned_team_id,
+           created_at
+    from updated_conversation
+  `;
+}
+
 function buildMessageSummaryWhereSql(where: SQL): SQL {
   return sql`
     select m.id,
@@ -401,6 +526,41 @@ function mapMessageSummaryRow(row: MessageSummaryRow): PersistedMessageSummary {
         : (row.error_code as PlatformErrorCode),
     providerMessageId: row.provider_message_id ?? undefined
   };
+}
+
+function serializeEventRows(events: readonly PlatformEvent[]): string {
+  return JSON.stringify(
+    events.map((event) => {
+      return {
+        id: event.id,
+        tenant_id: event.tenantId,
+        type: event.type,
+        version: event.version,
+        occurred_at: event.occurredAt,
+        idempotency_key: event.idempotencyKey ?? null,
+        payload: event.payload,
+        outbox_payload: event
+      };
+    })
+  );
+}
+
+function assertConversationRoutingTenantScoped(
+  input: UpdateConversationRoutingInput
+): void {
+  if (input.conversation.tenantId !== input.tenantId) {
+    throw new CoreError("tenant.boundary_violation");
+  }
+
+  if (input.events.length === 0) {
+    throw new CoreError("validation.failed");
+  }
+
+  for (const event of input.events) {
+    if (event.tenantId !== input.tenantId) {
+      throw new CoreError("tenant.boundary_violation");
+    }
+  }
 }
 
 function toIsoTimestamp(value: Date | string): string {

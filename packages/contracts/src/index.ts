@@ -57,6 +57,16 @@ export type PlatformEvent =
   | EventEnvelope<"employee.deactivated", { employeeId: EmployeeId }>
   | EventEnvelope<"client.created", { clientId: ClientId }>
   | EventEnvelope<"conversation.created", { conversationId: ConversationId }>
+  | EventEnvelope<
+      "conversation.assigned",
+      {
+        conversationId: ConversationId;
+        actorEmployeeId: EmployeeId;
+        currentQueueId: string | null;
+        assignedEmployeeId: EmployeeId | null;
+        assignedTeamId: string | null;
+      }
+    >
   | EventEnvelope<"message.received", { messageId: MessageId }>
   | EventEnvelope<"message.sent", { messageId: MessageId }>
   | EventEnvelope<

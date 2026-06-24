@@ -106,6 +106,29 @@ export const internalInboxReplyResponseSchema = z
   })
   .strict();
 
+export const internalInboxConversationRoutingUpdateRequestSchema = z
+  .object({
+    currentQueueId: z.string().trim().min(1).max(200).nullable().optional(),
+    assignedEmployeeId: z.string().trim().min(1).max(200).nullable().optional(),
+    assignedTeamId: z.string().trim().min(1).max(200).nullable().optional()
+  })
+  .strict()
+  .refine(
+    (request) => Object.values(request).some((value) => value !== undefined),
+    {
+      message: "At least one routing field is required."
+    }
+  );
+
+export const internalInboxConversationRoutingUpdateResponseSchema = z
+  .object({
+    conversationId: z.string().trim().min(1),
+    currentQueueId: z.string().trim().min(1).optional(),
+    assignedEmployeeId: z.string().trim().min(1).optional(),
+    assignedTeamId: z.string().trim().min(1).optional()
+  })
+  .strict();
+
 export const internalTenantBrandUpdateRequestSchema = z
   .object({
     productName: z.string().trim().min(1).max(120),
@@ -314,6 +337,12 @@ export type InternalInboxReplyRequest = z.infer<
 >;
 export type InternalInboxReplyResponse = z.infer<
   typeof internalInboxReplyResponseSchema
+>;
+export type InternalInboxConversationRoutingUpdateRequest = z.infer<
+  typeof internalInboxConversationRoutingUpdateRequestSchema
+>;
+export type InternalInboxConversationRoutingUpdateResponse = z.infer<
+  typeof internalInboxConversationRoutingUpdateResponseSchema
 >;
 export type InternalTenantBrandUpdateRequest = z.infer<
   typeof internalTenantBrandUpdateRequestSchema

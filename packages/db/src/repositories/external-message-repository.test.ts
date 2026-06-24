@@ -1,4 +1,9 @@
-import type { TenantId } from "@hulee/contracts";
+import type {
+  ConversationId,
+  EmployeeId,
+  PlatformEvent,
+  TenantId
+} from "@hulee/contracts";
 import {
   createSequentialIdFactory,
   ingestExternalIncomingMessage,
@@ -137,6 +142,47 @@ describe("external message repository", () => {
       updatedAt: "2026-06-22T10:01:00.000Z"
     });
   });
+
+  it("updates conversation routing and maps nullable assignment fields", async () => {
+    const repository = createExternalMessageRepository({
+      rawExecutor: new RecordingSqlExecutor([
+        {
+          id: "conversation-1",
+          tenant_id: tenantId,
+          type: "client_direct",
+          client_id: "client-1",
+          current_queue_id: "queue-sales",
+          assigned_employee_id: "employee-sales",
+          assigned_team_id: null,
+          created_at: "2026-06-22T10:00:00.000Z"
+        }
+      ]),
+      persistenceExecutor: new RecordingPersistenceExecutor()
+    });
+
+    await expect(
+      repository.updateConversationRouting({
+        tenantId,
+        conversation: {
+          id: "conversation-1" as ConversationId,
+          tenantId,
+          type: "client_direct",
+          clientId: "client-1" as never,
+          participantEmployeeIds: [],
+          currentQueueId: "queue-sales",
+          assignedEmployeeId: "employee-sales" as EmployeeId,
+          createdAt: "2026-06-22T10:00:00.000Z"
+        },
+        events: [createConversationAssignedEvent()],
+        updatedAt: new Date("2026-06-22T11:00:00.000Z")
+      })
+    ).resolves.toMatchObject({
+      id: "conversation-1",
+      currentQueueId: "queue-sales",
+      assignedEmployeeId: "employee-sales",
+      assignedTeamId: undefined
+    });
+  });
 });
 
 function createRepository(
@@ -162,4 +208,21 @@ class RecordingSqlExecutor implements RawSqlExecutor {
       rows: this.rows as readonly Row[]
     };
   }
+}
+
+function createConversationAssignedEvent(): PlatformEvent {
+  return {
+    id: "event-conversation-assigned" as never,
+    type: "conversation.assigned",
+    version: "v1",
+    tenantId,
+    occurredAt: "2026-06-22T11:00:00.000Z",
+    payload: {
+      conversationId: "conversation-1" as ConversationId,
+      actorEmployeeId: "employee-manager" as EmployeeId,
+      currentQueueId: "queue-sales",
+      assignedEmployeeId: "employee-sales" as EmployeeId,
+      assignedTeamId: null
+    }
+  };
 }

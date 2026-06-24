@@ -15,6 +15,7 @@ import {
   refreshTelegramDiagnostics,
   sendInboxReply,
   setTelegramWebhook,
+  updateInboxConversationRouting,
   updateTenantBrand,
   updateTelegramIntegration
 } from "./inbox-api-client";
@@ -43,6 +44,35 @@ export async function sendReplyAction(formData: FormData): Promise<void> {
     conversationId,
     text,
     idempotencyKey: `web-reply:${conversationId}:${randomUUID()}`
+  });
+
+  revalidatePath("/");
+}
+
+export async function updateConversationRoutingAction(
+  formData: FormData
+): Promise<void> {
+  await assertWebActionRequest();
+
+  const conversationId = readRequiredFormString(formData, "conversationId");
+  await assertVerifiedTenantPermission(
+    "conversation.assign",
+    `/?conversationId=${encodeURIComponent(conversationId)}`
+  );
+
+  await updateInboxConversationRouting({
+    conversationId,
+    request: {
+      currentQueueId: readNullableOptionalFormString(
+        formData,
+        "currentQueueId"
+      ),
+      assignedEmployeeId: readNullableOptionalFormString(
+        formData,
+        "assignedEmployeeId"
+      ),
+      assignedTeamId: readNullableOptionalFormString(formData, "assignedTeamId")
+    }
   });
 
   revalidatePath("/");
@@ -223,6 +253,20 @@ function normalizeOptionalFormValue(
   const normalized = value?.trim();
 
   return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+function readNullableOptionalFormString(
+  formData: FormData,
+  name: string
+): string | null | undefined {
+  if (!formData.has(name)) {
+    return undefined;
+  }
+
+  const value = readOptionalFormString(formData, name);
+  const normalized = value?.trim();
+
+  return normalized && normalized.length > 0 ? normalized : null;
 }
 
 function resolvePresetId(value: string): BrandThemePresetId {

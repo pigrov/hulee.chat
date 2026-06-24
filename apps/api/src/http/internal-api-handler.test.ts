@@ -32,6 +32,7 @@ const session: InternalApiSession = {
     "employees.manage",
     "inbox.read",
     "message.reply",
+    "conversation.assign",
     "modules.manage"
   ]
 };
@@ -65,6 +66,11 @@ function createHandler(input?: {
     messageId: "message-1",
     status: "queued" as const,
     idempotencyKey: "reply-1"
+  }));
+  const updateConversationRouting = vi.fn(async () => ({
+    conversationId: "conversation-1",
+    currentQueueId: "queue-sales",
+    assignedEmployeeId: "employee-2"
   }));
   const loadTelegramIntegration = vi.fn(async () => ({
     moduleId: "channel-telegram" as const,
@@ -210,7 +216,7 @@ function createHandler(input?: {
       }
     },
     inboxQueries: { loadInboxView },
-    inboxCommands: { sendReply },
+    inboxCommands: { sendReply, updateConversationRouting },
     integrations: {
       loadTelegramIntegration,
       updateTelegramIntegration,
@@ -233,6 +239,7 @@ function createHandler(input?: {
     handler,
     loadInboxView,
     sendReply,
+    updateConversationRouting,
     loadTelegramIntegration,
     updateTelegramIntegration,
     refreshTelegramDiagnostics,
@@ -504,6 +511,58 @@ describe("internal API handler", () => {
 
     expect(response.status).toBe(400);
     expect(sendReply).not.toHaveBeenCalled();
+  });
+
+  it("validates and updates conversation routing through conversation.assign", async () => {
+    const { handler, updateConversationRouting } = createHandler();
+    const response = await handler.handle({
+      method: "PATCH",
+      path: "/internal/v1/inbox/conversations/conversation-1/routing",
+      body: {
+        currentQueueId: " queue-sales ",
+        assignedEmployeeId: "employee-2",
+        assignedTeamId: null
+      }
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      conversationId: "conversation-1",
+      currentQueueId: "queue-sales",
+      assignedEmployeeId: "employee-2"
+    });
+    expect(updateConversationRouting).toHaveBeenCalledWith(session, {
+      conversationId: "conversation-1",
+      request: {
+        currentQueueId: "queue-sales",
+        assignedEmployeeId: "employee-2",
+        assignedTeamId: null
+      }
+    });
+  });
+
+  it("requires conversation.assign for conversation routing updates", async () => {
+    const { handler, updateConversationRouting } = createHandler({
+      session: {
+        ...session,
+        permissions: ["inbox.read", "message.reply"]
+      }
+    });
+    const response = await handler.handle({
+      method: "PATCH",
+      path: "/internal/v1/inbox/conversations/conversation-1/routing",
+      body: {
+        currentQueueId: "queue-sales"
+      }
+    });
+
+    expect(response.status).toBe(403);
+    expect(response.body).toMatchObject({
+      error: {
+        code: "permission.denied"
+      }
+    });
+    expect(updateConversationRouting).not.toHaveBeenCalled();
   });
 
   it("loads Telegram integration config through modules.manage permission", async () => {

@@ -7,6 +7,8 @@ import type {
   EmployeeId,
   InternalInboxBrandProfile,
   InternalInboxConversation,
+  InternalInboxConversationRoutingUpdateRequest,
+  InternalInboxConversationRoutingUpdateResponse,
   InternalInboxMessage,
   InternalInboxReplyRequest,
   InternalInboxReplyResponse,
@@ -15,6 +17,7 @@ import type {
   TenantId
 } from "@hulee/contracts";
 import {
+  assignConversationRouting,
   canAccess,
   CoreError,
   createSequentialIdFactory,
@@ -59,6 +62,13 @@ export type InternalInboxCommandService = {
     context: InternalInboxCommandContext,
     input: { conversationId: string; request: InternalInboxReplyRequest }
   ): Promise<InternalInboxReplyResponse>;
+  updateConversationRouting(
+    context: InternalInboxCommandContext,
+    input: {
+      conversationId: string;
+      request: InternalInboxConversationRoutingUpdateRequest;
+    }
+  ): Promise<InternalInboxConversationRoutingUpdateResponse>;
 };
 
 export type InternalInboxConversationAccessResource = {
@@ -222,6 +232,50 @@ export function createInternalInboxCommandService(
         status: "queued",
         idempotencyKey: result.message.idempotencyKey
       };
+    },
+
+    async updateConversationRouting(context, input) {
+      const assignedAt = now();
+      const conversation = await options.repository.findConversationById({
+        tenantId: context.tenantId,
+        conversationId: input.conversationId as ConversationId
+      });
+
+      if (conversation === null) {
+        throw new CoreError("tenant.not_found");
+      }
+
+      await options.authorization.assertConversationAccess(context, {
+        conversation,
+        permission: "conversation.assign"
+      });
+
+      const result = assignConversationRouting({
+        now: assignedAt.toISOString(),
+        idFactory: idFactory(context),
+        tenantId: context.tenantId,
+        actorEmployeeId: context.employeeId,
+        conversation,
+        currentQueueId: input.request.currentQueueId,
+        assignedEmployeeId: input.request.assignedEmployeeId as
+          | EmployeeId
+          | null
+          | undefined,
+        assignedTeamId: input.request.assignedTeamId
+      });
+      const updatedConversation =
+        await options.repository.updateConversationRouting({
+          tenantId: context.tenantId,
+          conversation: result.conversation,
+          events: result.events,
+          updatedAt: assignedAt
+        });
+
+      if (updatedConversation === null) {
+        throw new CoreError("tenant.not_found");
+      }
+
+      return toConversationRoutingResponse(updatedConversation);
     }
   };
 }
@@ -342,6 +396,17 @@ function toInternalInboxConversation(
   const { tenantId: _tenantId, ...conversation } = record;
 
   return conversation;
+}
+
+function toConversationRoutingResponse(
+  conversation: InternalInboxConversationAccessResource
+): InternalInboxConversationRoutingUpdateResponse {
+  return {
+    conversationId: conversation.id,
+    currentQueueId: conversation.currentQueueId,
+    assignedEmployeeId: conversation.assignedEmployeeId,
+    assignedTeamId: conversation.assignedTeamId
+  };
 }
 
 async function resolveInboxAccessSnapshot(input: {

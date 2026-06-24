@@ -3,12 +3,14 @@ import type {
   ConversationId,
   EmployeeId,
   MessageId,
+  PlatformEvent,
   TenantId
 } from "@hulee/contracts";
 import type {
   ExternalMessageRepository,
   PersistedMessageSummary,
-  TenantEmployeeRecord
+  TenantEmployeeRecord,
+  UpdateConversationRoutingInput
 } from "@hulee/db";
 import type {
   Client,
@@ -17,7 +19,7 @@ import type {
   QueueExternalOutboundMessageResult,
   RegisterExternalClientResult
 } from "@hulee/core";
-import { CoreError } from "@hulee/core";
+import { CoreError, createSequentialIdFactory } from "@hulee/core";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -240,6 +242,74 @@ describe("internal inbox command service", () => {
       })
     ).rejects.toEqual(new CoreError("permission.denied"));
   });
+
+  it("updates conversation routing when the current queue scope is assignable", async () => {
+    const routedConversation: Conversation = {
+      ...conversation,
+      currentQueueId: "queue-sales"
+    };
+    const repository = new InMemoryExternalMessageRepository([
+      routedConversation
+    ]);
+    const service = createInternalInboxCommandService({
+      repository,
+      authorization: createAssignAuthorization(),
+      now: () => now,
+      idFactory: () => createSequentialIdFactory("assign")
+    });
+
+    await expect(
+      service.updateConversationRouting(context, {
+        conversationId: routedConversation.id,
+        request: {
+          currentQueueId: "queue-claims",
+          assignedEmployeeId: "employee-2"
+        }
+      })
+    ).resolves.toEqual({
+      conversationId: routedConversation.id,
+      currentQueueId: "queue-claims",
+      assignedEmployeeId: "employee-2",
+      assignedTeamId: undefined
+    });
+    expect(repository.conversations[0]).toMatchObject({
+      currentQueueId: "queue-claims",
+      assignedEmployeeId: "employee-2"
+    });
+    expect(repository.routingEvents).toMatchObject([
+      {
+        type: "conversation.assigned",
+        payload: {
+          currentQueueId: "queue-claims",
+          assignedEmployeeId: "employee-2"
+        }
+      }
+    ]);
+  });
+
+  it("rejects conversation routing outside the actor queue scope", async () => {
+    const repository = new InMemoryExternalMessageRepository([
+      {
+        ...conversation,
+        currentQueueId: "queue-claims"
+      }
+    ]);
+    const service = createInternalInboxCommandService({
+      repository,
+      authorization: createAssignAuthorization(),
+      now: () => now
+    });
+
+    await expect(
+      service.updateConversationRouting(context, {
+        conversationId: conversation.id,
+        request: {
+          currentQueueId: "queue-sales"
+        }
+      })
+    ).rejects.toEqual(new CoreError("permission.denied"));
+    expect(repository.routingEvents).toHaveLength(0);
+  });
 });
 
 function createReplyAuthorization(): InternalInboxAuthorizationService {
@@ -276,6 +346,41 @@ function createReplyAuthorization(): InternalInboxAuthorizationService {
   });
 }
 
+function createAssignAuthorization(): InternalInboxAuthorizationService {
+  return createInternalInboxAuthorizationService({
+    employeeRepository: createEmployeeRepository(employee),
+    rbacRepository: {
+      async listEffectiveAccessSources() {
+        return {
+          roles: [
+            {
+              id: "role-assign",
+              tenantId,
+              permissions: ["conversation.assign"]
+            }
+          ],
+          roleBindings: [
+            {
+              tenantId,
+              roleId: "role-assign",
+              subject: {
+                type: "queue",
+                id: "queue-sales"
+              },
+              scope: {
+                type: "queue",
+                id: "queue-sales"
+              }
+            }
+          ],
+          directGrants: []
+        };
+      }
+    },
+    now: () => now
+  });
+}
+
 function createEmployeeRepository(employeeRecord: TenantEmployeeRecord) {
   return {
     async findEmployee(input: {
@@ -292,8 +397,9 @@ function createEmployeeRepository(employeeRecord: TenantEmployeeRecord) {
 
 class InMemoryExternalMessageRepository implements ExternalMessageRepository {
   readonly messages: PersistedMessageSummary[] = [];
+  readonly routingEvents: PlatformEvent[] = [];
 
-  constructor(private readonly conversations: Conversation[]) {}
+  constructor(readonly conversations: Conversation[]) {}
 
   async findClientByExternalHandle(): Promise<Client | null> {
     return null;
@@ -361,5 +467,23 @@ class InMemoryExternalMessageRepository implements ExternalMessageRepository {
       clientId: matchedConversation?.clientId ?? ("client-unknown" as ClientId),
       updatedAt: result.message.createdAt
     });
+  }
+
+  async updateConversationRouting(
+    input: UpdateConversationRoutingInput
+  ): Promise<Conversation | null> {
+    const index = this.conversations.findIndex(
+      (item) =>
+        item.tenantId === input.tenantId && item.id === input.conversation.id
+    );
+
+    if (index === -1) {
+      return null;
+    }
+
+    this.conversations[index] = input.conversation;
+    this.routingEvents.push(...input.events);
+
+    return input.conversation;
   }
 }
