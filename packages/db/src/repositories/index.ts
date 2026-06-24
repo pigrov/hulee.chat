@@ -22,6 +22,8 @@ export {
 export {
   buildListOrgUnitsSql,
   buildListWorkQueuesSql,
+  buildSetEmployeeOrgUnitMembershipsSql,
+  buildSetEmployeeWorkQueueMembershipsSql,
   buildUpsertOrgUnitSql,
   buildUpsertWorkQueueSql,
   createSqlOrgStructureRepository,
@@ -190,6 +192,8 @@ export type {
   OrgStructureStatus,
   OrgUnitKind,
   OrgUnitRecord,
+  SetEmployeeOrgUnitMembershipsInput,
+  SetEmployeeWorkQueueMembershipsInput,
   UpsertOrgUnitInput,
   UpsertWorkQueueInput,
   WorkQueueKind,

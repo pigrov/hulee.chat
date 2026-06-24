@@ -20,6 +20,7 @@ export type PermissionActor = {
   readonly employeeId: EmployeeId;
   readonly roles?: readonly EmployeeRole[];
   readonly orgUnitIds?: readonly string[];
+  readonly queueIds?: readonly string[];
   readonly teamIds?: readonly string[];
 };
 
@@ -37,7 +38,7 @@ export type PermissionRoleBindingSubject =
       readonly id: EmployeeId;
     }
   | {
-      readonly type: "team" | "org_unit";
+      readonly type: "team" | "org_unit" | "queue";
       readonly id: string;
     };
 
@@ -321,6 +322,8 @@ function isRoleBindingForActor(
       return includesId(actor.teamIds, binding.subject.id);
     case "org_unit":
       return includesId(actor.orgUnitIds, binding.subject.id);
+    case "queue":
+      return includesId(actor.queueIds, binding.subject.id);
   }
 }
 

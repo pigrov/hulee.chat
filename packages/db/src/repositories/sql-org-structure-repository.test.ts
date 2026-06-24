@@ -1,5 +1,6 @@
 import type { TenantId } from "@hulee/contracts";
 import { CoreError } from "@hulee/core";
+import type { EmployeeId } from "@hulee/contracts";
 import type { SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
@@ -123,6 +124,88 @@ describe("SQL org structure repository", () => {
 
     expect(orgUnitQuery.sql).toContain("from org_units");
     expect(orgUnitQuery.sql).toContain("and status = 'active'");
+  });
+
+  it("replaces employee org unit and work queue memberships with active tenant references", async () => {
+    const executor = new RecordingSqlExecutor([
+      [
+        {
+          employee_exists: true,
+          references_valid: true
+        }
+      ],
+      [
+        {
+          employee_exists: true,
+          references_valid: true
+        }
+      ]
+    ]);
+    const repository = createSqlOrgStructureRepository(executor);
+
+    await repository.setEmployeeOrgUnitMemberships({
+      tenantId,
+      employeeId: "employee-sales" as EmployeeId,
+      orgUnitIds: ["org-sales"],
+      updatedAt: now
+    });
+    await repository.setEmployeeWorkQueueMemberships({
+      tenantId,
+      employeeId: "employee-sales" as EmployeeId,
+      workQueueIds: ["queue-sales"],
+      updatedAt: now
+    });
+
+    expect(executor.queries).toHaveLength(2);
+    const orgUnitQuery = renderQuery(executor.queries[0]);
+    const workQueueQuery = renderQuery(executor.queries[1]);
+
+    expect(orgUnitQuery.sql).toContain("employee_org_unit_memberships");
+    expect(orgUnitQuery.sql).toContain("org_units.status = 'active'");
+    expect(orgUnitQuery.params).toEqual(
+      expect.arrayContaining([tenantId, "employee-sales", '["org-sales"]'])
+    );
+    expect(workQueueQuery.sql).toContain("employee_work_queue_memberships");
+    expect(workQueueQuery.sql).toContain("work_queues.status = 'active'");
+    expect(workQueueQuery.params).toEqual(
+      expect.arrayContaining([tenantId, "employee-sales", '["queue-sales"]'])
+    );
+  });
+
+  it("rejects employee membership updates when employee or references are invalid", async () => {
+    const repository = createSqlOrgStructureRepository(
+      new RecordingSqlExecutor([
+        [
+          {
+            employee_exists: false,
+            references_valid: true
+          }
+        ],
+        [
+          {
+            employee_exists: true,
+            references_valid: false
+          }
+        ]
+      ])
+    );
+
+    await expect(
+      repository.setEmployeeOrgUnitMemberships({
+        tenantId,
+        employeeId: "employee-missing" as EmployeeId,
+        orgUnitIds: [],
+        updatedAt: now
+      })
+    ).rejects.toThrow(new CoreError("tenant.boundary_violation"));
+    await expect(
+      repository.setEmployeeWorkQueueMemberships({
+        tenantId,
+        employeeId: "employee-sales" as EmployeeId,
+        workQueueIds: ["queue-missing"],
+        updatedAt: now
+      })
+    ).rejects.toThrow(new CoreError("validation.failed"));
   });
 
   it("rejects invalid kinds, statuses and self-parenting before SQL", async () => {

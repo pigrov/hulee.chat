@@ -21,7 +21,16 @@ import {
   type TenantRoleRecord
 } from "@hulee/db";
 import { createTranslator, type I18nMessageKey } from "@hulee/i18n";
-import { ArrowLeft, KeyRound, ListChecks, Plus, XCircle } from "lucide-react";
+import {
+  ArrowLeft,
+  Building2,
+  Inbox,
+  KeyRound,
+  ListChecks,
+  Plus,
+  Save,
+  XCircle
+} from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
@@ -32,6 +41,10 @@ import {
   navigationAccessFromSession
 } from "../../../../../src/access";
 import { DetailItem } from "../../../../../src/app-chrome";
+import {
+  setEmployeeOrgUnitMembershipsAction,
+  setEmployeeWorkQueueMembershipsAction
+} from "../../../../../src/employee-membership-actions";
 import { loadInboxViewModel } from "../../../../../src/inbox-api-client";
 import { allowedRoleBindingScopeTypesForPermissions } from "../../../../../src/rbac-scope";
 import { buildScopeReferenceOptions } from "../../../../../src/rbac-scope-options";
@@ -249,6 +262,90 @@ export default async function EmployeeAccessAdminPage({
                 .map((role) => roleLabelFromEmployeeRole(role, t))
                 .join(", ")}
             />
+          </div>
+        </section>
+
+        <section
+          className="settingsPanel"
+          aria-labelledby="employee-memberships-title"
+        >
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.employeeAccess.memberships")}</p>
+              <h2 className="sectionTitle" id="employee-memberships-title">
+                {t("admin.employeeAccess.memberships")}
+              </h2>
+              <p className="metaText">
+                {t("admin.employeeAccess.memberships.description")}
+              </p>
+            </div>
+            <span className="badge">
+              {employee.orgUnitIds.length + employee.queueIds.length}
+            </span>
+          </div>
+
+          <div className="employeeMembershipGrid">
+            <form
+              action={setEmployeeOrgUnitMembershipsAction}
+              className="settingsForm employeeMembershipForm"
+            >
+              <input name="returnTo" type="hidden" value={returnPath} />
+              <input
+                name="employeeId"
+                type="hidden"
+                value={employee.employeeId}
+              />
+              <MembershipCheckboxGroup
+                emptyLabel={t("admin.employeeAccess.noOrgUnitsAvailable")}
+                icon={<Building2 size={18} aria-hidden="true" />}
+                items={orgUnits.map((orgUnit) => ({
+                  id: orgUnit.id,
+                  label: orgUnit.name
+                }))}
+                name="orgUnitId"
+                selectedIds={employee.orgUnitIds}
+                title={t("admin.employeeAccess.orgUnitMemberships")}
+              />
+              <button
+                className="primaryButton"
+                disabled={isDeactivated}
+                type="submit"
+              >
+                <Save size={18} aria-hidden="true" />
+                {t("admin.employeeAccess.saveMemberships")}
+              </button>
+            </form>
+
+            <form
+              action={setEmployeeWorkQueueMembershipsAction}
+              className="settingsForm employeeMembershipForm"
+            >
+              <input name="returnTo" type="hidden" value={returnPath} />
+              <input
+                name="employeeId"
+                type="hidden"
+                value={employee.employeeId}
+              />
+              <MembershipCheckboxGroup
+                emptyLabel={t("admin.employeeAccess.noWorkQueuesAvailable")}
+                icon={<Inbox size={18} aria-hidden="true" />}
+                items={workQueues.map((workQueue) => ({
+                  id: workQueue.id,
+                  label: workQueue.name
+                }))}
+                name="workQueueId"
+                selectedIds={employee.queueIds}
+                title={t("admin.employeeAccess.workQueueMemberships")}
+              />
+              <button
+                className="primaryButton"
+                disabled={isDeactivated}
+                type="submit"
+              >
+                <Save size={18} aria-hidden="true" />
+                {t("admin.employeeAccess.saveMemberships")}
+              </button>
+            </form>
           </div>
         </section>
 
@@ -503,6 +600,53 @@ function EmployeeRoleBindingRow({
   );
 }
 
+function MembershipCheckboxGroup({
+  emptyLabel,
+  icon,
+  items,
+  name,
+  selectedIds,
+  title
+}: {
+  readonly emptyLabel: string;
+  readonly icon: ReactNode;
+  readonly items: readonly {
+    readonly id: string;
+    readonly label: string;
+  }[];
+  readonly name: string;
+  readonly selectedIds: readonly string[];
+  readonly title: string;
+}): ReactNode {
+  const selectedIdSet = new Set(selectedIds);
+
+  return (
+    <fieldset className="membershipFieldset">
+      <legend className="membershipLegend">
+        <span className="metricIcon">{icon}</span>
+        <span>{title}</span>
+      </legend>
+      {items.length === 0 ? (
+        <p className="metaText">{emptyLabel}</p>
+      ) : (
+        <div className="permissionCheckboxList">
+          {items.map((item) => (
+            <label className="permissionCheckboxRow" key={item.id}>
+              <input
+                defaultChecked={selectedIdSet.has(item.id)}
+                name={name}
+                type="checkbox"
+                value={item.id}
+              />
+              <span>{item.label}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </fieldset>
+  );
+}
+
 function EmployeeDirectGrantRow({
   currentEmployeeId,
   grant,
@@ -615,7 +759,9 @@ function buildEffectiveAccessPreview(input: {
   const actor: PermissionActor = {
     tenantId: input.tenantId,
     employeeId: input.employee.employeeId,
-    roles: input.employee.roles
+    roles: input.employee.roles,
+    orgUnitIds: input.employee.orgUnitIds,
+    queueIds: input.employee.queueIds
   };
 
   return [
@@ -792,6 +938,8 @@ function roleActionStatusKey(status: string): I18nMessageKey {
       return "admin.roles.actionStatus.directGrantCreated";
     case "direct_grant_revoked":
       return "admin.roles.actionStatus.directGrantRevoked";
+    case "memberships_updated":
+      return "admin.employeeAccess.actionStatus.membershipsUpdated";
     case "email_verification_required":
       return "auth.emailVerification.status.required";
     default:

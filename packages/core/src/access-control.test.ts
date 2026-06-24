@@ -31,6 +31,7 @@ const actor: PermissionActor = {
   employeeId,
   roles: [],
   orgUnitIds: ["org-sales"],
+  queueIds: ["queue-sales"],
   teamIds: ["team-sales"]
 };
 
@@ -49,6 +50,51 @@ describe("access-control", () => {
           grant.permission === "message.reply" && grant.scope.type === "tenant"
       )
     ).toBe(true);
+  });
+
+  it("resolves queue role bindings through actor queue membership", () => {
+    const role: PermissionRoleDefinition = {
+      id: "role-queue-sales",
+      tenantId,
+      permissions: ["inbox.read"]
+    };
+
+    const grants = resolveEffectivePermissionGrants({
+      actor,
+      roles: [role],
+      roleBindings: [
+        {
+          tenantId,
+          roleId: role.id,
+          subject: {
+            type: "queue",
+            id: "queue-sales"
+          },
+          scope: {
+            type: "queue",
+            id: "queue-sales"
+          }
+        },
+        {
+          tenantId,
+          roleId: role.id,
+          subject: {
+            type: "queue",
+            id: "queue-claims"
+          },
+          scope: {
+            type: "queue",
+            id: "queue-claims"
+          }
+        }
+      ]
+    });
+
+    expect(grants).toHaveLength(1);
+    expect(grants[0]?.scope).toEqual({
+      type: "queue",
+      id: "queue-sales"
+    });
   });
 
   it("deduplicates role binding and direct grants with the same scope", () => {

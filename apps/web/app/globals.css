@@ -793,6 +793,35 @@ a.secondaryButton {
   gap: var(--hulee-space-block);
 }
 
+.employeeMembershipGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--hulee-space-block);
+}
+
+.employeeMembershipForm {
+  align-content: start;
+}
+
+.membershipFieldset {
+  display: grid;
+  min-width: 0;
+  gap: var(--hulee-space-block);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.membershipLegend {
+  display: flex;
+  gap: var(--hulee-space-inline);
+  align-items: center;
+  margin-bottom: var(--hulee-space-inline);
+  color: var(--hulee-color-text-default);
+  font-size: 14px;
+  font-weight: 700;
+}
+
 .permissionDomainGroup {
   display: grid;
   min-width: 0;
@@ -1285,6 +1314,7 @@ button.managementRow:focus-visible {
   .managementRow.orgStructureRow,
   .scopePickerGrid,
   .roleEditorGrid,
+  .employeeMembershipGrid,
   .permissionEditorGrid,
   .brandPresetGrid,
   .brandColorGrid,

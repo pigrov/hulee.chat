@@ -24,7 +24,8 @@ const actor: PermissionActor = {
   employeeId,
   roles: [],
   teamIds: ["team-sales"],
-  orgUnitIds: ["org-sales"]
+  orgUnitIds: ["org-sales"],
+  queueIds: ["queue-sales"]
 };
 
 describe("SQL RBAC repository", () => {
@@ -216,8 +217,8 @@ describe("SQL RBAC repository", () => {
           id: "binding-sales",
           tenant_id: tenantId,
           role_id: "role-sales",
-          subject_type: "team",
-          subject_id: "team-sales",
+          subject_type: "queue",
+          subject_id: "queue-sales",
           scope_type: "queue",
           scope_id: "queue-sales",
           starts_at: null,
@@ -261,8 +262,8 @@ describe("SQL RBAC repository", () => {
           tenantId,
           roleId: "role-sales",
           subject: {
-            type: "team",
-            id: "team-sales"
+            type: "queue",
+            id: "queue-sales"
           },
           scope: {
             type: "queue",
@@ -291,8 +292,15 @@ describe("SQL RBAC repository", () => {
     expect(bindingQuery.sql).toContain("subject_type = 'employee'");
     expect(bindingQuery.sql).toContain("subject_type = 'team'");
     expect(bindingQuery.sql).toContain("subject_type = 'org_unit'");
+    expect(bindingQuery.sql).toContain("subject_type = 'queue'");
     expect(bindingQuery.params).toEqual(
-      expect.arrayContaining([tenantId, employeeId, "team-sales", "org-sales"])
+      expect.arrayContaining([
+        tenantId,
+        employeeId,
+        "team-sales",
+        "org-sales",
+        "queue-sales"
+      ])
     );
   });
 

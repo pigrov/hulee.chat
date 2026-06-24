@@ -619,8 +619,7 @@ export function buildCreateTenantRoleBindingSql(
         )
       )
       and (
-        ${input.subject.type} = 'org_unit'
-        or (
+        (
           ${input.subject.type} = 'employee'
           and exists (
             select 1
@@ -636,6 +635,26 @@ export function buildCreateTenantRoleBindingSql(
             from teams subject_team
             where subject_team.tenant_id = ${input.tenantId}
               and subject_team.id = ${input.subject.id}
+          )
+        )
+        or (
+          ${input.subject.type} = 'org_unit'
+          and exists (
+            select 1
+            from org_units subject_org_unit
+            where subject_org_unit.tenant_id = ${input.tenantId}
+              and subject_org_unit.id = ${input.subject.id}
+              and subject_org_unit.status = 'active'
+          )
+        )
+        or (
+          ${input.subject.type} = 'queue'
+          and exists (
+            select 1
+            from work_queues subject_work_queue
+            where subject_work_queue.tenant_id = ${input.tenantId}
+              and subject_work_queue.id = ${input.subject.id}
+              and subject_work_queue.status = 'active'
           )
         )
       )
@@ -1155,6 +1174,15 @@ function actorSubjectPredicate(actor: PermissionActor): SQL {
     `);
   }
 
+  if (actor.queueIds?.length) {
+    predicates.push(sql`
+      (subject_type = 'queue' and subject_id in (${sql.join(
+        actor.queueIds.map((queueId) => sql`${queueId}`),
+        sql`, `
+      )}))
+    `);
+  }
+
   return sql.join(predicates, sql` or `);
 }
 
@@ -1230,7 +1258,8 @@ function assertRoleBindingSubject(
   if (
     value.type !== "employee" &&
     value.type !== "team" &&
-    value.type !== "org_unit"
+    value.type !== "org_unit" &&
+    value.type !== "queue"
   ) {
     throw new CoreError("validation.failed");
   }

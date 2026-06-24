@@ -28,6 +28,8 @@ export type TenantEmployeeRecord = {
   email: string;
   displayName: string;
   roles: readonly EmployeeRole[];
+  orgUnitIds: readonly string[];
+  queueIds: readonly string[];
   createdAt: Date;
   deactivatedAt: Date | null;
 };
@@ -139,6 +141,8 @@ type EmployeeRow = {
   email: string;
   display_name: string;
   roles: unknown;
+  org_unit_ids: unknown;
+  queue_ids: unknown;
   created_at: SqlTimestamp;
   deactivated_at: SqlTimestamp | null;
 };
@@ -297,19 +301,49 @@ export function buildListTenantEmployeesSql(
            employees.display_name,
            employees.created_at,
            employees.deactivated_at,
-           coalesce(json_agg(employee_roles.role order by employee_roles.role)
-             filter (where employee_roles.role is not null), '[]'::json) as roles
+           coalesce(employee_role_rows.roles, '[]'::json) as roles,
+           coalesce(
+             org_unit_membership_rows.org_unit_ids,
+             '[]'::json
+           ) as org_unit_ids,
+           coalesce(
+             work_queue_membership_rows.queue_ids,
+             '[]'::json
+           ) as queue_ids
     from employees
-    left join employee_roles on employee_roles.tenant_id = employees.tenant_id
-      and employee_roles.employee_id = employees.id
+    left join lateral (
+      select json_agg(employee_roles.role order by employee_roles.role) as roles
+      from employee_roles
+      where employee_roles.tenant_id = employees.tenant_id
+        and employee_roles.employee_id = employees.id
+    ) employee_role_rows on true
+    left join lateral (
+      select json_agg(
+               employee_org_unit_memberships.org_unit_id
+               order by employee_org_unit_memberships.org_unit_id
+             ) as org_unit_ids
+      from employee_org_unit_memberships
+      inner join org_units on org_units.tenant_id =
+          employee_org_unit_memberships.tenant_id
+        and org_units.id = employee_org_unit_memberships.org_unit_id
+        and org_units.status = 'active'
+      where employee_org_unit_memberships.tenant_id = employees.tenant_id
+        and employee_org_unit_memberships.employee_id = employees.id
+    ) org_unit_membership_rows on true
+    left join lateral (
+      select json_agg(
+               employee_work_queue_memberships.work_queue_id
+               order by employee_work_queue_memberships.work_queue_id
+             ) as queue_ids
+      from employee_work_queue_memberships
+      inner join work_queues on work_queues.tenant_id =
+          employee_work_queue_memberships.tenant_id
+        and work_queues.id = employee_work_queue_memberships.work_queue_id
+        and work_queues.status = 'active'
+      where employee_work_queue_memberships.tenant_id = employees.tenant_id
+        and employee_work_queue_memberships.employee_id = employees.id
+    ) work_queue_membership_rows on true
     where employees.tenant_id = ${input.tenantId}
-    group by employees.tenant_id,
-             employees.id,
-             employees.account_id,
-             employees.email,
-             employees.display_name,
-             employees.created_at,
-             employees.deactivated_at
     order by employees.created_at asc
   `;
 }
@@ -325,20 +359,50 @@ export function buildFindTenantEmployeeSql(
            employees.display_name,
            employees.created_at,
            employees.deactivated_at,
-           coalesce(json_agg(employee_roles.role order by employee_roles.role)
-             filter (where employee_roles.role is not null), '[]'::json) as roles
+           coalesce(employee_role_rows.roles, '[]'::json) as roles,
+           coalesce(
+             org_unit_membership_rows.org_unit_ids,
+             '[]'::json
+           ) as org_unit_ids,
+           coalesce(
+             work_queue_membership_rows.queue_ids,
+             '[]'::json
+           ) as queue_ids
     from employees
-    left join employee_roles on employee_roles.tenant_id = employees.tenant_id
-      and employee_roles.employee_id = employees.id
+    left join lateral (
+      select json_agg(employee_roles.role order by employee_roles.role) as roles
+      from employee_roles
+      where employee_roles.tenant_id = employees.tenant_id
+        and employee_roles.employee_id = employees.id
+    ) employee_role_rows on true
+    left join lateral (
+      select json_agg(
+               employee_org_unit_memberships.org_unit_id
+               order by employee_org_unit_memberships.org_unit_id
+             ) as org_unit_ids
+      from employee_org_unit_memberships
+      inner join org_units on org_units.tenant_id =
+          employee_org_unit_memberships.tenant_id
+        and org_units.id = employee_org_unit_memberships.org_unit_id
+        and org_units.status = 'active'
+      where employee_org_unit_memberships.tenant_id = employees.tenant_id
+        and employee_org_unit_memberships.employee_id = employees.id
+    ) org_unit_membership_rows on true
+    left join lateral (
+      select json_agg(
+               employee_work_queue_memberships.work_queue_id
+               order by employee_work_queue_memberships.work_queue_id
+             ) as queue_ids
+      from employee_work_queue_memberships
+      inner join work_queues on work_queues.tenant_id =
+          employee_work_queue_memberships.tenant_id
+        and work_queues.id = employee_work_queue_memberships.work_queue_id
+        and work_queues.status = 'active'
+      where employee_work_queue_memberships.tenant_id = employees.tenant_id
+        and employee_work_queue_memberships.employee_id = employees.id
+    ) work_queue_membership_rows on true
     where employees.tenant_id = ${input.tenantId}
       and employees.id = ${input.employeeId}
-    group by employees.tenant_id,
-             employees.id,
-             employees.account_id,
-             employees.email,
-             employees.display_name,
-             employees.created_at,
-             employees.deactivated_at
     limit 1
   `;
 }
@@ -1399,6 +1463,8 @@ function mapEmployeeRow(row: EmployeeRow): TenantEmployeeRecord {
     email: row.email,
     displayName: row.display_name,
     roles: parseEmployeeRoles(row.roles),
+    orgUnitIds: parseStringIds(row.org_unit_ids),
+    queueIds: parseStringIds(row.queue_ids),
     createdAt: new Date(row.created_at),
     deactivatedAt:
       row.deactivated_at === null ? null : new Date(row.deactivated_at)
@@ -1477,5 +1543,13 @@ function parsePermissions(value: unknown): readonly Permission[] {
 
   return permissions.filter((permission): permission is Permission => {
     return typeof permission === "string" && isPermission(permission);
+  });
+}
+
+function parseStringIds(value: unknown): readonly string[] {
+  const ids = Array.isArray(value) ? value : [];
+
+  return ids.filter((id): id is string => {
+    return typeof id === "string" && id.trim().length > 0;
   });
 }

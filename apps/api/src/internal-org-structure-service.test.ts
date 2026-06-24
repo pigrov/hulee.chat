@@ -138,6 +138,8 @@ function repositoryStub(input?: {
       routingConfig: request.routingConfig ?? {}
     })),
     listOrgUnits: vi.fn(async () => orgUnits),
-    listWorkQueues: vi.fn(async () => workQueues)
+    listWorkQueues: vi.fn(async () => workQueues),
+    setEmployeeOrgUnitMemberships: vi.fn(async () => undefined),
+    setEmployeeWorkQueueMemberships: vi.fn(async () => undefined)
   };
 }

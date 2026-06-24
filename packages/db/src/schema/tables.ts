@@ -648,6 +648,62 @@ export const workQueues = pgTable(
   ]
 );
 
+export const employeeOrgUnitMemberships = pgTable(
+  "employee_org_unit_memberships",
+  {
+    tenantId: tenantIdColumn().references(() => tenants.id),
+    employeeId: text("employee_id")
+      .notNull()
+      .references(() => employees.id),
+    orgUnitId: text("org_unit_id")
+      .notNull()
+      .references(() => orgUnits.id),
+    ...timestamps
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.tenantId, table.employeeId, table.orgUnitId]
+    }),
+    index("employee_org_unit_memberships_tenant_idx").on(table.tenantId),
+    index("employee_org_unit_memberships_tenant_employee_idx").on(
+      table.tenantId,
+      table.employeeId
+    ),
+    index("employee_org_unit_memberships_tenant_org_unit_idx").on(
+      table.tenantId,
+      table.orgUnitId
+    )
+  ]
+);
+
+export const employeeWorkQueueMemberships = pgTable(
+  "employee_work_queue_memberships",
+  {
+    tenantId: tenantIdColumn().references(() => tenants.id),
+    employeeId: text("employee_id")
+      .notNull()
+      .references(() => employees.id),
+    workQueueId: text("work_queue_id")
+      .notNull()
+      .references(() => workQueues.id),
+    ...timestamps
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.tenantId, table.employeeId, table.workQueueId]
+    }),
+    index("employee_work_queue_memberships_tenant_idx").on(table.tenantId),
+    index("employee_work_queue_memberships_tenant_employee_idx").on(
+      table.tenantId,
+      table.employeeId
+    ),
+    index("employee_work_queue_memberships_tenant_work_queue_idx").on(
+      table.tenantId,
+      table.workQueueId
+    )
+  ]
+);
+
 export const clients = pgTable(
   "clients",
   {

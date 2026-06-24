@@ -1,4 +1,4 @@
-import type { TenantId } from "@hulee/contracts";
+import type { EmployeeId, TenantId } from "@hulee/contracts";
 import { CoreError } from "@hulee/core";
 import { sql, type SQL } from "drizzle-orm";
 
@@ -76,6 +76,20 @@ export type ListWorkQueuesInput = {
   readonly activeOnly?: boolean;
 };
 
+export type SetEmployeeOrgUnitMembershipsInput = {
+  readonly tenantId: TenantId;
+  readonly employeeId: EmployeeId;
+  readonly orgUnitIds: readonly string[];
+  readonly updatedAt: Date;
+};
+
+export type SetEmployeeWorkQueueMembershipsInput = {
+  readonly tenantId: TenantId;
+  readonly employeeId: EmployeeId;
+  readonly workQueueIds: readonly string[];
+  readonly updatedAt: Date;
+};
+
 export type OrgStructureRepository = {
   upsertOrgUnit(input: UpsertOrgUnitInput): Promise<OrgUnitRecord>;
   upsertWorkQueue(input: UpsertWorkQueueInput): Promise<WorkQueueRecord>;
@@ -83,6 +97,12 @@ export type OrgStructureRepository = {
   listWorkQueues(
     input: ListWorkQueuesInput
   ): Promise<readonly WorkQueueRecord[]>;
+  setEmployeeOrgUnitMemberships(
+    input: SetEmployeeOrgUnitMembershipsInput
+  ): Promise<void>;
+  setEmployeeWorkQueueMemberships(
+    input: SetEmployeeWorkQueueMembershipsInput
+  ): Promise<void>;
 };
 
 type OrgUnitRow = {
@@ -102,6 +122,11 @@ type WorkQueueRow = {
   owning_org_unit_id: string | null;
   status: string;
   routing_config: unknown;
+};
+
+type MembershipUpdateValidationRow = {
+  employee_exists: boolean;
+  references_valid: boolean;
 };
 
 export function createSqlOrgStructureRepository(
@@ -156,6 +181,22 @@ export function createSqlOrgStructureRepository(
       assertTenantScopedRows(input.tenantId, rows);
 
       return rows;
+    },
+
+    async setEmployeeOrgUnitMemberships(input) {
+      const result = await rawExecutor.execute<MembershipUpdateValidationRow>(
+        buildSetEmployeeOrgUnitMembershipsSql(input)
+      );
+
+      assertMembershipUpdateResult(result.rows[0]);
+    },
+
+    async setEmployeeWorkQueueMemberships(input) {
+      const result = await rawExecutor.execute<MembershipUpdateValidationRow>(
+        buildSetEmployeeWorkQueueMembershipsSql(input)
+      );
+
+      assertMembershipUpdateResult(result.rows[0]);
     }
   };
 }
@@ -329,6 +370,148 @@ export function buildListWorkQueuesSql(input: ListWorkQueuesInput): SQL {
   `;
 }
 
+export function buildSetEmployeeOrgUnitMembershipsSql(
+  input: SetEmployeeOrgUnitMembershipsInput
+): SQL {
+  assertNonEmpty(input.tenantId);
+  assertNonEmpty(input.employeeId);
+  const orgUnitIds = uniqueMembershipIds(input.orgUnitIds);
+
+  return sql`
+    with requested as (
+      select distinct value as org_unit_id
+      from jsonb_array_elements_text(${JSON.stringify(orgUnitIds)}::jsonb)
+    ),
+    target_employee as (
+      select id,
+             tenant_id
+      from employees
+      where tenant_id = ${input.tenantId}
+        and id = ${input.employeeId}
+        and deactivated_at is null
+      limit 1
+    ),
+    valid_requested as (
+      select requested.org_unit_id
+      from requested
+      inner join org_units on org_units.tenant_id = ${input.tenantId}
+        and org_units.id = requested.org_unit_id
+        and org_units.status = 'active'
+    ),
+    validation as (
+      select exists (select 1 from target_employee) as employee_exists,
+             (select count(*) from requested) =
+               (select count(*) from valid_requested) as references_valid
+    ),
+    deleted as (
+      delete from employee_org_unit_memberships memberships
+      using target_employee,
+            validation
+      where memberships.tenant_id = target_employee.tenant_id
+        and memberships.employee_id = target_employee.id
+        and validation.employee_exists
+        and validation.references_valid
+      returning memberships.org_unit_id
+    ),
+    inserted as (
+      insert into employee_org_unit_memberships (
+        tenant_id,
+        employee_id,
+        org_unit_id,
+        created_at,
+        updated_at
+      )
+      select target_employee.tenant_id,
+             target_employee.id,
+             valid_requested.org_unit_id,
+             ${input.updatedAt},
+             ${input.updatedAt}
+      from target_employee
+      cross join valid_requested
+      cross join validation
+      where validation.employee_exists
+        and validation.references_valid
+      on conflict (tenant_id, employee_id, org_unit_id) do update
+      set updated_at = excluded.updated_at
+      returning org_unit_id
+    )
+    select employee_exists,
+           references_valid
+    from validation
+  `;
+}
+
+export function buildSetEmployeeWorkQueueMembershipsSql(
+  input: SetEmployeeWorkQueueMembershipsInput
+): SQL {
+  assertNonEmpty(input.tenantId);
+  assertNonEmpty(input.employeeId);
+  const workQueueIds = uniqueMembershipIds(input.workQueueIds);
+
+  return sql`
+    with requested as (
+      select distinct value as work_queue_id
+      from jsonb_array_elements_text(${JSON.stringify(workQueueIds)}::jsonb)
+    ),
+    target_employee as (
+      select id,
+             tenant_id
+      from employees
+      where tenant_id = ${input.tenantId}
+        and id = ${input.employeeId}
+        and deactivated_at is null
+      limit 1
+    ),
+    valid_requested as (
+      select requested.work_queue_id
+      from requested
+      inner join work_queues on work_queues.tenant_id = ${input.tenantId}
+        and work_queues.id = requested.work_queue_id
+        and work_queues.status = 'active'
+    ),
+    validation as (
+      select exists (select 1 from target_employee) as employee_exists,
+             (select count(*) from requested) =
+               (select count(*) from valid_requested) as references_valid
+    ),
+    deleted as (
+      delete from employee_work_queue_memberships memberships
+      using target_employee,
+            validation
+      where memberships.tenant_id = target_employee.tenant_id
+        and memberships.employee_id = target_employee.id
+        and validation.employee_exists
+        and validation.references_valid
+      returning memberships.work_queue_id
+    ),
+    inserted as (
+      insert into employee_work_queue_memberships (
+        tenant_id,
+        employee_id,
+        work_queue_id,
+        created_at,
+        updated_at
+      )
+      select target_employee.tenant_id,
+             target_employee.id,
+             valid_requested.work_queue_id,
+             ${input.updatedAt},
+             ${input.updatedAt}
+      from target_employee
+      cross join valid_requested
+      cross join validation
+      where validation.employee_exists
+        and validation.references_valid
+      on conflict (tenant_id, employee_id, work_queue_id) do update
+      set updated_at = excluded.updated_at
+      returning work_queue_id
+    )
+    select employee_exists,
+           references_valid
+    from validation
+  `;
+}
+
 function mapOrgUnitRow(row: OrgUnitRow): OrgUnitRecord {
   assertOrgUnitKind(row.kind);
   assertOrgStructureStatus(row.status);
@@ -380,6 +563,28 @@ function assertOrgStructureStatus(
 
 function assertNonEmpty(value: string): void {
   if (value.trim().length === 0) {
+    throw new CoreError("validation.failed");
+  }
+}
+
+function uniqueMembershipIds(ids: readonly string[]): readonly string[] {
+  const uniqueIds = [...new Set(ids.map((id) => id.trim()))];
+
+  for (const id of uniqueIds) {
+    assertNonEmpty(id);
+  }
+
+  return uniqueIds;
+}
+
+function assertMembershipUpdateResult(
+  row: MembershipUpdateValidationRow | undefined
+): void {
+  if (row === undefined || !row.employee_exists) {
+    throw new CoreError("tenant.boundary_violation");
+  }
+
+  if (!row.references_valid) {
     throw new CoreError("validation.failed");
   }
 }

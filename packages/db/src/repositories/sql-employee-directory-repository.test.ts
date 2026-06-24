@@ -34,6 +34,8 @@ describe("SQL employee directory repository", () => {
           email: "agent@example.test",
           display_name: "Agent",
           roles: ["agent", "unknown"],
+          org_unit_ids: ["org-sales"],
+          queue_ids: ["queue-sales"],
           created_at: "2026-06-23T10:00:00.000Z",
           deactivated_at: null
         }
@@ -52,6 +54,8 @@ describe("SQL employee directory repository", () => {
         email: "agent@example.test",
         displayName: "Agent",
         roles: ["agent"],
+        orgUnitIds: ["org-sales"],
+        queueIds: ["queue-sales"],
         createdAt: new Date("2026-06-23T10:00:00.000Z"),
         deactivatedAt: null
       }

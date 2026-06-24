@@ -1159,7 +1159,9 @@ function buildEffectiveAccessPreview(input: {
   const actor: PermissionActor = {
     tenantId: input.tenantId,
     employeeId: input.employee.employeeId,
-    roles: input.employee.roles
+    roles: input.employee.roles,
+    orgUnitIds: input.employee.orgUnitIds,
+    queueIds: input.employee.queueIds
   };
 
   return [
@@ -1584,6 +1586,8 @@ function subjectTypeKey(subject: PermissionRoleBindingSubject): I18nMessageKey {
       return "admin.roles.subject.team";
     case "org_unit":
       return "admin.roles.subject.orgUnit";
+    case "queue":
+      return "admin.roles.subject.queue";
     default:
       return "admin.roles.subject.employee";
   }

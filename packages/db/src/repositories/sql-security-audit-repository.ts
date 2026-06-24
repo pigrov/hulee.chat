@@ -34,7 +34,9 @@ export type OrgStructureAuditAction =
   | "work_queue.created"
   | "work_queue.updated"
   | "work_queue.archived"
-  | "work_queue.restored";
+  | "work_queue.restored"
+  | "employee_org_membership.updated"
+  | "employee_queue_membership.updated";
 
 export type SecurityAuditAction =
   | AuthSecurityAuditAction
@@ -46,6 +48,7 @@ export type AccessAuditEntityType = "role" | "role_binding" | "direct_grant";
 export type SecurityAuditEntityType =
   | "session"
   | AccessAuditEntityType
+  | "employee"
   | "org_unit"
   | "work_queue";
 
