@@ -2,20 +2,33 @@
 
 import type { EmployeeId, TenantId } from "@hulee/contracts";
 import {
+  resolveEffectivePermissionGrants,
+  type EffectivePermissionGrant,
+  type PermissionActor,
+  type PermissionResourceContext
+} from "@hulee/core";
+import {
   createSqlEmployeeDirectoryRepository,
   createSqlOrgStructureRepository,
   createSqlSecurityAuditRepository,
-  type OrgStructureAuditAction
+  createSqlTenantRbacRepository,
+  type OrgStructureAuditAction,
+  type OrgUnitRecord,
+  type TeamRecord,
+  type TenantEmployeeRecord,
+  type WorkQueueRecord
 } from "@hulee/db";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 
 import { assertWebActionRequest } from "./action-security";
+import { assertWebTenantEmailVerified, type WebAccessSession } from "./access";
+import { assertCanUpdateEmployeeMemberships } from "./employee-membership-access";
 import {
-  assertCurrentWebTenantPermission,
   getWebDatabase,
-  isEmailNotVerifiedError
+  isEmailNotVerifiedError,
+  requireCurrentWebAccessSession
 } from "./session";
 
 export async function setEmployeeOrgUnitMembershipsAction(
@@ -42,16 +55,27 @@ export async function setEmployeeOrgUnitMembershipsAction(
         employeeId
       }),
       repository.listOrgUnits({
-        tenantId: session.tenantId,
-        activeOnly: true
+        tenantId: session.tenantId
       })
     ]);
 
     assertActiveEmployee(employee);
     assertKnownIds(
       orgUnitIds,
-      orgUnits.map((orgUnit) => orgUnit.id)
+      orgUnits
+        .filter((orgUnit) => orgUnit.status === "active")
+        .map((orgUnit) => orgUnit.id)
     );
+    assertCanUpdateEmployeeMemberships({
+      ...(await resolveMembershipActorPrivilege({
+        session,
+        employeeRepository,
+        now
+      })),
+      previousIds: employee.orgUnitIds,
+      nextIds: orgUnitIds,
+      resources: orgUnitMembershipResources(orgUnits)
+    });
 
     await repository.setEmployeeOrgUnitMemberships({
       tenantId: session.tenantId,
@@ -109,16 +133,27 @@ export async function setEmployeeWorkQueueMembershipsAction(
         employeeId
       }),
       repository.listWorkQueues({
-        tenantId: session.tenantId,
-        activeOnly: true
+        tenantId: session.tenantId
       })
     ]);
 
     assertActiveEmployee(employee);
     assertKnownIds(
       workQueueIds,
-      workQueues.map((workQueue) => workQueue.id)
+      workQueues
+        .filter((workQueue) => workQueue.status === "active")
+        .map((workQueue) => workQueue.id)
     );
+    assertCanUpdateEmployeeMemberships({
+      ...(await resolveMembershipActorPrivilege({
+        session,
+        employeeRepository,
+        now
+      })),
+      previousIds: employee.queueIds,
+      nextIds: workQueueIds,
+      resources: workQueueMembershipResources(workQueues)
+    });
 
     await repository.setEmployeeWorkQueueMemberships({
       tenantId: session.tenantId,
@@ -185,6 +220,16 @@ export async function setEmployeeTeamMembershipsAction(
       teamIds,
       teams.map((team) => team.id)
     );
+    assertCanUpdateEmployeeMemberships({
+      ...(await resolveMembershipActorPrivilege({
+        session,
+        employeeRepository,
+        now
+      })),
+      previousIds: employee.teamIds,
+      nextIds: teamIds,
+      resources: teamMembershipResources(teams)
+    });
 
     await repository.setEmployeeTeamMemberships({
       tenantId: session.tenantId,
@@ -220,11 +265,11 @@ export async function setEmployeeTeamMembershipsAction(
 
 async function assertVerifiedRolesPermission(
   employeeId: EmployeeId
-): ReturnType<typeof assertCurrentWebTenantPermission> {
+): Promise<WebAccessSession> {
   try {
-    return await assertCurrentWebTenantPermission("roles.manage", {
-      requireVerifiedEmail: true
-    });
+    const session = await requireCurrentWebAccessSession();
+
+    return assertWebTenantEmailVerified(session);
   } catch (error) {
     if (isEmailNotVerifiedError(error)) {
       redirect(
@@ -236,9 +281,105 @@ async function assertVerifiedRolesPermission(
   }
 }
 
-function assertActiveEmployee(
-  employee: { readonly deactivatedAt: Date | null } | null
-): void {
+async function resolveMembershipActorPrivilege(input: {
+  readonly session: WebAccessSession;
+  readonly employeeRepository: ReturnType<
+    typeof createSqlEmployeeDirectoryRepository
+  >;
+  readonly now: Date;
+}): Promise<{
+  readonly actor: PermissionActor;
+  readonly effectiveGrants: readonly EffectivePermissionGrant[];
+}> {
+  const currentEmployee = await input.employeeRepository.findEmployee({
+    tenantId: input.session.tenantId,
+    employeeId: input.session.employeeId
+  });
+
+  assertActiveEmployee(currentEmployee);
+
+  const actor = permissionActorFromEmployee(currentEmployee);
+  const sources = await createSqlTenantRbacRepository(
+    getWebDatabase()
+  ).listEffectiveAccessSources({
+    actor,
+    at: input.now
+  });
+
+  return {
+    actor,
+    effectiveGrants: resolveEffectivePermissionGrants({
+      actor,
+      roles: sources.roles,
+      roleBindings: sources.roleBindings,
+      directGrants: sources.directGrants,
+      at: input.now
+    })
+  };
+}
+
+function permissionActorFromEmployee(
+  employee: TenantEmployeeRecord
+): PermissionActor {
+  return {
+    tenantId: employee.tenantId,
+    employeeId: employee.employeeId,
+    roles: employee.roles,
+    orgUnitIds: employee.orgUnitIds,
+    queueIds: employee.queueIds,
+    teamIds: employee.teamIds
+  };
+}
+
+function orgUnitMembershipResources(
+  orgUnits: readonly OrgUnitRecord[]
+): readonly {
+  readonly id: string;
+  readonly resource: PermissionResourceContext;
+}[] {
+  return orgUnits.map((orgUnit) => ({
+    id: orgUnit.id,
+    resource: {
+      tenantId: orgUnit.tenantId,
+      orgUnitId: orgUnit.id,
+      orgUnitIds: [orgUnit.id]
+    }
+  }));
+}
+
+function workQueueMembershipResources(
+  workQueues: readonly WorkQueueRecord[]
+): readonly {
+  readonly id: string;
+  readonly resource: PermissionResourceContext;
+}[] {
+  return workQueues.map((workQueue) => ({
+    id: workQueue.id,
+    resource: {
+      tenantId: workQueue.tenantId,
+      orgUnitId: workQueue.owningOrgUnitId ?? undefined,
+      queueId: workQueue.id
+    }
+  }));
+}
+
+function teamMembershipResources(teams: readonly TeamRecord[]): readonly {
+  readonly id: string;
+  readonly resource: PermissionResourceContext;
+}[] {
+  return teams.map((team) => ({
+    id: team.id,
+    resource: {
+      tenantId: team.tenantId,
+      teamId: team.id,
+      teamIds: [team.id]
+    }
+  }));
+}
+
+function assertActiveEmployee<
+  TEmployee extends { readonly deactivatedAt: Date | null }
+>(employee: TEmployee | null): asserts employee is TEmployee {
   if (employee === null || employee.deactivatedAt !== null) {
     throw new Error("Employee is not active.");
   }
