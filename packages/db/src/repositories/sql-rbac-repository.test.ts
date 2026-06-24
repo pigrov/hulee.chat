@@ -60,6 +60,8 @@ describe("SQL RBAC repository", () => {
     expect(createRoleQuery.sql).toContain("insert into tenant_roles");
     expect(createRoleQuery.params).toContain(tenantId);
     expect(bindingQuery.sql).toContain("insert into tenant_role_bindings");
+    expect(bindingQuery.sql).toContain("from work_queues subject_work_queue");
+    expect(bindingQuery.sql).toContain("subject_work_queue.status = 'active'");
     expect(bindingQuery.params).toContain("queue-sales");
     expect(grantQuery.sql).toContain("insert into direct_permission_grants");
     expect(grantQuery.params).toContain("temporary coverage");

@@ -11,6 +11,17 @@ type SelectOption = {
   readonly label: string;
 };
 
+export type RoleAssignmentSubjectType = "employee" | "org_unit" | "queue";
+
+export type RoleAssignmentSubject = {
+  readonly type: RoleAssignmentSubjectType;
+  readonly id: string;
+};
+
+export type RoleAssignmentSubjectOptions = Partial<
+  Record<RoleAssignmentSubjectType, readonly SelectOption[]>
+>;
+
 type ScopeReferenceOption = {
   readonly value: string;
   readonly label: string;
@@ -39,6 +50,8 @@ export type ScopePickerMessages = {
   readonly reason: string;
   readonly reasonPlaceholder: string;
   readonly role: string;
+  readonly subjectReference: string;
+  readonly subjectType: string;
   readonly scopeType: string;
   readonly scopeReference: string;
   readonly scopeReferenceDescription: string;
@@ -47,6 +60,8 @@ export type ScopePickerMessages = {
   readonly selectEmployee: string;
   readonly selectPermission: string;
   readonly selectRole: string;
+  readonly selectSubject: string;
+  readonly subjectLabels: Record<RoleAssignmentSubjectType, string>;
   readonly scopeLabels: Record<PermissionScopeType, string>;
 };
 
@@ -176,37 +191,127 @@ export function RoleAssignmentFields({
   messages,
   roles,
   scopeReferenceOptions,
-  selectedEmployeeId
+  selectedEmployeeId,
+  selectedSubject,
+  subjectOptions
 }: {
   readonly employees: readonly SelectOption[];
   readonly messages: ScopePickerMessages;
   readonly roles: readonly RoleAssignmentOption[];
   readonly scopeReferenceOptions?: ScopeReferenceOptions;
   readonly selectedEmployeeId?: string;
+  readonly selectedSubject?: RoleAssignmentSubject;
+  readonly subjectOptions?: RoleAssignmentSubjectOptions;
 }): ReactNode {
   const [roleId, setRoleId] = useState("");
+  const [subjectType, setSubjectType] =
+    useState<RoleAssignmentSubjectType>("employee");
+  const [subjectId, setSubjectId] = useState("");
   const selectedRole = useMemo(
     () => roles.find((role) => role.id === roleId),
     [roleId, roles]
   );
+  const effectiveSelectedSubject =
+    selectedSubject ??
+    (selectedEmployeeId === undefined
+      ? undefined
+      : ({
+          type: "employee",
+          id: selectedEmployeeId
+        } satisfies RoleAssignmentSubject));
+  const effectiveSubjectOptions =
+    subjectOptions ??
+    ({
+      employee: employees
+    } satisfies RoleAssignmentSubjectOptions);
+  const availableSubjectTypes = (
+    ["employee", "org_unit", "queue"] as const
+  ).filter((candidate) => (effectiveSubjectOptions[candidate] ?? []).length);
+  const selectedSubjectType = availableSubjectTypes.includes(subjectType)
+    ? subjectType
+    : availableSubjectTypes[0];
+  const selectedSubjectOptions =
+    selectedSubjectType === undefined
+      ? []
+      : (effectiveSubjectOptions[selectedSubjectType] ?? []);
   const allowedScopeTypes = selectedRole?.allowedScopeTypes ?? [];
+
+  useEffect(() => {
+    if (
+      selectedSubjectType !== undefined &&
+      selectedSubjectType !== subjectType
+    ) {
+      setSubjectType(selectedSubjectType);
+    }
+  }, [selectedSubjectType, subjectType]);
+
+  useEffect(() => {
+    if (
+      subjectId.length > 0 &&
+      !selectedSubjectOptions.some((option) => option.value === subjectId)
+    ) {
+      setSubjectId("");
+    }
+  }, [selectedSubjectOptions, subjectId]);
 
   return (
     <>
-      {selectedEmployeeId === undefined ? (
-        <label className="fieldStack">
-          <span className="detailLabel">{messages.employee}</span>
-          <select className="selectInput" name="employeeId" required>
-            <option value="">{messages.selectEmployee}</option>
-            {employees.map((employee) => (
-              <option key={employee.value} value={employee.value}>
-                {employee.label}
-              </option>
-            ))}
-          </select>
-        </label>
+      {effectiveSelectedSubject === undefined ? (
+        <div className="roleSubjectGrid">
+          <label className="fieldStack">
+            <span className="detailLabel">{messages.subjectType}</span>
+            <select
+              className="selectInput"
+              name="subjectType"
+              onChange={(event) =>
+                setSubjectType(
+                  event.currentTarget.value as RoleAssignmentSubjectType
+                )
+              }
+              required
+              value={selectedSubjectType ?? ""}
+            >
+              {availableSubjectTypes.length === 0 ? (
+                <option value="">{messages.selectSubject}</option>
+              ) : null}
+              {availableSubjectTypes.map((availableSubjectType) => (
+                <option key={availableSubjectType} value={availableSubjectType}>
+                  {messages.subjectLabels[availableSubjectType]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="fieldStack">
+            <span className="detailLabel">{messages.subjectReference}</span>
+            <select
+              className="selectInput"
+              name="subjectId"
+              onChange={(event) => setSubjectId(event.currentTarget.value)}
+              required
+              value={subjectId}
+            >
+              <option value="">{messages.selectSubject}</option>
+              {selectedSubjectOptions.map((subjectOption) => (
+                <option key={subjectOption.value} value={subjectOption.value}>
+                  {subjectOption.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       ) : (
-        <input name="employeeId" type="hidden" value={selectedEmployeeId} />
+        <>
+          <input
+            name="subjectType"
+            type="hidden"
+            value={effectiveSelectedSubject.type}
+          />
+          <input
+            name="subjectId"
+            type="hidden"
+            value={effectiveSelectedSubject.id}
+          />
+        </>
       )}
       <label className="fieldStack">
         <span className="detailLabel">{messages.role}</span>

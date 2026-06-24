@@ -907,6 +907,8 @@ function scopePickerMessages(t: Translator): ScopePickerMessages {
     reason: t("admin.roles.directGrantReasonInput"),
     reasonPlaceholder: t("admin.roles.directGrantReason.placeholder"),
     role: t("admin.roles.role"),
+    subjectReference: t("admin.roles.subjectReference"),
+    subjectType: t("admin.roles.subjectType"),
     scopeType: t("admin.roles.scopeType"),
     scopeReference: t("admin.roles.scopeReference"),
     scopeReferenceDescription: t("admin.roles.scopeReference.description"),
@@ -915,6 +917,12 @@ function scopePickerMessages(t: Translator): ScopePickerMessages {
     selectEmployee: t("admin.roles.selectEmployee"),
     selectPermission: t("admin.roles.selectPermission"),
     selectRole: t("admin.roles.selectRole"),
+    selectSubject: t("admin.roles.selectSubject"),
+    subjectLabels: {
+      employee: t("admin.roles.subject.employee"),
+      org_unit: t("admin.roles.subject.orgUnit"),
+      queue: t("admin.roles.subject.queue")
+    },
     scopeLabels: {
       tenant: t("admin.roles.scope.tenant"),
       org_unit: t("admin.roles.scope.orgUnit"),

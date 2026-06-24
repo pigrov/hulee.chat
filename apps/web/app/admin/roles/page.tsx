@@ -23,8 +23,10 @@ import {
   createSqlTenantRbacRepository,
   type AccessAuditAction,
   type AccessAuditRecord,
+  type OrgUnitRecord,
   type TenantEmployeeRecord,
-  type TenantRoleRecord
+  type TenantRoleRecord,
+  type WorkQueueRecord
 } from "@hulee/db";
 import { createTranslator, type I18nMessageKey } from "@hulee/i18n";
 import {
@@ -67,6 +69,7 @@ import { buildScopeReferenceOptions } from "../../../src/rbac-scope-options";
 import {
   DirectGrantFields,
   RoleAssignmentFields,
+  type RoleAssignmentSubjectOptions,
   type ScopePickerMessages
 } from "../../../src/rbac-scope-picker";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
@@ -179,6 +182,20 @@ export default async function RolesAdminPage({
     value: employee.employeeId,
     label: employee.displayName
   }));
+  const roleAssignmentSubjectOptions = {
+    employee: employeeOptions,
+    org_unit: orgUnits.map((orgUnit) => ({
+      value: orgUnit.id,
+      label: orgUnit.name
+    })),
+    queue: workQueues.map((workQueue) => ({
+      value: workQueue.id,
+      label: workQueue.name
+    }))
+  } satisfies RoleAssignmentSubjectOptions;
+  const roleAssignmentSubjectCount = Object.values(
+    roleAssignmentSubjectOptions
+  ).reduce((count, options) => count + options.length, 0);
   const scopeReferenceOptions = buildScopeReferenceOptions({
     orgUnits,
     workQueues
@@ -291,7 +308,7 @@ export default async function RolesAdminPage({
                 {t("admin.roles.assignRole.description")}
               </p>
             </div>
-            <span className="badge">{activeEmployees.length}</span>
+            <span className="badge">{roleAssignmentSubjectCount}</span>
           </div>
 
           <form
@@ -303,12 +320,13 @@ export default async function RolesAdminPage({
               messages={scopePickerMessages(t)}
               roles={roleAssignmentOptions}
               scopeReferenceOptions={scopeReferenceOptions}
+              subjectOptions={roleAssignmentSubjectOptions}
             />
             <button
               className="primaryButton"
               type="submit"
               disabled={
-                employeeOptions.length === 0 ||
+                roleAssignmentSubjectCount === 0 ||
                 roleAssignmentOptions.length === 0
               }
             >
@@ -411,8 +429,10 @@ export default async function RolesAdminPage({
                   currentEmployeeId={access.employeeId}
                   employees={employees}
                   key={binding.id}
+                  orgUnits={orgUnits}
                   roles={roles}
                   t={t}
+                  workQueues={workQueues}
                 />
               ))
             )}
@@ -883,13 +903,17 @@ function RoleBindingRow({
   currentEmployeeId,
   employees,
   roles,
-  t
+  t,
+  orgUnits,
+  workQueues
 }: {
   binding: PermissionRoleBinding;
   currentEmployeeId: string;
   employees: readonly TenantEmployeeRecord[];
   roles: readonly TenantRoleRecord[];
   t: Translator;
+  orgUnits: readonly OrgUnitRecord[];
+  workQueues: readonly WorkQueueRecord[];
 }): ReactNode {
   const role = roles.find((candidate) => candidate.id === binding.roleId);
   const employee =
@@ -914,7 +938,11 @@ function RoleBindingRow({
         <p className="metaText">
           {t("admin.roles.assignmentSubject", {
             subject: t(subjectTypeKey(binding.subject)),
-            value: subjectValue(binding.subject, employee)
+            value: subjectValue(binding.subject, {
+              employee,
+              orgUnits,
+              workQueues
+            })
           })}
         </p>
         <p className="metaText">
@@ -1375,13 +1403,30 @@ function countBindingsByRoleId(
 
 function subjectValue(
   subject: PermissionRoleBindingSubject,
-  employee: TenantEmployeeRecord | undefined
-): string {
-  if (subject.type !== "employee") {
-    return subject.id;
+  references: {
+    readonly employee?: TenantEmployeeRecord;
+    readonly orgUnits: readonly OrgUnitRecord[];
+    readonly workQueues: readonly WorkQueueRecord[];
   }
-
-  return employee ? `${employee.displayName} (${employee.email})` : subject.id;
+): string {
+  switch (subject.type) {
+    case "employee":
+      return references.employee
+        ? `${references.employee.displayName} (${references.employee.email})`
+        : subject.id;
+    case "org_unit":
+      return (
+        references.orgUnits.find((orgUnit) => orgUnit.id === subject.id)
+          ?.name ?? subject.id
+      );
+    case "queue":
+      return (
+        references.workQueues.find((workQueue) => workQueue.id === subject.id)
+          ?.name ?? subject.id
+      );
+    case "team":
+      return subject.id;
+  }
 }
 
 function employeeValue(
@@ -1419,6 +1464,8 @@ function scopePickerMessages(t: Translator): ScopePickerMessages {
     reason: t("admin.roles.directGrantReasonInput"),
     reasonPlaceholder: t("admin.roles.directGrantReason.placeholder"),
     role: t("admin.roles.role"),
+    subjectReference: t("admin.roles.subjectReference"),
+    subjectType: t("admin.roles.subjectType"),
     scopeType: t("admin.roles.scopeType"),
     scopeReference: t("admin.roles.scopeReference"),
     scopeReferenceDescription: t("admin.roles.scopeReference.description"),
@@ -1427,6 +1474,12 @@ function scopePickerMessages(t: Translator): ScopePickerMessages {
     selectEmployee: t("admin.roles.selectEmployee"),
     selectPermission: t("admin.roles.selectPermission"),
     selectRole: t("admin.roles.selectRole"),
+    selectSubject: t("admin.roles.selectSubject"),
+    subjectLabels: {
+      employee: t("admin.roles.subject.employee"),
+      org_unit: t("admin.roles.subject.orgUnit"),
+      queue: t("admin.roles.subject.queue")
+    },
     scopeLabels: {
       tenant: t("admin.roles.scope.tenant"),
       org_unit: t("admin.roles.scope.orgUnit"),

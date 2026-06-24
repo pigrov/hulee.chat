@@ -10,6 +10,7 @@ import {
   type Permission,
   type PermissionScope,
   type PermissionRoleBinding,
+  type PermissionRoleBindingSubject,
   type PreparedCustomTenantRole
 } from "@hulee/core";
 import {
@@ -265,10 +266,7 @@ export async function assignTenantRoleAction(
   await assertWebActionRequest();
 
   const session = await assertVerifiedRolesPermission();
-  const employeeId = readRequiredFormString(
-    formData,
-    "employeeId"
-  ) as EmployeeId;
+  const subject = readRoleBindingSubject(formData);
   const roleId = readRequiredFormString(formData, "roleId");
   const scope = normalizePermissionScope({
     type: readRequiredFormString(formData, "scopeType"),
@@ -278,15 +276,13 @@ export async function assignTenantRoleAction(
   const rbacRepository = createSqlTenantRbacRepository(getWebDatabase());
   const employeeRepository =
     createSqlEmployeeDirectoryRepository(getWebDatabase());
+  const orgStructureRepository =
+    createSqlOrgStructureRepository(getWebDatabase());
   let destination = roleActionDestination(formData, "invalid");
 
   try {
-    const [roles, target, bindings] = await Promise.all([
+    const [roles, bindings] = await Promise.all([
       rbacRepository.listRoleDefinitions({ tenantId: session.tenantId }),
-      employeeRepository.findEmployee({
-        tenantId: session.tenantId,
-        employeeId
-      }),
       rbacRepository.listRoleBindings({
         tenantId: session.tenantId,
         at: now
@@ -296,8 +292,8 @@ export async function assignTenantRoleAction(
     const existingBinding = bindings.find((binding) => {
       return (
         binding.roleId === roleId &&
-        binding.subject.type === "employee" &&
-        binding.subject.id === employeeId &&
+        binding.subject.type === subject.type &&
+        binding.subject.id === subject.id &&
         areScopesEqual(binding.scope, scope)
       );
     });
@@ -306,24 +302,23 @@ export async function assignTenantRoleAction(
       throw new Error("Role is not assignable.");
     }
 
-    if (target === null || target.deactivatedAt !== null) {
-      throw new Error("Employee is not assignable.");
-    }
-
     assertPermissionsAllowedForScope(role.permissions, scope.type);
+    await assertAssignableRoleBindingSubject({
+      tenantId: session.tenantId,
+      subject,
+      employeeRepository,
+      orgStructureRepository
+    });
     await assertKnownScopeReference(session.tenantId, scope);
 
     if (existingBinding === undefined) {
-      const bindingId = `role_binding:${session.tenantId}:${employeeId}:${randomUUID()}`;
+      const bindingId = `role_binding:${session.tenantId}:${subject.type}:${randomUUID()}`;
 
       await rbacRepository.createRoleBinding({
         id: bindingId,
         tenantId: session.tenantId,
         roleId,
-        subject: {
-          type: "employee",
-          id: employeeId
-        },
+        subject,
         scope,
         createdByEmployeeId: session.employeeId,
         createdAt: now
@@ -337,9 +332,7 @@ export async function assignTenantRoleAction(
         entityId: bindingId,
         metadata: {
           roleId,
-          targetEmployeeId: employeeId,
-          subjectType: "employee",
-          subjectId: employeeId,
+          ...roleBindingSubjectMetadata(subject),
           ...scopeMetadata(scope)
         },
         occurredAt: now
@@ -697,6 +690,58 @@ async function assertKnownScopeReference(
   }
 }
 
+async function assertAssignableRoleBindingSubject(input: {
+  readonly tenantId: TenantId;
+  readonly subject: PermissionRoleBindingSubject;
+  readonly employeeRepository: ReturnType<
+    typeof createSqlEmployeeDirectoryRepository
+  >;
+  readonly orgStructureRepository: ReturnType<
+    typeof createSqlOrgStructureRepository
+  >;
+}): Promise<void> {
+  switch (input.subject.type) {
+    case "employee": {
+      const target = await input.employeeRepository.findEmployee({
+        tenantId: input.tenantId,
+        employeeId: input.subject.id
+      });
+
+      if (target === null || target.deactivatedAt !== null) {
+        throw new Error("Employee is not assignable.");
+      }
+
+      return;
+    }
+    case "org_unit": {
+      const orgUnits = await input.orgStructureRepository.listOrgUnits({
+        tenantId: input.tenantId,
+        activeOnly: true
+      });
+
+      if (!orgUnits.some((orgUnit) => orgUnit.id === input.subject.id)) {
+        throw new Error("Org unit subject is not assignable.");
+      }
+
+      return;
+    }
+    case "queue": {
+      const workQueues = await input.orgStructureRepository.listWorkQueues({
+        tenantId: input.tenantId,
+        activeOnly: true
+      });
+
+      if (!workQueues.some((workQueue) => workQueue.id === input.subject.id)) {
+        throw new Error("Work queue subject is not assignable.");
+      }
+
+      return;
+    }
+    case "team":
+      throw new Error("Team role assignments are not supported yet.");
+  }
+}
+
 function permissionDiff(
   previousPermissions: readonly Permission[],
   nextPermissions: readonly Permission[]
@@ -749,6 +794,51 @@ function scopeMetadata(scope: PermissionScope): Record<string, string> {
   return id === undefined
     ? { scopeType: scope.type }
     : { scopeType: scope.type, scopeId: id };
+}
+
+function roleBindingSubjectMetadata(
+  subject: PermissionRoleBindingSubject
+): Record<string, string> {
+  return subject.type === "employee"
+    ? {
+        targetEmployeeId: subject.id,
+        subjectType: subject.type,
+        subjectId: subject.id
+      }
+    : {
+        subjectType: subject.type,
+        subjectId: subject.id
+      };
+}
+
+function readRoleBindingSubject(
+  formData: FormData
+): PermissionRoleBindingSubject {
+  const subjectType =
+    readOptionalFormString(formData, "subjectType") ?? "employee";
+  const subjectId =
+    readOptionalFormString(formData, "subjectId") ??
+    readRequiredFormString(formData, "employeeId");
+
+  switch (subjectType) {
+    case "employee":
+      return {
+        type: "employee",
+        id: subjectId as EmployeeId
+      };
+    case "org_unit":
+      return {
+        type: "org_unit",
+        id: subjectId
+      };
+    case "queue":
+      return {
+        type: "queue",
+        id: subjectId
+      };
+    default:
+      throw new Error("Role binding subject type is not supported.");
+  }
 }
 
 function readRequiredFormString(formData: FormData, name: string): string {

@@ -769,6 +769,12 @@ a.secondaryButton {
   gap: var(--hulee-space-block);
 }
 
+.roleSubjectGrid {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.8fr) minmax(220px, 1.4fr);
+  gap: var(--hulee-space-block);
+}
+
 .orgStructureCreateForm,
 .orgStructureInlineForm {
   grid-template-columns:
@@ -1314,6 +1320,7 @@ button.managementRow:focus-visible {
   .managementRow.orgStructureRow,
   .scopePickerGrid,
   .roleEditorGrid,
+  .roleSubjectGrid,
   .employeeMembershipGrid,
   .permissionEditorGrid,
   .brandPresetGrid,
