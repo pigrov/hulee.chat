@@ -28,6 +28,7 @@ import {
 } from "./http/internal-api-handler";
 import {
   createInternalInboxCommandService,
+  createSqlInternalInboxAuthorizationService,
   createSqlInternalInboxQueryService
 } from "./internal-inbox-service";
 import {
@@ -128,6 +129,9 @@ export function createInternalApiDataPlaneHandler(
         })
       )
     : undefined;
+  const inboxAuthorization = createSqlInternalInboxAuthorizationService({
+    database: options.database
+  });
 
   return createInternalApiHandler({
     sessionResolver: createSignedInternalSessionResolver({
@@ -137,10 +141,12 @@ export function createInternalApiDataPlaneHandler(
         (options.env?.NODE_ENV ?? process.env.NODE_ENV) !== "production"
     }),
     inboxQueries: createSqlInternalInboxQueryService({
-      database: options.database
+      database: options.database,
+      authorization: inboxAuthorization
     }),
     inboxCommands: createInternalInboxCommandService({
-      repository: externalMessageRepository
+      repository: externalMessageRepository,
+      authorization: inboxAuthorization
     }),
     integrations: createInternalIntegrationService({
       repository: createSqlTenantModuleConfigRepository(options.database),
@@ -246,7 +252,9 @@ export { createPublicApiHandler } from "./http/public-api-handler";
 export { createTelegramWebhookHandler } from "./http/telegram-webhook-handler";
 export { createExternalChannelCommandService } from "./external-channel-command-service";
 export {
+  createInternalInboxAuthorizationService,
   createInternalInboxCommandService,
+  createSqlInternalInboxAuthorizationService,
   createSqlInternalInboxQueryService
 } from "./internal-inbox-service";
 export { createInternalIntegrationService } from "./internal-integrations-service";
@@ -259,6 +267,9 @@ export type {
   ExternalChannelCommandServiceOptions
 } from "./external-channel-command-service";
 export type {
+  InternalInboxAuthorizationService,
+  InternalInboxAuthorizationServiceOptions,
+  InternalInboxConversationAccessResource,
   InternalInboxCommandContext,
   InternalInboxCommandService,
   InternalInboxCommandServiceOptions,

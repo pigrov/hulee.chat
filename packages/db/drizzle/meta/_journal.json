@@ -78,6 +78,13 @@
       "when": 1782270276712,
       "tag": "0010_closed_jackpot",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1782274926512,
+      "tag": "0011_condemned_franklin_richards",
+      "breakpoints": true
     }
   ]
 }

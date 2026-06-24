@@ -153,6 +153,25 @@ describe("SQL local auth repository", () => {
     });
   });
 
+  it("aggregates scoped permissions for coarse session capability checks", async () => {
+    const executor = new RecordingSqlExecutor([]);
+    const repository = createSqlLocalAuthRepository(executor);
+
+    await repository.findSessionByToken(
+      "raw-token",
+      new Date("2026-06-22T10:00:00.000Z")
+    );
+
+    const query = renderQuery(executor.queries[0]).sql;
+
+    expect(query).toContain("employee_org_unit_memberships");
+    expect(query).toContain("employee_work_queue_memberships");
+    expect(query).not.toContain("tenant_role_bindings.scope_type = 'tenant'");
+    expect(query).not.toContain(
+      "direct_permission_grants.scope_type = 'tenant'"
+    );
+  });
+
   it("returns null for unknown sessions", async () => {
     const repository = createSqlLocalAuthRepository(
       new RecordingSqlExecutor([])

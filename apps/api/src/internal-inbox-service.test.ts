@@ -7,7 +7,8 @@ import type {
 } from "@hulee/contracts";
 import type {
   ExternalMessageRepository,
-  PersistedMessageSummary
+  PersistedMessageSummary,
+  TenantEmployeeRecord
 } from "@hulee/db";
 import type {
   Client,
@@ -16,10 +17,14 @@ import type {
   QueueExternalOutboundMessageResult,
   RegisterExternalClientResult
 } from "@hulee/core";
+import { CoreError } from "@hulee/core";
 import { describe, expect, it } from "vitest";
 
 import {
+  createInternalInboxAuthorizationService,
   createInternalInboxCommandService,
+  type InternalInboxAuthorizationService,
+  type InternalInboxConversationAccessResource,
   type InternalInboxCommandContext
 } from "./internal-inbox-service";
 
@@ -38,12 +43,25 @@ const conversation: Conversation = {
   createdAt: "2026-06-22T10:00:00.000Z"
 };
 const now = new Date("2026-06-22T10:00:00.000Z");
+const employee: TenantEmployeeRecord = {
+  tenantId,
+  employeeId: context.employeeId,
+  accountId: "account-1",
+  email: "agent@example.com",
+  displayName: "Agent",
+  roles: [],
+  orgUnitIds: ["org-sales"],
+  queueIds: ["queue-sales"],
+  createdAt: now,
+  deactivatedAt: null
+};
 
 describe("internal inbox command service", () => {
   it("queues replies against tenant-owned conversations", async () => {
     const repository = new InMemoryExternalMessageRepository([conversation]);
     const service = createInternalInboxCommandService({
       repository,
+      authorization: createReplyAuthorization(),
       now: () => now,
       idempotencyKeyFactory: () => "reply-1"
     });
@@ -66,6 +84,7 @@ describe("internal inbox command service", () => {
     const repository = new InMemoryExternalMessageRepository([conversation]);
     const service = createInternalInboxCommandService({
       repository,
+      authorization: createReplyAuthorization(),
       now: () => now
     });
     const first = await service.sendReply(context, {
@@ -96,6 +115,7 @@ describe("internal inbox command service", () => {
     ]);
     const service = createInternalInboxCommandService({
       repository,
+      authorization: createReplyAuthorization(),
       now: () => now
     });
 
@@ -110,7 +130,165 @@ describe("internal inbox command service", () => {
       code: "tenant.not_found"
     });
   });
+
+  it("filters conversations by the current queue scope", async () => {
+    const authorization = createInternalInboxAuthorizationService({
+      employeeRepository: createEmployeeRepository(employee),
+      rbacRepository: {
+        async listEffectiveAccessSources() {
+          return {
+            roles: [
+              {
+                id: "role-lead-intake",
+                tenantId,
+                permissions: ["inbox.read"]
+              }
+            ],
+            roleBindings: [
+              {
+                tenantId,
+                roleId: "role-lead-intake",
+                subject: {
+                  type: "queue",
+                  id: "queue-sales"
+                },
+                scope: {
+                  type: "queue",
+                  id: "queue-sales"
+                }
+              }
+            ],
+            directGrants: []
+          };
+        }
+      },
+      now: () => now
+    });
+    const conversations: readonly InternalInboxConversationAccessResource[] = [
+      {
+        id: "conversation-sales",
+        tenantId,
+        clientId: "client-sales",
+        currentQueueId: "queue-sales"
+      },
+      {
+        id: "conversation-claims",
+        tenantId,
+        clientId: "client-claims",
+        currentQueueId: "queue-claims"
+      }
+    ];
+
+    await expect(
+      authorization.filterConversations(context, {
+        conversations,
+        permission: "inbox.read"
+      })
+    ).resolves.toEqual([conversations[0]]);
+  });
+
+  it("allows assigned replies only for the current assignee", async () => {
+    const authorization = createInternalInboxAuthorizationService({
+      employeeRepository: createEmployeeRepository(employee),
+      rbacRepository: {
+        async listEffectiveAccessSources() {
+          return {
+            roles: [
+              {
+                id: "role-assigned-reply",
+                tenantId,
+                permissions: ["message.reply"]
+              }
+            ],
+            roleBindings: [
+              {
+                tenantId,
+                roleId: "role-assigned-reply",
+                subject: {
+                  type: "employee",
+                  id: context.employeeId
+                },
+                scope: {
+                  type: "assigned"
+                }
+              }
+            ],
+            directGrants: []
+          };
+        }
+      },
+      now: () => now
+    });
+
+    await expect(
+      authorization.assertConversationAccess(context, {
+        conversation: {
+          ...conversation,
+          assignedEmployeeId: context.employeeId
+        },
+        permission: "message.reply"
+      })
+    ).resolves.toBeUndefined();
+
+    await expect(
+      authorization.assertConversationAccess(context, {
+        conversation: {
+          ...conversation,
+          assignedEmployeeId: "employee-2" as EmployeeId
+        },
+        permission: "message.reply"
+      })
+    ).rejects.toEqual(new CoreError("permission.denied"));
+  });
 });
+
+function createReplyAuthorization(): InternalInboxAuthorizationService {
+  return createInternalInboxAuthorizationService({
+    employeeRepository: createEmployeeRepository(employee),
+    rbacRepository: {
+      async listEffectiveAccessSources() {
+        return {
+          roles: [
+            {
+              id: "role-reply",
+              tenantId,
+              permissions: ["message.reply"]
+            }
+          ],
+          roleBindings: [
+            {
+              tenantId,
+              roleId: "role-reply",
+              subject: {
+                type: "employee",
+                id: context.employeeId
+              },
+              scope: {
+                type: "tenant"
+              }
+            }
+          ],
+          directGrants: []
+        };
+      }
+    },
+    now: () => now
+  });
+}
+
+function createEmployeeRepository(employeeRecord: TenantEmployeeRecord) {
+  return {
+    async findEmployee(input: {
+      tenantId: TenantId;
+      employeeId: EmployeeId;
+    }): Promise<TenantEmployeeRecord | null> {
+      return employeeRecord.tenantId === input.tenantId &&
+        employeeRecord.employeeId === input.employeeId
+        ? employeeRecord
+        : null;
+    }
+  };
+}
 
 class InMemoryExternalMessageRepository implements ExternalMessageRepository {
   readonly messages: PersistedMessageSummary[] = [];

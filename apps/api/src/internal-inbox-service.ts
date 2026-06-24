@@ -15,12 +15,27 @@ import type {
   TenantId
 } from "@hulee/contracts";
 import {
+  canAccess,
   CoreError,
   createSequentialIdFactory,
   queueExternalOutboundMessage,
-  type IdFactory
+  resolveEffectivePermissionGrants,
+  type IdFactory,
+  type Permission,
+  type PermissionActor,
+  type PermissionResourceContext
 } from "@hulee/core";
-import type { ExternalMessageRepository, HuleeDatabase } from "@hulee/db";
+import type {
+  EmployeeDirectoryRepository,
+  ExternalMessageRepository,
+  HuleeDatabase,
+  TenantEmployeeRecord,
+  TenantRbacRepository
+} from "@hulee/db";
+import {
+  createSqlEmployeeDirectoryRepository,
+  createSqlTenantRbacRepository
+} from "@hulee/db";
 import { sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 
@@ -46,8 +61,48 @@ export type InternalInboxCommandService = {
   ): Promise<InternalInboxReplyResponse>;
 };
 
+export type InternalInboxConversationAccessResource = {
+  readonly id: string;
+  readonly tenantId: TenantId;
+  readonly clientId: string;
+  readonly currentQueueId?: string;
+  readonly currentQueueOwningOrgUnitId?: string;
+  readonly assignedEmployeeId?: EmployeeId;
+  readonly assignedTeamId?: string;
+};
+
+export type InternalInboxAuthorizationService = {
+  filterConversations<
+    TConversation extends InternalInboxConversationAccessResource
+  >(
+    context: InternalInboxQueryContext,
+    input: {
+      conversations: readonly TConversation[];
+      permission: Permission;
+    }
+  ): Promise<readonly TConversation[]>;
+  assertConversationAccess(
+    context: InternalInboxCommandContext,
+    input: {
+      conversation: InternalInboxConversationAccessResource;
+      permission: Permission;
+    }
+  ): Promise<void>;
+};
+
+export type InternalInboxAuthorizationServiceOptions = {
+  employeeRepository: Pick<EmployeeDirectoryRepository, "findEmployee">;
+  rbacRepository: Pick<TenantRbacRepository, "listEffectiveAccessSources">;
+  queueOwnerResolver?: (input: {
+    tenantId: TenantId;
+    queueId: string;
+  }) => Promise<string | undefined>;
+  now?: () => Date;
+};
+
 export type InternalInboxCommandServiceOptions = {
   repository: ExternalMessageRepository;
+  authorization: InternalInboxAuthorizationService;
   now?: () => Date;
   idFactory?: (context: InternalInboxCommandContext) => IdFactory;
   idempotencyKeyFactory?: (input: {
@@ -71,16 +126,24 @@ type TenantRow = {
 };
 
 type ConversationRow = {
+  tenant_id: string;
   conversation_id: string;
   client_id: string;
   client_display_name: string;
   status: string;
   source: string;
+  current_queue_id: string | null;
+  current_queue_owning_org_unit_id: string | null;
+  assigned_employee_id: string | null;
+  assigned_team_id: string | null;
   message_count: number | string;
   queued_count: number | string;
   last_message_text: string | null;
   last_message_at: Date | string | null;
 };
+
+type InboxConversationRecord = InternalInboxConversation &
+  InternalInboxConversationAccessResource;
 
 type MessageRow = {
   id: string;
@@ -111,20 +174,6 @@ export function createInternalInboxCommandService(
           conversationId: input.conversationId,
           requestId: context.requestId
         });
-      const existingMessage =
-        await options.repository.findMessageByIdempotencyKey({
-          tenantId: context.tenantId,
-          idempotencyKey
-        });
-
-      if (existingMessage !== null) {
-        return {
-          messageId: existingMessage.message.id,
-          status: "queued",
-          idempotencyKey: existingMessage.message.idempotencyKey
-        };
-      }
-
       const conversation = await options.repository.findConversationById({
         tenantId: context.tenantId,
         conversationId: input.conversationId as ConversationId
@@ -132,6 +181,29 @@ export function createInternalInboxCommandService(
 
       if (conversation === null) {
         throw new CoreError("tenant.not_found");
+      }
+
+      await options.authorization.assertConversationAccess(context, {
+        conversation,
+        permission: "message.reply"
+      });
+
+      const existingMessage =
+        await options.repository.findMessageByIdempotencyKey({
+          tenantId: context.tenantId,
+          idempotencyKey
+        });
+
+      if (existingMessage !== null) {
+        if (existingMessage.message.conversationId !== conversation.id) {
+          throw new CoreError("validation.failed");
+        }
+
+        return {
+          messageId: existingMessage.message.id,
+          status: "queued",
+          idempotencyKey: existingMessage.message.idempotencyKey
+        };
       }
 
       const result = queueExternalOutboundMessage({
@@ -154,25 +226,103 @@ export function createInternalInboxCommandService(
   };
 }
 
+export function createSqlInternalInboxAuthorizationService(input: {
+  database: HuleeDatabase;
+  now?: () => Date;
+}): InternalInboxAuthorizationService {
+  return createInternalInboxAuthorizationService({
+    employeeRepository: createSqlEmployeeDirectoryRepository(input.database),
+    rbacRepository: createSqlTenantRbacRepository(input.database),
+    queueOwnerResolver: ({ tenantId, queueId }) =>
+      loadQueueOwnerOrgUnitId(input.database, tenantId, queueId),
+    now: input.now
+  });
+}
+
+export function createInternalInboxAuthorizationService(
+  options: InternalInboxAuthorizationServiceOptions
+): InternalInboxAuthorizationService {
+  const now = options.now ?? (() => new Date());
+
+  return {
+    async filterConversations(context, input) {
+      const snapshot = await resolveInboxAccessSnapshot({
+        context,
+        now: now(),
+        options
+      });
+
+      return input.conversations.filter(
+        (conversation) =>
+          canAccess({
+            actor: snapshot.actor,
+            permission: input.permission,
+            resource: conversationResourceContext(conversation),
+            effectiveGrants: snapshot.effectiveGrants
+          }).allowed
+      );
+    },
+
+    async assertConversationAccess(context, input) {
+      const snapshot = await resolveInboxAccessSnapshot({
+        context,
+        now: now(),
+        options
+      });
+      const conversation = await withResolvedQueueOwner(
+        input.conversation,
+        options
+      );
+      const decision = canAccess({
+        actor: snapshot.actor,
+        permission: input.permission,
+        resource: conversationResourceContext(conversation),
+        effectiveGrants: snapshot.effectiveGrants
+      });
+
+      if (!decision.allowed) {
+        throw new CoreError("permission.denied");
+      }
+    }
+  };
+}
+
 export function createSqlInternalInboxQueryService(input: {
   database: HuleeDatabase;
+  authorization?: InternalInboxAuthorizationService;
 }): InternalInboxQueryService {
+  const authorization =
+    input.authorization ??
+    createSqlInternalInboxAuthorizationService({ database: input.database });
+
   return {
     async loadInboxView(context, queryInput) {
-      const [tenant, conversations] = await Promise.all([
+      const [tenant, conversationRecords] = await Promise.all([
         loadTenantContext(input.database, context.tenantId),
         loadConversations(input.database, context.tenantId)
       ]);
-      const selectedConversation =
-        conversations.find(
+      const readableConversationRecords =
+        await authorization.filterConversations(context, {
+          conversations: conversationRecords,
+          permission: "inbox.read"
+        });
+      const selectedConversationRecord =
+        readableConversationRecords.find(
           (conversation) =>
             conversation.id === queryInput?.selectedConversationId
-        ) ?? conversations[0];
-      const messages = selectedConversation
+        ) ?? readableConversationRecords[0];
+      const conversations = readableConversationRecords.map(
+        toInternalInboxConversation
+      );
+      const selectedConversation =
+        selectedConversationRecord === undefined
+          ? undefined
+          : toInternalInboxConversation(selectedConversationRecord);
+      const messages = selectedConversationRecord
         ? await loadMessages(
             input.database,
             context.tenantId,
-            selectedConversation.id
+            selectedConversationRecord.id
           )
         : [];
 
@@ -184,6 +334,122 @@ export function createSqlInternalInboxQueryService(input: {
       };
     }
   };
+}
+
+function toInternalInboxConversation(
+  record: InboxConversationRecord
+): InternalInboxConversation {
+  const { tenantId: _tenantId, ...conversation } = record;
+
+  return conversation;
+}
+
+async function resolveInboxAccessSnapshot(input: {
+  readonly context: InternalInboxCommandContext;
+  readonly now: Date;
+  readonly options: InternalInboxAuthorizationServiceOptions;
+}): Promise<{
+  readonly actor: PermissionActor;
+  readonly effectiveGrants: ReturnType<typeof resolveEffectivePermissionGrants>;
+}> {
+  const employee = await input.options.employeeRepository.findEmployee({
+    tenantId: input.context.tenantId,
+    employeeId: input.context.employeeId
+  });
+
+  if (employee === null || employee.deactivatedAt !== null) {
+    throw new CoreError("permission.denied");
+  }
+
+  const actor = permissionActorFromEmployee(employee);
+  const sources = await input.options.rbacRepository.listEffectiveAccessSources(
+    {
+      actor,
+      at: input.now
+    }
+  );
+
+  return {
+    actor,
+    effectiveGrants: resolveEffectivePermissionGrants({
+      actor,
+      roles: sources.roles,
+      roleBindings: sources.roleBindings,
+      directGrants: sources.directGrants,
+      at: input.now
+    })
+  };
+}
+
+function permissionActorFromEmployee(
+  employee: TenantEmployeeRecord
+): PermissionActor {
+  return {
+    tenantId: employee.tenantId,
+    employeeId: employee.employeeId,
+    roles: employee.roles,
+    orgUnitIds: employee.orgUnitIds,
+    queueIds: employee.queueIds
+  };
+}
+
+async function withResolvedQueueOwner(
+  conversation: InternalInboxConversationAccessResource,
+  options: InternalInboxAuthorizationServiceOptions
+): Promise<InternalInboxConversationAccessResource> {
+  if (
+    conversation.currentQueueId === undefined ||
+    conversation.currentQueueOwningOrgUnitId !== undefined ||
+    options.queueOwnerResolver === undefined
+  ) {
+    return conversation;
+  }
+
+  const currentQueueOwningOrgUnitId = await options.queueOwnerResolver({
+    tenantId: conversation.tenantId,
+    queueId: conversation.currentQueueId
+  });
+
+  return currentQueueOwningOrgUnitId === undefined
+    ? conversation
+    : {
+        ...conversation,
+        currentQueueOwningOrgUnitId
+      };
+}
+
+function conversationResourceContext(
+  conversation: InternalInboxConversationAccessResource
+): PermissionResourceContext {
+  return {
+    tenantId: conversation.tenantId,
+    clientId: conversation.clientId as PermissionResourceContext["clientId"],
+    conversationId:
+      conversation.id as PermissionResourceContext["conversationId"],
+    orgUnitId: conversation.currentQueueOwningOrgUnitId,
+    queueId: conversation.currentQueueId,
+    assignedEmployeeId: conversation.assignedEmployeeId,
+    assignedTeamIds:
+      conversation.assignedTeamId === undefined
+        ? undefined
+        : [conversation.assignedTeamId]
+  };
+}
+
+async function loadQueueOwnerOrgUnitId(
+  db: HuleeDatabase,
+  tenantId: TenantId,
+  queueId: string
+): Promise<string | undefined> {
+  const result = await db.execute<{ owning_org_unit_id: string | null }>(sql`
+    select owning_org_unit_id
+    from work_queues
+    where tenant_id = ${tenantId}
+      and id = ${queueId}
+    limit 1
+  `);
+
+  return result.rows[0]?.owning_org_unit_id ?? undefined;
 }
 
 async function loadTenantContext(
@@ -266,14 +532,19 @@ async function loadTenantContext(
 async function loadConversations(
   db: HuleeDatabase,
   tenantId: TenantId
-): Promise<InternalInboxConversation[]> {
+): Promise<InboxConversationRecord[]> {
   const result = await db.execute<ConversationRow>(sql`
     select
+      c.tenant_id,
       c.id as conversation_id,
       c.client_id,
       cl.display_name as client_display_name,
       c.status,
       cl.source,
+      c.current_queue_id,
+      wq.owning_org_unit_id as current_queue_owning_org_unit_id,
+      c.assigned_employee_id,
+      c.assigned_team_id,
       count(m.id)::int as message_count,
       count(m.id) filter (where m.status = 'queued')::int as queued_count,
       (
@@ -285,23 +556,43 @@ async function loadConversations(
     inner join clients cl
       on cl.tenant_id = c.tenant_id
      and cl.id = c.client_id
+    left join work_queues wq
+      on wq.tenant_id = c.tenant_id
+     and wq.id = c.current_queue_id
     left join messages m
       on m.tenant_id = c.tenant_id
      and m.conversation_id = c.id
     where c.tenant_id = ${tenantId}
       and c.type = 'client_direct'
       and c.status = 'open'
-    group by c.id, c.client_id, cl.display_name, c.status, cl.source
+    group by c.tenant_id,
+             c.id,
+             c.client_id,
+             cl.display_name,
+             c.status,
+             cl.source,
+             c.current_queue_id,
+             wq.owning_org_unit_id,
+             c.assigned_employee_id,
+             c.assigned_team_id
     order by max(m.created_at) desc nulls last, c.created_at desc, c.id desc
     limit 50
   `);
 
   return result.rows.map((row) => ({
+    tenantId: row.tenant_id as TenantId,
     id: row.conversation_id,
     clientId: row.client_id,
     clientDisplayName: row.client_display_name,
     status: row.status,
     source: row.source,
+    currentQueueId: row.current_queue_id ?? undefined,
+    currentQueueOwningOrgUnitId:
+      row.current_queue_owning_org_unit_id ?? undefined,
+    assignedEmployeeId: row.assigned_employee_id
+      ? (row.assigned_employee_id as EmployeeId)
+      : undefined,
+    assignedTeamId: row.assigned_team_id ?? undefined,
     messageCount: Number(row.message_count),
     queuedCount: Number(row.queued_count),
     lastMessageText: row.last_message_text ?? undefined,

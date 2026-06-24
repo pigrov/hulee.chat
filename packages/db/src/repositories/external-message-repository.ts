@@ -1,6 +1,7 @@
 import type {
   ClientId,
   ConversationId,
+  EmployeeId,
   MessageId,
   PlatformErrorCode,
   TenantId
@@ -104,6 +105,9 @@ type ConversationRow = {
   tenant_id: string;
   type: Conversation["type"];
   client_id: string;
+  current_queue_id: string | null;
+  assigned_employee_id: string | null;
+  assigned_team_id: string | null;
   created_at: Date | string;
 };
 
@@ -269,6 +273,9 @@ export function buildFindOpenConversationByClientSql(
            tenant_id,
            type,
            client_id,
+           current_queue_id,
+           assigned_employee_id,
+           assigned_team_id,
            created_at
     from conversations
     where tenant_id = ${input.tenantId}
@@ -297,6 +304,9 @@ export function buildFindConversationByIdSql(
            tenant_id,
            type,
            client_id,
+           current_queue_id,
+           assigned_employee_id,
+           assigned_team_id,
            created_at
     from conversations
     where tenant_id = ${input.tenantId}
@@ -362,6 +372,11 @@ function mapConversationRow(row: ConversationRow): Conversation {
     type: row.type,
     clientId: row.client_id as ClientId,
     participantEmployeeIds: [],
+    currentQueueId: row.current_queue_id ?? undefined,
+    assignedEmployeeId: row.assigned_employee_id
+      ? (row.assigned_employee_id as EmployeeId)
+      : undefined,
+    assignedTeamId: row.assigned_team_id ?? undefined,
     createdAt: toIsoTimestamp(row.created_at)
   };
 }

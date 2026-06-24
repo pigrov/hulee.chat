@@ -747,10 +747,29 @@ export const conversations = pgTable(
     tenantId: tenantIdColumn().references(() => tenants.id),
     type: conversationType("type").notNull(),
     clientId: text("client_id").references(() => clients.id),
+    currentQueueId: text("current_queue_id").references(() => workQueues.id),
+    assignedEmployeeId: text("assigned_employee_id").references(
+      () => employees.id
+    ),
+    assignedTeamId: text("assigned_team_id").references(() => teams.id),
     status: text("status").notNull().default("open"),
     ...timestamps
   },
-  (table) => [index("conversations_tenant_idx").on(table.tenantId)]
+  (table) => [
+    index("conversations_tenant_idx").on(table.tenantId),
+    index("conversations_tenant_queue_idx").on(
+      table.tenantId,
+      table.currentQueueId
+    ),
+    index("conversations_tenant_assigned_employee_idx").on(
+      table.tenantId,
+      table.assignedEmployeeId
+    ),
+    index("conversations_tenant_assigned_team_idx").on(
+      table.tenantId,
+      table.assignedTeamId
+    )
+  ]
 );
 
 export const conversationParticipants = pgTable(

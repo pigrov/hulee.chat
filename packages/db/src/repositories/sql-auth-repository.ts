@@ -230,7 +230,7 @@ export function buildFindTenantAccountByEmailSql(input: {
         and employee_roles.employee_id = employees.id
     ) legacy_roles on true
     left join lateral (
-      ${buildTenantScopedPermissionAggregationSql(sql`tenants.id`, sql`employees.id`, sql`now()`)}
+      ${buildAccessiblePermissionAggregationSql(sql`tenants.id`, sql`employees.id`, sql`now()`)}
     ) tenant_permissions on true
     where tenants.slug = ${input.tenantSlug}
       and lower(accounts.email) = lower(${input.email})
@@ -267,7 +267,7 @@ export function buildListTenantAccountsByEmailSql(email: string): SQL {
         and employee_roles.employee_id = employees.id
     ) legacy_roles on true
     left join lateral (
-      ${buildTenantScopedPermissionAggregationSql(sql`tenants.id`, sql`employees.id`, sql`now()`)}
+      ${buildAccessiblePermissionAggregationSql(sql`tenants.id`, sql`employees.id`, sql`now()`)}
     ) tenant_permissions on true
     where lower(accounts.email) = lower(${email})
     order by tenants.display_name asc,
@@ -348,7 +348,7 @@ export function buildFindAuthSessionByTokenSql(token: string, now: Date): SQL {
         and employee_roles.employee_id = employees.id
     ) legacy_roles on true
     left join lateral (
-      ${buildTenantScopedPermissionAggregationSql(sql`sessions.tenant_id`, sql`employees.id`, sql`${now}`)}
+      ${buildAccessiblePermissionAggregationSql(sql`sessions.tenant_id`, sql`employees.id`, sql`${now}`)}
     ) tenant_permissions on true
     left join platform_admin_accounts
       on platform_admin_accounts.id = sessions.platform_admin_account_id
@@ -641,7 +641,7 @@ function parsePermissions(value: unknown): readonly Permission[] {
   });
 }
 
-function buildTenantScopedPermissionAggregationSql(
+function buildAccessiblePermissionAggregationSql(
   tenantId: SQL,
   employeeId: SQL,
   at: SQL
@@ -665,10 +665,46 @@ function buildTenantScopedPermissionAggregationSql(
           on tenant_role_permissions.tenant_id = tenant_role_bindings.tenant_id
          and tenant_role_permissions.role_id = tenant_role_bindings.role_id
         where tenant_role_bindings.tenant_id = ${tenantId}
-          and tenant_role_bindings.subject_type = 'employee'
-          and tenant_role_bindings.subject_id = ${employeeId}
-          and tenant_role_bindings.scope_type = 'tenant'
-          and tenant_role_bindings.scope_id is null
+          and (
+            (
+              tenant_role_bindings.subject_type = 'employee'
+              and tenant_role_bindings.subject_id = ${employeeId}
+            )
+            or (
+              tenant_role_bindings.subject_type = 'org_unit'
+              and exists (
+                select 1
+                from employee_org_unit_memberships
+                inner join org_units
+                  on org_units.tenant_id =
+                      employee_org_unit_memberships.tenant_id
+                 and org_units.id =
+                      employee_org_unit_memberships.org_unit_id
+                 and org_units.status = 'active'
+                where employee_org_unit_memberships.tenant_id = ${tenantId}
+                  and employee_org_unit_memberships.employee_id = ${employeeId}
+                  and employee_org_unit_memberships.org_unit_id =
+                      tenant_role_bindings.subject_id
+              )
+            )
+            or (
+              tenant_role_bindings.subject_type = 'queue'
+              and exists (
+                select 1
+                from employee_work_queue_memberships
+                inner join work_queues
+                  on work_queues.tenant_id =
+                      employee_work_queue_memberships.tenant_id
+                 and work_queues.id =
+                      employee_work_queue_memberships.work_queue_id
+                 and work_queues.status = 'active'
+                where employee_work_queue_memberships.tenant_id = ${tenantId}
+                  and employee_work_queue_memberships.employee_id = ${employeeId}
+                  and employee_work_queue_memberships.work_queue_id =
+                      tenant_role_bindings.subject_id
+              )
+            )
+          )
           and tenant_role_bindings.revoked_at is null
           and (
             tenant_role_bindings.starts_at is null
@@ -683,8 +719,6 @@ function buildTenantScopedPermissionAggregationSql(
         from direct_permission_grants
         where direct_permission_grants.tenant_id = ${tenantId}
           and direct_permission_grants.employee_id = ${employeeId}
-          and direct_permission_grants.scope_type = 'tenant'
-          and direct_permission_grants.scope_id is null
           and direct_permission_grants.revoked_at is null
           and (
             direct_permission_grants.starts_at is null

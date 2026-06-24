@@ -101,6 +101,9 @@ export function mapExternalMessageIngestionToPersistenceRows(
             tenantId: result.conversation.tenantId,
             type: result.conversation.type,
             clientId: result.conversation.clientId,
+            currentQueueId: result.conversation.currentQueueId ?? null,
+            assignedEmployeeId: result.conversation.assignedEmployeeId ?? null,
+            assignedTeamId: result.conversation.assignedTeamId ?? null,
             status: "open",
             createdAt: parseTimestamp(result.conversation.createdAt),
             updatedAt: parseTimestamp(result.conversation.createdAt)

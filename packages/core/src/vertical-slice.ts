@@ -58,6 +58,9 @@ export type Conversation = TenantScope & {
   type: ConversationType;
   clientId: ClientId;
   participantEmployeeIds: readonly EmployeeId[];
+  currentQueueId?: string;
+  assignedEmployeeId?: EmployeeId;
+  assignedTeamId?: string;
   createdAt: string;
 };
 

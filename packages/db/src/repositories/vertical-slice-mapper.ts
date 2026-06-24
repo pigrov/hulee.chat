@@ -211,6 +211,9 @@ export function mapWorkspaceToPersistenceRows(
         tenantId: workspace.conversation.tenantId,
         type: workspace.conversation.type,
         clientId: workspace.conversation.clientId,
+        currentQueueId: workspace.conversation.currentQueueId ?? null,
+        assignedEmployeeId: workspace.conversation.assignedEmployeeId ?? null,
+        assignedTeamId: workspace.conversation.assignedTeamId ?? null,
         status: "open",
         createdAt: parseTimestamp(workspace.conversation.createdAt),
         updatedAt: parseTimestamp(workspace.conversation.createdAt)
