@@ -583,6 +583,46 @@ describe("internal API handler", () => {
     });
   });
 
+  it("requires narrow employees.manage override for org structure routes", async () => {
+    const { handler, loadOrgStructure, upsertOrgUnit, upsertWorkQueue } =
+      createHandler({
+        session: sessionWithPermissions(["employees.manage", "tenant.manage"])
+      });
+    const loadResponse = await handler.handle({
+      method: "GET",
+      path: "/internal/v1/org-structure"
+    });
+    const orgUnitResponse = await handler.handle({
+      method: "PUT",
+      path: "/internal/v1/org-structure/org-units",
+      body: {
+        name: "Sales",
+        kind: "department"
+      }
+    });
+    const queueResponse = await handler.handle({
+      method: "PUT",
+      path: "/internal/v1/org-structure/work-queues",
+      body: {
+        name: "Claims",
+        kind: "claims",
+        owningOrgUnitId: "org-sales"
+      }
+    });
+
+    for (const response of [loadResponse, orgUnitResponse, queueResponse]) {
+      expect(response.status).toBe(403);
+      expect(response.body).toMatchObject({
+        error: {
+          code: "permission.denied"
+        }
+      });
+    }
+    expect(loadOrgStructure).not.toHaveBeenCalled();
+    expect(upsertOrgUnit).not.toHaveBeenCalled();
+    expect(upsertWorkQueue).not.toHaveBeenCalled();
+  });
+
   it("inspects access decisions through roles.manage permission", async () => {
     const rolesManageSession = sessionWithPermissions(["roles.manage"]);
     const { handler, inspectAccessDecision } = createHandler({
@@ -914,6 +954,66 @@ describe("internal API handler", () => {
         code: "permission.denied"
       }
     });
+  });
+
+  it("requires narrow modules.manage override for Telegram integration routes", async () => {
+    const {
+      handler,
+      loadTelegramIntegration,
+      updateTelegramIntegration,
+      refreshTelegramDiagnostics,
+      setTelegramWebhook,
+      deleteTelegramWebhook
+    } = createHandler({
+      session: sessionWithPermissions(["modules.manage", "tenant.manage"])
+    });
+    const loadResponse = await handler.handle({
+      method: "GET",
+      path: "/internal/v1/integrations/telegram"
+    });
+    const updateResponse = await handler.handle({
+      method: "PUT",
+      path: "/internal/v1/integrations/telegram",
+      body: {
+        enabled: true,
+        channelExternalId: "telegram-local",
+        mode: "webhook",
+        botTokenSecretRef: "env:HULEE_TELEGRAM_BOT_TOKEN",
+        outboundEnabled: true
+      }
+    });
+    const diagnosticsResponse = await handler.handle({
+      method: "POST",
+      path: "/internal/v1/integrations/telegram/diagnostics"
+    });
+    const setWebhookResponse = await handler.handle({
+      method: "POST",
+      path: "/internal/v1/integrations/telegram/webhook"
+    });
+    const deleteWebhookResponse = await handler.handle({
+      method: "DELETE",
+      path: "/internal/v1/integrations/telegram/webhook"
+    });
+
+    for (const response of [
+      loadResponse,
+      updateResponse,
+      diagnosticsResponse,
+      setWebhookResponse,
+      deleteWebhookResponse
+    ]) {
+      expect(response.status).toBe(403);
+      expect(response.body).toMatchObject({
+        error: {
+          code: "permission.denied"
+        }
+      });
+    }
+    expect(loadTelegramIntegration).not.toHaveBeenCalled();
+    expect(updateTelegramIntegration).not.toHaveBeenCalled();
+    expect(refreshTelegramDiagnostics).not.toHaveBeenCalled();
+    expect(setTelegramWebhook).not.toHaveBeenCalled();
+    expect(deleteTelegramWebhook).not.toHaveBeenCalled();
   });
 
   it("honors permissions passed by the internal web client headers", async () => {
