@@ -660,7 +660,7 @@ function matchRoute(request: ApiHttpRequest): RouteMatch | undefined {
   return undefined;
 }
 
-function assertSessionCan(
+function assertSessionPermissionHeaderContains(
   session: InternalApiSession,
   permission: Permission
 ): void {
@@ -673,7 +673,7 @@ function assertSignedEffectivePermissionOverride(
   session: InternalApiSession,
   permission: Permission
 ): void {
-  assertSessionCan(session, permission);
+  assertSessionPermissionHeaderContains(session, permission);
 
   if (session.authMode === "local_dev") {
     return;

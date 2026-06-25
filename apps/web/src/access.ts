@@ -45,7 +45,8 @@ export function resolveWebAccessSession(
   };
 }
 
-export function canTenantPermission(
+// Coarse session capabilities are only for UI visibility and internal header narrowing.
+export function hasSessionPermissionCapability(
   session: WebAccessSession,
   permission: Permission
 ): boolean {
@@ -72,17 +73,6 @@ export function assertWebTenantEmailVerified(
   return session;
 }
 
-export function assertWebTenantPermission(
-  permission: Permission,
-  session = resolveWebAccessSession()
-): WebAccessSession {
-  if (!canTenantPermission(session, permission)) {
-    throw new CoreError("permission.denied");
-  }
-
-  return session;
-}
-
 export function assertWebPlatformAdmin(
   session = resolveWebAccessSession()
 ): WebAccessSession {
@@ -98,11 +88,11 @@ export function navigationAccessFromSession(
 ): NavigationAccess {
   return {
     tenantAdmin:
-      canTenantPermission(session, "tenant.manage") ||
-      canTenantPermission(session, "employees.manage") ||
-      canTenantPermission(session, "roles.manage") ||
-      canTenantPermission(session, "audit.view") ||
-      canTenantPermission(session, "modules.manage"),
+      hasSessionPermissionCapability(session, "tenant.manage") ||
+      hasSessionPermissionCapability(session, "employees.manage") ||
+      hasSessionPermissionCapability(session, "roles.manage") ||
+      hasSessionPermissionCapability(session, "audit.view") ||
+      hasSessionPermissionCapability(session, "modules.manage"),
     platformAdmin: canPlatformAdmin(session)
   };
 }

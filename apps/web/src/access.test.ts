@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   assertWebTenantEmailVerified,
   assertWebPlatformAdmin,
-  assertWebTenantPermission,
   canPlatformAdmin,
+  hasSessionPermissionCapability,
   isTenantEmailVerificationRequired,
   navigationAccessFromSession,
   resolveWebAccessSession
@@ -72,13 +72,13 @@ describe("web access guards", () => {
     expect(navigationAccessFromSession(session).tenantAdmin).toBe(true);
   });
 
-  it("throws when required access is missing", () => {
+  it("keeps session capabilities separate from platform guards", () => {
     const session = resolveWebAccessSession({
       NODE_ENV: "production"
     });
 
-    expect(() => assertWebTenantPermission("modules.manage", session)).toThrow(
-      /permission.denied/
+    expect(hasSessionPermissionCapability(session, "modules.manage")).toBe(
+      false
     );
     expect(() => assertWebPlatformAdmin(session)).toThrow(/permission.denied/);
   });

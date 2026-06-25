@@ -2,7 +2,7 @@ import type { Permission } from "@hulee/core";
 import type { I18nMessageKey } from "@hulee/i18n";
 
 import {
-  canTenantPermission,
+  hasSessionPermissionCapability,
   navigationAccessFromSession,
   type WebAccessSession
 } from "./access";
@@ -149,7 +149,7 @@ function hasTenantAdminPermission(
     return hasEffectivePermission(context.effectiveAccess, permission);
   }
 
-  return canTenantPermission(context.session, permission);
+  return hasSessionPermissionCapability(context.session, permission);
 }
 
 function normalizeTenantAdminAccess(
