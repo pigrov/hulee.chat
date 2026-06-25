@@ -45,7 +45,7 @@ export function resolveWebAccessSession(
   };
 }
 
-// Coarse session capabilities are only for UI visibility and internal header narrowing.
+// Coarse session capabilities are only for internal header narrowing.
 export function hasSessionPermissionCapability(
   session: WebAccessSession,
   permission: Permission
@@ -87,12 +87,7 @@ export function navigationAccessFromSession(
   session: WebAccessSession
 ): NavigationAccess {
   return {
-    tenantAdmin:
-      hasSessionPermissionCapability(session, "tenant.manage") ||
-      hasSessionPermissionCapability(session, "employees.manage") ||
-      hasSessionPermissionCapability(session, "roles.manage") ||
-      hasSessionPermissionCapability(session, "audit.view") ||
-      hasSessionPermissionCapability(session, "modules.manage"),
+    tenantAdmin: false,
     platformAdmin: canPlatformAdmin(session)
   };
 }

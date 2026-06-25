@@ -16,7 +16,7 @@ describe("tenant admin navigation", () => {
   it("shows every tenant admin section for tenant admins", () => {
     expect(
       getVisibleTenantAdminSections(
-        session([
+        access([
           "tenant.manage",
           "employees.manage",
           "roles.manage",
@@ -37,13 +37,20 @@ describe("tenant admin navigation", () => {
   it("filters navigation sections by permissions", () => {
     expect(
       getVisibleTenantAdminSections(
-        session(["roles.manage", "audit.view", "modules.manage"])
+        access(["roles.manage", "audit.view", "modules.manage"])
       ).map((section) => section.id)
     ).toEqual(["roles", "audit", "integrations"]);
   });
 
-  it("hides tenant admin navigation for regular agents", () => {
-    expect(getVisibleTenantAdminSections(session([]))).toEqual([]);
+  it("hides tenant admin navigation without effective access", () => {
+    const currentSession = session(["roles.manage"]);
+
+    expect(
+      getVisibleTenantAdminSections({
+        session: currentSession,
+        effectiveAccess: undefined
+      })
+    ).toEqual([]);
   });
 
   it("shows navigation sections from effective access grants", () => {
@@ -90,6 +97,23 @@ describe("tenant admin navigation", () => {
     ).toBe(true);
   });
 });
+
+function access(permissions: readonly Permission[]) {
+  const currentSession = session([]);
+
+  return {
+    session: currentSession,
+    effectiveAccess: {
+      actor: {
+        tenantId: currentSession.tenantId,
+        employeeId: currentSession.employeeId
+      },
+      effectiveGrants: permissions.map((permission) =>
+        grant(currentSession, permission)
+      )
+    }
+  };
+}
 
 function session(permissions: readonly Permission[]): WebAccessSession {
   return {

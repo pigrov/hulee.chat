@@ -57,13 +57,10 @@ export function TenantAdminShell({
   title: string;
   titleId: string;
 }): ReactNode {
-  const adminAccess =
-    effectiveAccess === undefined
-      ? access
-      : {
-          session: access,
-          effectiveAccess
-        };
+  const adminAccess = {
+    session: access,
+    effectiveAccess
+  };
   const visibleSections = getVisibleTenantAdminSections(adminAccess);
   const shouldRequireEmailVerification =
     isTenantEmailVerificationRequired(access);

@@ -1,11 +1,7 @@
 import type { Permission } from "@hulee/core";
 import type { I18nMessageKey } from "@hulee/i18n";
 
-import {
-  hasSessionPermissionCapability,
-  navigationAccessFromSession,
-  type WebAccessSession
-} from "./access";
+import { navigationAccessFromSession, type WebAccessSession } from "./access";
 import {
   hasEffectivePermission,
   type WebEffectiveAccessSnapshot
@@ -34,9 +30,7 @@ export type TenantAdminAccessContext = {
   readonly effectiveAccess?: WebEffectiveAccessSnapshot | undefined;
 };
 
-export type TenantAdminAccessInput =
-  | WebAccessSession
-  | TenantAdminAccessContext;
+export type TenantAdminAccessInput = TenantAdminAccessContext;
 
 export const tenantAdminSections: readonly TenantAdminSection[] = [
   {
@@ -131,10 +125,8 @@ export function canAccessTenantAdminSection(
 export function navigationAccessFromTenantAdminAccess(
   access: TenantAdminAccessInput
 ): ReturnType<typeof navigationAccessFromSession> {
-  const context = normalizeTenantAdminAccess(access);
-
   return {
-    ...navigationAccessFromSession(context.session),
+    ...navigationAccessFromSession(access.session),
     tenantAdmin: getVisibleTenantAdminSections(access).length > 0
   };
 }
@@ -143,23 +135,5 @@ function hasTenantAdminPermission(
   access: TenantAdminAccessInput,
   permission: Permission
 ): boolean {
-  const context = normalizeTenantAdminAccess(access);
-
-  if ("effectiveAccess" in context) {
-    return hasEffectivePermission(context.effectiveAccess, permission);
-  }
-
-  return hasSessionPermissionCapability(context.session, permission);
-}
-
-function normalizeTenantAdminAccess(
-  access: TenantAdminAccessInput
-): TenantAdminAccessContext {
-  if ("session" in access) {
-    return access;
-  }
-
-  return {
-    session: access
-  };
+  return hasEffectivePermission(access.effectiveAccess, permission);
 }

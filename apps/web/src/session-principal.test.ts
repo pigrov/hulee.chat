@@ -71,7 +71,7 @@ describe("web session principal mapping", () => {
       platformRoles: ["platform_admin"]
     });
     expect(navigationAccessFromSession(session)).toEqual({
-      tenantAdmin: true,
+      tenantAdmin: false,
       platformAdmin: true
     });
   });

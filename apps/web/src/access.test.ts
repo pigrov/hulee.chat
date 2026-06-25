@@ -20,7 +20,7 @@ describe("web access guards", () => {
     expect(session.permissions).toContain("modules.manage");
     expect(canPlatformAdmin(session)).toBe(true);
     expect(navigationAccessFromSession(session)).toEqual({
-      tenantAdmin: true,
+      tenantAdmin: false,
       platformAdmin: true
     });
   });
@@ -50,7 +50,7 @@ describe("web access guards", () => {
     expect(canPlatformAdmin(session)).toBe(true);
   });
 
-  it("shows tenant admin navigation for role managers", () => {
+  it("does not derive tenant admin navigation from coarse session permissions", () => {
     const session = {
       ...resolveWebAccessSession({
         NODE_ENV: "production"
@@ -58,18 +58,7 @@ describe("web access guards", () => {
       permissions: ["roles.manage" as const]
     };
 
-    expect(navigationAccessFromSession(session).tenantAdmin).toBe(true);
-  });
-
-  it("shows tenant admin navigation for audit viewers", () => {
-    const session = {
-      ...resolveWebAccessSession({
-        NODE_ENV: "production"
-      }),
-      permissions: ["audit.view" as const]
-    };
-
-    expect(navigationAccessFromSession(session).tenantAdmin).toBe(true);
+    expect(navigationAccessFromSession(session).tenantAdmin).toBe(false);
   });
 
   it("keeps session capabilities separate from platform guards", () => {
