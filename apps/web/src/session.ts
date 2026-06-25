@@ -1,4 +1,4 @@
-import type { EmployeeId } from "@hulee/contracts";
+import type { EmployeeId, TenantId } from "@hulee/contracts";
 import {
   createDrizzlePersistenceExecutor,
   createSqlEmployeeDirectoryRepository,
@@ -65,6 +65,7 @@ export {
 const sessionTtlMs = 1000 * 60 * 60 * 24 * 14;
 const lastTenantSlugTtlMs = 1000 * 60 * 60 * 24 * 365;
 const tenantLoginChoicesTtlMs = 1000 * 60 * 10;
+const platformOnlyTenantId = "tenant:platform-admin" as TenantId;
 
 export type ResolveCurrentWebAccessSessionOptions = {
   allowDevelopmentFallback?: boolean;
@@ -542,34 +543,31 @@ export async function logoutCurrentWebSession(): Promise<void> {
   ]);
 }
 
-function webAccessSessionFromPrincipal(
+export function webAccessSessionFromPrincipal(
   principal: AuthSessionPrincipal
 ): WebAccessSession {
-  const env = resolveWebEnv();
-  const fallback = resolveWebAccessSession(env);
-  const systemRoleTemplateIds =
-    principal.tenantAccount?.systemRoleTemplateIds ?? [];
-  const permissions =
-    principal.tenantAccount?.permissions ?? fallback.permissions;
+  const tenantAccount = principal.tenantAccount;
+  const systemRoleTemplateIds = tenantAccount?.systemRoleTemplateIds ?? [];
+  const permissions = tenantAccount?.permissions ?? [];
   const platformRoles: PlatformRole[] =
     principal.platformAdmin === undefined ? [] : ["platform_admin"];
 
   return {
-    tenantId: principal.tenantAccount?.tenantId ?? fallback.tenantId,
-    tenantSlug: principal.tenantAccount?.tenantSlug,
-    tenantDisplayName: principal.tenantAccount?.tenantDisplayName,
-    accountId: principal.tenantAccount?.accountId,
+    tenantId: tenantAccount?.tenantId ?? platformOnlyTenantId,
+    tenantSlug: tenantAccount?.tenantSlug,
+    tenantDisplayName: tenantAccount?.tenantDisplayName,
+    accountId: tenantAccount?.accountId,
     sessionId: principal.sessionId,
     sessionCreatedAt: principal.createdAt.toISOString(),
     sessionExpiresAt: principal.expiresAt.toISOString(),
     employeeId:
-      principal.tenantAccount?.employeeId ??
+      tenantAccount?.employeeId ??
       (`employee:platform:${principal.platformAdmin?.id ?? "anonymous"}` as EmployeeId),
-    email: principal.tenantAccount?.email ?? principal.platformAdmin?.email,
+    email: tenantAccount?.email ?? principal.platformAdmin?.email,
     emailVerifiedAt:
-      principal.tenantAccount?.emailVerifiedAt === undefined
+      tenantAccount?.emailVerifiedAt === undefined
         ? undefined
-        : (principal.tenantAccount.emailVerifiedAt?.toISOString() ?? null),
+        : (tenantAccount.emailVerifiedAt?.toISOString() ?? null),
     systemRoleTemplateIds,
     permissions,
     platformRoles

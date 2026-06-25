@@ -319,7 +319,7 @@ export function loadWebConfig(env: EnvSource = process.env): WebConfig {
       result.data.HULEE_PUBLIC_WEBHOOK_BASE_URL ?? publicBaseUrl,
     authChoiceSecret: result.data.HULEE_AUTH_CHOICE_SECRET,
     webAllowedOrigins: webAllowedOrigins ?? [],
-    webAuthRequired: result.data.HULEE_WEB_AUTH_REQUIRED ?? false,
+    webAuthRequired: result.data.HULEE_WEB_AUTH_REQUIRED ?? true,
     resendToken: result.data.HULEE_RESEND_TOKEN,
     emailFrom: result.data.HULEE_EMAIL_FROM
   };

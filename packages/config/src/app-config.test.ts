@@ -114,9 +114,19 @@ describe("app config", () => {
       publicWebhookBaseUrl: undefined,
       authChoiceSecret: undefined,
       webAllowedOrigins: [],
-      webAuthRequired: false,
+      webAuthRequired: true,
       resendToken: undefined,
       emailFrom: undefined
+    });
+  });
+
+  it("allows explicit local web auth fallback opt-in", () => {
+    expect(
+      loadWebConfig({
+        HULEE_WEB_AUTH_REQUIRED: "false"
+      })
+    ).toMatchObject({
+      webAuthRequired: false
     });
   });
 
