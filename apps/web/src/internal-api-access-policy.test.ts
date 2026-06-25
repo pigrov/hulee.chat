@@ -49,6 +49,24 @@ describe("web internal API access policy", () => {
     ).toBe("roles.manage");
     expect(
       resolveRequiredInternalApiEffectivePermissionOverride({
+        method: "PATCH",
+        path: "/internal/v1/rbac/roles/role-sales"
+      })
+    ).toBe("roles.manage");
+    expect(
+      resolveRequiredInternalApiEffectivePermissionOverride({
+        method: "DELETE",
+        path: "/internal/v1/rbac/role-bindings/binding-sales"
+      })
+    ).toBe("roles.manage");
+    expect(
+      resolveRequiredInternalApiEffectivePermissionOverride({
+        method: "POST",
+        path: "/internal/v1/rbac/direct-grants"
+      })
+    ).toBe("roles.manage");
+    expect(
+      resolveRequiredInternalApiEffectivePermissionOverride({
         method: "DELETE",
         path: "/internal/v1/integrations/telegram/webhook"
       })

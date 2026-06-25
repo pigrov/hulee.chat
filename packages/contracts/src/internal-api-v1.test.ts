@@ -10,6 +10,15 @@ import {
   internalInboxViewResponseSchema,
   internalOrgStructureResponseSchema,
   internalOrgUnitUpsertRequestSchema,
+  internalRbacDirectGrantCreateRequestSchema,
+  internalRbacDirectGrantResponseSchema,
+  internalRbacDirectGrantsResponseSchema,
+  internalRbacRoleBindingCreateRequestSchema,
+  internalRbacRoleBindingResponseSchema,
+  internalRbacRoleBindingsResponseSchema,
+  internalRbacRoleMutationRequestSchema,
+  internalRbacRoleResponseSchema,
+  internalRbacRolesResponseSchema,
   internalTenantBrandResponseSchema,
   internalTenantBrandUpdateRequestSchema,
   internalTelegramIntegrationResponseSchema,
@@ -340,6 +349,237 @@ describe("internal API v1 schemas", () => {
           queueId: "queue-sales",
           tenantId: "tenant-1"
         }
+      })
+    ).toThrow();
+  });
+
+  it("parses RBAC role management requests and responses", () => {
+    expect(
+      internalRbacRoleMutationRequestSchema.parse({
+        name: " Sales ",
+        description: " Sales role ",
+        permissions: [" conversation.read ", "message.reply"]
+      })
+    ).toEqual({
+      name: "Sales",
+      description: "Sales role",
+      permissions: ["conversation.read", "message.reply"]
+    });
+
+    expect(
+      internalRbacRolesResponseSchema.parse({
+        roles: [
+          {
+            id: "role-sales",
+            name: "Sales",
+            description: null,
+            status: "active",
+            isSystem: false,
+            permissions: ["conversation.read", "message.reply"],
+            createdByEmployeeId: "employee-1"
+          }
+        ]
+      })
+    ).toMatchObject({
+      roles: [
+        {
+          id: "role-sales",
+          status: "active"
+        }
+      ]
+    });
+
+    expect(
+      internalRbacRoleResponseSchema.parse({
+        role: {
+          id: "role-sales",
+          name: "Sales",
+          description: null,
+          status: "archived",
+          isSystem: false,
+          permissions: ["conversation.read"],
+          createdByEmployeeId: "employee-1",
+          archivedAt: "2026-06-24T10:00:00.000Z"
+        }
+      })
+    ).toMatchObject({
+      role: {
+        archivedAt: "2026-06-24T10:00:00.000Z"
+      }
+    });
+
+    expect(() =>
+      internalRbacRoleMutationRequestSchema.parse({
+        name: "Sales",
+        permissions: [],
+        tenantId: "tenant-1"
+      })
+    ).toThrow();
+  });
+
+  it("parses RBAC role binding contracts without tenant ids in request bodies", () => {
+    expect(
+      internalRbacRoleBindingCreateRequestSchema.parse({
+        roleId: " role-sales ",
+        subject: {
+          type: "employee",
+          id: " employee-2 "
+        },
+        scope: {
+          type: "queue",
+          id: " queue-sales "
+        },
+        expiresAt: "2026-07-24T10:00:00.000Z"
+      })
+    ).toEqual({
+      roleId: "role-sales",
+      subject: {
+        type: "employee",
+        id: "employee-2"
+      },
+      scope: {
+        type: "queue",
+        id: "queue-sales"
+      },
+      expiresAt: "2026-07-24T10:00:00.000Z"
+    });
+
+    expect(
+      internalRbacRoleBindingsResponseSchema.parse({
+        roleBindings: [
+          {
+            id: "binding-sales",
+            roleId: "role-sales",
+            subject: {
+              type: "team",
+              id: "team-sales"
+            },
+            scope: {
+              type: "tenant"
+            }
+          }
+        ]
+      })
+    ).toMatchObject({
+      roleBindings: [
+        {
+          subject: {
+            type: "team"
+          }
+        }
+      ]
+    });
+
+    expect(
+      internalRbacRoleBindingResponseSchema.parse({
+        roleBinding: {
+          id: "binding-sales",
+          roleId: "role-sales",
+          subject: {
+            type: "employee",
+            id: "employee-2"
+          },
+          scope: {
+            type: "assigned"
+          }
+        }
+      })
+    ).toMatchObject({
+      roleBinding: {
+        scope: {
+          type: "assigned"
+        }
+      }
+    });
+
+    expect(() =>
+      internalRbacRoleBindingCreateRequestSchema.parse({
+        roleId: "role-sales",
+        subject: {
+          type: "employee",
+          id: "employee-2"
+        },
+        scope: {
+          type: "queue"
+        },
+        tenantId: "tenant-1"
+      })
+    ).toThrow();
+  });
+
+  it("parses RBAC direct grant contracts and trims reasons", () => {
+    expect(
+      internalRbacDirectGrantCreateRequestSchema.parse({
+        employeeId: " employee-2 ",
+        permission: " conversation.assign ",
+        scope: {
+          type: "queue",
+          id: " queue-sales "
+        },
+        reason: " temporary coverage "
+      })
+    ).toEqual({
+      employeeId: "employee-2",
+      permission: "conversation.assign",
+      scope: {
+        type: "queue",
+        id: "queue-sales"
+      },
+      reason: "temporary coverage"
+    });
+
+    expect(
+      internalRbacDirectGrantsResponseSchema.parse({
+        directGrants: [
+          {
+            id: "grant-sales",
+            employeeId: "employee-2",
+            permission: "conversation.assign",
+            scope: {
+              type: "queue",
+              id: "queue-sales"
+            },
+            reason: "temporary coverage"
+          }
+        ]
+      })
+    ).toMatchObject({
+      directGrants: [
+        {
+          permission: "conversation.assign"
+        }
+      ]
+    });
+
+    expect(
+      internalRbacDirectGrantResponseSchema.parse({
+        directGrant: {
+          id: "grant-sales",
+          employeeId: "employee-2",
+          permission: "conversation.assign",
+          scope: {
+            type: "queue",
+            id: "queue-sales"
+          },
+          reason: "temporary coverage",
+          expiresAt: "2026-07-24T10:00:00.000Z"
+        }
+      })
+    ).toMatchObject({
+      directGrant: {
+        expiresAt: "2026-07-24T10:00:00.000Z"
+      }
+    });
+
+    expect(() =>
+      internalRbacDirectGrantCreateRequestSchema.parse({
+        employeeId: "employee-2",
+        permission: "conversation.assign",
+        scope: {
+          type: "assigned",
+          id: "employee-2"
+        },
+        reason: "temporary coverage"
       })
     ).toThrow();
   });

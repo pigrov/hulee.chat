@@ -4,6 +4,9 @@ import type {
   InternalAccessDecisionResponse,
   InternalInboxViewResponse,
   InternalOrgUnitUpsertRequest,
+  InternalRbacDirectGrantCreateRequest,
+  InternalRbacRoleBindingCreateRequest,
+  InternalRbacRoleMutationRequest,
   InternalTenantBrandUpdateRequest,
   InternalTelegramIntegrationUpdateRequest,
   InternalWorkQueueUpsertRequest,
@@ -93,6 +96,127 @@ function createHandler(input?: {
       effectiveGrantCount: 0
     })
   );
+  const rbacRole = {
+    id: "role-sales",
+    name: "Sales",
+    description: "Sales role",
+    status: "active" as const,
+    isSystem: false,
+    permissions: ["conversation.read", "message.reply"],
+    createdByEmployeeId: employeeId,
+    archivedAt: undefined
+  };
+  const rbacRoleBinding = {
+    id: "binding-sales",
+    roleId: "role-sales",
+    subject: {
+      type: "employee" as const,
+      id: "employee-2"
+    },
+    scope: {
+      type: "queue" as const,
+      id: "queue-sales"
+    }
+  };
+  const rbacDirectGrant = {
+    id: "grant-sales",
+    employeeId: "employee-2",
+    permission: "conversation.assign",
+    scope: {
+      type: "queue" as const,
+      id: "queue-sales"
+    },
+    reason: "temporary coverage"
+  };
+  const listRoles = vi.fn(async () => ({
+    roles: [rbacRole]
+  }));
+  const createRole = vi.fn(
+    async (_context: unknown, request: InternalRbacRoleMutationRequest) => ({
+      role: {
+        ...rbacRole,
+        id: "role-created",
+        name: request.name,
+        description: request.description ?? null,
+        permissions: request.permissions
+      }
+    })
+  );
+  const updateRole = vi.fn(
+    async (
+      _context: unknown,
+      input: { roleId: string; request: InternalRbacRoleMutationRequest }
+    ) => ({
+      role: {
+        ...rbacRole,
+        id: input.roleId,
+        name: input.request.name,
+        description: input.request.description ?? null,
+        permissions: input.request.permissions
+      }
+    })
+  );
+  const archiveRole = vi.fn(
+    async (_context: unknown, input: { roleId: string }) => ({
+      role: {
+        ...rbacRole,
+        id: input.roleId,
+        status: "archived" as const,
+        archivedAt: "2026-06-24T10:00:00.000Z"
+      }
+    })
+  );
+  const restoreRole = vi.fn(
+    async (_context: unknown, input: { roleId: string }) => ({
+      role: {
+        ...rbacRole,
+        id: input.roleId,
+        status: "active" as const,
+        archivedAt: undefined
+      }
+    })
+  );
+  const listRoleBindings = vi.fn(async () => ({
+    roleBindings: [rbacRoleBinding]
+  }));
+  const createRoleBinding = vi.fn(
+    async (
+      _context: unknown,
+      request: InternalRbacRoleBindingCreateRequest
+    ) => ({
+      roleBinding: {
+        ...rbacRoleBinding,
+        roleId: request.roleId,
+        subject: request.subject,
+        scope: request.scope,
+        expiresAt: request.expiresAt
+      }
+    })
+  );
+  const revokeRoleBinding = vi.fn(async () => ({
+    revoked: true as const
+  }));
+  const listDirectGrants = vi.fn(async () => ({
+    directGrants: [rbacDirectGrant]
+  }));
+  const createDirectGrant = vi.fn(
+    async (
+      _context: unknown,
+      request: InternalRbacDirectGrantCreateRequest
+    ) => ({
+      directGrant: {
+        ...rbacDirectGrant,
+        employeeId: request.employeeId,
+        permission: request.permission,
+        scope: request.scope,
+        reason: request.reason,
+        expiresAt: request.expiresAt
+      }
+    })
+  );
+  const revokeDirectGrant = vi.fn(async () => ({
+    revoked: true as const
+  }));
   const loadTelegramIntegration = vi.fn(async () => ({
     moduleId: "channel-telegram" as const,
     enabled: true,
@@ -256,6 +380,19 @@ function createHandler(input?: {
     },
     accessDecisions: {
       inspectAccessDecision
+    },
+    rbac: {
+      listRoles,
+      createRole,
+      updateRole,
+      archiveRole,
+      restoreRole,
+      listRoleBindings,
+      createRoleBinding,
+      revokeRoleBinding,
+      listDirectGrants,
+      createDirectGrant,
+      revokeDirectGrant
     }
   });
 
@@ -274,7 +411,18 @@ function createHandler(input?: {
     loadOrgStructure,
     upsertOrgUnit,
     upsertWorkQueue,
-    inspectAccessDecision
+    inspectAccessDecision,
+    listRoles,
+    createRole,
+    updateRole,
+    archiveRole,
+    restoreRole,
+    listRoleBindings,
+    createRoleBinding,
+    revokeRoleBinding,
+    listDirectGrants,
+    createDirectGrant,
+    revokeDirectGrant
   };
 }
 
@@ -699,6 +847,312 @@ describe("internal API handler", () => {
 
     expect(response.status).toBe(400);
     expect(inspectAccessDecision).not.toHaveBeenCalled();
+  });
+
+  it("manages RBAC roles through roles.manage permission", async () => {
+    const rolesManageSession = sessionWithPermissions(["roles.manage"]);
+    const {
+      handler,
+      listRoles,
+      createRole,
+      updateRole,
+      archiveRole,
+      restoreRole
+    } = createHandler({
+      session: rolesManageSession
+    });
+    const listResponse = await handler.handle({
+      method: "GET",
+      path: "/internal/v1/rbac/roles"
+    });
+    const createResponse = await handler.handle({
+      method: "POST",
+      path: "/internal/v1/rbac/roles",
+      body: {
+        name: " Sales ",
+        description: " Sales role ",
+        permissions: ["conversation.read", "message.reply"]
+      }
+    });
+    const updateResponse = await handler.handle({
+      method: "PATCH",
+      path: "/internal/v1/rbac/roles/role-sales",
+      body: {
+        name: " Sales lead ",
+        permissions: ["conversation.read"]
+      }
+    });
+    const archiveResponse = await handler.handle({
+      method: "POST",
+      path: "/internal/v1/rbac/roles/role-sales/archive"
+    });
+    const restoreResponse = await handler.handle({
+      method: "POST",
+      path: "/internal/v1/rbac/roles/role-sales/restore"
+    });
+
+    expect(listResponse.status).toBe(200);
+    expect(listResponse.body).toMatchObject({
+      roles: [
+        {
+          id: "role-sales"
+        }
+      ]
+    });
+    expect(createResponse.status).toBe(201);
+    expect(createResponse.body).toMatchObject({
+      role: {
+        id: "role-created",
+        name: "Sales"
+      }
+    });
+    expect(updateResponse.status).toBe(200);
+    expect(updateResponse.body).toMatchObject({
+      role: {
+        id: "role-sales",
+        name: "Sales lead"
+      }
+    });
+    expect(archiveResponse.status).toBe(200);
+    expect(archiveResponse.body).toMatchObject({
+      role: {
+        status: "archived"
+      }
+    });
+    expect(restoreResponse.status).toBe(200);
+    expect(restoreResponse.body).toMatchObject({
+      role: {
+        status: "active"
+      }
+    });
+    expect(listRoles).toHaveBeenCalledWith(rolesManageSession);
+    expect(createRole).toHaveBeenCalledWith(rolesManageSession, {
+      name: "Sales",
+      description: "Sales role",
+      permissions: ["conversation.read", "message.reply"]
+    });
+    expect(updateRole).toHaveBeenCalledWith(rolesManageSession, {
+      roleId: "role-sales",
+      request: {
+        name: "Sales lead",
+        permissions: ["conversation.read"]
+      }
+    });
+    expect(archiveRole).toHaveBeenCalledWith(rolesManageSession, {
+      roleId: "role-sales"
+    });
+    expect(restoreRole).toHaveBeenCalledWith(rolesManageSession, {
+      roleId: "role-sales"
+    });
+  });
+
+  it("manages role bindings and direct grants through roles.manage permission", async () => {
+    const rolesManageSession = sessionWithPermissions(["roles.manage"]);
+    const {
+      handler,
+      listRoleBindings,
+      createRoleBinding,
+      revokeRoleBinding,
+      listDirectGrants,
+      createDirectGrant,
+      revokeDirectGrant
+    } = createHandler({
+      session: rolesManageSession
+    });
+    const bindingsResponse = await handler.handle({
+      method: "GET",
+      path: "/internal/v1/rbac/role-bindings"
+    });
+    const createBindingResponse = await handler.handle({
+      method: "POST",
+      path: "/internal/v1/rbac/role-bindings",
+      body: {
+        roleId: "role-sales",
+        subject: {
+          type: "employee",
+          id: "employee-2"
+        },
+        scope: {
+          type: "queue",
+          id: "queue-sales"
+        }
+      }
+    });
+    const revokeBindingResponse = await handler.handle({
+      method: "DELETE",
+      path: "/internal/v1/rbac/role-bindings/binding-sales"
+    });
+    const grantsResponse = await handler.handle({
+      method: "GET",
+      path: "/internal/v1/rbac/direct-grants"
+    });
+    const createGrantResponse = await handler.handle({
+      method: "POST",
+      path: "/internal/v1/rbac/direct-grants",
+      body: {
+        employeeId: "employee-2",
+        permission: "conversation.assign",
+        scope: {
+          type: "queue",
+          id: "queue-sales"
+        },
+        reason: " temporary coverage "
+      }
+    });
+    const revokeGrantResponse = await handler.handle({
+      method: "DELETE",
+      path: "/internal/v1/rbac/direct-grants/grant-sales"
+    });
+
+    expect(bindingsResponse.status).toBe(200);
+    expect(bindingsResponse.body).toMatchObject({
+      roleBindings: [
+        {
+          id: "binding-sales"
+        }
+      ]
+    });
+    expect(createBindingResponse.status).toBe(201);
+    expect(createBindingResponse.body).toMatchObject({
+      roleBinding: {
+        roleId: "role-sales",
+        scope: {
+          type: "queue",
+          id: "queue-sales"
+        }
+      }
+    });
+    expect(revokeBindingResponse.status).toBe(200);
+    expect(revokeBindingResponse.body).toEqual({
+      revoked: true
+    });
+    expect(grantsResponse.status).toBe(200);
+    expect(grantsResponse.body).toMatchObject({
+      directGrants: [
+        {
+          id: "grant-sales"
+        }
+      ]
+    });
+    expect(createGrantResponse.status).toBe(201);
+    expect(createGrantResponse.body).toMatchObject({
+      directGrant: {
+        employeeId: "employee-2",
+        reason: "temporary coverage"
+      }
+    });
+    expect(revokeGrantResponse.status).toBe(200);
+    expect(revokeGrantResponse.body).toEqual({
+      revoked: true
+    });
+    expect(listRoleBindings).toHaveBeenCalledWith(rolesManageSession);
+    expect(createRoleBinding).toHaveBeenCalledWith(rolesManageSession, {
+      roleId: "role-sales",
+      subject: {
+        type: "employee",
+        id: "employee-2"
+      },
+      scope: {
+        type: "queue",
+        id: "queue-sales"
+      }
+    });
+    expect(revokeRoleBinding).toHaveBeenCalledWith(rolesManageSession, {
+      bindingId: "binding-sales"
+    });
+    expect(listDirectGrants).toHaveBeenCalledWith(rolesManageSession);
+    expect(createDirectGrant).toHaveBeenCalledWith(rolesManageSession, {
+      employeeId: "employee-2",
+      permission: "conversation.assign",
+      scope: {
+        type: "queue",
+        id: "queue-sales"
+      },
+      reason: "temporary coverage"
+    });
+    expect(revokeDirectGrant).toHaveBeenCalledWith(rolesManageSession, {
+      grantId: "grant-sales"
+    });
+  });
+
+  it("requires a signed narrow roles.manage override for RBAC management routes", async () => {
+    const { handler, listRoles, createRoleBinding, createDirectGrant } =
+      createHandler({
+        session: sessionWithPermissions(["roles.manage", "tenant.manage"])
+      });
+    const rolesResponse = await handler.handle({
+      method: "GET",
+      path: "/internal/v1/rbac/roles"
+    });
+    const bindingResponse = await handler.handle({
+      method: "POST",
+      path: "/internal/v1/rbac/role-bindings",
+      body: {
+        roleId: "role-sales",
+        subject: {
+          type: "employee",
+          id: "employee-2"
+        },
+        scope: {
+          type: "tenant"
+        }
+      }
+    });
+    const grantResponse = await handler.handle({
+      method: "POST",
+      path: "/internal/v1/rbac/direct-grants",
+      body: {
+        employeeId: "employee-2",
+        permission: "conversation.read",
+        scope: {
+          type: "tenant"
+        },
+        reason: "temporary coverage"
+      }
+    });
+
+    for (const response of [rolesResponse, bindingResponse, grantResponse]) {
+      expect(response.status).toBe(403);
+      expect(response.body).toMatchObject({
+        error: {
+          code: "permission.denied"
+        }
+      });
+    }
+    expect(listRoles).not.toHaveBeenCalled();
+    expect(createRoleBinding).not.toHaveBeenCalled();
+    expect(createDirectGrant).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid RBAC payloads before service execution", async () => {
+    const { handler, createRole, createDirectGrant } = createHandler({
+      session: sessionWithPermissions(["roles.manage"])
+    });
+    const roleResponse = await handler.handle({
+      method: "POST",
+      path: "/internal/v1/rbac/roles",
+      body: {
+        name: "",
+        permissions: ["conversation.read"]
+      }
+    });
+    const grantResponse = await handler.handle({
+      method: "POST",
+      path: "/internal/v1/rbac/direct-grants",
+      body: {
+        employeeId: "employee-2",
+        permission: "conversation.read",
+        scope: {
+          type: "queue"
+        },
+        reason: "temporary coverage"
+      }
+    });
+
+    expect(roleResponse.status).toBe(400);
+    expect(grantResponse.status).toBe(400);
+    expect(createRole).not.toHaveBeenCalled();
+    expect(createDirectGrant).not.toHaveBeenCalled();
   });
 
   it("validates and queues replies through the command service", async () => {

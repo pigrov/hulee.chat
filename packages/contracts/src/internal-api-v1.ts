@@ -331,6 +331,144 @@ export const internalAccessDecisionResponseSchema = z
   })
   .strict();
 
+export const internalRbacRoleStatusSchema = z.enum(["active", "archived"]);
+
+export const internalRbacRoleSchema = z
+  .object({
+    id: internalAccessDecisionIdSchema,
+    name: z.string().trim().min(1).max(80),
+    description: z.string().trim().min(1).max(500).nullable(),
+    status: internalRbacRoleStatusSchema,
+    isSystem: z.boolean(),
+    permissions: z.array(internalAccessDecisionPermissionSchema),
+    createdByEmployeeId: internalAccessDecisionIdSchema.nullable(),
+    archivedAt: z.string().datetime({ offset: true }).optional()
+  })
+  .strict();
+
+export const internalRbacRoleSubjectSchema = z.union([
+  z
+    .object({
+      type: z.literal("employee"),
+      id: internalAccessDecisionIdSchema
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("team"),
+      id: internalAccessDecisionIdSchema
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("org_unit"),
+      id: internalAccessDecisionIdSchema
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("queue"),
+      id: internalAccessDecisionIdSchema
+    })
+    .strict()
+]);
+
+export const internalRbacRoleBindingSchema = z
+  .object({
+    id: internalAccessDecisionIdSchema,
+    roleId: internalAccessDecisionIdSchema,
+    subject: internalRbacRoleSubjectSchema,
+    scope: internalAccessDecisionScopeSchema,
+    startsAt: z.string().datetime({ offset: true }).optional(),
+    expiresAt: z.string().datetime({ offset: true }).optional(),
+    revokedAt: z.string().datetime({ offset: true }).optional()
+  })
+  .strict();
+
+export const internalRbacDirectGrantSchema = z
+  .object({
+    id: internalAccessDecisionIdSchema,
+    employeeId: internalAccessDecisionIdSchema,
+    permission: internalAccessDecisionPermissionSchema,
+    scope: internalAccessDecisionScopeSchema,
+    reason: z.string().trim().min(1).max(500),
+    startsAt: z.string().datetime({ offset: true }).optional(),
+    expiresAt: z.string().datetime({ offset: true }).optional(),
+    revokedAt: z.string().datetime({ offset: true }).optional()
+  })
+  .strict();
+
+export const internalRbacRolesResponseSchema = z
+  .object({
+    roles: z.array(internalRbacRoleSchema)
+  })
+  .strict();
+
+export const internalRbacRoleBindingsResponseSchema = z
+  .object({
+    roleBindings: z.array(internalRbacRoleBindingSchema)
+  })
+  .strict();
+
+export const internalRbacDirectGrantsResponseSchema = z
+  .object({
+    directGrants: z.array(internalRbacDirectGrantSchema)
+  })
+  .strict();
+
+export const internalRbacRoleResponseSchema = z
+  .object({
+    role: internalRbacRoleSchema
+  })
+  .strict();
+
+export const internalRbacRoleBindingResponseSchema = z
+  .object({
+    roleBinding: internalRbacRoleBindingSchema
+  })
+  .strict();
+
+export const internalRbacDirectGrantResponseSchema = z
+  .object({
+    directGrant: internalRbacDirectGrantSchema
+  })
+  .strict();
+
+export const internalRbacRevokeResponseSchema = z
+  .object({
+    revoked: z.literal(true)
+  })
+  .strict();
+
+export const internalRbacRoleMutationRequestSchema = z
+  .object({
+    name: z.string().trim().min(1).max(80),
+    description: z.string().trim().min(1).max(500).optional(),
+    permissions: z.array(internalAccessDecisionPermissionSchema).min(1).max(100)
+  })
+  .strict();
+
+export const internalRbacRoleBindingCreateRequestSchema = z
+  .object({
+    roleId: internalAccessDecisionIdSchema,
+    subject: internalRbacRoleSubjectSchema,
+    scope: internalAccessDecisionScopeSchema,
+    startsAt: z.string().datetime({ offset: true }).optional(),
+    expiresAt: z.string().datetime({ offset: true }).optional()
+  })
+  .strict();
+
+export const internalRbacDirectGrantCreateRequestSchema = z
+  .object({
+    employeeId: internalAccessDecisionIdSchema,
+    permission: internalAccessDecisionPermissionSchema,
+    scope: internalAccessDecisionScopeSchema,
+    reason: z.string().trim().min(1).max(500),
+    startsAt: z.string().datetime({ offset: true }).optional(),
+    expiresAt: z.string().datetime({ offset: true }).optional()
+  })
+  .strict();
+
 export const internalTelegramIntegrationModeSchema = z.enum([
   "webhook",
   "polling"
@@ -509,6 +647,49 @@ export type InternalAccessDecisionGrant = z.infer<
 >;
 export type InternalAccessDecisionResponse = z.infer<
   typeof internalAccessDecisionResponseSchema
+>;
+export type InternalRbacRoleStatus = z.infer<
+  typeof internalRbacRoleStatusSchema
+>;
+export type InternalRbacRole = z.infer<typeof internalRbacRoleSchema>;
+export type InternalRbacRoleSubject = z.infer<
+  typeof internalRbacRoleSubjectSchema
+>;
+export type InternalRbacRoleBinding = z.infer<
+  typeof internalRbacRoleBindingSchema
+>;
+export type InternalRbacDirectGrant = z.infer<
+  typeof internalRbacDirectGrantSchema
+>;
+export type InternalRbacRolesResponse = z.infer<
+  typeof internalRbacRolesResponseSchema
+>;
+export type InternalRbacRoleBindingsResponse = z.infer<
+  typeof internalRbacRoleBindingsResponseSchema
+>;
+export type InternalRbacDirectGrantsResponse = z.infer<
+  typeof internalRbacDirectGrantsResponseSchema
+>;
+export type InternalRbacRoleResponse = z.infer<
+  typeof internalRbacRoleResponseSchema
+>;
+export type InternalRbacRoleBindingResponse = z.infer<
+  typeof internalRbacRoleBindingResponseSchema
+>;
+export type InternalRbacDirectGrantResponse = z.infer<
+  typeof internalRbacDirectGrantResponseSchema
+>;
+export type InternalRbacRevokeResponse = z.infer<
+  typeof internalRbacRevokeResponseSchema
+>;
+export type InternalRbacRoleMutationRequest = z.infer<
+  typeof internalRbacRoleMutationRequestSchema
+>;
+export type InternalRbacRoleBindingCreateRequest = z.infer<
+  typeof internalRbacRoleBindingCreateRequestSchema
+>;
+export type InternalRbacDirectGrantCreateRequest = z.infer<
+  typeof internalRbacDirectGrantCreateRequestSchema
 >;
 export type InternalTelegramIntegrationConfig = z.infer<
   typeof internalTelegramIntegrationConfigSchema

@@ -6,6 +6,13 @@ import type {
   InternalInboxViewResponse,
   InternalOrgStructureResponse,
   InternalOrgUnit,
+  InternalRbacDirectGrantResponse,
+  InternalRbacDirectGrantsResponse,
+  InternalRbacRevokeResponse,
+  InternalRbacRoleBindingResponse,
+  InternalRbacRoleBindingsResponse,
+  InternalRbacRoleResponse,
+  InternalRbacRolesResponse,
   InternalWorkQueue,
   InternalTenantBrandResponse,
   InternalTelegramIntegrationResponse,
@@ -19,6 +26,9 @@ import {
   internalApiV1Version,
   internalInboxReplyRequestSchema,
   internalOrgUnitUpsertRequestSchema,
+  internalRbacDirectGrantCreateRequestSchema,
+  internalRbacRoleBindingCreateRequestSchema,
+  internalRbacRoleMutationRequestSchema,
   internalTenantBrandUpdateRequestSchema,
   internalTelegramIntegrationUpdateRequestSchema,
   internalWorkQueueUpsertRequestSchema,
@@ -41,6 +51,7 @@ import type {
 import type { InternalAccessDecisionService } from "../internal-access-decision-service";
 import type { InternalIntegrationService } from "../internal-integrations-service";
 import type { InternalOrgStructureService } from "../internal-org-structure-service";
+import type { InternalRbacService } from "../internal-rbac-service";
 import type { InternalTenantSettingsService } from "../internal-tenant-service";
 import type { ApiHttpRequest, ApiHttpResponse } from "./public-api-handler";
 import { resolveRequestId } from "./request-id";
@@ -68,6 +79,7 @@ export type InternalApiHandlerOptions = {
   tenantSettings: InternalTenantSettingsService;
   orgStructure: InternalOrgStructureService;
   accessDecisions: InternalAccessDecisionService;
+  rbac: InternalRbacService;
   logger?: Logger;
   requestIdFactory?: () => string;
 };
@@ -111,6 +123,44 @@ type RouteMatch =
     }
   | {
       route: "access_decision";
+    }
+  | {
+      route: "rbac_roles_view";
+    }
+  | {
+      route: "rbac_role_create";
+    }
+  | {
+      route: "rbac_role_update";
+      roleId: string;
+    }
+  | {
+      route: "rbac_role_archive";
+      roleId: string;
+    }
+  | {
+      route: "rbac_role_restore";
+      roleId: string;
+    }
+  | {
+      route: "rbac_role_bindings_view";
+    }
+  | {
+      route: "rbac_role_binding_create";
+    }
+  | {
+      route: "rbac_role_binding_revoke";
+      bindingId: string;
+    }
+  | {
+      route: "rbac_direct_grants_view";
+    }
+  | {
+      route: "rbac_direct_grant_create";
+    }
+  | {
+      route: "rbac_direct_grant_revoke";
+      grantId: string;
     }
   | {
       route: "telegram_integration_view";
@@ -181,7 +231,8 @@ export function createInternalApiHandler(
           integrations: options.integrations,
           tenantSettings: options.tenantSettings,
           orgStructure: options.orgStructure,
-          accessDecisions: options.accessDecisions
+          accessDecisions: options.accessDecisions,
+          rbac: options.rbac
         });
       } catch (error) {
         const code = platformErrorCodeFromUnknown(error);
@@ -317,6 +368,7 @@ async function handleAuthenticatedRoute(input: {
   tenantSettings: InternalTenantSettingsService;
   orgStructure: InternalOrgStructureService;
   accessDecisions: InternalAccessDecisionService;
+  rbac: InternalRbacService;
 }): Promise<ApiHttpResponse> {
   assertInternalRouteAuthorization(input.session, input.route);
 
@@ -417,6 +469,115 @@ async function handleAuthenticatedRoute(input: {
       return jsonResponse(200, response);
     }
 
+    case "rbac_roles_view": {
+      const response: InternalRbacRolesResponse = await input.rbac.listRoles(
+        input.session
+      );
+
+      return jsonResponse(200, response);
+    }
+
+    case "rbac_role_create": {
+      const request = internalRbacRoleMutationRequestSchema.parse(
+        input.request.body
+      );
+      const response: InternalRbacRoleResponse = await input.rbac.createRole(
+        input.session,
+        request
+      );
+
+      return jsonResponse(201, response);
+    }
+
+    case "rbac_role_update": {
+      const request = internalRbacRoleMutationRequestSchema.parse(
+        input.request.body
+      );
+      const response: InternalRbacRoleResponse = await input.rbac.updateRole(
+        input.session,
+        {
+          roleId: input.route.roleId,
+          request
+        }
+      );
+
+      return jsonResponse(200, response);
+    }
+
+    case "rbac_role_archive": {
+      const response: InternalRbacRoleResponse = await input.rbac.archiveRole(
+        input.session,
+        {
+          roleId: input.route.roleId
+        }
+      );
+
+      return jsonResponse(200, response);
+    }
+
+    case "rbac_role_restore": {
+      const response: InternalRbacRoleResponse = await input.rbac.restoreRole(
+        input.session,
+        {
+          roleId: input.route.roleId
+        }
+      );
+
+      return jsonResponse(200, response);
+    }
+
+    case "rbac_role_bindings_view": {
+      const response: InternalRbacRoleBindingsResponse =
+        await input.rbac.listRoleBindings(input.session);
+
+      return jsonResponse(200, response);
+    }
+
+    case "rbac_role_binding_create": {
+      const request = internalRbacRoleBindingCreateRequestSchema.parse(
+        input.request.body
+      );
+      const response: InternalRbacRoleBindingResponse =
+        await input.rbac.createRoleBinding(input.session, request);
+
+      return jsonResponse(201, response);
+    }
+
+    case "rbac_role_binding_revoke": {
+      const response: InternalRbacRevokeResponse =
+        await input.rbac.revokeRoleBinding(input.session, {
+          bindingId: input.route.bindingId
+        });
+
+      return jsonResponse(200, response);
+    }
+
+    case "rbac_direct_grants_view": {
+      const response: InternalRbacDirectGrantsResponse =
+        await input.rbac.listDirectGrants(input.session);
+
+      return jsonResponse(200, response);
+    }
+
+    case "rbac_direct_grant_create": {
+      const request = internalRbacDirectGrantCreateRequestSchema.parse(
+        input.request.body
+      );
+      const response: InternalRbacDirectGrantResponse =
+        await input.rbac.createDirectGrant(input.session, request);
+
+      return jsonResponse(201, response);
+    }
+
+    case "rbac_direct_grant_revoke": {
+      const response: InternalRbacRevokeResponse =
+        await input.rbac.revokeDirectGrant(input.session, {
+          grantId: input.route.grantId
+        });
+
+      return jsonResponse(200, response);
+    }
+
     case "telegram_integration_view": {
       const response: InternalTelegramIntegrationResponse =
         await input.integrations.loadTelegramIntegration(input.session);
@@ -495,6 +656,17 @@ function internalRouteAuthorizationPolicy(
         permission: "employees.manage"
       };
     case "access_decision":
+    case "rbac_roles_view":
+    case "rbac_role_create":
+    case "rbac_role_update":
+    case "rbac_role_archive":
+    case "rbac_role_restore":
+    case "rbac_role_bindings_view":
+    case "rbac_role_binding_create":
+    case "rbac_role_binding_revoke":
+    case "rbac_direct_grants_view":
+    case "rbac_direct_grant_create":
+    case "rbac_direct_grant_revoke":
       return {
         kind: "signed_effective_permission_override",
         permission: "roles.manage"
@@ -568,6 +740,95 @@ function matchRoute(request: ApiHttpRequest): RouteMatch | undefined {
   if (request.method === "POST" && path === "/internal/v1/access/decision") {
     return {
       route: "access_decision"
+    };
+  }
+
+  if (request.method === "GET" && path === "/internal/v1/rbac/roles") {
+    return {
+      route: "rbac_roles_view"
+    };
+  }
+
+  if (request.method === "POST" && path === "/internal/v1/rbac/roles") {
+    return {
+      route: "rbac_role_create"
+    };
+  }
+
+  const roleUpdateMatch = path.match(/^\/internal\/v1\/rbac\/roles\/([^/]+)$/);
+
+  if (request.method === "PATCH" && roleUpdateMatch?.[1]) {
+    return {
+      route: "rbac_role_update",
+      roleId: decodeURIComponent(roleUpdateMatch[1])
+    };
+  }
+
+  const roleArchiveMatch = path.match(
+    /^\/internal\/v1\/rbac\/roles\/([^/]+)\/archive$/
+  );
+
+  if (request.method === "POST" && roleArchiveMatch?.[1]) {
+    return {
+      route: "rbac_role_archive",
+      roleId: decodeURIComponent(roleArchiveMatch[1])
+    };
+  }
+
+  const roleRestoreMatch = path.match(
+    /^\/internal\/v1\/rbac\/roles\/([^/]+)\/restore$/
+  );
+
+  if (request.method === "POST" && roleRestoreMatch?.[1]) {
+    return {
+      route: "rbac_role_restore",
+      roleId: decodeURIComponent(roleRestoreMatch[1])
+    };
+  }
+
+  if (request.method === "GET" && path === "/internal/v1/rbac/role-bindings") {
+    return {
+      route: "rbac_role_bindings_view"
+    };
+  }
+
+  if (request.method === "POST" && path === "/internal/v1/rbac/role-bindings") {
+    return {
+      route: "rbac_role_binding_create"
+    };
+  }
+
+  const roleBindingRevokeMatch = path.match(
+    /^\/internal\/v1\/rbac\/role-bindings\/([^/]+)$/
+  );
+
+  if (request.method === "DELETE" && roleBindingRevokeMatch?.[1]) {
+    return {
+      route: "rbac_role_binding_revoke",
+      bindingId: decodeURIComponent(roleBindingRevokeMatch[1])
+    };
+  }
+
+  if (request.method === "GET" && path === "/internal/v1/rbac/direct-grants") {
+    return {
+      route: "rbac_direct_grants_view"
+    };
+  }
+
+  if (request.method === "POST" && path === "/internal/v1/rbac/direct-grants") {
+    return {
+      route: "rbac_direct_grant_create"
+    };
+  }
+
+  const directGrantRevokeMatch = path.match(
+    /^\/internal\/v1\/rbac\/direct-grants\/([^/]+)$/
+  );
+
+  if (request.method === "DELETE" && directGrantRevokeMatch?.[1]) {
+    return {
+      route: "rbac_direct_grant_revoke",
+      grantId: decodeURIComponent(directGrantRevokeMatch[1])
     };
   }
 

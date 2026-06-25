@@ -40,6 +40,55 @@ export function resolveRequiredInternalApiEffectivePermissionOverride(
   }
 
   if (
+    pathname === "/internal/v1/rbac/roles" &&
+    (method === "GET" || method === "POST")
+  ) {
+    return "roles.manage";
+  }
+
+  if (
+    /^\/internal\/v1\/rbac\/roles\/[^/]+$/.test(pathname) &&
+    method === "PATCH"
+  ) {
+    return "roles.manage";
+  }
+
+  if (
+    /^\/internal\/v1\/rbac\/roles\/[^/]+\/(archive|restore)$/.test(pathname) &&
+    method === "POST"
+  ) {
+    return "roles.manage";
+  }
+
+  if (
+    pathname === "/internal/v1/rbac/role-bindings" &&
+    (method === "GET" || method === "POST")
+  ) {
+    return "roles.manage";
+  }
+
+  if (
+    /^\/internal\/v1\/rbac\/role-bindings\/[^/]+$/.test(pathname) &&
+    method === "DELETE"
+  ) {
+    return "roles.manage";
+  }
+
+  if (
+    pathname === "/internal/v1/rbac/direct-grants" &&
+    (method === "GET" || method === "POST")
+  ) {
+    return "roles.manage";
+  }
+
+  if (
+    /^\/internal\/v1\/rbac\/direct-grants\/[^/]+$/.test(pathname) &&
+    method === "DELETE"
+  ) {
+    return "roles.manage";
+  }
+
+  if (
     ((method === "GET" || method === "PUT") &&
       pathname === "/internal/v1/integrations/telegram") ||
     (method === "POST" &&

@@ -1,6 +1,7 @@
 import { loadApiConfig, type ApiConfig, type EnvSource } from "@hulee/config";
 import {
   createAesGcmTenantSecretCipher,
+  createSqlDomainEventRepository,
   createDrizzlePersistenceExecutor,
   createExternalMessageRepository,
   createSqlPublicApiAuditSink,
@@ -40,6 +41,7 @@ import {
   createInternalIntegrationService
 } from "./internal-integrations-service";
 import { createInternalOrgStructureService } from "./internal-org-structure-service";
+import { createInternalRbacService } from "./internal-rbac-service";
 import { createInternalTenantSettingsService } from "./internal-tenant-service";
 import { createExternalChannelCommandService } from "./external-channel-command-service";
 import { createPublicApiCommandService } from "./public-api-command-service";
@@ -172,6 +174,15 @@ export function createInternalApiDataPlaneHandler(
       ),
       rbacRepository: createSqlTenantRbacRepository(options.database)
     }),
+    rbac: createInternalRbacService({
+      rbacRepository: createSqlTenantRbacRepository(options.database),
+      employeeRepository: createSqlEmployeeDirectoryRepository(
+        options.database
+      ),
+      orgStructureRepository: createSqlOrgStructureRepository(options.database),
+      audit: createSqlSecurityAuditRepository(options.database),
+      events: createSqlDomainEventRepository(options.database)
+    }),
     logger: options.logger,
     requestIdFactory: options.requestIdFactory
   });
@@ -268,6 +279,7 @@ export {
 } from "./internal-inbox-service";
 export { createInternalIntegrationService } from "./internal-integrations-service";
 export { createInternalOrgStructureService } from "./internal-org-structure-service";
+export { createInternalRbacService } from "./internal-rbac-service";
 export { createInternalTenantSettingsService } from "./internal-tenant-service";
 export { createPublicApiCommandService } from "./public-api-command-service";
 export type {
@@ -295,6 +307,11 @@ export type {
   InternalIntegrationService,
   InternalIntegrationServiceOptions
 } from "./internal-integrations-service";
+export type {
+  InternalRbacContext,
+  InternalRbacService,
+  InternalRbacServiceOptions
+} from "./internal-rbac-service";
 export type {
   InternalTenantSettingsContext,
   InternalTenantSettingsService
