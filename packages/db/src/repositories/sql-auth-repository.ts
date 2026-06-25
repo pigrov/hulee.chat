@@ -36,6 +36,7 @@ export type PlatformAdminAuthAccount = {
 
 export type AuthSessionPrincipal = {
   sessionId: string;
+  createdAt: Date;
   expiresAt: Date;
   tenantAccount?: TenantAuthAccount;
   platformAdmin?: Omit<PlatformAdminAuthAccount, "passwordHash">;
@@ -115,6 +116,7 @@ type PlatformAdminAccountRow = {
 
 type AuthSessionRow = {
   session_id: string;
+  created_at: SqlTimestamp;
   expires_at: SqlTimestamp;
   tenant_id: string | null;
   tenant_slug: string | null;
@@ -315,6 +317,7 @@ export function buildInsertAuthSessionSql(input: CreateAuthSessionInput): SQL {
 export function buildFindAuthSessionByTokenSql(token: string, now: Date): SQL {
   return sql`
     select sessions.id as session_id,
+           sessions.created_at,
            sessions.expires_at,
            tenants.id as tenant_id,
            tenants.slug as tenant_slug,
@@ -619,6 +622,7 @@ function mapAuthSessionRow(row: AuthSessionRow): AuthSessionPrincipal {
 
   return {
     sessionId: row.session_id,
+    createdAt: new Date(row.created_at),
     expiresAt: new Date(row.expires_at),
     tenantAccount,
     platformAdmin

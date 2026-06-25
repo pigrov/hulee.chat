@@ -1,6 +1,7 @@
 import { CoreError } from "@hulee/core";
 import { describe, expect, it } from "vitest";
 
+import { PrivilegedActionReauthRequiredError } from "./privileged-action-policy";
 import { roleActionFailureStatus } from "./role-action-status";
 
 describe("role action status", () => {
@@ -15,5 +16,11 @@ describe("role action status", () => {
       "invalid"
     );
     expect(roleActionFailureStatus(new Error("invalid form"))).toBe("invalid");
+  });
+
+  it("maps privileged action freshness failures to re-auth status", () => {
+    expect(
+      roleActionFailureStatus(new PrivilegedActionReauthRequiredError())
+    ).toBe("reauth_required");
   });
 });

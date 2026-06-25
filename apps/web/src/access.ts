@@ -16,6 +16,9 @@ export type WebAccessSession = {
   tenantSlug?: string;
   tenantDisplayName?: string;
   accountId?: string;
+  sessionId?: string;
+  sessionCreatedAt?: string;
+  sessionExpiresAt?: string;
   employeeId: EmployeeId;
   email?: string;
   emailVerifiedAt?: string | null;

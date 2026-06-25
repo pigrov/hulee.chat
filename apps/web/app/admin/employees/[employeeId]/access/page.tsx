@@ -146,6 +146,8 @@ export default async function EmployeeAccessAdminPage({
     roles,
     roleBindings,
     directGrants,
+    expiredRoleBindings,
+    expiredDirectGrants,
     orgUnits,
     teams,
     workQueues,
@@ -159,6 +161,14 @@ export default async function EmployeeAccessAdminPage({
     rbacRepository.listRoleDefinitions({ tenantId: access.tenantId }),
     rbacRepository.listRoleBindings({ tenantId: access.tenantId, at: now }),
     rbacRepository.listDirectGrants({ tenantId: access.tenantId, at: now }),
+    rbacRepository.listExpiredRoleBindings({
+      tenantId: access.tenantId,
+      at: now
+    }),
+    rbacRepository.listExpiredDirectGrants({
+      tenantId: access.tenantId,
+      at: now
+    }),
     orgStructureRepository.listOrgUnits({
       tenantId: access.tenantId,
       activeOnly: true
@@ -215,6 +225,20 @@ export default async function EmployeeAccessAdminPage({
       )
     );
   const employeeDirectGrants = directGrants
+    .filter((grant) => grant.employeeId === employee.employeeId)
+    .sort((left, right) => left.permission.localeCompare(right.permission));
+  const expiredEmployeeRoleBindings = expiredRoleBindings
+    .filter(
+      (binding) =>
+        binding.subject.type === "employee" &&
+        binding.subject.id === employee.employeeId
+    )
+    .sort((left, right) =>
+      roleNameById(left.roleId, roles, t).localeCompare(
+        roleNameById(right.roleId, roles, t)
+      )
+    );
+  const expiredEmployeeDirectGrants = expiredDirectGrants
     .filter((grant) => grant.employeeId === employee.employeeId)
     .sort((left, right) => left.permission.localeCompare(right.permission));
   const effectiveAccess = buildEffectiveAccessPreview({
@@ -531,6 +555,50 @@ export default async function EmployeeAccessAdminPage({
 
         <section
           className="settingsPanel"
+          aria-labelledby="employee-expired-role-bindings-title"
+        >
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.roles.assignments")}</p>
+              <h2
+                className="sectionTitle"
+                id="employee-expired-role-bindings-title"
+              >
+                {t("admin.employeeAccess.expiredAssignments")}
+              </h2>
+              <p className="metaText">
+                {t("admin.employeeAccess.expiredAssignments.description")}
+              </p>
+            </div>
+            <span className="badge">{expiredEmployeeRoleBindings.length}</span>
+          </div>
+
+          <div className="managementList">
+            {expiredEmployeeRoleBindings.length === 0 ? (
+              <p className="metaText">
+                {t("admin.employeeAccess.noExpiredAssignments")}
+              </p>
+            ) : (
+              expiredEmployeeRoleBindings.map((binding) => (
+                <EmployeeRoleBindingRow
+                  binding={binding}
+                  currentEmployeeId={access.employeeId}
+                  expired
+                  key={
+                    binding.id ??
+                    `${binding.roleId}:${permissionScopeKey(binding.scope)}`
+                  }
+                  returnPath={returnPath}
+                  roles={roles}
+                  t={t}
+                />
+              ))
+            )}
+          </div>
+        </section>
+
+        <section
+          className="settingsPanel"
           aria-labelledby="employee-direct-grants-title"
         >
           <div className="sectionHeader">
@@ -555,6 +623,49 @@ export default async function EmployeeAccessAdminPage({
               employeeDirectGrants.map((grant) => (
                 <EmployeeDirectGrantRow
                   currentEmployeeId={access.employeeId}
+                  grant={grant}
+                  key={
+                    grant.id ??
+                    `${grant.permission}:${permissionScopeKey(grant.scope)}`
+                  }
+                  returnPath={returnPath}
+                  t={t}
+                />
+              ))
+            )}
+          </div>
+        </section>
+
+        <section
+          className="settingsPanel"
+          aria-labelledby="employee-expired-direct-grants-title"
+        >
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.roles.directGrants")}</p>
+              <h2
+                className="sectionTitle"
+                id="employee-expired-direct-grants-title"
+              >
+                {t("admin.employeeAccess.expiredDirectGrants")}
+              </h2>
+              <p className="metaText">
+                {t("admin.employeeAccess.expiredDirectGrants.description")}
+              </p>
+            </div>
+            <span className="badge">{expiredEmployeeDirectGrants.length}</span>
+          </div>
+
+          <div className="managementList">
+            {expiredEmployeeDirectGrants.length === 0 ? (
+              <p className="metaText">
+                {t("admin.employeeAccess.noExpiredDirectGrants")}
+              </p>
+            ) : (
+              expiredEmployeeDirectGrants.map((grant) => (
+                <EmployeeDirectGrantRow
+                  currentEmployeeId={access.employeeId}
+                  expired
                   grant={grant}
                   key={
                     grant.id ??
@@ -615,12 +726,14 @@ export default async function EmployeeAccessAdminPage({
 function EmployeeRoleBindingRow({
   binding,
   currentEmployeeId,
+  expired = false,
   returnPath,
   roles,
   t
 }: {
   readonly binding: PermissionRoleBinding;
   readonly currentEmployeeId: EmployeeId;
+  readonly expired?: boolean;
   readonly returnPath: string;
   readonly roles: readonly TenantRoleRecord[];
   readonly t: Translator;
@@ -646,7 +759,9 @@ function EmployeeRoleBindingRow({
         </p>
       </div>
       <div className="rowActions">
-        {isCurrentEmployee || binding.id === undefined ? (
+        {expired ? (
+          <span className="badge">{t("admin.roles.expired")}</span>
+        ) : isCurrentEmployee || binding.id === undefined ? (
           <span className="badge">{t("admin.roles.currentUser")}</span>
         ) : (
           <form className="inlineForm" action={revokeTenantRoleBindingAction}>
@@ -712,11 +827,13 @@ function MembershipCheckboxGroup({
 
 function EmployeeDirectGrantRow({
   currentEmployeeId,
+  expired = false,
   grant,
   returnPath,
   t
 }: {
   readonly currentEmployeeId: EmployeeId;
+  readonly expired?: boolean;
   readonly grant: DirectPermissionGrant;
   readonly returnPath: string;
   readonly t: Translator;
@@ -749,7 +866,9 @@ function EmployeeDirectGrantRow({
         </p>
       </div>
       <div className="rowActions">
-        {isCurrentEmployee || grant.id === undefined ? (
+        {expired ? (
+          <span className="badge">{t("admin.roles.expired")}</span>
+        ) : isCurrentEmployee || grant.id === undefined ? (
           <span className="badge">{t("admin.roles.currentUser")}</span>
         ) : (
           <form
@@ -1097,6 +1216,8 @@ function roleActionStatusKey(status: string): I18nMessageKey {
       return "admin.roles.actionStatus.directGrantRevoked";
     case "permission_denied":
       return "admin.roles.actionStatus.permissionDenied";
+    case "reauth_required":
+      return "admin.roles.actionStatus.reauthRequired";
     case "memberships_updated":
       return "admin.employeeAccess.actionStatus.membershipsUpdated";
     case "email_verification_required":

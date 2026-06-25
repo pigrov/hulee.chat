@@ -52,6 +52,10 @@ import {
   assertCanGrantScopedPermissions,
   assertCanManageScopedAccess
 } from "./rbac-least-privilege";
+import {
+  assertRecentPrivilegedActionSession,
+  isPrivilegedActionReauthRequiredError
+} from "./privileged-action-policy";
 import { roleActionFailureStatus } from "./role-action-status";
 import { findRoleTemplate, uniqueRoleTemplateName } from "./role-templates";
 
@@ -60,7 +64,7 @@ export async function createCustomTenantRoleAction(
 ): Promise<void> {
   await assertWebActionRequest();
 
-  const session = await assertVerifiedRolesPermission();
+  const session = await assertVerifiedRolesPermission(formData);
   const now = new Date();
   const repository = createSqlTenantRbacRepository(getWebDatabase());
   let destination = roleActionDestination(formData, "invalid");
@@ -131,7 +135,7 @@ export async function createRoleFromTemplateAction(
 ): Promise<void> {
   await assertWebActionRequest();
 
-  const session = await assertVerifiedRolesPermission();
+  const session = await assertVerifiedRolesPermission(formData);
   const now = new Date();
   const repository = createSqlTenantRbacRepository(getWebDatabase());
   let destination = roleActionDestination(formData, "invalid");
@@ -223,7 +227,7 @@ export async function updateCustomTenantRoleAction(
 ): Promise<void> {
   await assertWebActionRequest();
 
-  const session = await assertVerifiedRolesPermission();
+  const session = await assertVerifiedRolesPermission(formData);
   const now = new Date();
   const repository = createSqlTenantRbacRepository(getWebDatabase());
   let destination = roleActionDestination(formData, "invalid");
@@ -316,7 +320,7 @@ export async function archiveCustomTenantRoleAction(
 ): Promise<void> {
   await assertWebActionRequest();
 
-  const session = await assertVerifiedRolesPermission();
+  const session = await assertVerifiedRolesPermission(formData);
   const now = new Date();
   const repository = createSqlTenantRbacRepository(getWebDatabase());
   let destination = roleActionDestination(formData, "invalid");
@@ -388,7 +392,7 @@ export async function restoreCustomTenantRoleAction(
 ): Promise<void> {
   await assertWebActionRequest();
 
-  const session = await assertVerifiedRolesPermission();
+  const session = await assertVerifiedRolesPermission(formData);
   const now = new Date();
   const repository = createSqlTenantRbacRepository(getWebDatabase());
   let destination = roleActionDestination(formData, "invalid");
@@ -452,7 +456,7 @@ export async function assignTenantRoleAction(
 ): Promise<void> {
   await assertWebActionRequest();
 
-  const session = await assertVerifiedRolesPermission();
+  const session = await assertVerifiedRolesPermission(formData);
   const subject = readRoleBindingSubject(formData);
   const roleId = readRequiredFormString(formData, "roleId");
   const scope = normalizePermissionScope({
@@ -578,7 +582,7 @@ export async function revokeTenantRoleBindingAction(
 ): Promise<void> {
   await assertWebActionRequest();
 
-  const session = await assertVerifiedRolesPermission();
+  const session = await assertVerifiedRolesPermission(formData);
   const bindingId = readRequiredFormString(formData, "bindingId");
   const now = new Date();
   const rbacRepository = createSqlTenantRbacRepository(getWebDatabase());
@@ -686,7 +690,7 @@ export async function createDirectPermissionGrantAction(
 ): Promise<void> {
   await assertWebActionRequest();
 
-  const session = await assertVerifiedRolesPermission();
+  const session = await assertVerifiedRolesPermission(formData);
   const now = new Date();
   const rbacRepository = createSqlTenantRbacRepository(getWebDatabase());
   const employeeRepository =
@@ -825,7 +829,7 @@ export async function revokeDirectPermissionGrantAction(
 ): Promise<void> {
   await assertWebActionRequest();
 
-  const session = await assertVerifiedRolesPermission();
+  const session = await assertVerifiedRolesPermission(formData);
   const grantId = readRequiredFormString(formData, "grantId");
   const now = new Date();
   const rbacRepository = createSqlTenantRbacRepository(getWebDatabase());
@@ -952,16 +956,27 @@ async function recordAccessMutation(input: {
   });
 }
 
-async function assertVerifiedRolesPermission(): ReturnType<
-  typeof assertCurrentWebEffectiveTenantPermission
-> {
+async function assertVerifiedRolesPermission(
+  formData: FormData
+): ReturnType<typeof assertCurrentWebEffectiveTenantPermission> {
   try {
-    return await assertCurrentWebEffectiveTenantPermission("roles.manage", {
-      requireVerifiedEmail: true
-    });
+    const session = await assertCurrentWebEffectiveTenantPermission(
+      "roles.manage",
+      {
+        requireVerifiedEmail: true
+      }
+    );
+
+    assertRecentPrivilegedActionSession(session);
+
+    return session;
   } catch (error) {
     if (isEmailNotVerifiedError(error)) {
-      redirect("/admin/roles?roleActionStatus=email_verification_required");
+      redirect(roleActionDestination(formData, "email_verification_required"));
+    }
+
+    if (isPrivilegedActionReauthRequiredError(error)) {
+      redirect(roleActionDestination(formData, "reauth_required"));
     }
 
     throw error;

@@ -112,6 +112,7 @@ describe("SQL local auth repository", () => {
       new RecordingSqlExecutor([
         {
           session_id: "session-1",
+          created_at: new Date("2026-06-22T09:30:00.000Z"),
           expires_at: new Date("2026-06-23T10:00:00.000Z"),
           tenant_id: tenantId,
           tenant_slug: "local",
@@ -138,6 +139,7 @@ describe("SQL local auth repository", () => {
       )
     ).resolves.toMatchObject({
       sessionId: "session-1",
+      createdAt: new Date("2026-06-22T09:30:00.000Z"),
       tenantAccount: {
         tenantId,
         tenantDisplayName: "Local Company",

@@ -26,6 +26,10 @@ import { assertWebActionRequest } from "./action-security";
 import { assertWebTenantEmailVerified, type WebAccessSession } from "./access";
 import { assertCanUpdateEmployeeMemberships } from "./employee-membership-access";
 import {
+  assertRecentPrivilegedActionSession,
+  isPrivilegedActionReauthRequiredError
+} from "./privileged-action-policy";
+import {
   getWebDatabase,
   isEmailNotVerifiedError,
   requireCurrentWebAccessSession
@@ -269,11 +273,20 @@ async function assertVerifiedRolesPermission(
   try {
     const session = await requireCurrentWebAccessSession();
 
-    return assertWebTenantEmailVerified(session);
+    assertWebTenantEmailVerified(session);
+    assertRecentPrivilegedActionSession(session);
+
+    return session;
   } catch (error) {
     if (isEmailNotVerifiedError(error)) {
       redirect(
         `${employeeAccessPath(employeeId)}?roleActionStatus=email_verification_required`
+      );
+    }
+
+    if (isPrivilegedActionReauthRequiredError(error)) {
+      redirect(
+        `${employeeAccessPath(employeeId)}?roleActionStatus=reauth_required`
       );
     }
 

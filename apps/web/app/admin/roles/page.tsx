@@ -149,6 +149,8 @@ export default async function RolesAdminPage({
     roles,
     roleBindings,
     directGrants,
+    expiredRoleBindings,
+    expiredDirectGrants,
     employees,
     orgUnits,
     teams,
@@ -159,6 +161,14 @@ export default async function RolesAdminPage({
     repository.listRoleDefinitions({ tenantId: access.tenantId }),
     repository.listRoleBindings({ tenantId: access.tenantId, at: now }),
     repository.listDirectGrants({ tenantId: access.tenantId, at: now }),
+    repository.listExpiredRoleBindings({
+      tenantId: access.tenantId,
+      at: now
+    }),
+    repository.listExpiredDirectGrants({
+      tenantId: access.tenantId,
+      at: now
+    }),
     employeeRepository.listEmployees({ tenantId: access.tenantId }),
     orgStructureRepository.listOrgUnits({
       tenantId: access.tenantId,
@@ -482,6 +492,47 @@ export default async function RolesAdminPage({
 
         <section
           className="settingsPanel"
+          aria-labelledby="expired-role-bindings-title"
+        >
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.roles.assignments")}</p>
+              <h2 className="sectionTitle" id="expired-role-bindings-title">
+                {t("admin.roles.expiredAssignments")}
+              </h2>
+              <p className="metaText">
+                {t("admin.roles.expiredAssignments.description")}
+              </p>
+            </div>
+            <span className="badge">{expiredRoleBindings.length}</span>
+          </div>
+
+          <div className="managementList">
+            {expiredRoleBindings.length === 0 ? (
+              <p className="metaText">
+                {t("admin.roles.noExpiredAssignments")}
+              </p>
+            ) : (
+              expiredRoleBindings.map((binding) => (
+                <RoleBindingRow
+                  binding={binding}
+                  currentEmployeeId={access.employeeId}
+                  employees={employees}
+                  expired
+                  key={binding.id}
+                  orgUnits={orgUnits}
+                  roles={roles}
+                  t={t}
+                  teams={teams}
+                  workQueues={workQueues}
+                />
+              ))
+            )}
+          </div>
+        </section>
+
+        <section
+          className="settingsPanel"
           aria-labelledby="direct-grant-create-title"
         >
           <div className="sectionHeader">
@@ -546,6 +597,43 @@ export default async function RolesAdminPage({
                 <DirectGrantRow
                   currentEmployeeId={access.employeeId}
                   employees={employees}
+                  grant={grant}
+                  key={grant.id}
+                  t={t}
+                />
+              ))
+            )}
+          </div>
+        </section>
+
+        <section
+          className="settingsPanel"
+          aria-labelledby="expired-direct-grants-title"
+        >
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.roles.directGrants")}</p>
+              <h2 className="sectionTitle" id="expired-direct-grants-title">
+                {t("admin.roles.expiredDirectGrants")}
+              </h2>
+              <p className="metaText">
+                {t("admin.roles.expiredDirectGrants.description")}
+              </p>
+            </div>
+            <span className="badge">{expiredDirectGrants.length}</span>
+          </div>
+
+          <div className="managementList">
+            {expiredDirectGrants.length === 0 ? (
+              <p className="metaText">
+                {t("admin.roles.noExpiredDirectGrants")}
+              </p>
+            ) : (
+              expiredDirectGrants.map((grant) => (
+                <DirectGrantRow
+                  currentEmployeeId={access.employeeId}
+                  employees={employees}
+                  expired
                   grant={grant}
                   key={grant.id}
                   t={t}
@@ -861,6 +949,7 @@ function RoleBindingRow({
   binding,
   currentEmployeeId,
   employees,
+  expired = false,
   roles,
   t,
   teams,
@@ -870,6 +959,7 @@ function RoleBindingRow({
   binding: PermissionRoleBinding;
   currentEmployeeId: string;
   employees: readonly TenantEmployeeRecord[];
+  expired?: boolean;
   roles: readonly TenantRoleRecord[];
   t: Translator;
   teams: readonly TeamRecord[];
@@ -914,7 +1004,9 @@ function RoleBindingRow({
         </p>
       </div>
       <div className="rowActions">
-        {isCurrentEmployee ? (
+        {expired ? (
+          <span className="badge">{t("admin.roles.expired")}</span>
+        ) : isCurrentEmployee ? (
           <span className="badge">{t("admin.roles.currentUser")}</span>
         ) : (
           <form className="inlineForm" action={revokeTenantRoleBindingAction}>
@@ -933,11 +1025,13 @@ function RoleBindingRow({
 function DirectGrantRow({
   currentEmployeeId,
   employees,
+  expired = false,
   grant,
   t
 }: {
   currentEmployeeId: string;
   employees: readonly TenantEmployeeRecord[];
+  expired?: boolean;
   grant: DirectPermissionGrant;
   t: Translator;
 }): ReactNode {
@@ -977,7 +1071,9 @@ function DirectGrantRow({
         </p>
       </div>
       <div className="rowActions">
-        {isCurrentEmployee || grant.id === undefined ? (
+        {expired ? (
+          <span className="badge">{t("admin.roles.expired")}</span>
+        ) : isCurrentEmployee || grant.id === undefined ? (
           <span className="badge">{t("admin.roles.currentUser")}</span>
         ) : (
           <form
@@ -1399,6 +1495,8 @@ function roleActionStatusKey(status: string): I18nMessageKey {
       return "admin.roles.actionStatus.directGrantRevoked";
     case "permission_denied":
       return "admin.roles.actionStatus.permissionDenied";
+    case "reauth_required":
+      return "admin.roles.actionStatus.reauthRequired";
     case "email_verification_required":
       return "auth.emailVerification.status.required";
     default:

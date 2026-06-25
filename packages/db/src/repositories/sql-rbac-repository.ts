@@ -105,6 +105,12 @@ export type ListTenantRoleBindingsInput = {
   readonly at: Date;
 };
 
+export type ListExpiredTenantRoleBindingsInput = {
+  readonly tenantId: TenantId;
+  readonly at: Date;
+  readonly limit?: number;
+};
+
 export type ListActorRoleBindingsInput = {
   readonly actor: PermissionActor;
   readonly at: Date;
@@ -119,6 +125,12 @@ export type ListActorDirectPermissionGrantsInput = {
 export type ListTenantDirectPermissionGrantsInput = {
   readonly tenantId: TenantId;
   readonly at: Date;
+};
+
+export type ListExpiredTenantDirectPermissionGrantsInput = {
+  readonly tenantId: TenantId;
+  readonly at: Date;
+  readonly limit?: number;
 };
 
 export type ListEffectiveAccessSourcesInput = {
@@ -155,6 +167,9 @@ export type TenantRbacRepository = {
   listRoleBindings(
     input: ListTenantRoleBindingsInput
   ): Promise<readonly PermissionRoleBinding[]>;
+  listExpiredRoleBindings(
+    input: ListExpiredTenantRoleBindingsInput
+  ): Promise<readonly PermissionRoleBinding[]>;
   listRoleBindingsForActor(
     input: ListActorRoleBindingsInput
   ): Promise<readonly PermissionRoleBinding[]>;
@@ -163,6 +178,9 @@ export type TenantRbacRepository = {
   ): Promise<readonly DirectPermissionGrant[]>;
   listDirectGrants(
     input: ListTenantDirectPermissionGrantsInput
+  ): Promise<readonly DirectPermissionGrant[]>;
+  listExpiredDirectGrants(
+    input: ListExpiredTenantDirectPermissionGrantsInput
   ): Promise<readonly DirectPermissionGrant[]>;
   listEffectiveAccessSources(
     input: ListEffectiveAccessSourcesInput
@@ -277,6 +295,17 @@ export function createSqlTenantRbacRepository(
       return bindings;
     },
 
+    async listExpiredRoleBindings(input) {
+      const result = await rawExecutor.execute<TenantRoleBindingRow>(
+        buildListExpiredTenantRoleBindingsSql(input)
+      );
+      const bindings = result.rows.map(mapTenantRoleBindingRow);
+
+      assertTenantScopedRows(input.tenantId, bindings);
+
+      return bindings;
+    },
+
     async listRoleBindingsForActor(input) {
       const result = await rawExecutor.execute<TenantRoleBindingRow>(
         buildListActorRoleBindingsSql(input)
@@ -302,6 +331,17 @@ export function createSqlTenantRbacRepository(
     async listDirectGrants(input) {
       const result = await rawExecutor.execute<DirectPermissionGrantRow>(
         buildListTenantDirectPermissionGrantsSql(input)
+      );
+      const grants = result.rows.map(mapDirectPermissionGrantRow);
+
+      assertTenantScopedRows(input.tenantId, grants);
+
+      return grants;
+    },
+
+    async listExpiredDirectGrants(input) {
+      const result = await rawExecutor.execute<DirectPermissionGrantRow>(
+        buildListExpiredTenantDirectPermissionGrantsSql(input)
       );
       const grants = result.rows.map(mapDirectPermissionGrantRow);
 
@@ -953,6 +993,33 @@ export function buildListTenantRoleBindingsSql(
   `;
 }
 
+export function buildListExpiredTenantRoleBindingsSql(
+  input: ListExpiredTenantRoleBindingsInput
+): SQL {
+  assertNonEmpty(input.tenantId);
+
+  return sql`
+    select id,
+           tenant_id,
+           role_id,
+           subject_type,
+           subject_id,
+           scope_type,
+           scope_id,
+           starts_at,
+           expires_at,
+           revoked_at
+    from tenant_role_bindings
+    where tenant_id = ${input.tenantId}
+      and revoked_at is null
+      and expires_at is not null
+      and expires_at <= ${input.at}
+    order by expires_at desc,
+             created_at desc
+    limit ${normalizeListLimit(input.limit)}
+  `;
+}
+
 export function buildListActorRoleBindingsSql(
   input: ListActorRoleBindingsInput
 ): SQL {
@@ -1029,6 +1096,33 @@ export function buildListTenantDirectPermissionGrantsSql(
       and (starts_at is null or starts_at <= ${input.at})
       and (expires_at is null or expires_at > ${input.at})
     order by created_at asc
+  `;
+}
+
+export function buildListExpiredTenantDirectPermissionGrantsSql(
+  input: ListExpiredTenantDirectPermissionGrantsInput
+): SQL {
+  assertNonEmpty(input.tenantId);
+
+  return sql`
+    select id,
+           tenant_id,
+           employee_id,
+           permission,
+           scope_type,
+           scope_id,
+           reason,
+           starts_at,
+           expires_at,
+           revoked_at
+    from direct_permission_grants
+    where tenant_id = ${input.tenantId}
+      and revoked_at is null
+      and expires_at is not null
+      and expires_at <= ${input.at}
+    order by expires_at desc,
+             created_at desc
+    limit ${normalizeListLimit(input.limit)}
   `;
 }
 
@@ -1279,6 +1373,18 @@ function assertNonEmpty(value: string): void {
   if (value.trim().length === 0) {
     throw new CoreError("validation.failed");
   }
+}
+
+function normalizeListLimit(limit: number | undefined): number {
+  if (limit === undefined) {
+    return 100;
+  }
+
+  if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+    throw new CoreError("validation.failed");
+  }
+
+  return limit;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

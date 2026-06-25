@@ -478,6 +478,7 @@ async function createStoredWebSession(input: {
 
   const session = webAccessSessionFromPrincipal({
     sessionId,
+    createdAt: now,
     expiresAt,
     tenantAccount: input.tenantAccount,
     platformAdmin: input.platformAdmin
@@ -555,6 +556,9 @@ function webAccessSessionFromPrincipal(
     tenantSlug: principal.tenantAccount?.tenantSlug,
     tenantDisplayName: principal.tenantAccount?.tenantDisplayName,
     accountId: principal.tenantAccount?.accountId,
+    sessionId: principal.sessionId,
+    sessionCreatedAt: principal.createdAt.toISOString(),
+    sessionExpiresAt: principal.expiresAt.toISOString(),
     employeeId:
       principal.tenantAccount?.employeeId ??
       (`employee:platform:${principal.platformAdmin?.id ?? "anonymous"}` as EmployeeId),

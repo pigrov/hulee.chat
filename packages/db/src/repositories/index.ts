@@ -231,6 +231,8 @@ export type {
   EffectiveAccessSources,
   ListActorDirectPermissionGrantsInput,
   ListActorRoleBindingsInput,
+  ListExpiredTenantDirectPermissionGrantsInput,
+  ListExpiredTenantRoleBindingsInput,
   ListEffectiveAccessSourcesInput,
   ListTenantDirectPermissionGrantsInput,
   ListTenantRoleDefinitionsInput,

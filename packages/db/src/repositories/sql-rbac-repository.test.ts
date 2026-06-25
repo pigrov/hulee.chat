@@ -352,6 +352,56 @@ describe("SQL RBAC repository", () => {
     expect(query.params).toEqual(expect.arrayContaining([tenantId, now]));
   });
 
+  it("lists expired tenant role bindings for administration", async () => {
+    const executor = new RecordingSqlExecutor([
+      [
+        {
+          id: "binding-expired",
+          tenant_id: tenantId,
+          role_id: "role-sales",
+          subject_type: "employee",
+          subject_id: employeeId,
+          scope_type: "tenant",
+          scope_id: null,
+          starts_at: null,
+          expires_at: "2026-06-21T10:00:00.000Z",
+          revoked_at: null
+        }
+      ]
+    ]);
+    const repository = createSqlTenantRbacRepository(executor);
+
+    await expect(
+      repository.listExpiredRoleBindings({
+        tenantId,
+        at: now,
+        limit: 25
+      })
+    ).resolves.toEqual([
+      {
+        id: "binding-expired",
+        tenantId,
+        roleId: "role-sales",
+        subject: {
+          type: "employee",
+          id: employeeId
+        },
+        scope: {
+          type: "tenant"
+        },
+        expiresAt: "2026-06-21T10:00:00.000Z"
+      }
+    ]);
+
+    const query = renderQuery(executor.queries[0]);
+
+    expect(query.sql).toContain("from tenant_role_bindings");
+    expect(query.sql).toContain("expires_at is not null");
+    expect(query.sql).toContain("expires_at <= $2");
+    expect(query.sql).toContain("limit $3");
+    expect(query.params).toEqual([tenantId, now, 25]);
+  });
+
   it("lists active direct grants for administration", async () => {
     const executor = new RecordingSqlExecutor([
       [
@@ -396,6 +446,55 @@ describe("SQL RBAC repository", () => {
     expect(query.sql).toContain("where tenant_id = $1");
     expect(query.sql).toContain("revoked_at is null");
     expect(query.params).toEqual(expect.arrayContaining([tenantId, now]));
+  });
+
+  it("lists expired direct grants for administration", async () => {
+    const executor = new RecordingSqlExecutor([
+      [
+        {
+          id: "grant-expired",
+          tenant_id: tenantId,
+          employee_id: employeeId,
+          permission: "client.view",
+          scope_type: "client",
+          scope_id: "client-1",
+          reason: "temporary coverage",
+          starts_at: null,
+          expires_at: "2026-06-21T10:00:00.000Z",
+          revoked_at: null
+        }
+      ]
+    ]);
+    const repository = createSqlTenantRbacRepository(executor);
+
+    await expect(
+      repository.listExpiredDirectGrants({
+        tenantId,
+        at: now,
+        limit: 25
+      })
+    ).resolves.toEqual([
+      {
+        id: "grant-expired",
+        tenantId,
+        employeeId,
+        permission: "client.view",
+        scope: {
+          type: "client",
+          id: "client-1"
+        },
+        reason: "temporary coverage",
+        expiresAt: "2026-06-21T10:00:00.000Z"
+      }
+    ]);
+
+    const query = renderQuery(executor.queries[0]);
+
+    expect(query.sql).toContain("from direct_permission_grants");
+    expect(query.sql).toContain("expires_at is not null");
+    expect(query.sql).toContain("expires_at <= $2");
+    expect(query.sql).toContain("limit $3");
+    expect(query.params).toEqual([tenantId, now, 25]);
   });
 
   it("rejects cross-tenant rows returned from role reads", async () => {
