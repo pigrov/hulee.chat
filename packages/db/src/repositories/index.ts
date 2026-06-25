@@ -127,7 +127,6 @@ export {
   hashAuthSessionToken
 } from "./sql-auth-repository";
 export {
-  buildChangeEmployeeRoleSql,
   buildDeactivateEmployeeSql,
   buildAcceptEmployeeInvitationSql,
   buildCreateEmployeeInvitationSql,
@@ -310,7 +309,6 @@ export type {
 } from "./sql-auth-repository";
 export type {
   AcceptEmployeeInvitationPersistenceInput,
-  ChangeEmployeeRolePersistenceInput,
   CreateEmployeeInvitationPersistenceInput,
   DeactivateEmployeePersistenceInput,
   EmployeeDirectoryRepository,

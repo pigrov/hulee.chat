@@ -213,7 +213,7 @@ describe("SQL employee directory repository", () => {
     expect(executor.queries).toHaveLength(2);
   });
 
-  it("writes role, deactivation and invitation lifecycle commands", async () => {
+  it("writes deactivation and invitation lifecycle commands", async () => {
     const executor = new RecordingSqlExecutor([
       {
         employee_id: employeeId,
@@ -222,32 +222,6 @@ describe("SQL employee directory repository", () => {
     ]);
     const repository = createSqlEmployeeDirectoryRepository(executor);
     const now = new Date("2026-06-23T10:00:00.000Z");
-    const events = [
-      {
-        id: "event-1" as EventId,
-        type: "employee.role_changed" as const,
-        version: "v1" as const,
-        tenantId,
-        occurredAt: now.toISOString(),
-        payload: {
-          employeeId,
-          role: "supervisor"
-        }
-      }
-    ];
-
-    await repository.changeEmployeeRole({
-      tenantId,
-      employeeId,
-      role: "supervisor",
-      changedAt: now,
-      events
-    });
-
-    const changeRoleQuery = renderQuery(executor.queries[0]);
-
-    expect(changeRoleQuery.sql).toContain("update tenant_role_bindings");
-    expect(changeRoleQuery.sql).toContain("insert into tenant_role_bindings");
 
     await repository.deactivateEmployee({
       tenantId,
@@ -308,7 +282,7 @@ describe("SQL employee directory repository", () => {
       ]
     });
 
-    expect(executor.queries).toHaveLength(4);
+    expect(executor.queries).toHaveLength(3);
   });
 });
 

@@ -3,11 +3,7 @@ import type { EmployeeId, PlatformEvent, TenantId } from "@hulee/contracts";
 import { createDomainEvent } from "./domain-events";
 import { CoreError } from "./errors";
 import { createSequentialIdFactory, type IdFactory } from "./ids";
-import {
-  isEmployeeRole,
-  type Employee,
-  type EmployeeRole
-} from "./permissions";
+import type { Employee } from "./permissions";
 
 export type EmployeeInvitation = {
   id: string;
@@ -75,20 +71,6 @@ export type ResendEmployeeInvitationInput = {
 
 export type ResentEmployeeInvitation = {
   invitation: EmployeeInvitation;
-  events: readonly PlatformEvent[];
-};
-
-export type ChangeEmployeeRoleInput = {
-  now: string;
-  tenantId: TenantId;
-  actor: Employee;
-  employee: Employee;
-  role: string;
-  idFactory?: IdFactory;
-};
-
-export type ChangedEmployeeRole = {
-  employee: Employee;
   events: readonly PlatformEvent[];
 };
 
@@ -260,41 +242,6 @@ export function resendEmployeeInvitation(
   };
 }
 
-export function changeEmployeeRole(
-  input: ChangeEmployeeRoleInput
-): ChangedEmployeeRole {
-  assertEmployeeManagementActor(input.actor, input.tenantId);
-  assertEmployeeTenant(input.employee, input.tenantId);
-  assertNotSelfTarget(input.actor, input.employee);
-
-  if (input.employee.deactivatedAt !== undefined) {
-    throw new CoreError("validation.failed");
-  }
-
-  const role = parseEmployeeRole(input.role);
-  const ids = input.idFactory ?? createSequentialIdFactory(input.tenantId);
-  const employee: Employee = {
-    ...input.employee,
-    roles: [role]
-  };
-
-  return {
-    employee,
-    events: [
-      createDomainEvent({
-        id: ids.eventId("employee.role_changed"),
-        type: "employee.role_changed",
-        tenantId: input.tenantId,
-        occurredAt: input.now,
-        payload: {
-          employeeId: employee.id,
-          role
-        }
-      })
-    ]
-  };
-}
-
 export function deactivateEmployee(
   input: DeactivateEmployeeInput
 ): DeactivatedEmployee {
@@ -374,14 +321,6 @@ function assertInvitationPending(
   }
 
   requireFutureTimestamp(invitation.expiresAt, now);
-}
-
-function parseEmployeeRole(value: string): EmployeeRole {
-  if (!isEmployeeRole(value)) {
-    throw new CoreError("validation.failed");
-  }
-
-  return value;
 }
 
 function normalizeEmail(value: string): string {

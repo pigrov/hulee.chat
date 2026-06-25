@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   acceptEmployeeInvitation,
-  changeEmployeeRole,
   CoreError,
   createEmployeeInvitation,
   createSequentialIdFactory,
@@ -160,44 +159,6 @@ describe("employee invitations", () => {
     expect(resent.invitation.revokedAt).toBeUndefined();
     expect(resent.invitation.expiresAt).toBe("2026-07-02T10:00:00.000Z");
     expect(resent.events[0]?.type).toBe("employee.invitation_resent");
-  });
-
-  it("changes another employee role and rejects self role changes", () => {
-    const agent: Employee = {
-      id: "employee_agent" as Employee["id"],
-      tenantId,
-      email: "agent@example.test",
-      displayName: "Agent",
-      roles: ["agent"],
-      createdAt: now
-    };
-    const changed = changeEmployeeRole({
-      now: "2026-06-24T10:00:00.000Z",
-      tenantId,
-      actor: tenantAdmin,
-      employee: agent,
-      role: "supervisor",
-      idFactory: createSequentialIdFactory("role-change")
-    });
-
-    expect(changed.employee.roles).toEqual(["supervisor"]);
-    expect(changed.events[0]).toMatchObject({
-      type: "employee.role_changed",
-      payload: {
-        employeeId: agent.id,
-        role: "supervisor"
-      }
-    });
-
-    expect(() => {
-      changeEmployeeRole({
-        now: "2026-06-24T10:00:00.000Z",
-        tenantId,
-        actor: tenantAdmin,
-        employee: tenantAdmin,
-        role: "agent"
-      });
-    }).toThrow(new CoreError("validation.failed"));
   });
 
   it("deactivates another employee and rejects self deactivation", () => {

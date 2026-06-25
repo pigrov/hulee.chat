@@ -3,7 +3,6 @@ import {
   CoreError,
   isPermission,
   isEmployeeRole,
-  permissionsForRoles,
   type Employee,
   type EmployeeInvitation,
   type EmployeeRole,
@@ -75,14 +74,6 @@ export type AcceptEmployeeInvitationPersistenceInput = {
   acceptedAt: Date;
 };
 
-export type ChangeEmployeeRolePersistenceInput = {
-  tenantId: TenantId;
-  employeeId: EmployeeId;
-  role: EmployeeRole;
-  changedAt: Date;
-  events: readonly PlatformEvent[];
-};
-
 export type DeactivateEmployeePersistenceInput = {
   tenantId: TenantId;
   employeeId: EmployeeId;
@@ -125,7 +116,6 @@ export type EmployeeDirectoryRepository = {
   acceptInvitation(
     input: AcceptEmployeeInvitationPersistenceInput
   ): Promise<TenantAuthAccount>;
-  changeEmployeeRole(input: ChangeEmployeeRolePersistenceInput): Promise<void>;
   deactivateEmployee(input: DeactivateEmployeePersistenceInput): Promise<void>;
   revokeInvitation(
     input: RevokeEmployeeInvitationPersistenceInput
@@ -247,16 +237,6 @@ export function createSqlEmployeeDirectoryRepository(
       }
 
       return mapAcceptedInvitationRow(row);
-    },
-
-    async changeEmployeeRole(input) {
-      const result = await rawExecutor.execute<{ employee_id: string }>(
-        buildChangeEmployeeRoleSql(input)
-      );
-
-      if (result.rows[0] === undefined) {
-        throw new CoreError("validation.failed");
-      }
     },
 
     async deactivateEmployee(input) {
@@ -779,255 +759,6 @@ export function buildAcceptEmployeeInvitationSql(
   `;
 }
 
-export function buildChangeEmployeeRoleSql(
-  input: ChangeEmployeeRolePersistenceInput
-): SQL {
-  return sql`
-    with target_employee as (
-      select id,
-             tenant_id
-      from employees
-      where tenant_id = ${input.tenantId}
-        and id = ${input.employeeId}
-        and deactivated_at is null
-      limit 1
-    ),
-    role_template as (
-      select *
-      from jsonb_to_recordset(${serializeEmployeeRoleTemplates([input.role])}::jsonb)
-        as role_template(
-          role text,
-          name text,
-          description text,
-          permissions jsonb
-        )
-    ),
-    legacy_role_templates as (
-      select *
-      from jsonb_to_recordset(${serializeEmployeeRoleTemplates(fixedEmployeeRoles)}::jsonb)
-        as role_template(
-          role text,
-          name text,
-          description text,
-          permissions jsonb
-        )
-    ),
-    deleted_roles as (
-      delete from employee_roles
-      using target_employee
-      where employee_roles.tenant_id = target_employee.tenant_id
-        and employee_roles.employee_id = target_employee.id
-      returning employee_roles.employee_id
-    ),
-    inserted_role as (
-      insert into employee_roles (
-        tenant_id,
-        employee_id,
-        role,
-        created_at,
-        updated_at
-      )
-      select target_employee.tenant_id,
-             target_employee.id,
-             ${input.role},
-             ${input.changedAt},
-             ${input.changedAt}
-      from target_employee
-      returning tenant_id,
-                employee_id,
-                role
-    ),
-    revoked_tenant_role_bindings as (
-      update tenant_role_bindings
-      set revoked_at = ${input.changedAt},
-          updated_at = ${input.changedAt}
-      from target_employee,
-           legacy_role_templates
-      where tenant_role_bindings.tenant_id = target_employee.tenant_id
-        and tenant_role_bindings.subject_type = 'employee'
-        and tenant_role_bindings.subject_id = target_employee.id
-        and tenant_role_bindings.role_id = concat(
-          'role:',
-          target_employee.tenant_id,
-          ':',
-          legacy_role_templates.role
-        )
-        and tenant_role_bindings.revoked_at is null
-      returning tenant_role_bindings.id
-    ),
-    tenant_role_upsert as (
-      insert into tenant_roles (
-        id,
-        tenant_id,
-        name,
-        description,
-        status,
-        is_system,
-        created_by_employee_id,
-        archived_at,
-        created_at,
-        updated_at
-      )
-      select concat('role:', target_employee.tenant_id, ':', ${input.role}),
-             target_employee.tenant_id,
-             role_template.name,
-             role_template.description,
-             'active',
-             true,
-             null,
-             null,
-             ${input.changedAt},
-             ${input.changedAt}
-      from target_employee
-      inner join role_template
-        on role_template.role = ${input.role}
-      on conflict (id) do update
-      set status = 'active',
-          archived_at = null,
-          updated_at = excluded.updated_at
-      returning id
-    ),
-    tenant_role_permission_upsert as (
-      insert into tenant_role_permissions (
-        tenant_id,
-        role_id,
-        permission,
-        created_at,
-        updated_at
-      )
-      select target_employee.tenant_id,
-             concat('role:', target_employee.tenant_id, ':', ${input.role}),
-             permission_rows.permission,
-             ${input.changedAt},
-             ${input.changedAt}
-      from target_employee
-      inner join role_template
-        on role_template.role = ${input.role}
-      cross join jsonb_array_elements_text(role_template.permissions)
-        as permission_rows(permission)
-      on conflict (tenant_id, role_id, permission) do nothing
-      returning permission
-    ),
-    tenant_role_binding_upsert as (
-      insert into tenant_role_bindings (
-        id,
-        tenant_id,
-        role_id,
-        subject_type,
-        subject_id,
-        scope_type,
-        scope_id,
-        created_by_employee_id,
-        starts_at,
-        expires_at,
-        revoked_at,
-        created_at,
-        updated_at
-      )
-      select concat(
-               'role_binding:',
-               target_employee.tenant_id,
-               ':',
-               target_employee.id,
-               ':',
-               ${input.role},
-               ':tenant'
-             ),
-             target_employee.tenant_id,
-             concat('role:', target_employee.tenant_id, ':', ${input.role}),
-             'employee',
-             target_employee.id,
-             'tenant',
-             null,
-             null,
-             null,
-             null,
-             null,
-             ${input.changedAt},
-             ${input.changedAt}
-      from target_employee
-      on conflict (id) do update
-      set revoked_at = null,
-          updated_at = excluded.updated_at
-      returning id
-    ),
-    updated_employee as (
-      update employees
-      set updated_at = ${input.changedAt}
-      from target_employee
-      where employees.tenant_id = target_employee.tenant_id
-        and employees.id = target_employee.id
-      returning employees.id
-    ),
-    event_rows as (
-      select *
-      from jsonb_to_recordset(${serializeEventRows(input.events)}::jsonb)
-        as event_row(
-          id text,
-          tenant_id text,
-          type text,
-          version text,
-          occurred_at timestamptz,
-          idempotency_key text,
-          payload jsonb
-        )
-    ),
-    inserted_events as (
-      insert into event_store (
-        id,
-        tenant_id,
-        type,
-        version,
-        occurred_at,
-        idempotency_key,
-        payload,
-        created_at,
-        updated_at
-      )
-      select event_rows.id,
-             event_rows.tenant_id,
-             event_rows.type,
-             event_rows.version,
-             event_rows.occurred_at,
-             event_rows.idempotency_key,
-             event_rows.payload,
-             event_rows.occurred_at,
-             event_rows.occurred_at
-      from event_rows
-      where exists (select 1 from inserted_role)
-      returning id,
-                tenant_id,
-                payload,
-                occurred_at
-    ),
-    inserted_outbox as (
-      insert into outbox (
-        id,
-        tenant_id,
-        event_id,
-        status,
-        attempts,
-        payload,
-        created_at,
-        updated_at
-      )
-      select concat('outbox:', id),
-             tenant_id,
-             id,
-             'pending',
-             0,
-             payload,
-             occurred_at,
-             occurred_at
-      from inserted_events
-      returning id
-    )
-    select employee_id
-    from inserted_role
-    limit 1
-  `;
-}
-
 export function buildDeactivateEmployeeSql(
   input: DeactivateEmployeePersistenceInput
 ): SQL {
@@ -1308,42 +1039,6 @@ function serializeEventRows(events: readonly PlatformEvent[]): string {
       };
     })
   );
-}
-
-function serializeEmployeeRoleTemplates(
-  roles: readonly EmployeeRole[]
-): string {
-  return JSON.stringify(
-    roles.map((role) => {
-      return {
-        role,
-        name: tenantRoleName(role),
-        description: tenantRoleDescription(role),
-        permissions: permissionsForRoles([role])
-      };
-    })
-  );
-}
-
-const fixedEmployeeRoles = [
-  "tenant_admin",
-  "supervisor",
-  "agent"
-] as const satisfies readonly EmployeeRole[];
-
-function tenantRoleName(role: EmployeeRole): string {
-  switch (role) {
-    case "tenant_admin":
-      return "Tenant admin";
-    case "supervisor":
-      return "Supervisor";
-    case "agent":
-      return "Agent";
-  }
-}
-
-function tenantRoleDescription(role: EmployeeRole): string {
-  return `System compatibility role for ${role}.`;
 }
 
 function mapEmployeeRow(row: EmployeeRow): TenantEmployeeRecord {

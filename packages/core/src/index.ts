@@ -42,7 +42,6 @@ export type {
 export { CoreError } from "./errors";
 export {
   acceptEmployeeInvitation,
-  changeEmployeeRole,
   createEmployeeInvitation,
   deactivateEmployee,
   resendEmployeeInvitation,
@@ -51,8 +50,6 @@ export {
 export type {
   AcceptedEmployeeInvitation,
   AcceptEmployeeInvitationInput,
-  ChangedEmployeeRole,
-  ChangeEmployeeRoleInput,
   CreatedEmployeeInvitation,
   CreateEmployeeInvitationInput,
   DeactivatedEmployee,
