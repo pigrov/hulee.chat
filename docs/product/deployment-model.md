@@ -54,7 +54,7 @@ On-prem deployments enforce a signed license and local usage policies. Expensive
 
 Scoped RBAC is the active authorization model. Effective permissions are resolved from tenant roles, role bindings and direct grants.
 
-Legacy `employee_roles` data can remain in the database for compatibility reads, audit context and migration cleanup, but it is not an effective permission source and must not be used as an access management mutation path. New deployments and seed flows must create tenant roles and tenant-scoped bindings for initial administrators.
+Legacy `employee_roles` data can remain in the database only as historical data until migration cleanup, but runtime code must not read or write it for authorization, audit previews or bootstrap flows. New deployments and seed flows must create tenant roles and tenant-scoped bindings for initial administrators.
 
 Rollback from RBAC migration defects should use an application release rollback plus database backup/restore runbook. There is no runtime flag that re-enables fixed employee roles as an authorization fallback.
 

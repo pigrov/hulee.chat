@@ -76,12 +76,6 @@ describe("tenant workspace repository", () => {
       },
       {
         kind: "insert",
-        tableName: "employee_roles",
-        rowCount: 1,
-        onConflict: "fail"
-      },
-      {
-        kind: "insert",
         tableName: "tenant_roles",
         rowCount: 1,
         onConflict: "fail"
@@ -139,7 +133,6 @@ describe("tenant workspace repository", () => {
         "tenant_entitlements",
         "accounts",
         "employees",
-        "employee_roles",
         "tenant_roles",
         "tenant_role_permissions",
         "tenant_role_bindings",

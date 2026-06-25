@@ -13,7 +13,6 @@ import {
   conversationParticipants as conversationParticipantsTable,
   conversations as conversationsTable,
   employees as employeesTable,
-  employeeRoles as employeeRolesTable,
   eventStore as eventStoreTable,
   messages as messagesTable,
   outbox as outboxTable,
@@ -35,7 +34,6 @@ type TenantModuleInsert = typeof tenantModulesTable.$inferInsert;
 type TenantEntitlementInsert = typeof tenantEntitlementsTable.$inferInsert;
 type AccountInsert = typeof accountsTable.$inferInsert;
 type EmployeeInsert = typeof employeesTable.$inferInsert;
-type EmployeeRoleInsert = typeof employeeRolesTable.$inferInsert;
 type TenantRoleInsert = typeof tenantRolesTable.$inferInsert;
 type TenantRolePermissionInsert =
   typeof tenantRolePermissionsTable.$inferInsert;
@@ -56,7 +54,6 @@ export type WorkspacePersistenceRows = {
   tenantEntitlements: TenantEntitlementInsert[];
   accounts: AccountInsert[];
   employees: EmployeeInsert[];
-  employeeRoles: EmployeeRoleInsert[];
   tenantRoles: TenantRoleInsert[];
   tenantRolePermissions: TenantRolePermissionInsert[];
   tenantRoleBindings: TenantRoleBindingInsert[];
@@ -76,7 +73,6 @@ export type TenantRegistrationPersistenceRows = {
   tenantEntitlements: TenantEntitlementInsert[];
   accounts: AccountInsert[];
   employees: EmployeeInsert[];
-  employeeRoles: EmployeeRoleInsert[];
   tenantRoles: TenantRoleInsert[];
   tenantRolePermissions: TenantRolePermissionInsert[];
   tenantRoleBindings: TenantRoleBindingInsert[];
@@ -182,15 +178,6 @@ export function mapWorkspaceToPersistenceRows(
         updatedAt: createdAt
       }
     ],
-    employeeRoles: workspace.admin.roles.map((role) => {
-      return {
-        tenantId: workspace.tenant.id,
-        employeeId: workspace.admin.id,
-        role,
-        createdAt,
-        updatedAt: createdAt
-      };
-    }),
     tenantRoles: tenantRbacRows.tenantRoles,
     tenantRolePermissions: tenantRbacRows.tenantRolePermissions,
     tenantRoleBindings: tenantRbacRows.tenantRoleBindings,
@@ -340,15 +327,6 @@ export function mapTenantRegistrationToPersistenceRows(input: {
         updatedAt: createdAt
       }
     ],
-    employeeRoles: input.registration.admin.roles.map((role) => {
-      return {
-        tenantId: input.registration.tenant.id,
-        employeeId: input.registration.admin.id,
-        role,
-        createdAt,
-        updatedAt: createdAt
-      };
-    }),
     tenantRoles: tenantRbacRows.tenantRoles,
     tenantRolePermissions: tenantRbacRows.tenantRolePermissions,
     tenantRoleBindings: tenantRbacRows.tenantRoleBindings,
@@ -391,7 +369,6 @@ export function collectWorkspaceTenantScopedRows(
     ...rows.tenantEntitlements.map(requireTenantScope),
     ...rows.accounts.map(requireTenantScope),
     ...rows.employees.map(requireTenantScope),
-    ...rows.employeeRoles.map(requireTenantScope),
     ...rows.tenantRoles.map(requireTenantScope),
     ...rows.tenantRolePermissions.map(requireTenantScope),
     ...rows.tenantRoleBindings.map(requireTenantScope),
@@ -414,7 +391,6 @@ export function collectTenantRegistrationTenantScopedRows(
     ...rows.tenantEntitlements.map(requireTenantScope),
     ...rows.accounts.map(requireTenantScope),
     ...rows.employees.map(requireTenantScope),
-    ...rows.employeeRoles.map(requireTenantScope),
     ...rows.tenantRoles.map(requireTenantScope),
     ...rows.tenantRolePermissions.map(requireTenantScope),
     ...rows.tenantRoleBindings.map(requireTenantScope),

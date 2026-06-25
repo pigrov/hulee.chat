@@ -282,7 +282,7 @@ export function buildListTenantEmployeesSql(
            employees.display_name,
            employees.created_at,
            employees.deactivated_at,
-           coalesce(employee_role_rows.roles, '[]'::json) as roles,
+           '[]'::json as roles,
            coalesce(
              team_membership_rows.team_ids,
              '[]'::json
@@ -296,12 +296,6 @@ export function buildListTenantEmployeesSql(
              '[]'::json
            ) as queue_ids
     from employees
-    left join lateral (
-      select json_agg(employee_roles.role order by employee_roles.role) as roles
-      from employee_roles
-      where employee_roles.tenant_id = employees.tenant_id
-        and employee_roles.employee_id = employees.id
-    ) employee_role_rows on true
     left join lateral (
       select json_agg(
                employee_team_memberships.team_id
@@ -357,7 +351,7 @@ export function buildFindTenantEmployeeSql(
            employees.display_name,
            employees.created_at,
            employees.deactivated_at,
-           coalesce(employee_role_rows.roles, '[]'::json) as roles,
+           '[]'::json as roles,
            coalesce(
              team_membership_rows.team_ids,
              '[]'::json
@@ -371,12 +365,6 @@ export function buildFindTenantEmployeeSql(
              '[]'::json
            ) as queue_ids
     from employees
-    left join lateral (
-      select json_agg(employee_roles.role order by employee_roles.role) as roles
-      from employee_roles
-      where employee_roles.tenant_id = employees.tenant_id
-        and employee_roles.employee_id = employees.id
-    ) employee_role_rows on true
     left join lateral (
       select json_agg(
                employee_team_memberships.team_id

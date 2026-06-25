@@ -5,7 +5,6 @@ import {
   resolveEffectivePermissionGrants,
   type DirectPermissionGrant,
   type EffectivePermissionGrant,
-  type EmployeeRole,
   type PermissionActor,
   type PermissionDomain,
   type PermissionGrantSource,
@@ -304,12 +303,6 @@ export default async function EmployeeAccessAdminPage({
                   ? "admin.employees.status.deactivated"
                   : "admin.employees.status.active"
               )}
-            />
-            <DetailItem
-              label={t("admin.employeeAccess.fixedRoles")}
-              value={employee.roles
-                .map((role) => roleLabelFromEmployeeRole(role, t))
-                .join(", ")}
             />
           </div>
         </section>
@@ -1015,17 +1008,6 @@ function roleName(role: TenantRoleRecord, t: Translator): string {
   const roleLabelKey = role.isSystem ? fixedRoleLabelKey(role.id) : undefined;
 
   return roleLabelKey ? t(roleLabelKey) : role.name;
-}
-
-function roleLabelFromEmployeeRole(role: EmployeeRole, t: Translator): string {
-  switch (role) {
-    case "tenant_admin":
-      return t("admin.employees.role.tenantAdmin");
-    case "supervisor":
-      return t("admin.employees.role.supervisor");
-    case "agent":
-      return t("admin.employees.role.agent");
-  }
 }
 
 function fixedRoleLabelKey(roleId: string): I18nMessageKey | undefined {

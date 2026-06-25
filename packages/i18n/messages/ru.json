@@ -422,7 +422,6 @@
   "admin.employeeAccess.description": "Роли, прямые гранты и итоговые права выбранного сотрудника.",
   "admin.employeeAccess.backToEmployees": "К сотрудникам",
   "admin.employeeAccess.status": "Статус",
-  "admin.employeeAccess.fixedRoles": "Фиксированные роли",
   "admin.employeeAccess.assignRole": "Назначить роль сотруднику",
   "admin.employeeAccess.assignRole.description": "Добавьте активную роль с областью доступа для этого сотрудника.",
   "admin.employeeAccess.directGrant": "Добавить прямой грант",

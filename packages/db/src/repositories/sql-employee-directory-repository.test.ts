@@ -24,7 +24,7 @@ describe("SQL employee directory repository", () => {
     expect(hash).not.toContain("raw-invitation-token");
   });
 
-  it("maps employees with valid roles and permissions", async () => {
+  it("maps employees with memberships", async () => {
     const executor = new RecordingSqlExecutor([
       {
         tenant_id: tenantId,
@@ -32,7 +32,7 @@ describe("SQL employee directory repository", () => {
         account_id: "account-1",
         email: "agent@example.test",
         display_name: "Agent",
-        roles: ["agent", "unknown"],
+        roles: [],
         team_ids: ["team-sales"],
         org_unit_ids: ["org-sales"],
         queue_ids: ["queue-sales"],
@@ -53,7 +53,7 @@ describe("SQL employee directory repository", () => {
         accountId: "account-1",
         email: "agent@example.test",
         displayName: "Agent",
-        roles: ["agent"],
+        roles: [],
         teamIds: ["team-sales"],
         orgUnitIds: ["org-sales"],
         queueIds: ["queue-sales"],
@@ -64,6 +64,9 @@ describe("SQL employee directory repository", () => {
 
     expect(renderQuery(executor.queries[0]).sql).toContain(
       "employee_team_memberships"
+    );
+    expect(renderQuery(executor.queries[0]).sql).not.toContain(
+      "employee_roles"
     );
   });
 

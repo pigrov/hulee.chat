@@ -23,7 +23,7 @@ describe("SQL local auth repository", () => {
     expect(hash).not.toContain("raw-session-token");
   });
 
-  it("maps tenant auth accounts with valid roles and permissions", async () => {
+  it("maps tenant auth accounts with effective permissions", async () => {
     const repository = createSqlLocalAuthRepository(
       new RecordingSqlExecutor([
         {
@@ -36,7 +36,7 @@ describe("SQL local auth repository", () => {
           email_verified_at: new Date("2026-06-22T10:00:00.000Z"),
           display_name: "Admin",
           password_hash: "scrypt:v1:salt:hash",
-          roles: ["tenant_admin", "unknown"],
+          roles: [],
           permissions: ["modules.manage", "message.reply", "unknown"]
         }
       ])
@@ -53,7 +53,7 @@ describe("SQL local auth repository", () => {
       tenantDisplayName: "Local Company",
       employeeId,
       emailVerifiedAt: new Date("2026-06-22T10:00:00.000Z"),
-      roles: ["tenant_admin"],
+      roles: [],
       permissions: expect.arrayContaining(["modules.manage", "message.reply"])
     });
   });
@@ -71,7 +71,7 @@ describe("SQL local auth repository", () => {
           email_verified_at: null,
           display_name: "Admin",
           password_hash: "scrypt:v1:salt:hash",
-          roles: ["tenant_admin"],
+          roles: [],
           permissions: ["tenant.manage"]
         },
         {
@@ -84,7 +84,7 @@ describe("SQL local auth repository", () => {
           email_verified_at: new Date("2026-06-22T10:00:00.000Z"),
           display_name: "Admin Other",
           password_hash: "scrypt:v1:salt:hash",
-          roles: ["agent"],
+          roles: [],
           permissions: ["inbox.read"]
         }
       ])
@@ -97,12 +97,12 @@ describe("SQL local auth repository", () => {
         tenantSlug: "acme",
         tenantDisplayName: "Acme",
         emailVerifiedAt: null,
-        roles: ["tenant_admin"]
+        roles: []
       },
       {
         tenantSlug: "other",
         tenantDisplayName: "Other",
-        roles: ["agent"]
+        roles: []
       }
     ]);
   });
@@ -123,7 +123,6 @@ describe("SQL local auth repository", () => {
           employee_email_verified_at: new Date("2026-06-22T10:00:00.000Z"),
           employee_display_name: "Admin",
           employee_password_hash: "scrypt:v1:salt:hash",
-          employee_roles: ["tenant_admin"],
           employee_permissions: ["tenant.manage", "message.reply"],
           platform_admin_account_id: "platform-admin-1",
           platform_admin_email: "platform@example.test",
@@ -145,7 +144,7 @@ describe("SQL local auth repository", () => {
         tenantDisplayName: "Local Company",
         employeeId,
         emailVerifiedAt: new Date("2026-06-22T10:00:00.000Z"),
-        roles: ["tenant_admin"],
+        roles: [],
         permissions: ["tenant.manage", "message.reply"]
       },
       platformAdmin: {
@@ -169,6 +168,7 @@ describe("SQL local auth repository", () => {
     expect(query).toContain("employee_org_unit_memberships");
     expect(query).toContain("employee_team_memberships");
     expect(query).toContain("employee_work_queue_memberships");
+    expect(query).not.toContain("employee_roles");
     expect(query).not.toContain("tenant_role_bindings.scope_type = 'tenant'");
     expect(query).not.toContain(
       "direct_permission_grants.scope_type = 'tenant'"
@@ -227,6 +227,7 @@ describe("SQL local auth repository", () => {
     expect(tenantAdminUpsertQuery.sql).toContain("tenant_roles");
     expect(tenantAdminUpsertQuery.sql).toContain("tenant_role_permissions");
     expect(tenantAdminUpsertQuery.sql).toContain("tenant_role_bindings");
+    expect(tenantAdminUpsertQuery.sql).not.toContain("employee_roles");
     expect(executor.queries).toHaveLength(4);
   });
 });

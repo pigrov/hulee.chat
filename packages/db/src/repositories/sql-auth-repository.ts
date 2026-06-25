@@ -127,7 +127,6 @@ type AuthSessionRow = {
   employee_email_verified_at: SqlTimestamp | null;
   employee_display_name: string | null;
   employee_password_hash: string | null;
-  employee_roles: unknown;
   employee_permissions: unknown;
   platform_admin_account_id: string | null;
   platform_admin_email: string | null;
@@ -214,23 +213,13 @@ export function buildFindTenantAccountByEmailSql(input: {
            accounts.email_verified_at,
            employees.display_name,
            accounts.password_hash,
-           legacy_roles.roles,
+           '[]'::json as roles,
            tenant_permissions.permissions
     from tenants
     inner join accounts on accounts.tenant_id = tenants.id
     inner join employees on employees.tenant_id = tenants.id
       and employees.account_id = accounts.id
       and employees.deactivated_at is null
-    left join lateral (
-      select coalesce(
-               json_agg(employee_roles.role order by employee_roles.role)
-                 filter (where employee_roles.role is not null),
-               '[]'::json
-             ) as roles
-      from employee_roles
-      where employee_roles.tenant_id = tenants.id
-        and employee_roles.employee_id = employees.id
-    ) legacy_roles on true
     left join lateral (
       ${buildAccessiblePermissionAggregationSql(sql`tenants.id`, sql`employees.id`, sql`now()`)}
     ) tenant_permissions on true
@@ -251,23 +240,13 @@ export function buildListTenantAccountsByEmailSql(email: string): SQL {
            accounts.email_verified_at,
            employees.display_name,
            accounts.password_hash,
-           legacy_roles.roles,
+           '[]'::json as roles,
            tenant_permissions.permissions
     from tenants
     inner join accounts on accounts.tenant_id = tenants.id
     inner join employees on employees.tenant_id = tenants.id
       and employees.account_id = accounts.id
       and employees.deactivated_at is null
-    left join lateral (
-      select coalesce(
-               json_agg(employee_roles.role order by employee_roles.role)
-                 filter (where employee_roles.role is not null),
-               '[]'::json
-             ) as roles
-      from employee_roles
-      where employee_roles.tenant_id = tenants.id
-        and employee_roles.employee_id = employees.id
-    ) legacy_roles on true
     left join lateral (
       ${buildAccessiblePermissionAggregationSql(sql`tenants.id`, sql`employees.id`, sql`now()`)}
     ) tenant_permissions on true
@@ -328,7 +307,6 @@ export function buildFindAuthSessionByTokenSql(token: string, now: Date): SQL {
            accounts.email_verified_at as employee_email_verified_at,
            employees.display_name as employee_display_name,
            accounts.password_hash as employee_password_hash,
-           legacy_roles.roles as employee_roles,
            tenant_permissions.permissions as employee_permissions,
            platform_admin_accounts.id as platform_admin_account_id,
            platform_admin_accounts.email as platform_admin_email,
@@ -340,16 +318,6 @@ export function buildFindAuthSessionByTokenSql(token: string, now: Date): SQL {
       and employees.deactivated_at is null
     left join accounts on accounts.id = employees.account_id
       and accounts.tenant_id = sessions.tenant_id
-    left join lateral (
-      select coalesce(
-               json_agg(employee_roles.role order by employee_roles.role)
-                 filter (where employee_roles.role is not null),
-               '[]'::json
-             ) as roles
-      from employee_roles
-      where employee_roles.tenant_id = sessions.tenant_id
-        and employee_roles.employee_id = employees.id
-    ) legacy_roles on true
     left join lateral (
       ${buildAccessiblePermissionAggregationSql(sql`sessions.tenant_id`, sql`employees.id`, sql`${now}`)}
     ) tenant_permissions on true
@@ -452,24 +420,6 @@ export function buildUpsertTenantAdminAccountSql(
           display_name = excluded.display_name,
           updated_at = excluded.updated_at
       returning id
-    ),
-    legacy_role_upsert as (
-      insert into employee_roles (
-        tenant_id,
-        employee_id,
-        role,
-        created_at,
-        updated_at
-      )
-      values (
-        ${input.tenantId},
-        ${input.employeeId},
-        'tenant_admin',
-        ${input.updatedAt},
-        ${input.updatedAt}
-      )
-      on conflict (tenant_id, employee_id, role) do nothing
-      returning role
     ),
     tenant_role_upsert as (
       insert into tenant_roles (
@@ -605,7 +555,7 @@ function mapAuthSessionRow(row: AuthSessionRow): AuthSessionPrincipal {
           email_verified_at: row.employee_email_verified_at,
           display_name: row.employee_display_name,
           password_hash: row.employee_password_hash,
-          roles: row.employee_roles,
+          roles: [],
           permissions: row.employee_permissions
         })
       : undefined;

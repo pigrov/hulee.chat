@@ -11,7 +11,6 @@ import {
   conversationParticipants,
   conversations,
   employees,
-  employeeRoles,
   eventStore,
   messages,
   outbox,
@@ -40,7 +39,6 @@ const tableRefs = {
   tenantEntitlements: tableRef("tenant_entitlements", tenantEntitlements),
   accounts: tableRef("accounts", accounts),
   employees: tableRef("employees", employees),
-  employeeRoles: tableRef("employee_roles", employeeRoles),
   tenantRoles: tableRef("tenant_roles", tenantRoles),
   tenantRolePermissions: tableRef(
     "tenant_role_permissions",
@@ -95,11 +93,6 @@ export function createTenantWorkspaceRepository(
         await transaction.insertRows(tableRefs.employees, rows.employees, {
           onConflict: "fail"
         });
-        await transaction.insertRows(
-          tableRefs.employeeRoles,
-          rows.employeeRoles,
-          { onConflict: "fail" }
-        );
         await transaction.insertRows(tableRefs.tenantRoles, rows.tenantRoles, {
           onConflict: "fail"
         });
@@ -145,10 +138,6 @@ export function createTenantWorkspaceRepository(
         );
         await transaction.insertRows(tableRefs.accounts, rows.accounts);
         await transaction.insertRows(tableRefs.employees, rows.employees);
-        await transaction.insertRows(
-          tableRefs.employeeRoles,
-          rows.employeeRoles
-        );
         await transaction.insertRows(tableRefs.tenantRoles, rows.tenantRoles);
         await transaction.insertRows(
           tableRefs.tenantRolePermissions,
