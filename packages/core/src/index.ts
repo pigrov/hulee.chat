@@ -10,6 +10,11 @@ export {
   buildEffectiveAccessCacheKey,
   createEffectiveAccessCache
 } from "./authorization-cache";
+export {
+  defaultBreakGlassDurationMs,
+  maxBreakGlassDurationMs,
+  prepareBreakGlassDirectGrant
+} from "./break-glass-access";
 export type {
   CanAccessInput,
   DirectPermissionGrant,
@@ -31,6 +36,10 @@ export type {
   EffectiveAccessCacheOptions,
   EffectiveAccessCacheVersion
 } from "./authorization-cache";
+export type {
+  PreparedBreakGlassDirectGrant,
+  PrepareBreakGlassDirectGrantInput
+} from "./break-glass-access";
 export {
   completeAuthEmailToken,
   createAccountEmailVerifiedEvent,
