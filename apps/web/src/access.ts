@@ -1,10 +1,10 @@
 import type { EmployeeId, TenantId } from "@hulee/contracts";
 import {
   CoreError,
-  isEmployeeRole,
-  permissionsForRoles,
-  type EmployeeRole,
-  type Permission
+  isSystemRoleTemplateId,
+  permissionsForSystemRoleTemplates,
+  type Permission,
+  type SystemRoleTemplateId
 } from "@hulee/core";
 
 import type { NavigationAccess } from "./app-chrome";
@@ -22,7 +22,7 @@ export type WebAccessSession = {
   employeeId: EmployeeId;
   email?: string;
   emailVerifiedAt?: string | null;
-  tenantRoles: readonly EmployeeRole[];
+  systemRoleTemplateIds: readonly SystemRoleTemplateId[];
   permissions: readonly Permission[];
   platformRoles: readonly PlatformRole[];
 };
@@ -33,14 +33,14 @@ const defaultEmployeeId = "employee:local-dev" as EmployeeId;
 export function resolveWebAccessSession(
   env: NodeJS.ProcessEnv = process.env
 ): WebAccessSession {
-  const tenantRoles = resolveTenantRoles(env);
+  const systemRoleTemplateIds = resolveSystemRoleTemplateIds(env);
   const platformRoles = resolvePlatformRoles(env);
 
   return {
     tenantId: (env.HULEE_WEB_TENANT_ID ?? defaultTenantId) as TenantId,
     employeeId: (env.HULEE_WEB_EMPLOYEE_ID ?? defaultEmployeeId) as EmployeeId,
-    tenantRoles,
-    permissions: permissionsForRoles(tenantRoles),
+    systemRoleTemplateIds,
+    permissions: permissionsForSystemRoleTemplates(systemRoleTemplateIds),
     platformRoles
   };
 }
@@ -117,10 +117,12 @@ export function buildInternalApiHeaders(
   };
 }
 
-function resolveTenantRoles(env: NodeJS.ProcessEnv): readonly EmployeeRole[] {
-  const configured = parseCsv(env.HULEE_WEB_TENANT_ROLES).filter(
-    isEmployeeRole
-  );
+function resolveSystemRoleTemplateIds(
+  env: NodeJS.ProcessEnv
+): readonly SystemRoleTemplateId[] {
+  const configured = parseCsv(
+    env.HULEE_WEB_SYSTEM_ROLE_TEMPLATES ?? env.HULEE_WEB_TENANT_ROLES
+  ).filter(isSystemRoleTemplateId);
 
   if (configured.length > 0) {
     return configured;

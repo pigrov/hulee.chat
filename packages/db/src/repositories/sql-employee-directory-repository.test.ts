@@ -32,7 +32,7 @@ describe("SQL employee directory repository", () => {
         account_id: "account-1",
         email: "agent@example.test",
         display_name: "Agent",
-        roles: [],
+        system_role_template_ids: [],
         team_ids: ["team-sales"],
         org_unit_ids: ["org-sales"],
         queue_ids: ["queue-sales"],
@@ -53,7 +53,7 @@ describe("SQL employee directory repository", () => {
         accountId: "account-1",
         email: "agent@example.test",
         displayName: "Agent",
-        roles: [],
+        systemRoleTemplateIds: [],
         teamIds: ["team-sales"],
         orgUnitIds: ["org-sales"],
         queueIds: ["queue-sales"],
@@ -121,7 +121,7 @@ describe("SQL employee directory repository", () => {
         email_verified_at: "2026-06-23T10:00:00.000Z",
         display_name: "Agent",
         password_hash: "scrypt:v1:salt:hash",
-        roles: [],
+        system_role_template_ids: [],
         permissions: []
       }
     ]);
@@ -163,7 +163,7 @@ describe("SQL employee directory repository", () => {
           tenantId,
           email: "agent@example.test",
           displayName: "Agent",
-          roles: [],
+          systemRoleTemplateIds: [],
           createdAt: now
         } satisfies Employee,
         events: [
@@ -195,7 +195,7 @@ describe("SQL employee directory repository", () => {
       tenantDisplayName: "Acme",
       employeeId,
       emailVerifiedAt: new Date("2026-06-23T10:00:00.000Z"),
-      roles: [],
+      systemRoleTemplateIds: [],
       permissions: []
     });
 

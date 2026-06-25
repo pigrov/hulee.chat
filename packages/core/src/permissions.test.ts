@@ -9,15 +9,15 @@ import {
   assertPermissionScopeAllowed,
   getPermissionDefinition,
   hasPermission,
-  isEmployeeRole,
   isPermission,
   isPermissionScope,
   isPermissionScopeAllowed,
   isPermissionScopeType,
+  isSystemRoleTemplateId,
   normalizePermissionScope,
   permissionCatalog,
   permissionScopeRequiresReference,
-  permissionsForRoles,
+  permissionsForSystemRoleTemplates,
   type Employee
 } from "./permissions";
 
@@ -26,24 +26,24 @@ const employee: Employee = {
   tenantId: "tenant-1" as never,
   email: "agent@example.test",
   displayName: "Agent",
-  roles: ["agent"],
+  systemRoleTemplateIds: ["agent"],
   createdAt: "2026-06-22T10:00:00.000Z"
 };
 
 describe("permissions", () => {
-  it("maps tenant admin roles to tenant management permissions", () => {
-    expect(permissionsForRoles(["tenant_admin"])).toEqual(
+  it("maps tenant admin templates to tenant management permissions", () => {
+    expect(permissionsForSystemRoleTemplates(["tenant_admin"])).toEqual(
       permissionCatalog.map(({ id }) => id)
     );
   });
 
-  it("deduplicates permissions from multiple roles", () => {
-    expect(permissionsForRoles(["tenant_admin", "agent"])).toEqual(
-      permissionCatalog.map(({ id }) => id)
-    );
+  it("deduplicates permissions from multiple templates", () => {
+    expect(
+      permissionsForSystemRoleTemplates(["tenant_admin", "agent"])
+    ).toEqual(permissionCatalog.map(({ id }) => id));
   });
 
-  it("checks employee permissions through roles", () => {
+  it("checks employee permissions through system templates", () => {
     expect(hasPermission(employee, "inbox.read")).toBe(true);
     expect(hasPermission(employee, "modules.manage")).toBe(false);
     expect(() => assertEmployeeCan(employee, "modules.manage")).toThrow(
@@ -51,9 +51,9 @@ describe("permissions", () => {
     );
   });
 
-  it("validates known role and permission values", () => {
-    expect(isEmployeeRole("tenant_admin")).toBe(true);
-    expect(isEmployeeRole("platform_admin")).toBe(false);
+  it("validates known system template and permission values", () => {
+    expect(isSystemRoleTemplateId("tenant_admin")).toBe(true);
+    expect(isSystemRoleTemplateId("platform_admin")).toBe(false);
     expect(isPermission("modules.manage")).toBe(true);
     expect(isPermission("roles.manage")).toBe(true);
     expect(isPermission("platform.admin")).toBe(false);

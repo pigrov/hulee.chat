@@ -36,7 +36,7 @@ describe("SQL local auth repository", () => {
           email_verified_at: new Date("2026-06-22T10:00:00.000Z"),
           display_name: "Admin",
           password_hash: "scrypt:v1:salt:hash",
-          roles: [],
+          system_role_template_ids: [],
           permissions: ["modules.manage", "message.reply", "unknown"]
         }
       ])
@@ -53,7 +53,7 @@ describe("SQL local auth repository", () => {
       tenantDisplayName: "Local Company",
       employeeId,
       emailVerifiedAt: new Date("2026-06-22T10:00:00.000Z"),
-      roles: [],
+      systemRoleTemplateIds: [],
       permissions: expect.arrayContaining(["modules.manage", "message.reply"])
     });
   });
@@ -71,7 +71,7 @@ describe("SQL local auth repository", () => {
           email_verified_at: null,
           display_name: "Admin",
           password_hash: "scrypt:v1:salt:hash",
-          roles: [],
+          system_role_template_ids: [],
           permissions: ["tenant.manage"]
         },
         {
@@ -84,7 +84,7 @@ describe("SQL local auth repository", () => {
           email_verified_at: new Date("2026-06-22T10:00:00.000Z"),
           display_name: "Admin Other",
           password_hash: "scrypt:v1:salt:hash",
-          roles: [],
+          system_role_template_ids: [],
           permissions: ["inbox.read"]
         }
       ])
@@ -97,12 +97,12 @@ describe("SQL local auth repository", () => {
         tenantSlug: "acme",
         tenantDisplayName: "Acme",
         emailVerifiedAt: null,
-        roles: []
+        systemRoleTemplateIds: []
       },
       {
         tenantSlug: "other",
         tenantDisplayName: "Other",
-        roles: []
+        systemRoleTemplateIds: []
       }
     ]);
   });
@@ -144,7 +144,7 @@ describe("SQL local auth repository", () => {
         tenantDisplayName: "Local Company",
         employeeId,
         emailVerifiedAt: new Date("2026-06-22T10:00:00.000Z"),
-        roles: [],
+        systemRoleTemplateIds: [],
         permissions: ["tenant.manage", "message.reply"]
       },
       platformAdmin: {

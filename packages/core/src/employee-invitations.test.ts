@@ -22,7 +22,7 @@ const tenantAdmin: Employee = {
   tenantId,
   email: "admin@example.test",
   displayName: "Admin",
-  roles: ["tenant_admin"],
+  systemRoleTemplateIds: ["tenant_admin"],
   createdAt: now
 };
 
@@ -90,7 +90,7 @@ describe("employee invitations", () => {
       tenantId,
       email: "agent@example.test",
       displayName: "Accepted Agent",
-      roles: []
+      systemRoleTemplateIds: []
     });
     expect(result.events.map((event) => event.type)).toEqual([
       "employee.created",
@@ -167,7 +167,7 @@ describe("employee invitations", () => {
       tenantId,
       email: "agent@example.test",
       displayName: "Agent",
-      roles: ["agent"],
+      systemRoleTemplateIds: ["agent"],
       createdAt: now
     };
     const deactivated = deactivateEmployee({

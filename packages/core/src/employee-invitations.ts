@@ -141,7 +141,7 @@ export function acceptEmployeeInvitation(
     tenantId: input.invitation.tenantId,
     email: input.invitation.email,
     displayName,
-    roles: [],
+    systemRoleTemplateIds: [],
     createdAt: input.now
   };
 

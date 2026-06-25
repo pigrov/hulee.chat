@@ -2,7 +2,7 @@ import type { EmployeeId, TenantId } from "@hulee/contracts";
 
 import { CoreError } from "./errors";
 
-export type EmployeeRole = "tenant_admin" | "supervisor" | "agent";
+export type SystemRoleTemplateId = "tenant_admin" | "supervisor" | "agent";
 
 export const permissionScopeTypes = [
   "tenant",
@@ -274,7 +274,7 @@ export type Permission = (typeof permissionCatalog)[number]["id"];
 
 export type PermissionDefinition = (typeof permissionCatalog)[number];
 
-const employeeRoles = ["tenant_admin", "supervisor", "agent"] as const;
+const systemRoleTemplateIds = ["tenant_admin", "supervisor", "agent"] as const;
 const permissions = permissionCatalog.map(
   ({ id }) => id
 ) as readonly Permission[];
@@ -287,7 +287,10 @@ const scopeTypesWithoutReference = [
   "own"
 ] as const satisfies readonly PermissionScopeType[];
 
-const rolePermissions: Record<EmployeeRole, readonly Permission[]> = {
+const systemRoleTemplatePermissions: Record<
+  SystemRoleTemplateId,
+  readonly Permission[]
+> = {
   tenant_admin: permissions,
   supervisor: [
     "inbox.read",
@@ -326,13 +329,15 @@ export type Employee = {
   tenantId: TenantId;
   email: string;
   displayName: string;
-  roles: readonly EmployeeRole[];
+  systemRoleTemplateIds: readonly SystemRoleTemplateId[];
   createdAt: string;
   deactivatedAt?: string;
 };
 
-export function isEmployeeRole(value: string): value is EmployeeRole {
-  return employeeRoles.includes(value as EmployeeRole);
+export function isSystemRoleTemplateId(
+  value: string
+): value is SystemRoleTemplateId {
+  return systemRoleTemplateIds.includes(value as SystemRoleTemplateId);
 }
 
 export function isPermission(value: string): value is Permission {
@@ -466,13 +471,13 @@ export function normalizePermissionScope(input: {
   };
 }
 
-export function permissionsForRoles(
-  roles: readonly EmployeeRole[]
+export function permissionsForSystemRoleTemplates(
+  templateIds: readonly SystemRoleTemplateId[]
 ): readonly Permission[] {
   const result = new Set<Permission>();
 
-  for (const role of roles) {
-    for (const permission of rolePermissions[role]) {
+  for (const templateId of templateIds) {
+    for (const permission of systemRoleTemplatePermissions[templateId]) {
       result.add(permission);
     }
   }
@@ -484,8 +489,8 @@ export function hasPermission(
   employee: Employee,
   permission: Permission
 ): boolean {
-  return employee.roles.some((role) =>
-    rolePermissions[role].includes(permission)
+  return employee.systemRoleTemplateIds.some((templateId) =>
+    systemRoleTemplatePermissions[templateId].includes(permission)
   );
 }
 

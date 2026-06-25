@@ -175,7 +175,6 @@ function permissionActorFromEmployee(
   return {
     tenantId: employee.tenantId,
     employeeId: employee.employeeId,
-    roles: employee.roles,
     teamIds: employee.teamIds,
     orgUnitIds: employee.orgUnitIds,
     queueIds: employee.queueIds

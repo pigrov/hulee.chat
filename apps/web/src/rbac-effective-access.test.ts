@@ -19,7 +19,7 @@ describe("RBAC effective web access", () => {
     expect(
       permissionActorFromTenantEmployee(
         employee({
-          roles: ["agent"],
+          systemRoleTemplateIds: ["agent"],
           orgUnitIds: ["org-sales"],
           queueIds: ["queue-sales"],
           teamIds: ["team-a"]
@@ -28,7 +28,6 @@ describe("RBAC effective web access", () => {
     ).toEqual({
       tenantId,
       employeeId,
-      roles: ["agent"],
       orgUnitIds: ["org-sales"],
       queueIds: ["queue-sales"],
       teamIds: ["team-a"]
@@ -85,14 +84,14 @@ describe("RBAC effective web access", () => {
     ]);
   });
 
-  it("does not resolve legacy employee roles as effective access", async () => {
+  it("does not resolve system templates as effective access", async () => {
     const snapshot = await resolveEmployeeEffectiveAccess({
       tenantId,
       employeeId,
       at: new Date("2026-01-01T00:00:00.000Z"),
       employeeRepository: {
         async findEmployee() {
-          return employee({ roles: ["agent"] });
+          return employee({ systemRoleTemplateIds: ["agent"] });
         }
       },
       rbacRepository: {
@@ -183,7 +182,7 @@ function employee(
     accountId: "account-1",
     email: "employee@example.com",
     displayName: "Employee",
-    roles: [],
+    systemRoleTemplateIds: [],
     teamIds: [],
     orgUnitIds: [],
     queueIds: [],

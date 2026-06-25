@@ -1,8 +1,8 @@
 import type { EmployeeId, TenantId } from "@hulee/contracts";
 import type {
   EffectivePermissionGrant,
-  EmployeeRole,
-  Permission
+  Permission,
+  SystemRoleTemplateId
 } from "@hulee/core";
 import { describe, expect, it } from "vitest";
 
@@ -95,7 +95,7 @@ function session(permissions: readonly Permission[]): WebAccessSession {
   return {
     tenantId: "tenant:test" as TenantId,
     employeeId: "employee:test" as EmployeeId,
-    tenantRoles: ["agent"] satisfies readonly EmployeeRole[],
+    systemRoleTemplateIds: ["agent"] satisfies readonly SystemRoleTemplateId[],
     permissions,
     platformRoles: [] satisfies readonly PlatformRole[]
   };

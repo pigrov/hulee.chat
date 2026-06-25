@@ -1163,7 +1163,6 @@ function buildEffectiveAccessPreview(input: {
   const actor: PermissionActor = {
     tenantId: input.tenantId,
     employeeId: input.employee.employeeId,
-    roles: input.employee.roles,
     teamIds: input.employee.teamIds,
     orgUnitIds: input.employee.orgUnitIds,
     queueIds: input.employee.queueIds

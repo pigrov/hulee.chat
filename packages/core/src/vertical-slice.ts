@@ -229,7 +229,7 @@ export function createMvpTenantWorkspace(
     tenantId,
     email: input.adminEmail,
     displayName: input.adminEmail,
-    roles: ["tenant_admin"],
+    systemRoleTemplateIds: ["tenant_admin"],
     createdAt: input.now
   };
   const client: Client = {

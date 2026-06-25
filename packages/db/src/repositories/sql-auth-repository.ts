@@ -1,10 +1,10 @@
 import type { EmployeeId, TenantId } from "@hulee/contracts";
 import {
-  isEmployeeRole,
   isPermission,
-  permissionsForRoles,
-  type EmployeeRole,
-  type Permission
+  isSystemRoleTemplateId,
+  permissionsForSystemRoleTemplates,
+  type Permission,
+  type SystemRoleTemplateId
 } from "@hulee/core";
 import { createHash } from "node:crypto";
 import { sql, type SQL } from "drizzle-orm";
@@ -23,7 +23,7 @@ export type TenantAuthAccount = {
   emailVerifiedAt: Date | null;
   displayName: string;
   passwordHash: string | null;
-  roles: readonly EmployeeRole[];
+  systemRoleTemplateIds: readonly SystemRoleTemplateId[];
   permissions: readonly Permission[];
 };
 
@@ -103,7 +103,7 @@ type TenantAuthAccountRow = {
   email_verified_at: SqlTimestamp | null;
   display_name: string;
   password_hash: string | null;
-  roles: unknown;
+  system_role_template_ids: unknown;
   permissions: unknown;
 };
 
@@ -213,7 +213,7 @@ export function buildFindTenantAccountByEmailSql(input: {
            accounts.email_verified_at,
            employees.display_name,
            accounts.password_hash,
-           '[]'::json as roles,
+           '[]'::json as system_role_template_ids,
            tenant_permissions.permissions
     from tenants
     inner join accounts on accounts.tenant_id = tenants.id
@@ -240,7 +240,7 @@ export function buildListTenantAccountsByEmailSql(email: string): SQL {
            accounts.email_verified_at,
            employees.display_name,
            accounts.password_hash,
-           '[]'::json as roles,
+           '[]'::json as system_role_template_ids,
            tenant_permissions.permissions
     from tenants
     inner join accounts on accounts.tenant_id = tenants.id
@@ -517,7 +517,9 @@ export function hashAuthSessionToken(token: string): string {
 }
 
 function mapTenantAccountRow(row: TenantAuthAccountRow): TenantAuthAccount {
-  const roles = parseEmployeeRoles(row.roles);
+  const systemRoleTemplateIds = parseSystemRoleTemplateIds(
+    row.system_role_template_ids
+  );
   const permissions = parsePermissions(row.permissions);
 
   return {
@@ -531,7 +533,7 @@ function mapTenantAccountRow(row: TenantAuthAccountRow): TenantAuthAccount {
       row.email_verified_at === null ? null : new Date(row.email_verified_at),
     displayName: row.display_name,
     passwordHash: row.password_hash,
-    roles,
+    systemRoleTemplateIds,
     permissions
   };
 }
@@ -555,7 +557,7 @@ function mapAuthSessionRow(row: AuthSessionRow): AuthSessionPrincipal {
           email_verified_at: row.employee_email_verified_at,
           display_name: row.employee_display_name,
           password_hash: row.employee_password_hash,
-          roles: [],
+          system_role_template_ids: [],
           permissions: row.employee_permissions
         })
       : undefined;
@@ -579,12 +581,18 @@ function mapAuthSessionRow(row: AuthSessionRow): AuthSessionPrincipal {
   };
 }
 
-function parseEmployeeRoles(value: unknown): readonly EmployeeRole[] {
-  const roles = Array.isArray(value) ? value : [];
+function parseSystemRoleTemplateIds(
+  value: unknown
+): readonly SystemRoleTemplateId[] {
+  const templateIds = Array.isArray(value) ? value : [];
 
-  return roles.filter((role): role is EmployeeRole => {
-    return typeof role === "string" && isEmployeeRole(role);
-  });
+  return templateIds.filter(
+    (templateId): templateId is SystemRoleTemplateId => {
+      return (
+        typeof templateId === "string" && isSystemRoleTemplateId(templateId)
+      );
+    }
+  );
 }
 
 function parsePermissions(value: unknown): readonly Permission[] {
@@ -703,20 +711,23 @@ function buildAccessiblePermissionAggregationSql(
   `;
 }
 
-function tenantRoleIdSql(tenantId: TenantId, role: EmployeeRole): string {
-  return `role:${tenantId}:${role}`;
+function tenantRoleIdSql(
+  tenantId: TenantId,
+  templateId: SystemRoleTemplateId
+): string {
+  return `role:${tenantId}:${templateId}`;
 }
 
 function tenantRoleBindingIdSql(
   tenantId: TenantId,
   employeeId: EmployeeId,
-  role: EmployeeRole
+  templateId: SystemRoleTemplateId
 ): string {
-  return `role_binding:${tenantId}:${employeeId}:${role}:tenant`;
+  return `role_binding:${tenantId}:${employeeId}:${templateId}:tenant`;
 }
 
 function tenantAdminPermissionsJson(): string {
-  return JSON.stringify(permissionsForRoles(["tenant_admin"]));
+  return JSON.stringify(permissionsForSystemRoleTemplates(["tenant_admin"]));
 }
 
 function normalizeEmail(email: string): string {

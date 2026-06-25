@@ -82,25 +82,25 @@ export {
   assertPermissionScopeAllowed,
   getPermissionDefinition,
   hasPermission,
-  isEmployeeRole,
   isPermission,
   isPermissionScope,
   isPermissionScopeAllowed,
   isPermissionScopeType,
+  isSystemRoleTemplateId,
   normalizePermissionScope,
   permissionCatalog,
   permissionScopeRequiresReference,
   permissionScopeTypes,
-  permissionsForRoles
+  permissionsForSystemRoleTemplates
 } from "./permissions";
 export type {
   Employee,
-  EmployeeRole,
   Permission,
   PermissionDefinition,
   PermissionDomain,
   PermissionScope,
-  PermissionScopeType
+  PermissionScopeType,
+  SystemRoleTemplateId
 } from "./permissions";
 export { createRbacEvent, rbacEventTypes } from "./rbac-events";
 export type {

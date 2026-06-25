@@ -2,11 +2,11 @@ import type { EmployeeId, PlatformEvent, TenantId } from "@hulee/contracts";
 import {
   CoreError,
   isPermission,
-  isEmployeeRole,
+  isSystemRoleTemplateId,
   type Employee,
   type EmployeeInvitation,
-  type EmployeeRole,
-  type Permission
+  type Permission,
+  type SystemRoleTemplateId
 } from "@hulee/core";
 import { createHash } from "node:crypto";
 import { sql, type SQL } from "drizzle-orm";
@@ -26,7 +26,7 @@ export type TenantEmployeeRecord = {
   accountId: string | null;
   email: string;
   displayName: string;
-  roles: readonly EmployeeRole[];
+  systemRoleTemplateIds: readonly SystemRoleTemplateId[];
   teamIds: readonly string[];
   orgUnitIds: readonly string[];
   queueIds: readonly string[];
@@ -131,7 +131,7 @@ type EmployeeRow = {
   account_id: string | null;
   email: string;
   display_name: string;
-  roles: unknown;
+  system_role_template_ids: unknown;
   team_ids: unknown;
   org_unit_ids: unknown;
   queue_ids: unknown;
@@ -169,7 +169,7 @@ type AcceptedInvitationRow = {
   email_verified_at: SqlTimestamp | null;
   display_name: string;
   password_hash: string | null;
-  roles: unknown;
+  system_role_template_ids: unknown;
   permissions: unknown;
 };
 
@@ -282,7 +282,7 @@ export function buildListTenantEmployeesSql(
            employees.display_name,
            employees.created_at,
            employees.deactivated_at,
-           '[]'::json as roles,
+           '[]'::json as system_role_template_ids,
            coalesce(
              team_membership_rows.team_ids,
              '[]'::json
@@ -351,7 +351,7 @@ export function buildFindTenantEmployeeSql(
            employees.display_name,
            employees.created_at,
            employees.deactivated_at,
-           '[]'::json as roles,
+           '[]'::json as system_role_template_ids,
            coalesce(
              team_membership_rows.team_ids,
              '[]'::json
@@ -737,7 +737,7 @@ export function buildAcceptEmployeeInvitationSql(
            inserted_account.email_verified_at,
            inserted_employee.display_name,
            inserted_account.password_hash,
-           '[]'::json as roles,
+           '[]'::json as system_role_template_ids,
            '[]'::json as permissions
     from pending_invitation
     inner join inserted_account
@@ -1036,7 +1036,9 @@ function mapEmployeeRow(row: EmployeeRow): TenantEmployeeRecord {
     accountId: row.account_id,
     email: row.email,
     displayName: row.display_name,
-    roles: parseEmployeeRoles(row.roles),
+    systemRoleTemplateIds: parseSystemRoleTemplateIds(
+      row.system_role_template_ids
+    ),
     teamIds: parseStringIds(row.team_ids),
     orgUnitIds: parseStringIds(row.org_unit_ids),
     queueIds: parseStringIds(row.queue_ids),
@@ -1075,7 +1077,9 @@ function mapInvitationRow(row: InvitationRow): EmployeeInvitation {
 function mapAcceptedInvitationRow(
   row: AcceptedInvitationRow
 ): TenantAuthAccount {
-  const roles = parseEmployeeRoles(row.roles);
+  const systemRoleTemplateIds = parseSystemRoleTemplateIds(
+    row.system_role_template_ids
+  );
   const permissions = parsePermissions(row.permissions);
 
   return {
@@ -1089,17 +1093,23 @@ function mapAcceptedInvitationRow(
       row.email_verified_at === null ? null : new Date(row.email_verified_at),
     displayName: row.display_name,
     passwordHash: row.password_hash,
-    roles,
+    systemRoleTemplateIds,
     permissions
   };
 }
 
-function parseEmployeeRoles(value: unknown): readonly EmployeeRole[] {
-  const roles = Array.isArray(value) ? value : [];
+function parseSystemRoleTemplateIds(
+  value: unknown
+): readonly SystemRoleTemplateId[] {
+  const templateIds = Array.isArray(value) ? value : [];
 
-  return roles.filter((role): role is EmployeeRole => {
-    return typeof role === "string" && isEmployeeRole(role);
-  });
+  return templateIds.filter(
+    (templateId): templateId is SystemRoleTemplateId => {
+      return (
+        typeof templateId === "string" && isSystemRoleTemplateId(templateId)
+      );
+    }
+  );
 }
 
 function parsePermissions(value: unknown): readonly Permission[] {

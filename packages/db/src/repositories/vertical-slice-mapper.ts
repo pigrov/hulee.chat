@@ -1,5 +1,9 @@
 import type { PlatformEvent, TenantId } from "@hulee/contracts";
-import { CoreError, permissionsForRoles, type EmployeeRole } from "@hulee/core";
+import {
+  CoreError,
+  permissionsForSystemRoleTemplates,
+  type SystemRoleTemplateId
+} from "@hulee/core";
 import type {
   Message,
   MvpTenantWorkspace,
@@ -91,10 +95,10 @@ export function mapWorkspaceToPersistenceRows(
 ): WorkspacePersistenceRows {
   const createdAt = parseTimestamp(workspace.tenant.createdAt);
   const adminAccountId = `account:${workspace.admin.id}`;
-  const tenantRbacRows = mapEmployeeRolesToTenantRbacRows({
+  const tenantRbacRows = mapSystemRoleTemplatesToTenantRbacRows({
     tenantId: workspace.tenant.id,
     employeeId: workspace.admin.id,
-    roles: workspace.admin.roles,
+    templateIds: workspace.admin.systemRoleTemplateIds,
     createdAt
   });
   const rows: WorkspacePersistenceRows = {
@@ -236,10 +240,10 @@ export function mapTenantRegistrationToPersistenceRows(input: {
 }): TenantRegistrationPersistenceRows {
   const createdAt = parseTimestamp(input.registration.tenant.createdAt);
   const adminAccountId = `account:${input.registration.admin.id}`;
-  const tenantRbacRows = mapEmployeeRolesToTenantRbacRows({
+  const tenantRbacRows = mapSystemRoleTemplatesToTenantRbacRows({
     tenantId: input.registration.tenant.id,
     employeeId: input.registration.admin.id,
-    roles: input.registration.admin.roles,
+    templateIds: input.registration.admin.systemRoleTemplateIds,
     createdAt
   });
   const rows: TenantRegistrationPersistenceRows = {
@@ -456,25 +460,25 @@ function mapOutboxRow(event: PlatformEvent): OutboxInsert {
   };
 }
 
-function mapEmployeeRolesToTenantRbacRows(input: {
+function mapSystemRoleTemplatesToTenantRbacRows(input: {
   tenantId: TenantId;
   employeeId: string;
-  roles: readonly EmployeeRole[];
+  templateIds: readonly SystemRoleTemplateId[];
   createdAt: Date;
 }): {
   tenantRoles: TenantRoleInsert[];
   tenantRolePermissions: TenantRolePermissionInsert[];
   tenantRoleBindings: TenantRoleBindingInsert[];
 } {
-  const roles = uniqueRoles(input.roles);
+  const templateIds = uniqueSystemRoleTemplateIds(input.templateIds);
 
   return {
-    tenantRoles: roles.map((role) => {
+    tenantRoles: templateIds.map((templateId) => {
       return {
-        id: tenantRoleId(input.tenantId, role),
+        id: tenantRoleId(input.tenantId, templateId),
         tenantId: input.tenantId,
-        name: tenantRoleName(role),
-        description: tenantRoleDescription(role),
+        name: tenantRoleName(templateId),
+        description: tenantRoleDescription(templateId),
         status: "active",
         isSystem: true,
         createdByEmployeeId: null,
@@ -483,22 +487,24 @@ function mapEmployeeRolesToTenantRbacRows(input: {
         updatedAt: input.createdAt
       };
     }),
-    tenantRolePermissions: roles.flatMap((role) => {
-      return permissionsForRoles([role]).map((permission) => {
-        return {
-          tenantId: input.tenantId,
-          roleId: tenantRoleId(input.tenantId, role),
-          permission,
-          createdAt: input.createdAt,
-          updatedAt: input.createdAt
-        };
-      });
+    tenantRolePermissions: templateIds.flatMap((templateId) => {
+      return permissionsForSystemRoleTemplates([templateId]).map(
+        (permission) => {
+          return {
+            tenantId: input.tenantId,
+            roleId: tenantRoleId(input.tenantId, templateId),
+            permission,
+            createdAt: input.createdAt,
+            updatedAt: input.createdAt
+          };
+        }
+      );
     }),
-    tenantRoleBindings: roles.map((role) => {
+    tenantRoleBindings: templateIds.map((templateId) => {
       return {
-        id: tenantRoleBindingId(input.tenantId, input.employeeId, role),
+        id: tenantRoleBindingId(input.tenantId, input.employeeId, templateId),
         tenantId: input.tenantId,
-        roleId: tenantRoleId(input.tenantId, role),
+        roleId: tenantRoleId(input.tenantId, templateId),
         subjectType: "employee",
         subjectId: input.employeeId,
         scopeType: "tenant",
@@ -514,24 +520,29 @@ function mapEmployeeRolesToTenantRbacRows(input: {
   };
 }
 
-function uniqueRoles(roles: readonly EmployeeRole[]): readonly EmployeeRole[] {
-  return [...new Set(roles)];
+function uniqueSystemRoleTemplateIds(
+  templateIds: readonly SystemRoleTemplateId[]
+): readonly SystemRoleTemplateId[] {
+  return [...new Set(templateIds)];
 }
 
-function tenantRoleId(tenantId: TenantId, role: EmployeeRole): string {
-  return `role:${tenantId}:${role}`;
+function tenantRoleId(
+  tenantId: TenantId,
+  templateId: SystemRoleTemplateId
+): string {
+  return `role:${tenantId}:${templateId}`;
 }
 
 function tenantRoleBindingId(
   tenantId: TenantId,
   employeeId: string,
-  role: EmployeeRole
+  templateId: SystemRoleTemplateId
 ): string {
-  return `role_binding:${tenantId}:${employeeId}:${role}:tenant`;
+  return `role_binding:${tenantId}:${employeeId}:${templateId}:tenant`;
 }
 
-function tenantRoleName(role: EmployeeRole): string {
-  switch (role) {
+function tenantRoleName(templateId: SystemRoleTemplateId): string {
+  switch (templateId) {
     case "tenant_admin":
       return "Tenant admin";
     case "supervisor":
@@ -541,8 +552,8 @@ function tenantRoleName(role: EmployeeRole): string {
   }
 }
 
-function tenantRoleDescription(role: EmployeeRole): string {
-  return `System compatibility role for ${role}.`;
+function tenantRoleDescription(templateId: SystemRoleTemplateId): string {
+  return `System compatibility role for ${templateId}.`;
 }
 
 function requireTenantScope(row: {

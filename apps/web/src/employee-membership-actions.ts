@@ -337,7 +337,6 @@ function permissionActorFromEmployee(
   return {
     tenantId: employee.tenantId,
     employeeId: employee.employeeId,
-    roles: employee.roles,
     orgUnitIds: employee.orgUnitIds,
     queueIds: employee.queueIds,
     teamIds: employee.teamIds

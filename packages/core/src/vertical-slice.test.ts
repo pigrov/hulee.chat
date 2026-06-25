@@ -44,7 +44,7 @@ describe("MVP in-memory vertical slice", () => {
       value: "channel-telegram",
       enabled: true
     });
-    expect(workspace.admin.roles).toEqual(["tenant_admin"]);
+    expect(workspace.admin.systemRoleTemplateIds).toEqual(["tenant_admin"]);
     expect(workspace.client.tenantId).toBe(workspace.tenant.id);
     expect(workspace.conversation.tenantId).toBe(workspace.tenant.id);
     expect(workspace.inboundMessage).toMatchObject({
@@ -171,7 +171,7 @@ describe("MVP in-memory vertical slice", () => {
     const employeeWithoutRoles: Employee = {
       ...workspace.admin,
       id: "employee_without_roles" as never,
-      roles: []
+      systemRoleTemplateIds: []
     };
 
     expect(() => {

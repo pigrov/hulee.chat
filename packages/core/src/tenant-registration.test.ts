@@ -35,7 +35,7 @@ describe("tenant registration", () => {
       tenantId: registration.tenant.id,
       email: "owner@example.com",
       displayName: "Owner",
-      roles: ["tenant_admin"]
+      systemRoleTemplateIds: ["tenant_admin"]
     });
     expect(registration.events.map((event) => event.type)).toEqual([
       "tenant.created",

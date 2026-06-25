@@ -1153,7 +1153,6 @@ async function resolveRoleManagementActorPrivilege(input: {
   const actor: PermissionActor = {
     tenantId: input.session.tenantId,
     employeeId: input.session.employeeId,
-    roles: employee.roles,
     orgUnitIds: employee.orgUnitIds,
     queueIds: employee.queueIds,
     teamIds: employee.teamIds

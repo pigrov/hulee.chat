@@ -321,7 +321,7 @@ function employeeFromSession(
     tenantId: session.tenantId,
     email: "",
     displayName: "",
-    roles: session.tenantRoles,
+    systemRoleTemplateIds: session.systemRoleTemplateIds,
     createdAt: now
   };
 }
@@ -332,7 +332,7 @@ function employeeFromRecord(record: TenantEmployeeRecord): Employee {
     tenantId: record.tenantId,
     email: record.email,
     displayName: record.displayName,
-    roles: record.roles,
+    systemRoleTemplateIds: record.systemRoleTemplateIds,
     createdAt: record.createdAt.toISOString(),
     deactivatedAt: record.deactivatedAt?.toISOString()
   };

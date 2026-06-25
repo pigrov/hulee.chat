@@ -1,11 +1,11 @@
 import type { EmployeeId, TenantId } from "@hulee/contracts";
 import type {
   DirectPermissionGrant,
-  EmployeeRole,
   Permission,
   PermissionActor,
   PermissionRoleBinding,
-  PermissionRoleDefinition
+  PermissionRoleDefinition,
+  SystemRoleTemplateId
 } from "@hulee/core";
 import type { TenantEmployeeRecord } from "@hulee/db";
 import { describe, expect, it, vi } from "vitest";
@@ -249,13 +249,13 @@ describe("internal access decision service", () => {
     expect(employeeRepository.findEmployee).not.toHaveBeenCalled();
   });
 
-  it("does not authorize access decisions from requester legacy roles", async () => {
+  it("does not authorize access decisions from requester system templates", async () => {
     const service = createInternalAccessDecisionService(
       testOptions({
         employees: [
           employee({
             employeeId: adminEmployeeId,
-            roles: ["tenant_admin"]
+            systemRoleTemplateIds: ["tenant_admin"]
           }),
           employee({ employeeId: targetEmployeeId })
         ],
@@ -365,7 +365,7 @@ function context() {
 
 function employee(input: {
   employeeId: EmployeeId;
-  roles?: readonly EmployeeRole[];
+  systemRoleTemplateIds?: readonly SystemRoleTemplateId[];
   teamIds?: readonly string[];
   orgUnitIds?: readonly string[];
   queueIds?: readonly string[];
@@ -377,7 +377,7 @@ function employee(input: {
     accountId: null,
     email: `${input.employeeId}@example.test`,
     displayName: String(input.employeeId),
-    roles: input.roles ?? [],
+    systemRoleTemplateIds: input.systemRoleTemplateIds ?? [],
     teamIds: input.teamIds ?? [],
     orgUnitIds: input.orgUnitIds ?? [],
     queueIds: input.queueIds ?? [],

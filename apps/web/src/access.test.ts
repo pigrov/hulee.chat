@@ -16,7 +16,7 @@ describe("web access guards", () => {
       NODE_ENV: "development"
     });
 
-    expect(session.tenantRoles).toEqual(["tenant_admin"]);
+    expect(session.systemRoleTemplateIds).toEqual(["tenant_admin"]);
     expect(session.permissions).toContain("modules.manage");
     expect(canPlatformAdmin(session)).toBe(true);
     expect(navigationAccessFromSession(session)).toEqual({
@@ -30,19 +30,22 @@ describe("web access guards", () => {
       NODE_ENV: "production"
     });
 
-    expect(session.tenantRoles).toEqual(["agent"]);
+    expect(session.systemRoleTemplateIds).toEqual(["agent"]);
     expect(session.permissions).not.toContain("modules.manage");
     expect(canPlatformAdmin(session)).toBe(false);
   });
 
-  it("accepts configured tenant and platform roles", () => {
+  it("accepts configured system templates and platform roles", () => {
     const session = resolveWebAccessSession({
       NODE_ENV: "production",
-      HULEE_WEB_TENANT_ROLES: "supervisor,tenant_admin,unknown",
+      HULEE_WEB_SYSTEM_ROLE_TEMPLATES: "supervisor,tenant_admin,unknown",
       HULEE_WEB_PLATFORM_ADMIN: "1"
     });
 
-    expect(session.tenantRoles).toEqual(["supervisor", "tenant_admin"]);
+    expect(session.systemRoleTemplateIds).toEqual([
+      "supervisor",
+      "tenant_admin"
+    ]);
     expect(session.permissions).toContain("modules.manage");
     expect(canPlatformAdmin(session)).toBe(true);
   });

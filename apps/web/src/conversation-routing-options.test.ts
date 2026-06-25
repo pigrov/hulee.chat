@@ -125,7 +125,7 @@ function employee(employeeIdValue: EmployeeId): TenantEmployeeRecord {
     accountId: `account:${employeeIdValue}`,
     email: `${employeeIdValue}@example.test`,
     displayName: employeeIdValue,
-    roles: [],
+    systemRoleTemplateIds: [],
     orgUnitIds: ["org-sales"],
     queueIds: ["queue-sales"],
     teamIds: ["team-sales"],

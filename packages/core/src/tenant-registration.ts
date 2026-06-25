@@ -76,7 +76,7 @@ export function registerTenant(input: RegisterTenantInput): RegisteredTenant {
     tenantId,
     email: adminEmail,
     displayName: input.adminDisplayName?.trim() || adminEmail,
-    roles: ["tenant_admin"],
+    systemRoleTemplateIds: ["tenant_admin"],
     createdAt: input.now
   };
   const events: PlatformEvent[] = [

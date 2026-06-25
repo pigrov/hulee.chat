@@ -19,7 +19,7 @@ import {
   createSequentialIdFactory,
   internalApiSignatureHeader,
   internalApiTimestampHeader,
-  permissionsForRoles,
+  permissionsForSystemRoleTemplates,
   registerTenant,
   type Permission
 } from "@hulee/core";
@@ -339,8 +339,10 @@ export async function registerLocalTenant(
       emailVerifiedAt: null,
       displayName: registration.admin.displayName,
       passwordHash,
-      roles: registration.admin.roles,
-      permissions: permissionsForRoles(registration.admin.roles)
+      systemRoleTemplateIds: registration.admin.systemRoleTemplateIds,
+      permissions: permissionsForSystemRoleTemplates(
+        registration.admin.systemRoleTemplateIds
+      )
     }
   });
 }
@@ -545,7 +547,8 @@ function webAccessSessionFromPrincipal(
 ): WebAccessSession {
   const env = resolveWebEnv();
   const fallback = resolveWebAccessSession(env);
-  const tenantRoles = principal.tenantAccount?.roles ?? [];
+  const systemRoleTemplateIds =
+    principal.tenantAccount?.systemRoleTemplateIds ?? [];
   const permissions =
     principal.tenantAccount?.permissions ?? fallback.permissions;
   const platformRoles: PlatformRole[] =
@@ -567,7 +570,7 @@ function webAccessSessionFromPrincipal(
       principal.tenantAccount?.emailVerifiedAt === undefined
         ? undefined
         : (principal.tenantAccount.emailVerifiedAt?.toISOString() ?? null),
-    tenantRoles,
+    systemRoleTemplateIds,
     permissions,
     platformRoles
   };

@@ -32,24 +32,12 @@ const resolverPerformanceBudgetMs = 1_000;
 const actor: PermissionActor = {
   tenantId,
   employeeId,
-  roles: [],
   orgUnitIds: ["org-sales"],
   queueIds: ["queue-sales"],
   teamIds: ["team-sales"]
 };
 
 describe("access-control", () => {
-  it("does not use legacy actor roles as effective permission grants", () => {
-    const grants = resolveEffectivePermissionGrants({
-      actor: {
-        ...actor,
-        roles: ["agent"]
-      }
-    });
-
-    expect(grants).toEqual([]);
-  });
-
   it("resolves queue role bindings through actor queue membership", () => {
     const role: PermissionRoleDefinition = {
       id: "role-queue-sales",

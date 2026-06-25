@@ -9,7 +9,6 @@ import { CoreError } from "./errors";
 import {
   assertPermissionScopeAllowed,
   isPermissionScope,
-  type EmployeeRole,
   type Permission,
   type PermissionScope
 } from "./permissions";
@@ -17,7 +16,6 @@ import {
 export type PermissionActor = {
   readonly tenantId: TenantId;
   readonly employeeId: EmployeeId;
-  readonly roles?: readonly EmployeeRole[];
   readonly orgUnitIds?: readonly string[];
   readonly queueIds?: readonly string[];
   readonly teamIds?: readonly string[];

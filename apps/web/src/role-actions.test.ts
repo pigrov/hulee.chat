@@ -85,7 +85,7 @@ describe("role management actions", () => {
       tenantSlug: "local",
       employeeId: adminEmployeeId,
       sessionCreatedAt: new Date().toISOString(),
-      tenantRoles: ["tenant_admin"],
+      systemRoleTemplateIds: ["tenant_admin"],
       permissions: ["roles.manage"],
       platformRoles: []
     });
@@ -389,7 +389,7 @@ function employee(employeeId: EmployeeId): {
   readonly employeeId: EmployeeId;
   readonly email: string;
   readonly displayName: string;
-  readonly roles: readonly ["tenant_admin"] | readonly [];
+  readonly systemRoleTemplateIds: readonly ["tenant_admin"] | readonly [];
   readonly orgUnitIds: readonly string[];
   readonly teamIds: readonly string[];
   readonly queueIds: readonly string[];
@@ -400,7 +400,8 @@ function employee(employeeId: EmployeeId): {
     employeeId,
     email: `${employeeId}@example.test`,
     displayName: String(employeeId),
-    roles: employeeId === adminEmployeeId ? ["tenant_admin"] : [],
+    systemRoleTemplateIds:
+      employeeId === adminEmployeeId ? ["tenant_admin"] : [],
     orgUnitIds: [],
     teamIds: [],
     queueIds: [],
