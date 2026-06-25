@@ -30,7 +30,7 @@ export type InboxViewModel = InternalInboxViewResponse;
 export type TenantBrandViewModel = InternalTenantBrandResponse;
 export type TelegramIntegrationViewModel = InternalTelegramIntegrationResponse;
 export type InternalApiAccessOptions = {
-  readonly permissions?: readonly Permission[];
+  readonly effectivePermissionOverride?: Permission;
 };
 
 export async function loadInboxViewModel(input?: {
@@ -157,7 +157,7 @@ export async function loadTenantBrand(
     headers: await buildInternalApiHeaders({
       method: "GET",
       path: internalPath(url),
-      permissions: options.permissions
+      effectivePermissionOverride: options.effectivePermissionOverride
     })
   });
 
@@ -184,7 +184,7 @@ export async function updateTenantBrand(
         method: "PUT",
         path: internalPath(url),
         body: request,
-        permissions: options.permissions
+        effectivePermissionOverride: options.effectivePermissionOverride
       })),
       "content-type": "application/json; charset=utf-8"
     },
@@ -212,7 +212,7 @@ export async function loadTelegramIntegration(
     headers: await buildInternalApiHeaders({
       method: "GET",
       path: internalPath(url),
-      permissions: options.permissions
+      effectivePermissionOverride: options.effectivePermissionOverride
     })
   });
 
@@ -242,7 +242,7 @@ export async function updateTelegramIntegration(
         method: "PUT",
         path: internalPath(url),
         body: request,
-        permissions: options.permissions
+        effectivePermissionOverride: options.effectivePermissionOverride
       })),
       "content-type": "application/json; charset=utf-8"
     },
@@ -291,7 +291,7 @@ export async function deleteTelegramWebhook(
     headers: await buildInternalApiHeaders({
       method: "DELETE",
       path: internalPath(url),
-      permissions: options.permissions
+      effectivePermissionOverride: options.effectivePermissionOverride
     })
   });
 
@@ -316,7 +316,7 @@ async function postTelegramIntegrationCommand(
     headers: await buildInternalApiHeaders({
       method: "POST",
       path: internalPath(url),
-      permissions: options.permissions
+      effectivePermissionOverride: options.effectivePermissionOverride
     })
   });
 

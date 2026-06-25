@@ -57,7 +57,7 @@ describe("inbox API client", () => {
     );
   });
 
-  it("passes explicit effective permissions when loading integration settings", async () => {
+  it("passes explicit effective permission override when loading integration settings", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => {
       return Response.json({
         moduleId: "channel-telegram",
@@ -89,16 +89,18 @@ describe("inbox API client", () => {
 
     vi.stubGlobal("fetch", fetchMock);
 
-    await loadTelegramIntegration({ permissions: ["modules.manage"] });
+    await loadTelegramIntegration({
+      effectivePermissionOverride: "modules.manage"
+    });
 
     expect(buildInternalApiHeaders).toHaveBeenCalledWith({
       method: "GET",
       path: "/internal/v1/integrations/telegram",
-      permissions: ["modules.manage"]
+      effectivePermissionOverride: "modules.manage"
     });
   });
 
-  it("passes explicit effective permissions when updating tenant brand", async () => {
+  it("passes explicit effective permission override when updating tenant brand", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => {
       return Response.json({
         brand: {
@@ -126,7 +128,7 @@ describe("inbox API client", () => {
           "color.brand.primary": "#177f75"
         }
       },
-      { permissions: ["tenant.manage"] }
+      { effectivePermissionOverride: "tenant.manage" }
     );
 
     expect(buildInternalApiHeaders).toHaveBeenCalledWith({
@@ -139,7 +141,7 @@ describe("inbox API client", () => {
           "color.brand.primary": "#177f75"
         }
       },
-      permissions: ["tenant.manage"]
+      effectivePermissionOverride: "tenant.manage"
     });
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
       productName: "Acme Desk",

@@ -128,6 +128,15 @@ type RouteMatch =
       route: "telegram_integration_webhook_delete";
     };
 
+type InternalRouteAuthorizationPolicy =
+  | {
+      readonly kind: "service_effective_access";
+    }
+  | {
+      readonly kind: "signed_effective_permission_override";
+      readonly permission: Permission;
+    };
+
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8"
 };
@@ -370,6 +379,8 @@ async function handleAuthenticatedRoute(input: {
   orgStructure: InternalOrgStructureService;
   accessDecisions: InternalAccessDecisionService;
 }): Promise<ApiHttpResponse> {
+  assertInternalRouteAuthorization(input.session, input.route);
+
   switch (input.route.route) {
     case "inbox_view": {
       const response: InternalInboxViewResponse =
@@ -409,7 +420,6 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "tenant_brand_view": {
-      assertSignedEffectivePermissionOverride(input.session, "tenant.manage");
       const response: InternalTenantBrandResponse =
         await input.tenantSettings.loadTenantBrand(input.session);
 
@@ -417,7 +427,6 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "tenant_brand_update": {
-      assertSignedEffectivePermissionOverride(input.session, "tenant.manage");
       const request = internalTenantBrandUpdateRequestSchema.parse(
         input.request.body
       );
@@ -428,10 +437,6 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "org_structure_view": {
-      assertSignedEffectivePermissionOverride(
-        input.session,
-        "employees.manage"
-      );
       const response: InternalOrgStructureResponse =
         await input.orgStructure.loadOrgStructure(input.session);
 
@@ -439,10 +444,6 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "org_unit_upsert": {
-      assertSignedEffectivePermissionOverride(
-        input.session,
-        "employees.manage"
-      );
       const request = internalOrgUnitUpsertRequestSchema.parse(
         input.request.body
       );
@@ -455,10 +456,6 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "work_queue_upsert": {
-      assertSignedEffectivePermissionOverride(
-        input.session,
-        "employees.manage"
-      );
       const request = internalWorkQueueUpsertRequestSchema.parse(
         input.request.body
       );
@@ -469,7 +466,6 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "access_decision": {
-      assertSignedEffectivePermissionOverride(input.session, "roles.manage");
       const request = internalAccessDecisionRequestSchema.parse(
         input.request.body
       );
@@ -483,7 +479,6 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "telegram_integration_view": {
-      assertSignedEffectivePermissionOverride(input.session, "modules.manage");
       const response: InternalTelegramIntegrationResponse =
         await input.integrations.loadTelegramIntegration(input.session);
 
@@ -491,7 +486,6 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "telegram_integration_update": {
-      assertSignedEffectivePermissionOverride(input.session, "modules.manage");
       const request = internalTelegramIntegrationUpdateRequestSchema.parse(
         input.request.body
       );
@@ -505,7 +499,6 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "telegram_integration_diagnostics": {
-      assertSignedEffectivePermissionOverride(input.session, "modules.manage");
       const response: InternalTelegramIntegrationResponse =
         await input.integrations.refreshTelegramDiagnostics(input.session);
 
@@ -513,7 +506,6 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "telegram_integration_webhook_set": {
-      assertSignedEffectivePermissionOverride(input.session, "modules.manage");
       const response: InternalTelegramIntegrationResponse =
         await input.integrations.setTelegramWebhook(input.session);
 
@@ -521,12 +513,62 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "telegram_integration_webhook_delete": {
-      assertSignedEffectivePermissionOverride(input.session, "modules.manage");
       const response: InternalTelegramIntegrationResponse =
         await input.integrations.deleteTelegramWebhook(input.session);
 
       return jsonResponse(200, response);
     }
+  }
+}
+
+function assertInternalRouteAuthorization(
+  session: InternalApiSession,
+  route: Exclude<RouteMatch, { route: "health" }>
+): void {
+  const policy = internalRouteAuthorizationPolicy(route);
+
+  if (policy.kind === "signed_effective_permission_override") {
+    assertSignedEffectivePermissionOverride(session, policy.permission);
+  }
+}
+
+function internalRouteAuthorizationPolicy(
+  route: Exclude<RouteMatch, { route: "health" }>
+): InternalRouteAuthorizationPolicy {
+  switch (route.route) {
+    case "inbox_view":
+    case "inbox_reply":
+    case "inbox_routing_update":
+      return {
+        kind: "service_effective_access"
+      };
+    case "tenant_brand_view":
+    case "tenant_brand_update":
+      return {
+        kind: "signed_effective_permission_override",
+        permission: "tenant.manage"
+      };
+    case "org_structure_view":
+    case "org_unit_upsert":
+    case "work_queue_upsert":
+      return {
+        kind: "signed_effective_permission_override",
+        permission: "employees.manage"
+      };
+    case "access_decision":
+      return {
+        kind: "signed_effective_permission_override",
+        permission: "roles.manage"
+      };
+    case "telegram_integration_view":
+    case "telegram_integration_update":
+    case "telegram_integration_diagnostics":
+    case "telegram_integration_webhook_set":
+    case "telegram_integration_webhook_delete":
+      return {
+        kind: "signed_effective_permission_override",
+        permission: "modules.manage"
+      };
   }
 }
 

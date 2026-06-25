@@ -60,7 +60,7 @@ export default async function IntegrationsAdminPage(): Promise<ReactNode> {
   }
 
   const internalApiAccess = {
-    permissions: ["modules.manage"] as const
+    effectivePermissionOverride: "modules.manage" as const
   };
   const [model, telegramIntegration] = await Promise.all([
     loadTenantAdminViewModel({ tenantId: access.tenantId, database }),

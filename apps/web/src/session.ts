@@ -190,15 +190,15 @@ export async function buildInternalApiHeaders(input: {
   method: string;
   path: string;
   body?: unknown;
-  permissions?: readonly Permission[];
+  effectivePermissionOverride?: Permission;
 }): Promise<Record<string, string>> {
   const session = await requireCurrentWebAccessSession();
   const internalSession =
-    input.permissions === undefined
+    input.effectivePermissionOverride === undefined
       ? session
       : {
           ...session,
-          permissions: input.permissions
+          permissions: [input.effectivePermissionOverride]
         };
   const headers = buildInternalApiHeadersForSession(internalSession);
   const config = resolveWebConfig();

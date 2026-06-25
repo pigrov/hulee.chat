@@ -305,7 +305,7 @@ async function assertVerifiedTenantPermission(
     });
 
     return {
-      permissions: [permission]
+      effectivePermissionOverride: permission
     };
   } catch (error) {
     if (isEmailNotVerifiedError(error)) {
