@@ -365,6 +365,70 @@ describe("internal inbox command service", () => {
     ).resolves.toEqual([conversations[0]]);
   });
 
+  it("resolves queue owners before filtering org-unit scoped inbox visibility", async () => {
+    const authorization = createInternalInboxAuthorizationService({
+      employeeRepository: createEmployeeRepository(employee),
+      rbacRepository: {
+        async listEffectiveAccessSources() {
+          return {
+            roles: [
+              {
+                id: "role-sales-supervisor",
+                tenantId,
+                permissions: ["inbox.read"]
+              }
+            ],
+            roleBindings: [
+              {
+                tenantId,
+                roleId: "role-sales-supervisor",
+                subject: {
+                  type: "employee",
+                  id: context.employeeId
+                },
+                scope: {
+                  type: "org_unit",
+                  id: "org-sales"
+                }
+              }
+            ],
+            directGrants: []
+          };
+        }
+      },
+      queueOwnerResolver: async ({ queueId }) => {
+        return queueId === "queue-sales" ? "org-sales" : "org-claims";
+      },
+      now: () => now
+    });
+    const conversations: readonly InternalInboxConversationAccessResource[] = [
+      {
+        id: "conversation-sales",
+        tenantId,
+        clientId: "client-sales",
+        currentQueueId: "queue-sales"
+      },
+      {
+        id: "conversation-claims",
+        tenantId,
+        clientId: "client-claims",
+        currentQueueId: "queue-claims"
+      }
+    ];
+
+    await expect(
+      authorization.filterConversations(context, {
+        conversations,
+        permission: "inbox.read"
+      })
+    ).resolves.toEqual([
+      {
+        ...conversations[0],
+        currentQueueOwningOrgUnitId: "org-sales"
+      }
+    ]);
+  });
+
   it("allows assigned replies only for the current assignee", async () => {
     const authorization = createInternalInboxAuthorizationService({
       employeeRepository: createEmployeeRepository(employee),
@@ -710,6 +774,30 @@ describe("internal inbox command service", () => {
     expect(repository.routingEvents).toHaveLength(0);
   });
 
+  it("rejects conversation routing into a target queue outside the actor org-unit scope", async () => {
+    const repository = new InMemoryExternalMessageRepository([
+      {
+        ...conversation,
+        currentQueueId: "queue-sales"
+      }
+    ]);
+    const service = createInternalInboxCommandService({
+      repository,
+      authorization: createOrgUnitAssignAuthorization(),
+      now: () => now
+    });
+
+    await expect(
+      service.updateConversationRouting(context, {
+        conversationId: conversation.id,
+        request: {
+          currentQueueId: "queue-claims"
+        }
+      })
+    ).rejects.toEqual(new CoreError("permission.denied"));
+    expect(repository.routingEvents).toHaveLength(0);
+  });
+
   it("reports invalid routing targets when persistence rejects the update", async () => {
     const repository = new RejectingRoutingExternalMessageRepository([
       {
@@ -868,6 +956,44 @@ function createAssignAuthorization(): InternalInboxAuthorizationService {
           directGrants: []
         };
       }
+    },
+    now: () => now
+  });
+}
+
+function createOrgUnitAssignAuthorization(): InternalInboxAuthorizationService {
+  return createInternalInboxAuthorizationService({
+    employeeRepository: createEmployeeRepository(employee),
+    rbacRepository: {
+      async listEffectiveAccessSources() {
+        return {
+          roles: [
+            {
+              id: "role-org-assign",
+              tenantId,
+              permissions: ["conversation.assign"]
+            }
+          ],
+          roleBindings: [
+            {
+              tenantId,
+              roleId: "role-org-assign",
+              subject: {
+                type: "employee",
+                id: context.employeeId
+              },
+              scope: {
+                type: "org_unit",
+                id: "org-sales"
+              }
+            }
+          ],
+          directGrants: []
+        };
+      }
+    },
+    queueOwnerResolver: async ({ queueId }) => {
+      return queueId === "queue-sales" ? "org-sales" : "org-claims";
     },
     now: () => now
   });

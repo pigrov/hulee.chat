@@ -338,8 +338,13 @@ export function createInternalInboxAuthorizationService(
         now: now(),
         options
       });
+      const conversations = await Promise.all(
+        input.conversations.map((conversation) =>
+          withResolvedQueueOwner(conversation, options)
+        )
+      );
 
-      return input.conversations.filter(
+      return conversations.filter(
         (conversation) =>
           canAccess({
             actor: snapshot.actor,
@@ -546,10 +551,12 @@ function permissionActorFromEmployee(
   };
 }
 
-async function withResolvedQueueOwner(
-  conversation: InternalInboxConversationAccessResource,
+async function withResolvedQueueOwner<
+  TConversation extends InternalInboxConversationAccessResource
+>(
+  conversation: TConversation,
   options: InternalInboxAuthorizationServiceOptions
-): Promise<InternalInboxConversationAccessResource> {
+): Promise<TConversation> {
   if (
     conversation.currentQueueId === undefined ||
     conversation.currentQueueOwningOrgUnitId !== undefined ||
