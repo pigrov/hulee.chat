@@ -5,9 +5,7 @@ import {
   isPermission,
   isPermissionScope,
   isPermissionScopeType,
-  permissionsForRoles,
   type DirectPermissionGrant,
-  type EmployeeRole,
   type Permission,
   type PermissionActor,
   type PermissionRoleBinding,
@@ -91,11 +89,6 @@ export type RevokeDirectPermissionGrantInput = {
   readonly revokedAt: Date;
 };
 
-export type BackfillFixedEmployeeRolesInput = {
-  readonly tenantId?: TenantId;
-  readonly backfilledAt: Date;
-};
-
 export type ListTenantRoleDefinitionsInput = {
   readonly tenantId: TenantId;
 };
@@ -156,9 +149,6 @@ export type TenantRbacRepository = {
   addRolePermission(input: AddTenantRolePermissionInput): Promise<void>;
   createRoleBinding(input: CreateTenantRoleBindingInput): Promise<void>;
   createDirectGrant(input: CreateDirectPermissionGrantInput): Promise<void>;
-  backfillFixedEmployeeRoles(
-    input: BackfillFixedEmployeeRolesInput
-  ): Promise<void>;
   revokeRoleBinding(input: RevokeTenantRoleBindingInput): Promise<void>;
   revokeDirectGrant(input: RevokeDirectPermissionGrantInput): Promise<void>;
   listRoleDefinitions(
@@ -259,10 +249,6 @@ export function createSqlTenantRbacRepository(
 
     async createDirectGrant(input) {
       await rawExecutor.execute(buildCreateDirectPermissionGrantSql(input));
-    },
-
-    async backfillFixedEmployeeRoles(input) {
-      await rawExecutor.execute(buildBackfillFixedEmployeeRolesSql(input));
     },
 
     async revokeRoleBinding(input) {
@@ -760,146 +746,6 @@ export function buildCreateDirectPermissionGrantSql(
   `;
 }
 
-export function buildBackfillFixedEmployeeRolesSql(
-  input: BackfillFixedEmployeeRolesInput
-): SQL {
-  const tenantId = input.tenantId ?? null;
-
-  return sql`
-    with role_templates as (
-      select *
-      from jsonb_to_recordset(${serializeFixedEmployeeRoleTemplates()}::jsonb)
-        as role_template(
-          role text,
-          name text,
-          description text,
-          permissions jsonb
-        )
-    ),
-    source_roles as (
-      select distinct employee_roles.tenant_id,
-                      employee_roles.role
-      from employee_roles
-      inner join role_templates
-        on role_templates.role = employee_roles.role
-      where ${tenantId} is null
-         or employee_roles.tenant_id = ${tenantId}
-    ),
-    source_employee_roles as (
-      select employee_roles.tenant_id,
-             employee_roles.employee_id,
-             employee_roles.role
-      from employee_roles
-      inner join role_templates
-        on role_templates.role = employee_roles.role
-      inner join employees
-        on employees.tenant_id = employee_roles.tenant_id
-       and employees.id = employee_roles.employee_id
-      where employees.deactivated_at is null
-        and (${tenantId} is null or employee_roles.tenant_id = ${tenantId})
-    ),
-    inserted_roles as (
-      insert into tenant_roles (
-        id,
-        tenant_id,
-        name,
-        description,
-        status,
-        is_system,
-        created_by_employee_id,
-        archived_at,
-        created_at,
-        updated_at
-      )
-      select concat('role:', source_roles.tenant_id, ':', source_roles.role),
-             source_roles.tenant_id,
-             role_templates.name,
-             role_templates.description,
-             'active',
-             true,
-             null,
-             null,
-             ${input.backfilledAt},
-             ${input.backfilledAt}
-      from source_roles
-      inner join role_templates
-        on role_templates.role = source_roles.role
-      on conflict (id) do nothing
-      returning id
-    ),
-    inserted_permissions as (
-      insert into tenant_role_permissions (
-        tenant_id,
-        role_id,
-        permission,
-        created_at,
-        updated_at
-      )
-      select source_roles.tenant_id,
-             concat('role:', source_roles.tenant_id, ':', source_roles.role),
-             permission_rows.permission,
-             ${input.backfilledAt},
-             ${input.backfilledAt}
-      from source_roles
-      inner join role_templates
-        on role_templates.role = source_roles.role
-      cross join jsonb_array_elements_text(role_templates.permissions)
-        as permission_rows(permission)
-      on conflict (tenant_id, role_id, permission) do nothing
-      returning role_id
-    ),
-    inserted_bindings as (
-      insert into tenant_role_bindings (
-        id,
-        tenant_id,
-        role_id,
-        subject_type,
-        subject_id,
-        scope_type,
-        scope_id,
-        created_by_employee_id,
-        starts_at,
-        expires_at,
-        revoked_at,
-        created_at,
-        updated_at
-      )
-      select concat(
-               'role_binding:',
-               source_employee_roles.tenant_id,
-               ':',
-               source_employee_roles.employee_id,
-               ':',
-               source_employee_roles.role,
-               ':tenant'
-             ),
-             source_employee_roles.tenant_id,
-             concat(
-               'role:',
-               source_employee_roles.tenant_id,
-               ':',
-               source_employee_roles.role
-             ),
-             'employee',
-             source_employee_roles.employee_id,
-             'tenant',
-             null,
-             null,
-             null,
-             null,
-             null,
-             ${input.backfilledAt},
-             ${input.backfilledAt}
-      from source_employee_roles
-      on conflict (id) do nothing
-      returning id
-    )
-    select (select count(*) from inserted_roles) as inserted_role_count,
-           (select count(*) from inserted_permissions) as inserted_permission_count,
-           (select count(*) from inserted_bindings) as inserted_binding_count
-  `;
-}
-
 export function buildRevokeTenantRoleBindingSql(
   input: RevokeTenantRoleBindingInput
 ): SQL {
@@ -1280,42 +1126,8 @@ function actorSubjectPredicate(actor: PermissionActor): SQL {
   return sql.join(predicates, sql` or `);
 }
 
-function serializeFixedEmployeeRoleTemplates(): string {
-  return JSON.stringify(
-    fixedEmployeeRoles.map((role) => {
-      return {
-        role,
-        name: tenantRoleName(role),
-        description: tenantRoleDescription(role),
-        permissions: permissionsForRoles([role])
-      };
-    })
-  );
-}
-
-const fixedEmployeeRoles = [
-  "tenant_admin",
-  "supervisor",
-  "agent"
-] as const satisfies readonly EmployeeRole[];
-
 function scopeId(scope: PermissionScope): string | null {
   return "id" in scope ? scope.id : null;
-}
-
-function tenantRoleName(role: EmployeeRole): string {
-  switch (role) {
-    case "tenant_admin":
-      return "Tenant admin";
-    case "supervisor":
-      return "Supervisor";
-    case "agent":
-      return "Agent";
-  }
-}
-
-function tenantRoleDescription(role: EmployeeRole): string {
-  return `System compatibility role for ${role}.`;
 }
 
 function assertPermission(value: string): asserts value is Permission {

@@ -259,8 +259,16 @@ Tenant-owned tables:
 - `tenant_api_keys`
 - `accounts`
 - `employees`
-- `employee_roles`
+- `tenant_roles`
+- `tenant_role_permissions`
+- `tenant_role_bindings`
+- `direct_permission_grants`
 - `teams`
+- `org_units`
+- `work_queues`
+- `employee_org_unit_memberships`
+- `employee_work_queue_memberships`
+- `employee_team_memberships`
 - `clients`
 - `client_contacts`
 - `conversations`

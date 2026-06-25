@@ -381,22 +381,6 @@ export const employees = pgTable(
   ]
 );
 
-export const employeeRoles = pgTable(
-  "employee_roles",
-  {
-    tenantId: tenantIdColumn().references(() => tenants.id),
-    employeeId: text("employee_id")
-      .notNull()
-      .references(() => employees.id),
-    role: text("role").notNull(),
-    ...timestamps
-  },
-  (table) => [
-    primaryKey({ columns: [table.tenantId, table.employeeId, table.role] }),
-    index("employee_roles_tenant_idx").on(table.tenantId)
-  ]
-);
-
 export const tenantRoles = pgTable(
   "tenant_roles",
   {
