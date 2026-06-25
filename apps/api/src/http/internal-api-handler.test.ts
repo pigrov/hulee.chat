@@ -687,6 +687,30 @@ describe("internal API handler", () => {
     });
   });
 
+  it("delegates reply authorization to the command service instead of session permissions", async () => {
+    const scopedSession = sessionWithPermissions([]);
+    const { handler, sendReply } = createHandler({
+      session: scopedSession
+    });
+    const response = await handler.handle({
+      method: "POST",
+      path: "/internal/v1/inbox/conversations/conversation-1/replies",
+      body: {
+        text: "Hello",
+        idempotencyKey: "reply-1"
+      }
+    });
+
+    expect(response.status).toBe(202);
+    expect(sendReply).toHaveBeenCalledWith(scopedSession, {
+      conversationId: "conversation-1",
+      request: {
+        text: "Hello",
+        idempotencyKey: "reply-1"
+      }
+    });
+  });
+
   it("returns reply permission errors from the command service", async () => {
     const scopedSession: InternalApiSession = {
       ...session,
@@ -759,6 +783,28 @@ describe("internal API handler", () => {
         currentQueueId: "queue-sales",
         assignedEmployeeId: "employee-2",
         assignedTeamId: null
+      }
+    });
+  });
+
+  it("delegates routing authorization to the command service instead of session permissions", async () => {
+    const scopedSession = sessionWithPermissions([]);
+    const { handler, updateConversationRouting } = createHandler({
+      session: scopedSession
+    });
+    const response = await handler.handle({
+      method: "PATCH",
+      path: "/internal/v1/inbox/conversations/conversation-1/routing",
+      body: {
+        currentQueueId: "queue-sales"
+      }
+    });
+
+    expect(response.status).toBe(200);
+    expect(updateConversationRouting).toHaveBeenCalledWith(scopedSession, {
+      conversationId: "conversation-1",
+      request: {
+        currentQueueId: "queue-sales"
       }
     });
   });

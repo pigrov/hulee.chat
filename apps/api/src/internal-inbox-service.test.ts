@@ -200,6 +200,25 @@ describe("internal inbox command service", () => {
     expect(repository.messages).toHaveLength(0);
   });
 
+  it("ignores coarse context permissions when authorizing replies", async () => {
+    const repository = new InMemoryExternalMessageRepository([conversation]);
+    const service = createInternalInboxCommandService({
+      repository,
+      authorization: createNoGrantAuthorization(),
+      now: () => now
+    });
+
+    await expect(
+      service.sendReply(contextWithCoarsePermissions(["message.reply"]), {
+        conversationId: conversation.id,
+        request: {
+          text: "Hello"
+        }
+      })
+    ).rejects.toEqual(new CoreError("permission.denied"));
+    expect(repository.messages).toHaveLength(0);
+  });
+
   it("queues assigned-team replies for active team members", async () => {
     const repository = new InMemoryExternalMessageRepository([
       {
@@ -774,6 +793,33 @@ describe("internal inbox command service", () => {
     expect(repository.routingEvents).toHaveLength(0);
   });
 
+  it("ignores coarse context permissions when authorizing routing updates", async () => {
+    const repository = new InMemoryExternalMessageRepository([
+      {
+        ...conversation,
+        currentQueueId: "queue-sales"
+      }
+    ]);
+    const service = createInternalInboxCommandService({
+      repository,
+      authorization: createNoGrantAuthorization(),
+      now: () => now
+    });
+
+    await expect(
+      service.updateConversationRouting(
+        contextWithCoarsePermissions(["conversation.assign"]),
+        {
+          conversationId: conversation.id,
+          request: {
+            currentQueueId: "queue-sales"
+          }
+        }
+      )
+    ).rejects.toEqual(new CoreError("permission.denied"));
+    expect(repository.routingEvents).toHaveLength(0);
+  });
+
   it("rejects conversation routing into a target queue outside the actor org-unit scope", async () => {
     const repository = new InMemoryExternalMessageRepository([
       {
@@ -822,6 +868,22 @@ describe("internal inbox command service", () => {
     ).rejects.toEqual(new CoreError("validation.failed"));
   });
 });
+
+function createNoGrantAuthorization(): InternalInboxAuthorizationService {
+  return createInternalInboxAuthorizationService({
+    employeeRepository: createEmployeeRepository(employee),
+    rbacRepository: {
+      async listEffectiveAccessSources() {
+        return {
+          roles: [],
+          roleBindings: [],
+          directGrants: []
+        };
+      }
+    },
+    now: () => now
+  });
+}
 
 function createReplyAuthorization(): InternalInboxAuthorizationService {
   return createInternalInboxAuthorizationService({
@@ -997,6 +1059,17 @@ function createOrgUnitAssignAuthorization(): InternalInboxAuthorizationService {
     },
     now: () => now
   });
+}
+
+function contextWithCoarsePermissions(
+  permissions: readonly string[]
+): typeof context & {
+  readonly permissions: readonly string[];
+} {
+  return {
+    ...context,
+    permissions
+  };
 }
 
 function createEmployeeRepository(employeeRecord: TenantEmployeeRecord) {
