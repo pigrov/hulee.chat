@@ -19,7 +19,6 @@ const server = createApiNodeServer({
     env,
     logger: runtime.logger,
     internalApiSecret: runtime.config.internalApiSecret,
-    rbacResolutionMode: runtime.config.rbacResolutionMode,
     secretEncryptionKey: runtime.config.secretEncryptionKey,
     publicWebhookBaseUrl: runtime.config.publicWebhookBaseUrl
   })

@@ -249,9 +249,9 @@ describe("internal access decision service", () => {
     expect(employeeRepository.findEmployee).not.toHaveBeenCalled();
   });
 
-  it("honors scoped-only rollout mode for requester legacy roles", async () => {
-    const service = createInternalAccessDecisionService({
-      ...testOptions({
+  it("does not authorize access decisions from requester legacy roles", async () => {
+    const service = createInternalAccessDecisionService(
+      testOptions({
         employees: [
           employee({
             employeeId: adminEmployeeId,
@@ -260,9 +260,8 @@ describe("internal access decision service", () => {
           employee({ employeeId: targetEmployeeId })
         ],
         sourcesByEmployeeId: {}
-      }),
-      permissionResolverMode: "scoped"
-    });
+      })
+    );
 
     await expect(
       service.inspectAccessDecision(context(), {

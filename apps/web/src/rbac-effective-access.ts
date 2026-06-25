@@ -3,16 +3,13 @@ import {
   resolveEffectivePermissionGrants,
   type EffectivePermissionGrant,
   type Permission,
-  type PermissionActor,
-  type PermissionResolverMode
+  type PermissionActor
 } from "@hulee/core";
 import type {
   EmployeeDirectoryRepository,
   TenantEmployeeRecord,
   TenantRbacRepository
 } from "@hulee/db";
-
-import { resolveWebConfig } from "./web-config";
 
 export type WebEffectiveAccessSnapshot = {
   readonly actor: PermissionActor;
@@ -30,7 +27,6 @@ export async function resolveEmployeeEffectiveAccess(input: {
     TenantRbacRepository,
     "listEffectiveAccessSources"
   >;
-  readonly permissionResolverMode?: PermissionResolverMode;
   readonly at?: Date;
 }): Promise<WebEffectiveAccessSnapshot | undefined> {
   const employee = await input.employeeRepository.findEmployee({
@@ -47,8 +43,6 @@ export async function resolveEmployeeEffectiveAccess(input: {
   }
 
   const at = input.at ?? new Date();
-  const permissionResolverMode =
-    input.permissionResolverMode ?? resolveWebConfig().rbacResolutionMode;
   const actor = permissionActorFromTenantEmployee(employee);
   const sources = await input.rbacRepository.listEffectiveAccessSources({
     actor,
@@ -62,8 +56,7 @@ export async function resolveEmployeeEffectiveAccess(input: {
       roles: sources.roles,
       roleBindings: sources.roleBindings,
       directGrants: sources.directGrants,
-      at,
-      mode: permissionResolverMode
+      at
     })
   };
 }

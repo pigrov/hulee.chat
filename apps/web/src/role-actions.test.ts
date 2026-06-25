@@ -1,5 +1,9 @@
 import type { EmployeeId, TenantId } from "@hulee/contracts";
-import type { DirectPermissionGrant, Permission } from "@hulee/core";
+import type {
+  DirectPermissionGrant,
+  Permission,
+  PermissionRoleBinding
+} from "@hulee/core";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const mocks = vi.hoisted(() => {
@@ -32,7 +36,6 @@ const mocks = vi.hoisted(() => {
     recordSecurityAudit: vi.fn(),
     redirect,
     revalidatePath: vi.fn(),
-    resolveWebConfig: vi.fn(),
     revokeDirectGrant: vi.fn()
   };
 });
@@ -53,8 +56,7 @@ vi.mock("./session", () => ({
   assertCurrentWebEffectiveTenantPermission:
     mocks.assertCurrentWebEffectiveTenantPermission,
   getWebDatabase: mocks.getWebDatabase,
-  isEmailNotVerifiedError: mocks.isEmailNotVerifiedError,
-  resolveWebConfig: mocks.resolveWebConfig
+  isEmailNotVerifiedError: mocks.isEmailNotVerifiedError
 }));
 
 vi.mock("@hulee/db", () => ({
@@ -88,9 +90,6 @@ describe("role management actions", () => {
       platformRoles: []
     });
     mocks.getWebDatabase.mockReturnValue({ kind: "database" });
-    mocks.resolveWebConfig.mockReturnValue({
-      rbacResolutionMode: "dual"
-    });
     mocks.isEmailNotVerifiedError.mockReturnValue(false);
     mocks.createSqlTenantRbacRepository.mockReturnValue(rbacRepository());
     mocks.createSqlEmployeeDirectoryRepository.mockReturnValue(
@@ -109,8 +108,8 @@ describe("role management actions", () => {
     mocks.createRoleBinding.mockResolvedValue(undefined);
     mocks.createDirectGrant.mockResolvedValue(undefined);
     mocks.revokeDirectGrant.mockResolvedValue(undefined);
-    mocks.listRoleDefinitions.mockResolvedValue([salesRole()]);
-    mocks.listRoleBindings.mockResolvedValue([]);
+    mocks.listRoleDefinitions.mockResolvedValue([salesRole(), adminRole()]);
+    mocks.listRoleBindings.mockResolvedValue([adminRoleBinding()]);
     mocks.listDirectGrants.mockResolvedValue([clientDirectGrant()]);
     mocks.listDirectGrantsForEmployee.mockResolvedValue([]);
     mocks.findEmployee.mockImplementation(
@@ -332,6 +331,43 @@ function salesRole(): {
     isSystem: false,
     createdByEmployeeId: null,
     permissions: ["client.view", "message.reply"]
+  };
+}
+
+function adminRole(): {
+  readonly id: string;
+  readonly tenantId: TenantId;
+  readonly status: "active";
+  readonly name: string;
+  readonly description: null;
+  readonly isSystem: boolean;
+  readonly createdByEmployeeId: null;
+  readonly permissions: readonly Permission[];
+} {
+  return {
+    id: "role-admin",
+    tenantId,
+    status: "active",
+    name: "Admin",
+    description: null,
+    isSystem: true,
+    createdByEmployeeId: null,
+    permissions: ["roles.manage"]
+  };
+}
+
+function adminRoleBinding(): PermissionRoleBinding {
+  return {
+    id: "binding-admin",
+    tenantId,
+    roleId: "role-admin",
+    subject: {
+      type: "employee",
+      id: adminEmployeeId
+    },
+    scope: {
+      type: "tenant"
+    }
   };
 }
 

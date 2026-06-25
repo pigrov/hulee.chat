@@ -111,7 +111,6 @@ export type InternalApiDataPlaneHandlerOptions = {
   database: HuleeDatabase;
   env?: EnvSource;
   internalApiSecret?: string;
-  rbacResolutionMode?: ApiConfig["rbacResolutionMode"];
   secretEncryptionKey?: string;
   publicWebhookBaseUrl?: string;
   telegramApiBaseUrl?: string;
@@ -135,8 +134,7 @@ export function createInternalApiDataPlaneHandler(
       )
     : undefined;
   const inboxAuthorization = createSqlInternalInboxAuthorizationService({
-    database: options.database,
-    permissionResolverMode: options.rbacResolutionMode
+    database: options.database
   });
 
   return createInternalApiHandler({
@@ -175,8 +173,7 @@ export function createInternalApiDataPlaneHandler(
       employeeRepository: createSqlEmployeeDirectoryRepository(
         options.database
       ),
-      rbacRepository: createSqlTenantRbacRepository(options.database),
-      permissionResolverMode: options.rbacResolutionMode
+      rbacRepository: createSqlTenantRbacRepository(options.database)
     }),
     logger: options.logger,
     requestIdFactory: options.requestIdFactory
@@ -231,7 +228,6 @@ export type ApiDataPlaneHandlerOptions = PublicApiDataPlaneHandlerOptions &
     InternalApiDataPlaneHandlerOptions,
     | "env"
     | "internalApiSecret"
-    | "rbacResolutionMode"
     | "secretEncryptionKey"
     | "publicWebhookBaseUrl"
     | "telegramApiBaseUrl"

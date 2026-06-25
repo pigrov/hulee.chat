@@ -167,28 +167,6 @@ export default async function EmployeesAdminPage({
                 autoComplete="name"
               />
             </label>
-            <label className="fieldStack">
-              <span className="detailLabel">
-                {t("admin.employees.accessTemplate")}
-              </span>
-              <select
-                className="selectInput"
-                name="role"
-                defaultValue="agent"
-                required
-              >
-                <option value="agent">{t("admin.employees.role.agent")}</option>
-                <option value="supervisor">
-                  {t("admin.employees.role.supervisor")}
-                </option>
-                <option value="tenant_admin">
-                  {t("admin.employees.role.tenantAdmin")}
-                </option>
-              </select>
-              <span className="metaText">
-                {t("admin.employees.inviteAccessTemplateDescription")}
-              </span>
-            </label>
             {resolvedSearchParams?.inviteStatus === "invalid" ? (
               <p className="formError">{t("admin.employees.inviteInvalid")}</p>
             ) : null}
@@ -231,17 +209,6 @@ export default async function EmployeesAdminPage({
                     </span>
                   </div>
                   <div className="rowActions">
-                    <div className="detailItem">
-                      <span className="detailLabel">
-                        {t("admin.employees.accessTemplate")}
-                      </span>
-                      <span className="badge">
-                        <KeyRound size={14} aria-hidden="true" />
-                        {employee.roles
-                          .map((role) => t(roleLabelKey(role)))
-                          .join(", ")}
-                      </span>
-                    </div>
                     {canManageRoles ? (
                       <Link
                         className="secondaryButton"
@@ -352,25 +319,12 @@ export default async function EmployeesAdminPage({
 
 function actionStatusKey(status: string): I18nMessageKey {
   switch (status) {
-    case "role_changed":
-      return "admin.employees.actionStatus.roleChanged";
     case "deactivated":
       return "admin.employees.actionStatus.deactivated";
     case "invite_revoked":
       return "admin.employees.actionStatus.inviteRevoked";
     default:
       return "admin.employees.actionStatus.invalid";
-  }
-}
-
-function roleLabelKey(role: string): I18nMessageKey {
-  switch (role) {
-    case "tenant_admin":
-      return "admin.employees.role.tenantAdmin";
-    case "supervisor":
-      return "admin.employees.role.supervisor";
-    default:
-      return "admin.employees.role.agent";
   }
 }
 

@@ -9,7 +9,6 @@ import { CoreError } from "./errors";
 import {
   assertPermissionScopeAllowed,
   isPermissionScope,
-  permissionsForRoles,
   type EmployeeRole,
   type Permission,
   type PermissionScope
@@ -67,10 +66,6 @@ export type DirectPermissionGrant = {
 
 export type PermissionGrantSource =
   | {
-      readonly type: "fixed_role";
-      readonly role: EmployeeRole;
-    }
-  | {
       readonly type: "role_binding";
       readonly roleId: string;
       readonly bindingId?: string;
@@ -89,15 +84,12 @@ export type EffectivePermissionGrant = {
   readonly sources: readonly PermissionGrantSource[];
 };
 
-export type PermissionResolverMode = "scoped" | "dual" | "legacy";
-
 export type ResolveEffectivePermissionGrantsInput = {
   readonly actor: PermissionActor;
   readonly roles?: readonly PermissionRoleDefinition[];
   readonly roleBindings?: readonly PermissionRoleBinding[];
   readonly directGrants?: readonly DirectPermissionGrant[];
   readonly at?: Date | string;
-  readonly mode?: PermissionResolverMode;
 };
 
 export type PermissionResourceContext = {
@@ -143,35 +135,12 @@ export function resolveEffectivePermissionGrants(
   input: ResolveEffectivePermissionGrantsInput
 ): readonly EffectivePermissionGrant[] {
   const at = timestamp(input.at ?? new Date());
-  const mode = input.mode ?? "dual";
   const grants = new Map<string, MutableEffectivePermissionGrant>();
   const roleById = new Map<string, PermissionRoleDefinition>();
 
-  if (mode === "scoped" || mode === "dual") {
-    for (const role of input.roles ?? []) {
-      assertSameTenant(input.actor.tenantId, role.tenantId);
-      roleById.set(role.id, role);
-    }
-  }
-
-  if (mode === "legacy" || mode === "dual") {
-    for (const role of input.actor.roles ?? []) {
-      for (const permission of permissionsForRoles([role])) {
-        addEffectiveGrant(grants, {
-          actor: input.actor,
-          permission,
-          scope: { type: "tenant" },
-          source: { type: "fixed_role", role }
-        });
-      }
-    }
-  }
-
-  if (mode === "legacy") {
-    return [...grants.values()].map((grant) => ({
-      ...grant,
-      sources: [...grant.sources]
-    }));
+  for (const role of input.roles ?? []) {
+    assertSameTenant(input.actor.tenantId, role.tenantId);
+    roleById.set(role.id, role);
   }
 
   for (const binding of input.roleBindings ?? []) {

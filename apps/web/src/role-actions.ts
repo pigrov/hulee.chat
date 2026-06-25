@@ -45,8 +45,7 @@ import { assertWebActionRequest } from "./action-security";
 import {
   assertCurrentWebEffectiveTenantPermission,
   getWebDatabase,
-  isEmailNotVerifiedError,
-  resolveWebConfig
+  isEmailNotVerifiedError
 } from "./session";
 import type { WebAccessSession } from "./access";
 import {
@@ -1167,8 +1166,7 @@ async function resolveRoleManagementActorPrivilege(input: {
       roles: input.roles,
       roleBindings: input.roleBindings,
       directGrants,
-      at: input.now,
-      mode: resolveWebConfig().rbacResolutionMode
+      at: input.now
     })
   };
 }

@@ -3,7 +3,6 @@
 import type { EmployeeId } from "@hulee/contracts";
 import {
   acceptEmployeeInvitation,
-  changeEmployeeRole,
   createAccountEmailVerifiedEvent,
   createEmployeeInvitation,
   createSequentialIdFactory,
@@ -43,7 +42,7 @@ export async function inviteEmployeeAction(formData: FormData): Promise<void> {
   const session = await assertVerifiedTenantPermission("employees.manage");
   const email = readRequiredFormString(formData, "email");
   const displayName = readOptionalFormString(formData, "displayName");
-  const role = readRequiredFormString(formData, "role");
+  const role = "agent";
   const now = new Date();
   const token = randomBytes(32).toString("base64url");
   const tokenHash = hashEmployeeInvitationToken(token);
@@ -83,57 +82,6 @@ export async function inviteEmployeeAction(formData: FormData): Promise<void> {
     )}`;
   } catch {
     destination = "/admin/employees?inviteStatus=invalid";
-  }
-
-  revalidatePath("/admin/employees");
-  redirect(destination);
-}
-
-export async function updateEmployeeRoleAction(
-  formData: FormData
-): Promise<void> {
-  await assertWebActionRequest();
-
-  const session = await assertVerifiedTenantPermission("employees.manage");
-  const employeeId = readRequiredFormString(
-    formData,
-    "employeeId"
-  ) as EmployeeId;
-  const role = readRequiredFormString(formData, "role");
-  const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
-  let destination = "/admin/employees?actionStatus=invalid";
-
-  try {
-    const target = await repository.findEmployee({
-      tenantId: session.tenantId,
-      employeeId
-    });
-
-    if (target === null) {
-      throw new Error("Employee not found.");
-    }
-
-    const now = new Date();
-    const changed = changeEmployeeRole({
-      now: now.toISOString(),
-      tenantId: session.tenantId,
-      actor: employeeFromSession(session, now.toISOString()),
-      employee: employeeFromRecord(target),
-      role,
-      idFactory: createSequentialIdFactory(`role:${randomUUID()}`)
-    });
-
-    await repository.changeEmployeeRole({
-      tenantId: session.tenantId,
-      employeeId: changed.employee.id,
-      role: changed.employee.roles[0] ?? "agent",
-      changedAt: now,
-      events: changed.events
-    });
-
-    destination = "/admin/employees?actionStatus=role_changed";
-  } catch {
-    destination = "/admin/employees?actionStatus=invalid";
   }
 
   revalidatePath("/admin/employees");

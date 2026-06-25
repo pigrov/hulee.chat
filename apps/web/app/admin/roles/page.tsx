@@ -1214,8 +1214,6 @@ function effectiveGrantSourceKey(
   index: number
 ): string {
   switch (source.type) {
-    case "fixed_role":
-      return `${index}:fixed_role:${source.role}`;
     case "role_binding":
       return `${index}:role_binding:${source.bindingId ?? source.roleId}`;
     case "direct_grant":
@@ -1236,10 +1234,6 @@ function sourceLabel(
   }
 ): string {
   switch (source.type) {
-    case "fixed_role":
-      return references.t("admin.roles.source.fixedRole", {
-        value: roleLabelFromEmployeeRole(source.role, references.t)
-      });
     case "role_binding": {
       const role = references.roles.find(
         (candidate) => candidate.id === source.roleId
@@ -1287,19 +1281,6 @@ function roleName(role: TenantRoleRecord, t: Translator): string {
   const roleLabelKey = role.isSystem ? fixedRoleLabelKey(role.id) : undefined;
 
   return roleLabelKey ? t(roleLabelKey) : role.name;
-}
-
-function roleLabelFromEmployeeRole(role: string, t: Translator): string {
-  switch (role) {
-    case "tenant_admin":
-      return t("admin.employees.role.tenantAdmin");
-    case "supervisor":
-      return t("admin.employees.role.supervisor");
-    case "agent":
-      return t("admin.employees.role.agent");
-    default:
-      return role;
-  }
 }
 
 function countBindingsByRoleId(

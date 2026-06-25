@@ -85,12 +85,11 @@ describe("RBAC effective web access", () => {
     ]);
   });
 
-  it("honors scoped-only rollout mode for legacy employee roles", async () => {
+  it("does not resolve legacy employee roles as effective access", async () => {
     const snapshot = await resolveEmployeeEffectiveAccess({
       tenantId,
       employeeId,
       at: new Date("2026-01-01T00:00:00.000Z"),
-      permissionResolverMode: "scoped",
       employeeRepository: {
         async findEmployee() {
           return employee({ roles: ["agent"] });

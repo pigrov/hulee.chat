@@ -15,7 +15,6 @@ export type {
   PermissionDecisionReason,
   PermissionGrantSource,
   PermissionResourceContext,
-  PermissionResolverMode,
   PermissionRoleBinding,
   PermissionRoleBindingSubject,
   PermissionRoleDefinition,

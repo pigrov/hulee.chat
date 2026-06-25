@@ -947,7 +947,7 @@ export function buildChangeEmployeeRoleSql(
           permissions jsonb
         )
     ),
-    fixed_role_templates as (
+    legacy_role_templates as (
       select *
       from jsonb_to_recordset(${serializeEmployeeRoleTemplates(fixedEmployeeRoles)}::jsonb)
         as role_template(
@@ -987,7 +987,7 @@ export function buildChangeEmployeeRoleSql(
       set revoked_at = ${input.changedAt},
           updated_at = ${input.changedAt}
       from target_employee,
-           fixed_role_templates
+           legacy_role_templates
       where tenant_role_bindings.tenant_id = target_employee.tenant_id
         and tenant_role_bindings.subject_type = 'employee'
         and tenant_role_bindings.subject_id = target_employee.id
@@ -995,7 +995,7 @@ export function buildChangeEmployeeRoleSql(
           'role:',
           target_employee.tenant_id,
           ':',
-          fixed_role_templates.role
+          legacy_role_templates.role
         )
         and tenant_role_bindings.revoked_at is null
       returning tenant_role_bindings.id

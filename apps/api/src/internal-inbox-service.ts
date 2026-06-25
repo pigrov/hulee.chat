@@ -26,7 +26,6 @@ import {
   type IdFactory,
   type Permission,
   type PermissionActor,
-  type PermissionResolverMode,
   type PermissionResourceContext
 } from "@hulee/core";
 import type {
@@ -113,7 +112,6 @@ export type InternalInboxAuthorizationService = {
 export type InternalInboxAuthorizationServiceOptions = {
   employeeRepository: Pick<EmployeeDirectoryRepository, "findEmployee">;
   rbacRepository: Pick<TenantRbacRepository, "listEffectiveAccessSources">;
-  permissionResolverMode?: PermissionResolverMode;
   queueOwnerResolver?: (input: {
     tenantId: TenantId;
     queueId: string;
@@ -317,13 +315,11 @@ export function createInternalInboxCommandService(
 
 export function createSqlInternalInboxAuthorizationService(input: {
   database: HuleeDatabase;
-  permissionResolverMode?: PermissionResolverMode;
   now?: () => Date;
 }): InternalInboxAuthorizationService {
   return createInternalInboxAuthorizationService({
     employeeRepository: createSqlEmployeeDirectoryRepository(input.database),
     rbacRepository: createSqlTenantRbacRepository(input.database),
-    permissionResolverMode: input.permissionResolverMode,
     queueOwnerResolver: ({ tenantId, queueId }) =>
       loadQueueOwnerOrgUnitId(input.database, tenantId, queueId),
     now: input.now
@@ -533,8 +529,7 @@ async function resolveInboxAccessSnapshot(input: {
       roles: sources.roles,
       roleBindings: sources.roleBindings,
       directGrants: sources.directGrants,
-      at: input.now,
-      mode: input.options.permissionResolverMode
+      at: input.now
     })
   };
 }

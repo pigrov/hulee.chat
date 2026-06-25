@@ -50,15 +50,13 @@ On-prem deployments enforce a signed license and local usage policies. Expensive
 - On-prem upgrades must run migrations explicitly and produce a rollback/backup plan.
 - Company-layer must declare compatible core version.
 
-## RBAC Rollout Mode
+## RBAC Migration State
 
-`HULEE_RBAC_RESOLUTION_MODE` controls how effective permissions are resolved during the migration from fixed employee roles to scoped RBAC:
+Scoped RBAC is the active authorization model. Effective permissions are resolved from tenant roles, role bindings and direct grants.
 
-- `dual`: default migration mode. Legacy employee roles and scoped RBAC grants are both evaluated.
-- `scoped`: target mode. Only tenant roles, role bindings and direct grants are evaluated.
-- `legacy`: rollback mode. Only fixed employee roles are evaluated while scoped RBAC data is ignored.
+Legacy `employee_roles` data can remain in the database for compatibility reads, audit context and migration cleanup, but it is not an effective permission source. New deployments and seed flows must create tenant roles and tenant-scoped bindings for initial administrators.
 
-Rollout should start in `dual`, switch a deployment to `scoped` only after role backfill and access tests pass, and use `legacy` only as a temporary rollback while scoped RBAC data or migration defects are corrected.
+Rollback from RBAC migration defects should use an application release rollback plus database backup/restore runbook. There is no runtime flag that re-enables fixed employee roles as an authorization fallback.
 
 ## Client App Distribution
 

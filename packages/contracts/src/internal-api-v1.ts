@@ -291,12 +291,6 @@ export const internalAccessDecisionScopeSchema = z.union([
 export const internalAccessDecisionGrantSourceSchema = z.union([
   z
     .object({
-      type: z.literal("fixed_role"),
-      role: z.enum(["tenant_admin", "supervisor", "agent"])
-    })
-    .strict(),
-  z
-    .object({
       type: z.literal("role_binding"),
       roleId: internalAccessDecisionIdSchema,
       bindingId: internalAccessDecisionIdSchema.optional()

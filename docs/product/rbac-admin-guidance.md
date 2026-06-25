@@ -6,7 +6,6 @@ This document explains how company administrators should model access in Hulee o
 
 Effective access is the sum of:
 
-- fixed employee roles while the deployment is in `dual` or `legacy` rollout mode;
 - tenant role bindings;
 - direct permission grants.
 
@@ -98,12 +97,8 @@ For each role, review:
 - whether `roles.manage`, `employees.manage`, `audit.view`, `integrations.manage`, `modules.manage`, `api_keys.manage` or `webhooks.manage` are only present in administrative roles;
 - whether operational roles can still perform their intended inbox and routing tasks.
 
-## Rollout Mode
+## Legacy Employee Roles
 
-`HULEE_RBAC_RESOLUTION_MODE` controls the migration from fixed employee roles to scoped RBAC:
+Scoped RBAC is the only authorization source for company access. Legacy employee roles such as `tenant_admin`, `supervisor` and `agent` may still appear in older employee records during migration cleanup, but they do not grant effective permissions by themselves.
 
-- `dual`: migration mode. Fixed employee roles and scoped RBAC are both evaluated.
-- `scoped`: target mode. Only scoped RBAC is evaluated.
-- `legacy`: rollback mode. Only fixed employee roles are evaluated.
-
-Company admins should verify role bindings and direct grants in `dual` mode before the deployment switches to `scoped`.
+Company admins should manage access with tenant role bindings and direct grants. If an employee has only a legacy employee role and no scoped role binding or direct grant, the employee should be treated as having no company access.

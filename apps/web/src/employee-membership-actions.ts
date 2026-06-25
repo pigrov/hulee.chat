@@ -32,8 +32,7 @@ import {
 import {
   getWebDatabase,
   isEmailNotVerifiedError,
-  requireCurrentWebAccessSession,
-  resolveWebConfig
+  requireCurrentWebAccessSession
 } from "./session";
 
 export async function setEmployeeOrgUnitMembershipsAction(
@@ -327,8 +326,7 @@ async function resolveMembershipActorPrivilege(input: {
       roles: sources.roles,
       roleBindings: sources.roleBindings,
       directGrants: sources.directGrants,
-      at: input.now,
-      mode: resolveWebConfig().rbacResolutionMode
+      at: input.now
     })
   };
 }
