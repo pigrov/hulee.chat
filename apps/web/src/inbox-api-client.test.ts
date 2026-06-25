@@ -21,7 +21,9 @@ import {
   loadInboxViewModel,
   loadTelegramIntegration,
   refreshTelegramDiagnostics,
+  sendInboxReply,
   setTelegramWebhook,
+  updateInboxConversationRouting,
   updateTelegramIntegration,
   updateTenantBrand
 } from "./inbox-api-client";
@@ -63,6 +65,99 @@ describe("inbox API client", () => {
     expect(buildInternalApiHeaders).toHaveBeenCalledWith({
       method: "GET",
       path: "/internal/v1/inbox"
+    });
+  });
+
+  it("builds operational inbox view requests without effective permission override", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => {
+      return Response.json(inboxViewResponse());
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await loadInboxViewModel({
+      selectedConversationId: "conversation-1",
+      queueId: "queue-sales",
+      assignedToMe: true
+    });
+
+    const headerInput = vi.mocked(buildInternalApiHeaders).mock.calls[0]?.[0];
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      "https://api.example.test/internal/v1/inbox?conversationId=conversation-1&queueId=queue-sales&assigned=me"
+    );
+    expect(headerInput).toEqual({
+      method: "GET",
+      path: "/internal/v1/inbox?conversationId=conversation-1&queueId=queue-sales&assigned=me"
+    });
+    expect(headerInput).not.toHaveProperty("effectivePermissionOverride");
+  });
+
+  it("builds operational inbox command requests without effective permission override", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (_url, request) => {
+      return request?.method === "PATCH"
+        ? Response.json({
+            conversationId: "conversation-1",
+            currentQueueId: "queue-sales",
+            assignedEmployeeId: "employee-2"
+          })
+        : Response.json({
+            messageId: "message-1",
+            status: "queued",
+            idempotencyKey: "reply-1"
+          });
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await sendInboxReply({
+      conversationId: "conversation-1",
+      text: "Hello",
+      idempotencyKey: "reply-1"
+    });
+    await updateInboxConversationRouting({
+      conversationId: "conversation-1",
+      request: {
+        currentQueueId: "queue-sales",
+        assignedEmployeeId: "employee-2",
+        assignedTeamId: null
+      }
+    });
+
+    const replyHeaderInput = vi.mocked(buildInternalApiHeaders).mock
+      .calls[0]?.[0];
+    const routingHeaderInput = vi.mocked(buildInternalApiHeaders).mock
+      .calls[1]?.[0];
+
+    expect(replyHeaderInput).toEqual({
+      method: "POST",
+      path: "/internal/v1/inbox/conversations/conversation-1/replies",
+      body: {
+        text: "Hello",
+        idempotencyKey: "reply-1"
+      }
+    });
+    expect(replyHeaderInput).not.toHaveProperty("effectivePermissionOverride");
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      text: "Hello",
+      idempotencyKey: "reply-1"
+    });
+    expect(routingHeaderInput).toEqual({
+      method: "PATCH",
+      path: "/internal/v1/inbox/conversations/conversation-1/routing",
+      body: {
+        currentQueueId: "queue-sales",
+        assignedEmployeeId: "employee-2",
+        assignedTeamId: null
+      }
+    });
+    expect(routingHeaderInput).not.toHaveProperty(
+      "effectivePermissionOverride"
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
+      currentQueueId: "queue-sales",
+      assignedEmployeeId: "employee-2",
+      assignedTeamId: null
     });
   });
 
@@ -210,6 +305,29 @@ describe("inbox API client", () => {
     });
   });
 });
+
+function inboxViewResponse(): unknown {
+  return {
+    tenant: {
+      tenantId: "tenant-1",
+      displayName: "Acme",
+      deploymentType: "saas_shared",
+      locale: "en",
+      timezone: "UTC",
+      brand: {
+        id: "brand-1",
+        scope: "tenant",
+        tenantId: "tenant-1",
+        productName: "Acme Desk",
+        assets: {},
+        themeTokens: {},
+        links: {}
+      }
+    },
+    conversations: [],
+    messages: []
+  };
+}
 
 function telegramIntegrationResponse(): unknown {
   return {
