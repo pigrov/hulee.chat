@@ -4,7 +4,6 @@ import { createDomainEvent } from "./domain-events";
 import { CoreError } from "./errors";
 import { createSequentialIdFactory, type IdFactory } from "./ids";
 import {
-  assertEmployeeCan,
   isEmployeeRole,
   type Employee,
   type EmployeeRole
@@ -15,7 +14,6 @@ export type EmployeeInvitation = {
   tenantId: TenantId;
   email: string;
   displayName?: string;
-  role: EmployeeRole;
   tokenHash: string;
   invitedByEmployeeId: EmployeeId;
   expiresAt: string;
@@ -30,7 +28,6 @@ export type CreateEmployeeInvitationInput = {
   actor: Employee;
   email: string;
   displayName?: string;
-  role: string;
   tokenHash: string;
   expiresAt: string;
   idFactory?: IdFactory;
@@ -115,7 +112,6 @@ export function createEmployeeInvitation(
 
   const email = normalizeEmail(input.email);
   const displayName = normalizeOptionalText(input.displayName);
-  const role = parseEmployeeRole(input.role);
   const tokenHash = requireTokenHash(input.tokenHash);
   const expiresAt = requireFutureTimestamp(input.expiresAt, input.now);
   const ids = input.idFactory ?? createSequentialIdFactory(input.tenantId);
@@ -124,7 +120,6 @@ export function createEmployeeInvitation(
     tenantId: input.tenantId,
     email,
     displayName,
-    role,
     tokenHash,
     invitedByEmployeeId: input.actor.id,
     expiresAt,
@@ -141,8 +136,7 @@ export function createEmployeeInvitation(
         occurredAt: input.now,
         payload: {
           invitationId: invitation.id,
-          email,
-          role
+          email
         }
       })
     ]
@@ -165,7 +159,7 @@ export function acceptEmployeeInvitation(
     tenantId: input.invitation.tenantId,
     email: input.invitation.email,
     displayName,
-    roles: [input.invitation.role],
+    roles: [],
     createdAt: input.now
   };
 
@@ -345,8 +339,6 @@ function assertEmployeeManagementActor(
   if (actor.deactivatedAt !== undefined) {
     throw new CoreError("permission.denied");
   }
-
-  assertEmployeeCan(actor, "employees.manage");
 }
 
 function assertEmployeeTenant(employee: Employee, tenantId: TenantId): void {

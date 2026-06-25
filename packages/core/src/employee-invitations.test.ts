@@ -35,7 +35,6 @@ describe("employee invitations", () => {
       actor: tenantAdmin,
       email: " AGENT@EXAMPLE.TEST ",
       displayName: "Agent",
-      role: "agent",
       tokenHash,
       expiresAt: "2026-06-30T10:00:00.000Z",
       idFactory: createSequentialIdFactory("invite")
@@ -45,7 +44,6 @@ describe("employee invitations", () => {
       tenantId,
       email: "agent@example.test",
       displayName: "Agent",
-      role: "agent",
       invitedByEmployeeId: tenantAdmin.id
     });
     expect(result.events).toHaveLength(1);
@@ -54,27 +52,9 @@ describe("employee invitations", () => {
       type: "employee.invited",
       payload: {
         invitationId: result.invitation.id,
-        email: "agent@example.test",
-        role: "agent"
+        email: "agent@example.test"
       }
     });
-  });
-
-  it("requires employees.manage permission", () => {
-    expect(() => {
-      createEmployeeInvitation({
-        now,
-        tenantId,
-        actor: {
-          ...tenantAdmin,
-          roles: ["agent"]
-        },
-        email: "agent@example.test",
-        role: "agent",
-        tokenHash,
-        expiresAt: "2026-06-30T10:00:00.000Z"
-      });
-    }).toThrow(new CoreError("permission.denied"));
   });
 
   it("protects tenant boundary before creating invitations", () => {
@@ -84,7 +64,6 @@ describe("employee invitations", () => {
         tenantId: "tenant_other" as TenantId,
         actor: tenantAdmin,
         email: "agent@example.test",
-        role: "agent",
         tokenHash,
         expiresAt: "2026-06-30T10:00:00.000Z"
       });
@@ -97,7 +76,6 @@ describe("employee invitations", () => {
       tenantId,
       actor: tenantAdmin,
       email: "agent@example.test",
-      role: "supervisor",
       tokenHash,
       expiresAt: "2026-06-30T10:00:00.000Z",
       idFactory: createSequentialIdFactory("invite-accept-source")
@@ -113,7 +91,7 @@ describe("employee invitations", () => {
       tenantId,
       email: "agent@example.test",
       displayName: "Accepted Agent",
-      roles: ["supervisor"]
+      roles: []
     });
     expect(result.events.map((event) => event.type)).toEqual([
       "employee.created",
@@ -127,7 +105,6 @@ describe("employee invitations", () => {
       tenantId,
       actor: tenantAdmin,
       email: "agent@example.test",
-      role: "agent",
       tokenHash,
       expiresAt: "2026-06-30T10:00:00.000Z"
     }).invitation;
@@ -156,7 +133,6 @@ describe("employee invitations", () => {
       tenantId,
       actor: tenantAdmin,
       email: "agent@example.test",
-      role: "agent",
       tokenHash,
       expiresAt: "2026-06-30T10:00:00.000Z",
       idFactory: createSequentialIdFactory("invite-admin")

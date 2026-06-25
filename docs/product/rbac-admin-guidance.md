@@ -102,3 +102,5 @@ For each role, review:
 Scoped RBAC is the only authorization source for company access. Legacy employee roles such as `tenant_admin`, `supervisor` and `agent` may still appear in older employee records during migration cleanup, but they do not grant effective permissions by themselves.
 
 Company admins should manage access with tenant role bindings and direct grants. If an employee has only a legacy employee role and no scoped role binding or direct grant, the employee should be treated as having no company access.
+
+New employee invitations do not carry an access role. After the employee accepts an invitation, company admins should assign the required tenant role binding or direct grant from the access management UI.

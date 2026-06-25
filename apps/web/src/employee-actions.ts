@@ -42,7 +42,6 @@ export async function inviteEmployeeAction(formData: FormData): Promise<void> {
   const session = await assertVerifiedTenantPermission("employees.manage");
   const email = readRequiredFormString(formData, "email");
   const displayName = readOptionalFormString(formData, "displayName");
-  const role = "agent";
   const now = new Date();
   const token = randomBytes(32).toString("base64url");
   const tokenHash = hashEmployeeInvitationToken(token);
@@ -56,7 +55,6 @@ export async function inviteEmployeeAction(formData: FormData): Promise<void> {
       actor: employeeFromSession(session, now.toISOString()),
       email,
       displayName,
-      role,
       tokenHash,
       expiresAt: new Date(now.getTime() + invitationTtlMs).toISOString(),
       idFactory: createSequentialIdFactory(`invite:${randomUUID()}`)

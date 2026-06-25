@@ -154,7 +154,6 @@ type InvitationRow = {
   tenant_id: string;
   email: string;
   display_name: string | null;
-  role: string;
   token_hash: string;
   invited_by_employee_id: string;
   accepted_employee_id: string | null;
@@ -451,7 +450,6 @@ export function buildListTenantInvitationsSql(
            tenant_id,
            email,
            display_name,
-           role,
            token_hash,
            invited_by_employee_id,
            accepted_employee_id,
@@ -474,7 +472,6 @@ export function buildFindInvitationByIdSql(
            employee_invitations.tenant_id,
            employee_invitations.email,
            employee_invitations.display_name,
-           employee_invitations.role,
            employee_invitations.token_hash,
            employee_invitations.invited_by_employee_id,
            employee_invitations.accepted_employee_id,
@@ -506,7 +503,6 @@ export function buildFindInvitationByTokenHashSql(tokenHash: string): SQL {
            employee_invitations.tenant_id,
            employee_invitations.email,
            employee_invitations.display_name,
-           employee_invitations.role,
            employee_invitations.token_hash,
            employee_invitations.invited_by_employee_id,
            employee_invitations.accepted_employee_id,
@@ -541,7 +537,6 @@ export function buildCreateEmployeeInvitationSql(
         tenant_id,
         email,
         display_name,
-        role,
         token_hash,
         invited_by_employee_id,
         expires_at,
@@ -553,7 +548,6 @@ export function buildCreateEmployeeInvitationSql(
         ${input.invitation.tenantId},
         ${input.invitation.email},
         ${input.invitation.displayName ?? null},
-        ${input.invitation.role},
         ${input.invitation.tokenHash},
         ${input.invitation.invitedByEmployeeId},
         ${new Date(input.invitation.expiresAt)},
@@ -627,19 +621,11 @@ export function buildCreateEmployeeInvitationSql(
 export function buildAcceptEmployeeInvitationSql(
   input: AcceptEmployeeInvitationPersistenceInput
 ): SQL {
-  const roles = input.employee.roles;
-  const role = roles.length === 1 ? roles[0] : undefined;
-
-  if (role === undefined) {
-    throw new CoreError("validation.failed");
-  }
-
   return sql`
     with pending_invitation as (
       select employee_invitations.id,
              employee_invitations.tenant_id,
              employee_invitations.email,
-             employee_invitations.role,
              tenants.slug as tenant_slug,
              tenants.display_name as tenant_display_name
       from employee_invitations
@@ -647,21 +633,10 @@ export function buildAcceptEmployeeInvitationSql(
       where employee_invitations.token_hash = ${input.tokenHash}
         and employee_invitations.tenant_id = ${input.employee.tenantId}
         and employee_invitations.email = ${input.employee.email}
-        and employee_invitations.role = ${role}
         and employee_invitations.accepted_at is null
         and employee_invitations.revoked_at is null
         and employee_invitations.expires_at > ${input.acceptedAt}
       limit 1
-    ),
-    role_template as (
-      select *
-      from jsonb_to_recordset(${serializeEmployeeRoleTemplates([role])}::jsonb)
-        as role_template(
-          role text,
-          name text,
-          description text,
-          permissions jsonb
-        )
     ),
     inserted_account as (
       insert into accounts (
@@ -712,122 +687,6 @@ export function buildAcceptEmployeeInvitationSql(
                 account_id,
                 email,
                 display_name
-    ),
-    inserted_role as (
-      insert into employee_roles (
-        tenant_id,
-        employee_id,
-        role,
-        created_at,
-        updated_at
-      )
-      select pending_invitation.tenant_id,
-             ${input.employee.id},
-             pending_invitation.role,
-             ${input.acceptedAt},
-             ${input.acceptedAt}
-      from pending_invitation
-      returning tenant_id,
-                employee_id,
-                role
-    ),
-    tenant_role_upsert as (
-      insert into tenant_roles (
-        id,
-        tenant_id,
-        name,
-        description,
-        status,
-        is_system,
-        created_by_employee_id,
-        archived_at,
-        created_at,
-        updated_at
-      )
-      select concat('role:', pending_invitation.tenant_id, ':', pending_invitation.role),
-             pending_invitation.tenant_id,
-             role_template.name,
-             role_template.description,
-             'active',
-             true,
-             null,
-             null,
-             ${input.acceptedAt},
-             ${input.acceptedAt}
-      from pending_invitation
-      inner join role_template
-        on role_template.role = pending_invitation.role
-      on conflict (id) do update
-      set status = 'active',
-          archived_at = null,
-          updated_at = excluded.updated_at
-      returning id
-    ),
-    tenant_role_permission_upsert as (
-      insert into tenant_role_permissions (
-        tenant_id,
-        role_id,
-        permission,
-        created_at,
-        updated_at
-      )
-      select pending_invitation.tenant_id,
-             concat('role:', pending_invitation.tenant_id, ':', pending_invitation.role),
-             permission_rows.permission,
-             ${input.acceptedAt},
-             ${input.acceptedAt}
-      from pending_invitation
-      inner join role_template
-        on role_template.role = pending_invitation.role
-      cross join jsonb_array_elements_text(role_template.permissions)
-        as permission_rows(permission)
-      on conflict (tenant_id, role_id, permission) do nothing
-      returning permission
-    ),
-    tenant_role_binding_upsert as (
-      insert into tenant_role_bindings (
-        id,
-        tenant_id,
-        role_id,
-        subject_type,
-        subject_id,
-        scope_type,
-        scope_id,
-        created_by_employee_id,
-        starts_at,
-        expires_at,
-        revoked_at,
-        created_at,
-        updated_at
-      )
-      select concat(
-               'role_binding:',
-               pending_invitation.tenant_id,
-               ':',
-               inserted_employee.id,
-               ':',
-               pending_invitation.role,
-               ':tenant'
-             ),
-             pending_invitation.tenant_id,
-             concat('role:', pending_invitation.tenant_id, ':', pending_invitation.role),
-             'employee',
-             inserted_employee.id,
-             'tenant',
-             null,
-             null,
-             null,
-             null,
-             null,
-             ${input.acceptedAt},
-             ${input.acceptedAt}
-      from pending_invitation
-      inner join inserted_employee
-        on inserted_employee.tenant_id = pending_invitation.tenant_id
-      on conflict (id) do update
-      set revoked_at = null,
-          updated_at = excluded.updated_at
-      returning id
     ),
     updated_invitation as (
       update employee_invitations
@@ -910,17 +769,13 @@ export function buildAcceptEmployeeInvitationSql(
            inserted_account.email_verified_at,
            inserted_employee.display_name,
            inserted_account.password_hash,
-           json_build_array(inserted_role.role) as roles,
-           role_template.permissions
+           '[]'::json as roles,
+           '[]'::json as permissions
     from pending_invitation
     inner join inserted_account
       on inserted_account.tenant_id = pending_invitation.tenant_id
     inner join inserted_employee
       on inserted_employee.tenant_id = pending_invitation.tenant_id
-    inner join inserted_role
-      on inserted_role.tenant_id = pending_invitation.tenant_id
-    inner join role_template
-      on role_template.role = inserted_role.role
   `;
 }
 
@@ -1520,14 +1375,11 @@ function mapInvitationPreviewRow(
 }
 
 function mapInvitationRow(row: InvitationRow): EmployeeInvitation {
-  const role = parseInvitationRole(row.role);
-
   return {
     id: row.id,
     tenantId: row.tenant_id as TenantId,
     email: row.email,
     displayName: row.display_name ?? undefined,
-    role,
     tokenHash: row.token_hash,
     invitedByEmployeeId: row.invited_by_employee_id as EmployeeId,
     expiresAt: mapSqlTimestamp(row.expires_at),
@@ -1557,14 +1409,6 @@ function mapAcceptedInvitationRow(
     roles,
     permissions
   };
-}
-
-function parseInvitationRole(value: string): EmployeeRole {
-  if (!isEmployeeRole(value)) {
-    throw new CoreError("validation.failed");
-  }
-
-  return value;
 }
 
 function parseEmployeeRoles(value: unknown): readonly EmployeeRole[] {

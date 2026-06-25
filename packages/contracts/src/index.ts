@@ -42,7 +42,7 @@ export type PlatformEvent =
   | EventEnvelope<"employee.created", { employeeId: EmployeeId }>
   | EventEnvelope<
       "employee.invited",
-      { invitationId: string; email: string; role: string }
+      { invitationId: string; email: string; role?: string }
     >
   | EventEnvelope<
       "employee.invitation_accepted",

@@ -76,7 +76,6 @@ describe("SQL employee directory repository", () => {
           tenant_id: tenantId,
           email: "agent@example.test",
           display_name: "Agent",
-          role: "agent",
           token_hash: tokenHash,
           invited_by_employee_id: "employee-admin",
           accepted_employee_id: null,
@@ -101,7 +100,6 @@ describe("SQL employee directory repository", () => {
         id: "invitation-1",
         tenantId,
         email: "agent@example.test",
-        role: "agent",
         expiresAt: "2026-06-30T10:00:00.000Z",
         createdAt: "2026-06-23T10:00:00.000Z"
       }
@@ -120,8 +118,8 @@ describe("SQL employee directory repository", () => {
         email_verified_at: "2026-06-23T10:00:00.000Z",
         display_name: "Agent",
         password_hash: "scrypt:v1:salt:hash",
-        roles: ["agent"],
-        permissions: ["inbox.read", "message.reply"]
+        roles: [],
+        permissions: []
       }
     ]);
     const repository = createSqlEmployeeDirectoryRepository(executor);
@@ -132,7 +130,6 @@ describe("SQL employee directory repository", () => {
         id: "invitation-1",
         tenantId,
         email: "agent@example.test",
-        role: "agent",
         tokenHash: hashEmployeeInvitationToken("invite-token"),
         invitedByEmployeeId: "employee-admin" as EmployeeId,
         expiresAt: "2026-06-30T10:00:00.000Z",
@@ -147,8 +144,7 @@ describe("SQL employee directory repository", () => {
           occurredAt: now,
           payload: {
             invitationId: "invitation-1",
-            email: "agent@example.test",
-            role: "agent"
+            email: "agent@example.test"
           }
         }
       ]
@@ -164,7 +160,7 @@ describe("SQL employee directory repository", () => {
           tenantId,
           email: "agent@example.test",
           displayName: "Agent",
-          roles: ["agent"],
+          roles: [],
           createdAt: now
         } satisfies Employee,
         events: [
@@ -196,16 +192,16 @@ describe("SQL employee directory repository", () => {
       tenantDisplayName: "Acme",
       employeeId,
       emailVerifiedAt: new Date("2026-06-23T10:00:00.000Z"),
-      roles: ["agent"],
-      permissions: expect.arrayContaining(["inbox.read", "message.reply"])
+      roles: [],
+      permissions: []
     });
 
     const acceptQuery = renderQuery(executor.queries[1]);
 
     expect(acceptQuery.sql).toMatch(/email_verified_at\s*,/);
-    expect(acceptQuery.sql).toContain("insert into tenant_roles");
-    expect(acceptQuery.sql).toContain("insert into tenant_role_permissions");
-    expect(acceptQuery.sql).toContain("insert into tenant_role_bindings");
+    expect(acceptQuery.sql).not.toContain("insert into employee_roles");
+    expect(acceptQuery.sql).not.toContain("insert into tenant_roles");
+    expect(acceptQuery.sql).not.toContain("insert into tenant_role_bindings");
     expect(acceptQuery.params).toContainEqual(new Date(now));
     expect(
       acceptQuery.params.some((param) => {
@@ -293,7 +289,6 @@ describe("SQL employee directory repository", () => {
         id: "invitation-1",
         tenantId,
         email: "agent@example.test",
-        role: "agent",
         tokenHash: hashEmployeeInvitationToken("new-token"),
         invitedByEmployeeId: "employee-admin" as EmployeeId,
         expiresAt: "2026-06-30T10:00:00.000Z",

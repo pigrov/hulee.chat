@@ -526,7 +526,6 @@ export const employeeInvitations = pgTable(
     tenantId: tenantIdColumn().references(() => tenants.id),
     email: text("email").notNull(),
     displayName: text("display_name"),
-    role: text("role").notNull(),
     tokenHash: text("token_hash").notNull(),
     invitedByEmployeeId: text("invited_by_employee_id")
       .notNull()
