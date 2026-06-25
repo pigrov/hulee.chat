@@ -1,0 +1,80 @@
+import { CoreError, type Permission } from "@hulee/core";
+
+export type InternalApiRouteAccessInput = {
+  readonly method: string;
+  readonly path: string;
+};
+
+export type InternalApiEffectivePermissionOverrideInput =
+  InternalApiRouteAccessInput & {
+    readonly effectivePermissionOverride?: Permission;
+  };
+
+export function resolveRequiredInternalApiEffectivePermissionOverride(
+  input: InternalApiRouteAccessInput
+): Permission | undefined {
+  const method = input.method.toUpperCase();
+  const pathname = normalizeInternalApiPath(input.path);
+
+  if (
+    (method === "GET" || method === "PUT") &&
+    pathname === "/internal/v1/tenant/brand"
+  ) {
+    return "tenant.manage";
+  }
+
+  if (method === "GET" && pathname === "/internal/v1/org-structure") {
+    return "employees.manage";
+  }
+
+  if (
+    method === "PUT" &&
+    (pathname === "/internal/v1/org-structure/org-units" ||
+      pathname === "/internal/v1/org-structure/work-queues")
+  ) {
+    return "employees.manage";
+  }
+
+  if (method === "POST" && pathname === "/internal/v1/access/decision") {
+    return "roles.manage";
+  }
+
+  if (
+    ((method === "GET" || method === "PUT") &&
+      pathname === "/internal/v1/integrations/telegram") ||
+    (method === "POST" &&
+      pathname === "/internal/v1/integrations/telegram/diagnostics") ||
+    ((method === "POST" || method === "DELETE") &&
+      pathname === "/internal/v1/integrations/telegram/webhook")
+  ) {
+    return "modules.manage";
+  }
+
+  return undefined;
+}
+
+export function assertInternalApiEffectivePermissionOverride(
+  input: InternalApiEffectivePermissionOverrideInput
+): Permission | undefined {
+  const requiredOverride =
+    resolveRequiredInternalApiEffectivePermissionOverride(input);
+
+  if (
+    requiredOverride !== undefined &&
+    input.effectivePermissionOverride !== requiredOverride
+  ) {
+    throw new CoreError("permission.denied");
+  }
+
+  return input.effectivePermissionOverride;
+}
+
+function normalizeInternalApiPath(path: string): string {
+  const pathname = path.split("?")[0] ?? path;
+
+  if (pathname.length > 1 && pathname.endsWith("/")) {
+    return pathname.slice(0, -1);
+  }
+
+  return pathname;
+}

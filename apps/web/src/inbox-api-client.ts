@@ -18,7 +18,7 @@ import {
   type InternalTelegramIntegrationResponse,
   type InternalTelegramIntegrationUpdateRequest
 } from "@hulee/contracts";
-import type { Permission } from "@hulee/core";
+import { CoreError, type Permission } from "@hulee/core";
 
 import { buildInternalApiHeaders } from "./session";
 import { throwInternalApiErrorResponse } from "./internal-api-errors";
@@ -29,8 +29,10 @@ export type InboxMessage = InternalInboxMessage;
 export type InboxViewModel = InternalInboxViewResponse;
 export type TenantBrandViewModel = InternalTenantBrandResponse;
 export type TelegramIntegrationViewModel = InternalTelegramIntegrationResponse;
-export type InternalApiAccessOptions = {
-  readonly effectivePermissionOverride?: Permission;
+export type InternalApiAccessOptions<
+  TPermission extends Permission = Permission
+> = {
+  readonly effectivePermissionOverride: TPermission;
 };
 
 export async function loadInboxViewModel(input?: {
@@ -149,7 +151,7 @@ export async function updateInboxConversationRouting(input: {
 }
 
 export async function loadTenantBrand(
-  options: InternalApiAccessOptions = {}
+  options: InternalApiAccessOptions<"tenant.manage">
 ): Promise<TenantBrandViewModel> {
   const url = new URL("/internal/v1/tenant/brand", resolveInternalApiBaseUrl());
   const response = await fetch(url, {
@@ -157,7 +159,10 @@ export async function loadTenantBrand(
     headers: await buildInternalApiHeaders({
       method: "GET",
       path: internalPath(url),
-      effectivePermissionOverride: options.effectivePermissionOverride
+      effectivePermissionOverride: requireEffectivePermissionOverride(
+        options,
+        "tenant.manage"
+      )
     })
   });
 
@@ -172,7 +177,7 @@ export async function loadTenantBrand(
 
 export async function updateTenantBrand(
   input: InternalTenantBrandUpdateRequest,
-  options: InternalApiAccessOptions = {}
+  options: InternalApiAccessOptions<"tenant.manage">
 ): Promise<TenantBrandViewModel> {
   const request = internalTenantBrandUpdateRequestSchema.parse(input);
   const url = new URL("/internal/v1/tenant/brand", resolveInternalApiBaseUrl());
@@ -184,7 +189,10 @@ export async function updateTenantBrand(
         method: "PUT",
         path: internalPath(url),
         body: request,
-        effectivePermissionOverride: options.effectivePermissionOverride
+        effectivePermissionOverride: requireEffectivePermissionOverride(
+          options,
+          "tenant.manage"
+        )
       })),
       "content-type": "application/json; charset=utf-8"
     },
@@ -201,7 +209,7 @@ export async function updateTenantBrand(
 }
 
 export async function loadTelegramIntegration(
-  options: InternalApiAccessOptions = {}
+  options: InternalApiAccessOptions<"modules.manage">
 ): Promise<TelegramIntegrationViewModel> {
   const url = new URL(
     "/internal/v1/integrations/telegram",
@@ -212,7 +220,10 @@ export async function loadTelegramIntegration(
     headers: await buildInternalApiHeaders({
       method: "GET",
       path: internalPath(url),
-      effectivePermissionOverride: options.effectivePermissionOverride
+      effectivePermissionOverride: requireEffectivePermissionOverride(
+        options,
+        "modules.manage"
+      )
     })
   });
 
@@ -227,7 +238,7 @@ export async function loadTelegramIntegration(
 
 export async function updateTelegramIntegration(
   input: InternalTelegramIntegrationUpdateRequest,
-  options: InternalApiAccessOptions = {}
+  options: InternalApiAccessOptions<"modules.manage">
 ): Promise<TelegramIntegrationViewModel> {
   const request = internalTelegramIntegrationUpdateRequestSchema.parse(input);
   const url = new URL(
@@ -242,7 +253,10 @@ export async function updateTelegramIntegration(
         method: "PUT",
         path: internalPath(url),
         body: request,
-        effectivePermissionOverride: options.effectivePermissionOverride
+        effectivePermissionOverride: requireEffectivePermissionOverride(
+          options,
+          "modules.manage"
+        )
       })),
       "content-type": "application/json; charset=utf-8"
     },
@@ -259,7 +273,7 @@ export async function updateTelegramIntegration(
 }
 
 export async function refreshTelegramDiagnostics(
-  options: InternalApiAccessOptions = {}
+  options: InternalApiAccessOptions<"modules.manage">
 ): Promise<TelegramIntegrationViewModel> {
   return postTelegramIntegrationCommand(
     "/internal/v1/integrations/telegram/diagnostics",
@@ -269,7 +283,7 @@ export async function refreshTelegramDiagnostics(
 }
 
 export async function setTelegramWebhook(
-  options: InternalApiAccessOptions = {}
+  options: InternalApiAccessOptions<"modules.manage">
 ): Promise<TelegramIntegrationViewModel> {
   return postTelegramIntegrationCommand(
     "/internal/v1/integrations/telegram/webhook",
@@ -279,7 +293,7 @@ export async function setTelegramWebhook(
 }
 
 export async function deleteTelegramWebhook(
-  options: InternalApiAccessOptions = {}
+  options: InternalApiAccessOptions<"modules.manage">
 ): Promise<TelegramIntegrationViewModel> {
   const url = new URL(
     "/internal/v1/integrations/telegram/webhook",
@@ -291,7 +305,10 @@ export async function deleteTelegramWebhook(
     headers: await buildInternalApiHeaders({
       method: "DELETE",
       path: internalPath(url),
-      effectivePermissionOverride: options.effectivePermissionOverride
+      effectivePermissionOverride: requireEffectivePermissionOverride(
+        options,
+        "modules.manage"
+      )
     })
   });
 
@@ -307,7 +324,7 @@ export async function deleteTelegramWebhook(
 async function postTelegramIntegrationCommand(
   path: string,
   errorPrefix: string,
-  options: InternalApiAccessOptions = {}
+  options: InternalApiAccessOptions<"modules.manage">
 ): Promise<TelegramIntegrationViewModel> {
   const url = new URL(path, resolveInternalApiBaseUrl());
   const response = await fetch(url, {
@@ -316,7 +333,10 @@ async function postTelegramIntegrationCommand(
     headers: await buildInternalApiHeaders({
       method: "POST",
       path: internalPath(url),
-      effectivePermissionOverride: options.effectivePermissionOverride
+      effectivePermissionOverride: requireEffectivePermissionOverride(
+        options,
+        "modules.manage"
+      )
     })
   });
 
@@ -333,4 +353,15 @@ function resolveInternalApiBaseUrl(): string {
 
 function internalPath(url: URL): string {
   return `${url.pathname}${url.search}`;
+}
+
+function requireEffectivePermissionOverride<TPermission extends Permission>(
+  options: InternalApiAccessOptions<TPermission> | undefined,
+  permission: TPermission
+): TPermission {
+  if (options?.effectivePermissionOverride !== permission) {
+    throw new CoreError("permission.denied");
+  }
+
+  return permission;
 }

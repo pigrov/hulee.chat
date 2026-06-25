@@ -48,6 +48,7 @@ import {
   hasEffectivePermission,
   resolveEmployeeEffectiveAccess
 } from "./rbac-effective-access";
+import { assertInternalApiEffectivePermissionOverride } from "./internal-api-access-policy";
 import { getWebDatabase } from "./web-database";
 import { resolveWebConfig, resolveWebEnv } from "./web-config";
 
@@ -193,13 +194,20 @@ export async function buildInternalApiHeaders(input: {
   body?: unknown;
   effectivePermissionOverride?: Permission;
 }): Promise<Record<string, string>> {
-  const session = await requireCurrentWebAccessSession();
+  const effectivePermissionOverride =
+    assertInternalApiEffectivePermissionOverride(input);
+  const session =
+    effectivePermissionOverride === undefined
+      ? await requireCurrentWebAccessSession()
+      : await assertCurrentWebEffectiveTenantPermission(
+          effectivePermissionOverride
+        );
   const internalSession =
-    input.effectivePermissionOverride === undefined
+    effectivePermissionOverride === undefined
       ? session
       : {
           ...session,
-          permissions: [input.effectivePermissionOverride]
+          permissions: [effectivePermissionOverride]
         };
   const headers = buildInternalApiHeadersForSession(internalSession);
   const config = resolveWebConfig();

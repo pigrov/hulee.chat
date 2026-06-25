@@ -295,10 +295,10 @@ function readRequiredFormString(formData: FormData, name: string): string {
   return value;
 }
 
-async function assertVerifiedTenantPermission(
-  permission: Permission,
+async function assertVerifiedTenantPermission<TPermission extends Permission>(
+  permission: TPermission,
   redirectPath: string
-): Promise<InternalApiAccessOptions> {
+): Promise<InternalApiAccessOptions<TPermission>> {
   try {
     await assertCurrentWebEffectiveTenantPermission(permission, {
       requireVerifiedEmail: true
