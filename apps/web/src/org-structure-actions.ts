@@ -21,11 +21,12 @@ import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 
 import { assertWebActionRequest } from "./action-security";
+import { getWebDatabase, isEmailNotVerifiedError } from "./session";
+import type { WebAccessSession } from "./access";
 import {
-  assertCurrentWebEffectiveTenantPermission,
-  getWebDatabase,
-  isEmailNotVerifiedError
-} from "./session";
+  assertWebDbBackedAdminCommandBoundary,
+  webDbBackedAdminCommandBoundaries
+} from "./web-admin-command-boundary";
 
 export async function upsertOrgUnitAction(formData: FormData): Promise<void> {
   await assertWebActionRequest();
@@ -314,13 +315,11 @@ function revalidateOrgStructurePaths(): void {
   revalidatePath("/admin/employees/[employeeId]/access", "page");
 }
 
-async function assertVerifiedOrgStructurePermission(): ReturnType<
-  typeof assertCurrentWebEffectiveTenantPermission
-> {
+async function assertVerifiedOrgStructurePermission(): Promise<WebAccessSession> {
   try {
-    return await assertCurrentWebEffectiveTenantPermission("employees.manage", {
-      requireVerifiedEmail: true
-    });
+    return await assertWebDbBackedAdminCommandBoundary(
+      webDbBackedAdminCommandBoundaries.orgStructure
+    );
   } catch (error) {
     if (isEmailNotVerifiedError(error)) {
       redirect(orgStructureDestination("email_verification_required"));

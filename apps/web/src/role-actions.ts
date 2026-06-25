@@ -42,22 +42,19 @@ import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 
 import { assertWebActionRequest } from "./action-security";
-import {
-  assertCurrentWebEffectiveTenantPermission,
-  getWebDatabase,
-  isEmailNotVerifiedError
-} from "./session";
+import { getWebDatabase, isEmailNotVerifiedError } from "./session";
 import type { WebAccessSession } from "./access";
 import {
   assertCanGrantScopedPermissions,
   assertCanManageScopedAccess
 } from "./rbac-least-privilege";
-import {
-  assertRecentPrivilegedActionSession,
-  isPrivilegedActionReauthRequiredError
-} from "./privileged-action-policy";
+import { isPrivilegedActionReauthRequiredError } from "./privileged-action-policy";
 import { roleActionFailureStatus } from "./role-action-status";
 import { findRoleTemplate, uniqueRoleTemplateName } from "./role-templates";
+import {
+  assertWebDbBackedAdminCommandBoundary,
+  webDbBackedAdminCommandBoundaries
+} from "./web-admin-command-boundary";
 
 export async function createCustomTenantRoleAction(
   formData: FormData
@@ -958,18 +955,11 @@ async function recordAccessMutation(input: {
 
 async function assertVerifiedRolesPermission(
   formData: FormData
-): ReturnType<typeof assertCurrentWebEffectiveTenantPermission> {
+): Promise<WebAccessSession> {
   try {
-    const session = await assertCurrentWebEffectiveTenantPermission(
-      "roles.manage",
-      {
-        requireVerifiedEmail: true
-      }
+    return await assertWebDbBackedAdminCommandBoundary(
+      webDbBackedAdminCommandBoundaries.roleAccess
     );
-
-    assertRecentPrivilegedActionSession(session);
-
-    return session;
   } catch (error) {
     if (isEmailNotVerifiedError(error)) {
       redirect(roleActionDestination(formData, "email_verification_required"));

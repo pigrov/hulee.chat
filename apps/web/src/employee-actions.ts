@@ -9,8 +9,7 @@ import {
   deactivateEmployee,
   resendEmployeeInvitation,
   revokeEmployeeInvitation,
-  type Employee,
-  type Permission
+  type Employee
 } from "@hulee/core";
 import {
   createSqlEmployeeDirectoryRepository,
@@ -28,18 +27,22 @@ import { assertWebActionRequest } from "./action-security";
 import { assertWebAuthRateLimit } from "./auth-rate-limit";
 import { requireValidPassword } from "./password-policy";
 import {
-  assertCurrentWebEffectiveTenantPermission,
   createTenantWebSession,
   getWebDatabase,
   isEmailNotVerifiedError
 } from "./session";
+import type { WebAccessSession } from "./access";
+import {
+  assertWebDbBackedAdminCommandBoundary,
+  webDbBackedAdminCommandBoundaries
+} from "./web-admin-command-boundary";
 
 const invitationTtlMs = 1000 * 60 * 60 * 24 * 14;
 
 export async function inviteEmployeeAction(formData: FormData): Promise<void> {
   await assertWebActionRequest();
 
-  const session = await assertVerifiedTenantPermission("employees.manage");
+  const session = await assertVerifiedEmployeeManagementPermission();
   const email = readRequiredFormString(formData, "email");
   const displayName = readOptionalFormString(formData, "displayName");
   const now = new Date();
@@ -91,7 +94,7 @@ export async function deactivateEmployeeAction(
 ): Promise<void> {
   await assertWebActionRequest();
 
-  const session = await assertVerifiedTenantPermission("employees.manage");
+  const session = await assertVerifiedEmployeeManagementPermission();
   const employeeId = readRequiredFormString(
     formData,
     "employeeId"
@@ -139,7 +142,7 @@ export async function revokeEmployeeInviteAction(
 ): Promise<void> {
   await assertWebActionRequest();
 
-  const session = await assertVerifiedTenantPermission("employees.manage");
+  const session = await assertVerifiedEmployeeManagementPermission();
   const invitationId = readRequiredFormString(formData, "invitationId");
   const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
   let destination = "/admin/employees?actionStatus=invalid";
@@ -184,7 +187,7 @@ export async function resendEmployeeInviteAction(
 ): Promise<void> {
   await assertWebActionRequest();
 
-  const session = await assertVerifiedTenantPermission("employees.manage");
+  const session = await assertVerifiedEmployeeManagementPermission();
   const invitationId = readRequiredFormString(formData, "invitationId");
   const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
   const now = new Date();
@@ -310,12 +313,7 @@ async function sendInvitationEmail(
   });
 }
 
-function employeeFromSession(
-  session: Awaited<
-    ReturnType<typeof assertCurrentWebEffectiveTenantPermission>
-  >,
-  now: string
-): Employee {
+function employeeFromSession(session: WebAccessSession, now: string): Employee {
   return {
     id: session.employeeId,
     tenantId: session.tenantId,
@@ -348,13 +346,11 @@ function readRequiredFormString(formData: FormData, name: string): string {
   return value.trim();
 }
 
-async function assertVerifiedTenantPermission(
-  permission: Permission
-): ReturnType<typeof assertCurrentWebEffectiveTenantPermission> {
+async function assertVerifiedEmployeeManagementPermission(): Promise<WebAccessSession> {
   try {
-    return await assertCurrentWebEffectiveTenantPermission(permission, {
-      requireVerifiedEmail: true
-    });
+    return await assertWebDbBackedAdminCommandBoundary(
+      webDbBackedAdminCommandBoundaries.employeeLifecycle
+    );
   } catch (error) {
     if (isEmailNotVerifiedError(error)) {
       redirect("/admin/employees?emailVerification=required");

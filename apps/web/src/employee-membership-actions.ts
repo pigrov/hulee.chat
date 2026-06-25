@@ -23,17 +23,14 @@ import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 
 import { assertWebActionRequest } from "./action-security";
-import { assertWebTenantEmailVerified, type WebAccessSession } from "./access";
+import type { WebAccessSession } from "./access";
 import { assertCanUpdateEmployeeMemberships } from "./employee-membership-access";
+import { isPrivilegedActionReauthRequiredError } from "./privileged-action-policy";
+import { getWebDatabase, isEmailNotVerifiedError } from "./session";
 import {
-  assertRecentPrivilegedActionSession,
-  isPrivilegedActionReauthRequiredError
-} from "./privileged-action-policy";
-import {
-  getWebDatabase,
-  isEmailNotVerifiedError,
-  requireCurrentWebAccessSession
-} from "./session";
+  assertWebDbBackedAdminCommandBoundary,
+  webDbBackedAdminCommandBoundaries
+} from "./web-admin-command-boundary";
 
 export async function setEmployeeOrgUnitMembershipsAction(
   formData: FormData
@@ -271,12 +268,9 @@ async function assertVerifiedRolesPermission(
   employeeId: EmployeeId
 ): Promise<WebAccessSession> {
   try {
-    const session = await requireCurrentWebAccessSession();
-
-    assertWebTenantEmailVerified(session);
-    assertRecentPrivilegedActionSession(session);
-
-    return session;
+    return await assertWebDbBackedAdminCommandBoundary(
+      webDbBackedAdminCommandBoundaries.employeeMembership
+    );
   } catch (error) {
     if (isEmailNotVerifiedError(error)) {
       redirect(
