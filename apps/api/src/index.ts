@@ -139,10 +139,7 @@ export function createInternalApiDataPlaneHandler(
 
   return createInternalApiHandler({
     sessionResolver: createSignedInternalSessionResolver({
-      secret: options.internalApiSecret,
-      allowUnsignedFallback:
-        options.internalApiSecret === undefined &&
-        (options.env?.NODE_ENV ?? process.env.NODE_ENV) !== "production"
+      secret: options.internalApiSecret
     }),
     inboxQueries: createSqlInternalInboxQueryService({
       database: options.database,

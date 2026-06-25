@@ -472,6 +472,27 @@ describe("internal API handler", () => {
     expect(loadTenantBrand).not.toHaveBeenCalled();
   });
 
+  it("requires narrow effective permission override in local dev mode too", async () => {
+    const { handler, loadTenantBrand } = createHandler({
+      session: sessionWithPermissions(
+        ["tenant.manage", "employees.manage"],
+        "local_dev"
+      )
+    });
+    const response = await handler.handle({
+      method: "GET",
+      path: "/internal/v1/tenant/brand"
+    });
+
+    expect(response.status).toBe(403);
+    expect(response.body).toMatchObject({
+      error: {
+        code: "permission.denied"
+      }
+    });
+    expect(loadTenantBrand).not.toHaveBeenCalled();
+  });
+
   it("loads and upserts org structure through employees.manage permission", async () => {
     const employeesManageSession = sessionWithPermissions(["employees.manage"]);
     const { handler, loadOrgStructure, upsertOrgUnit, upsertWorkQueue } =
@@ -878,6 +899,47 @@ describe("internal API handler", () => {
       error: {
         code: "permission.denied"
       }
+    });
+  });
+
+  it("does not create unsigned fallback sessions without explicit headers", async () => {
+    const localDevResolver = createLocalDevInternalSessionResolver();
+    const unsignedResolver = createSignedInternalSessionResolver({});
+    const request = {
+      method: "GET" as const,
+      path: "/internal/v1/integrations/telegram",
+      headers: {}
+    };
+
+    await expect(
+      localDevResolver.resolve(request, "request-1")
+    ).resolves.toBeNull();
+    await expect(
+      unsignedResolver.resolve(request, "request-1")
+    ).resolves.toBeNull();
+  });
+
+  it("resolves explicit local dev headers when signing is not configured", async () => {
+    const resolver = createSignedInternalSessionResolver({});
+
+    await expect(
+      resolver.resolve(
+        {
+          method: "GET",
+          path: "/internal/v1/integrations/telegram",
+          headers: {
+            "x-hulee-tenant-id": tenantId,
+            "x-hulee-employee-id": employeeId,
+            "x-hulee-permissions": "modules.manage"
+          }
+        },
+        "request-1"
+      )
+    ).resolves.toMatchObject({
+      tenantId,
+      employeeId,
+      permissions: ["modules.manage"],
+      authMode: "local_dev"
     });
   });
 

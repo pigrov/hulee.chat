@@ -141,8 +141,6 @@ const jsonHeaders = {
   "content-type": "application/json; charset=utf-8"
 };
 
-const defaultTenantId = "tenant_local_1" as TenantId;
-
 export function createInternalApiHandler(
   options: InternalApiHandlerOptions
 ): InternalApiHandler {
@@ -212,49 +210,33 @@ export function createLocalDevInternalSessionResolver(input?: {
 }): InternalApiSessionResolver {
   return {
     async resolve(request, requestId) {
-      return (
-        resolveHeaderSession(request, requestId, "local_dev", input) ??
-        createFallbackDevSession(request, requestId, input)
-      );
+      return resolveHeaderSession(request, requestId, "local_dev", input);
     }
   };
 }
 
 export function createSignedInternalSessionResolver(input: {
   secret?: string;
-  allowUnsignedFallback?: boolean;
   now?: () => Date;
   maxAgeMs?: number;
-  fallback?: {
-    tenantId?: TenantId;
-    employeeId?: EmployeeId;
-    permissions?: readonly Permission[];
-  };
 }): InternalApiSessionResolver {
   const now = input.now ?? (() => new Date());
+  const secret = input.secret?.trim();
 
   return {
     async resolve(request, requestId) {
       const headerSession = resolveHeaderSession(
         request,
         requestId,
-        "signed",
-        input.fallback
+        secret === undefined || secret.length === 0 ? "local_dev" : "signed"
       );
 
       if (headerSession === null) {
-        return input.allowUnsignedFallback
-          ? createFallbackDevSession(request, requestId, input.fallback)
-          : null;
+        return null;
       }
 
-      if (input.secret === undefined) {
-        return input.allowUnsignedFallback
-          ? {
-              ...headerSession,
-              authMode: "local_dev"
-            }
-          : null;
+      if (secret === undefined || secret.length === 0) {
+        return headerSession;
       }
 
       const timestamp = headerValue(
@@ -278,7 +260,7 @@ export function createSignedInternalSessionResolver(input: {
         employeeId: headerSession.employeeId,
         permissions: headerSession.permissions,
         timestamp,
-        secret: input.secret,
+        secret,
         signature,
         now: now(),
         maxAgeMs: input.maxAgeMs
@@ -322,49 +304,6 @@ function resolveHeaderSession(
     employeeId,
     permissions: permissions ?? [],
     authMode
-  };
-}
-
-function createFallbackDevSession(
-  request: ApiHttpRequest,
-  requestId: string,
-  input?: {
-    tenantId?: TenantId;
-    employeeId?: EmployeeId;
-    permissions?: readonly Permission[];
-  }
-): InternalApiSession {
-  const tenantId =
-    (headerValue(request.headers, "x-hulee-tenant-id") as
-      | TenantId
-      | undefined) ??
-    input?.tenantId ??
-    ((process.env.HULEE_WEB_TENANT_ID ?? defaultTenantId) as TenantId);
-  const employeeId =
-    (headerValue(request.headers, "x-hulee-employee-id") as
-      | EmployeeId
-      | undefined) ??
-    input?.employeeId ??
-    (`employee:${tenantId}:local-dev` as EmployeeId);
-  const headerPermissions = parsePermissionsHeader(
-    headerValue(request.headers, "x-hulee-permissions")
-  );
-
-  return {
-    requestId,
-    tenantId,
-    employeeId,
-    permissions: input?.permissions ??
-      headerPermissions ?? [
-        "tenant.manage",
-        "employees.manage",
-        "inbox.read",
-        "message.reply",
-        "conversation.assign",
-        "modules.manage",
-        "roles.manage"
-      ],
-    authMode: "local_dev"
   };
 }
 
@@ -716,10 +655,6 @@ function assertSignedEffectivePermissionOverride(
   permission: Permission
 ): void {
   assertSessionPermissionHeaderContains(session, permission);
-
-  if (session.authMode === "local_dev") {
-    return;
-  }
 
   if (
     session.permissions.length !== 1 ||
