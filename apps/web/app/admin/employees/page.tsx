@@ -18,7 +18,7 @@ import {
 } from "../../../src/employee-actions";
 import { resolvePublicBaseUrl } from "../../../src/email";
 import { formatDateTime } from "../../../src/formatting";
-import { loadInboxViewModel } from "../../../src/inbox-api-client";
+import { loadTenantAdminViewModel } from "../../../src/admin-view-model";
 import {
   getWebDatabase,
   resolveCurrentWebAccessSession
@@ -74,7 +74,7 @@ export default async function EmployeesAdminPage({
 
   const [model, employees, invitations, resolvedSearchParams] =
     await Promise.all([
-      loadInboxViewModel(),
+      loadTenantAdminViewModel({ tenantId: access.tenantId, database }),
       repository.listEmployees({ tenantId: access.tenantId }),
       repository.listInvitations({ tenantId: access.tenantId, limit: 25 }),
       searchParams

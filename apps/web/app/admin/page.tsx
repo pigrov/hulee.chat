@@ -18,7 +18,7 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AccessDeniedPage } from "../../src/access-denied";
-import { loadInboxViewModel } from "../../src/inbox-api-client";
+import { loadTenantAdminViewModel } from "../../src/admin-view-model";
 import {
   getWebDatabase,
   resolveCurrentWebAccessSession
@@ -66,7 +66,10 @@ export default async function TenantAdminPage(): Promise<ReactNode> {
     );
   }
 
-  const model = await loadInboxViewModel();
+  const model = await loadTenantAdminViewModel({
+    tenantId: access.tenantId,
+    database
+  });
   const { t } = createTranslator(model.tenant.locale);
 
   return (

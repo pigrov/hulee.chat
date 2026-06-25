@@ -23,7 +23,7 @@ import type { ReactNode } from "react";
 
 import { AccessDeniedPage } from "../../../src/access-denied";
 import { DetailItem } from "../../../src/app-chrome";
-import { loadInboxViewModel } from "../../../src/inbox-api-client";
+import { loadTenantAdminViewModel } from "../../../src/admin-view-model";
 import {
   orgStructureStatusKey,
   orgUnitKindKey,
@@ -92,7 +92,7 @@ export default async function OrgStructureAdminPage({
   const repository = createSqlOrgStructureRepository(database);
   const [model, orgUnits, teams, workQueues, resolvedSearchParams] =
     await Promise.all([
-      loadInboxViewModel(),
+      loadTenantAdminViewModel({ tenantId: access.tenantId, database }),
       repository.listOrgUnits({ tenantId: access.tenantId }),
       repository.listTeams({ tenantId: access.tenantId }),
       repository.listWorkQueues({ tenantId: access.tenantId }),

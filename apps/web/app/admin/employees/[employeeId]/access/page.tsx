@@ -45,7 +45,7 @@ import {
   setEmployeeTeamMembershipsAction,
   setEmployeeWorkQueueMembershipsAction
 } from "../../../../../src/employee-membership-actions";
-import { loadInboxViewModel } from "../../../../../src/inbox-api-client";
+import { loadTenantAdminViewModel } from "../../../../../src/admin-view-model";
 import { allowedRoleBindingScopeTypesForPermissions } from "../../../../../src/rbac-scope";
 import { buildScopeReferenceOptions } from "../../../../../src/rbac-scope-options";
 import {
@@ -152,7 +152,7 @@ export default async function EmployeeAccessAdminPage({
     workQueues,
     resolvedSearch
   ] = await Promise.all([
-    loadInboxViewModel(),
+    loadTenantAdminViewModel({ tenantId: access.tenantId }),
     employeeRepository.findEmployee({
       tenantId: access.tenantId,
       employeeId

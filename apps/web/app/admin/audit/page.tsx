@@ -26,7 +26,7 @@ import type { ReactNode } from "react";
 
 import { AccessDeniedPage } from "../../../src/access-denied";
 import { formatDateTime } from "../../../src/formatting";
-import { loadInboxViewModel } from "../../../src/inbox-api-client";
+import { loadTenantAdminViewModel } from "../../../src/admin-view-model";
 import {
   getWebDatabase,
   resolveCurrentWebAccessSession
@@ -108,7 +108,7 @@ export default async function AuditAdminPage({
   const orgStructureRepository = createSqlOrgStructureRepository(database);
   const [model, employees, roles, teams, workQueues, resolvedSearchParams] =
     await Promise.all([
-      loadInboxViewModel(),
+      loadTenantAdminViewModel({ tenantId: access.tenantId, database }),
       employeeRepository.listEmployees({ tenantId: access.tenantId }),
       rbacRepository.listRoleDefinitions({ tenantId: access.tenantId }),
       orgStructureRepository.listTeams({ tenantId: access.tenantId }),

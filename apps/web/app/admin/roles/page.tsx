@@ -40,7 +40,7 @@ import type { ReactNode } from "react";
 
 import { AccessDeniedPage } from "../../../src/access-denied";
 import { DetailItem } from "../../../src/app-chrome";
-import { loadInboxViewModel } from "../../../src/inbox-api-client";
+import { loadTenantAdminViewModel } from "../../../src/admin-view-model";
 import {
   archiveCustomTenantRoleAction,
   assignTenantRoleAction,
@@ -157,7 +157,7 @@ export default async function RolesAdminPage({
     workQueues,
     resolvedSearchParams
   ] = await Promise.all([
-    loadInboxViewModel(),
+    loadTenantAdminViewModel({ tenantId: access.tenantId }),
     repository.listRoleDefinitions({ tenantId: access.tenantId }),
     repository.listRoleBindings({ tenantId: access.tenantId, at: now }),
     repository.listDirectGrants({ tenantId: access.tenantId, at: now }),
