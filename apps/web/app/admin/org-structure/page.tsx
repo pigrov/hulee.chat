@@ -25,7 +25,9 @@ import { AccessDeniedPage } from "../../../src/access-denied";
 import { DetailItem } from "../../../src/app-chrome";
 import { loadTenantAdminViewModel } from "../../../src/admin-view-model";
 import {
+  isOrgStructureSectionId,
   orgStructureStatusKey,
+  type OrgStructureSectionId,
   orgUnitKindKey,
   workQueueKindKey
 } from "../../../src/org-structure-labels";
@@ -52,11 +54,21 @@ export const runtime = "nodejs";
 
 type Translator = ReturnType<typeof createTranslator>["t"];
 
+type OrgStructureSection = {
+  readonly id: OrgStructureSectionId;
+  readonly titleKey: I18nMessageKey;
+  readonly descriptionKey: I18nMessageKey;
+  readonly count: number;
+  readonly activeCount: number;
+  readonly icon: ReactNode;
+};
+
 export default async function OrgStructureAdminPage({
   searchParams
 }: {
   searchParams?: Promise<{
     orgStructureStatus?: string;
+    section?: string;
   }>;
 }): Promise<ReactNode> {
   const access = await resolveCurrentWebAccessSession();
@@ -105,6 +117,35 @@ export default async function OrgStructureAdminPage({
   const activeWorkQueues = workQueues.filter(
     (workQueue) => workQueue.status === "active"
   );
+  const selectedSection = resolveOrgStructureSection(
+    resolvedSearchParams?.section
+  );
+  const sections: readonly OrgStructureSection[] = [
+    {
+      id: "org_units",
+      titleKey: "admin.orgStructure.orgUnits",
+      descriptionKey: "admin.orgStructure.orgUnits.description",
+      count: orgUnits.length,
+      activeCount: activeOrgUnits.length,
+      icon: <Building2 size={18} aria-hidden="true" />
+    },
+    {
+      id: "teams",
+      titleKey: "admin.orgStructure.teams",
+      descriptionKey: "admin.orgStructure.teams.description",
+      count: teams.length,
+      activeCount: teams.length,
+      icon: <UsersRound size={18} aria-hidden="true" />
+    },
+    {
+      id: "work_queues",
+      titleKey: "admin.orgStructure.workQueues",
+      descriptionKey: "admin.orgStructure.workQueues.description",
+      count: workQueues.length,
+      activeCount: activeWorkQueues.length,
+      icon: <ListChecks size={18} aria-hidden="true" />
+    }
+  ];
 
   return (
     <TenantAdminShell
@@ -130,179 +171,302 @@ export default async function OrgStructureAdminPage({
       titleId="org-structure-title"
     >
       <div className="adminStack">
-        <section
-          className="settingsPanel"
-          aria-labelledby="org-unit-create-title"
-        >
-          <div className="sectionHeader">
-            <div>
-              <p className="eyebrow">{t("admin.orgStructure.orgUnits")}</p>
-              <h2 className="sectionTitle" id="org-unit-create-title">
-                {t("admin.orgStructure.createOrgUnit")}
-              </h2>
-              <p className="metaText">
-                {t("admin.orgStructure.createOrgUnit.description")}
-              </p>
-            </div>
-            <span className="badge">{activeOrgUnits.length}</span>
-          </div>
+        <OrgStructureSectionNavigation
+          sections={sections}
+          selectedSection={selectedSection}
+          t={t}
+        />
 
-          <form
-            className="settingsForm orgStructureCreateForm"
-            action={upsertOrgUnitAction}
-          >
-            <OrgUnitNameField t={t} />
-            <OrgUnitKindField t={t} />
-            <OrgUnitParentField orgUnits={orgUnits} t={t} />
-            <button className="primaryButton" type="submit">
-              <Plus size={18} aria-hidden="true" />
-              {t("admin.orgStructure.create")}
-            </button>
-          </form>
-        </section>
+        {selectedSection === "org_units" ? (
+          <>
+            <section
+              className="settingsPanel"
+              aria-labelledby="org-unit-create-title"
+            >
+              <div className="sectionHeader">
+                <div>
+                  <p className="eyebrow">{t("admin.orgStructure.orgUnits")}</p>
+                  <h2 className="sectionTitle" id="org-unit-create-title">
+                    {t("admin.orgStructure.createOrgUnit")}
+                  </h2>
+                  <p className="metaText">
+                    {t("admin.orgStructure.createOrgUnit.description")}
+                  </p>
+                </div>
+                <span className="badge">{activeOrgUnits.length}</span>
+              </div>
 
-        <section className="settingsPanel" aria-labelledby="org-units-title">
-          <div className="sectionHeader">
-            <div>
-              <p className="eyebrow">{t("admin.directory")}</p>
-              <h2 className="sectionTitle" id="org-units-title">
-                {t("admin.orgStructure.orgUnits")}
-              </h2>
-              <p className="metaText">
-                {t("admin.orgStructure.orgUnits.description")}
-              </p>
-            </div>
-            <span className="badge">{orgUnits.length}</span>
-          </div>
+              <form
+                className="settingsForm orgStructureCreateForm"
+                action={upsertOrgUnitAction}
+              >
+                <input name="section" type="hidden" value="org_units" />
+                <OrgUnitNameField t={t} />
+                <OrgUnitKindField t={t} />
+                <OrgUnitParentField orgUnits={orgUnits} t={t} />
+                <button className="primaryButton" type="submit">
+                  <Plus size={18} aria-hidden="true" />
+                  {t("admin.orgStructure.create")}
+                </button>
+              </form>
+            </section>
 
-          <div className="managementList">
-            {orgUnits.length === 0 ? (
-              <p className="metaText">{t("admin.orgStructure.noOrgUnits")}</p>
-            ) : (
-              orgUnits.map((orgUnit) => (
-                <OrgUnitRow
-                  key={orgUnit.id}
-                  orgUnit={orgUnit}
-                  orgUnits={orgUnits}
-                  t={t}
-                />
-              ))
-            )}
-          </div>
-        </section>
+            <section
+              className="settingsPanel"
+              aria-labelledby="org-units-title"
+            >
+              <div className="sectionHeader">
+                <div>
+                  <p className="eyebrow">{t("admin.directory")}</p>
+                  <h2 className="sectionTitle" id="org-units-title">
+                    {t("admin.orgStructure.orgUnits")}
+                  </h2>
+                  <p className="metaText">
+                    {t("admin.orgStructure.orgUnits.description")}
+                  </p>
+                </div>
+                <span className="badge">{orgUnits.length}</span>
+              </div>
 
-        <section className="settingsPanel" aria-labelledby="team-create-title">
-          <div className="sectionHeader">
-            <div>
-              <p className="eyebrow">{t("admin.orgStructure.teams")}</p>
-              <h2 className="sectionTitle" id="team-create-title">
-                {t("admin.orgStructure.createTeam")}
-              </h2>
-              <p className="metaText">
-                {t("admin.orgStructure.createTeam.description")}
-              </p>
-            </div>
-            <span className="badge">{teams.length}</span>
-          </div>
+              <div className="managementList">
+                {orgUnits.length === 0 ? (
+                  <p className="metaText">
+                    {t("admin.orgStructure.noOrgUnits")}
+                  </p>
+                ) : (
+                  orgUnits.map((orgUnit) => (
+                    <OrgUnitRow
+                      key={orgUnit.id}
+                      orgUnit={orgUnit}
+                      orgUnits={orgUnits}
+                      t={t}
+                    />
+                  ))
+                )}
+              </div>
+            </section>
+          </>
+        ) : null}
 
-          <form
-            className="settingsForm orgStructureCreateForm"
-            action={upsertTeamAction}
-          >
-            <TeamNameField t={t} />
-            <button className="primaryButton" type="submit">
-              <Plus size={18} aria-hidden="true" />
-              {t("admin.orgStructure.create")}
-            </button>
-          </form>
-        </section>
+        {selectedSection === "teams" ? (
+          <>
+            <section
+              className="settingsPanel"
+              aria-labelledby="team-create-title"
+            >
+              <div className="sectionHeader">
+                <div>
+                  <p className="eyebrow">{t("admin.orgStructure.teams")}</p>
+                  <h2 className="sectionTitle" id="team-create-title">
+                    {t("admin.orgStructure.createTeam")}
+                  </h2>
+                  <p className="metaText">
+                    {t("admin.orgStructure.createTeam.description")}
+                  </p>
+                </div>
+                <span className="badge">{teams.length}</span>
+              </div>
 
-        <section className="settingsPanel" aria-labelledby="teams-title">
-          <div className="sectionHeader">
-            <div>
-              <p className="eyebrow">{t("admin.directory")}</p>
-              <h2 className="sectionTitle" id="teams-title">
-                {t("admin.orgStructure.teams")}
-              </h2>
-              <p className="metaText">
-                {t("admin.orgStructure.teams.description")}
-              </p>
-            </div>
-            <span className="badge">{teams.length}</span>
-          </div>
+              <form
+                className="settingsForm orgStructureCreateForm"
+                action={upsertTeamAction}
+              >
+                <input name="section" type="hidden" value="teams" />
+                <TeamNameField t={t} />
+                <button className="primaryButton" type="submit">
+                  <Plus size={18} aria-hidden="true" />
+                  {t("admin.orgStructure.create")}
+                </button>
+              </form>
+            </section>
 
-          <div className="managementList">
-            {teams.length === 0 ? (
-              <p className="metaText">{t("admin.orgStructure.noTeams")}</p>
-            ) : (
-              teams.map((team) => <TeamRow key={team.id} t={t} team={team} />)
-            )}
-          </div>
-        </section>
+            <section className="settingsPanel" aria-labelledby="teams-title">
+              <div className="sectionHeader">
+                <div>
+                  <p className="eyebrow">{t("admin.directory")}</p>
+                  <h2 className="sectionTitle" id="teams-title">
+                    {t("admin.orgStructure.teams")}
+                  </h2>
+                  <p className="metaText">
+                    {t("admin.orgStructure.teams.description")}
+                  </p>
+                </div>
+                <span className="badge">{teams.length}</span>
+              </div>
 
-        <section
-          className="settingsPanel"
-          aria-labelledby="work-queue-create-title"
-        >
-          <div className="sectionHeader">
-            <div>
-              <p className="eyebrow">{t("admin.orgStructure.workQueues")}</p>
-              <h2 className="sectionTitle" id="work-queue-create-title">
-                {t("admin.orgStructure.createWorkQueue")}
-              </h2>
-              <p className="metaText">
-                {t("admin.orgStructure.createWorkQueue.description")}
-              </p>
-            </div>
-            <span className="badge">{activeWorkQueues.length}</span>
-          </div>
+              <div className="managementList">
+                {teams.length === 0 ? (
+                  <p className="metaText">{t("admin.orgStructure.noTeams")}</p>
+                ) : (
+                  teams.map((team) => (
+                    <TeamRow key={team.id} t={t} team={team} />
+                  ))
+                )}
+              </div>
+            </section>
+          </>
+        ) : null}
 
-          <form
-            className="settingsForm orgStructureCreateForm"
-            action={upsertWorkQueueAction}
-          >
-            <WorkQueueNameField t={t} />
-            <WorkQueueKindField t={t} />
-            <WorkQueueOwnerField orgUnits={orgUnits} t={t} />
-            <button className="primaryButton" type="submit">
-              <Plus size={18} aria-hidden="true" />
-              {t("admin.orgStructure.create")}
-            </button>
-          </form>
-        </section>
+        {selectedSection === "work_queues" ? (
+          <>
+            <section
+              className="settingsPanel"
+              aria-labelledby="work-queue-create-title"
+            >
+              <div className="sectionHeader">
+                <div>
+                  <p className="eyebrow">
+                    {t("admin.orgStructure.workQueues")}
+                  </p>
+                  <h2 className="sectionTitle" id="work-queue-create-title">
+                    {t("admin.orgStructure.createWorkQueue")}
+                  </h2>
+                  <p className="metaText">
+                    {t("admin.orgStructure.createWorkQueue.description")}
+                  </p>
+                </div>
+                <span className="badge">{activeWorkQueues.length}</span>
+              </div>
 
-        <section className="settingsPanel" aria-labelledby="work-queues-title">
-          <div className="sectionHeader">
-            <div>
-              <p className="eyebrow">{t("admin.directory")}</p>
-              <h2 className="sectionTitle" id="work-queues-title">
-                {t("admin.orgStructure.workQueues")}
-              </h2>
-              <p className="metaText">
-                {t("admin.orgStructure.workQueues.description")}
-              </p>
-            </div>
-            <span className="badge">{workQueues.length}</span>
-          </div>
+              <form
+                className="settingsForm orgStructureCreateForm"
+                action={upsertWorkQueueAction}
+              >
+                <input name="section" type="hidden" value="work_queues" />
+                <WorkQueueNameField t={t} />
+                <WorkQueueKindField t={t} />
+                <WorkQueueOwnerField orgUnits={orgUnits} t={t} />
+                <button className="primaryButton" type="submit">
+                  <Plus size={18} aria-hidden="true" />
+                  {t("admin.orgStructure.create")}
+                </button>
+              </form>
+            </section>
 
-          <div className="managementList">
-            {workQueues.length === 0 ? (
-              <p className="metaText">{t("admin.orgStructure.noWorkQueues")}</p>
-            ) : (
-              workQueues.map((workQueue) => (
-                <WorkQueueRow
-                  key={workQueue.id}
-                  orgUnits={orgUnits}
-                  t={t}
-                  workQueue={workQueue}
-                />
-              ))
-            )}
-          </div>
-        </section>
+            <section
+              className="settingsPanel"
+              aria-labelledby="work-queues-title"
+            >
+              <div className="sectionHeader">
+                <div>
+                  <p className="eyebrow">{t("admin.directory")}</p>
+                  <h2 className="sectionTitle" id="work-queues-title">
+                    {t("admin.orgStructure.workQueues")}
+                  </h2>
+                  <p className="metaText">
+                    {t("admin.orgStructure.workQueues.description")}
+                  </p>
+                </div>
+                <span className="badge">{workQueues.length}</span>
+              </div>
+
+              <div className="managementList">
+                {workQueues.length === 0 ? (
+                  <p className="metaText">
+                    {t("admin.orgStructure.noWorkQueues")}
+                  </p>
+                ) : (
+                  workQueues.map((workQueue) => (
+                    <WorkQueueRow
+                      key={workQueue.id}
+                      orgUnits={orgUnits}
+                      t={t}
+                      workQueue={workQueue}
+                    />
+                  ))
+                )}
+              </div>
+            </section>
+          </>
+        ) : null}
       </div>
     </TenantAdminShell>
   );
+}
+
+function OrgStructureSectionNavigation({
+  sections,
+  selectedSection,
+  t
+}: {
+  readonly sections: readonly OrgStructureSection[];
+  readonly selectedSection: OrgStructureSectionId;
+  readonly t: Translator;
+}): ReactNode {
+  return (
+    <section
+      className="settingsPanel orgStructureSectionPanel"
+      aria-labelledby="org-structure-sections-title"
+    >
+      <div className="sectionHeader">
+        <div>
+          <p className="eyebrow">{t("admin.orgStructure")}</p>
+          <h2 className="sectionTitle" id="org-structure-sections-title">
+            {t("admin.orgStructure.workspace")}
+          </h2>
+          <p className="metaText">
+            {t("admin.orgStructure.workspace.description")}
+          </p>
+        </div>
+      </div>
+
+      <nav
+        className="orgStructureTabs"
+        aria-label={t("admin.orgStructure.sections")}
+      >
+        {sections.map((section) => (
+          <a
+            key={section.id}
+            className={
+              section.id === selectedSection
+                ? "orgStructureTab orgStructureTabActive"
+                : "orgStructureTab"
+            }
+            href={orgStructureSectionHref(section.id)}
+            aria-current={section.id === selectedSection ? "page" : undefined}
+          >
+            <span className="metricIcon">{section.icon}</span>
+            <span className="orgStructureTabBody">
+              <span className="orgStructureTabTitle">
+                {t(section.titleKey)}
+              </span>
+              <span className="orgStructureTabDescription">
+                {t(section.descriptionKey)}
+              </span>
+            </span>
+            <span className="orgStructureTabMeta">
+              <span className="badge">
+                {t("admin.orgStructure.totalCount", {
+                  count: section.count
+                })}
+              </span>
+              <span className="badge">
+                {t("admin.orgStructure.activeCount", {
+                  count: section.activeCount
+                })}
+              </span>
+            </span>
+          </a>
+        ))}
+      </nav>
+    </section>
+  );
+}
+
+function resolveOrgStructureSection(
+  section: string | undefined
+): OrgStructureSectionId {
+  if (section !== undefined && isOrgStructureSectionId(section)) {
+    return section;
+  }
+
+  return "org_units";
+}
+
+function orgStructureSectionHref(section: OrgStructureSectionId): string {
+  const params = new URLSearchParams({ section });
+
+  return `/admin/org-structure?${params.toString()}`;
 }
 
 function OrgUnitRow({
@@ -325,6 +489,7 @@ function OrgUnitRow({
         className="settingsForm orgStructureInlineForm"
         action={upsertOrgUnitAction}
       >
+        <input name="section" type="hidden" value="org_units" />
         <input name="id" type="hidden" value={orgUnit.id} />
         <OrgUnitNameField defaultValue={orgUnit.name} t={t} />
         <OrgUnitKindField defaultValue={orgUnit.kind} t={t} />
@@ -344,6 +509,7 @@ function OrgUnitRow({
           {t(orgStructureStatusKey(orgUnit.status))}
         </span>
         <form className="inlineForm" action={setOrgUnitStatusAction}>
+          <input name="section" type="hidden" value="org_units" />
           <input name="id" type="hidden" value={orgUnit.id} />
           <input name="status" type="hidden" value={nextStatus} />
           <button
@@ -385,6 +551,7 @@ function TeamRow({
         className="settingsForm orgStructureInlineForm"
         action={upsertTeamAction}
       >
+        <input name="section" type="hidden" value="teams" />
         <input name="id" type="hidden" value={team.id} />
         <TeamNameField defaultValue={team.name} t={t} />
         <button className="secondaryButton" type="submit">
@@ -416,6 +583,7 @@ function WorkQueueRow({
         className="settingsForm orgStructureInlineForm"
         action={upsertWorkQueueAction}
       >
+        <input name="section" type="hidden" value="work_queues" />
         <input name="id" type="hidden" value={workQueue.id} />
         <WorkQueueNameField defaultValue={workQueue.name} t={t} />
         <WorkQueueKindField defaultValue={workQueue.kind} t={t} />
@@ -434,6 +602,7 @@ function WorkQueueRow({
           {t(orgStructureStatusKey(workQueue.status))}
         </span>
         <form className="inlineForm" action={setWorkQueueStatusAction}>
+          <input name="section" type="hidden" value="work_queues" />
           <input name="id" type="hidden" value={workQueue.id} />
           <input name="status" type="hidden" value={nextStatus} />
           <button

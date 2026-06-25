@@ -1,6 +1,20 @@
 import type { OrgStructureStatus, OrgUnitKind, WorkQueueKind } from "@hulee/db";
 import type { I18nMessageKey } from "@hulee/i18n";
 
+export const orgStructureSectionIds = [
+  "org_units",
+  "teams",
+  "work_queues"
+] as const;
+
+export type OrgStructureSectionId = (typeof orgStructureSectionIds)[number];
+
+export function isOrgStructureSectionId(
+  value: string
+): value is OrgStructureSectionId {
+  return orgStructureSectionIds.includes(value as OrgStructureSectionId);
+}
+
 export function orgUnitKindKey(kind: OrgUnitKind): I18nMessageKey {
   switch (kind) {
     case "department":

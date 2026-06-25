@@ -2,6 +2,8 @@ import { orgUnitKinds, workQueueKinds } from "@hulee/db";
 import { describe, expect, it } from "vitest";
 
 import {
+  isOrgStructureSectionId,
+  orgStructureSectionIds,
   orgStructureStatusKey,
   orgUnitKindKey,
   workQueueKindKey
@@ -35,5 +37,15 @@ describe("org structure labels", () => {
     expect(orgStructureStatusKey("archived")).toBe(
       "admin.orgStructure.status.archived"
     );
+  });
+
+  it("recognizes org structure sections", () => {
+    expect(orgStructureSectionIds).toEqual([
+      "org_units",
+      "teams",
+      "work_queues"
+    ]);
+    expect(isOrgStructureSectionId("teams")).toBe(true);
+    expect(isOrgStructureSectionId("unknown")).toBe(false);
   });
 });
