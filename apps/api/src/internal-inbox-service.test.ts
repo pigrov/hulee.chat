@@ -15,7 +15,10 @@ import type {
 import type {
   Client,
   Conversation,
+  DirectPermissionGrant,
   IngestExternalIncomingMessageResult,
+  PermissionRoleBinding,
+  PermissionRoleDefinition,
   QueueExternalOutboundMessageResult,
   RegisterExternalClientResult
 } from "@hulee/core";
@@ -460,6 +463,136 @@ describe("internal inbox command service", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("filters operational inbox visibility by employee role scopes", async () => {
+    const { authorization, personas, conversations } =
+      createOperationalAccessFixture();
+
+    await expect(
+      authorization.filterConversations(personaContext(personas.intake), {
+        conversations,
+        permission: "inbox.read"
+      })
+    ).resolves.toEqual([conversations[0]]);
+
+    await expect(
+      authorization.filterConversations(personaContext(personas.sales), {
+        conversations,
+        permission: "inbox.read"
+      })
+    ).resolves.toEqual([conversations[1]]);
+
+    await expect(
+      authorization.filterConversations(personaContext(personas.salesLead), {
+        conversations,
+        permission: "inbox.read"
+      })
+    ).resolves.toEqual([conversations[1], conversations[2]]);
+
+    await expect(
+      authorization.filterConversations(personaContext(personas.claims), {
+        conversations,
+        permission: "inbox.read"
+      })
+    ).resolves.toEqual([conversations[3]]);
+
+    await expect(
+      authorization.filterConversations(personaContext(personas.measurement), {
+        conversations,
+        permission: "inbox.read"
+      })
+    ).resolves.toEqual([conversations[4]]);
+  });
+
+  it("denies operational commands outside the effective scope", async () => {
+    const { authorization, personas, conversations } =
+      createOperationalAccessFixture();
+    const [
+      intakeLead,
+      salesAssigned,
+      salesOther,
+      claimsConversation,
+      measurementAssigned,
+      measurementOther
+    ] = conversations;
+
+    await expect(
+      authorization.assertConversationAccess(personaContext(personas.intake), {
+        conversation: intakeLead,
+        permission: "lead.classify"
+      })
+    ).resolves.toBeUndefined();
+    await expect(
+      authorization.assertConversationAccess(personaContext(personas.intake), {
+        conversation: salesAssigned,
+        permission: "lead.classify"
+      })
+    ).rejects.toEqual(new CoreError("permission.denied"));
+
+    await expect(
+      authorization.assertConversationAccess(personaContext(personas.sales), {
+        conversation: salesAssigned,
+        permission: "message.reply"
+      })
+    ).resolves.toBeUndefined();
+    await expect(
+      authorization.assertConversationAccess(personaContext(personas.sales), {
+        conversation: salesOther,
+        permission: "message.reply"
+      })
+    ).rejects.toEqual(new CoreError("permission.denied"));
+
+    await expect(
+      authorization.assertConversationAccess(
+        personaContext(personas.salesLead),
+        {
+          conversation: salesOther,
+          permission: "conversation.assign"
+        }
+      )
+    ).resolves.toBeUndefined();
+    await expect(
+      authorization.assertConversationAccess(
+        personaContext(personas.salesLead),
+        {
+          conversation: claimsConversation,
+          permission: "conversation.assign"
+        }
+      )
+    ).rejects.toEqual(new CoreError("permission.denied"));
+
+    await expect(
+      authorization.assertConversationAccess(personaContext(personas.claims), {
+        conversation: claimsConversation,
+        permission: "message.reply"
+      })
+    ).resolves.toBeUndefined();
+    await expect(
+      authorization.assertConversationAccess(personaContext(personas.claims), {
+        conversation: salesAssigned,
+        permission: "message.reply"
+      })
+    ).rejects.toEqual(new CoreError("permission.denied"));
+
+    await expect(
+      authorization.assertConversationAccess(
+        personaContext(personas.measurement),
+        {
+          conversation: measurementAssigned,
+          permission: "files.upload"
+        }
+      )
+    ).resolves.toBeUndefined();
+    await expect(
+      authorization.assertConversationAccess(
+        personaContext(personas.measurement),
+        {
+          conversation: measurementOther,
+          permission: "files.upload"
+        }
+      )
+    ).rejects.toEqual(new CoreError("permission.denied"));
+  });
+
   it("updates conversation routing when source and target stay in the actor queue scope", async () => {
     const routedConversation: Conversation = {
       ...conversation,
@@ -751,6 +884,324 @@ function createEmployeeRepository(employeeRecord: TenantEmployeeRecord) {
         ? employeeRecord
         : null;
     }
+  };
+}
+
+function createOperationalAccessFixture(): {
+  readonly authorization: InternalInboxAuthorizationService;
+  readonly personas: Record<
+    "intake" | "sales" | "salesLead" | "claims" | "measurement",
+    EmployeeId
+  >;
+  readonly conversations: readonly InternalInboxConversationAccessResource[];
+} {
+  const personas = {
+    intake: "employee-lead-intake" as EmployeeId,
+    sales: "employee-sales-rep" as EmployeeId,
+    salesLead: "employee-sales-lead" as EmployeeId,
+    claims: "employee-claims" as EmployeeId,
+    measurement: "employee-measurement" as EmployeeId
+  };
+  const employees = new Map<EmployeeId, TenantEmployeeRecord>([
+    [
+      personas.intake,
+      operationalEmployee(personas.intake, {
+        queueIds: ["queue-new-leads"],
+        orgUnitIds: ["org-intake"]
+      })
+    ],
+    [
+      personas.sales,
+      operationalEmployee(personas.sales, {
+        teamIds: ["team-sales"],
+        orgUnitIds: ["org-sales"]
+      })
+    ],
+    [
+      personas.salesLead,
+      operationalEmployee(personas.salesLead, {
+        teamIds: ["team-sales"],
+        orgUnitIds: ["org-sales"]
+      })
+    ],
+    [
+      personas.claims,
+      operationalEmployee(personas.claims, {
+        queueIds: ["queue-claims"],
+        orgUnitIds: ["org-claims"]
+      })
+    ],
+    [
+      personas.measurement,
+      operationalEmployee(personas.measurement, {
+        teamIds: ["team-measurements"],
+        orgUnitIds: ["org-field"]
+      })
+    ]
+  ]);
+  const roleDefinitions: readonly PermissionRoleDefinition[] = [
+    operationalRole("role-lead-intake", [
+      "inbox.read",
+      "lead.classify",
+      "lead.qualify",
+      "conversation.assign",
+      "client.view"
+    ]),
+    operationalRole("role-sales-rep", [
+      "inbox.read",
+      "message.reply",
+      "client.view"
+    ]),
+    operationalRole("role-sales-supervisor", [
+      "inbox.read",
+      "message.reply",
+      "conversation.assign",
+      "client.view",
+      "reports.view"
+    ]),
+    operationalRole("role-claims", [
+      "inbox.read",
+      "message.reply",
+      "client.view",
+      "files.upload"
+    ]),
+    operationalRole("role-measurement", [
+      "inbox.read",
+      "message.reply",
+      "client.view",
+      "files.upload"
+    ])
+  ];
+  const accessSources = new Map<
+    EmployeeId,
+    {
+      readonly roles: readonly PermissionRoleDefinition[];
+      readonly roleBindings: readonly PermissionRoleBinding[];
+      readonly directGrants: readonly DirectPermissionGrant[];
+    }
+  >([
+    [
+      personas.intake,
+      {
+        roles: [roleDefinitions[0]],
+        roleBindings: [
+          roleBinding("role-lead-intake", personas.intake, {
+            type: "queue",
+            id: "queue-new-leads"
+          })
+        ],
+        directGrants: []
+      }
+    ],
+    [
+      personas.sales,
+      {
+        roles: [roleDefinitions[1]],
+        roleBindings: [
+          roleBinding("role-sales-rep", personas.sales, {
+            type: "assigned"
+          })
+        ],
+        directGrants: []
+      }
+    ],
+    [
+      personas.salesLead,
+      {
+        roles: [roleDefinitions[2]],
+        roleBindings: [
+          roleBinding("role-sales-supervisor", personas.salesLead, {
+            type: "org_unit",
+            id: "org-sales"
+          })
+        ],
+        directGrants: []
+      }
+    ],
+    [
+      personas.claims,
+      {
+        roles: [roleDefinitions[3]],
+        roleBindings: [
+          roleBinding("role-claims", personas.claims, {
+            type: "queue",
+            id: "queue-claims"
+          })
+        ],
+        directGrants: []
+      }
+    ],
+    [
+      personas.measurement,
+      {
+        roles: [roleDefinitions[4]],
+        roleBindings: [
+          roleBinding("role-measurement", personas.measurement, {
+            type: "assigned"
+          })
+        ],
+        directGrants: []
+      }
+    ]
+  ]);
+
+  return {
+    authorization: createInternalInboxAuthorizationService({
+      employeeRepository: createEmployeeMapRepository(employees),
+      rbacRepository: {
+        async listEffectiveAccessSources(input) {
+          return (
+            accessSources.get(input.actor.employeeId) ?? emptyAccessSources()
+          );
+        }
+      },
+      now: () => now
+    }),
+    personas,
+    conversations: [
+      operationalConversation("conversation-new-lead", "client-new-lead", {
+        currentQueueId: "queue-new-leads",
+        currentQueueOwningOrgUnitId: "org-intake"
+      }),
+      operationalConversation("conversation-sales-assigned", "client-sales-1", {
+        currentQueueId: "queue-sales",
+        currentQueueOwningOrgUnitId: "org-sales",
+        assignedEmployeeId: personas.sales,
+        assignedTeamId: "team-sales"
+      }),
+      operationalConversation("conversation-sales-other", "client-sales-2", {
+        currentQueueId: "queue-sales",
+        currentQueueOwningOrgUnitId: "org-sales",
+        assignedEmployeeId: "employee-other-sales" as EmployeeId,
+        assignedTeamId: "team-other-sales"
+      }),
+      operationalConversation("conversation-claims", "client-claims", {
+        currentQueueId: "queue-claims",
+        currentQueueOwningOrgUnitId: "org-claims"
+      }),
+      operationalConversation(
+        "conversation-measurement-assigned",
+        "client-measurement-1",
+        {
+          currentQueueId: "queue-measurements",
+          currentQueueOwningOrgUnitId: "org-field",
+          assignedEmployeeId: personas.measurement,
+          assignedTeamId: "team-measurements"
+        }
+      ),
+      operationalConversation(
+        "conversation-measurement-other",
+        "client-measurement-2",
+        {
+          currentQueueId: "queue-measurements",
+          currentQueueOwningOrgUnitId: "org-field",
+          assignedEmployeeId: "employee-other-measurement" as EmployeeId,
+          assignedTeamId: "team-other-measurements"
+        }
+      )
+    ]
+  };
+}
+
+function createEmployeeMapRepository(
+  employees: ReadonlyMap<EmployeeId, TenantEmployeeRecord>
+) {
+  return {
+    async findEmployee(input: {
+      tenantId: TenantId;
+      employeeId: EmployeeId;
+    }): Promise<TenantEmployeeRecord | null> {
+      const employeeRecord = employees.get(input.employeeId);
+      return employeeRecord?.tenantId === input.tenantId
+        ? employeeRecord
+        : null;
+    }
+  };
+}
+
+function operationalEmployee(
+  employeeId: EmployeeId,
+  input: {
+    readonly teamIds?: readonly string[];
+    readonly orgUnitIds?: readonly string[];
+    readonly queueIds?: readonly string[];
+  } = {}
+): TenantEmployeeRecord {
+  return {
+    tenantId,
+    employeeId,
+    accountId: `${employeeId}-account`,
+    email: `${employeeId}@example.com`,
+    displayName: employeeId,
+    roles: [],
+    teamIds: input.teamIds ?? [],
+    orgUnitIds: input.orgUnitIds ?? [],
+    queueIds: input.queueIds ?? [],
+    createdAt: now,
+    deactivatedAt: null
+  };
+}
+
+function operationalRole(
+  id: string,
+  permissions: PermissionRoleDefinition["permissions"]
+): PermissionRoleDefinition {
+  return {
+    id,
+    tenantId,
+    permissions
+  };
+}
+
+function roleBinding(
+  roleId: string,
+  employeeId: EmployeeId,
+  scope: PermissionRoleBinding["scope"]
+): PermissionRoleBinding {
+  return {
+    tenantId,
+    roleId,
+    subject: {
+      type: "employee",
+      id: employeeId
+    },
+    scope
+  };
+}
+
+function operationalConversation(
+  id: string,
+  clientId: string,
+  input: Omit<
+    InternalInboxConversationAccessResource,
+    "id" | "tenantId" | "clientId"
+  >
+): InternalInboxConversationAccessResource {
+  return {
+    id,
+    tenantId,
+    clientId,
+    ...input
+  };
+}
+
+function personaContext(employeeId: EmployeeId): InternalInboxCommandContext {
+  return {
+    requestId: `request-${employeeId}`,
+    tenantId,
+    employeeId
+  };
+}
+
+function emptyAccessSources(): {
+  readonly roles: readonly PermissionRoleDefinition[];
+  readonly roleBindings: readonly PermissionRoleBinding[];
+  readonly directGrants: readonly DirectPermissionGrant[];
+} {
+  return {
+    roles: [],
+    roleBindings: [],
+    directGrants: []
   };
 }
 
