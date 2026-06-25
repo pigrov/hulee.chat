@@ -6,6 +6,10 @@ export {
   canAccess,
   resolveEffectivePermissionGrants
 } from "./access-control";
+export {
+  buildEffectiveAccessCacheKey,
+  createEffectiveAccessCache
+} from "./authorization-cache";
 export type {
   CanAccessInput,
   DirectPermissionGrant,
@@ -20,6 +24,13 @@ export type {
   PermissionRoleDefinition,
   ResolveEffectivePermissionGrantsInput
 } from "./access-control";
+export type {
+  EffectiveAccessCache,
+  EffectiveAccessCacheInvalidationInput,
+  EffectiveAccessCacheKeyInput,
+  EffectiveAccessCacheOptions,
+  EffectiveAccessCacheVersion
+} from "./authorization-cache";
 export {
   completeAuthEmailToken,
   createAccountEmailVerifiedEvent,
