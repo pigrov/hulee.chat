@@ -94,6 +94,24 @@ describe("conversation routing options", () => {
     expect(options.canClearTeam).toBe(false);
   });
 
+  it("limits org-scoped routing targets to queues owned by the org", () => {
+    const options = buildConversationRoutingOptions({
+      tenantId,
+      actor,
+      effectiveGrants: [grant("org_unit", "org-sales")],
+      conversation,
+      employees,
+      teams,
+      workQueues
+    });
+
+    expect(options.canRouteConversation).toBe(true);
+    expect(options.workQueues.map((queue) => queue.id)).toEqual([
+      "queue-sales"
+    ]);
+    expect(options.canClearQueue).toBe(false);
+  });
+
   it("returns no routing options when the current conversation is outside scope", () => {
     const options = buildConversationRoutingOptions({
       tenantId,
@@ -155,7 +173,7 @@ function workQueue(id: string, owningOrgUnitId: string): WorkQueueRecord {
 }
 
 function grant(
-  scopeType: "queue" | "team",
+  scopeType: "queue" | "team" | "org_unit",
   id: string
 ): EffectivePermissionGrant {
   return {

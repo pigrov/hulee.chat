@@ -56,6 +56,30 @@ describe("conversation reply options", () => {
     ).toBe(false);
   });
 
+  it("allows org-scoped replies only for conversations in the org queue", () => {
+    expect(
+      canReplyToConversation({
+        tenantId,
+        actor,
+        effectiveGrants: [grant({ type: "org_unit", id: "org-sales" })],
+        conversation
+      })
+    ).toBe(true);
+
+    expect(
+      canReplyToConversation({
+        tenantId,
+        actor,
+        effectiveGrants: [grant({ type: "org_unit", id: "org-sales" })],
+        conversation: {
+          ...conversation,
+          currentQueueId: "queue-claims",
+          currentQueueOwningOrgUnitId: "org-claims"
+        }
+      })
+    ).toBe(false);
+  });
+
   it("allows assigned replies through employee and team assignment", () => {
     expect(
       canReplyToConversation({
