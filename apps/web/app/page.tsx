@@ -58,7 +58,11 @@ import {
   buildReadableInboxQueueOptions,
   resolveReadableInboxQueueFilter
 } from "../src/inbox-queue-options";
-import { getWebDatabase, resolveCurrentWebAccessSession } from "../src/session";
+import {
+  getWebDatabase,
+  resolveCurrentWebAccessSession,
+  resolveWebConfig
+} from "../src/session";
 import {
   loadInboxViewModel,
   type InboxConversation,
@@ -566,7 +570,8 @@ async function resolveWebAccessSnapshot(input: {
       roles: sources.roles,
       roleBindings: sources.roleBindings,
       directGrants: sources.directGrants,
-      at: now
+      at: now,
+      mode: resolveWebConfig().rbacResolutionMode
     })
   };
 }

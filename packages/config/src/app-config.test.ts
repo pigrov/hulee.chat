@@ -20,6 +20,7 @@ describe("app config", () => {
       nodeEnv: "development",
       deploymentType: "on_prem",
       logLevel: "info",
+      rbacResolutionMode: "dual",
       databaseUrl: defaultLocalDatabaseUrl,
       secretEncryptionKey: undefined,
       host: "0.0.0.0",
@@ -100,12 +101,42 @@ describe("app config", () => {
     });
   });
 
+  it("loads the RBAC resolution rollout mode", () => {
+    expect(
+      loadWebConfig({
+        HULEE_RBAC_RESOLUTION_MODE: "scoped"
+      })
+    ).toMatchObject({
+      rbacResolutionMode: "scoped"
+    });
+
+    expect(() =>
+      loadApiConfig({
+        HULEE_RBAC_RESOLUTION_MODE: "unknown"
+      })
+    ).toThrow(ConfigError);
+
+    try {
+      loadApiConfig({
+        HULEE_RBAC_RESOLUTION_MODE: "unknown"
+      });
+    } catch (error) {
+      expect((error as ConfigError).issues).toEqual([
+        {
+          variable: "HULEE_RBAC_RESOLUTION_MODE",
+          message: "must be scoped, dual or legacy"
+        }
+      ]);
+    }
+  });
+
   it("loads development web defaults", () => {
     expect(loadWebConfig({})).toEqual({
       appName: "web",
       nodeEnv: "development",
       deploymentType: "on_prem",
       logLevel: "info",
+      rbacResolutionMode: "dual",
       databaseUrl: defaultLocalDatabaseUrl,
       secretEncryptionKey: undefined,
       internalApiBaseUrl: "http://127.0.0.1:4000",

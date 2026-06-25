@@ -55,6 +55,76 @@ describe("access-control", () => {
     ).toBe(true);
   });
 
+  it("uses scoped-only, dual and legacy resolver modes for rollout", () => {
+    const role: PermissionRoleDefinition = {
+      id: "role-scoped-admin",
+      tenantId,
+      permissions: ["roles.manage"]
+    };
+    const binding: PermissionRoleBinding = {
+      id: "binding-scoped-admin",
+      tenantId,
+      roleId: role.id,
+      subject: {
+        type: "employee",
+        id: employeeId
+      },
+      scope: {
+        type: "org_unit",
+        id: "org-sales"
+      }
+    };
+    const rolloutActor: PermissionActor = {
+      ...actor,
+      roles: ["agent"]
+    };
+    const scoped = resolveEffectivePermissionGrants({
+      actor: rolloutActor,
+      roles: [role],
+      roleBindings: [binding],
+      mode: "scoped"
+    });
+    const dual = resolveEffectivePermissionGrants({
+      actor: rolloutActor,
+      roles: [role],
+      roleBindings: [binding],
+      mode: "dual"
+    });
+    const legacy = resolveEffectivePermissionGrants({
+      actor: rolloutActor,
+      roles: [role],
+      roleBindings: [binding],
+      directGrants: [
+        directGrant({
+          permission: "roles.manage",
+          scope: {
+            type: "tenant"
+          }
+        })
+      ],
+      mode: "legacy"
+    });
+
+    expect(
+      scoped.some((grant) => grant.sources[0]?.type === "fixed_role")
+    ).toBe(false);
+    expect(scoped.some((grant) => grant.permission === "roles.manage")).toBe(
+      true
+    );
+    expect(dual.some((grant) => grant.sources[0]?.type === "fixed_role")).toBe(
+      true
+    );
+    expect(dual.some((grant) => grant.permission === "roles.manage")).toBe(
+      true
+    );
+    expect(
+      legacy.every((grant) => grant.sources[0]?.type === "fixed_role")
+    ).toBe(true);
+    expect(legacy.some((grant) => grant.permission === "roles.manage")).toBe(
+      false
+    );
+  });
+
   it("resolves queue role bindings through actor queue membership", () => {
     const role: PermissionRoleDefinition = {
       id: "role-queue-sales",

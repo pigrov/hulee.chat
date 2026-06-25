@@ -85,6 +85,40 @@ describe("RBAC effective web access", () => {
     ]);
   });
 
+  it("honors scoped-only rollout mode for legacy employee roles", async () => {
+    const snapshot = await resolveEmployeeEffectiveAccess({
+      tenantId,
+      employeeId,
+      at: new Date("2026-01-01T00:00:00.000Z"),
+      permissionResolverMode: "scoped",
+      employeeRepository: {
+        async findEmployee() {
+          return employee({ roles: ["agent"] });
+        }
+      },
+      rbacRepository: {
+        async listEffectiveAccessSources() {
+          return {
+            roles: [],
+            roleBindings: [],
+            directGrants: [
+              {
+                tenantId,
+                employeeId,
+                permission: "roles.manage",
+                scope: { type: "tenant" },
+                reason: "Scoped rollout"
+              }
+            ]
+          };
+        }
+      }
+    });
+
+    expect(hasEffectivePermission(snapshot, "message.reply")).toBe(false);
+    expect(hasEffectivePermission(snapshot, "roles.manage")).toBe(true);
+  });
+
   it("does not resolve access for missing or inactive employees", async () => {
     const inactiveSnapshot = await resolveEmployeeEffectiveAccess({
       tenantId,

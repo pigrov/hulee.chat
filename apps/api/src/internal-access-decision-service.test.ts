@@ -249,6 +249,32 @@ describe("internal access decision service", () => {
     expect(employeeRepository.findEmployee).not.toHaveBeenCalled();
   });
 
+  it("honors scoped-only rollout mode for requester legacy roles", async () => {
+    const service = createInternalAccessDecisionService({
+      ...testOptions({
+        employees: [
+          employee({
+            employeeId: adminEmployeeId,
+            roles: ["tenant_admin"]
+          }),
+          employee({ employeeId: targetEmployeeId })
+        ],
+        sourcesByEmployeeId: {}
+      }),
+      permissionResolverMode: "scoped"
+    });
+
+    await expect(
+      service.inspectAccessDecision(context(), {
+        employeeId: targetEmployeeId,
+        permission: "conversation.read",
+        resource: {}
+      })
+    ).rejects.toMatchObject({
+      code: "permission.denied"
+    });
+  });
+
   it("returns missing permission without exposing unrelated target grants", async () => {
     const service = createInternalAccessDecisionService(
       testOptions({

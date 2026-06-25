@@ -18,6 +18,7 @@ import {
   type Permission,
   type PermissionActor,
   type PermissionGrantSource,
+  type PermissionResolverMode,
   type PermissionResourceContext
 } from "@hulee/core";
 import type {
@@ -42,6 +43,7 @@ export type InternalAccessDecisionService = {
 export type InternalAccessDecisionServiceOptions = {
   employeeRepository: Pick<EmployeeDirectoryRepository, "findEmployee">;
   rbacRepository: Pick<TenantRbacRepository, "listEffectiveAccessSources">;
+  permissionResolverMode?: PermissionResolverMode;
   now?: () => Date;
 };
 
@@ -72,7 +74,8 @@ export function createInternalAccessDecisionService(
       const requesterSnapshot = await resolveAccessSnapshot({
         employee: requester,
         rbacRepository: options.rbacRepository,
-        at: evaluatedAt
+        at: evaluatedAt,
+        permissionResolverMode: options.permissionResolverMode
       });
       const inspectionDecision = canAccess({
         actor: requesterSnapshot.actor,
@@ -93,7 +96,8 @@ export function createInternalAccessDecisionService(
       const targetSnapshot = await resolveAccessSnapshot({
         employee: targetEmployee,
         rbacRepository: options.rbacRepository,
-        at: evaluatedAt
+        at: evaluatedAt,
+        permissionResolverMode: options.permissionResolverMode
       });
       const decision = canAccess({
         actor: targetSnapshot.actor,
@@ -150,6 +154,7 @@ async function resolveAccessSnapshot(input: {
   employee: TenantEmployeeRecord;
   rbacRepository: Pick<TenantRbacRepository, "listEffectiveAccessSources">;
   at: Date;
+  permissionResolverMode?: PermissionResolverMode;
 }): Promise<AccessSnapshot> {
   const actor = permissionActorFromEmployee(input.employee);
   const sources = await input.rbacRepository.listEffectiveAccessSources({
@@ -164,7 +169,8 @@ async function resolveAccessSnapshot(input: {
       roles: sources.roles,
       roleBindings: sources.roleBindings,
       directGrants: sources.directGrants,
-      at: input.at
+      at: input.at,
+      mode: input.permissionResolverMode
     })
   };
 }

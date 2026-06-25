@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => {
     recordSecurityAudit: vi.fn(),
     redirect,
     revalidatePath: vi.fn(),
+    resolveWebConfig: vi.fn(),
     revokeDirectGrant: vi.fn()
   };
 });
@@ -52,7 +53,8 @@ vi.mock("./session", () => ({
   assertCurrentWebEffectiveTenantPermission:
     mocks.assertCurrentWebEffectiveTenantPermission,
   getWebDatabase: mocks.getWebDatabase,
-  isEmailNotVerifiedError: mocks.isEmailNotVerifiedError
+  isEmailNotVerifiedError: mocks.isEmailNotVerifiedError,
+  resolveWebConfig: mocks.resolveWebConfig
 }));
 
 vi.mock("@hulee/db", () => ({
@@ -86,6 +88,9 @@ describe("role management actions", () => {
       platformRoles: []
     });
     mocks.getWebDatabase.mockReturnValue({ kind: "database" });
+    mocks.resolveWebConfig.mockReturnValue({
+      rbacResolutionMode: "dual"
+    });
     mocks.isEmailNotVerifiedError.mockReturnValue(false);
     mocks.createSqlTenantRbacRepository.mockReturnValue(rbacRepository());
     mocks.createSqlEmployeeDirectoryRepository.mockReturnValue(

@@ -50,6 +50,16 @@ On-prem deployments enforce a signed license and local usage policies. Expensive
 - On-prem upgrades must run migrations explicitly and produce a rollback/backup plan.
 - Company-layer must declare compatible core version.
 
+## RBAC Rollout Mode
+
+`HULEE_RBAC_RESOLUTION_MODE` controls how effective permissions are resolved during the migration from fixed employee roles to scoped RBAC:
+
+- `dual`: default migration mode. Legacy employee roles and scoped RBAC grants are both evaluated.
+- `scoped`: target mode. Only tenant roles, role bindings and direct grants are evaluated.
+- `legacy`: rollback mode. Only fixed employee roles are evaluated while scoped RBAC data is ignored.
+
+Rollout should start in `dual`, switch a deployment to `scoped` only after role backfill and access tests pass, and use `legacy` only as a temporary rollback while scoped RBAC data or migration defects are corrected.
+
 ## Client App Distribution
 
 - Web/PWA is deployed with the web application.

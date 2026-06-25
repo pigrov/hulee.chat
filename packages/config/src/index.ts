@@ -9,6 +9,7 @@ export const defaultLocalDatabaseUrl =
 
 export type RuntimeEnvironment = "development" | "test" | "production";
 export type HuleeAppName = "api" | "web" | "worker";
+export type RbacResolutionMode = "scoped" | "dual" | "legacy";
 
 export type EnvSource = Record<string, string | undefined>;
 
@@ -38,6 +39,7 @@ export type BaseAppConfig = {
   nodeEnv: RuntimeEnvironment;
   deploymentType: DeploymentType;
   logLevel: LogLevel;
+  rbacResolutionMode: RbacResolutionMode;
   databaseUrl: string;
   secretEncryptionKey?: string;
 };
@@ -81,6 +83,7 @@ const deploymentTypeSchema = z.enum([
 ]);
 
 const logLevelSchema = z.enum(["debug", "info", "warn", "error"]);
+const rbacResolutionModeSchema = z.enum(["scoped", "dual", "legacy"]);
 
 const emptyToUndefined = (value: unknown): unknown => {
   if (typeof value === "string" && value.trim() === "") {
@@ -133,6 +136,10 @@ const baseEnvSchema = z.object({
     deploymentTypeSchema.optional()
   ),
   HULEE_LOG_LEVEL: z.preprocess(emptyToUndefined, logLevelSchema.optional()),
+  HULEE_RBAC_RESOLUTION_MODE: z.preprocess(
+    emptyToUndefined,
+    rbacResolutionModeSchema.optional()
+  ),
   DATABASE_URL: optionalUrl,
   HULEE_SECRET_ENCRYPTION_KEY: optionalNonEmptyString
 });
@@ -168,6 +175,7 @@ const issueMessages: Record<string, string> = {
   NODE_ENV: "must be development, test or production",
   HULEE_DEPLOYMENT_TYPE: "must be saas_shared, saas_isolated or on_prem",
   HULEE_LOG_LEVEL: "must be debug, info, warn or error",
+  HULEE_RBAC_RESOLUTION_MODE: "must be scoped, dual or legacy",
   DATABASE_URL: "must be a valid URL and is required in production",
   HULEE_SECRET_ENCRYPTION_KEY:
     "must be a base64, hex or 32-byte UTF-8 encryption key",
@@ -225,6 +233,7 @@ function buildBaseConfig(
     nodeEnv,
     deploymentType: env.HULEE_DEPLOYMENT_TYPE ?? "on_prem",
     logLevel: env.HULEE_LOG_LEVEL ?? "info",
+    rbacResolutionMode: env.HULEE_RBAC_RESOLUTION_MODE ?? "dual",
     databaseUrl: env.DATABASE_URL ?? defaultLocalDatabaseUrl,
     secretEncryptionKey: env.HULEE_SECRET_ENCRYPTION_KEY
   };
