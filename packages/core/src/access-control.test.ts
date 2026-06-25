@@ -1,3 +1,5 @@
+import { performance } from "node:perf_hooks";
+
 import type {
   ClientId,
   ConversationId,
@@ -25,6 +27,7 @@ const tenantId = "tenant-1" as TenantId;
 const otherTenantId = "tenant-2" as TenantId;
 const employeeId = "employee-1" as EmployeeId;
 const otherEmployeeId = "employee-2" as EmployeeId;
+const resolverPerformanceBudgetMs = 1_000;
 
 const actor: PermissionActor = {
   tenantId,
@@ -243,6 +246,36 @@ describe("access-control", () => {
         ]
       })
     ).toThrow(new CoreError("validation.failed"));
+  });
+
+  it("resolves tenant-sized access sources within the latency budget", () => {
+    const fixture = largeTenantRbacFixture();
+    const startedAt = performance.now();
+
+    const grants = resolveEffectivePermissionGrants({
+      actor: fixture.actor,
+      roles: fixture.roles,
+      roleBindings: fixture.roleBindings,
+      directGrants: fixture.directGrants,
+      at: "2026-06-23T10:00:00.000Z"
+    });
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(grants.length).toBeGreaterThan(2_500);
+    expect(elapsedMs).toBeLessThan(resolverPerformanceBudgetMs);
+    expect(
+      canAccess({
+        actor: fixture.actor,
+        permission: "client.view",
+        resource: resource({
+          clientId: "client-400" as ClientId
+        }),
+        effectiveGrants: grants
+      })
+    ).toMatchObject({
+      allowed: true,
+      reason: "allowed"
+    });
   });
 
   it("allows access for every supported scope type", () => {
@@ -491,4 +524,138 @@ function resource(
     tenantId,
     ...overrides
   };
+}
+
+function largeTenantRbacFixture(): {
+  readonly actor: PermissionActor;
+  readonly roles: readonly PermissionRoleDefinition[];
+  readonly roleBindings: readonly PermissionRoleBinding[];
+  readonly directGrants: readonly DirectPermissionGrant[];
+} {
+  const orgUnitIds = rangeIds("org", 60);
+  const teamIds = rangeIds("team", 120);
+  const queueIds = rangeIds("queue", 300);
+  const performanceActor: PermissionActor = {
+    ...actor,
+    orgUnitIds,
+    teamIds,
+    queueIds
+  };
+  const permissionSets: readonly (readonly Permission[])[] = [
+    [
+      "inbox.read",
+      "message.reply",
+      "conversation.read",
+      "client.view",
+      "files.view"
+    ],
+    ["conversation.assign", "lead.classify", "lead.qualify", "reports.view"],
+    ["client.edit", "client.contacts.view", "files.upload"]
+  ];
+  const roles = Array.from({ length: 120 }, (_, index) => ({
+    id: `role-large-${index}`,
+    tenantId,
+    permissions: permissionSets[index % permissionSets.length] ?? []
+  }));
+  const roleBindings = Array.from({ length: 2_400 }, (_, index) =>
+    largeTenantRoleBinding({
+      roleId: roles[index % roles.length]?.id ?? roles[0]?.id ?? "role-large-0",
+      index,
+      orgUnitIds,
+      teamIds,
+      queueIds
+    })
+  );
+  const directGrants = Array.from({ length: 2_000 }, (_, index) =>
+    index % 2 === 0
+      ? directGrant({
+          id: `grant-client-${index}`,
+          permission: "client.view",
+          scope: {
+            type: "client",
+            id: `client-${index}`
+          },
+          reason: "large tenant fixture"
+        })
+      : directGrant({
+          id: `grant-conversation-${index}`,
+          permission: "conversation.read",
+          scope: {
+            type: "conversation",
+            id: `conversation-${index}`
+          },
+          reason: "large tenant fixture"
+        })
+  );
+
+  return {
+    actor: performanceActor,
+    roles,
+    roleBindings,
+    directGrants
+  };
+}
+
+function largeTenantRoleBinding(input: {
+  readonly roleId: string;
+  readonly index: number;
+  readonly orgUnitIds: readonly string[];
+  readonly teamIds: readonly string[];
+  readonly queueIds: readonly string[];
+}): PermissionRoleBinding {
+  if (input.index % 3 === 0) {
+    const queueId =
+      input.queueIds[input.index % input.queueIds.length] ?? "queue-0";
+    return {
+      id: `binding-queue-${input.index}`,
+      tenantId,
+      roleId: input.roleId,
+      subject: {
+        type: "queue",
+        id: queueId
+      },
+      scope: {
+        type: "queue",
+        id: queueId
+      }
+    };
+  }
+
+  if (input.index % 3 === 1) {
+    const teamId =
+      input.teamIds[input.index % input.teamIds.length] ?? "team-0";
+    return {
+      id: `binding-team-${input.index}`,
+      tenantId,
+      roleId: input.roleId,
+      subject: {
+        type: "team",
+        id: teamId
+      },
+      scope: {
+        type: "team",
+        id: teamId
+      }
+    };
+  }
+
+  const orgUnitId =
+    input.orgUnitIds[input.index % input.orgUnitIds.length] ?? "org-0";
+  return {
+    id: `binding-org-${input.index}`,
+    tenantId,
+    roleId: input.roleId,
+    subject: {
+      type: "org_unit",
+      id: orgUnitId
+    },
+    scope: {
+      type: "org_unit",
+      id: orgUnitId
+    }
+  };
+}
+
+function rangeIds(prefix: string, count: number): readonly string[] {
+  return Array.from({ length: count }, (_, index) => `${prefix}-${index}`);
 }
