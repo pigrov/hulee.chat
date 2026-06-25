@@ -16,13 +16,24 @@ vi.mock("./web-config", () => ({
 
 import { buildInternalApiHeaders } from "./session";
 import {
+  archiveRbacRole,
+  createRbacDirectGrant,
+  createRbacRole,
+  createRbacRoleBinding,
   deleteTelegramWebhook,
+  loadRbacDirectGrants,
+  loadRbacRoleBindings,
+  loadRbacRoles,
   loadTenantBrand,
   loadInboxViewModel,
   loadTelegramIntegration,
   refreshTelegramDiagnostics,
+  restoreRbacRole,
+  revokeRbacDirectGrant,
+  revokeRbacRoleBinding,
   sendInboxReply,
   setTelegramWebhook,
+  updateRbacRole,
   updateInboxConversationRouting,
   updateTelegramIntegration,
   updateTenantBrand
@@ -246,8 +257,164 @@ describe("inbox API client", () => {
         effectivePermissionOverride: "modules.manage"
       } as never)
     ).rejects.toEqual(new CoreError("permission.denied"));
+    await expect(
+      loadRbacRoles({
+        effectivePermissionOverride: "tenant.manage"
+      } as never)
+    ).rejects.toEqual(new CoreError("permission.denied"));
     expect(buildInternalApiHeaders).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("passes explicit effective permission override for RBAC admin clients", async () => {
+    const rolesManageOptions = {
+      effectivePermissionOverride: "roles.manage" as const
+    };
+    const fetchMock = vi.fn<typeof fetch>(async (url, request) => {
+      return Response.json(
+        rbacResponseForRequest(String(url), request?.method ?? "GET")
+      );
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await loadRbacRoles(rolesManageOptions);
+    await createRbacRole(
+      {
+        name: "Sales",
+        description: "Sales team",
+        permissions: ["client.view"]
+      },
+      rolesManageOptions
+    );
+    await updateRbacRole(
+      "role-sales",
+      {
+        name: "Sales custom",
+        description: undefined,
+        permissions: ["client.view", "message.reply"]
+      },
+      rolesManageOptions
+    );
+    await archiveRbacRole("role-sales", rolesManageOptions);
+    await restoreRbacRole("role-sales", rolesManageOptions);
+    await loadRbacRoleBindings(rolesManageOptions);
+    await createRbacRoleBinding(
+      {
+        roleId: "role-sales",
+        subject: {
+          type: "employee",
+          id: "employee-2"
+        },
+        scope: {
+          type: "tenant"
+        }
+      },
+      rolesManageOptions
+    );
+    await revokeRbacRoleBinding("binding-sales", rolesManageOptions);
+    await loadRbacDirectGrants(rolesManageOptions);
+    await createRbacDirectGrant(
+      {
+        employeeId: "employee-2",
+        permission: "client.view",
+        scope: {
+          type: "tenant"
+        },
+        reason: "Temporary sales handoff"
+      },
+      rolesManageOptions
+    );
+    await revokeRbacDirectGrant("grant-client", rolesManageOptions);
+
+    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(1, {
+      method: "GET",
+      path: "/internal/v1/rbac/roles",
+      effectivePermissionOverride: "roles.manage"
+    });
+    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(2, {
+      method: "POST",
+      path: "/internal/v1/rbac/roles",
+      body: {
+        name: "Sales",
+        description: "Sales team",
+        permissions: ["client.view"]
+      },
+      effectivePermissionOverride: "roles.manage"
+    });
+    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(3, {
+      method: "PATCH",
+      path: "/internal/v1/rbac/roles/role-sales",
+      body: {
+        name: "Sales custom",
+        description: undefined,
+        permissions: ["client.view", "message.reply"]
+      },
+      effectivePermissionOverride: "roles.manage"
+    });
+    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(4, {
+      method: "POST",
+      path: "/internal/v1/rbac/roles/role-sales/archive",
+      effectivePermissionOverride: "roles.manage"
+    });
+    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(5, {
+      method: "POST",
+      path: "/internal/v1/rbac/roles/role-sales/restore",
+      effectivePermissionOverride: "roles.manage"
+    });
+    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(6, {
+      method: "GET",
+      path: "/internal/v1/rbac/role-bindings",
+      effectivePermissionOverride: "roles.manage"
+    });
+    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(7, {
+      method: "POST",
+      path: "/internal/v1/rbac/role-bindings",
+      body: {
+        roleId: "role-sales",
+        subject: {
+          type: "employee",
+          id: "employee-2"
+        },
+        scope: {
+          type: "tenant"
+        }
+      },
+      effectivePermissionOverride: "roles.manage"
+    });
+    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(8, {
+      method: "DELETE",
+      path: "/internal/v1/rbac/role-bindings/binding-sales",
+      effectivePermissionOverride: "roles.manage"
+    });
+    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(9, {
+      method: "GET",
+      path: "/internal/v1/rbac/direct-grants",
+      effectivePermissionOverride: "roles.manage"
+    });
+    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(10, {
+      method: "POST",
+      path: "/internal/v1/rbac/direct-grants",
+      body: {
+        employeeId: "employee-2",
+        permission: "client.view",
+        scope: {
+          type: "tenant"
+        },
+        reason: "Temporary sales handoff"
+      },
+      effectivePermissionOverride: "roles.manage"
+    });
+    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(11, {
+      method: "DELETE",
+      path: "/internal/v1/rbac/direct-grants/grant-client",
+      effectivePermissionOverride: "roles.manage"
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
+      name: "Sales",
+      description: "Sales team",
+      permissions: ["client.view"]
+    });
   });
 
   it("passes explicit effective permission override when updating tenant brand", async () => {
@@ -372,5 +539,123 @@ function tenantBrandResponse(): unknown {
       },
       links: {}
     }
+  };
+}
+
+function rbacResponseForRequest(url: string, method: string): unknown {
+  const path = new URL(url).pathname;
+
+  if (path === "/internal/v1/rbac/roles" && method === "GET") {
+    return {
+      roles: [rbacRoleResponse()]
+    };
+  }
+
+  if (path === "/internal/v1/rbac/roles" && method === "POST") {
+    return {
+      role: rbacRoleResponse({ name: "Sales" })
+    };
+  }
+
+  if (path === "/internal/v1/rbac/roles/role-sales" && method === "PATCH") {
+    return {
+      role: rbacRoleResponse({ name: "Sales custom" })
+    };
+  }
+
+  if (
+    (path === "/internal/v1/rbac/roles/role-sales/archive" ||
+      path === "/internal/v1/rbac/roles/role-sales/restore") &&
+    method === "POST"
+  ) {
+    return {
+      role: rbacRoleResponse()
+    };
+  }
+
+  if (path === "/internal/v1/rbac/role-bindings" && method === "GET") {
+    return {
+      roleBindings: []
+    };
+  }
+
+  if (path === "/internal/v1/rbac/role-bindings" && method === "POST") {
+    return {
+      roleBinding: rbacRoleBindingResponse()
+    };
+  }
+
+  if (
+    path === "/internal/v1/rbac/role-bindings/binding-sales" &&
+    method === "DELETE"
+  ) {
+    return {
+      revoked: true
+    };
+  }
+
+  if (path === "/internal/v1/rbac/direct-grants" && method === "GET") {
+    return {
+      directGrants: []
+    };
+  }
+
+  if (path === "/internal/v1/rbac/direct-grants" && method === "POST") {
+    return {
+      directGrant: rbacDirectGrantResponse()
+    };
+  }
+
+  if (
+    path === "/internal/v1/rbac/direct-grants/grant-client" &&
+    method === "DELETE"
+  ) {
+    return {
+      revoked: true
+    };
+  }
+
+  throw new Error(`Unexpected RBAC request ${method} ${path}.`);
+}
+
+function rbacRoleResponse(
+  overrides: {
+    readonly name?: string;
+  } = {}
+): unknown {
+  return {
+    id: "role-sales",
+    name: overrides.name ?? "Sales",
+    description: "Sales team",
+    status: "active",
+    isSystem: false,
+    permissions: ["client.view"],
+    createdByEmployeeId: null
+  };
+}
+
+function rbacRoleBindingResponse(): unknown {
+  return {
+    id: "binding-sales",
+    roleId: "role-sales",
+    subject: {
+      type: "employee",
+      id: "employee-2"
+    },
+    scope: {
+      type: "tenant"
+    }
+  };
+}
+
+function rbacDirectGrantResponse(): unknown {
+  return {
+    id: "grant-client",
+    employeeId: "employee-2",
+    permission: "client.view",
+    scope: {
+      type: "tenant"
+    },
+    reason: "Temporary sales handoff"
   };
 }

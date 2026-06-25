@@ -3,6 +3,16 @@ import {
   internalInboxConversationRoutingUpdateResponseSchema,
   internalInboxReplyResponseSchema,
   internalInboxViewResponseSchema,
+  internalRbacDirectGrantCreateRequestSchema,
+  internalRbacDirectGrantResponseSchema,
+  internalRbacDirectGrantsResponseSchema,
+  internalRbacRevokeResponseSchema,
+  internalRbacRoleBindingCreateRequestSchema,
+  internalRbacRoleBindingResponseSchema,
+  internalRbacRoleBindingsResponseSchema,
+  internalRbacRoleMutationRequestSchema,
+  internalRbacRoleResponseSchema,
+  internalRbacRolesResponseSchema,
   internalTenantBrandResponseSchema,
   internalTenantBrandUpdateRequestSchema,
   internalTelegramIntegrationResponseSchema,
@@ -13,6 +23,16 @@ import {
   type InternalInboxMessage,
   type InternalInboxReplyResponse,
   type InternalInboxViewResponse,
+  type InternalRbacDirectGrantCreateRequest,
+  type InternalRbacDirectGrantResponse,
+  type InternalRbacDirectGrantsResponse,
+  type InternalRbacRevokeResponse,
+  type InternalRbacRoleBindingCreateRequest,
+  type InternalRbacRoleBindingResponse,
+  type InternalRbacRoleBindingsResponse,
+  type InternalRbacRoleMutationRequest,
+  type InternalRbacRoleResponse,
+  type InternalRbacRolesResponse,
   type InternalTenantBrandResponse,
   type InternalTenantBrandUpdateRequest,
   type InternalTelegramIntegrationResponse,
@@ -29,6 +49,9 @@ export type InboxMessage = InternalInboxMessage;
 export type InboxViewModel = InternalInboxViewResponse;
 export type TenantBrandViewModel = InternalTenantBrandResponse;
 export type TelegramIntegrationViewModel = InternalTelegramIntegrationResponse;
+export type RbacRolesViewModel = InternalRbacRolesResponse;
+export type RbacRoleBindingsViewModel = InternalRbacRoleBindingsResponse;
+export type RbacDirectGrantsViewModel = InternalRbacDirectGrantsResponse;
 export type InternalApiAccessOptions<
   TPermission extends Permission = Permission
 > = {
@@ -148,6 +171,162 @@ export async function updateInboxConversationRouting(input: {
   return internalInboxConversationRoutingUpdateResponseSchema.parse(
     await response.json()
   );
+}
+
+export async function loadRbacRoles(
+  options: InternalApiAccessOptions<"roles.manage">
+): Promise<RbacRolesViewModel> {
+  return requestInternalApiJson({
+    method: "GET",
+    path: "/internal/v1/rbac/roles",
+    schema: internalRbacRolesResponseSchema,
+    errorPrefix: "Internal RBAC roles API returned",
+    options,
+    permission: "roles.manage"
+  });
+}
+
+export async function createRbacRole(
+  input: InternalRbacRoleMutationRequest,
+  options: InternalApiAccessOptions<"roles.manage">
+): Promise<InternalRbacRoleResponse> {
+  return requestInternalApiJson({
+    method: "POST",
+    path: "/internal/v1/rbac/roles",
+    body: internalRbacRoleMutationRequestSchema.parse(input),
+    schema: internalRbacRoleResponseSchema,
+    errorPrefix: "Internal RBAC role create API returned",
+    options,
+    permission: "roles.manage"
+  });
+}
+
+export async function updateRbacRole(
+  roleId: string,
+  input: InternalRbacRoleMutationRequest,
+  options: InternalApiAccessOptions<"roles.manage">
+): Promise<InternalRbacRoleResponse> {
+  return requestInternalApiJson({
+    method: "PATCH",
+    path: `/internal/v1/rbac/roles/${encodeURIComponent(roleId)}`,
+    body: internalRbacRoleMutationRequestSchema.parse(input),
+    schema: internalRbacRoleResponseSchema,
+    errorPrefix: "Internal RBAC role update API returned",
+    options,
+    permission: "roles.manage"
+  });
+}
+
+export async function archiveRbacRole(
+  roleId: string,
+  options: InternalApiAccessOptions<"roles.manage">
+): Promise<InternalRbacRoleResponse> {
+  return requestInternalApiJson({
+    method: "POST",
+    path: `/internal/v1/rbac/roles/${encodeURIComponent(roleId)}/archive`,
+    schema: internalRbacRoleResponseSchema,
+    errorPrefix: "Internal RBAC role archive API returned",
+    options,
+    permission: "roles.manage"
+  });
+}
+
+export async function restoreRbacRole(
+  roleId: string,
+  options: InternalApiAccessOptions<"roles.manage">
+): Promise<InternalRbacRoleResponse> {
+  return requestInternalApiJson({
+    method: "POST",
+    path: `/internal/v1/rbac/roles/${encodeURIComponent(roleId)}/restore`,
+    schema: internalRbacRoleResponseSchema,
+    errorPrefix: "Internal RBAC role restore API returned",
+    options,
+    permission: "roles.manage"
+  });
+}
+
+export async function loadRbacRoleBindings(
+  options: InternalApiAccessOptions<"roles.manage">
+): Promise<RbacRoleBindingsViewModel> {
+  return requestInternalApiJson({
+    method: "GET",
+    path: "/internal/v1/rbac/role-bindings",
+    schema: internalRbacRoleBindingsResponseSchema,
+    errorPrefix: "Internal RBAC role bindings API returned",
+    options,
+    permission: "roles.manage"
+  });
+}
+
+export async function createRbacRoleBinding(
+  input: InternalRbacRoleBindingCreateRequest,
+  options: InternalApiAccessOptions<"roles.manage">
+): Promise<InternalRbacRoleBindingResponse> {
+  return requestInternalApiJson({
+    method: "POST",
+    path: "/internal/v1/rbac/role-bindings",
+    body: internalRbacRoleBindingCreateRequestSchema.parse(input),
+    schema: internalRbacRoleBindingResponseSchema,
+    errorPrefix: "Internal RBAC role binding create API returned",
+    options,
+    permission: "roles.manage"
+  });
+}
+
+export async function revokeRbacRoleBinding(
+  bindingId: string,
+  options: InternalApiAccessOptions<"roles.manage">
+): Promise<InternalRbacRevokeResponse> {
+  return requestInternalApiJson({
+    method: "DELETE",
+    path: `/internal/v1/rbac/role-bindings/${encodeURIComponent(bindingId)}`,
+    schema: internalRbacRevokeResponseSchema,
+    errorPrefix: "Internal RBAC role binding revoke API returned",
+    options,
+    permission: "roles.manage"
+  });
+}
+
+export async function loadRbacDirectGrants(
+  options: InternalApiAccessOptions<"roles.manage">
+): Promise<RbacDirectGrantsViewModel> {
+  return requestInternalApiJson({
+    method: "GET",
+    path: "/internal/v1/rbac/direct-grants",
+    schema: internalRbacDirectGrantsResponseSchema,
+    errorPrefix: "Internal RBAC direct grants API returned",
+    options,
+    permission: "roles.manage"
+  });
+}
+
+export async function createRbacDirectGrant(
+  input: InternalRbacDirectGrantCreateRequest,
+  options: InternalApiAccessOptions<"roles.manage">
+): Promise<InternalRbacDirectGrantResponse> {
+  return requestInternalApiJson({
+    method: "POST",
+    path: "/internal/v1/rbac/direct-grants",
+    body: internalRbacDirectGrantCreateRequestSchema.parse(input),
+    schema: internalRbacDirectGrantResponseSchema,
+    errorPrefix: "Internal RBAC direct grant create API returned",
+    options,
+    permission: "roles.manage"
+  });
+}
+
+export async function revokeRbacDirectGrant(
+  grantId: string,
+  options: InternalApiAccessOptions<"roles.manage">
+): Promise<InternalRbacRevokeResponse> {
+  return requestInternalApiJson({
+    method: "DELETE",
+    path: `/internal/v1/rbac/direct-grants/${encodeURIComponent(grantId)}`,
+    schema: internalRbacRevokeResponseSchema,
+    errorPrefix: "Internal RBAC direct grant revoke API returned",
+    options,
+    permission: "roles.manage"
+  });
 }
 
 export async function loadTenantBrand(
@@ -345,6 +524,55 @@ async function postTelegramIntegrationCommand(
   }
 
   return internalTelegramIntegrationResponseSchema.parse(await response.json());
+}
+
+type InternalApiResponseSchema<TResponse> = {
+  parse(value: unknown): TResponse;
+};
+
+async function requestInternalApiJson<
+  TResponse,
+  TPermission extends Permission
+>(input: {
+  readonly method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
+  readonly path: string;
+  readonly body?: unknown;
+  readonly schema: InternalApiResponseSchema<TResponse>;
+  readonly errorPrefix: string;
+  readonly options: InternalApiAccessOptions<TPermission>;
+  readonly permission: TPermission;
+}): Promise<TResponse> {
+  const url = new URL(input.path, resolveInternalApiBaseUrl());
+  const body =
+    input.body === undefined ? undefined : JSON.stringify(input.body);
+  const response = await fetch(url, {
+    method: input.method,
+    cache: "no-store",
+    headers: {
+      ...(await buildInternalApiHeaders({
+        method: input.method,
+        path: internalPath(url),
+        body: input.body,
+        effectivePermissionOverride: requireEffectivePermissionOverride(
+          input.options,
+          input.permission
+        )
+      })),
+      ...(body === undefined
+        ? {}
+        : { "content-type": "application/json; charset=utf-8" })
+    },
+    body
+  });
+
+  if (!response.ok) {
+    await throwInternalApiErrorResponse({
+      response,
+      message: input.errorPrefix
+    });
+  }
+
+  return input.schema.parse(await response.json());
 }
 
 function resolveInternalApiBaseUrl(): string {

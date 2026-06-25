@@ -1,10 +1,6 @@
 import type { EmployeeId, TenantId } from "@hulee/contracts";
-import type {
-  DirectPermissionGrant,
-  Permission,
-  PermissionRoleBinding
-} from "@hulee/core";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { CoreError } from "@hulee/core";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
   const redirect = vi.fn((destination: string) => {
@@ -12,31 +8,21 @@ const mocks = vi.hoisted(() => {
   });
 
   return {
-    appendDomainEvent: vi.fn(),
-    assertCurrentWebEffectiveTenantPermission: vi.fn(),
+    archiveRbacRole: vi.fn(),
     assertWebActionRequest: vi.fn(),
-    createDirectGrant: vi.fn(),
-    createRoleBinding: vi.fn(),
-    createRoleWithPermissions: vi.fn(),
-    createSqlDomainEventRepository: vi.fn(),
-    createSqlEmployeeDirectoryRepository: vi.fn(),
-    createSqlOrgStructureRepository: vi.fn(),
-    createSqlSecurityAuditRepository: vi.fn(),
-    createSqlTenantRbacRepository: vi.fn(),
-    findEmployee: vi.fn(),
-    getWebDatabase: vi.fn(),
+    assertWebDbBackedAdminCommandBoundary: vi.fn(),
+    createRbacDirectGrant: vi.fn(),
+    createRbacRole: vi.fn(),
+    createRbacRoleBinding: vi.fn(),
     isEmailNotVerifiedError: vi.fn(),
-    listDirectGrants: vi.fn(),
-    listDirectGrantsForEmployee: vi.fn(),
-    listOrgUnits: vi.fn(),
-    listRoleBindings: vi.fn(),
-    listRoleDefinitions: vi.fn(),
-    listTeams: vi.fn(),
-    listWorkQueues: vi.fn(),
-    recordSecurityAudit: vi.fn(),
+    isPrivilegedActionReauthRequiredError: vi.fn(),
+    loadRbacRoles: vi.fn(),
     redirect,
+    restoreRbacRole: vi.fn(),
     revalidatePath: vi.fn(),
-    revokeDirectGrant: vi.fn()
+    revokeRbacDirectGrant: vi.fn(),
+    revokeRbacRoleBinding: vi.fn(),
+    updateRbacRole: vi.fn()
   };
 });
 
@@ -52,25 +38,45 @@ vi.mock("./action-security", () => ({
   assertWebActionRequest: mocks.assertWebActionRequest
 }));
 
+vi.mock("./inbox-api-client", () => ({
+  archiveRbacRole: mocks.archiveRbacRole,
+  createRbacDirectGrant: mocks.createRbacDirectGrant,
+  createRbacRole: mocks.createRbacRole,
+  createRbacRoleBinding: mocks.createRbacRoleBinding,
+  loadRbacRoles: mocks.loadRbacRoles,
+  restoreRbacRole: mocks.restoreRbacRole,
+  revokeRbacDirectGrant: mocks.revokeRbacDirectGrant,
+  revokeRbacRoleBinding: mocks.revokeRbacRoleBinding,
+  updateRbacRole: mocks.updateRbacRole
+}));
+
+vi.mock("./privileged-action-policy", () => ({
+  isPrivilegedActionReauthRequiredError:
+    mocks.isPrivilegedActionReauthRequiredError
+}));
+
 vi.mock("./session", () => ({
-  assertCurrentWebEffectiveTenantPermission:
-    mocks.assertCurrentWebEffectiveTenantPermission,
-  getWebDatabase: mocks.getWebDatabase,
   isEmailNotVerifiedError: mocks.isEmailNotVerifiedError
 }));
 
-vi.mock("@hulee/db", () => ({
-  createSqlDomainEventRepository: mocks.createSqlDomainEventRepository,
-  createSqlEmployeeDirectoryRepository:
-    mocks.createSqlEmployeeDirectoryRepository,
-  createSqlOrgStructureRepository: mocks.createSqlOrgStructureRepository,
-  createSqlSecurityAuditRepository: mocks.createSqlSecurityAuditRepository,
-  createSqlTenantRbacRepository: mocks.createSqlTenantRbacRepository
+vi.mock("./web-admin-command-boundary", () => ({
+  assertWebDbBackedAdminCommandBoundary:
+    mocks.assertWebDbBackedAdminCommandBoundary,
+  webDbBackedAdminCommandBoundaries: {
+    roleAccess: {
+      permission: "roles.manage",
+      requireVerifiedEmail: true,
+      requireRecentSession: true
+    }
+  }
 }));
 
 const tenantId = "tenant-test" as TenantId;
 const adminEmployeeId = "employee-admin" as EmployeeId;
 const targetEmployeeId = "employee-agent" as EmployeeId;
+const rolesManageOptions = {
+  effectivePermissionOverride: "roles.manage"
+};
 
 describe("role management actions", () => {
   beforeEach(() => {
@@ -80,7 +86,7 @@ describe("role management actions", () => {
       throw Object.assign(new Error("NEXT_REDIRECT"), { destination });
     });
     mocks.assertWebActionRequest.mockResolvedValue(undefined);
-    mocks.assertCurrentWebEffectiveTenantPermission.mockResolvedValue({
+    mocks.assertWebDbBackedAdminCommandBoundary.mockResolvedValue({
       tenantId,
       tenantSlug: "local",
       employeeId: adminEmployeeId,
@@ -89,40 +95,38 @@ describe("role management actions", () => {
       permissions: ["roles.manage"],
       platformRoles: []
     });
-    mocks.getWebDatabase.mockReturnValue({ kind: "database" });
     mocks.isEmailNotVerifiedError.mockReturnValue(false);
-    mocks.createSqlTenantRbacRepository.mockReturnValue(rbacRepository());
-    mocks.createSqlEmployeeDirectoryRepository.mockReturnValue(
-      employeeRepository()
-    );
-    mocks.createSqlOrgStructureRepository.mockReturnValue(
-      orgStructureRepository()
-    );
-    mocks.createSqlSecurityAuditRepository.mockReturnValue({
-      record: mocks.recordSecurityAudit
+    mocks.isPrivilegedActionReauthRequiredError.mockReturnValue(false);
+    mocks.loadRbacRoles.mockResolvedValue({
+      roles: [roleResponse({ id: "role-sales", name: "Sales" })]
     });
-    mocks.createSqlDomainEventRepository.mockReturnValue({
-      append: mocks.appendDomainEvent
+    mocks.createRbacRole.mockResolvedValue({
+      role: roleResponse({ id: "role-custom", name: "Custom role" })
     });
-    mocks.createRoleWithPermissions.mockResolvedValue(undefined);
-    mocks.createRoleBinding.mockResolvedValue(undefined);
-    mocks.createDirectGrant.mockResolvedValue(undefined);
-    mocks.revokeDirectGrant.mockResolvedValue(undefined);
-    mocks.listRoleDefinitions.mockResolvedValue([salesRole(), adminRole()]);
-    mocks.listRoleBindings.mockResolvedValue([adminRoleBinding()]);
-    mocks.listDirectGrants.mockResolvedValue([clientDirectGrant()]);
-    mocks.listDirectGrantsForEmployee.mockResolvedValue([]);
-    mocks.findEmployee.mockImplementation(
-      async (input: { employeeId: EmployeeId }) => employee(input.employeeId)
-    );
-    mocks.listOrgUnits.mockResolvedValue([]);
-    mocks.listTeams.mockResolvedValue([]);
-    mocks.listWorkQueues.mockResolvedValue([]);
-    mocks.recordSecurityAudit.mockResolvedValue(undefined);
-    mocks.appendDomainEvent.mockResolvedValue(undefined);
+    mocks.updateRbacRole.mockResolvedValue({
+      role: roleResponse({ id: "role-sales", name: "Sales custom" })
+    });
+    mocks.archiveRbacRole.mockResolvedValue({
+      role: roleResponse({
+        id: "role-sales",
+        name: "Sales",
+        status: "archived"
+      })
+    });
+    mocks.restoreRbacRole.mockResolvedValue({
+      role: roleResponse({ id: "role-sales", name: "Sales" })
+    });
+    mocks.createRbacRoleBinding.mockResolvedValue({
+      roleBinding: roleBindingResponse()
+    });
+    mocks.revokeRbacRoleBinding.mockResolvedValue({ revoked: true });
+    mocks.createRbacDirectGrant.mockResolvedValue({
+      directGrant: directGrantResponse()
+    });
+    mocks.revokeRbacDirectGrant.mockResolvedValue({ revoked: true });
   });
 
-  it("creates a custom role from permission catalog form fields", async () => {
+  it("creates a custom role through the internal RBAC API", async () => {
     const { createCustomTenantRoleAction } = await import("./role-actions");
 
     await expectRedirect(
@@ -136,38 +140,93 @@ describe("role management actions", () => {
       "/admin/roles?roleActionStatus=created"
     );
 
-    expect(mocks.createRoleWithPermissions).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tenantId,
+    expect(mocks.assertWebDbBackedAdminCommandBoundary).toHaveBeenCalledWith({
+      permission: "roles.manage",
+      requireVerifiedEmail: true,
+      requireRecentSession: true
+    });
+    expect(mocks.createRbacRole).toHaveBeenCalledWith(
+      {
         name: "Sales custom",
         description: "Sales scoped permissions",
-        isSystem: false,
-        createdByEmployeeId: adminEmployeeId,
         permissions: ["client.view", "message.reply"]
-      })
+      },
+      rolesManageOptions
     );
-    expect(mocks.recordSecurityAudit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tenantId,
-        actorEmployeeId: adminEmployeeId,
-        action: "role.created",
-        entityType: "role"
-      })
+    expectRoleAdminRevalidation();
+  });
+
+  it("creates a role from a system template through the internal RBAC API", async () => {
+    const { createRoleFromTemplateAction } = await import("./role-actions");
+
+    await expectRedirect(
+      createRoleFromTemplateAction(
+        formData({
+          templateId: "sales_representative",
+          locale: "en"
+        })
+      ),
+      "/admin/roles?roleActionStatus=template_created"
     );
-    expect(mocks.appendDomainEvent).toHaveBeenCalledWith(
+
+    expect(mocks.loadRbacRoles).toHaveBeenCalledWith(rolesManageOptions);
+    expect(mocks.createRbacRole).toHaveBeenCalledWith(
       expect.objectContaining({
-        tenantId,
-        events: [
-          expect.objectContaining({
-            type: "role.created",
-            tenantId
-          })
-        ]
-      })
+        permissions: expect.arrayContaining(["client.view", "message.reply"])
+      }),
+      rolesManageOptions
     );
   });
 
-  it("assigns an active role to an employee with tenant scope", async () => {
+  it("updates and archives custom roles through the internal RBAC API", async () => {
+    const { archiveCustomTenantRoleAction, updateCustomTenantRoleAction } =
+      await import("./role-actions");
+
+    await expectRedirect(
+      updateCustomTenantRoleAction(
+        formData({
+          roleId: "role-sales",
+          name: "Sales custom",
+          permissions: ["client.view"]
+        })
+      ),
+      "/admin/roles?roleActionStatus=updated"
+    );
+    await expectRedirect(
+      archiveCustomTenantRoleAction(formData({ roleId: "role-sales" })),
+      "/admin/roles?roleActionStatus=archived"
+    );
+
+    expect(mocks.updateRbacRole).toHaveBeenCalledWith(
+      "role-sales",
+      {
+        name: "Sales custom",
+        description: undefined,
+        permissions: ["client.view"]
+      },
+      rolesManageOptions
+    );
+    expect(mocks.archiveRbacRole).toHaveBeenCalledWith(
+      "role-sales",
+      rolesManageOptions
+    );
+  });
+
+  it("restores custom roles through the internal RBAC API", async () => {
+    const { restoreCustomTenantRoleAction } = await import("./role-actions");
+
+    await expectRedirect(
+      restoreCustomTenantRoleAction(formData({ roleId: "role-sales" })),
+      "/admin/roles?roleActionStatus=restored"
+    );
+
+    expect(mocks.restoreRbacRole).toHaveBeenCalledWith(
+      "role-sales",
+      rolesManageOptions
+    );
+  });
+
+  it("assigns active roles through the internal RBAC API", async () => {
     const { assignTenantRoleAction } = await import("./role-actions");
 
     await expectRedirect(
@@ -181,9 +240,8 @@ describe("role management actions", () => {
       "/admin/roles?roleActionStatus=assigned"
     );
 
-    expect(mocks.createRoleBinding).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tenantId,
+    expect(mocks.createRbacRoleBinding).toHaveBeenCalledWith(
+      {
         roleId: "role-sales",
         subject: {
           type: "employee",
@@ -191,24 +249,27 @@ describe("role management actions", () => {
         },
         scope: {
           type: "tenant"
-        },
-        createdByEmployeeId: adminEmployeeId
-      })
-    );
-    expect(mocks.recordSecurityAudit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tenantId,
-        action: "role_binding.created",
-        entityType: "role_binding",
-        metadata: expect.objectContaining({
-          roleId: "role-sales",
-          targetEmployeeId
-        })
-      })
+        }
+      },
+      rolesManageOptions
     );
   });
 
-  it("adds a direct grant with a reason and optional expiry", async () => {
+  it("revokes role bindings through the internal RBAC API", async () => {
+    const { revokeTenantRoleBindingAction } = await import("./role-actions");
+
+    await expectRedirect(
+      revokeTenantRoleBindingAction(formData({ bindingId: "binding-sales" })),
+      "/admin/roles?roleActionStatus=revoked"
+    );
+
+    expect(mocks.revokeRbacRoleBinding).toHaveBeenCalledWith(
+      "binding-sales",
+      rolesManageOptions
+    );
+  });
+
+  it("adds a direct grant through the internal RBAC API", async () => {
     const { createDirectPermissionGrantAction } =
       await import("./role-actions");
 
@@ -225,145 +286,96 @@ describe("role management actions", () => {
       "/admin/roles?roleActionStatus=direct_grant_created"
     );
 
-    expect(mocks.createDirectGrant).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tenantId,
+    expect(mocks.createRbacDirectGrant).toHaveBeenCalledWith(
+      {
         employeeId: targetEmployeeId,
         permission: "client.view",
         scope: {
           type: "tenant"
         },
         reason: "Temporary sales handoff",
-        createdByEmployeeId: adminEmployeeId
-      })
-    );
-    expect(mocks.recordSecurityAudit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tenantId,
-        action: "direct_grant.created",
-        entityType: "direct_grant",
-        metadata: expect.objectContaining({
-          targetEmployeeId,
-          permission: "client.view",
-          reason: "Temporary sales handoff"
-        })
-      })
+        expiresAt: expect.any(String)
+      },
+      rolesManageOptions
     );
   });
 
-  it("revokes an existing direct grant", async () => {
+  it("revokes direct grants through the internal RBAC API", async () => {
     const { revokeDirectPermissionGrantAction } =
       await import("./role-actions");
 
     await expectRedirect(
-      revokeDirectPermissionGrantAction(
-        formData({
-          grantId: "grant-client"
-        })
-      ),
+      revokeDirectPermissionGrantAction(formData({ grantId: "grant-client" })),
       "/admin/roles?roleActionStatus=direct_grant_revoked"
     );
 
-    expect(mocks.revokeDirectGrant).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tenantId,
-        grantId: "grant-client"
-      })
+    expect(mocks.revokeRbacDirectGrant).toHaveBeenCalledWith(
+      "grant-client",
+      rolesManageOptions
     );
-    expect(mocks.recordSecurityAudit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tenantId,
-        action: "direct_grant.revoked",
-        entityType: "direct_grant",
-        entityId: "grant-client",
-        metadata: expect.objectContaining({
-          targetEmployeeId,
-          permission: "client.view"
+  });
+
+  it("maps internal RBAC permission denials to role action status", async () => {
+    const { createCustomTenantRoleAction } = await import("./role-actions");
+    mocks.createRbacRole.mockRejectedValueOnce(
+      new CoreError("permission.denied")
+    );
+
+    await expectRedirect(
+      createCustomTenantRoleAction(
+        formData({
+          name: "Sales custom",
+          permissions: ["client.view"]
         })
-      })
+      ),
+      "/admin/roles?roleActionStatus=permission_denied"
     );
+  });
+
+  it("redirects to email verification when the action boundary requires it", async () => {
+    const { assignTenantRoleAction } = await import("./role-actions");
+    const error = new Error("Email verification required.");
+
+    mocks.assertWebDbBackedAdminCommandBoundary.mockRejectedValueOnce(error);
+    mocks.isEmailNotVerifiedError.mockReturnValueOnce(true);
+
+    await expectRedirect(
+      assignTenantRoleAction(
+        formData({
+          employeeId: targetEmployeeId,
+          roleId: "role-sales",
+          scopeType: "tenant"
+        })
+      ),
+      "/admin/roles?roleActionStatus=email_verification_required"
+    );
+    expect(mocks.createRbacRoleBinding).not.toHaveBeenCalled();
   });
 });
 
-function rbacRepository(): unknown {
-  return {
-    createDirectGrant: mocks.createDirectGrant,
-    createRoleBinding: mocks.createRoleBinding,
-    createRoleWithPermissions: mocks.createRoleWithPermissions,
-    listDirectGrants: mocks.listDirectGrants,
-    listDirectGrantsForEmployee: mocks.listDirectGrantsForEmployee,
-    listRoleBindings: mocks.listRoleBindings,
-    listRoleDefinitions: mocks.listRoleDefinitions,
-    revokeDirectGrant: mocks.revokeDirectGrant
-  };
-}
-
-function employeeRepository(): unknown {
-  return {
-    findEmployee: mocks.findEmployee
-  };
-}
-
-function orgStructureRepository(): unknown {
-  return {
-    listOrgUnits: mocks.listOrgUnits,
-    listTeams: mocks.listTeams,
-    listWorkQueues: mocks.listWorkQueues
-  };
-}
-
-function salesRole(): {
+function roleResponse(input: {
   readonly id: string;
-  readonly tenantId: TenantId;
-  readonly status: "active";
   readonly name: string;
-  readonly description: null;
-  readonly isSystem: boolean;
-  readonly createdByEmployeeId: null;
-  readonly permissions: readonly Permission[];
-} {
+  readonly status?: "active" | "archived";
+}): unknown {
   return {
-    id: "role-sales",
-    tenantId,
-    status: "active",
-    name: "Sales",
+    id: input.id,
+    name: input.name,
     description: null,
+    status: input.status ?? "active",
     isSystem: false,
-    createdByEmployeeId: null,
-    permissions: ["client.view", "message.reply"]
+    permissions: ["client.view"],
+    createdByEmployeeId: adminEmployeeId
   };
 }
 
-function adminRole(): {
-  readonly id: string;
-  readonly tenantId: TenantId;
-  readonly status: "active";
-  readonly name: string;
-  readonly description: null;
-  readonly isSystem: boolean;
-  readonly createdByEmployeeId: null;
-  readonly permissions: readonly Permission[];
-} {
+function roleBindingResponse(): unknown {
   return {
-    id: "role-admin",
-    tenantId,
-    status: "active",
-    name: "Admin",
-    description: null,
-    isSystem: true,
-    createdByEmployeeId: null,
-    permissions: ["roles.manage"]
-  };
-}
-
-function adminRoleBinding(): PermissionRoleBinding {
-  return {
-    id: "binding-admin",
-    tenantId,
-    roleId: "role-admin",
+    id: "binding-sales",
+    roleId: "role-sales",
     subject: {
       type: "employee",
-      id: adminEmployeeId
+      id: targetEmployeeId
     },
     scope: {
       type: "tenant"
@@ -371,10 +383,9 @@ function adminRoleBinding(): PermissionRoleBinding {
   };
 }
 
-function clientDirectGrant(): DirectPermissionGrant {
+function directGrantResponse(): unknown {
   return {
     id: "grant-client",
-    tenantId,
     employeeId: targetEmployeeId,
     permission: "client.view",
     scope: {
@@ -384,29 +395,13 @@ function clientDirectGrant(): DirectPermissionGrant {
   };
 }
 
-function employee(employeeId: EmployeeId): {
-  readonly tenantId: TenantId;
-  readonly employeeId: EmployeeId;
-  readonly email: string;
-  readonly displayName: string;
-  readonly systemRoleTemplateIds: readonly ["tenant_admin"] | readonly [];
-  readonly orgUnitIds: readonly string[];
-  readonly teamIds: readonly string[];
-  readonly queueIds: readonly string[];
-  readonly deactivatedAt: null;
-} {
-  return {
-    tenantId,
-    employeeId,
-    email: `${employeeId}@example.test`,
-    displayName: String(employeeId),
-    systemRoleTemplateIds:
-      employeeId === adminEmployeeId ? ["tenant_admin"] : [],
-    orgUnitIds: [],
-    teamIds: [],
-    queueIds: [],
-    deactivatedAt: null
-  };
+function expectRoleAdminRevalidation(): void {
+  expect(mocks.revalidatePath).toHaveBeenCalledWith("/admin/roles");
+  expect(mocks.revalidatePath).toHaveBeenCalledWith("/admin/employees");
+  expect(mocks.revalidatePath).toHaveBeenCalledWith(
+    "/admin/employees/[employeeId]/access",
+    "page"
+  );
 }
 
 function formData(
