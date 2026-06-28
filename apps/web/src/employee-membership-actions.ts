@@ -24,6 +24,10 @@ import { randomUUID } from "node:crypto";
 
 import { assertWebActionRequest } from "./action-security";
 import type { WebAccessSession } from "./access";
+import {
+  isEmployeeAccessSectionId,
+  type EmployeeAccessSectionId
+} from "./employee-access-sections";
 import { assertCanUpdateEmployeeMemberships } from "./employee-membership-access";
 import { isPrivilegedActionReauthRequiredError } from "./privileged-action-policy";
 import { getWebDatabase, isEmailNotVerifiedError } from "./session";
@@ -41,7 +45,7 @@ export async function setEmployeeOrgUnitMembershipsAction(
     formData,
     "employeeId"
   ) as EmployeeId;
-  const session = await assertVerifiedRolesPermission(employeeId);
+  const session = await assertVerifiedRolesPermission(employeeId, formData);
   const now = new Date();
   let destination = employeeAccessDestination(formData, employeeId, "invalid");
 
@@ -119,7 +123,7 @@ export async function setEmployeeWorkQueueMembershipsAction(
     formData,
     "employeeId"
   ) as EmployeeId;
-  const session = await assertVerifiedRolesPermission(employeeId);
+  const session = await assertVerifiedRolesPermission(employeeId, formData);
   const now = new Date();
   let destination = employeeAccessDestination(formData, employeeId, "invalid");
 
@@ -197,7 +201,7 @@ export async function setEmployeeTeamMembershipsAction(
     formData,
     "employeeId"
   ) as EmployeeId;
-  const session = await assertVerifiedRolesPermission(employeeId);
+  const session = await assertVerifiedRolesPermission(employeeId, formData);
   const now = new Date();
   let destination = employeeAccessDestination(formData, employeeId, "invalid");
 
@@ -265,7 +269,8 @@ export async function setEmployeeTeamMembershipsAction(
 }
 
 async function assertVerifiedRolesPermission(
-  employeeId: EmployeeId
+  employeeId: EmployeeId,
+  formData?: FormData
 ): Promise<WebAccessSession> {
   try {
     return await assertWebDbBackedAdminCommandBoundary(
@@ -274,13 +279,17 @@ async function assertVerifiedRolesPermission(
   } catch (error) {
     if (isEmailNotVerifiedError(error)) {
       redirect(
-        `${employeeAccessPath(employeeId)}?roleActionStatus=email_verification_required`
+        employeeAccessDestination(
+          formData,
+          employeeId,
+          "email_verification_required"
+        )
       );
     }
 
     if (isPrivilegedActionReauthRequiredError(error)) {
       redirect(
-        `${employeeAccessPath(employeeId)}?roleActionStatus=reauth_required`
+        employeeAccessDestination(formData, employeeId, "reauth_required")
       );
     }
 
@@ -432,17 +441,27 @@ function revalidateEmployeeAccessPaths(): void {
 }
 
 function employeeAccessDestination(
-  formData: FormData,
+  formData: FormData | undefined,
   employeeId: EmployeeId,
   status: string
 ): string {
-  const returnTo = readOptionalFormString(formData, "returnTo");
+  const returnTo =
+    formData === undefined
+      ? undefined
+      : readOptionalFormString(formData, "returnTo");
   const path =
     returnTo === employeeAccessPath(employeeId)
       ? returnTo
       : employeeAccessPath(employeeId);
+  const params = new URLSearchParams({ roleActionStatus: status });
+  const section =
+    formData === undefined ? undefined : readEmployeeAccessSection(formData);
 
-  return `${path}?roleActionStatus=${encodeURIComponent(status)}`;
+  if (section !== undefined) {
+    params.set("section", section);
+  }
+
+  return `${path}?${params.toString()}`;
 }
 
 function employeeAccessPath(employeeId: EmployeeId): string {
@@ -470,6 +489,18 @@ function readOptionalFormString(
   }
 
   return value.trim();
+}
+
+function readEmployeeAccessSection(
+  formData: FormData
+): EmployeeAccessSectionId | undefined {
+  const value = readOptionalFormString(formData, "employeeAccessSection");
+
+  if (value === undefined || !isEmployeeAccessSectionId(value)) {
+    return undefined;
+  }
+
+  return value;
 }
 
 function uniqueFormStringList(formData: FormData, name: string): string[] {

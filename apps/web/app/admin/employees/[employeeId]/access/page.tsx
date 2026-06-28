@@ -41,6 +41,10 @@ import type { ReactNode } from "react";
 import { AccessDeniedPage } from "../../../../../src/access-denied";
 import { DetailItem } from "../../../../../src/app-chrome";
 import {
+  isEmployeeAccessSectionId,
+  type EmployeeAccessSectionId
+} from "../../../../../src/employee-access-sections";
+import {
   setEmployeeOrgUnitMembershipsAction,
   setEmployeeTeamMembershipsAction,
   setEmployeeWorkQueueMembershipsAction
@@ -75,6 +79,17 @@ export const runtime = "nodejs";
 
 type Translator = ReturnType<typeof createTranslator>["t"];
 
+type EmployeeAccessSection = {
+  readonly id: EmployeeAccessSectionId;
+  readonly titleKey: I18nMessageKey;
+  readonly descriptionKey: I18nMessageKey;
+  readonly count: number;
+  readonly countKey: I18nMessageKey;
+  readonly secondaryCount?: number;
+  readonly secondaryCountKey?: I18nMessageKey;
+  readonly icon: ReactNode;
+};
+
 const domainOrder = [
   "tenant",
   "employees",
@@ -101,6 +116,7 @@ export default async function EmployeeAccessAdminPage({
   }>;
   searchParams?: Promise<{
     roleActionStatus?: string;
+    section?: string;
   }>;
 }): Promise<ReactNode> {
   const access = await resolveCurrentWebAccessSession();
@@ -249,6 +265,53 @@ export default async function EmployeeAccessAdminPage({
     tenantId: access.tenantId
   });
   const isDeactivated = employee.deactivatedAt !== null;
+  const selectedSection = resolveEmployeeAccessSection(resolvedSearch?.section);
+  const membershipCount =
+    employee.orgUnitIds.length +
+    employee.teamIds.length +
+    employee.queueIds.length;
+  const availableMembershipCount =
+    orgUnits.length + teams.length + workQueues.length;
+  const sections: readonly EmployeeAccessSection[] = [
+    {
+      id: "memberships",
+      titleKey: "admin.employeeAccess.memberships",
+      descriptionKey: "admin.employeeAccess.memberships.description",
+      count: membershipCount,
+      countKey: "admin.employeeAccess.selectedCount",
+      secondaryCount: availableMembershipCount,
+      secondaryCountKey: "admin.employeeAccess.availableCount",
+      icon: <Building2 size={18} aria-hidden="true" />
+    },
+    {
+      id: "roles",
+      titleKey: "admin.employeeAccess.roles",
+      descriptionKey: "admin.employeeAccess.roles.description",
+      count: employeeRoleBindings.length,
+      countKey: "admin.employeeAccess.activeCount",
+      secondaryCount: expiredEmployeeRoleBindings.length,
+      secondaryCountKey: "admin.employeeAccess.expiredCount",
+      icon: <UsersRound size={18} aria-hidden="true" />
+    },
+    {
+      id: "direct_grants",
+      titleKey: "admin.employeeAccess.directGrants",
+      descriptionKey: "admin.employeeAccess.directGrants.description",
+      count: employeeDirectGrants.length,
+      countKey: "admin.employeeAccess.activeCount",
+      secondaryCount: expiredEmployeeDirectGrants.length,
+      secondaryCountKey: "admin.employeeAccess.expiredCount",
+      icon: <KeyRound size={18} aria-hidden="true" />
+    },
+    {
+      id: "effective_access",
+      titleKey: "admin.employeeAccess.effectiveAccess",
+      descriptionKey: "admin.employeeAccess.effectiveAccess.description",
+      count: effectiveAccess.length,
+      countKey: "admin.employeeAccess.permissionCount",
+      icon: <ListChecks size={18} aria-hidden="true" />
+    }
+  ];
 
   return (
     <TenantAdminShell
@@ -307,413 +370,573 @@ export default async function EmployeeAccessAdminPage({
           </div>
         </section>
 
-        <section
-          className="settingsPanel"
-          aria-labelledby="employee-memberships-title"
-        >
-          <div className="sectionHeader">
-            <div>
-              <p className="eyebrow">{t("admin.employeeAccess.memberships")}</p>
-              <h2 className="sectionTitle" id="employee-memberships-title">
-                {t("admin.employeeAccess.memberships")}
-              </h2>
-              <p className="metaText">
-                {t("admin.employeeAccess.memberships.description")}
-              </p>
-            </div>
-            <span className="badge">
-              {employee.orgUnitIds.length +
-                employee.teamIds.length +
-                employee.queueIds.length}
-            </span>
-          </div>
+        <EmployeeAccessSectionNavigation
+          returnPath={returnPath}
+          sections={sections}
+          selectedSection={selectedSection}
+          t={t}
+        />
 
-          <div className="employeeMembershipGrid">
-            <form
-              action={setEmployeeOrgUnitMembershipsAction}
-              className="settingsForm employeeMembershipForm"
-            >
-              <input name="returnTo" type="hidden" value={returnPath} />
-              <input
-                name="employeeId"
-                type="hidden"
-                value={employee.employeeId}
-              />
-              <MembershipCheckboxGroup
-                emptyLabel={t("admin.employeeAccess.noOrgUnitsAvailable")}
-                icon={<Building2 size={18} aria-hidden="true" />}
-                items={orgUnits.map((orgUnit) => ({
-                  id: orgUnit.id,
-                  label: orgUnit.name
-                }))}
-                name="orgUnitId"
-                selectedIds={employee.orgUnitIds}
-                title={t("admin.employeeAccess.orgUnitMemberships")}
-              />
-              <button
-                className="primaryButton"
-                disabled={isDeactivated}
-                type="submit"
-              >
-                <Save size={18} aria-hidden="true" />
-                {t("admin.employeeAccess.saveMemberships")}
-              </button>
-            </form>
-
-            <form
-              action={setEmployeeTeamMembershipsAction}
-              className="settingsForm employeeMembershipForm"
-            >
-              <input name="returnTo" type="hidden" value={returnPath} />
-              <input
-                name="employeeId"
-                type="hidden"
-                value={employee.employeeId}
-              />
-              <MembershipCheckboxGroup
-                emptyLabel={t("admin.employeeAccess.noTeamsAvailable")}
-                icon={<UsersRound size={18} aria-hidden="true" />}
-                items={teams.map((team) => ({
-                  id: team.id,
-                  label: team.name
-                }))}
-                name="teamId"
-                selectedIds={employee.teamIds}
-                title={t("admin.employeeAccess.teamMemberships")}
-              />
-              <button
-                className="primaryButton"
-                disabled={isDeactivated}
-                type="submit"
-              >
-                <Save size={18} aria-hidden="true" />
-                {t("admin.employeeAccess.saveMemberships")}
-              </button>
-            </form>
-
-            <form
-              action={setEmployeeWorkQueueMembershipsAction}
-              className="settingsForm employeeMembershipForm"
-            >
-              <input name="returnTo" type="hidden" value={returnPath} />
-              <input
-                name="employeeId"
-                type="hidden"
-                value={employee.employeeId}
-              />
-              <MembershipCheckboxGroup
-                emptyLabel={t("admin.employeeAccess.noWorkQueuesAvailable")}
-                icon={<Inbox size={18} aria-hidden="true" />}
-                items={workQueues.map((workQueue) => ({
-                  id: workQueue.id,
-                  label: workQueue.name
-                }))}
-                name="workQueueId"
-                selectedIds={employee.queueIds}
-                title={t("admin.employeeAccess.workQueueMemberships")}
-              />
-              <button
-                className="primaryButton"
-                disabled={isDeactivated}
-                type="submit"
-              >
-                <Save size={18} aria-hidden="true" />
-                {t("admin.employeeAccess.saveMemberships")}
-              </button>
-            </form>
-          </div>
-        </section>
-
-        <section
-          className="settingsPanel"
-          aria-labelledby="employee-role-assign-title"
-        >
-          <div className="sectionHeader">
-            <div>
-              <p className="eyebrow">{t("admin.roles.assignments")}</p>
-              <h2 className="sectionTitle" id="employee-role-assign-title">
-                {t("admin.employeeAccess.assignRole")}
-              </h2>
-              <p className="metaText">
-                {t("admin.employeeAccess.assignRole.description")}
-              </p>
-            </div>
-            <span className="badge">{roleAssignmentOptions.length}</span>
-          </div>
-
-          <form
-            action={assignTenantRoleAction}
-            className="settingsForm employeeAccessAssignForm"
+        {selectedSection === "memberships" ? (
+          <section
+            className="settingsPanel"
+            aria-labelledby="employee-memberships-title"
           >
-            <input name="returnTo" type="hidden" value={returnPath} />
-            <RoleAssignmentFields
-              employees={employeeOptions}
-              messages={scopePickerMessages(t)}
-              roles={roleAssignmentOptions}
-              scopeReferenceOptions={scopeReferenceOptions}
-              selectedEmployeeId={employee.employeeId}
-            />
-            <button
-              className="primaryButton"
-              disabled={isDeactivated || roleAssignmentOptions.length === 0}
-              type="submit"
-            >
-              <Plus size={18} aria-hidden="true" />
-              {t("admin.roles.assign")}
-            </button>
-          </form>
-        </section>
-
-        <section
-          className="settingsPanel"
-          aria-labelledby="employee-direct-grant-title"
-        >
-          <div className="sectionHeader">
-            <div>
-              <p className="eyebrow">{t("admin.roles.directGrants")}</p>
-              <h2 className="sectionTitle" id="employee-direct-grant-title">
-                {t("admin.employeeAccess.directGrant")}
-              </h2>
-              <p className="metaText">
-                {t("admin.employeeAccess.directGrant.description")}
-              </p>
+            <div className="sectionHeader">
+              <div>
+                <p className="eyebrow">
+                  {t("admin.employeeAccess.memberships")}
+                </p>
+                <h2 className="sectionTitle" id="employee-memberships-title">
+                  {t("admin.employeeAccess.memberships")}
+                </h2>
+                <p className="metaText">
+                  {t("admin.employeeAccess.memberships.description")}
+                </p>
+              </div>
+              <span className="badge">
+                {employee.orgUnitIds.length +
+                  employee.teamIds.length +
+                  employee.queueIds.length}
+              </span>
             </div>
-            <span className="badge">{directGrantPermissionOptions.length}</span>
-          </div>
 
-          <form
-            action={createDirectPermissionGrantAction}
-            className="settingsForm employeeAccessGrantForm"
+            <div className="employeeMembershipGrid">
+              <form
+                action={setEmployeeOrgUnitMembershipsAction}
+                className="settingsForm employeeMembershipForm"
+              >
+                <input name="returnTo" type="hidden" value={returnPath} />
+                <input
+                  name="employeeAccessSection"
+                  type="hidden"
+                  value="memberships"
+                />
+                <input
+                  name="employeeId"
+                  type="hidden"
+                  value={employee.employeeId}
+                />
+                <MembershipCheckboxGroup
+                  emptyLabel={t("admin.employeeAccess.noOrgUnitsAvailable")}
+                  icon={<Building2 size={18} aria-hidden="true" />}
+                  items={orgUnits.map((orgUnit) => ({
+                    id: orgUnit.id,
+                    label: orgUnit.name
+                  }))}
+                  name="orgUnitId"
+                  selectedIds={employee.orgUnitIds}
+                  title={t("admin.employeeAccess.orgUnitMemberships")}
+                />
+                <button
+                  className="primaryButton"
+                  disabled={isDeactivated}
+                  type="submit"
+                >
+                  <Save size={18} aria-hidden="true" />
+                  {t("admin.employeeAccess.saveMemberships")}
+                </button>
+              </form>
+
+              <form
+                action={setEmployeeTeamMembershipsAction}
+                className="settingsForm employeeMembershipForm"
+              >
+                <input name="returnTo" type="hidden" value={returnPath} />
+                <input
+                  name="employeeAccessSection"
+                  type="hidden"
+                  value="memberships"
+                />
+                <input
+                  name="employeeId"
+                  type="hidden"
+                  value={employee.employeeId}
+                />
+                <MembershipCheckboxGroup
+                  emptyLabel={t("admin.employeeAccess.noTeamsAvailable")}
+                  icon={<UsersRound size={18} aria-hidden="true" />}
+                  items={teams.map((team) => ({
+                    id: team.id,
+                    label: team.name
+                  }))}
+                  name="teamId"
+                  selectedIds={employee.teamIds}
+                  title={t("admin.employeeAccess.teamMemberships")}
+                />
+                <button
+                  className="primaryButton"
+                  disabled={isDeactivated}
+                  type="submit"
+                >
+                  <Save size={18} aria-hidden="true" />
+                  {t("admin.employeeAccess.saveMemberships")}
+                </button>
+              </form>
+
+              <form
+                action={setEmployeeWorkQueueMembershipsAction}
+                className="settingsForm employeeMembershipForm"
+              >
+                <input name="returnTo" type="hidden" value={returnPath} />
+                <input
+                  name="employeeAccessSection"
+                  type="hidden"
+                  value="memberships"
+                />
+                <input
+                  name="employeeId"
+                  type="hidden"
+                  value={employee.employeeId}
+                />
+                <MembershipCheckboxGroup
+                  emptyLabel={t("admin.employeeAccess.noWorkQueuesAvailable")}
+                  icon={<Inbox size={18} aria-hidden="true" />}
+                  items={workQueues.map((workQueue) => ({
+                    id: workQueue.id,
+                    label: workQueue.name
+                  }))}
+                  name="workQueueId"
+                  selectedIds={employee.queueIds}
+                  title={t("admin.employeeAccess.workQueueMemberships")}
+                />
+                <button
+                  className="primaryButton"
+                  disabled={isDeactivated}
+                  type="submit"
+                >
+                  <Save size={18} aria-hidden="true" />
+                  {t("admin.employeeAccess.saveMemberships")}
+                </button>
+              </form>
+            </div>
+          </section>
+        ) : null}
+
+        {selectedSection === "roles" ? (
+          <>
+            <section
+              className="settingsPanel"
+              aria-labelledby="employee-role-assign-title"
+            >
+              <div className="sectionHeader">
+                <div>
+                  <p className="eyebrow">{t("admin.roles.assignments")}</p>
+                  <h2 className="sectionTitle" id="employee-role-assign-title">
+                    {t("admin.employeeAccess.assignRole")}
+                  </h2>
+                  <p className="metaText">
+                    {t("admin.employeeAccess.assignRole.description")}
+                  </p>
+                </div>
+                <span className="badge">{roleAssignmentOptions.length}</span>
+              </div>
+
+              <form
+                action={assignTenantRoleAction}
+                className="settingsForm employeeAccessAssignForm"
+              >
+                <input name="returnTo" type="hidden" value={returnPath} />
+                <input
+                  name="employeeAccessSection"
+                  type="hidden"
+                  value="roles"
+                />
+                <RoleAssignmentFields
+                  employees={employeeOptions}
+                  messages={scopePickerMessages(t)}
+                  roles={roleAssignmentOptions}
+                  scopeReferenceOptions={scopeReferenceOptions}
+                  selectedEmployeeId={employee.employeeId}
+                />
+                <button
+                  className="primaryButton"
+                  disabled={isDeactivated || roleAssignmentOptions.length === 0}
+                  type="submit"
+                >
+                  <Plus size={18} aria-hidden="true" />
+                  {t("admin.roles.assign")}
+                </button>
+              </form>
+            </section>
+          </>
+        ) : null}
+
+        {selectedSection === "direct_grants" ? (
+          <>
+            <section
+              className="settingsPanel"
+              aria-labelledby="employee-direct-grant-title"
+            >
+              <div className="sectionHeader">
+                <div>
+                  <p className="eyebrow">{t("admin.roles.directGrants")}</p>
+                  <h2 className="sectionTitle" id="employee-direct-grant-title">
+                    {t("admin.employeeAccess.directGrant")}
+                  </h2>
+                  <p className="metaText">
+                    {t("admin.employeeAccess.directGrant.description")}
+                  </p>
+                </div>
+                <span className="badge">
+                  {directGrantPermissionOptions.length}
+                </span>
+              </div>
+
+              <form
+                action={createDirectPermissionGrantAction}
+                className="settingsForm employeeAccessGrantForm"
+              >
+                <input name="returnTo" type="hidden" value={returnPath} />
+                <input
+                  name="employeeAccessSection"
+                  type="hidden"
+                  value="direct_grants"
+                />
+                <DirectGrantFields
+                  employees={employeeOptions}
+                  messages={scopePickerMessages(t)}
+                  permissions={directGrantPermissionOptions}
+                  scopeReferenceOptions={scopeReferenceOptions}
+                  selectedEmployeeId={employee.employeeId}
+                />
+                <button
+                  className="primaryButton"
+                  disabled={
+                    isDeactivated || directGrantPermissionOptions.length === 0
+                  }
+                  type="submit"
+                >
+                  <Plus size={18} aria-hidden="true" />
+                  {t("admin.roles.grantDirectPermission")}
+                </button>
+              </form>
+            </section>
+          </>
+        ) : null}
+
+        {selectedSection === "roles" ? (
+          <>
+            <section
+              className="settingsPanel"
+              aria-labelledby="employee-role-bindings-title"
+            >
+              <div className="sectionHeader">
+                <div>
+                  <p className="eyebrow">{t("admin.roles.assignments")}</p>
+                  <h2
+                    className="sectionTitle"
+                    id="employee-role-bindings-title"
+                  >
+                    {t("admin.employeeAccess.activeAssignments")}
+                  </h2>
+                  <p className="metaText">
+                    {t("admin.employeeAccess.activeAssignments.description")}
+                  </p>
+                </div>
+                <span className="badge">{employeeRoleBindings.length}</span>
+              </div>
+
+              <div className="managementList">
+                {employeeRoleBindings.length === 0 ? (
+                  <p className="metaText">
+                    {t("admin.employeeAccess.noAssignments")}
+                  </p>
+                ) : (
+                  employeeRoleBindings.map((binding) => (
+                    <EmployeeRoleBindingRow
+                      binding={binding}
+                      currentEmployeeId={access.employeeId}
+                      key={
+                        binding.id ??
+                        `${binding.roleId}:${permissionScopeKey(binding.scope)}`
+                      }
+                      returnPath={returnPath}
+                      roles={roles}
+                      t={t}
+                    />
+                  ))
+                )}
+              </div>
+            </section>
+
+            <section
+              className="settingsPanel"
+              aria-labelledby="employee-expired-role-bindings-title"
+            >
+              <div className="sectionHeader">
+                <div>
+                  <p className="eyebrow">{t("admin.roles.assignments")}</p>
+                  <h2
+                    className="sectionTitle"
+                    id="employee-expired-role-bindings-title"
+                  >
+                    {t("admin.employeeAccess.expiredAssignments")}
+                  </h2>
+                  <p className="metaText">
+                    {t("admin.employeeAccess.expiredAssignments.description")}
+                  </p>
+                </div>
+                <span className="badge">
+                  {expiredEmployeeRoleBindings.length}
+                </span>
+              </div>
+
+              <div className="managementList">
+                {expiredEmployeeRoleBindings.length === 0 ? (
+                  <p className="metaText">
+                    {t("admin.employeeAccess.noExpiredAssignments")}
+                  </p>
+                ) : (
+                  expiredEmployeeRoleBindings.map((binding) => (
+                    <EmployeeRoleBindingRow
+                      binding={binding}
+                      currentEmployeeId={access.employeeId}
+                      expired
+                      key={
+                        binding.id ??
+                        `${binding.roleId}:${permissionScopeKey(binding.scope)}`
+                      }
+                      returnPath={returnPath}
+                      roles={roles}
+                      t={t}
+                    />
+                  ))
+                )}
+              </div>
+            </section>
+          </>
+        ) : null}
+
+        {selectedSection === "direct_grants" ? (
+          <>
+            <section
+              className="settingsPanel"
+              aria-labelledby="employee-direct-grants-title"
+            >
+              <div className="sectionHeader">
+                <div>
+                  <p className="eyebrow">{t("admin.roles.directGrants")}</p>
+                  <h2
+                    className="sectionTitle"
+                    id="employee-direct-grants-title"
+                  >
+                    {t("admin.employeeAccess.activeDirectGrants")}
+                  </h2>
+                  <p className="metaText">
+                    {t("admin.employeeAccess.activeDirectGrants.description")}
+                  </p>
+                </div>
+                <span className="badge">{employeeDirectGrants.length}</span>
+              </div>
+
+              <div className="managementList">
+                {employeeDirectGrants.length === 0 ? (
+                  <p className="metaText">
+                    {t("admin.employeeAccess.noDirectGrants")}
+                  </p>
+                ) : (
+                  employeeDirectGrants.map((grant) => (
+                    <EmployeeDirectGrantRow
+                      currentEmployeeId={access.employeeId}
+                      grant={grant}
+                      key={
+                        grant.id ??
+                        `${grant.permission}:${permissionScopeKey(grant.scope)}`
+                      }
+                      returnPath={returnPath}
+                      t={t}
+                    />
+                  ))
+                )}
+              </div>
+            </section>
+
+            <section
+              className="settingsPanel"
+              aria-labelledby="employee-expired-direct-grants-title"
+            >
+              <div className="sectionHeader">
+                <div>
+                  <p className="eyebrow">{t("admin.roles.directGrants")}</p>
+                  <h2
+                    className="sectionTitle"
+                    id="employee-expired-direct-grants-title"
+                  >
+                    {t("admin.employeeAccess.expiredDirectGrants")}
+                  </h2>
+                  <p className="metaText">
+                    {t("admin.employeeAccess.expiredDirectGrants.description")}
+                  </p>
+                </div>
+                <span className="badge">
+                  {expiredEmployeeDirectGrants.length}
+                </span>
+              </div>
+
+              <div className="managementList">
+                {expiredEmployeeDirectGrants.length === 0 ? (
+                  <p className="metaText">
+                    {t("admin.employeeAccess.noExpiredDirectGrants")}
+                  </p>
+                ) : (
+                  expiredEmployeeDirectGrants.map((grant) => (
+                    <EmployeeDirectGrantRow
+                      currentEmployeeId={access.employeeId}
+                      expired
+                      grant={grant}
+                      key={
+                        grant.id ??
+                        `${grant.permission}:${permissionScopeKey(grant.scope)}`
+                      }
+                      returnPath={returnPath}
+                      t={t}
+                    />
+                  ))
+                )}
+              </div>
+            </section>
+          </>
+        ) : null}
+
+        {selectedSection === "effective_access" ? (
+          <section
+            className="settingsPanel"
+            aria-labelledby="employee-effective-access-title"
           >
-            <input name="returnTo" type="hidden" value={returnPath} />
-            <DirectGrantFields
-              employees={employeeOptions}
-              messages={scopePickerMessages(t)}
-              permissions={directGrantPermissionOptions}
-              scopeReferenceOptions={scopeReferenceOptions}
-              selectedEmployeeId={employee.employeeId}
-            />
-            <button
-              className="primaryButton"
-              disabled={
-                isDeactivated || directGrantPermissionOptions.length === 0
-              }
-              type="submit"
-            >
-              <Plus size={18} aria-hidden="true" />
-              {t("admin.roles.grantDirectPermission")}
-            </button>
-          </form>
-        </section>
-
-        <section
-          className="settingsPanel"
-          aria-labelledby="employee-role-bindings-title"
-        >
-          <div className="sectionHeader">
-            <div>
-              <p className="eyebrow">{t("admin.roles.assignments")}</p>
-              <h2 className="sectionTitle" id="employee-role-bindings-title">
-                {t("admin.employeeAccess.activeAssignments")}
-              </h2>
-              <p className="metaText">
-                {t("admin.employeeAccess.activeAssignments.description")}
-              </p>
+            <div className="sectionHeader">
+              <div>
+                <p className="eyebrow">{t("admin.roles.accessPreview")}</p>
+                <h2
+                  className="sectionTitle"
+                  id="employee-effective-access-title"
+                >
+                  {t("admin.employeeAccess.effectiveAccess")}
+                </h2>
+                <p className="metaText">
+                  {t("admin.employeeAccess.effectiveAccess.description")}
+                </p>
+              </div>
+              <span className="badge">{effectiveAccess.length}</span>
             </div>
-            <span className="badge">{employeeRoleBindings.length}</span>
-          </div>
 
-          <div className="managementList">
-            {employeeRoleBindings.length === 0 ? (
-              <p className="metaText">
-                {t("admin.employeeAccess.noAssignments")}
-              </p>
-            ) : (
-              employeeRoleBindings.map((binding) => (
-                <EmployeeRoleBindingRow
-                  binding={binding}
-                  currentEmployeeId={access.employeeId}
-                  key={
-                    binding.id ??
-                    `${binding.roleId}:${permissionScopeKey(binding.scope)}`
-                  }
-                  returnPath={returnPath}
-                  roles={roles}
-                  t={t}
-                />
-              ))
-            )}
-          </div>
-        </section>
-
-        <section
-          className="settingsPanel"
-          aria-labelledby="employee-expired-role-bindings-title"
-        >
-          <div className="sectionHeader">
-            <div>
-              <p className="eyebrow">{t("admin.roles.assignments")}</p>
-              <h2
-                className="sectionTitle"
-                id="employee-expired-role-bindings-title"
-              >
-                {t("admin.employeeAccess.expiredAssignments")}
-              </h2>
-              <p className="metaText">
-                {t("admin.employeeAccess.expiredAssignments.description")}
-              </p>
+            <div className="managementList">
+              {effectiveAccess.length === 0 ? (
+                <p className="metaText">
+                  {t("admin.employeeAccess.noEffectiveAccess")}
+                </p>
+              ) : (
+                effectiveAccess.map((grant) => (
+                  <EffectiveGrantRow
+                    employee={employee}
+                    grant={grant}
+                    key={effectiveGrantKey(grant)}
+                    orgUnits={orgUnits}
+                    roleBindings={roleBindings}
+                    roles={roles}
+                    t={t}
+                    teams={teams}
+                    workQueues={workQueues}
+                  />
+                ))
+              )}
             </div>
-            <span className="badge">{expiredEmployeeRoleBindings.length}</span>
-          </div>
-
-          <div className="managementList">
-            {expiredEmployeeRoleBindings.length === 0 ? (
-              <p className="metaText">
-                {t("admin.employeeAccess.noExpiredAssignments")}
-              </p>
-            ) : (
-              expiredEmployeeRoleBindings.map((binding) => (
-                <EmployeeRoleBindingRow
-                  binding={binding}
-                  currentEmployeeId={access.employeeId}
-                  expired
-                  key={
-                    binding.id ??
-                    `${binding.roleId}:${permissionScopeKey(binding.scope)}`
-                  }
-                  returnPath={returnPath}
-                  roles={roles}
-                  t={t}
-                />
-              ))
-            )}
-          </div>
-        </section>
-
-        <section
-          className="settingsPanel"
-          aria-labelledby="employee-direct-grants-title"
-        >
-          <div className="sectionHeader">
-            <div>
-              <p className="eyebrow">{t("admin.roles.directGrants")}</p>
-              <h2 className="sectionTitle" id="employee-direct-grants-title">
-                {t("admin.employeeAccess.activeDirectGrants")}
-              </h2>
-              <p className="metaText">
-                {t("admin.employeeAccess.activeDirectGrants.description")}
-              </p>
-            </div>
-            <span className="badge">{employeeDirectGrants.length}</span>
-          </div>
-
-          <div className="managementList">
-            {employeeDirectGrants.length === 0 ? (
-              <p className="metaText">
-                {t("admin.employeeAccess.noDirectGrants")}
-              </p>
-            ) : (
-              employeeDirectGrants.map((grant) => (
-                <EmployeeDirectGrantRow
-                  currentEmployeeId={access.employeeId}
-                  grant={grant}
-                  key={
-                    grant.id ??
-                    `${grant.permission}:${permissionScopeKey(grant.scope)}`
-                  }
-                  returnPath={returnPath}
-                  t={t}
-                />
-              ))
-            )}
-          </div>
-        </section>
-
-        <section
-          className="settingsPanel"
-          aria-labelledby="employee-expired-direct-grants-title"
-        >
-          <div className="sectionHeader">
-            <div>
-              <p className="eyebrow">{t("admin.roles.directGrants")}</p>
-              <h2
-                className="sectionTitle"
-                id="employee-expired-direct-grants-title"
-              >
-                {t("admin.employeeAccess.expiredDirectGrants")}
-              </h2>
-              <p className="metaText">
-                {t("admin.employeeAccess.expiredDirectGrants.description")}
-              </p>
-            </div>
-            <span className="badge">{expiredEmployeeDirectGrants.length}</span>
-          </div>
-
-          <div className="managementList">
-            {expiredEmployeeDirectGrants.length === 0 ? (
-              <p className="metaText">
-                {t("admin.employeeAccess.noExpiredDirectGrants")}
-              </p>
-            ) : (
-              expiredEmployeeDirectGrants.map((grant) => (
-                <EmployeeDirectGrantRow
-                  currentEmployeeId={access.employeeId}
-                  expired
-                  grant={grant}
-                  key={
-                    grant.id ??
-                    `${grant.permission}:${permissionScopeKey(grant.scope)}`
-                  }
-                  returnPath={returnPath}
-                  t={t}
-                />
-              ))
-            )}
-          </div>
-        </section>
-
-        <section
-          className="settingsPanel"
-          aria-labelledby="employee-effective-access-title"
-        >
-          <div className="sectionHeader">
-            <div>
-              <p className="eyebrow">{t("admin.roles.accessPreview")}</p>
-              <h2 className="sectionTitle" id="employee-effective-access-title">
-                {t("admin.employeeAccess.effectiveAccess")}
-              </h2>
-              <p className="metaText">
-                {t("admin.employeeAccess.effectiveAccess.description")}
-              </p>
-            </div>
-            <span className="badge">{effectiveAccess.length}</span>
-          </div>
-
-          <div className="managementList">
-            {effectiveAccess.length === 0 ? (
-              <p className="metaText">
-                {t("admin.employeeAccess.noEffectiveAccess")}
-              </p>
-            ) : (
-              effectiveAccess.map((grant) => (
-                <EffectiveGrantRow
-                  employee={employee}
-                  grant={grant}
-                  key={effectiveGrantKey(grant)}
-                  orgUnits={orgUnits}
-                  roleBindings={roleBindings}
-                  roles={roles}
-                  t={t}
-                  teams={teams}
-                  workQueues={workQueues}
-                />
-              ))
-            )}
-          </div>
-        </section>
+          </section>
+        ) : null}
       </div>
     </TenantAdminShell>
   );
+}
+
+function EmployeeAccessSectionNavigation({
+  returnPath,
+  sections,
+  selectedSection,
+  t
+}: {
+  readonly returnPath: string;
+  readonly sections: readonly EmployeeAccessSection[];
+  readonly selectedSection: EmployeeAccessSectionId;
+  readonly t: Translator;
+}): ReactNode {
+  return (
+    <section
+      className="settingsPanel employeeAccessSectionPanel"
+      aria-labelledby="employee-access-sections-title"
+    >
+      <div className="sectionHeader">
+        <div>
+          <p className="eyebrow">{t("admin.employeeAccess")}</p>
+          <h2 className="sectionTitle" id="employee-access-sections-title">
+            {t("admin.employeeAccess.workspace")}
+          </h2>
+          <p className="metaText">
+            {t("admin.employeeAccess.workspace.description")}
+          </p>
+        </div>
+      </div>
+
+      <nav
+        className="employeeAccessTabs"
+        aria-label={t("admin.employeeAccess.sections")}
+      >
+        {sections.map((section) => (
+          <a
+            key={section.id}
+            className={
+              section.id === selectedSection
+                ? "employeeAccessTab employeeAccessTabActive"
+                : "employeeAccessTab"
+            }
+            href={employeeAccessSectionHref(returnPath, section.id)}
+            aria-current={section.id === selectedSection ? "page" : undefined}
+          >
+            <span className="metricIcon">{section.icon}</span>
+            <span className="employeeAccessTabBody">
+              <span className="employeeAccessTabTitle">
+                {t(section.titleKey)}
+              </span>
+              <span className="employeeAccessTabDescription">
+                {t(section.descriptionKey)}
+              </span>
+            </span>
+            <span className="employeeAccessTabMeta">
+              <span className="badge">
+                {t(section.countKey, { count: section.count })}
+              </span>
+              {section.secondaryCount !== undefined &&
+              section.secondaryCountKey !== undefined ? (
+                <span className="badge">
+                  {t(section.secondaryCountKey, {
+                    count: section.secondaryCount
+                  })}
+                </span>
+              ) : null}
+            </span>
+          </a>
+        ))}
+      </nav>
+    </section>
+  );
+}
+
+function resolveEmployeeAccessSection(
+  section: string | undefined
+): EmployeeAccessSectionId {
+  if (section !== undefined && isEmployeeAccessSectionId(section)) {
+    return section;
+  }
+
+  return "memberships";
+}
+
+function employeeAccessSectionHref(
+  returnPath: string,
+  section: EmployeeAccessSectionId
+): string {
+  const params = new URLSearchParams({ section });
+
+  return `${returnPath}?${params.toString()}`;
 }
 
 function EmployeeRoleBindingRow({
@@ -759,6 +982,7 @@ function EmployeeRoleBindingRow({
         ) : (
           <form className="inlineForm" action={revokeTenantRoleBindingAction}>
             <input name="returnTo" type="hidden" value={returnPath} />
+            <input name="employeeAccessSection" type="hidden" value="roles" />
             <input name="bindingId" type="hidden" value={binding.id} />
             <button className="dangerButton" type="submit">
               <XCircle size={14} aria-hidden="true" />
@@ -869,6 +1093,11 @@ function EmployeeDirectGrantRow({
             action={revokeDirectPermissionGrantAction}
           >
             <input name="returnTo" type="hidden" value={returnPath} />
+            <input
+              name="employeeAccessSection"
+              type="hidden"
+              value="direct_grants"
+            />
             <input name="grantId" type="hidden" value={grant.id} />
             <button className="dangerButton" type="submit">
               <XCircle size={14} aria-hidden="true" />

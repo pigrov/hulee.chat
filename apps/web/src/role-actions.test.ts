@@ -77,6 +77,7 @@ const targetEmployeeId = "employee-agent" as EmployeeId;
 const rolesManageOptions = {
   effectivePermissionOverride: "roles.manage"
 };
+const targetEmployeeAccessPath = `/admin/employees/${encodeURIComponent(targetEmployeeId)}/access`;
 
 describe("role management actions", () => {
   beforeEach(() => {
@@ -252,6 +253,23 @@ describe("role management actions", () => {
         }
       },
       rolesManageOptions
+    );
+  });
+
+  it("preserves selected employee access section after employee role assignment", async () => {
+    const { assignTenantRoleAction } = await import("./role-actions");
+
+    await expectRedirect(
+      assignTenantRoleAction(
+        formData({
+          employeeId: targetEmployeeId,
+          employeeAccessSection: "roles",
+          returnTo: targetEmployeeAccessPath,
+          roleId: "role-sales",
+          scopeType: "tenant"
+        })
+      ),
+      `${targetEmployeeAccessPath}?roleActionStatus=assigned&section=roles`
     );
   });
 

@@ -13,6 +13,10 @@ import { redirect } from "next/navigation";
 
 import { assertWebActionRequest } from "./action-security";
 import {
+  isEmployeeAccessSectionId,
+  type EmployeeAccessSectionId
+} from "./employee-access-sections";
+import {
   archiveRbacRole,
   createRbacDirectGrant,
   createRbacRole,
@@ -353,8 +357,14 @@ function revalidateRoleAdminPaths(): void {
 function roleActionDestination(formData: FormData, status: string): string {
   const returnTo = readOptionalFormString(formData, "returnTo");
   const path = isSafeRoleActionReturnTo(returnTo) ? returnTo : "/admin/roles";
+  const params = new URLSearchParams({ roleActionStatus: status });
+  const employeeAccessSection = readEmployeeAccessSection(formData);
 
-  return `${path}?roleActionStatus=${encodeURIComponent(status)}`;
+  if (isEmployeeAccessReturnTo(path) && employeeAccessSection !== undefined) {
+    params.set("section", employeeAccessSection);
+  }
+
+  return `${path}?${params.toString()}`;
 }
 
 function isSafeRoleActionReturnTo(path: string | undefined): path is string {
@@ -362,9 +372,23 @@ function isSafeRoleActionReturnTo(path: string | undefined): path is string {
     return true;
   }
 
-  return (
-    path !== undefined && /^\/admin\/employees\/[^/?#]+\/access$/.test(path)
-  );
+  return path !== undefined && isEmployeeAccessReturnTo(path);
+}
+
+function isEmployeeAccessReturnTo(path: string): boolean {
+  return /^\/admin\/employees\/[^/?#]+\/access$/.test(path);
+}
+
+function readEmployeeAccessSection(
+  formData: FormData
+): EmployeeAccessSectionId | undefined {
+  const value = readOptionalFormString(formData, "employeeAccessSection");
+
+  if (value === undefined || !isEmployeeAccessSectionId(value)) {
+    return undefined;
+  }
+
+  return value;
 }
 
 function readRoleBindingSubject(

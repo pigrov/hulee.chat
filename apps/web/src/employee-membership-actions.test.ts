@@ -116,6 +116,32 @@ describe("employee membership actions", () => {
     expect(mocks.createSqlEmployeeDirectoryRepository).not.toHaveBeenCalled();
   });
 
+  it("preserves selected employee access section on privileged reauth redirect", async () => {
+    mocks.assertCurrentWebEffectiveTenantPermission.mockResolvedValueOnce({
+      tenantId,
+      employeeId: adminEmployeeId,
+      sessionCreatedAt: "2020-01-01T00:00:00.000Z",
+      systemRoleTemplateIds: [],
+      permissions: ["roles.manage"],
+      platformRoles: []
+    });
+    const { setEmployeeOrgUnitMembershipsAction } =
+      await import("./employee-membership-actions");
+
+    await expectRedirect(
+      setEmployeeOrgUnitMembershipsAction(
+        formData({
+          employeeAccessSection: "memberships",
+          employeeId: targetEmployeeId,
+          returnTo: employeeAccessPath(targetEmployeeId)
+        })
+      ),
+      `${employeeAccessPath(
+        targetEmployeeId
+      )}?roleActionStatus=reauth_required&section=memberships`
+    );
+  });
+
   it("redirects unverified tenant accounts before membership repository access", async () => {
     const emailError = new CoreError("auth.email_not_verified");
 
