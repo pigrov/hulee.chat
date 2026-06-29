@@ -60,6 +60,11 @@ channel secrets in GitHub Secrets. The deploy workflow auto-detects
 `hulee_chat_worker_provider_egress`. Without that flag, the normal app services
 deploy without VPN requirements.
 
+When the gateway image is a server-local image such as
+`bridge-nordvpn-gateway:latest`, it must already exist on the host. The deploy
+workflow verifies the image locally and pulls only registry-managed app/runtime
+service images.
+
 The first gateway implementation uses the Hulee-owned compose service
 `hulee_chat_vpn_gateway` with a configurable gateway image and provider envs.
 It does not depend on Bridge containers or files.

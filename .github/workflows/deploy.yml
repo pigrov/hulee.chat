@@ -98,13 +98,24 @@ jobs:
           fi
           compose=(docker compose --env-file .env --env-file .release.env -f docker-compose.yml)
           services=(postgres api worker web)
+          pull_services=(postgres api worker web)
           image_containers=(hulee_chat_api hulee_chat_web hulee_chat_worker)
           if [ "$provider_egress_enabled" = true ]; then
             compose+=(--profile provider-egress)
             services+=(egress-gateway worker-provider-egress)
+            pull_services+=(worker-provider-egress)
             image_containers+=(hulee_chat_worker_provider_egress)
+            egress_gateway_image=$(grep -E '^[[:space:]]*HULEE_EGRESS_GATEWAY_IMAGE[[:space:]]*=' .env | tail -n 1 | cut -d= -f2- | xargs || true)
+            egress_gateway_image=${egress_gateway_image:-qmcgaw/gluetun:v3.40}
+            if docker image inspect "$egress_gateway_image" >/dev/null 2>&1; then
+              echo "Using existing egress gateway image on server: $egress_gateway_image"
+            else
+              echo "Egress gateway image is not present locally: $egress_gateway_image" >&2
+              echo "Build or pull it on the server before enabling provider egress." >&2
+              exit 1
+            fi
           fi
-          "${compose[@]}" pull
+          "${compose[@]}" pull "${pull_services[@]}"
           "${compose[@]}" run --rm -T migrate </dev/null
           "${compose[@]}" up -d --force-recreate --wait --wait-timeout 180 "${services[@]}"
           for container in "${image_containers[@]}"; do
