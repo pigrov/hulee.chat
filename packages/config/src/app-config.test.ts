@@ -97,7 +97,10 @@ describe("app config", () => {
         HULEE_PUBLIC_WEBHOOK_BASE_URL: "https://hooks.example.test",
         HULEE_WORKER_POLL_INTERVAL_MS: "2500",
         HULEE_OUTBOX_BATCH_SIZE: "25",
-        HULEE_OUTBOX_RETRY_DELAY_MS: "45000"
+        HULEE_OUTBOX_RETRY_DELAY_MS: "45000",
+        HULEE_EGRESS_PROBES_ENABLED: "true",
+        HULEE_EGRESS_PROBE_INTERVAL_MS: "60000",
+        HULEE_EGRESS_PROBE_TIMEOUT_MS: "5000"
       })
     ).toMatchObject({
       appName: "worker",
@@ -109,7 +112,10 @@ describe("app config", () => {
       publicWebhookBaseUrl: "https://hooks.example.test",
       pollIntervalMs: 2500,
       outboxBatchSize: 25,
-      outboxRetryDelayMs: 45000
+      outboxRetryDelayMs: 45000,
+      egressProbesEnabled: true,
+      egressProbeIntervalMs: 60000,
+      egressProbeTimeoutMs: 5000
     });
   });
 

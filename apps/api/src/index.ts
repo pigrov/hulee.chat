@@ -7,6 +7,7 @@ import {
   createSqlPublicApiAuditSink,
   createSqlChannelAuthChallengeRepository,
   createSqlChannelConnectorRepository,
+  createSqlDeploymentEgressStatusRepository,
   createSqlEmployeeDirectoryRepository,
   createSqlOrgStructureRepository,
   createSqlSecurityAuditRepository,
@@ -196,7 +197,10 @@ export function createInternalApiDataPlaneHandler(
       rbacRepository: createSqlTenantRbacRepository(options.database)
     }),
     egressStatus: createInternalEgressStatusService({
-      profiles: options.egressProfile ? [options.egressProfile] : []
+      profiles: options.egressProfile ? [options.egressProfile] : [],
+      snapshotRepository: createSqlDeploymentEgressStatusRepository(
+        options.database
+      )
     }),
     rbac: createInternalRbacService({
       rbacRepository: createSqlTenantRbacRepository(options.database),

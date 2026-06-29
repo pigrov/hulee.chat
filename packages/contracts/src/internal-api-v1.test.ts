@@ -776,8 +776,22 @@ describe("internal API v1 schemas", () => {
             profileId: "managed-messenger-vpn",
             profileKind: "vpn_namespace",
             status: "ready",
-            source: "deployment_config",
+            source: "runtime_probe",
             checkedAt: "2026-06-29T10:00:00.000Z",
+            alertSeverity: "none",
+            consecutiveFailures: 0,
+            lastReadyAt: "2026-06-29T10:00:00.000Z",
+            publicIp: "178.212.32.166",
+            probes: [
+              {
+                name: "https.connectivity",
+                target: "https://www.gstatic.com/generate_204",
+                status: "success",
+                checkedAt: "2026-06-29T10:00:00.000Z",
+                latencyMs: 80,
+                httpStatus: 204
+              }
+            ],
             supportedProviders: ["telegram", "whatsapp"],
             supportedChannelTypes: ["telegram_bot", "whatsapp_qr_bridge"]
           }
@@ -788,7 +802,8 @@ describe("internal API v1 schemas", () => {
         {
           profileKind: "vpn_namespace",
           status: "ready",
-          source: "deployment_config"
+          source: "runtime_probe",
+          alertSeverity: "none"
         }
       ]
     });

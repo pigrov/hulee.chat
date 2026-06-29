@@ -205,6 +205,11 @@ export {
 } from "./telegram-outbound-dispatcher";
 export { runTelegramPollingSweep } from "./telegram-polling-sweeper";
 export { createTelegramProviderOperationDispatcher } from "./telegram-provider-operation-dispatcher";
+export {
+  createWorkerEgressMonitor,
+  defaultEgressProbes,
+  shouldRunEgressMonitor
+} from "./egress-monitor";
 export type {
   ClaimPendingOutboxInput,
   MarkOutboxFailedInput,
@@ -230,3 +235,9 @@ export type {
   TelegramProviderOperationBotApiClientFactory,
   TelegramProviderOperationDispatcherOptions
 } from "./telegram-provider-operation-dispatcher";
+export type {
+  EgressMonitorOptions,
+  EgressProbeDefinition,
+  EgressProbeKind,
+  WorkerEgressMonitor
+} from "./egress-monitor";

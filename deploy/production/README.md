@@ -46,6 +46,9 @@ HULEE_WORKER_FEATURES=core
 HULEE_PROVIDER_EGRESS_WORKER_FEATURES=telegram_bot,telegram_user,whatsapp_user,whatsapp_official
 HULEE_EGRESS_OPENVPN_USER=...
 HULEE_EGRESS_OPENVPN_PASSWORD=...
+HULEE_EGRESS_PROBES_ENABLED=true
+HULEE_EGRESS_PROBE_INTERVAL_MS=30000
+HULEE_EGRESS_PROBE_TIMEOUT_MS=8000
 ```
 
 The compose service supports two first-step gateway env shapes:
@@ -74,6 +77,12 @@ default nameserver can leak DNS outside the VPN. A startup log line like
 ready. Treat it as a problem only if it is not followed by
 `DNS server listening` and `ready`, or if the gateway/worker `/etc/resolv.conf`
 does not point at `127.0.0.1`.
+
+The provider-egress worker writes runtime probe snapshots to
+`deployment_egress_status_snapshots`. Platform admins can see the latest VPN
+state, failed probes, consecutive failures and public egress IP on `/platform`.
+If the snapshot becomes stale, the UI marks the profile degraded so a stopped
+provider worker is visible even when the deployment config still says `ready`.
 
 Registry gateway images such as `qmcgaw/gluetun:v3.40` are pulled by the deploy
 workflow. Server-local gateway images such as `bridge-nordvpn-gateway:latest`

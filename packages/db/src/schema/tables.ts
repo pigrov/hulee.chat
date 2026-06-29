@@ -120,6 +120,29 @@ export const platformAuditLog = pgTable(
   ]
 );
 
+export const deploymentEgressStatusSnapshots = pgTable(
+  "deployment_egress_status_snapshots",
+  {
+    profileId: text("profile_id").primaryKey(),
+    profileKind: text("profile_kind").notNull(),
+    status: text("status").notNull(),
+    checkedAt: timestamp("checked_at", { withTimezone: true }).notNull(),
+    lastReadyAt: timestamp("last_ready_at", { withTimezone: true }),
+    lastFailureAt: timestamp("last_failure_at", { withTimezone: true }),
+    consecutiveFailures: integer("consecutive_failures").notNull().default(0),
+    alertSeverity: text("alert_severity").notNull().default("none"),
+    lastErrorCode: text("last_error_code"),
+    operatorHint: text("operator_hint"),
+    publicIp: text("public_ip"),
+    details: jsonb("details").notNull().default({}),
+    ...timestamps
+  },
+  (table) => [
+    index("deployment_egress_status_checked_idx").on(table.checkedAt),
+    index("deployment_egress_status_status_idx").on(table.status)
+  ]
+);
+
 export const moduleCatalog = pgTable(
   "module_catalog",
   {

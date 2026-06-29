@@ -520,6 +520,25 @@ export const internalEgressStatusSchema = z.enum([
   "misconfigured"
 ]);
 
+export const internalEgressProbeStatusSchema = z.enum([
+  "unknown",
+  "success",
+  "failed",
+  "skipped"
+]);
+
+export const internalEgressAlertSeveritySchema = z.enum([
+  "none",
+  "info",
+  "warning",
+  "critical"
+]);
+export const internalEgressActiveAlertSeveritySchema = z.enum([
+  "info",
+  "warning",
+  "critical"
+]);
+
 export const internalEgressRequirementSchema = z
   .object({
     required: z.boolean(),
@@ -558,10 +577,44 @@ export const internalEgressProfileStatusSchema = z
     profileId: z.string().trim().min(1).max(200),
     profileKind: internalEgressProfileKindSchema,
     status: internalEgressStatusSchema,
-    source: z.literal("deployment_config"),
+    source: z.enum(["deployment_config", "runtime_probe"]),
     checkedAt: z.string().datetime({ offset: true }),
+    alertSeverity: internalEgressAlertSeveritySchema.optional(),
+    consecutiveFailures: z.number().int().nonnegative().optional(),
+    lastReadyAt: z.string().datetime({ offset: true }).optional(),
+    lastFailureAt: z.string().datetime({ offset: true }).optional(),
+    publicIp: z.string().trim().min(1).max(80).optional(),
     lastErrorCode: internalApiPlatformErrorCodeSchema.optional(),
     operatorHint: z.string().trim().min(1).max(500).optional(),
+    probes: z
+      .array(
+        z
+          .object({
+            name: z.string().trim().min(1).max(120),
+            target: z.string().trim().min(1).max(300),
+            status: internalEgressProbeStatusSchema,
+            checkedAt: z.string().datetime({ offset: true }),
+            latencyMs: z.number().int().nonnegative().max(300_000).optional(),
+            httpStatus: z.number().int().min(100).max(599).optional(),
+            errorCode: z.string().trim().min(1).max(120).optional(),
+            errorMessage: z.string().trim().min(1).max(500).optional()
+          })
+          .strict()
+      )
+      .max(20)
+      .optional(),
+    alerts: z
+      .array(
+        z
+          .object({
+            severity: internalEgressActiveAlertSeveritySchema,
+            code: z.string().trim().min(1).max(120),
+            message: z.string().trim().min(1).max(500)
+          })
+          .strict()
+      )
+      .max(20)
+      .optional(),
     supportedProviders: z
       .array(z.string().trim().min(1).max(80))
       .max(50)
@@ -998,6 +1051,12 @@ export type InternalEgressProfileKind = z.infer<
   typeof internalEgressProfileKindSchema
 >;
 export type InternalEgressStatus = z.infer<typeof internalEgressStatusSchema>;
+export type InternalEgressProbeStatus = z.infer<
+  typeof internalEgressProbeStatusSchema
+>;
+export type InternalEgressAlertSeverity = z.infer<
+  typeof internalEgressAlertSeveritySchema
+>;
 export type InternalEgressRequirement = z.infer<
   typeof internalEgressRequirementSchema
 >;

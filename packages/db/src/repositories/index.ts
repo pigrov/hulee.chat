@@ -44,6 +44,11 @@ export {
   createSqlTenantModuleConfigRepository
 } from "./sql-module-config-repository";
 export {
+  buildListDeploymentEgressStatusSnapshotsSql,
+  buildUpsertDeploymentEgressStatusSnapshotSql,
+  createSqlDeploymentEgressStatusRepository
+} from "./sql-deployment-egress-status-repository";
+export {
   buildListOrgUnitsSql,
   buildListWorkQueuesSql,
   buildSetEmployeeOrgUnitMembershipsSql,
@@ -228,6 +233,14 @@ export type {
   TenantModuleConfigRepository,
   UpsertTenantModuleConfigInput
 } from "./sql-module-config-repository";
+export type {
+  DeploymentEgressAlert,
+  DeploymentEgressProbeResult,
+  DeploymentEgressStatusRepository,
+  DeploymentEgressStatusSnapshot,
+  ListDeploymentEgressStatusSnapshotsInput,
+  UpsertDeploymentEgressStatusSnapshotInput
+} from "./sql-deployment-egress-status-repository";
 export type {
   ListOrgUnitsInput,
   ListTeamsInput,

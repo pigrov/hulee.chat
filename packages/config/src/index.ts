@@ -100,6 +100,9 @@ export type WorkerConfig = BaseAppConfig & {
   pollIntervalMs: number;
   outboxBatchSize: number;
   outboxRetryDelayMs: number;
+  egressProbesEnabled: boolean;
+  egressProbeIntervalMs: number;
+  egressProbeTimeoutMs: number;
 };
 
 const runtimeEnvironmentSchema = z.enum(["development", "test", "production"]);
@@ -233,7 +236,10 @@ const workerEnvSchema = baseEnvSchema.extend({
   HULEE_PUBLIC_WEBHOOK_BASE_URL: optionalHttpUrl,
   HULEE_WORKER_POLL_INTERVAL_MS: optionalInteger(100, 60_000),
   HULEE_OUTBOX_BATCH_SIZE: optionalInteger(1, 500),
-  HULEE_OUTBOX_RETRY_DELAY_MS: optionalInteger(100, 3_600_000)
+  HULEE_OUTBOX_RETRY_DELAY_MS: optionalInteger(100, 3_600_000),
+  HULEE_EGRESS_PROBES_ENABLED: optionalBoolean,
+  HULEE_EGRESS_PROBE_INTERVAL_MS: optionalInteger(5_000, 3_600_000),
+  HULEE_EGRESS_PROBE_TIMEOUT_MS: optionalInteger(500, 60_000)
 });
 
 const issueMessages: Record<string, string> = {
@@ -268,7 +274,12 @@ const issueMessages: Record<string, string> = {
     "must be an integer from 100 to 60000 milliseconds",
   HULEE_OUTBOX_BATCH_SIZE: "must be an integer from 1 to 500",
   HULEE_OUTBOX_RETRY_DELAY_MS:
-    "must be an integer from 100 to 3600000 milliseconds"
+    "must be an integer from 100 to 3600000 milliseconds",
+  HULEE_EGRESS_PROBES_ENABLED: "must be true, false, 1 or 0",
+  HULEE_EGRESS_PROBE_INTERVAL_MS:
+    "must be an integer from 5000 to 3600000 milliseconds",
+  HULEE_EGRESS_PROBE_TIMEOUT_MS:
+    "must be an integer from 500 to 60000 milliseconds"
 };
 
 function zodIssuesToConfigIssues(issues: z.core.$ZodIssue[]): ConfigIssue[] {
@@ -532,7 +543,10 @@ export function loadWorkerConfig(env: EnvSource = process.env): WorkerConfig {
       result.data.HULEE_PUBLIC_BASE_URL,
     pollIntervalMs: result.data.HULEE_WORKER_POLL_INTERVAL_MS ?? 1_000,
     outboxBatchSize: result.data.HULEE_OUTBOX_BATCH_SIZE ?? 50,
-    outboxRetryDelayMs: result.data.HULEE_OUTBOX_RETRY_DELAY_MS ?? 30_000
+    outboxRetryDelayMs: result.data.HULEE_OUTBOX_RETRY_DELAY_MS ?? 30_000,
+    egressProbesEnabled: result.data.HULEE_EGRESS_PROBES_ENABLED ?? true,
+    egressProbeIntervalMs: result.data.HULEE_EGRESS_PROBE_INTERVAL_MS ?? 30_000,
+    egressProbeTimeoutMs: result.data.HULEE_EGRESS_PROBE_TIMEOUT_MS ?? 8_000
   };
 }
 

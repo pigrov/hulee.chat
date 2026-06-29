@@ -1,10 +1,12 @@
 import {
   createHuleeDatabase,
   closeHuleeDatabase,
+  createSqlDeploymentEgressStatusRepository,
   createSqlOutboxRepository
 } from "@hulee/db";
 
 import {
+  createWorkerEgressMonitor,
   createWorkerOutboxHandler,
   createWorkerTelegramPollingSweeper,
   createWorkerRuntime,
@@ -33,6 +35,11 @@ const telegramBotServices = runtime.config.workerFeatures.includes(
       })
     }
   : undefined;
+const egressMonitor = createWorkerEgressMonitor({
+  config: runtime.config,
+  repository: createSqlDeploymentEgressStatusRepository(database),
+  logger: runtime.logger
+});
 
 let stopping = false;
 let processing = false;
@@ -42,9 +49,12 @@ runtime.logger.info("worker.started", {
   pollIntervalMs: runtime.config.pollIntervalMs,
   outboxBatchSize: runtime.config.outboxBatchSize,
   egressProfileKind: runtime.config.egressProfile.profileKind,
-  egressProfileStatus: runtime.config.egressProfile.status
+  egressProfileStatus: runtime.config.egressProfile.status,
+  egressProbesEnabled: runtime.config.egressProbesEnabled,
+  egressProbeIntervalMs: runtime.config.egressProbeIntervalMs
 });
 
+egressMonitor.start();
 void runLoop();
 
 async function runLoop(): Promise<void> {
@@ -107,6 +117,7 @@ function sleep(ms: number): Promise<void> {
 
 async function shutdown(): Promise<void> {
   stopping = true;
+  egressMonitor.stop();
   await closeHuleeDatabase(database);
 }
 

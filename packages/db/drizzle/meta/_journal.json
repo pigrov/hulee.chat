@@ -113,6 +113,13 @@
       "when": 1782657001870,
       "tag": "0015_omniscient_talisman",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1782740000000,
+      "tag": "0016_deployment_egress_status",
+      "breakpoints": true
     }
   ]
 }

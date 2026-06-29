@@ -309,6 +309,18 @@ function EgressProfileStatusRow({
         value={formatOptionalDateTime(profile.checkedAt, locale, t)}
       />
       <DetailItem
+        label={t("integrations.egress.source")}
+        value={t(egressSourceKey(profile.source))}
+      />
+      <DetailItem
+        label={t("integrations.egress.publicIp")}
+        value={profile.publicIp ?? t("common.unknown")}
+      />
+      <DetailItem
+        label={t("integrations.egress.consecutiveFailures")}
+        value={String(profile.consecutiveFailures ?? 0)}
+      />
+      <DetailItem
         label={t("integrations.egress.providers")}
         value={formatList(profile.supportedProviders, t)}
       />
@@ -326,6 +338,30 @@ function EgressProfileStatusRow({
         <DetailItem
           label={t("integrations.egress.operatorHint")}
           value={profile.operatorHint}
+        />
+      ) : null}
+      {profile.alerts && profile.alerts.length > 0 ? (
+        <DetailItem
+          label={t("integrations.egress.alerts")}
+          value={profile.alerts.map((alert) => alert.code).join(", ")}
+        />
+      ) : null}
+      {profile.probes && profile.probes.length > 0 ? (
+        <DetailItem
+          label={t("integrations.egress.probes")}
+          value={profile.probes
+            .map((probe) =>
+              [
+                probe.name,
+                t(egressProbeStatusKey(probe.status)),
+                probe.latencyMs === undefined
+                  ? undefined
+                  : `${probe.latencyMs} ms`
+              ]
+                .filter(Boolean)
+                .join(" / ")
+            )
+            .join("; ")}
         />
       ) : null}
     </div>
@@ -583,6 +619,18 @@ function channelHealthStatusKey(
   status: InternalChannelConnectorSummary["healthStatus"]
 ): I18nMessageKey {
   return `integrations.channel.health.${status}` as I18nMessageKey;
+}
+
+function egressSourceKey(
+  source: InternalEgressProfileStatus["source"]
+): I18nMessageKey {
+  return `integrations.egress.source.${source}` as I18nMessageKey;
+}
+
+function egressProbeStatusKey(
+  status: NonNullable<InternalEgressProfileStatus["probes"]>[number]["status"]
+): I18nMessageKey {
+  return `integrations.egress.probeStatus.${status}` as I18nMessageKey;
 }
 
 function channelClassKey(
