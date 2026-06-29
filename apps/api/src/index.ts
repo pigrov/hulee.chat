@@ -41,6 +41,7 @@ import {
   createSqlInternalInboxQueryService
 } from "./internal-inbox-service";
 import { createInternalAccessDecisionService } from "./internal-access-decision-service";
+import { createInternalEgressStatusService } from "./internal-egress-status-service";
 import {
   createTenantSecretResolver,
   createInternalIntegrationService
@@ -193,6 +194,9 @@ export function createInternalApiDataPlaneHandler(
       ),
       rbacRepository: createSqlTenantRbacRepository(options.database)
     }),
+    egressStatus: createInternalEgressStatusService({
+      profiles: options.egressProfile ? [options.egressProfile] : []
+    }),
     rbac: createInternalRbacService({
       rbacRepository: createSqlTenantRbacRepository(options.database),
       employeeRepository: createSqlEmployeeDirectoryRepository(
@@ -292,6 +296,7 @@ export { createPublicApiHandler } from "./http/public-api-handler";
 export { createTelegramWebhookHandler } from "./http/telegram-webhook-handler";
 export { createExternalChannelCommandService } from "./external-channel-command-service";
 export { createInternalAccessDecisionService } from "./internal-access-decision-service";
+export { createInternalEgressStatusService } from "./internal-egress-status-service";
 export {
   createInternalInboxAuthorizationService,
   createInternalInboxCommandService,
@@ -313,6 +318,11 @@ export type {
   InternalAccessDecisionService,
   InternalAccessDecisionServiceOptions
 } from "./internal-access-decision-service";
+export type {
+  InternalEgressStatusContext,
+  InternalEgressStatusService,
+  InternalEgressStatusServiceOptions
+} from "./internal-egress-status-service";
 export type {
   InternalInboxAuthorizationService,
   InternalInboxAuthorizationServiceOptions,

@@ -28,6 +28,7 @@ import {
   loadChannelCatalog,
   loadChannelAuthChallenge,
   loadChannelConnectors,
+  loadEgressStatus,
   loadRbacDirectGrants,
   loadRbacRoleBindings,
   loadRbacRoles,
@@ -252,6 +253,20 @@ describe("inbox API client", () => {
         });
       }
 
+      if (url.pathname.endsWith("/egress/status")) {
+        return Response.json({
+          profiles: [
+            {
+              profileId: "managed-messenger-vpn",
+              profileKind: "vpn_namespace",
+              status: "ready",
+              source: "deployment_config",
+              checkedAt: "2026-06-29T10:00:00.000Z"
+            }
+          ]
+        });
+      }
+
       return Response.json({
         connectors: [
           {
@@ -277,6 +292,9 @@ describe("inbox API client", () => {
     await loadChannelConnectors({
       effectivePermissionOverride: "modules.manage"
     });
+    await loadEgressStatus({
+      effectivePermissionOverride: "modules.manage"
+    });
 
     expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(1, {
       method: "GET",
@@ -286,6 +304,11 @@ describe("inbox API client", () => {
     expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(2, {
       method: "GET",
       path: "/internal/v1/channels/connectors",
+      effectivePermissionOverride: "modules.manage"
+    });
+    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(3, {
+      method: "GET",
+      path: "/internal/v1/egress/status",
       effectivePermissionOverride: "modules.manage"
     });
   });

@@ -91,7 +91,8 @@ export function resolveRequiredInternalApiEffectivePermissionOverride(
   if (
     (method === "GET" &&
       (pathname === "/internal/v1/channels/catalog" ||
-        pathname === "/internal/v1/channels/connectors")) ||
+        pathname === "/internal/v1/channels/connectors" ||
+        pathname === "/internal/v1/egress/status")) ||
     (method === "POST" && pathname === "/internal/v1/channels/connectors") ||
     (method === "POST" &&
       /^\/internal\/v1\/channels\/connectors\/[^/]+\/disable$/.test(

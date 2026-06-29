@@ -5,6 +5,7 @@ import type {
   InternalChannelCatalogResponse,
   InternalChannelConnectorSummary,
   InternalChannelConnectorsResponse,
+  InternalEgressStatusResponse,
   InternalInboxConversationRoutingUpdateResponse,
   InternalInboxReplyResponse,
   InternalInboxViewResponse,
@@ -56,6 +57,7 @@ import type {
   InternalInboxQueryService
 } from "../internal-inbox-service";
 import type { InternalAccessDecisionService } from "../internal-access-decision-service";
+import type { InternalEgressStatusService } from "../internal-egress-status-service";
 import type { InternalIntegrationService } from "../internal-integrations-service";
 import type { InternalOrgStructureService } from "../internal-org-structure-service";
 import type { InternalRbacService } from "../internal-rbac-service";
@@ -86,6 +88,7 @@ export type InternalApiHandlerOptions = {
   tenantSettings: InternalTenantSettingsService;
   orgStructure: InternalOrgStructureService;
   accessDecisions: InternalAccessDecisionService;
+  egressStatus: InternalEgressStatusService;
   rbac: InternalRbacService;
   logger?: Logger;
   requestIdFactory?: () => string;
@@ -224,6 +227,9 @@ type RouteMatch =
   | {
       route: "channel_connector_telegram_webhook_delete";
       connectorId: string;
+    }
+  | {
+      route: "egress_status_view";
     };
 
 type InternalRouteAuthorizationPolicy =
@@ -280,6 +286,7 @@ export function createInternalApiHandler(
           tenantSettings: options.tenantSettings,
           orgStructure: options.orgStructure,
           accessDecisions: options.accessDecisions,
+          egressStatus: options.egressStatus,
           rbac: options.rbac
         });
       } catch (error) {
@@ -416,6 +423,7 @@ async function handleAuthenticatedRoute(input: {
   tenantSettings: InternalTenantSettingsService;
   orgStructure: InternalOrgStructureService;
   accessDecisions: InternalAccessDecisionService;
+  egressStatus: InternalEgressStatusService;
   rbac: InternalRbacService;
 }): Promise<ApiHttpResponse> {
   assertInternalRouteAuthorization(input.session, input.route);
@@ -765,6 +773,13 @@ async function handleAuthenticatedRoute(input: {
 
       return jsonResponse(200, response);
     }
+
+    case "egress_status_view": {
+      const response: InternalEgressStatusResponse =
+        await input.egressStatus.loadEgressStatus(input.session);
+
+      return jsonResponse(200, response);
+    }
   }
 }
 
@@ -841,6 +856,7 @@ function internalRouteAuthorizationPolicy(
     case "channel_connector_telegram_diagnostics":
     case "channel_connector_telegram_webhook_set":
     case "channel_connector_telegram_webhook_delete":
+    case "egress_status_view":
       return {
         kind: "signed_effective_permission_override",
         permission: "modules.manage"
@@ -1028,6 +1044,12 @@ function matchRoute(request: ApiHttpRequest): RouteMatch | undefined {
   if (request.method === "GET" && path === "/internal/v1/channels/connectors") {
     return {
       route: "channel_connectors_view"
+    };
+  }
+
+  if (request.method === "GET" && path === "/internal/v1/egress/status") {
+    return {
+      route: "egress_status_view"
     };
   }
 

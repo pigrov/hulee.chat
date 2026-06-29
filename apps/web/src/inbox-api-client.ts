@@ -6,6 +6,7 @@ import {
   internalChannelConnectorSummarySchema,
   internalChannelCatalogResponseSchema,
   internalChannelConnectorsResponseSchema,
+  internalEgressStatusResponseSchema,
   internalInboxConversationRoutingUpdateRequestSchema,
   internalInboxConversationRoutingUpdateResponseSchema,
   internalInboxReplyResponseSchema,
@@ -31,6 +32,7 @@ import {
   type InternalChannelConnectorCreateRequest,
   type InternalChannelConnectorSummary,
   type InternalChannelConnectorsResponse,
+  type InternalEgressStatusResponse,
   type InternalInboxConversation,
   type InternalInboxConversationRoutingUpdateRequest,
   type InternalInboxConversationRoutingUpdateResponse,
@@ -67,6 +69,7 @@ export type ChannelAuthChallengeViewModel =
   InternalChannelAuthChallengeResponse;
 export type ChannelConnectorsViewModel = InternalChannelConnectorsResponse;
 export type ChannelConnectorViewModel = InternalChannelConnectorSummary;
+export type EgressStatusViewModel = InternalEgressStatusResponse;
 export type TelegramIntegrationViewModel = InternalTelegramIntegrationResponse;
 export type RbacRolesViewModel = InternalRbacRolesResponse;
 export type RbacRoleBindingsViewModel = InternalRbacRoleBindingsResponse;
@@ -460,6 +463,19 @@ export async function loadChannelConnectors(
   }
 
   return internalChannelConnectorsResponseSchema.parse(await response.json());
+}
+
+export async function loadEgressStatus(
+  options: InternalApiAccessOptions<"modules.manage">
+): Promise<EgressStatusViewModel> {
+  return requestInternalApiJson({
+    method: "GET",
+    path: "/internal/v1/egress/status",
+    schema: internalEgressStatusResponseSchema,
+    errorPrefix: "Internal egress status API returned",
+    options,
+    permission: "modules.manage"
+  });
 }
 
 export async function createChannelConnector(

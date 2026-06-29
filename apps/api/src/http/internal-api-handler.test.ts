@@ -96,6 +96,18 @@ function createHandler(input?: {
       effectiveGrantCount: 0
     })
   );
+  const loadEgressStatus = vi.fn(async () => ({
+    profiles: [
+      {
+        profileId: "managed-messenger-vpn",
+        profileKind: "vpn_namespace" as const,
+        status: "ready" as const,
+        source: "deployment_config" as const,
+        checkedAt: "2026-06-29T10:00:00.000Z",
+        supportedProviders: ["telegram", "whatsapp"]
+      }
+    ]
+  }));
   const rbacRole = {
     id: "role-sales",
     name: "Sales",
@@ -531,6 +543,9 @@ function createHandler(input?: {
     accessDecisions: {
       inspectAccessDecision
     },
+    egressStatus: {
+      loadEgressStatus
+    },
     rbac: {
       listRoles,
       createRole,
@@ -571,6 +586,7 @@ function createHandler(input?: {
     upsertOrgUnit,
     upsertWorkQueue,
     inspectAccessDecision,
+    loadEgressStatus,
     listRoles,
     createRole,
     updateRole,
@@ -1556,6 +1572,33 @@ describe("internal API handler", () => {
     expect(listChannelConnectors).toHaveBeenCalledWith(modulesManageSession);
   });
 
+  it("loads egress status through modules.manage permission", async () => {
+    const modulesManageSession = sessionWithPermissions(["modules.manage"]);
+    const { handler, loadEgressStatus } = createHandler({
+      session: modulesManageSession
+    });
+
+    const response = await handler.handle({
+      method: "GET",
+      path: "/internal/v1/egress/status"
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      profiles: [
+        {
+          profileId: "managed-messenger-vpn",
+          profileKind: "vpn_namespace",
+          status: "ready",
+          source: "deployment_config",
+          checkedAt: "2026-06-29T10:00:00.000Z",
+          supportedProviders: ["telegram", "whatsapp"]
+        }
+      ]
+    });
+    expect(loadEgressStatus).toHaveBeenCalledWith(modulesManageSession);
+  });
+
   it("creates channel connectors through modules.manage permission", async () => {
     const modulesManageSession = sessionWithPermissions(["modules.manage"]);
     const { handler, createChannelConnector } = createHandler({
@@ -1806,6 +1849,24 @@ describe("internal API handler", () => {
         code: "permission.denied"
       }
     });
+  });
+
+  it("requires narrow modules.manage override for egress status", async () => {
+    const { handler, loadEgressStatus } = createHandler({
+      session: sessionWithPermissions(["modules.manage", "tenant.manage"])
+    });
+    const response = await handler.handle({
+      method: "GET",
+      path: "/internal/v1/egress/status"
+    });
+
+    expect(response.status).toBe(403);
+    expect(response.body).toMatchObject({
+      error: {
+        code: "permission.denied"
+      }
+    });
+    expect(loadEgressStatus).not.toHaveBeenCalled();
   });
 
   it("requires narrow modules.manage override for Telegram integration routes", async () => {

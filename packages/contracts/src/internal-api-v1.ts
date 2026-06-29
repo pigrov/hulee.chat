@@ -512,6 +512,14 @@ export const internalEgressProfileKindSchema = z.enum([
   "disabled"
 ]);
 
+export const internalEgressStatusSchema = z.enum([
+  "unknown",
+  "ready",
+  "degraded",
+  "unavailable",
+  "misconfigured"
+]);
+
 export const internalEgressRequirementSchema = z
   .object({
     required: z.boolean(),
@@ -536,18 +544,38 @@ export const internalEgressRequirementSchema = z
 export const internalEgressDiagnosticsSchema = z
   .object({
     required: z.boolean(),
-    status: z.enum([
-      "unknown",
-      "ready",
-      "degraded",
-      "unavailable",
-      "misconfigured"
-    ]),
+    status: internalEgressStatusSchema,
     profileKind: internalEgressProfileKindSchema.optional(),
     profileId: z.string().trim().min(1).max(200).optional(),
     checkedAt: z.string().datetime({ offset: true }).optional(),
     lastErrorCode: internalApiPlatformErrorCodeSchema.optional(),
     operatorHint: z.string().trim().min(1).max(500).optional()
+  })
+  .strict();
+
+export const internalEgressProfileStatusSchema = z
+  .object({
+    profileId: z.string().trim().min(1).max(200),
+    profileKind: internalEgressProfileKindSchema,
+    status: internalEgressStatusSchema,
+    source: z.literal("deployment_config"),
+    checkedAt: z.string().datetime({ offset: true }),
+    lastErrorCode: internalApiPlatformErrorCodeSchema.optional(),
+    operatorHint: z.string().trim().min(1).max(500).optional(),
+    supportedProviders: z
+      .array(z.string().trim().min(1).max(80))
+      .max(50)
+      .optional(),
+    supportedChannelTypes: z
+      .array(z.string().trim().min(1).max(80))
+      .max(50)
+      .optional()
+  })
+  .strict();
+
+export const internalEgressStatusResponseSchema = z
+  .object({
+    profiles: z.array(internalEgressProfileStatusSchema).max(20)
   })
   .strict();
 
@@ -969,11 +997,18 @@ export type InternalChannelConnectorHealthStatus = z.infer<
 export type InternalEgressProfileKind = z.infer<
   typeof internalEgressProfileKindSchema
 >;
+export type InternalEgressStatus = z.infer<typeof internalEgressStatusSchema>;
 export type InternalEgressRequirement = z.infer<
   typeof internalEgressRequirementSchema
 >;
 export type InternalEgressDiagnostics = z.infer<
   typeof internalEgressDiagnosticsSchema
+>;
+export type InternalEgressProfileStatus = z.infer<
+  typeof internalEgressProfileStatusSchema
+>;
+export type InternalEgressStatusResponse = z.infer<
+  typeof internalEgressStatusResponseSchema
 >;
 export type InternalChannelOnboardingStepKind = z.infer<
   typeof internalChannelOnboardingStepKindSchema

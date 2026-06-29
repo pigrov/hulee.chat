@@ -85,6 +85,12 @@ describe("web internal API access policy", () => {
     ).toBe("modules.manage");
     expect(
       resolveRequiredInternalApiEffectivePermissionOverride({
+        method: "GET",
+        path: "/internal/v1/egress/status"
+      })
+    ).toBe("modules.manage");
+    expect(
+      resolveRequiredInternalApiEffectivePermissionOverride({
         method: "POST",
         path: "/internal/v1/channels/connectors"
       })

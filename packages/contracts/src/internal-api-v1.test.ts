@@ -10,6 +10,7 @@ import {
   internalChannelCatalogResponseSchema,
   internalChannelConnectorCreateRequestSchema,
   internalChannelConnectorsResponseSchema,
+  internalEgressStatusResponseSchema,
   internalInboxConversationRoutingUpdateRequestSchema,
   internalInboxConversationRoutingUpdateResponseSchema,
   internalInboxReplyRequestSchema,
@@ -765,6 +766,47 @@ describe("internal API v1 schemas", () => {
         }
       ]
     });
+  });
+
+  it("parses safe egress status responses without runtime secrets", () => {
+    expect(
+      internalEgressStatusResponseSchema.parse({
+        profiles: [
+          {
+            profileId: "managed-messenger-vpn",
+            profileKind: "vpn_namespace",
+            status: "ready",
+            source: "deployment_config",
+            checkedAt: "2026-06-29T10:00:00.000Z",
+            supportedProviders: ["telegram", "whatsapp"],
+            supportedChannelTypes: ["telegram_bot", "whatsapp_qr_bridge"]
+          }
+        ]
+      })
+    ).toMatchObject({
+      profiles: [
+        {
+          profileKind: "vpn_namespace",
+          status: "ready",
+          source: "deployment_config"
+        }
+      ]
+    });
+
+    expect(() =>
+      internalEgressStatusResponseSchema.parse({
+        profiles: [
+          {
+            profileId: "managed-messenger-vpn",
+            profileKind: "vpn_namespace",
+            status: "ready",
+            source: "deployment_config",
+            checkedAt: "2026-06-29T10:00:00.000Z",
+            proxyPassword: "secret"
+          }
+        ]
+      })
+    ).toThrow();
   });
 
   it("parses channel connector create requests", () => {
