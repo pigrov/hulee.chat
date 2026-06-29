@@ -1335,6 +1335,20 @@ a.secondaryButton {
   align-items: flex-start;
 }
 
+.managementRow.egressProviderPolicyRow {
+  display: grid;
+  grid-template-columns:
+    minmax(180px, 1fr) minmax(180px, 220px) minmax(220px, 1fr)
+    auto;
+  align-items: flex-start;
+}
+
+.egressProviderPolicyStatus {
+  display: grid;
+  min-width: 0;
+  gap: var(--hulee-space-inline);
+}
+
 .sourceList {
   display: flex;
   flex-wrap: wrap;
@@ -1649,6 +1663,7 @@ button.managementRow:focus-visible {
   .orgStructureCreateForm,
   .orgStructureInlineForm,
   .managementRow.orgStructureRow,
+  .managementRow.egressProviderPolicyRow,
   .scopePickerGrid,
   .roleEditorGrid,
   .roleSubjectGrid,

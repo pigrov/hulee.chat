@@ -512,6 +512,13 @@ export const internalEgressProfileKindSchema = z.enum([
   "disabled"
 ]);
 
+export const internalEgressProviderSchema = z.enum([
+  "telegram",
+  "whatsapp",
+  "max",
+  "vk"
+]);
+
 export const internalEgressStatusSchema = z.enum([
   "unknown",
   "ready",
@@ -631,6 +638,29 @@ export const internalEgressStatusResponseSchema = z
     profiles: z.array(internalEgressProfileStatusSchema).max(20)
   })
   .strict();
+
+export const internalEgressProviderPolicySourceSchema = z.enum([
+  "deployment_default",
+  "platform_policy"
+]);
+
+export const internalEgressProviderPolicySchema = z
+  .object({
+    provider: internalEgressProviderSchema,
+    routingMode: internalEgressProfileKindSchema,
+    profileId: z.string().trim().min(1).max(200),
+    required: z.boolean(),
+    source: internalEgressProviderPolicySourceSchema,
+    supportedChannelTypes: z.array(internalChannelTypeSchema).min(1).max(20),
+    allowedProfileKinds: z.array(internalEgressProfileKindSchema).min(1).max(8),
+    updatedAt: z.string().datetime({ offset: true }).optional(),
+    updatedByPlatformAdminAccountId: z.string().trim().min(1).optional()
+  })
+  .strict()
+  .refine((policy) => policy.allowedProfileKinds.includes(policy.routingMode), {
+    message: "routingMode must be listed in allowedProfileKinds.",
+    path: ["routingMode"]
+  });
 
 export const internalChannelOnboardingStepKindSchema = z.enum([
   "display_name",
@@ -1050,6 +1080,9 @@ export type InternalChannelConnectorHealthStatus = z.infer<
 export type InternalEgressProfileKind = z.infer<
   typeof internalEgressProfileKindSchema
 >;
+export type InternalEgressProvider = z.infer<
+  typeof internalEgressProviderSchema
+>;
 export type InternalEgressStatus = z.infer<typeof internalEgressStatusSchema>;
 export type InternalEgressProbeStatus = z.infer<
   typeof internalEgressProbeStatusSchema
@@ -1068,6 +1101,12 @@ export type InternalEgressProfileStatus = z.infer<
 >;
 export type InternalEgressStatusResponse = z.infer<
   typeof internalEgressStatusResponseSchema
+>;
+export type InternalEgressProviderPolicySource = z.infer<
+  typeof internalEgressProviderPolicySourceSchema
+>;
+export type InternalEgressProviderPolicy = z.infer<
+  typeof internalEgressProviderPolicySchema
 >;
 export type InternalChannelOnboardingStepKind = z.infer<
   typeof internalChannelOnboardingStepKindSchema

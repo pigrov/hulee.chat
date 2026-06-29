@@ -578,7 +578,10 @@ export function webAccessSessionFromPrincipal(
         : (tenantAccount.emailVerifiedAt?.toISOString() ?? null),
     systemRoleTemplateIds,
     permissions,
-    platformRoles
+    platformRoles,
+    ...(principal.platformAdmin?.id
+      ? { platformAdminAccountId: principal.platformAdmin.id }
+      : {})
   };
 }
 

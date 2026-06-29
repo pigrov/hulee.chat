@@ -25,6 +25,7 @@ export type WebAccessSession = {
   systemRoleTemplateIds: readonly SystemRoleTemplateId[];
   permissions: readonly Permission[];
   platformRoles: readonly PlatformRole[];
+  platformAdminAccountId?: string;
 };
 
 const defaultTenantId = "tenant_local_1" as TenantId;

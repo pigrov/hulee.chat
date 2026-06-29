@@ -120,6 +120,13 @@
       "when": 1782740000000,
       "tag": "0016_deployment_egress_status",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1782754389203,
+      "tag": "0017_deployment_egress_provider_policies",
+      "breakpoints": true
     }
   ]
 }

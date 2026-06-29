@@ -5,13 +5,14 @@ import type { RawSqlExecutor } from "./sql-outbox-repository";
 
 export type PlatformAuditAction =
   | "platform.auth.login.succeeded"
-  | "platform.auth.logout.succeeded";
+  | "platform.auth.logout.succeeded"
+  | "platform.egress_provider_policy.updated";
 
 export type PlatformAuditRecord = {
   id: string;
   actorPlatformAdminAccountId?: string;
   action: PlatformAuditAction;
-  entityType: "session";
+  entityType: "session" | "deployment_egress_provider_policy";
   entityId: string;
   metadata?: Record<string, unknown>;
   occurredAt: Date;

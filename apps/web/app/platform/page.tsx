@@ -1,7 +1,14 @@
 import { defaultBrandProfile } from "@hulee/branding";
 import { createTranslator } from "@hulee/i18n";
-import type { InternalEgressProfileStatus } from "@hulee/contracts";
-import { createSqlDeploymentEgressStatusRepository } from "@hulee/db";
+import type { I18nMessageKey } from "@hulee/i18n";
+import type {
+  InternalChannelType,
+  InternalEgressProfileStatus
+} from "@hulee/contracts";
+import {
+  createSqlDeploymentEgressProviderPolicyRepository,
+  createSqlDeploymentEgressStatusRepository
+} from "@hulee/db";
 import {
   AlertTriangle,
   Boxes,
@@ -31,12 +38,24 @@ import {
   resolveOverallEgressStatus
 } from "../../src/egress-formatting";
 import { formatOptionalDateTime } from "../../src/formatting";
+import { updatePlatformEgressProviderPolicyAction } from "../../src/platform-egress-actions";
+import {
+  loadPlatformEgressProviderPolicies,
+  platformEgressProviderRoutingModes,
+  type PlatformEgressProviderPolicyView
+} from "../../src/platform-egress-policies";
 import { loadPlatformEgressStatus } from "../../src/platform-egress-status";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export default async function PlatformAdminPage(): Promise<ReactNode> {
+export default async function PlatformAdminPage({
+  searchParams
+}: {
+  searchParams?: Promise<{
+    egressPolicy?: string;
+  }>;
+}): Promise<ReactNode> {
   const access = await resolveCurrentWebAccessSession();
 
   if (access === null) {
@@ -54,12 +73,19 @@ export default async function PlatformAdminPage(): Promise<ReactNode> {
 
   const { t, locale } = createTranslator("ru");
   const webConfig = resolveWebConfig();
+  const database = getWebDatabase();
   const deploymentType = webConfig.deploymentType;
   const publicBaseUrl = webConfig.publicBaseUrl ?? "http://127.0.0.1:3001";
   const egressStatus = await loadPlatformEgressStatus({
     config: webConfig,
-    repository: createSqlDeploymentEgressStatusRepository(getWebDatabase())
+    repository: createSqlDeploymentEgressStatusRepository(database)
   });
+  const providerPolicies = await loadPlatformEgressProviderPolicies({
+    config: webConfig,
+    egressStatus,
+    repository: createSqlDeploymentEgressProviderPolicyRepository(database)
+  });
+  const resolvedSearchParams = await searchParams;
   const overallEgressStatus = resolveOverallEgressStatus(egressStatus.profiles);
 
   return (
@@ -85,6 +111,20 @@ export default async function PlatformAdminPage(): Promise<ReactNode> {
         </header>
 
         <div className="adminContent">
+          {resolvedSearchParams?.egressPolicy ? (
+            <p
+              className={
+                resolvedSearchParams.egressPolicy === "updated"
+                  ? "formNotice"
+                  : "formError"
+              }
+            >
+              {resolvedSearchParams.egressPolicy === "updated"
+                ? t("platform.egressPolicyStatus.updated")
+                : t("platform.egressPolicyStatus.invalid")}
+            </p>
+          ) : null}
+
           <section
             className="platformMetricGrid"
             aria-label={t("platform.overview")}
@@ -161,6 +201,37 @@ export default async function PlatformAdminPage(): Promise<ReactNode> {
                     key={profile.profileId}
                     locale={locale}
                     profile={profile}
+                    t={t}
+                  />
+                ))}
+              </div>
+            </section>
+
+            <section
+              className="settingsPanel"
+              aria-labelledby="egress-provider-routing-title"
+            >
+              <div className="sectionHeader">
+                <div>
+                  <p className="eyebrow">{t("platform.dataPlane")}</p>
+                  <h2
+                    className="sectionTitle"
+                    id="egress-provider-routing-title"
+                  >
+                    {t("platform.egressProviderRouting")}
+                  </h2>
+                </div>
+                <Network size={18} aria-hidden="true" />
+              </div>
+              <p className="metaText">
+                {t("platform.egressProviderRoutingDescription")}
+              </p>
+              <div className="managementList">
+                {providerPolicies.map((policy) => (
+                  <PlatformEgressProviderPolicy
+                    key={policy.provider}
+                    locale={locale}
+                    policy={policy}
                     t={t}
                   />
                 ))}
@@ -319,6 +390,95 @@ function PlatformEgressProfile({
   );
 }
 
+function PlatformEgressProviderPolicy({
+  locale,
+  policy,
+  t
+}: {
+  locale: string;
+  policy: PlatformEgressProviderPolicyView;
+  t: ReturnType<typeof createTranslator>["t"];
+}): ReactNode {
+  return (
+    <form
+      action={updatePlatformEgressProviderPolicyAction}
+      className="managementRow egressProviderPolicyRow"
+    >
+      <input name="provider" type="hidden" value={policy.provider} />
+      <div>
+        <p className="detailValue">{t(policy.titleKey)}</p>
+        <p className="metaText">
+          {policy.supportedChannelTypes
+            .map((channelType) => t(channelTypeKey(channelType)))
+            .join(", ")}
+        </p>
+        <div className="sourceList">
+          <span className="badge">
+            {t(egressPolicySourceKey(policy.source))}
+          </span>
+          <span className="badge">
+            {t(egressPolicyApplyStateKey(policy.applyState))}
+          </span>
+          {policy.directRouteWarning ? (
+            <span className="badge">
+              <AlertTriangle size={14} aria-hidden="true" />
+              {t("platform.egressPolicy.directWarning")}
+            </span>
+          ) : null}
+        </div>
+      </div>
+
+      <label className="fieldStack">
+        <span className="detailLabel">{t("platform.egressPolicy.route")}</span>
+        <select
+          className="selectInput"
+          defaultValue={policy.routingMode}
+          name="routingMode"
+        >
+          {platformEgressProviderRoutingModes.map((routingMode) => (
+            <option key={routingMode} value={routingMode}>
+              {t(egressProfileKindKey(routingMode))}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <div className="egressProviderPolicyStatus">
+        <DetailItem
+          label={t("integrations.egress.profile")}
+          value={policy.profileId}
+        />
+        <DetailItem
+          label={t("integrations.egress.status")}
+          value={
+            policy.runtimeProfile
+              ? t(egressStatusKey(policy.runtimeProfile.status))
+              : t("common.unknown")
+          }
+        />
+        <DetailItem
+          label={t("integrations.egress.checkedAt")}
+          value={formatOptionalDateTime(
+            policy.runtimeProfile?.checkedAt,
+            locale,
+            t
+          )}
+        />
+        {policy.updatedAt ? (
+          <DetailItem
+            label={t("platform.egressPolicy.updatedAt")}
+            value={formatOptionalDateTime(policy.updatedAt, locale, t)}
+          />
+        ) : null}
+      </div>
+
+      <button className="primaryButton" type="submit">
+        {t("common.save")}
+      </button>
+    </form>
+  );
+}
+
 function PlatformMetric({
   icon,
   label,
@@ -383,4 +543,31 @@ function egressProbeStatusKey(
   return `integrations.egress.probeStatus.${status}` as ReturnType<
     typeof egressStatusKey
   >;
+}
+
+function egressPolicySourceKey(
+  source: PlatformEgressProviderPolicyView["source"]
+): I18nMessageKey {
+  return `platform.egressPolicy.source.${source}` as I18nMessageKey;
+}
+
+function egressPolicyApplyStateKey(
+  state: PlatformEgressProviderPolicyView["applyState"]
+): I18nMessageKey {
+  return `platform.egressPolicy.applyState.${state}` as I18nMessageKey;
+}
+
+function channelTypeKey(
+  channelType: PlatformEgressProviderPolicyView["supportedChannelTypes"][number]
+): I18nMessageKey {
+  const keys = {
+    telegram_bot: "integrations.catalog.telegramBot.title",
+    telegram_qr_bridge: "integrations.catalog.telegramQr.title",
+    whatsapp_qr_bridge: "integrations.catalog.whatsappQr.title",
+    max_qr_bridge: "integrations.catalog.maxQr.title",
+    max_bot: "integrations.catalog.maxBot.title",
+    vk_community: "integrations.catalog.vkCommunity.title"
+  } satisfies Record<InternalChannelType, I18nMessageKey>;
+
+  return keys[channelType];
 }

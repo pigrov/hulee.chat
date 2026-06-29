@@ -143,6 +143,28 @@ export const deploymentEgressStatusSnapshots = pgTable(
   ]
 );
 
+export const deploymentEgressProviderPolicies = pgTable(
+  "deployment_egress_provider_policies",
+  {
+    provider: text("provider").primaryKey(),
+    routingMode: text("routing_mode").notNull(),
+    profileId: text("profile_id").notNull(),
+    required: boolean("required").notNull().default(true),
+    supportedChannelTypes: jsonb("supported_channel_types")
+      .notNull()
+      .default([]),
+    allowedProfileKinds: jsonb("allowed_profile_kinds").notNull().default([]),
+    updatedByPlatformAdminAccountId: text(
+      "updated_by_platform_admin_account_id"
+    ).references(() => platformAdminAccounts.id),
+    ...timestamps
+  },
+  (table) => [
+    index("deployment_egress_provider_policy_profile_idx").on(table.profileId),
+    index("deployment_egress_provider_policy_route_idx").on(table.routingMode)
+  ]
+);
+
 export const moduleCatalog = pgTable(
   "module_catalog",
   {

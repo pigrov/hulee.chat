@@ -10,6 +10,7 @@ import {
   internalChannelCatalogResponseSchema,
   internalChannelConnectorCreateRequestSchema,
   internalChannelConnectorsResponseSchema,
+  internalEgressProviderPolicySchema,
   internalEgressStatusResponseSchema,
   internalInboxConversationRoutingUpdateRequestSchema,
   internalInboxConversationRoutingUpdateResponseSchema,
@@ -820,6 +821,59 @@ describe("internal API v1 schemas", () => {
             proxyPassword: "secret"
           }
         ]
+      })
+    ).toThrow();
+  });
+
+  it("parses deployment egress provider policies", () => {
+    expect(
+      internalEgressProviderPolicySchema.parse({
+        provider: "telegram",
+        routingMode: "vpn_namespace",
+        profileId: "hulee_chat_vpn_gateway",
+        required: true,
+        source: "platform_policy",
+        supportedChannelTypes: ["telegram_bot", "telegram_qr_bridge"],
+        allowedProfileKinds: [
+          "vpn_namespace",
+          "direct",
+          "http_proxy",
+          "socks_proxy",
+          "customer_network",
+          "disabled"
+        ],
+        updatedAt: "2026-06-29T16:00:00.000Z",
+        updatedByPlatformAdminAccountId: "platform-admin-1"
+      })
+    ).toMatchObject({
+      provider: "telegram",
+      routingMode: "vpn_namespace",
+      source: "platform_policy",
+      supportedChannelTypes: ["telegram_bot", "telegram_qr_bridge"]
+    });
+
+    expect(() =>
+      internalEgressProviderPolicySchema.parse({
+        provider: "telegram",
+        routingMode: "vpn_namespace",
+        profileId: "hulee_chat_vpn_gateway",
+        required: true,
+        source: "platform_policy",
+        supportedChannelTypes: ["telegram_bot"],
+        allowedProfileKinds: ["direct"]
+      })
+    ).toThrow();
+
+    expect(() =>
+      internalEgressProviderPolicySchema.parse({
+        provider: "telegram",
+        routingMode: "vpn_namespace",
+        profileId: "hulee_chat_vpn_gateway",
+        required: true,
+        source: "platform_policy",
+        supportedChannelTypes: ["telegram_bot"],
+        allowedProfileKinds: ["vpn_namespace"],
+        nordvpnToken: "secret"
       })
     ).toThrow();
   });

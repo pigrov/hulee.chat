@@ -49,6 +49,12 @@ export {
   createSqlDeploymentEgressStatusRepository
 } from "./sql-deployment-egress-status-repository";
 export {
+  buildFindDeploymentEgressProviderPolicySql,
+  buildListDeploymentEgressProviderPoliciesSql,
+  buildUpsertDeploymentEgressProviderPolicySql,
+  createSqlDeploymentEgressProviderPolicyRepository
+} from "./sql-deployment-egress-provider-policy-repository";
+export {
   buildListOrgUnitsSql,
   buildListWorkQueuesSql,
   buildSetEmployeeOrgUnitMembershipsSql,
@@ -241,6 +247,11 @@ export type {
   ListDeploymentEgressStatusSnapshotsInput,
   UpsertDeploymentEgressStatusSnapshotInput
 } from "./sql-deployment-egress-status-repository";
+export type {
+  DeploymentEgressProviderPolicyRecord,
+  DeploymentEgressProviderPolicyRepository,
+  UpsertDeploymentEgressProviderPolicyInput
+} from "./sql-deployment-egress-provider-policy-repository";
 export type {
   ListOrgUnitsInput,
   ListTeamsInput,
