@@ -31,3 +31,29 @@ docker compose --env-file .env --env-file .release.env -f docker-compose.yml --p
 The nginx config in `deploy/nginx/chat.hulee.ru.conf` is a template for the
 existing `transcribe_nginx` reverse proxy. Apply it only after the app container
 is running and the TLS certificate exists.
+
+## Provider egress
+
+Telegram and WhatsApp provider traffic for Hulee-managed SaaS must run through a
+deployment egress profile. The production compose file keeps `api`, `web`,
+`postgres` and the regular `worker` on normal Docker networking. Provider-facing
+runtime jobs can be enabled separately with the `provider-egress` compose
+profile:
+
+```bash
+HULEE_PROVIDER_EGRESS_ENABLED=true
+HULEE_WORKER_FEATURES=core
+HULEE_PROVIDER_EGRESS_WORKER_FEATURES=telegram_bot,telegram_user,whatsapp_user,whatsapp_official
+HULEE_EGRESS_OPENVPN_USER=...
+HULEE_EGRESS_OPENVPN_PASSWORD=...
+```
+
+These values belong in the server `.env`; do not put VPN credentials or tenant
+channel secrets in GitHub Secrets. The deploy workflow auto-detects
+`HULEE_PROVIDER_EGRESS_ENABLED=true` and starts `hulee_chat_vpn_gateway` plus
+`hulee_chat_worker_provider_egress`. Without that flag, the normal app services
+deploy without VPN requirements.
+
+The first gateway implementation uses the Hulee-owned compose service
+`hulee_chat_vpn_gateway` with a configurable gateway image and provider envs.
+It does not depend on Bridge containers or files.

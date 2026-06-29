@@ -88,17 +88,33 @@ jobs:
           cd '${{ vars.DEPLOY_PATH }}'
           printf '%s' '${{ secrets.GHCR_TOKEN }}' | docker login ghcr.io -u '${{ github.repository_owner }}' --password-stdin >/dev/null
           expected_image='${{ env.IMAGE_NAME }}:${{ github.sha }}'
-          docker compose --env-file .env --env-file .release.env -f docker-compose.yml pull
-          docker compose --env-file .env --env-file .release.env -f docker-compose.yml run --rm -T migrate </dev/null
-          docker compose --env-file .env --env-file .release.env -f docker-compose.yml up -d --force-recreate --wait --wait-timeout 180 postgres api worker web
-          for container in hulee_chat_api hulee_chat_web hulee_chat_worker; do
+          provider_egress_enabled=false
+          if grep -Eiq '^[[:space:]]*HULEE_PROVIDER_EGRESS_ENABLED[[:space:]]*=[[:space:]]*(true|1|yes)[[:space:]]*$' .env; then
+            provider_egress_enabled=true
+          fi
+          if [ "$provider_egress_enabled" = true ] && [ ! -c /dev/net/tun ]; then
+            echo "Provider egress is enabled, but /dev/net/tun is not available on the host." >&2
+            exit 1
+          fi
+          compose=(docker compose --env-file .env --env-file .release.env -f docker-compose.yml)
+          services=(postgres api worker web)
+          image_containers=(hulee_chat_api hulee_chat_web hulee_chat_worker)
+          if [ "$provider_egress_enabled" = true ]; then
+            compose+=(--profile provider-egress)
+            services+=(egress-gateway worker-provider-egress)
+            image_containers+=(hulee_chat_worker_provider_egress)
+          fi
+          "${compose[@]}" pull
+          "${compose[@]}" run --rm -T migrate </dev/null
+          "${compose[@]}" up -d --force-recreate --wait --wait-timeout 180 "${services[@]}"
+          for container in "${image_containers[@]}"; do
             actual_image=$(docker inspect --format '{{.Config.Image}}' "$container")
             if [ "$actual_image" != "$expected_image" ]; then
               echo "$container is running $actual_image, expected $expected_image" >&2
               exit 1
             fi
           done
-          docker compose --env-file .env --env-file .release.env -f docker-compose.yml ps
+          "${compose[@]}" ps
           EOF
 
       - name: Smoke internal API

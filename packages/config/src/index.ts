@@ -13,6 +13,20 @@ export const defaultLocalDatabaseUrl =
 
 export type RuntimeEnvironment = "development" | "test" | "production";
 export type HuleeAppName = "api" | "web" | "worker";
+export const workerFeatureValues = [
+  "core",
+  "webhooks",
+  "telegram_bot",
+  "telegram_user",
+  "whatsapp_user",
+  "whatsapp_official",
+  "max_user"
+] as const;
+export type WorkerFeature = (typeof workerFeatureValues)[number];
+const defaultWorkerFeatures: readonly WorkerFeature[] = [
+  "core",
+  "telegram_bot"
+];
 
 export type EnvSource = Record<string, string | undefined>;
 
@@ -80,6 +94,7 @@ export type WebConfig = BaseAppConfig & {
 
 export type WorkerConfig = BaseAppConfig & {
   appName: "worker";
+  workerFeatures: readonly WorkerFeature[];
   pollIntervalMs: number;
   outboxBatchSize: number;
   outboxRetryDelayMs: number;
@@ -109,6 +124,7 @@ const egressProfileStatusSchema = z.enum([
   "unavailable",
   "misconfigured"
 ]);
+const workerFeatureSchema = z.enum(workerFeatureValues);
 
 const emptyToUndefined = (value: unknown): unknown => {
   if (typeof value === "string" && value.trim() === "") {
@@ -154,6 +170,19 @@ const optionalBoolean = z.preprocess(
     })
 );
 
+const optionalWorkerFeatures = z.preprocess((value) => {
+  const normalized = emptyToUndefined(value);
+
+  if (typeof normalized !== "string") {
+    return normalized;
+  }
+
+  return normalized
+    .split(",")
+    .map((feature) => feature.trim())
+    .filter((feature) => feature.length > 0);
+}, z.array(workerFeatureSchema).min(1).optional());
+
 const baseEnvSchema = z.object({
   NODE_ENV: z.preprocess(emptyToUndefined, runtimeEnvironmentSchema.optional()),
   HULEE_DEPLOYMENT_TYPE: z.preprocess(
@@ -197,6 +226,7 @@ const webEnvSchema = baseEnvSchema.extend({
 });
 
 const workerEnvSchema = baseEnvSchema.extend({
+  HULEE_WORKER_FEATURES: optionalWorkerFeatures,
   HULEE_WORKER_POLL_INTERVAL_MS: optionalInteger(100, 60_000),
   HULEE_OUTBOX_BATCH_SIZE: optionalInteger(1, 500),
   HULEE_OUTBOX_RETRY_DELAY_MS: optionalInteger(100, 3_600_000)
@@ -228,6 +258,8 @@ const issueMessages: Record<string, string> = {
   HULEE_WEB_AUTH_REQUIRED: "must be true, false, 1 or 0",
   HULEE_RESEND_TOKEN: "must not be empty",
   HULEE_EMAIL_FROM: "must not be empty",
+  HULEE_WORKER_FEATURES:
+    "must be a comma-separated list of worker features: core, webhooks, telegram_bot, telegram_user, whatsapp_user, whatsapp_official or max_user",
   HULEE_WORKER_POLL_INTERVAL_MS:
     "must be an integer from 100 to 60000 milliseconds",
   HULEE_OUTBOX_BATCH_SIZE: "must be an integer from 1 to 500",
@@ -489,10 +521,17 @@ export function loadWorkerConfig(env: EnvSource = process.env): WorkerConfig {
   return {
     ...buildBaseConfig("worker", result.data),
     appName: "worker",
+    workerFeatures: normalizeWorkerFeatures(result.data.HULEE_WORKER_FEATURES),
     pollIntervalMs: result.data.HULEE_WORKER_POLL_INTERVAL_MS ?? 1_000,
     outboxBatchSize: result.data.HULEE_OUTBOX_BATCH_SIZE ?? 50,
     outboxRetryDelayMs: result.data.HULEE_OUTBOX_RETRY_DELAY_MS ?? 30_000
   };
+}
+
+function normalizeWorkerFeatures(
+  features: readonly WorkerFeature[] | undefined
+): readonly WorkerFeature[] {
+  return [...new Set(features ?? defaultWorkerFeatures)];
 }
 
 export function loadLocalEnvFile(input?: {

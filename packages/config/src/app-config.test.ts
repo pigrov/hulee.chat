@@ -92,6 +92,7 @@ describe("app config", () => {
         HULEE_DEPLOYMENT_TYPE: "saas_shared",
         HULEE_LOG_LEVEL: "debug",
         DATABASE_URL: "postgres://user:pass@example.test:5432/hulee",
+        HULEE_WORKER_FEATURES: "core, telegram_bot, telegram_bot",
         HULEE_WORKER_POLL_INTERVAL_MS: "2500",
         HULEE_OUTBOX_BATCH_SIZE: "25",
         HULEE_OUTBOX_RETRY_DELAY_MS: "45000"
@@ -101,9 +102,16 @@ describe("app config", () => {
       nodeEnv: "test",
       deploymentType: "saas_shared",
       logLevel: "debug",
+      workerFeatures: ["core", "telegram_bot"],
       pollIntervalMs: 2500,
       outboxBatchSize: 25,
       outboxRetryDelayMs: 45000
+    });
+  });
+
+  it("defaults worker features to core and Telegram Bot for local bootstrap", () => {
+    expect(loadWorkerConfig({})).toMatchObject({
+      workerFeatures: ["core", "telegram_bot"]
     });
   });
 
@@ -320,6 +328,29 @@ describe("app config", () => {
         {
           variable: "HULEE_API_PORT",
           message: "must be an integer from 1 to 65535"
+        }
+      ]);
+    }
+  });
+
+  it("rejects unknown worker features without echoing values", () => {
+    expect(() =>
+      loadWorkerConfig({
+        HULEE_WORKER_FEATURES: "core,unknown-provider-feature"
+      })
+    ).toThrow(ConfigError);
+
+    try {
+      loadWorkerConfig({
+        HULEE_WORKER_FEATURES: "core,unknown-provider-feature"
+      });
+    } catch (error) {
+      expect(String(error)).not.toContain("unknown-provider-feature");
+      expect((error as ConfigError).issues).toEqual([
+        {
+          variable: "HULEE_WORKER_FEATURES",
+          message:
+            "must be a comma-separated list of worker features: core, webhooks, telegram_bot, telegram_user, whatsapp_user, whatsapp_official or max_user"
         }
       ]);
     }

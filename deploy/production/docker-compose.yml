@@ -80,6 +80,76 @@ services:
   worker:
     <<: *app-base
     container_name: hulee_chat_worker
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      HULEE_DEPLOYMENT_TYPE: ${HULEE_DEPLOYMENT_TYPE:-saas_shared}
+      HULEE_LOG_LEVEL: ${HULEE_LOG_LEVEL:-info}
+      HULEE_INTERNAL_API_SECRET: ${HULEE_INTERNAL_API_SECRET:?HULEE_INTERNAL_API_SECRET is required}
+      HULEE_PUBLIC_BASE_URL: ${HULEE_PUBLIC_BASE_URL:?HULEE_PUBLIC_BASE_URL is required}
+      HULEE_PUBLIC_WEBHOOK_BASE_URL: ${HULEE_PUBLIC_WEBHOOK_BASE_URL:?HULEE_PUBLIC_WEBHOOK_BASE_URL is required}
+      HULEE_WORKER_FEATURES: ${HULEE_WORKER_FEATURES:-core}
+    command: ["pnpm", "--filter", "@hulee/worker", "start"]
+
+  egress-gateway:
+    image: ${HULEE_EGRESS_GATEWAY_IMAGE:-qmcgaw/gluetun:v3.40}
+    container_name: hulee_chat_vpn_gateway
+    profiles:
+      - provider-egress
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    env_file:
+      - .env
+    environment:
+      VPN_SERVICE_PROVIDER: ${HULEE_EGRESS_VPN_SERVICE_PROVIDER:-nordvpn}
+      VPN_TYPE: ${HULEE_EGRESS_VPN_TYPE:-openvpn}
+      OPENVPN_USER: ${HULEE_EGRESS_OPENVPN_USER:-}
+      OPENVPN_PASSWORD: ${HULEE_EGRESS_OPENVPN_PASSWORD:-}
+      SERVER_COUNTRIES: ${HULEE_EGRESS_SERVER_COUNTRIES:-Netherlands}
+      OPENVPN_PROTOCOL: ${HULEE_EGRESS_OPENVPN_PROTOCOL:-udp}
+      DNS_KEEP_NAMESERVER: ${HULEE_EGRESS_DNS_KEEP_NAMESERVER:-on}
+      DOT: ${HULEE_EGRESS_DOT:-off}
+      FIREWALL_OUTBOUND_SUBNETS: ${HULEE_EGRESS_FIREWALL_OUTBOUND_SUBNETS:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
+    networks:
+      - default
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'wget -q --spider "$${HULEE_EGRESS_HEALTHCHECK_URL:-https://www.gstatic.com/generate_204}"'
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+  worker-provider-egress:
+    <<: *app-base
+    container_name: hulee_chat_worker_provider_egress
+    profiles:
+      - provider-egress
+    network_mode: "service:egress-gateway"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      HULEE_DEPLOYMENT_TYPE: ${HULEE_DEPLOYMENT_TYPE:-saas_shared}
+      HULEE_LOG_LEVEL: ${HULEE_LOG_LEVEL:-info}
+      HULEE_INTERNAL_API_SECRET: ${HULEE_INTERNAL_API_SECRET:?HULEE_INTERNAL_API_SECRET is required}
+      HULEE_PUBLIC_BASE_URL: ${HULEE_PUBLIC_BASE_URL:?HULEE_PUBLIC_BASE_URL is required}
+      HULEE_PUBLIC_WEBHOOK_BASE_URL: ${HULEE_PUBLIC_WEBHOOK_BASE_URL:?HULEE_PUBLIC_WEBHOOK_BASE_URL is required}
+      HULEE_WORKER_FEATURES: ${HULEE_PROVIDER_EGRESS_WORKER_FEATURES:-telegram_bot,telegram_user,whatsapp_user,whatsapp_official}
+      HULEE_EGRESS_PROFILE_ID: ${HULEE_PROVIDER_EGRESS_PROFILE_ID:-hulee_chat_vpn_gateway}
+      HULEE_EGRESS_PROFILE_KIND: vpn_namespace
+      HULEE_EGRESS_PROFILE_STATUS: ${HULEE_PROVIDER_EGRESS_PROFILE_STATUS:-ready}
+      HULEE_EGRESS_OPERATOR_HINT: ${HULEE_PROVIDER_EGRESS_OPERATOR_HINT:-Provider traffic is routed through hulee_chat_vpn_gateway.}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      egress-gateway:
+        condition: service_healthy
     command: ["pnpm", "--filter", "@hulee/worker", "start"]
 
   web:

@@ -15,22 +15,29 @@ const runtime = createWorkerRuntime();
 const database = createHuleeDatabase({
   connectionString: runtime.config.databaseUrl
 });
-const outboxRepository = createSqlOutboxRepository(database);
-const outboxHandler = createWorkerOutboxHandler({
-  database,
-  secretEncryptionKey: runtime.config.secretEncryptionKey,
-  egressProfile: runtime.config.egressProfile
-});
-const telegramPollingSweeper = createWorkerTelegramPollingSweeper({
-  database,
-  secretEncryptionKey: runtime.config.secretEncryptionKey,
-  egressProfile: runtime.config.egressProfile
-});
+const telegramBotServices = runtime.config.workerFeatures.includes(
+  "telegram_bot"
+)
+  ? {
+      outboxRepository: createSqlOutboxRepository(database),
+      outboxHandler: createWorkerOutboxHandler({
+        database,
+        secretEncryptionKey: runtime.config.secretEncryptionKey,
+        egressProfile: runtime.config.egressProfile
+      }),
+      pollingSweeper: createWorkerTelegramPollingSweeper({
+        database,
+        secretEncryptionKey: runtime.config.secretEncryptionKey,
+        egressProfile: runtime.config.egressProfile
+      })
+    }
+  : undefined;
 
 let stopping = false;
 let processing = false;
 
 runtime.logger.info("worker.started", {
+  workerFeatures: runtime.config.workerFeatures,
   pollIntervalMs: runtime.config.pollIntervalMs,
   outboxBatchSize: runtime.config.outboxBatchSize,
   egressProfileKind: runtime.config.egressProfile.profileKind,
@@ -51,12 +58,16 @@ async function processNextBatch(): Promise<void> {
     return;
   }
 
+  if (telegramBotServices === undefined) {
+    return;
+  }
+
   processing = true;
 
   try {
     const result = await processOutboxBatch({
-      repository: outboxRepository,
-      handler: outboxHandler,
+      repository: telegramBotServices.outboxRepository,
+      handler: telegramBotServices.outboxHandler,
       batchSize: runtime.config.outboxBatchSize,
       now: new Date(),
       retryDelayMs: runtime.config.outboxRetryDelayMs
@@ -71,7 +82,7 @@ async function processNextBatch(): Promise<void> {
       });
     }
 
-    const pollingResult = await telegramPollingSweeper.sweep();
+    const pollingResult = await telegramBotServices.pollingSweeper.sweep();
 
     if (pollingResult.configsPolled > 0 || pollingResult.updatesReceived > 0) {
       runtime.logger.info("worker.telegram_polling_sweep_processed", {
@@ -83,7 +94,7 @@ async function processNextBatch(): Promise<void> {
       });
     }
   } catch (error) {
-    runtime.logger.error("worker.outbox_batch_failed", undefined, error);
+    runtime.logger.error("worker.provider_batch_failed", undefined, error);
   } finally {
     processing = false;
   }
