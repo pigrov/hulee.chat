@@ -66,6 +66,15 @@ and `api`. The worker writes those values to `/etc/hosts` before startup, which
 lets Gluetun use VPN-backed DNS instead of Docker's default nameserver for
 external provider traffic.
 
+For the pinned `qmcgaw/gluetun:v3.40` image, DNS-over-TLS is configured with
+the legacy `DOT_*` environment variables exposed as `HULEE_EGRESS_DOT*`. Keep
+`HULEE_EGRESS_DNS_KEEP_NAMESERVER=off`; otherwise Gluetun warns that Docker's
+default nameserver can leak DNS outside the VPN. A startup log line like
+`using plaintext DNS at address 1.1.1.1` is expected before the DoT server is
+ready. Treat it as a problem only if it is not followed by
+`DNS server listening` and `ready`, or if the gateway/worker `/etc/resolv.conf`
+does not point at `127.0.0.1`.
+
 Registry gateway images such as `qmcgaw/gluetun:v3.40` are pulled by the deploy
 workflow. Server-local gateway images such as `bridge-nordvpn-gateway:latest`
 must already exist on the host; the deploy workflow verifies them locally and
