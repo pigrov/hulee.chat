@@ -48,6 +48,12 @@ HULEE_EGRESS_OPENVPN_USER=...
 HULEE_EGRESS_OPENVPN_PASSWORD=...
 ```
 
+The compose service supports two first-step gateway env shapes:
+
+- `qmcgaw/gluetun` through `HULEE_EGRESS_OPENVPN_*` and related gluetun envs;
+- the Bridge-compatible NordVPN gateway image through
+  `HULEE_EGRESS_NORDVPN_*` values.
+
 These values belong in the server `.env`; do not put VPN credentials or tenant
 channel secrets in GitHub Secrets. The deploy workflow auto-detects
 `HULEE_PROVIDER_EGRESS_ENABLED=true` and starts `hulee_chat_vpn_gateway` plus

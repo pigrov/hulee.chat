@@ -100,9 +100,12 @@ services:
       - NET_ADMIN
     devices:
       - /dev/net/tun:/dev/net/tun
+    sysctls:
+      net.ipv6.conf.all.disable_ipv6: "0"
     env_file:
       - .env
     environment:
+      # gluetun-compatible gateway image envs.
       VPN_SERVICE_PROVIDER: ${HULEE_EGRESS_VPN_SERVICE_PROVIDER:-nordvpn}
       VPN_TYPE: ${HULEE_EGRESS_VPN_TYPE:-openvpn}
       OPENVPN_USER: ${HULEE_EGRESS_OPENVPN_USER:-}
@@ -112,13 +115,27 @@ services:
       DNS_KEEP_NAMESERVER: ${HULEE_EGRESS_DNS_KEEP_NAMESERVER:-on}
       DOT: ${HULEE_EGRESS_DOT:-off}
       FIREWALL_OUTBOUND_SUBNETS: ${HULEE_EGRESS_FIREWALL_OUTBOUND_SUBNETS:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
+      # Bridge-compatible NordVPN gateway image envs.
+      NORDVPN_TOKEN: ${HULEE_EGRESS_NORDVPN_TOKEN:-}
+      NORDVPN_TECHNOLOGY: ${HULEE_EGRESS_NORDVPN_TECHNOLOGY:-}
+      NORDVPN_COUNTRY: ${HULEE_EGRESS_NORDVPN_COUNTRY:-}
+      NORDVPN_TARGETS: ${HULEE_EGRESS_NORDVPN_TARGETS:-}
+      NORDVPN_HEALTHCHECK_URLS: ${HULEE_EGRESS_NORDVPN_HEALTHCHECK_URLS:-}
+      NORDVPN_RECONNECT_AFTER_FAILURES: ${HULEE_EGRESS_NORDVPN_RECONNECT_AFTER_FAILURES:-3}
+      NORDVPN_RECONNECT_COOLDOWN_SECONDS: ${HULEE_EGRESS_NORDVPN_RECONNECT_COOLDOWN_SECONDS:-300}
+      NORDVPN_HEALTHCHECK_TIMEOUT_SECONDS: ${HULEE_EGRESS_NORDVPN_HEALTHCHECK_TIMEOUT_SECONDS:-8}
+      NORDVPN_LOG_PREFIX: hulee_chat_vpn_gateway
+      NORDVPN_ALLOW_SUBNETS: ${HULEE_EGRESS_NORDVPN_ALLOW_SUBNETS:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
+      NORDVPN_ALLOW_PORTS: ${HULEE_EGRESS_NORDVPN_ALLOW_PORTS:-}
+      NORDVPN_KILL_SWITCH: ${HULEE_EGRESS_NORDVPN_KILL_SWITCH:-}
+      NORDVPN_LAN_DISCOVERY: ${HULEE_EGRESS_NORDVPN_LAN_DISCOVERY:-}
     networks:
       - default
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          'wget -q --spider "$${HULEE_EGRESS_HEALTHCHECK_URL:-https://www.gstatic.com/generate_204}"'
+          'if command -v nordvpn >/dev/null 2>&1; then timeout 8s nordvpn status | grep -q ''Status: Connected''; else wget -q --spider "$${HULEE_EGRESS_HEALTHCHECK_URL:-https://www.gstatic.com/generate_204}"; fi'
         ]
       interval: 30s
       timeout: 10s
