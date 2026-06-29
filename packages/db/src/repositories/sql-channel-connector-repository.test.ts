@@ -7,13 +7,19 @@ import type {
   TenantId
 } from "@hulee/contracts";
 import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
 import type {
   RawSqlExecutor,
   RawSqlQueryResult
 } from "./sql-outbox-repository";
-import { createSqlChannelConnectorRepository } from "./sql-channel-connector-repository";
+
+import {
+  buildFindActiveChannelConnectorByConfigStringSql,
+  buildFindActiveChannelConnectorByExternalIdSql,
+  createSqlChannelConnectorRepository
+} from "./sql-channel-connector-repository";
 
 const tenantId = "tenant_channel_connector" as TenantId;
 const connectorId =
@@ -95,6 +101,30 @@ describe("SQL channel connector repository", () => {
     });
   });
 
+  it("builds active connector lookups that require a unique connected or degraded match", () => {
+    const webhookQuery = sqlText(
+      buildFindActiveChannelConnectorByConfigStringSql({
+        channelType: "telegram_bot",
+        configKey: "webhookConnectorId",
+        configValue: "tgwh_test"
+      })
+    );
+    const externalIdQuery = sqlText(
+      buildFindActiveChannelConnectorByExternalIdSql({
+        tenantId,
+        channelType: "telegram_bot",
+        channelExternalId: "telegram-local"
+      })
+    );
+
+    expect(webhookQuery).toContain("status in ('connected', 'degraded')");
+    expect(webhookQuery).toContain("count(*) over () as match_count");
+    expect(webhookQuery).toContain("where match_count = 1");
+    expect(externalIdQuery).toContain("tenant_id = $1");
+    expect(externalIdQuery).toContain("config ->> 'channelExternalId' = $3");
+    expect(externalIdQuery).toContain("where match_count = 1");
+  });
+
   it("lists tenant connectors without exposing deleted records by default", async () => {
     const executor = new RecordingSqlExecutor([createConnectorRow()]);
     const repository = createSqlChannelConnectorRepository(executor);
@@ -156,6 +186,10 @@ class RecordingSqlExecutor implements RawSqlExecutor {
       rows: this.rows as readonly Row[]
     };
   }
+}
+
+function sqlText(query: SQL): string {
+  return new PgDialect().sqlToQuery(query).sql;
 }
 
 function createConnectorRow(): Record<string, unknown> {

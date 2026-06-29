@@ -245,13 +245,19 @@ export function buildFindActiveChannelConnectorByConfigStringSql(
   input: FindActiveChannelConnectorByConfigStringInput
 ): SQL {
   return sql`
+    with matching_connectors as (
+      select ${channelConnectorSelectList},
+             count(*) over () as match_count
+      from channel_connectors
+      where channel_type = ${input.channelType}
+        and status in ('connected', 'degraded')
+        and config ->> ${input.configKey} = ${input.configValue}
+      order by created_at asc, id asc
+      limit 2
+    )
     select ${channelConnectorSelectList}
-    from channel_connectors
-    where channel_type = ${input.channelType}
-      and status not in ('disabled', 'deleted')
-      and config ->> ${input.configKey} = ${input.configValue}
-    order by created_at asc, id asc
-    limit 1
+    from matching_connectors
+    where match_count = 1
   `;
 }
 
@@ -259,14 +265,20 @@ export function buildFindActiveChannelConnectorByExternalIdSql(
   input: FindActiveChannelConnectorByExternalIdInput
 ): SQL {
   return sql`
+    with matching_connectors as (
+      select ${channelConnectorSelectList},
+             count(*) over () as match_count
+      from channel_connectors
+      where tenant_id = ${input.tenantId}
+        and channel_type = ${input.channelType}
+        and status in ('connected', 'degraded')
+        and config ->> 'channelExternalId' = ${input.channelExternalId}
+      order by created_at asc, id asc
+      limit 2
+    )
     select ${channelConnectorSelectList}
-    from channel_connectors
-    where tenant_id = ${input.tenantId}
-      and channel_type = ${input.channelType}
-      and status not in ('disabled', 'deleted')
-      and config ->> 'channelExternalId' = ${input.channelExternalId}
-    order by created_at asc, id asc
-    limit 1
+    from matching_connectors
+    where match_count = 1
   `;
 }
 

@@ -164,6 +164,73 @@ describe("telegram polling sweeper", () => {
     expect(repository.upserts).toEqual([]);
   });
 
+  it("polls each active Telegram polling connector independently", async () => {
+    const repository = new InMemoryChannelConnectorRepository([
+      createTelegramConnector({
+        channelExternalId: "telegram-primary",
+        id: "telegram_bot:primary",
+        mode: "polling",
+        secretRef: "env:HULEE_TELEGRAM_PRIMARY_TOKEN"
+      }),
+      createTelegramConnector({
+        channelExternalId: "telegram-secondary",
+        id: "telegram_bot:secondary",
+        mode: "polling",
+        secretRef: "env:HULEE_TELEGRAM_SECONDARY_TOKEN"
+      })
+    ]);
+    const commands = new RecordingInboundCommands();
+    const getUpdates = vi.fn(async () => [
+      {
+        updateId: 2001,
+        raw: telegramUpdate(2001, 77, "Hello")
+      }
+    ]);
+    const botApiClientFactory = vi.fn(() => ({
+      getUpdates
+    }));
+
+    const result = await runTelegramPollingSweep({
+      connectorRepository: repository,
+      secretResolver: {
+        async resolveSecret({ secretRef }) {
+          return secretRef === "env:HULEE_TELEGRAM_PRIMARY_TOKEN"
+            ? "token-primary"
+            : "token-secondary";
+        }
+      },
+      commands,
+      botApiClientFactory,
+      now: () => now,
+      requestIdFactory: ({ channelExternalId, updateId }) =>
+        `poll-${channelExternalId}-${updateId}`
+    });
+
+    expect(result).toMatchObject({
+      configsScanned: 2,
+      configsPolled: 2,
+      updatesReceived: 2,
+      updatesAccepted: 2,
+      updatesFailed: 0
+    });
+    expect(botApiClientFactory).toHaveBeenCalledWith({
+      apiBaseUrl: undefined,
+      botToken: "token-primary"
+    });
+    expect(botApiClientFactory).toHaveBeenCalledWith({
+      apiBaseUrl: undefined,
+      botToken: "token-secondary"
+    });
+    expect(commands.messages.map((entry) => entry.context.channelId)).toEqual([
+      "telegram-primary",
+      "telegram-secondary"
+    ]);
+    expect(repository.upserts.map((entry) => entry.id)).toEqual([
+      "telegram_bot:primary",
+      "telegram_bot:secondary"
+    ]);
+  });
+
   it("persists diagnosable provider errors when getUpdates fails", async () => {
     const repository = new InMemoryChannelConnectorRepository([
       createTelegramConnector({
@@ -310,11 +377,14 @@ class RecordingInboundCommands {
 }
 
 function createTelegramConnector(input: {
+  channelExternalId?: string;
+  id?: string;
   mode: "webhook" | "polling";
   diagnostics?: InternalTelegramIntegrationDiagnostics;
+  secretRef?: string;
 }): ChannelConnectorRecord {
   return {
-    id: "telegram_bot:tenant-polling" as ChannelConnectorId,
+    id: (input.id ?? "telegram_bot:tenant-polling") as ChannelConnectorId,
     tenantId,
     channelType: "telegram_bot" as ChannelType,
     channelClass: "bot_bridge" as ChannelClass,
@@ -325,14 +395,37 @@ function createTelegramConnector(input: {
     capabilities: {},
     onboardingState: {},
     config: {
-      channelExternalId: "telegram-local",
+      channelExternalId: input.channelExternalId ?? "telegram-local",
       mode: input.mode,
-      botTokenSecretRef: "env:HULEE_TELEGRAM_BOT_TOKEN",
+      botTokenSecretRef: input.secretRef ?? "env:HULEE_TELEGRAM_BOT_TOKEN",
       outboundEnabled: true
     },
     diagnostics: input.diagnostics ?? {},
     createdByEmployeeId: null,
     createdAt: now,
     updatedAt: now
+  };
+}
+
+function telegramUpdate(
+  updateId: number,
+  messageId: number,
+  text: string
+): Record<string, unknown> {
+  return {
+    update_id: updateId,
+    message: {
+      message_id: messageId,
+      date: 1782115200,
+      chat: {
+        id: 9001,
+        type: "private"
+      },
+      from: {
+        id: 42,
+        first_name: "Alice"
+      },
+      text
+    }
   };
 }

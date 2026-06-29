@@ -113,6 +113,60 @@ describe("telegram outbound dispatcher", () => {
     ]);
   });
 
+  it("dispatches through the connector that owns the queued channel external id", async () => {
+    const outboundRepository = new InMemoryOutboundDispatchRepository({
+      ...createQueuedMessage(),
+      channelExternalId: "telegram-secondary"
+    });
+    const connectorRepository = new InMemoryChannelConnectorRepository([
+      createTelegramConnector({
+        channelExternalId: "telegram-primary",
+        id: "telegram_bot:primary",
+        secretRef: "env:HULEE_TELEGRAM_PRIMARY_TOKEN"
+      }),
+      createTelegramConnector({
+        channelExternalId: "telegram-secondary",
+        id: "telegram_bot:secondary",
+        secretRef: "env:HULEE_TELEGRAM_SECONDARY_TOKEN"
+      })
+    ]);
+    const sendTextMessage = vi.fn(async () => ({
+      messageId: "telegram-provider-message-2",
+      chatId: "42",
+      raw: {}
+    }));
+    const clientFactory = vi.fn(() => ({
+      sendTextMessage
+    }));
+    const dispatcher = createTelegramOutboundDispatcher({
+      outboundRepository,
+      connectorRepository,
+      secretResolver: createEnvSecretResolver({
+        HULEE_TELEGRAM_PRIMARY_TOKEN: "token-primary",
+        HULEE_TELEGRAM_SECONDARY_TOKEN: "token-secondary"
+      }),
+      botApiClientFactory: clientFactory,
+      now: () => now,
+      attemptIdFactory: ({ outcome }) => `attempt-${outcome}`
+    });
+
+    await dispatcher.handle(createOutboxRecord("message.sent"));
+
+    expect(clientFactory).toHaveBeenCalledWith({
+      apiBaseUrl: undefined,
+      botToken: "token-secondary"
+    });
+    expect(sendTextMessage).toHaveBeenCalledWith({
+      chatId: "42",
+      text: "Hello"
+    });
+    expect(outboundRepository.sent).toEqual([
+      expect.objectContaining({
+        providerMessageId: "telegram-provider-message-2"
+      })
+    ]);
+  });
+
   it("skips non-message outbox records and non-Telegram channel handles", async () => {
     const outboundRepository = new InMemoryOutboundDispatchRepository({
       ...createQueuedMessage(),
@@ -175,63 +229,114 @@ class InMemoryOutboundDispatchRepository implements OutboundDispatchRepository {
 }
 
 class InMemoryChannelConnectorRepository implements ChannelConnectorRepository {
-  private readonly record = createTelegramConnector();
+  private readonly records: readonly ChannelConnectorRecord[];
+
+  constructor(
+    records: readonly ChannelConnectorRecord[] = [createTelegramConnector()]
+  ) {
+    this.records = records;
+  }
 
   async findConnector(
-    _input: FindChannelConnectorInput
+    input: FindChannelConnectorInput
   ): Promise<ChannelConnectorRecord | null> {
-    return this.record;
+    return (
+      this.records.find(
+        (record) =>
+          record.tenantId === input.tenantId && record.id === input.connectorId
+      ) ?? null
+    );
   }
 
   async findFirstConnectorByType(
-    _input: FindFirstChannelConnectorByTypeInput
+    input: FindFirstChannelConnectorByTypeInput
   ): Promise<ChannelConnectorRecord | null> {
-    return this.record;
+    return (
+      this.records.find(
+        (record) =>
+          record.tenantId === input.tenantId &&
+          record.channelType === input.channelType &&
+          (input.includeDeleted || record.status !== "deleted")
+      ) ?? null
+    );
   }
 
   async listActiveConnectorsByType(
-    _input: ListActiveChannelConnectorsByTypeInput
+    input: ListActiveChannelConnectorsByTypeInput
   ): Promise<ChannelConnectorRecord[]> {
-    return [this.record];
+    return this.records.filter(
+      (record) =>
+        record.channelType === input.channelType &&
+        isActiveStatus(record.status)
+    );
   }
 
   async listTenantConnectors(
     input: ListTenantChannelConnectorsInput
   ): Promise<ChannelConnectorRecord[]> {
-    return this.record.tenantId === input.tenantId ? [this.record] : [];
+    return this.records.filter(
+      (record) =>
+        record.tenantId === input.tenantId &&
+        (input.includeDeleted || record.status !== "deleted")
+    );
   }
 
   async findActiveConnectorByConfigString(
-    _input: FindActiveChannelConnectorByConfigStringInput
+    input: FindActiveChannelConnectorByConfigStringInput
   ): Promise<ChannelConnectorRecord | null> {
-    return this.record;
+    const matches = this.records.filter(
+      (record) =>
+        record.channelType === input.channelType &&
+        isActiveStatus(record.status) &&
+        isRecord(record.config) &&
+        record.config[input.configKey] === input.configValue
+    );
+
+    return matches.length === 1 ? matches[0] : null;
   }
 
   async findActiveConnectorByExternalId(
     input: FindActiveChannelConnectorByExternalIdInput
   ): Promise<ChannelConnectorRecord | null> {
-    return input.channelExternalId === "telegram-local" ? this.record : null;
+    const matches = this.records.filter(
+      (record) =>
+        record.tenantId === input.tenantId &&
+        record.channelType === input.channelType &&
+        isActiveStatus(record.status) &&
+        isRecord(record.config) &&
+        record.config.channelExternalId === input.channelExternalId
+    );
+
+    return matches.length === 1 ? matches[0] : null;
   }
 
   async upsertConnector(_input: UpsertChannelConnectorInput): Promise<void> {}
 }
 
-function createTelegramConnector(): ChannelConnectorRecord {
+function createTelegramConnector(
+  input: {
+    channelExternalId?: string;
+    id?: string;
+    secretRef?: string;
+    status?: ChannelConnectorStatus;
+  } = {}
+): ChannelConnectorRecord {
   return {
-    id: "telegram_bot:tenant_worker_telegram" as ChannelConnectorId,
+    id: (input.id ??
+      "telegram_bot:tenant_worker_telegram") as ChannelConnectorId,
     tenantId,
     channelType: "telegram_bot" as ChannelType,
     channelClass: "bot_bridge" as ChannelClass,
     provider: "telegram",
     displayName: "Telegram Bot",
-    status: "connected" as ChannelConnectorStatus,
+    status: (input.status ?? "connected") as ChannelConnectorStatus,
     healthStatus: "healthy" as ChannelConnectorHealthStatus,
     capabilities: {},
     onboardingState: {},
     config: {
-      channelExternalId: "telegram-local",
+      channelExternalId: input.channelExternalId ?? "telegram-local",
       mode: "webhook",
-      botTokenSecretRef: "env:HULEE_TELEGRAM_BOT_TOKEN",
+      botTokenSecretRef: input.secretRef ?? "env:HULEE_TELEGRAM_BOT_TOKEN",
       outboundEnabled: true
     },
     diagnostics: {},
@@ -239,6 +344,14 @@ function createTelegramConnector(): ChannelConnectorRecord {
     createdAt: now,
     updatedAt: now
   };
+}
+
+function isActiveStatus(status: ChannelConnectorRecord["status"]): boolean {
+  return status === "connected" || status === "degraded";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function createQueuedMessage(): QueuedOutboundMessageForDispatch {
