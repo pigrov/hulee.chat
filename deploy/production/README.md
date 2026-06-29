@@ -84,6 +84,15 @@ state, failed probes, consecutive failures and public egress IP on `/platform`.
 If the snapshot becomes stale, the UI marks the profile degraded so a stopped
 provider worker is visible even when the deployment config still says `ready`.
 
+Platform admins can also choose desired egress routing per provider on
+`/platform`. Those rows are stored in `deployment_egress_provider_policies` and
+are enforced by provider workers before they call external APIs. The setting is
+desired state, not an in-process network switch: if a policy says `direct` while
+the Telegram worker is still running inside `hulee_chat_vpn_gateway`, calls are
+blocked with egress diagnostics until the matching worker profile is deployed.
+Switching between `direct` and `vpn_namespace` requires moving provider worker
+features to the correct compose service and restarting/redeploying it.
+
 Registry gateway images such as `qmcgaw/gluetun:v3.40` are pulled by the deploy
 workflow. Server-local gateway images such as `bridge-nordvpn-gateway:latest`
 must already exist on the host; the deploy workflow verifies them locally and

@@ -8,13 +8,11 @@ import {
   createJsonLogger,
   type Logger
 } from "@hulee/observability";
-import {
-  createDeploymentEgressRuntime,
-  type EgressRuntime
-} from "@hulee/modules";
+import type { EgressRuntime } from "@hulee/modules";
 import {
   createAesGcmTenantSecretCipher,
   createSqlChannelConnectorRepository,
+  createSqlDeploymentEgressProviderPolicyRepository,
   createDrizzlePersistenceExecutor,
   createExternalMessageRepository,
   createSqlOutboundDispatchRepository,
@@ -40,6 +38,7 @@ import {
   type TelegramPollingSweepOptions,
   type TelegramPollingSweepResult
 } from "./telegram-polling-sweeper";
+import { createPolicyAwareDeploymentEgressRuntime } from "./policy-egress-runtime";
 
 export type WorkerBoundary = {
   processesOutbox: true;
@@ -108,11 +107,10 @@ export function createWorkerOutboxHandler(
     });
   const egressRuntime =
     options.egressRuntime ??
-    (options.egressProfile
-      ? createDeploymentEgressRuntime({
-          profiles: [options.egressProfile]
-        })
-      : undefined);
+    createWorkerDeploymentEgressRuntime({
+      database: options.database,
+      egressProfile: options.egressProfile
+    });
   const providerOperationDispatcher = createTelegramProviderOperationDispatcher(
     {
       connectorRepository,
@@ -182,11 +180,10 @@ export function createWorkerTelegramPollingSweeper(
     botApiClientFactory: options.telegramBotApiClientFactory,
     egressRuntime:
       options.egressRuntime ??
-      (options.egressProfile
-        ? createDeploymentEgressRuntime({
-            profiles: [options.egressProfile]
-          })
-        : undefined),
+      createWorkerDeploymentEgressRuntime({
+        database: options.database,
+        egressProfile: options.egressProfile
+      }),
     telegramApiBaseUrl: options.telegramApiBaseUrl
   };
 
@@ -197,7 +194,24 @@ export function createWorkerTelegramPollingSweeper(
   };
 }
 
+function createWorkerDeploymentEgressRuntime(input: {
+  database: HuleeDatabase;
+  egressProfile?: WorkerConfig["egressProfile"];
+}): EgressRuntime | undefined {
+  if (!input.egressProfile) {
+    return undefined;
+  }
+
+  return createPolicyAwareDeploymentEgressRuntime({
+    deploymentProfile: input.egressProfile,
+    policyRepository: createSqlDeploymentEgressProviderPolicyRepository(
+      input.database
+    )
+  });
+}
+
 export { processOutboxBatch } from "./outbox-processor";
+export { createPolicyAwareDeploymentEgressRuntime } from "./policy-egress-runtime";
 export {
   createEnvSecretResolver,
   createTenantSecretResolver,
