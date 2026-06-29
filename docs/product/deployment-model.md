@@ -84,3 +84,17 @@ Rollback from RBAC migration defects should use an application release rollback 
 - Observability stack.
 
 Redis can be added for cache, locks, sessions or realtime fanout when scale requires it. The MVP should avoid mandatory infrastructure unless it is clearly needed.
+
+## Provider Egress
+
+Hulee-managed SaaS must route Telegram and WhatsApp provider traffic through a
+managed egress profile, normally VPN/proxy-backed. This applies to Telegram Bot,
+Telegram user/QR, WhatsApp QR and any future WhatsApp Business API connector.
+
+Web, API, PostgreSQL and regular platform workers should stay on normal
+networking. Provider calls such as diagnostics, webhook sync, polling, outbound
+send and user-session auth should run in an egress-routed runtime/worker or use
+a provider client explicitly bound to the selected egress profile.
+
+Direct egress for Telegram/WhatsApp is acceptable only for local/dev bootstrap
+or when an on-prem/customer-network deployment explicitly owns that route.
