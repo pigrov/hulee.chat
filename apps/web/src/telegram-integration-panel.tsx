@@ -6,6 +6,7 @@ import {
   Circle,
   KeyRound,
   LinkIcon,
+  Network,
   Plug,
   PowerOff,
   Save,
@@ -132,6 +133,8 @@ export function TelegramIntegrationPanel({
 
       <TelegramSetupStepper currentStep={setupStep} steps={setupSteps} t={t} />
 
+      <TelegramEgressSummary integration={integration} locale={locale} t={t} />
+
       <TelegramSetupStepPanel
         config={config}
         integration={integration}
@@ -142,6 +145,65 @@ export function TelegramIntegrationPanel({
 
       <TelegramLifecycleActions integration={integration} t={t} />
     </section>
+  );
+}
+
+function TelegramEgressSummary({
+  integration,
+  locale,
+  t
+}: {
+  integration: TelegramIntegrationViewModel;
+  locale: string;
+  t: Translator;
+}): ReactNode {
+  const egress = integration.diagnostics.egress;
+
+  return (
+    <div
+      className="diagnosticGrid egressSummaryGrid"
+      aria-label={t("integrations.egress.summary")}
+    >
+      <DetailItem
+        label={t("integrations.egress.status")}
+        value={egress ? t(egressStatusKey(egress.status)) : t("common.unknown")}
+      />
+      <DetailItem
+        label={t("integrations.egress.profileKind")}
+        value={
+          egress?.profileKind
+            ? t(egressProfileKindKey(egress.profileKind))
+            : t("common.unknown")
+        }
+      />
+      <DetailItem
+        label={t("integrations.egress.profile")}
+        value={formatOptionalValue(egress?.profileId, t)}
+      />
+      <DetailItem
+        label={t("integrations.egress.required")}
+        value={formatOptionalBoolean(egress?.required, t)}
+      />
+      <DetailItem
+        label={t("integrations.egress.checkedAt")}
+        value={formatOptionalDateTime(egress?.checkedAt, locale, t)}
+      />
+      {egress?.lastErrorCode ? (
+        <DetailItem
+          label={t("integrations.egress.error")}
+          value={egress.lastErrorCode}
+        />
+      ) : null}
+      {egress?.operatorHint ? (
+        <DetailItem
+          label={t("integrations.egress.operatorHint")}
+          value={egress.operatorHint}
+        />
+      ) : null}
+      <span className="egressSummaryIcon" aria-hidden="true">
+        <Network size={18} />
+      </span>
+    </div>
   );
 }
 

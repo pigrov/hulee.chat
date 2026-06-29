@@ -28,6 +28,7 @@ import type {
   TenantId
 } from "@hulee/contracts";
 import {
+  internalEgressDiagnosticsSchema,
   internalTelegramIntegrationDiagnosticsSchema,
   isPlatformErrorCode
 } from "@hulee/contracts";
@@ -544,7 +545,8 @@ export function createInternalIntegrationService(
         status: "draft",
         healthStatus: "unknown",
         channelExternalId,
-        diagnosticsStatus: diagnostics.status
+        diagnosticsStatus: diagnostics.status,
+        ...(diagnostics.egress ? { egress: diagnostics.egress } : {})
       };
     },
 
@@ -2148,6 +2150,7 @@ function channelConnectorSummaryFromRecord(
     "channelExternalId"
   );
   const diagnosticsStatus = readRecordString(record.diagnostics, "status");
+  const egress = readRecordEgressDiagnostics(record.diagnostics);
 
   return {
     connectorId: record.id,
@@ -2158,7 +2161,8 @@ function channelConnectorSummaryFromRecord(
     status,
     healthStatus,
     ...(channelExternalId ? { channelExternalId } : {}),
-    ...(diagnosticsStatus ? { diagnosticsStatus } : {})
+    ...(diagnosticsStatus ? { diagnosticsStatus } : {}),
+    ...(egress ? { egress } : {})
   };
 }
 
@@ -2234,6 +2238,18 @@ function readRecordString(input: unknown, key: string): string | undefined {
   return typeof value === "string" && value.trim().length > 0
     ? value
     : undefined;
+}
+
+function readRecordEgressDiagnostics(
+  input: unknown
+): InternalEgressDiagnostics | undefined {
+  if (!isRecord(input)) {
+    return undefined;
+  }
+
+  const result = internalEgressDiagnosticsSchema.safeParse(input.egress);
+
+  return result.success ? result.data : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

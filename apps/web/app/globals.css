@@ -524,6 +524,26 @@ button.iconButton:disabled {
   background: var(--hulee-color-surface-raised);
 }
 
+.egressSummaryGrid {
+  position: relative;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding-right: 44px;
+}
+
+.egressSummaryIcon {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  color: var(--hulee-color-brand-primary);
+  background: var(--hulee-color-surface-default);
+}
+
 .setupStepList {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -1422,6 +1442,13 @@ button.integrationListItem {
   cursor: pointer;
 }
 
+.integrationListBadges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--hulee-space-inline);
+}
+
 .integrationListItem[aria-disabled="true"] {
   opacity: 0.72;
 }
@@ -1682,5 +1709,9 @@ button.managementRow:focus-visible {
 
   .setupStepList {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .egressSummaryGrid {
+    grid-template-columns: 1fr;
   }
 }

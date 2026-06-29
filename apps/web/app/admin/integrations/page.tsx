@@ -8,6 +8,7 @@ import type {
   InternalChannelAuthChallenge,
   InternalChannelCatalogItem,
   InternalChannelConnectorSummary,
+  InternalEgressDiagnostics,
   InternalEgressProfileStatus
 } from "@hulee/contracts";
 import {
@@ -61,6 +62,7 @@ export default async function IntegrationsAdminPage({
   searchParams
 }: {
   searchParams?: Promise<{
+    channelStatus?: string;
     challengeId?: string;
     connectorId?: string;
   }>;
@@ -121,15 +123,20 @@ export default async function IntegrationsAdminPage({
   const telegramChannel = channelCatalog.channels.find(
     (channel) => channel.channelType === "telegram_bot"
   );
+  const selectedTelegramIntegration =
+    selectedConnector?.channelType === "telegram_bot"
+      ? await loadTelegramIntegration(internalApiAccess, {
+          connectorId: selectedConnector.connectorId
+        })
+      : undefined;
   const integrationContent =
     selectedConnector?.channelType === "telegram_bot" || !selectedConnector ? (
       <TelegramIntegrationPanel
         channel={telegramChannel}
         integration={
           selectedConnector?.channelType === "telegram_bot"
-            ? await loadTelegramIntegration(internalApiAccess, {
-                connectorId: selectedConnector.connectorId
-              })
+            ? (selectedTelegramIntegration ??
+              createEmptyTelegramIntegrationViewModel())
             : createEmptyTelegramIntegrationViewModel()
         }
         locale={locale}
@@ -160,6 +167,16 @@ export default async function IntegrationsAdminPage({
       brand={model.tenant.brand}
       current="integrations"
       effectiveAccess={accessSnapshot}
+      sidebarContent={
+        resolvedSearchParams?.channelStatus ? (
+          <DetailItem
+            label={t("admin.integrations.actionStatus")}
+            value={t(
+              channelActionStatusKey(resolvedSearchParams.channelStatus)
+            )}
+          />
+        ) : null
+      }
       t={t}
       tenantDisplayName={model.tenant.displayName}
       title={t("admin.integrations")}
@@ -194,6 +211,7 @@ export default async function IntegrationsAdminPage({
                     connector={connector}
                     catalog={channelCatalog.channels}
                     current={connector.connectorId === selectedConnectorId}
+                    egressDiagnostics={connector.egress}
                     t={t}
                   />
                 ))
@@ -506,11 +524,13 @@ function ConnectorListItem({
   connector,
   catalog,
   current,
+  egressDiagnostics,
   t
 }: {
   connector: InternalChannelConnectorSummary;
   catalog: readonly InternalChannelCatalogItem[];
   current: boolean;
+  egressDiagnostics?: InternalEgressDiagnostics;
   t: Translator;
 }): ReactNode {
   const channel = catalog.find(
@@ -539,8 +559,16 @@ function ConnectorListItem({
           ].join(" / ")}
         </p>
       </div>
-      <span className="badge">
-        {t(channelHealthStatusKey(connector.healthStatus))}
+      <span className="integrationListBadges">
+        {egressDiagnostics ? (
+          <span className="badge">
+            <Network size={14} aria-hidden="true" />
+            {t(egressStatusKey(egressDiagnostics.status))}
+          </span>
+        ) : null}
+        <span className="badge">
+          {t(channelHealthStatusKey(connector.healthStatus))}
+        </span>
       </span>
     </Link>
   );
@@ -637,6 +665,19 @@ function channelClassKey(
   channelClass: InternalChannelConnectorSummary["channelClass"]
 ): I18nMessageKey {
   return `integrations.channel.class.${channelClass}` as I18nMessageKey;
+}
+
+function channelActionStatusKey(status: string): I18nMessageKey {
+  switch (status) {
+    case "created":
+      return "admin.integrations.actionStatus.created";
+    case "disabled":
+      return "admin.integrations.actionStatus.disabled";
+    case "deleted":
+      return "admin.integrations.actionStatus.deleted";
+    default:
+      return "admin.integrations.actionStatus.invalid";
+  }
 }
 
 function selectChannelConnector(input: {
