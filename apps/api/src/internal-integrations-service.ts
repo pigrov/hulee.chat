@@ -15,7 +15,6 @@ import type {
   InternalChannelOnboardingFlow,
   InternalChannelType,
   InternalEgressDiagnostics,
-  InternalEgressRequirement,
   InternalTelegramIntegrationConfig,
   InternalTelegramIntegrationDiagnostics,
   InternalTelegramIntegrationResponse,
@@ -38,10 +37,16 @@ import type {
 } from "@hulee/db";
 import { createChannelConnectorSecretRef } from "@hulee/db";
 import {
+  createPassthroughEgressRuntime,
   createTelegramBotApiClient,
   parseTelegramChannelConfig,
   telegramChannelManifest,
   TelegramAdapterError,
+  managedMessengerVpnEgressRequirement,
+  deploymentPolicyDirectEgressRequirement,
+  type EgressProfileResolution,
+  type EgressRuntime,
+  type TelegramBotApiEgressBinding,
   type TelegramBotApiClient,
   type TelegramBotApiSettings
 } from "@hulee/modules";
@@ -144,6 +149,7 @@ export type InternalIntegrationServiceOptions = {
   secretResolver?: SecretResolver;
   secretWriter?: SecretWriter;
   botApiClientFactory?: TelegramBotApiClientFactory;
+  egressRuntime?: EgressRuntime;
   telegramApiBaseUrl?: string;
   publicWebhookBaseUrl?: string;
   webhookConnectorIdFactory?: (input: {
@@ -159,28 +165,6 @@ const telegramChannelType = "telegram_bot" as const;
 const telegramChannelClass = "bot_bridge" as const;
 const telegramProvider = "telegram";
 const defaultTelegramDisplayName = "Telegram Bot";
-const managedMessengerVpnEgressRequirement = {
-  required: true,
-  defaultProfileKind: "vpn_namespace",
-  allowedProfileKinds: [
-    "vpn_namespace",
-    "http_proxy",
-    "socks_proxy",
-    "customer_network"
-  ],
-  enforcementScope: "hulee_managed_saas"
-} satisfies InternalEgressRequirement;
-const deploymentPolicyDirectEgressRequirement = {
-  required: false,
-  defaultProfileKind: "direct",
-  allowedProfileKinds: [
-    "direct",
-    "http_proxy",
-    "socks_proxy",
-    "customer_network"
-  ],
-  enforcementScope: "deployment_policy"
-} satisfies InternalEgressRequirement;
 const channelOnboardingFlows = {
   telegram_bot: {
     version: "v1",
@@ -471,6 +455,8 @@ export function createInternalIntegrationService(
     options.secretResolver ?? createEnvSecretResolver(process.env);
   const botApiClientFactory =
     options.botApiClientFactory ?? createTelegramBotApiClient;
+  const egressRuntime =
+    options.egressRuntime ?? createPassthroughEgressRuntime();
   const webhookConnectorIdFactory =
     options.webhookConnectorIdFactory ?? createTelegramWebhookConnectorId;
   const webhookSecretTokenFactory =
@@ -871,6 +857,7 @@ export function createInternalIntegrationService(
         repository: options.connectorRepository,
         secretResolver,
         botApiClientFactory,
+        egressRuntime,
         telegramApiBaseUrl: options.telegramApiBaseUrl,
         publicWebhookBaseUrl: options.publicWebhookBaseUrl,
         now
@@ -885,6 +872,7 @@ export function createInternalIntegrationService(
         repository: options.connectorRepository,
         secretResolver,
         botApiClientFactory,
+        egressRuntime,
         telegramApiBaseUrl: options.telegramApiBaseUrl,
         publicWebhookBaseUrl: options.publicWebhookBaseUrl,
         now
@@ -899,6 +887,7 @@ export function createInternalIntegrationService(
         repository: options.connectorRepository,
         secretResolver,
         botApiClientFactory,
+        egressRuntime,
         telegramApiBaseUrl: options.telegramApiBaseUrl,
         publicWebhookBaseUrl: options.publicWebhookBaseUrl,
         now
@@ -913,6 +902,7 @@ type TelegramProviderOperationOptions = {
   repository: ChannelConnectorRepository;
   secretResolver: SecretResolver;
   botApiClientFactory: TelegramBotApiClientFactory;
+  egressRuntime: EgressRuntime;
   telegramApiBaseUrl?: string;
   publicWebhookBaseUrl?: string;
   now: () => Date;
@@ -1441,10 +1431,12 @@ async function runTelegramProviderDiagnostics(
 
   const diagnostics = await buildTelegramProviderDiagnostics({
     tenantId: options.context.tenantId,
+    connectorId: state.connectorId,
     config: state.config,
     enabled: state.enabled,
     secretResolver: options.secretResolver,
     botApiClientFactory: options.botApiClientFactory,
+    egressRuntime: options.egressRuntime,
     telegramApiBaseUrl: options.telegramApiBaseUrl,
     publicWebhookBaseUrl: options.publicWebhookBaseUrl,
     polling: state.response.diagnostics.polling,
@@ -1504,6 +1496,12 @@ async function runTelegramWebhookSync(
     options.publicWebhookBaseUrl,
     buildTelegramWebhookPath(state.config)
   );
+  const egressResolution = await resolveTelegramEgressProfile({
+    egressRuntime: options.egressRuntime,
+    tenantId: options.context.tenantId,
+    connectorId: state.connectorId,
+    checkedAt: state.checkedAt
+  });
 
   if (!token || !expectedUrl || !webhookSecretToken) {
     const diagnostics = buildTelegramDiagnostics({
@@ -1519,6 +1517,7 @@ async function runTelegramWebhookSync(
         webhookSecretToken
       }),
       polling: state.response.diagnostics.polling,
+      egress: egressResolution.diagnostics,
       checks: {
         botTokenResolved: Boolean(token),
         webhookSecretTokenResolved: Boolean(webhookSecretToken),
@@ -1560,7 +1559,13 @@ async function runTelegramWebhookSync(
   try {
     const client = options.botApiClientFactory({
       apiBaseUrl: options.telegramApiBaseUrl,
-      botToken: token
+      botToken: token,
+      egress: buildTelegramBotApiEgressBinding({
+        egressRuntime: options.egressRuntime,
+        resolution: egressResolution,
+        tenantId: options.context.tenantId,
+        connectorId: state.connectorId
+      })
     });
 
     if (options.operation === "set") {
@@ -1578,6 +1583,7 @@ async function runTelegramWebhookSync(
       checkedAt: state.checkedAt,
       publicWebhookBaseUrl: options.publicWebhookBaseUrl,
       polling: state.response.diagnostics.polling,
+      egress: egressResolution.diagnostics,
       error
     });
 
@@ -1715,15 +1721,23 @@ async function upsertTelegramConnector(input: {
 
 async function buildTelegramProviderDiagnostics(input: {
   tenantId: TenantId;
+  connectorId: string;
   enabled: boolean;
   config: InternalTelegramIntegrationConfig;
   secretResolver: SecretResolver;
   botApiClientFactory: TelegramBotApiClientFactory;
+  egressRuntime: EgressRuntime;
   telegramApiBaseUrl?: string;
   publicWebhookBaseUrl?: string;
   polling?: InternalTelegramIntegrationDiagnostics["polling"];
   checkedAt: string;
 }): Promise<InternalTelegramIntegrationDiagnostics> {
+  const egressResolution = await resolveTelegramEgressProfile({
+    egressRuntime: input.egressRuntime,
+    tenantId: input.tenantId,
+    connectorId: input.connectorId,
+    checkedAt: input.checkedAt
+  });
   const token = await resolveTelegramBotToken(input);
 
   if (!token) {
@@ -1736,6 +1750,7 @@ async function buildTelegramProviderDiagnostics(input: {
       lastErrorCode: "validation.failed",
       operatorHint: "Bot token secret could not be resolved.",
       polling: input.polling,
+      egress: egressResolution.diagnostics,
       checks: {
         botTokenResolved: false,
         botApiReachable: false,
@@ -1747,7 +1762,13 @@ async function buildTelegramProviderDiagnostics(input: {
   try {
     const client = input.botApiClientFactory({
       apiBaseUrl: input.telegramApiBaseUrl,
-      botToken: token
+      botToken: token,
+      egress: buildTelegramBotApiEgressBinding({
+        egressRuntime: input.egressRuntime,
+        resolution: egressResolution,
+        tenantId: input.tenantId,
+        connectorId: input.connectorId
+      })
     });
     const [bot, webhook] = await Promise.all([
       client.getMe(),
@@ -1779,6 +1800,7 @@ async function buildTelegramProviderDiagnostics(input: {
         username: bot.username,
         firstName: bot.firstName
       },
+      egress: egressResolution.diagnostics,
       webhook: {
         expectedUrl,
         actualUrl: webhook.url,
@@ -1799,6 +1821,7 @@ async function buildTelegramProviderDiagnostics(input: {
       checkedAt: input.checkedAt,
       publicWebhookBaseUrl: input.publicWebhookBaseUrl,
       polling: input.polling,
+      egress: egressResolution.diagnostics,
       error
     });
   }
@@ -1856,6 +1879,7 @@ function telegramProviderFailureDiagnostics(input: {
   checkedAt: string;
   publicWebhookBaseUrl?: string;
   polling?: InternalTelegramIntegrationDiagnostics["polling"];
+  egress?: InternalTelegramIntegrationDiagnostics["egress"];
   error: unknown;
 }): InternalTelegramIntegrationDiagnostics {
   return buildTelegramDiagnostics({
@@ -1867,6 +1891,7 @@ function telegramProviderFailureDiagnostics(input: {
     lastErrorCode: platformErrorCodeFromTelegramError(input.error),
     operatorHint: "Telegram Bot API call failed.",
     polling: input.polling,
+    egress: input.egress,
     checks: {
       botTokenResolved: true,
       botApiReachable: false,
@@ -2253,6 +2278,38 @@ function telegramConnectorHealthFromDiagnostics(input: {
   }
 
   return "unhealthy";
+}
+
+async function resolveTelegramEgressProfile(input: {
+  egressRuntime: EgressRuntime;
+  tenantId: TenantId;
+  connectorId: string;
+  checkedAt: string;
+}): Promise<EgressProfileResolution> {
+  return input.egressRuntime.resolveProfile({
+    tenantId: input.tenantId,
+    connectorId: input.connectorId,
+    channelType: telegramChannelType,
+    provider: telegramProvider,
+    requirement: managedMessengerVpnEgressRequirement,
+    checkedAt: input.checkedAt
+  });
+}
+
+function buildTelegramBotApiEgressBinding(input: {
+  egressRuntime: EgressRuntime;
+  resolution: EgressProfileResolution;
+  tenantId: TenantId;
+  connectorId: string;
+}): TelegramBotApiEgressBinding {
+  return {
+    runtime: input.egressRuntime,
+    resolution: input.resolution,
+    tenantId: input.tenantId,
+    connectorId: input.connectorId,
+    channelType: telegramChannelType,
+    provider: telegramProvider
+  };
 }
 
 function buildTelegramDiagnostics(input: {

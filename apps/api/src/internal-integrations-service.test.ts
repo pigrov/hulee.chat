@@ -25,7 +25,7 @@ import type {
   UpsertChannelAuthChallengeInput,
   UpsertChannelConnectorInput
 } from "@hulee/db";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   createInternalIntegrationService,
@@ -624,6 +624,34 @@ describe("internal integrations service", () => {
         diagnostics: {}
       })
     ]);
+    const botApiClientFactory = vi.fn(() => ({
+      async sendTextMessage() {
+        return {
+          messageId: "1",
+          chatId: "1",
+          raw: {}
+        };
+      },
+      async getMe() {
+        return {
+          id: "100",
+          username: "hulee_test_bot",
+          raw: {}
+        };
+      },
+      async getWebhookInfo() {
+        return {
+          url: "https://example.test/webhooks/telegram/tgwh_test",
+          pendingUpdateCount: 0,
+          raw: {}
+        };
+      },
+      async getUpdates() {
+        return [];
+      },
+      async setWebhook() {},
+      async deleteWebhook() {}
+    }));
     const service = createInternalIntegrationService({
       connectorRepository: repository,
       now: () => now,
@@ -633,36 +661,7 @@ describe("internal integrations service", () => {
           return "token-1";
         }
       },
-      botApiClientFactory() {
-        return {
-          async sendTextMessage() {
-            return {
-              messageId: "1",
-              chatId: "1",
-              raw: {}
-            };
-          },
-          async getMe() {
-            return {
-              id: "100",
-              username: "hulee_test_bot",
-              raw: {}
-            };
-          },
-          async getWebhookInfo() {
-            return {
-              url: "https://example.test/webhooks/telegram/tgwh_test",
-              pendingUpdateCount: 0,
-              raw: {}
-            };
-          },
-          async getUpdates() {
-            return [];
-          },
-          async setWebhook() {},
-          async deleteWebhook() {}
-        };
-      }
+      botApiClientFactory
     });
 
     const response = await service.refreshTelegramDiagnostics(context, {
@@ -691,6 +690,20 @@ describe("internal integrations service", () => {
       }
     });
     expect(JSON.stringify(response)).not.toContain("token-1");
+    expect(botApiClientFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        botToken: "token-1",
+        egress: expect.objectContaining({
+          tenantId,
+          connectorId: "telegram_bot:tenant-integrations",
+          channelType: "telegram_bot",
+          provider: "telegram",
+          resolution: expect.objectContaining({
+            profileKind: "vpn_namespace"
+          })
+        })
+      })
+    );
     expect(
       repository.records.get("telegram_bot:tenant-integrations")?.diagnostics
     ).toEqual(response.diagnostics);

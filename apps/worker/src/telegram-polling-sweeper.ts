@@ -10,10 +10,15 @@ import type {
   ChannelConnectorRepository
 } from "@hulee/db";
 import {
+  createPassthroughEgressRuntime,
   createTelegramBotApiClient,
   createTelegramChannelAdapter,
+  managedMessengerVpnEgressRequirement,
   parseTelegramChannelConfig,
   TelegramAdapterError,
+  type EgressProfileResolution,
+  type EgressRuntime,
+  type TelegramBotApiEgressBinding,
   type TelegramBotApiSettings,
   type TelegramChannelConfig,
   type TelegramUpdate
@@ -39,6 +44,7 @@ export type TelegramPollingSweepOptions = {
   secretResolver: SecretResolver;
   commands: ExternalChannelCommandService;
   botApiClientFactory?: TelegramPollingBotApiClientFactory;
+  egressRuntime?: EgressRuntime;
   telegramApiBaseUrl?: string;
   now?: () => Date;
   configScanLimit?: number;
@@ -72,6 +78,8 @@ export async function runTelegramPollingSweep(
   options: TelegramPollingSweepOptions
 ): Promise<TelegramPollingSweepResult> {
   const now = options.now ?? (() => new Date());
+  const egressRuntime =
+    options.egressRuntime ?? createPassthroughEgressRuntime();
   const records = await options.connectorRepository.listActiveConnectorsByType({
     channelType: telegramChannelType,
     limit: options.configScanLimit ?? defaultConfigScanLimit
@@ -86,6 +94,12 @@ export async function runTelegramPollingSweep(
 
   for (const record of records) {
     const checkedAt = now().toISOString();
+    const egressResolution = await resolveTelegramEgressProfile({
+      egressRuntime,
+      tenantId: record.tenantId,
+      connectorId: record.id,
+      checkedAt
+    });
     const storedDiagnostics = parseStoredTelegramDiagnostics(
       record.diagnostics
     );
@@ -110,6 +124,7 @@ export async function runTelegramPollingSweep(
             outboundEnabled: false,
             botTokenSecretRefConfigured: false
           },
+          egress: egressResolution.diagnostics,
           previous: storedDiagnostics
         }),
         updatedAt: now()
@@ -129,6 +144,8 @@ export async function runTelegramPollingSweep(
       tenantId: record.tenantId,
       config,
       storedDiagnostics,
+      egressRuntime,
+      egressResolution,
       result,
       checkedAt,
       updatedAt: now()
@@ -144,6 +161,8 @@ async function pollTelegramConfig(
     tenantId: TenantId;
     config: TelegramChannelConfig;
     storedDiagnostics: InternalTelegramIntegrationDiagnostics | null;
+    egressRuntime: EgressRuntime;
+    egressResolution: EgressProfileResolution;
     result: TelegramPollingSweepResult;
     checkedAt: string;
     updatedAt: Date;
@@ -169,6 +188,7 @@ async function pollTelegramConfig(
           botTokenResolved: false,
           botApiReachable: false
         }),
+        egress: input.egressResolution.diagnostics,
         previous: input.storedDiagnostics
       }),
       updatedAt: input.updatedAt
@@ -179,7 +199,13 @@ async function pollTelegramConfig(
   const clientFactory = input.botApiClientFactory ?? createTelegramBotApiClient;
   const client = clientFactory({
     apiBaseUrl: input.telegramApiBaseUrl,
-    botToken: token
+    botToken: token,
+    egress: buildTelegramBotApiEgressBinding({
+      egressRuntime: input.egressRuntime,
+      resolution: input.egressResolution,
+      tenantId: input.tenantId,
+      connectorId: input.connectorRecord.id
+    })
   });
   const previousLastUpdateId = input.storedDiagnostics?.polling?.lastUpdateId;
 
@@ -227,6 +253,7 @@ async function pollTelegramConfig(
           acceptedUpdateCount: pollingResult.accepted,
           failedUpdateCount: pollingResult.failed
         },
+        egress: input.egressResolution.diagnostics,
         previous: input.storedDiagnostics
       }),
       updatedAt: input.updatedAt
@@ -252,6 +279,7 @@ async function pollTelegramConfig(
           acceptedUpdateCount: 0,
           failedUpdateCount: 0
         },
+        egress: input.egressResolution.diagnostics,
         previous: input.storedDiagnostics
       }),
       updatedAt: input.updatedAt
@@ -345,6 +373,38 @@ async function resolveBotToken(input: {
   });
 }
 
+async function resolveTelegramEgressProfile(input: {
+  egressRuntime: EgressRuntime;
+  tenantId: TenantId;
+  connectorId: string;
+  checkedAt: string;
+}): Promise<EgressProfileResolution> {
+  return input.egressRuntime.resolveProfile({
+    tenantId: input.tenantId,
+    connectorId: input.connectorId,
+    channelType: telegramChannelType,
+    provider: "telegram",
+    requirement: managedMessengerVpnEgressRequirement,
+    checkedAt: input.checkedAt
+  });
+}
+
+function buildTelegramBotApiEgressBinding(input: {
+  egressRuntime: EgressRuntime;
+  resolution: EgressProfileResolution;
+  tenantId: TenantId;
+  connectorId: string;
+}): TelegramBotApiEgressBinding {
+  return {
+    runtime: input.egressRuntime,
+    resolution: input.resolution,
+    tenantId: input.tenantId,
+    connectorId: input.connectorId,
+    channelType: telegramChannelType,
+    provider: "telegram"
+  };
+}
+
 function buildPollingDiagnostics(input: {
   checkedAt: string;
   status: InternalTelegramIntegrationDiagnostics["status"];
@@ -352,6 +412,7 @@ function buildPollingDiagnostics(input: {
   operatorHint?: string;
   checks: InternalTelegramIntegrationDiagnostics["checks"];
   polling?: InternalTelegramIntegrationDiagnostics["polling"];
+  egress?: InternalTelegramIntegrationDiagnostics["egress"];
   previous: InternalTelegramIntegrationDiagnostics | null;
 }): InternalTelegramIntegrationDiagnostics {
   return internalTelegramIntegrationDiagnosticsSchema.parse({
@@ -362,6 +423,9 @@ function buildPollingDiagnostics(input: {
     ...(input.previous?.bot ? { bot: input.previous.bot } : {}),
     ...(input.previous?.webhook ? { webhook: input.previous.webhook } : {}),
     ...(input.polling ? { polling: input.polling } : {}),
+    ...((input.egress ?? input.previous?.egress)
+      ? { egress: input.egress ?? input.previous?.egress }
+      : {}),
     checks: input.checks
   });
 }

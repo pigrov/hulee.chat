@@ -39,6 +39,20 @@ export type { LocalAuthProvider } from "./auth-local";
 export { createVkAuthProviderPlaceholder, vkAuthManifest } from "./auth-vk";
 export type { VkAuthProvider } from "./auth-vk";
 export {
+  createPassthroughEgressRuntime,
+  createStaticEgressRuntimeRegistry,
+  deploymentPolicyDirectEgressRequirement,
+  EgressRuntimeError,
+  managedMessengerVpnEgressRequirement
+} from "./egress";
+export type {
+  EgressOperationInput,
+  EgressProfileResolution,
+  EgressProfileResolveInput,
+  EgressRuntime,
+  EgressRuntimeRegistry
+} from "./egress";
+export {
   createPublicApiChannelAdapter,
   normalizePublicApiIncomingMessage,
   publicApiChannelInboundEnvelopeSchema,
@@ -63,6 +77,7 @@ export {
 } from "./telegram-channel";
 export type {
   TelegramBotApiClient,
+  TelegramBotApiEgressBinding,
   TelegramBotIdentity,
   TelegramChannelConfig,
   TelegramChannelInboundEnvelope,

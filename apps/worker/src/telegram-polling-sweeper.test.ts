@@ -213,14 +213,34 @@ describe("telegram polling sweeper", () => {
       updatesAccepted: 2,
       updatesFailed: 0
     });
-    expect(botApiClientFactory).toHaveBeenCalledWith({
-      apiBaseUrl: undefined,
-      botToken: "token-primary"
-    });
-    expect(botApiClientFactory).toHaveBeenCalledWith({
-      apiBaseUrl: undefined,
-      botToken: "token-secondary"
-    });
+    expect(botApiClientFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiBaseUrl: undefined,
+        botToken: "token-primary",
+        egress: expect.objectContaining({
+          connectorId: "telegram_bot:primary",
+          channelType: "telegram_bot",
+          provider: "telegram",
+          resolution: expect.objectContaining({
+            profileKind: "vpn_namespace"
+          })
+        })
+      })
+    );
+    expect(botApiClientFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiBaseUrl: undefined,
+        botToken: "token-secondary",
+        egress: expect.objectContaining({
+          connectorId: "telegram_bot:secondary",
+          channelType: "telegram_bot",
+          provider: "telegram",
+          resolution: expect.objectContaining({
+            profileKind: "vpn_namespace"
+          })
+        })
+      })
+    );
     expect(commands.messages.map((entry) => entry.context.channelId)).toEqual([
       "telegram-primary",
       "telegram-secondary"

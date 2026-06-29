@@ -1,6 +1,7 @@
 import type { ConversationId, MessageId, TenantId } from "@hulee/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { EgressOperationInput, EgressRuntime } from "./egress";
 import {
   createTelegramBotApiClient,
   createTelegramChannelAdapter,
@@ -296,6 +297,63 @@ describe("telegram channel adapter", () => {
       client.deleteWebhook({ dropPendingUpdates: true })
     ).resolves.toBeUndefined();
     expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+
+  it("routes Bot API HTTP calls through the configured egress runtime", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonTelegramResponse({
+        ok: true,
+        result: {
+          id: 100,
+          is_bot: true
+        }
+      })
+    );
+    const executeSpy = vi.fn((input: EgressOperationInput) => input);
+    const egressRuntime: EgressRuntime = {
+      async resolveProfile() {
+        throw new Error("should not be called by Telegram client");
+      },
+      async execute(input, operation) {
+        executeSpy(input);
+
+        return operation();
+      }
+    };
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createTelegramBotApiClient({
+      apiBaseUrl: "https://telegram.example",
+      botToken: "bot-token",
+      egress: {
+        runtime: egressRuntime,
+        resolution: {
+          profileKind: "vpn_namespace",
+          diagnostics: {
+            required: true,
+            status: "unknown",
+            profileKind: "vpn_namespace",
+            checkedAt: "2026-06-22T10:00:00.000Z"
+          }
+        },
+        tenantId: "tenant-1" as TenantId,
+        connectorId: "telegram_bot:tenant-1",
+        channelType: "telegram_bot",
+        provider: "telegram"
+      }
+    });
+
+    await client.getMe();
+
+    expect(executeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: "tenant-1",
+        connectorId: "telegram_bot:tenant-1",
+        channelType: "telegram_bot",
+        provider: "telegram",
+        operation: "telegram.bot_api.getMe"
+      })
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });
 

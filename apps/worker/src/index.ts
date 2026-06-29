@@ -8,6 +8,7 @@ import {
   createJsonLogger,
   type Logger
 } from "@hulee/observability";
+import type { EgressRuntime } from "@hulee/modules";
 import {
   createAesGcmTenantSecretCipher,
   createSqlChannelConnectorRepository,
@@ -71,6 +72,7 @@ export type WorkerOutboxHandlerOptions = {
   secretEncryptionKey?: string;
   secretResolver?: SecretResolver;
   telegramBotApiClientFactory?: TelegramBotApiClientFactory;
+  egressRuntime?: EgressRuntime;
   telegramApiBaseUrl?: string;
 };
 
@@ -95,6 +97,7 @@ export function createWorkerOutboxHandler(
         tenantSecrets
       }),
     botApiClientFactory: options.telegramBotApiClientFactory,
+    egressRuntime: options.egressRuntime,
     telegramApiBaseUrl: options.telegramApiBaseUrl
   });
 }
@@ -104,6 +107,7 @@ export type WorkerTelegramPollingSweeperOptions = {
   secretEncryptionKey?: string;
   secretResolver?: SecretResolver;
   telegramBotApiClientFactory?: TelegramPollingBotApiClientFactory;
+  egressRuntime?: EgressRuntime;
   telegramApiBaseUrl?: string;
 };
 
@@ -137,6 +141,7 @@ export function createWorkerTelegramPollingSweeper(
       repository: externalMessageRepository
     }),
     botApiClientFactory: options.telegramBotApiClientFactory,
+    egressRuntime: options.egressRuntime,
     telegramApiBaseUrl: options.telegramApiBaseUrl
   };
 

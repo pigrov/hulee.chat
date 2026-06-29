@@ -11,9 +11,21 @@ import type {
 } from "@hulee/contracts";
 import { z } from "zod";
 
+import type { EgressProfileResolution, EgressRuntime } from "./egress";
+
+export type TelegramBotApiEgressBinding = {
+  runtime: EgressRuntime;
+  resolution: EgressProfileResolution;
+  tenantId: TenantId;
+  connectorId: string;
+  channelType: string;
+  provider: string;
+};
+
 export type TelegramBotApiSettings = {
   apiBaseUrl?: string;
   botToken: string;
+  egress?: TelegramBotApiEgressBinding;
   httpTimeoutMs?: number;
 };
 
@@ -516,14 +528,19 @@ async function requestTelegramJson(
   );
 
   try {
-    const response = await fetch(buildTelegramMethodUrl(settings, method), {
-      method: "POST",
-      headers: {
-        "content-type": "application/json"
-      },
-      body: JSON.stringify(removeUndefinedValues(body)),
-      signal: controller.signal
-    });
+    const response = await executeTelegramBotApiOperation(
+      settings,
+      method,
+      async () =>
+        fetch(buildTelegramMethodUrl(settings, method), {
+          method: "POST",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify(removeUndefinedValues(body)),
+          signal: controller.signal
+        })
+    );
     const payload = (await response.json().catch(() => ({}))) as unknown;
     const record = asRecord(payload);
     const ok = record?.ok === true;
@@ -550,6 +567,28 @@ async function requestTelegramJson(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function executeTelegramBotApiOperation<T>(
+  settings: TelegramBotApiSettings,
+  method: string,
+  operation: () => Promise<T>
+): Promise<T> {
+  if (!settings.egress) {
+    return operation();
+  }
+
+  return settings.egress.runtime.execute(
+    {
+      tenantId: settings.egress.tenantId,
+      connectorId: settings.egress.connectorId,
+      channelType: settings.egress.channelType,
+      provider: settings.egress.provider,
+      operation: `telegram.bot_api.${method}`,
+      resolution: settings.egress.resolution
+    },
+    operation
+  );
 }
 
 function removeUndefinedValues(

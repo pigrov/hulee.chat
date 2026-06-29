@@ -152,10 +152,20 @@ describe("telegram outbound dispatcher", () => {
 
     await dispatcher.handle(createOutboxRecord("message.sent"));
 
-    expect(clientFactory).toHaveBeenCalledWith({
-      apiBaseUrl: undefined,
-      botToken: "token-secondary"
-    });
+    expect(clientFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiBaseUrl: undefined,
+        botToken: "token-secondary",
+        egress: expect.objectContaining({
+          connectorId: "telegram_bot:secondary",
+          channelType: "telegram_bot",
+          provider: "telegram",
+          resolution: expect.objectContaining({
+            profileKind: "vpn_namespace"
+          })
+        })
+      })
+    );
     expect(sendTextMessage).toHaveBeenCalledWith({
       chatId: "42",
       text: "Hello"

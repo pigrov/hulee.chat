@@ -12,9 +12,14 @@ import type {
   TenantSecretRepository
 } from "@hulee/db";
 import {
+  createPassthroughEgressRuntime,
   createTelegramBotApiClient,
   createTelegramChannelAdapter,
+  managedMessengerVpnEgressRequirement,
   parseTelegramChannelConfig,
+  type EgressProfileResolution,
+  type EgressRuntime,
+  type TelegramBotApiEgressBinding,
   type TelegramBotApiSettings,
   type TelegramMessageSender
 } from "@hulee/modules";
@@ -37,6 +42,7 @@ export type TelegramOutboundDispatcherOptions = {
   connectorRepository: ChannelConnectorRepository;
   secretResolver: SecretResolver;
   botApiClientFactory?: TelegramBotApiClientFactory;
+  egressRuntime?: EgressRuntime;
   now?: () => Date;
   attemptIdFactory?: (input: {
     tenantId: TenantId;
@@ -53,6 +59,8 @@ export function createTelegramOutboundDispatcher(
 ): OutboxHandler {
   const botApiClientFactory =
     options.botApiClientFactory ?? createTelegramBotApiClient;
+  const egressRuntime =
+    options.egressRuntime ?? createPassthroughEgressRuntime();
   const now = options.now ?? (() => new Date());
   const attemptIdFactory =
     options.attemptIdFactory ??
@@ -100,10 +108,22 @@ export function createTelegramOutboundDispatcher(
         record.tenantId,
         config.botTokenSecretRef
       );
+      const egressResolution = await resolveTelegramEgressProfile({
+        egressRuntime,
+        tenantId: record.tenantId,
+        connectorId: configRecord.id,
+        checkedAt: now().toISOString()
+      });
       const adapter = createTelegramChannelAdapter({
         botApiClient: botApiClientFactory({
           apiBaseUrl: options.telegramApiBaseUrl,
-          botToken
+          botToken,
+          egress: buildTelegramBotApiEgressBinding({
+            egressRuntime,
+            resolution: egressResolution,
+            tenantId: record.tenantId,
+            connectorId: configRecord.id
+          })
         })
       });
       const result = await adapter.sendMessage({
@@ -124,6 +144,38 @@ export function createTelegramOutboundDispatcher(
         result
       });
     }
+  };
+}
+
+async function resolveTelegramEgressProfile(input: {
+  egressRuntime: EgressRuntime;
+  tenantId: TenantId;
+  connectorId: string;
+  checkedAt: string;
+}): Promise<EgressProfileResolution> {
+  return input.egressRuntime.resolveProfile({
+    tenantId: input.tenantId,
+    connectorId: input.connectorId,
+    channelType: telegramChannelType,
+    provider: "telegram",
+    requirement: managedMessengerVpnEgressRequirement,
+    checkedAt: input.checkedAt
+  });
+}
+
+function buildTelegramBotApiEgressBinding(input: {
+  egressRuntime: EgressRuntime;
+  resolution: EgressProfileResolution;
+  tenantId: TenantId;
+  connectorId: string;
+}): TelegramBotApiEgressBinding {
+  return {
+    runtime: input.egressRuntime,
+    resolution: input.resolution,
+    tenantId: input.tenantId,
+    connectorId: input.connectorId,
+    channelType: telegramChannelType,
+    provider: "telegram"
   };
 }
 
