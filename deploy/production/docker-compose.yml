@@ -113,7 +113,10 @@ services:
       SERVER_COUNTRIES: ${HULEE_EGRESS_SERVER_COUNTRIES:-Netherlands}
       OPENVPN_PROTOCOL: ${HULEE_EGRESS_OPENVPN_PROTOCOL:-udp}
       DNS_KEEP_NAMESERVER: ${HULEE_EGRESS_DNS_KEEP_NAMESERVER:-off}
-      DOT: ${HULEE_EGRESS_DOT:-on}
+      DNS_UPSTREAM_RESOLVER_TYPE: ${HULEE_EGRESS_DNS_UPSTREAM_RESOLVER_TYPE:-dot}
+      DNS_UPSTREAM_RESOLVERS: ${HULEE_EGRESS_DNS_UPSTREAM_RESOLVERS:-cloudflare}
+      DNS_CACHING: ${HULEE_EGRESS_DNS_CACHING:-on}
+      DNS_UPSTREAM_IPV6: ${HULEE_EGRESS_DNS_UPSTREAM_IPV6:-off}
       FIREWALL_OUTBOUND_SUBNETS: ${HULEE_EGRESS_FIREWALL_OUTBOUND_SUBNETS:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
       # Bridge-compatible NordVPN gateway image envs.
       NORDVPN_TOKEN: ${HULEE_EGRESS_NORDVPN_TOKEN:-}
@@ -149,9 +152,6 @@ services:
     profiles:
       - provider-egress
     network_mode: "service:egress-gateway"
-    extra_hosts:
-      - "postgres:${HULEE_PROVIDER_EGRESS_POSTGRES_HOST:-127.0.0.1}"
-      - "api:${HULEE_PROVIDER_EGRESS_API_HOST:-127.0.0.1}"
     environment:
       NODE_ENV: production
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
@@ -165,12 +165,19 @@ services:
       HULEE_EGRESS_PROFILE_KIND: vpn_namespace
       HULEE_EGRESS_PROFILE_STATUS: ${HULEE_PROVIDER_EGRESS_PROFILE_STATUS:-ready}
       HULEE_EGRESS_OPERATOR_HINT: ${HULEE_PROVIDER_EGRESS_OPERATOR_HINT:-Provider traffic is routed through hulee_chat_vpn_gateway.}
+      HULEE_PROVIDER_EGRESS_POSTGRES_HOST: ${HULEE_PROVIDER_EGRESS_POSTGRES_HOST:-}
+      HULEE_PROVIDER_EGRESS_API_HOST: ${HULEE_PROVIDER_EGRESS_API_HOST:-}
     depends_on:
       postgres:
         condition: service_healthy
       egress-gateway:
         condition: service_healthy
-    command: ["pnpm", "--filter", "@hulee/worker", "start"]
+    command:
+      [
+        "sh",
+        "-lc",
+        "if [ -n \"$${HULEE_PROVIDER_EGRESS_POSTGRES_HOST:-}\" ]; then printf '%s postgres\\n' \"$${HULEE_PROVIDER_EGRESS_POSTGRES_HOST}\" >> /etc/hosts; fi; if [ -n \"$${HULEE_PROVIDER_EGRESS_API_HOST:-}\" ]; then printf '%s api\\n' \"$${HULEE_PROVIDER_EGRESS_API_HOST}\" >> /etc/hosts; fi; exec pnpm --filter @hulee/worker start"
+      ]
 
   web:
     <<: *app-base
