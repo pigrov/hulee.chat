@@ -112,8 +112,8 @@ services:
       OPENVPN_PASSWORD: ${HULEE_EGRESS_OPENVPN_PASSWORD:-}
       SERVER_COUNTRIES: ${HULEE_EGRESS_SERVER_COUNTRIES:-Netherlands}
       OPENVPN_PROTOCOL: ${HULEE_EGRESS_OPENVPN_PROTOCOL:-udp}
-      DNS_KEEP_NAMESERVER: ${HULEE_EGRESS_DNS_KEEP_NAMESERVER:-on}
-      DOT: ${HULEE_EGRESS_DOT:-off}
+      DNS_KEEP_NAMESERVER: ${HULEE_EGRESS_DNS_KEEP_NAMESERVER:-off}
+      DOT: ${HULEE_EGRESS_DOT:-on}
       FIREWALL_OUTBOUND_SUBNETS: ${HULEE_EGRESS_FIREWALL_OUTBOUND_SUBNETS:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
       # Bridge-compatible NordVPN gateway image envs.
       NORDVPN_TOKEN: ${HULEE_EGRESS_NORDVPN_TOKEN:-}
@@ -149,6 +149,9 @@ services:
     profiles:
       - provider-egress
     network_mode: "service:egress-gateway"
+    extra_hosts:
+      - "postgres:${HULEE_PROVIDER_EGRESS_POSTGRES_HOST:-127.0.0.1}"
+      - "api:${HULEE_PROVIDER_EGRESS_API_HOST:-127.0.0.1}"
     environment:
       NODE_ENV: production
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}

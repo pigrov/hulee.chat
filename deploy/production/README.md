@@ -60,6 +60,12 @@ channel secrets in GitHub Secrets. The deploy workflow auto-detects
 `hulee_chat_worker_provider_egress`. Without that flag, the normal app services
 deploy without VPN requirements.
 
+The provider-egress worker uses the VPN gateway network namespace, so the deploy
+workflow writes `.provider-egress.env` with current internal IPs for `postgres`
+and `api`. Those values are injected as `/etc/hosts` entries and let Gluetun use
+VPN-backed DNS instead of Docker's default nameserver for external provider
+traffic.
+
 Registry gateway images such as `qmcgaw/gluetun:v3.40` are pulled by the deploy
 workflow. Server-local gateway images such as `bridge-nordvpn-gateway:latest`
 must already exist on the host; the deploy workflow verifies them locally and

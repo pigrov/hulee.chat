@@ -97,12 +97,11 @@ jobs:
             exit 1
           fi
           compose=(docker compose --env-file .env --env-file .release.env -f docker-compose.yml)
-          services=(postgres api worker web)
+          core_services=(postgres api worker web)
           pull_services=(postgres api worker web)
           image_containers=(hulee_chat_api hulee_chat_web hulee_chat_worker)
           if [ "$provider_egress_enabled" = true ]; then
             compose+=(--profile provider-egress)
-            services+=(egress-gateway worker-provider-egress)
             pull_services+=(worker-provider-egress)
             image_containers+=(hulee_chat_worker_provider_egress)
             egress_gateway_image=$(grep -E '^[[:space:]]*HULEE_EGRESS_GATEWAY_IMAGE[[:space:]]*=' .env | tail -n 1 | cut -d= -f2- | xargs || true)
@@ -120,7 +119,22 @@ jobs:
           fi
           "${compose[@]}" pull "${pull_services[@]}"
           "${compose[@]}" run --rm -T migrate </dev/null
-          "${compose[@]}" up -d --force-recreate --wait --wait-timeout 180 "${services[@]}"
+          "${compose[@]}" up -d --force-recreate --wait --wait-timeout 180 "${core_services[@]}"
+          if [ "$provider_egress_enabled" = true ]; then
+            postgres_ip=$(docker inspect --format '{{with index .NetworkSettings.Networks "hulee-chat_default"}}{{.IPAddress}}{{end}}' hulee_chat_postgres)
+            api_ip=$(docker inspect --format '{{with index .NetworkSettings.Networks "hulee-chat_default"}}{{.IPAddress}}{{end}}' hulee_chat_api)
+            if [ -z "$postgres_ip" ] || [ -z "$api_ip" ]; then
+              echo "Could not resolve provider egress internal hosts: postgres=$postgres_ip api=$api_ip" >&2
+              exit 1
+            fi
+            cat > .provider-egress.env <<PROVIDER_EGRESS_ENV
+          HULEE_PROVIDER_EGRESS_POSTGRES_HOST=$postgres_ip
+          HULEE_PROVIDER_EGRESS_API_HOST=$api_ip
+          PROVIDER_EGRESS_ENV
+            compose+=(--env-file .provider-egress.env)
+            "${compose[@]}" up -d --force-recreate --wait --wait-timeout 180 egress-gateway
+            "${compose[@]}" up -d --force-recreate --no-deps --wait --wait-timeout 180 worker-provider-egress
+          fi
           for container in "${image_containers[@]}"; do
             actual_image=$(docker inspect --format '{{.Config.Image}}' "$container")
             if [ "$actual_image" != "$expected_image" ]; then
