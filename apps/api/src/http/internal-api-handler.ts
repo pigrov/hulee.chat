@@ -206,23 +206,24 @@ type RouteMatch =
       challengeId: string;
     }
   | {
-      route: "telegram_integration_view";
-      connectorId?: string;
+      route: "channel_connector_telegram_view";
+      connectorId: string;
     }
   | {
-      route: "telegram_integration_update";
+      route: "channel_connector_telegram_update";
+      connectorId: string;
     }
   | {
-      route: "telegram_integration_diagnostics";
-      connectorId?: string;
+      route: "channel_connector_telegram_diagnostics";
+      connectorId: string;
     }
   | {
-      route: "telegram_integration_webhook_set";
-      connectorId?: string;
+      route: "channel_connector_telegram_webhook_set";
+      connectorId: string;
     }
   | {
-      route: "telegram_integration_webhook_delete";
-      connectorId?: string;
+      route: "channel_connector_telegram_webhook_delete";
+      connectorId: string;
     };
 
 type InternalRouteAuthorizationPolicy =
@@ -714,7 +715,7 @@ async function handleAuthenticatedRoute(input: {
       return jsonResponse(200, response);
     }
 
-    case "telegram_integration_view": {
+    case "channel_connector_telegram_view": {
       const response: InternalTelegramIntegrationResponse =
         await input.integrations.loadTelegramIntegration(input.session, {
           connectorId: input.route.connectorId
@@ -723,10 +724,12 @@ async function handleAuthenticatedRoute(input: {
       return jsonResponse(200, response);
     }
 
-    case "telegram_integration_update": {
+    case "channel_connector_telegram_update": {
       const request = internalTelegramIntegrationUpdateRequestSchema.parse(
         input.request.body
       );
+      assertRouteConnectorMatchesRequest(input.route.connectorId, request);
+
       const response: InternalTelegramIntegrationResponse =
         await input.integrations.updateTelegramIntegration(
           input.session,
@@ -736,28 +739,28 @@ async function handleAuthenticatedRoute(input: {
       return jsonResponse(200, response);
     }
 
-    case "telegram_integration_diagnostics": {
+    case "channel_connector_telegram_diagnostics": {
       const response: InternalTelegramIntegrationResponse =
         await input.integrations.refreshTelegramDiagnostics(input.session, {
-          connectorId: requireRouteConnectorId(input.route.connectorId)
+          connectorId: input.route.connectorId
         });
 
       return jsonResponse(200, response);
     }
 
-    case "telegram_integration_webhook_set": {
+    case "channel_connector_telegram_webhook_set": {
       const response: InternalTelegramIntegrationResponse =
         await input.integrations.setTelegramWebhook(input.session, {
-          connectorId: requireRouteConnectorId(input.route.connectorId)
+          connectorId: input.route.connectorId
         });
 
       return jsonResponse(200, response);
     }
 
-    case "telegram_integration_webhook_delete": {
+    case "channel_connector_telegram_webhook_delete": {
       const response: InternalTelegramIntegrationResponse =
         await input.integrations.deleteTelegramWebhook(input.session, {
-          connectorId: requireRouteConnectorId(input.route.connectorId)
+          connectorId: input.route.connectorId
         });
 
       return jsonResponse(200, response);
@@ -765,14 +768,13 @@ async function handleAuthenticatedRoute(input: {
   }
 }
 
-function requireRouteConnectorId(connectorId: string | undefined): string {
-  const normalized = connectorId?.trim();
-
-  if (!normalized) {
+function assertRouteConnectorMatchesRequest(
+  routeConnectorId: string,
+  request: { connectorId: string }
+): void {
+  if (request.connectorId.trim() !== routeConnectorId.trim()) {
     throw new CoreError("validation.failed");
   }
-
-  return normalized;
 }
 
 function assertInternalRouteAuthorization(
@@ -834,11 +836,11 @@ function internalRouteAuthorizationPolicy(
     case "channel_auth_challenge_view":
     case "channel_auth_challenge_submit":
     case "channel_auth_challenge_cancel":
-    case "telegram_integration_view":
-    case "telegram_integration_update":
-    case "telegram_integration_diagnostics":
-    case "telegram_integration_webhook_set":
-    case "telegram_integration_webhook_delete":
+    case "channel_connector_telegram_view":
+    case "channel_connector_telegram_update":
+    case "channel_connector_telegram_diagnostics":
+    case "channel_connector_telegram_webhook_set":
+    case "channel_connector_telegram_webhook_delete":
       return {
         kind: "signed_effective_permission_override",
         permission: "modules.manage"
@@ -1119,52 +1121,50 @@ function matchRoute(request: ApiHttpRequest): RouteMatch | undefined {
     };
   }
 
-  if (
-    request.method === "GET" &&
-    path === "/internal/v1/integrations/telegram"
-  ) {
+  const telegramConnectorMatch = path.match(
+    /^\/internal\/v1\/channels\/connectors\/([^/]+)\/telegram$/
+  );
+
+  if (request.method === "GET" && telegramConnectorMatch?.[1]) {
     return {
-      route: "telegram_integration_view",
-      connectorId: nonEmptyQueryValue(url.searchParams.get("connectorId"))
+      route: "channel_connector_telegram_view",
+      connectorId: decodeURIComponent(telegramConnectorMatch[1])
     };
   }
 
-  if (
-    request.method === "PUT" &&
-    path === "/internal/v1/integrations/telegram"
-  ) {
+  if (request.method === "PUT" && telegramConnectorMatch?.[1]) {
     return {
-      route: "telegram_integration_update"
+      route: "channel_connector_telegram_update",
+      connectorId: decodeURIComponent(telegramConnectorMatch[1])
     };
   }
 
-  if (
-    request.method === "POST" &&
-    path === "/internal/v1/integrations/telegram/diagnostics"
-  ) {
+  const telegramDiagnosticsMatch = path.match(
+    /^\/internal\/v1\/channels\/connectors\/([^/]+)\/telegram\/diagnostics$/
+  );
+
+  if (request.method === "POST" && telegramDiagnosticsMatch?.[1]) {
     return {
-      route: "telegram_integration_diagnostics",
-      connectorId: nonEmptyQueryValue(url.searchParams.get("connectorId"))
+      route: "channel_connector_telegram_diagnostics",
+      connectorId: decodeURIComponent(telegramDiagnosticsMatch[1])
     };
   }
 
-  if (
-    request.method === "POST" &&
-    path === "/internal/v1/integrations/telegram/webhook"
-  ) {
+  const telegramWebhookMatch = path.match(
+    /^\/internal\/v1\/channels\/connectors\/([^/]+)\/telegram\/webhook$/
+  );
+
+  if (request.method === "POST" && telegramWebhookMatch?.[1]) {
     return {
-      route: "telegram_integration_webhook_set",
-      connectorId: nonEmptyQueryValue(url.searchParams.get("connectorId"))
+      route: "channel_connector_telegram_webhook_set",
+      connectorId: decodeURIComponent(telegramWebhookMatch[1])
     };
   }
 
-  if (
-    request.method === "DELETE" &&
-    path === "/internal/v1/integrations/telegram/webhook"
-  ) {
+  if (request.method === "DELETE" && telegramWebhookMatch?.[1]) {
     return {
-      route: "telegram_integration_webhook_delete",
-      connectorId: nonEmptyQueryValue(url.searchParams.get("connectorId"))
+      route: "channel_connector_telegram_webhook_delete",
+      connectorId: decodeURIComponent(telegramWebhookMatch[1])
     };
   }
 

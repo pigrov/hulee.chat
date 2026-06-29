@@ -100,11 +100,17 @@ export function resolveRequiredInternalApiEffectivePermissionOverride(
     (method === "DELETE" &&
       /^\/internal\/v1\/channels\/connectors\/[^/]+$/.test(pathname)) ||
     ((method === "GET" || method === "PUT") &&
-      pathname === "/internal/v1/integrations/telegram") ||
+      /^\/internal\/v1\/channels\/connectors\/[^/]+\/telegram$/.test(
+        pathname
+      )) ||
     (method === "POST" &&
-      pathname === "/internal/v1/integrations/telegram/diagnostics") ||
+      /^\/internal\/v1\/channels\/connectors\/[^/]+\/telegram\/diagnostics$/.test(
+        pathname
+      )) ||
     ((method === "POST" || method === "DELETE") &&
-      pathname === "/internal/v1/integrations/telegram/webhook")
+      /^\/internal\/v1\/channels\/connectors\/[^/]+\/telegram\/webhook$/.test(
+        pathname
+      ))
   ) {
     return "modules.manage";
   }

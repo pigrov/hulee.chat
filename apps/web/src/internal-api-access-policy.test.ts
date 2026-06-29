@@ -68,7 +68,7 @@ describe("web internal API access policy", () => {
     expect(
       resolveRequiredInternalApiEffectivePermissionOverride({
         method: "DELETE",
-        path: "/internal/v1/integrations/telegram/webhook"
+        path: "/internal/v1/channels/connectors/telegram_bot%3Asecond/telegram/webhook"
       })
     ).toBe("modules.manage");
     expect(
@@ -113,16 +113,22 @@ describe("web internal API access policy", () => {
     expect(() =>
       assertInternalApiEffectivePermissionOverride({
         method: "GET",
-        path: "/internal/v1/integrations/telegram",
+        path: "/internal/v1/channels/connectors/telegram_bot%3Asecond/telegram",
         effectivePermissionOverride: "tenant.manage"
       })
     ).toThrow(new CoreError("permission.denied"));
     expect(
       assertInternalApiEffectivePermissionOverride({
         method: "GET",
-        path: "/internal/v1/integrations/telegram",
+        path: "/internal/v1/channels/connectors/telegram_bot%3Asecond/telegram",
         effectivePermissionOverride: "modules.manage"
       })
     ).toBe("modules.manage");
+    expect(
+      resolveRequiredInternalApiEffectivePermissionOverride({
+        method: "GET",
+        path: "/internal/v1/integrations/telegram"
+      })
+    ).toBeUndefined();
   });
 });

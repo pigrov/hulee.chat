@@ -29,7 +29,8 @@ import {
   loadChannelCatalog,
   loadChannelAuthChallenge,
   loadChannelConnectors,
-  loadTelegramIntegration
+  loadTelegramIntegration,
+  type TelegramIntegrationViewModel
 } from "../../../src/inbox-api-client";
 import {
   getWebDatabase,
@@ -112,12 +113,13 @@ export default async function IntegrationsAdminPage({
     selectedConnector?.channelType === "telegram_bot" || !selectedConnector ? (
       <TelegramIntegrationPanel
         channel={telegramChannel}
-        integration={await loadTelegramIntegration(internalApiAccess, {
-          connectorId:
-            selectedConnector?.channelType === "telegram_bot"
-              ? selectedConnector.connectorId
-              : undefined
-        })}
+        integration={
+          selectedConnector?.channelType === "telegram_bot"
+            ? await loadTelegramIntegration(internalApiAccess, {
+                connectorId: selectedConnector.connectorId
+              })
+            : createEmptyTelegramIntegrationViewModel()
+        }
         locale={locale}
         t={t}
       />
@@ -655,4 +657,22 @@ function normalizeOptionalSearchParam(
   const normalized = value?.trim();
 
   return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+function createEmptyTelegramIntegrationViewModel(): TelegramIntegrationViewModel {
+  return {
+    moduleId: "channel-telegram",
+    enabled: false,
+    diagnostics: {
+      status: "disabled",
+      checkedAt: new Date().toISOString(),
+      checks: {
+        moduleEnabled: false,
+        configValid: false,
+        inboundWebhookReady: false,
+        outboundEnabled: false,
+        botTokenSecretRefConfigured: false
+      }
+    }
+  };
 }

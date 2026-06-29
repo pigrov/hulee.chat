@@ -199,7 +199,7 @@ describe("inbox API client", () => {
 
     expect(buildInternalApiHeaders).toHaveBeenCalledWith({
       method: "GET",
-      path: "/internal/v1/integrations/telegram?connectorId=telegram_bot%3Asecond",
+      path: "/internal/v1/channels/connectors/telegram_bot%3Asecond/telegram",
       effectivePermissionOverride: "modules.manage"
     });
   });
@@ -489,7 +489,7 @@ describe("inbox API client", () => {
 
     expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(1, {
       method: "PUT",
-      path: "/internal/v1/integrations/telegram",
+      path: "/internal/v1/channels/connectors/telegram_bot%3Asecond/telegram",
       body: {
         connectorId: "telegram_bot:second",
         enabled: true,
@@ -502,17 +502,17 @@ describe("inbox API client", () => {
     });
     expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(2, {
       method: "POST",
-      path: "/internal/v1/integrations/telegram/diagnostics?connectorId=telegram_bot%3Asecond",
+      path: "/internal/v1/channels/connectors/telegram_bot%3Asecond/telegram/diagnostics",
       effectivePermissionOverride: "modules.manage"
     });
     expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(3, {
       method: "POST",
-      path: "/internal/v1/integrations/telegram/webhook?connectorId=telegram_bot%3Asecond",
+      path: "/internal/v1/channels/connectors/telegram_bot%3Asecond/telegram/webhook",
       effectivePermissionOverride: "modules.manage"
     });
     expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(4, {
       method: "DELETE",
-      path: "/internal/v1/integrations/telegram/webhook?connectorId=telegram_bot%3Asecond",
+      path: "/internal/v1/channels/connectors/telegram_bot%3Asecond/telegram/webhook",
       effectivePermissionOverride: "modules.manage"
     });
   });
@@ -522,9 +522,11 @@ describe("inbox API client", () => {
 
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(loadTelegramIntegration(undefined as never)).rejects.toEqual(
-      new CoreError("permission.denied")
-    );
+    await expect(
+      loadTelegramIntegration(undefined as never, {
+        connectorId: "telegram_bot:second"
+      })
+    ).rejects.toEqual(new CoreError("permission.denied"));
     await expect(
       loadTenantBrand({
         effectivePermissionOverride: "modules.manage"

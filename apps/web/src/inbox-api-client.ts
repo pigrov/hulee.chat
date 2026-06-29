@@ -709,14 +709,9 @@ export async function cancelChannelAuthChallenge(
 
 export async function loadTelegramIntegration(
   options: InternalApiAccessOptions<"modules.manage">,
-  input?: { connectorId?: string }
+  input: { connectorId: string }
 ): Promise<TelegramIntegrationViewModel> {
-  const url = new URL(
-    "/internal/v1/integrations/telegram",
-    resolveInternalApiBaseUrl()
-  );
-
-  appendConnectorId(url, input?.connectorId);
+  const url = telegramConnectorUrl(input.connectorId);
 
   const response = await fetch(url, {
     cache: "no-store",
@@ -744,10 +739,7 @@ export async function updateTelegramIntegration(
   options: InternalApiAccessOptions<"modules.manage">
 ): Promise<TelegramIntegrationViewModel> {
   const request = internalTelegramIntegrationUpdateRequestSchema.parse(input);
-  const url = new URL(
-    "/internal/v1/integrations/telegram",
-    resolveInternalApiBaseUrl()
-  );
+  const url = telegramConnectorUrl(request.connectorId);
   const response = await fetch(url, {
     method: "PUT",
     cache: "no-store",
@@ -780,10 +772,9 @@ export async function refreshTelegramDiagnostics(
   input: { connectorId: string }
 ): Promise<TelegramIntegrationViewModel> {
   return postTelegramIntegrationCommand(
-    "/internal/v1/integrations/telegram/diagnostics",
+    `${telegramConnectorPath(input.connectorId)}/diagnostics`,
     "Internal Telegram diagnostics API returned",
-    options,
-    input
+    options
   );
 }
 
@@ -792,10 +783,9 @@ export async function setTelegramWebhook(
   input: { connectorId: string }
 ): Promise<TelegramIntegrationViewModel> {
   return postTelegramIntegrationCommand(
-    "/internal/v1/integrations/telegram/webhook",
+    `${telegramConnectorPath(input.connectorId)}/webhook`,
     "Internal Telegram webhook sync API returned",
-    options,
-    input
+    options
   );
 }
 
@@ -804,11 +794,9 @@ export async function deleteTelegramWebhook(
   input: { connectorId: string }
 ): Promise<TelegramIntegrationViewModel> {
   const url = new URL(
-    "/internal/v1/integrations/telegram/webhook",
+    `${telegramConnectorPath(input.connectorId)}/webhook`,
     resolveInternalApiBaseUrl()
   );
-
-  appendConnectorId(url, input?.connectorId);
 
   const response = await fetch(url, {
     method: "DELETE",
@@ -835,12 +823,9 @@ export async function deleteTelegramWebhook(
 async function postTelegramIntegrationCommand(
   path: string,
   errorPrefix: string,
-  options: InternalApiAccessOptions<"modules.manage">,
-  input: { connectorId: string }
+  options: InternalApiAccessOptions<"modules.manage">
 ): Promise<TelegramIntegrationViewModel> {
   const url = new URL(path, resolveInternalApiBaseUrl());
-
-  appendConnectorId(url, input?.connectorId);
 
   const response = await fetch(url, {
     method: "POST",
@@ -860,14 +845,6 @@ async function postTelegramIntegrationCommand(
   }
 
   return internalTelegramIntegrationResponseSchema.parse(await response.json());
-}
-
-function appendConnectorId(url: URL, connectorId: string | undefined): void {
-  const normalized = connectorId?.trim();
-
-  if (normalized && normalized.length > 0) {
-    url.searchParams.set("connectorId", normalized);
-  }
 }
 
 function channelAuthChallengeCollectionUrl(connectorId: string): URL {
@@ -896,6 +873,19 @@ function channelAuthChallengeItemPath(
   return `/internal/v1/channels/connectors/${encodeURIComponent(
     connectorId.trim()
   )}/auth-challenges/${encodeURIComponent(challengeId.trim())}`;
+}
+
+function telegramConnectorUrl(connectorId: string): URL {
+  return new URL(
+    telegramConnectorPath(connectorId),
+    resolveInternalApiBaseUrl()
+  );
+}
+
+function telegramConnectorPath(connectorId: string): string {
+  return `/internal/v1/channels/connectors/${encodeURIComponent(
+    connectorId.trim()
+  )}/telegram`;
 }
 
 type InternalApiResponseSchema<TResponse> = {
