@@ -8,10 +8,14 @@ import {
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
+import { internalChannelTypeSchema } from "@hulee/contracts";
 import type { Permission } from "@hulee/core";
 
 import {
+  createChannelConnector,
+  deleteChannelConnector,
   deleteTelegramWebhook,
+  disableChannelConnector,
   refreshTelegramDiagnostics,
   sendInboxReply,
   setTelegramWebhook,
@@ -223,16 +227,26 @@ export async function updateTelegramIntegrationAction(
     formData,
     "channelExternalId"
   ).trim();
+  const connectorId = optionalConnectorIdFromForm(formData);
+  const displayName = readOptionalFormString(formData, "displayName")?.trim();
   const mode = readRequiredFormString(formData, "mode").trim();
   const botTokenSecretRef = readOptionalFormString(
     formData,
     "botTokenSecretRef"
   );
   const botToken = readOptionalFormString(formData, "botToken");
+  const enabled = readFormCheckbox(formData, "enabled");
+  const setupStepCompleted = readTelegramSetupStepCompleted(formData);
 
   await updateTelegramIntegration(
     {
-      enabled: readFormCheckbox(formData, "enabled"),
+      connectorId,
+      displayName:
+        displayName === undefined || displayName.length === 0
+          ? undefined
+          : displayName,
+      enabled,
+      setupStepCompleted,
       channelExternalId,
       mode: mode === "polling" ? "polling" : "webhook",
       botTokenSecretRef:
@@ -247,42 +261,127 @@ export async function updateTelegramIntegrationAction(
     },
     internalApiAccess
   );
-  await refreshTelegramDiagnostics(internalApiAccess);
+
+  if (enabled) {
+    await refreshTelegramDiagnostics(internalApiAccess, {
+      connectorId
+    });
+  }
 
   revalidateTelegramIntegrationPaths();
 }
 
-export async function refreshTelegramDiagnosticsAction(): Promise<void> {
+export async function createChannelConnectorAction(
+  formData: FormData
+): Promise<void> {
   await assertWebActionRequest();
   const internalApiAccess = await assertVerifiedTenantPermission(
     "modules.manage",
     "/admin/integrations"
   );
+  const channelType = internalChannelTypeSchema.parse(
+    readRequiredFormString(formData, "channelType")
+  );
+  const displayName = readOptionalFormString(formData, "displayName")?.trim();
+  const connector = await createChannelConnector(
+    {
+      channelType,
+      displayName:
+        displayName === undefined || displayName.length === 0
+          ? undefined
+          : displayName
+    },
+    internalApiAccess
+  );
 
-  await refreshTelegramDiagnostics(internalApiAccess);
   revalidateTelegramIntegrationPaths();
+  redirect(
+    `/admin/integrations?connectorId=${encodeURIComponent(
+      connector.connectorId
+    )}&channelStatus=created`
+  );
 }
 
-export async function setTelegramWebhookAction(): Promise<void> {
+export async function refreshTelegramDiagnosticsAction(
+  formData: FormData
+): Promise<void> {
   await assertWebActionRequest();
   const internalApiAccess = await assertVerifiedTenantPermission(
     "modules.manage",
     "/admin/integrations"
   );
+  const connectorId = optionalConnectorIdFromForm(formData);
 
-  await setTelegramWebhook(internalApiAccess);
+  await refreshTelegramDiagnostics(internalApiAccess, {
+    connectorId
+  });
   revalidateTelegramIntegrationPaths();
 }
 
-export async function deleteTelegramWebhookAction(): Promise<void> {
+export async function setTelegramWebhookAction(
+  formData: FormData
+): Promise<void> {
   await assertWebActionRequest();
   const internalApiAccess = await assertVerifiedTenantPermission(
     "modules.manage",
     "/admin/integrations"
   );
+  const connectorId = optionalConnectorIdFromForm(formData);
 
-  await deleteTelegramWebhook(internalApiAccess);
+  await setTelegramWebhook(internalApiAccess, {
+    connectorId
+  });
   revalidateTelegramIntegrationPaths();
+}
+
+export async function deleteTelegramWebhookAction(
+  formData: FormData
+): Promise<void> {
+  await assertWebActionRequest();
+  const internalApiAccess = await assertVerifiedTenantPermission(
+    "modules.manage",
+    "/admin/integrations"
+  );
+  const connectorId = optionalConnectorIdFromForm(formData);
+
+  await deleteTelegramWebhook(internalApiAccess, {
+    connectorId
+  });
+  revalidateTelegramIntegrationPaths();
+}
+
+export async function disableChannelConnectorAction(
+  formData: FormData
+): Promise<void> {
+  await assertWebActionRequest();
+  const internalApiAccess = await assertVerifiedTenantPermission(
+    "modules.manage",
+    "/admin/integrations"
+  );
+  const connectorId = readRequiredFormString(formData, "connectorId").trim();
+
+  await disableChannelConnector({ connectorId }, internalApiAccess);
+  revalidateTelegramIntegrationPaths();
+  redirect(
+    `/admin/integrations?connectorId=${encodeURIComponent(
+      connectorId
+    )}&channelStatus=disabled`
+  );
+}
+
+export async function deleteChannelConnectorAction(
+  formData: FormData
+): Promise<void> {
+  await assertWebActionRequest();
+  const internalApiAccess = await assertVerifiedTenantPermission(
+    "modules.manage",
+    "/admin/integrations"
+  );
+  const connectorId = readRequiredFormString(formData, "connectorId").trim();
+
+  await deleteChannelConnector({ connectorId }, internalApiAccess);
+  revalidateTelegramIntegrationPaths();
+  redirect("/admin/integrations?channelStatus=deleted");
 }
 
 function readRequiredFormString(formData: FormData, name: string): string {
@@ -293,6 +392,12 @@ function readRequiredFormString(formData: FormData, name: string): string {
   }
 
   return value;
+}
+
+function optionalConnectorIdFromForm(formData: FormData): string | undefined {
+  const connectorId = readOptionalFormString(formData, "connectorId")?.trim();
+
+  return connectorId && connectorId.length > 0 ? connectorId : undefined;
 }
 
 async function assertVerifiedTenantPermission<TPermission extends Permission>(
@@ -393,6 +498,16 @@ function resolvePresetId(value: string): BrandThemePresetId {
 
 function readFormCheckbox(formData: FormData, name: string): boolean {
   return formData.get(name) === "on";
+}
+
+function readTelegramSetupStepCompleted(
+  formData: FormData
+): "name" | "token" | "mode" | undefined {
+  const value = readOptionalFormString(formData, "setupStepCompleted");
+
+  return value === "name" || value === "token" || value === "mode"
+    ? value
+    : undefined;
 }
 
 function revalidateBrandPaths(): void {

@@ -10,11 +10,11 @@ import {
 } from "@hulee/observability";
 import {
   createAesGcmTenantSecretCipher,
+  createSqlChannelConnectorRepository,
   createDrizzlePersistenceExecutor,
   createExternalMessageRepository,
   createSqlOutboundDispatchRepository,
   createSqlTenantSecretRepository,
-  createSqlTenantModuleConfigRepository,
   type HuleeDatabase
 } from "@hulee/db";
 import { createExternalChannelCommandService } from "@hulee/core";
@@ -88,9 +88,7 @@ export function createWorkerOutboxHandler(
 
   return createTelegramOutboundDispatcher({
     outboundRepository: createSqlOutboundDispatchRepository(options.database),
-    moduleConfigRepository: createSqlTenantModuleConfigRepository(
-      options.database
-    ),
+    connectorRepository: createSqlChannelConnectorRepository(options.database),
     secretResolver:
       options.secretResolver ??
       createTenantSecretResolver({
@@ -129,9 +127,7 @@ export function createWorkerTelegramPollingSweeper(
     persistenceExecutor: createDrizzlePersistenceExecutor(options.database)
   });
   const sweepOptions: TelegramPollingSweepOptions = {
-    moduleConfigRepository: createSqlTenantModuleConfigRepository(
-      options.database
-    ),
+    connectorRepository: createSqlChannelConnectorRepository(options.database),
     secretResolver:
       options.secretResolver ??
       createTenantSecretResolver({

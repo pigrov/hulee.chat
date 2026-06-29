@@ -524,6 +524,57 @@ button.iconButton:disabled {
   background: var(--hulee-color-surface-raised);
 }
 
+.setupStepList {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.setupStep {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-raised);
+  color: var(--hulee-color-text-muted);
+}
+
+.setupStep[data-state="current"] {
+  border-color: var(--hulee-color-brand-primary);
+  background: var(--hulee-color-surface-muted);
+  color: var(--hulee-color-text-default);
+}
+
+.setupStep[data-state="complete"] {
+  color: var(--hulee-color-text-default);
+}
+
+.setupStepMarker {
+  display: grid;
+  color: var(--hulee-color-brand-primary);
+  place-items: center;
+}
+
+.setupStepLabel {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.setupStepPanel {
+  display: grid;
+  gap: 8px;
+}
+
 .buttonRow {
   display: flex;
   flex-wrap: wrap;
@@ -759,6 +810,11 @@ a.secondaryButton {
 
 .integrationList,
 .managementList {
+  display: grid;
+  gap: 8px;
+}
+
+.integrationListGroup {
   display: grid;
   gap: 8px;
 }
@@ -1309,10 +1365,32 @@ a.integrationListItem {
   text-decoration: none;
 }
 
+.integrationListForm {
+  margin: 0;
+}
+
+a.integrationListItem,
+button.integrationListItem {
+  width: 100%;
+}
+
+button.integrationListItem {
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.integrationListItem[aria-disabled="true"] {
+  opacity: 0.72;
+}
+
 a.managementRow:hover,
 a.managementRow:focus-visible,
 a.integrationListItem:hover,
 a.integrationListItem:focus-visible,
+button.integrationListItem:hover,
+button.integrationListItem:focus-visible,
 button.managementRow:hover,
 button.managementRow:focus-visible {
   border-color: var(--hulee-color-brand-primary);
@@ -1472,6 +1550,10 @@ button.managementRow:focus-visible {
   .platformGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .setupStepList {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 760px) {
@@ -1554,5 +1636,9 @@ button.managementRow:focus-visible {
 
   .integrationCatalog {
     position: static;
+  }
+
+  .setupStepList {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

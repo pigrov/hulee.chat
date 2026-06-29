@@ -161,6 +161,19 @@ export function createTenantSecretRef(input: {
   return `${secretRefPrefix}${input.tenantId}/${input.moduleId}/${input.secretName}`;
 }
 
+export function createChannelConnectorSecretRef(input: {
+  tenantId: TenantId;
+  connectorId: string;
+  secretName: string;
+}): string {
+  assertSecretRefSegment(input.tenantId);
+  assertSecretRefSegment("channels");
+  assertSecretRefSegment(input.connectorId);
+  assertSecretRefSegment(input.secretName);
+
+  return `${secretRefPrefix}${input.tenantId}/channels/${input.connectorId}/${input.secretName}`;
+}
+
 export function parseTenantSecretRef(input: {
   tenantId: TenantId;
   secretRef: string;

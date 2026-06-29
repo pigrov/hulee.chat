@@ -5,11 +5,11 @@ import {
   createDrizzlePersistenceExecutor,
   createExternalMessageRepository,
   createSqlPublicApiAuditSink,
+  createSqlChannelConnectorRepository,
   createSqlEmployeeDirectoryRepository,
   createSqlOrgStructureRepository,
   createSqlSecurityAuditRepository,
   createSqlTenantSecretRepository,
-  createSqlTenantModuleConfigRepository,
   createSqlTenantApiKeyRepository,
   createSqlTenantRbacRepository,
   type HuleeDatabase
@@ -46,7 +46,7 @@ import { createInternalTenantSettingsService } from "./internal-tenant-service";
 import { createExternalChannelCommandService } from "./external-channel-command-service";
 import { createPublicApiCommandService } from "./public-api-command-service";
 import {
-  createTenantModuleTelegramWebhookConnectorResolver,
+  createChannelConnectorTelegramWebhookConnectorResolver,
   createTelegramWebhookHandler,
   type TelegramWebhookHandler
 } from "./http/telegram-webhook-handler";
@@ -153,7 +153,9 @@ export function createInternalApiDataPlaneHandler(
       audit: createSqlSecurityAuditRepository(options.database)
     }),
     integrations: createInternalIntegrationService({
-      repository: createSqlTenantModuleConfigRepository(options.database),
+      connectorRepository: createSqlChannelConnectorRepository(
+        options.database
+      ),
       secretResolver: createTenantSecretResolver({
         env: options.env,
         tenantSecrets
@@ -203,7 +205,7 @@ export function createTelegramWebhookDataPlaneHandler(
     rawExecutor: options.database,
     persistenceExecutor: createDrizzlePersistenceExecutor(options.database)
   });
-  const moduleConfigRepository = createSqlTenantModuleConfigRepository(
+  const connectorRepository = createSqlChannelConnectorRepository(
     options.database
   );
   const tenantSecrets = options.secretEncryptionKey
@@ -219,8 +221,8 @@ export function createTelegramWebhookDataPlaneHandler(
     commands: createExternalChannelCommandService({
       repository: externalMessageRepository
     }),
-    connectorResolver: createTenantModuleTelegramWebhookConnectorResolver({
-      repository: moduleConfigRepository
+    connectorResolver: createChannelConnectorTelegramWebhookConnectorResolver({
+      repository: connectorRepository
     }),
     secretResolver: createTenantSecretResolver({
       env: options.env,

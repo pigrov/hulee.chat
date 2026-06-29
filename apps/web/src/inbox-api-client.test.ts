@@ -17,10 +17,15 @@ vi.mock("./web-config", () => ({
 import { buildInternalApiHeaders } from "./session";
 import {
   archiveRbacRole,
+  createChannelConnector,
   createRbacDirectGrant,
   createRbacRole,
   createRbacRoleBinding,
+  deleteChannelConnector,
   deleteTelegramWebhook,
+  disableChannelConnector,
+  loadChannelCatalog,
+  loadChannelConnectors,
   loadRbacDirectGrants,
   loadRbacRoleBindings,
   loadRbacRoles,
@@ -179,13 +184,161 @@ describe("inbox API client", () => {
 
     vi.stubGlobal("fetch", fetchMock);
 
-    await loadTelegramIntegration({
-      effectivePermissionOverride: "modules.manage"
-    });
+    await loadTelegramIntegration(
+      {
+        effectivePermissionOverride: "modules.manage"
+      },
+      {
+        connectorId: "telegram_bot:second"
+      }
+    );
 
     expect(buildInternalApiHeaders).toHaveBeenCalledWith({
       method: "GET",
-      path: "/internal/v1/integrations/telegram",
+      path: "/internal/v1/integrations/telegram?connectorId=telegram_bot%3Asecond",
+      effectivePermissionOverride: "modules.manage"
+    });
+  });
+
+  it("passes explicit effective permission override when loading channel catalog and connectors", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = new URL(String(input));
+
+      if (url.pathname.endsWith("/channels/catalog")) {
+        return Response.json({
+          channels: [
+            {
+              channelType: "telegram_bot",
+              channelClass: "bot_bridge",
+              provider: "telegram",
+              titleKey: "integrations.catalog.telegramBot.title",
+              descriptionKey: "integrations.catalog.telegramBot.description",
+              readiness: "available",
+              supportsMultiple: true,
+              capabilities: ["inbound", "outbound", "webhook"]
+            }
+          ]
+        });
+      }
+
+      return Response.json({
+        connectors: [
+          {
+            connectorId: "telegram_bot:tenant-1",
+            channelType: "telegram_bot",
+            channelClass: "bot_bridge",
+            provider: "telegram",
+            displayName: "Telegram Bot",
+            status: "connected",
+            healthStatus: "healthy",
+            channelExternalId: "telegram-local",
+            diagnosticsStatus: "configured"
+          }
+        ]
+      });
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await loadChannelCatalog({
+      effectivePermissionOverride: "modules.manage"
+    });
+    await loadChannelConnectors({
+      effectivePermissionOverride: "modules.manage"
+    });
+
+    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(1, {
+      method: "GET",
+      path: "/internal/v1/channels/catalog",
+      effectivePermissionOverride: "modules.manage"
+    });
+    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(2, {
+      method: "GET",
+      path: "/internal/v1/channels/connectors",
+      effectivePermissionOverride: "modules.manage"
+    });
+  });
+
+  it("passes explicit effective permission override when creating channel connectors", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => {
+      return Response.json({
+        connectorId: "telegram_bot:generated",
+        channelType: "telegram_bot",
+        channelClass: "bot_bridge",
+        provider: "telegram",
+        displayName: "Telegram Bot",
+        status: "draft",
+        healthStatus: "unknown",
+        channelExternalId: "telegram-generated",
+        diagnosticsStatus: "disabled"
+      });
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createChannelConnector(
+      {
+        channelType: "telegram_bot"
+      },
+      {
+        effectivePermissionOverride: "modules.manage"
+      }
+    );
+
+    expect(buildInternalApiHeaders).toHaveBeenCalledWith({
+      method: "POST",
+      path: "/internal/v1/channels/connectors",
+      body: {
+        channelType: "telegram_bot"
+      },
+      effectivePermissionOverride: "modules.manage"
+    });
+  });
+
+  it("passes explicit effective permission override when changing connector lifecycle", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const status = init?.method === "DELETE" ? "deleted" : "disabled";
+
+      return Response.json({
+        connectorId: "telegram_bot:second",
+        channelType: "telegram_bot",
+        channelClass: "bot_bridge",
+        provider: "telegram",
+        displayName: "Telegram Bot",
+        status,
+        healthStatus: "unknown",
+        channelExternalId: "telegram-local",
+        diagnosticsStatus: "disabled"
+      });
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await disableChannelConnector(
+      {
+        connectorId: "telegram_bot:second"
+      },
+      {
+        effectivePermissionOverride: "modules.manage"
+      }
+    );
+    await deleteChannelConnector(
+      {
+        connectorId: "telegram_bot:second"
+      },
+      {
+        effectivePermissionOverride: "modules.manage"
+      }
+    );
+
+    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(1, {
+      method: "POST",
+      path: "/internal/v1/channels/connectors/telegram_bot%3Asecond/disable",
+      effectivePermissionOverride: "modules.manage"
+    });
+    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(2, {
+      method: "DELETE",
+      path: "/internal/v1/channels/connectors/telegram_bot%3Asecond",
       effectivePermissionOverride: "modules.manage"
     });
   });
@@ -207,10 +360,20 @@ describe("inbox API client", () => {
       },
       { effectivePermissionOverride: "modules.manage" }
     );
-    await refreshTelegramDiagnostics({
-      effectivePermissionOverride: "modules.manage"
-    });
-    await setTelegramWebhook({ effectivePermissionOverride: "modules.manage" });
+    await refreshTelegramDiagnostics(
+      {
+        effectivePermissionOverride: "modules.manage"
+      },
+      {
+        connectorId: "telegram_bot:second"
+      }
+    );
+    await setTelegramWebhook(
+      { effectivePermissionOverride: "modules.manage" },
+      {
+        connectorId: "telegram_bot:second"
+      }
+    );
     await deleteTelegramWebhook({
       effectivePermissionOverride: "modules.manage"
     });
@@ -229,12 +392,12 @@ describe("inbox API client", () => {
     });
     expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(2, {
       method: "POST",
-      path: "/internal/v1/integrations/telegram/diagnostics",
+      path: "/internal/v1/integrations/telegram/diagnostics?connectorId=telegram_bot%3Asecond",
       effectivePermissionOverride: "modules.manage"
     });
     expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(3, {
       method: "POST",
-      path: "/internal/v1/integrations/telegram/webhook",
+      path: "/internal/v1/integrations/telegram/webhook?connectorId=telegram_bot%3Asecond",
       effectivePermissionOverride: "modules.manage"
     });
     expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(4, {

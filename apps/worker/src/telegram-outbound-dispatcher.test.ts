@@ -1,4 +1,9 @@
 import type {
+  ChannelClass,
+  ChannelConnectorHealthStatus,
+  ChannelConnectorId,
+  ChannelConnectorStatus,
+  ChannelType,
   ConversationId,
   MessageId,
   PlatformEvent,
@@ -6,16 +11,19 @@ import type {
 } from "@hulee/contracts";
 import { CoreError } from "@hulee/core";
 import type {
-  FindEnabledTenantModuleConfigInput,
-  FindTenantModuleConfigInput,
-  ListEnabledTenantModuleConfigsInput,
+  ChannelConnectorRecord,
+  ChannelConnectorRepository,
+  FindActiveChannelConnectorByConfigStringInput,
+  FindActiveChannelConnectorByExternalIdInput,
+  FindChannelConnectorInput,
+  FindFirstChannelConnectorByTypeInput,
+  ListActiveChannelConnectorsByTypeInput,
+  ListTenantChannelConnectorsInput,
   MarkOutboundMessageFailedInput,
   MarkOutboundMessageSentInput,
   OutboundDispatchRepository,
   QueuedOutboundMessageForDispatch,
-  TenantModuleConfigRecord,
-  TenantModuleConfigRepository,
-  UpsertTenantModuleConfigInput
+  UpsertChannelConnectorInput
 } from "@hulee/db";
 import { describe, expect, it, vi } from "vitest";
 
@@ -35,7 +43,7 @@ describe("telegram outbound dispatcher", () => {
     const outboundRepository = new InMemoryOutboundDispatchRepository(
       createQueuedMessage()
     );
-    const moduleConfigRepository = new InMemoryModuleConfigRepository();
+    const connectorRepository = new InMemoryChannelConnectorRepository();
     const sendTextMessage = vi.fn(async () => ({
       messageId: "telegram-provider-message-1",
       chatId: "42",
@@ -43,7 +51,7 @@ describe("telegram outbound dispatcher", () => {
     }));
     const dispatcher = createTelegramOutboundDispatcher({
       outboundRepository,
-      moduleConfigRepository,
+      connectorRepository,
       secretResolver: createEnvSecretResolver({
         HULEE_TELEGRAM_BOT_TOKEN: "token-1"
       }),
@@ -79,7 +87,7 @@ describe("telegram outbound dispatcher", () => {
     });
     const dispatcher = createTelegramOutboundDispatcher({
       outboundRepository,
-      moduleConfigRepository: new InMemoryModuleConfigRepository(),
+      connectorRepository: new InMemoryChannelConnectorRepository(),
       secretResolver: createEnvSecretResolver({
         HULEE_TELEGRAM_BOT_TOKEN: "token-1"
       }),
@@ -112,7 +120,7 @@ describe("telegram outbound dispatcher", () => {
     });
     const dispatcher = createTelegramOutboundDispatcher({
       outboundRepository,
-      moduleConfigRepository: new InMemoryModuleConfigRepository(),
+      connectorRepository: new InMemoryChannelConnectorRepository(),
       secretResolver: createEnvSecretResolver({
         HULEE_TELEGRAM_BOT_TOKEN: "token-1"
       }),
@@ -135,7 +143,7 @@ describe("telegram outbound dispatcher", () => {
       outboundRepository: new InMemoryOutboundDispatchRepository(
         createQueuedMessage()
       ),
-      moduleConfigRepository: new InMemoryModuleConfigRepository(),
+      connectorRepository: new InMemoryChannelConnectorRepository(),
       secretResolver: createEnvSecretResolver({})
     });
 
@@ -166,48 +174,71 @@ class InMemoryOutboundDispatchRepository implements OutboundDispatchRepository {
   }
 }
 
-class InMemoryModuleConfigRepository implements TenantModuleConfigRepository {
-  async findConfig(
-    input: FindTenantModuleConfigInput
-  ): Promise<TenantModuleConfigRecord | null> {
-    return this.moduleConfig(input);
+class InMemoryChannelConnectorRepository implements ChannelConnectorRepository {
+  private readonly record = createTelegramConnector();
+
+  async findConnector(
+    _input: FindChannelConnectorInput
+  ): Promise<ChannelConnectorRecord | null> {
+    return this.record;
   }
 
-  async findEnabledConfig(
-    input: FindEnabledTenantModuleConfigInput
-  ): Promise<TenantModuleConfigRecord | null> {
-    return this.moduleConfig(input);
+  async findFirstConnectorByType(
+    _input: FindFirstChannelConnectorByTypeInput
+  ): Promise<ChannelConnectorRecord | null> {
+    return this.record;
   }
 
-  async listEnabledConfigs(
-    _input: ListEnabledTenantModuleConfigsInput
-  ): Promise<TenantModuleConfigRecord[]> {
-    return [this.moduleConfig({ tenantId, moduleId: "channel-telegram" })];
+  async listActiveConnectorsByType(
+    _input: ListActiveChannelConnectorsByTypeInput
+  ): Promise<ChannelConnectorRecord[]> {
+    return [this.record];
   }
 
-  async findEnabledConfigByConfigString(): Promise<TenantModuleConfigRecord | null> {
-    return null;
+  async listTenantConnectors(
+    input: ListTenantChannelConnectorsInput
+  ): Promise<ChannelConnectorRecord[]> {
+    return this.record.tenantId === input.tenantId ? [this.record] : [];
   }
 
-  async upsertConfig(_input: UpsertTenantModuleConfigInput): Promise<void> {}
-
-  private moduleConfig(input: {
-    tenantId: TenantId;
-    moduleId: string;
-  }): TenantModuleConfigRecord {
-    return {
-      tenantId: input.tenantId,
-      moduleId: input.moduleId,
-      enabled: true,
-      config: {
-        channelExternalId: "telegram-local",
-        mode: "webhook",
-        botTokenSecretRef: "env:HULEE_TELEGRAM_BOT_TOKEN",
-        outboundEnabled: true
-      },
-      diagnostics: {}
-    };
+  async findActiveConnectorByConfigString(
+    _input: FindActiveChannelConnectorByConfigStringInput
+  ): Promise<ChannelConnectorRecord | null> {
+    return this.record;
   }
+
+  async findActiveConnectorByExternalId(
+    input: FindActiveChannelConnectorByExternalIdInput
+  ): Promise<ChannelConnectorRecord | null> {
+    return input.channelExternalId === "telegram-local" ? this.record : null;
+  }
+
+  async upsertConnector(_input: UpsertChannelConnectorInput): Promise<void> {}
+}
+
+function createTelegramConnector(): ChannelConnectorRecord {
+  return {
+    id: "telegram_bot:tenant_worker_telegram" as ChannelConnectorId,
+    tenantId,
+    channelType: "telegram_bot" as ChannelType,
+    channelClass: "bot_bridge" as ChannelClass,
+    provider: "telegram",
+    displayName: "Telegram Bot",
+    status: "connected" as ChannelConnectorStatus,
+    healthStatus: "healthy" as ChannelConnectorHealthStatus,
+    capabilities: {},
+    onboardingState: {},
+    config: {
+      channelExternalId: "telegram-local",
+      mode: "webhook",
+      botTokenSecretRef: "env:HULEE_TELEGRAM_BOT_TOKEN",
+      outboundEnabled: true
+    },
+    diagnostics: {},
+    createdByEmployeeId: null,
+    createdAt: now,
+    updatedAt: now
+  };
 }
 
 function createQueuedMessage(): QueuedOutboundMessageForDispatch {

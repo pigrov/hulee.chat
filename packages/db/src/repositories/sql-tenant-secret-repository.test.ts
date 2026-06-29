@@ -9,6 +9,7 @@ import type {
 } from "./sql-outbox-repository";
 import {
   createAesGcmTenantSecretCipher,
+  createChannelConnectorSecretRef,
   createSqlTenantSecretRepository,
   createTenantSecretRef,
   parseTenantSecretRef
@@ -31,6 +32,20 @@ describe("SQL tenant secret repository", () => {
     expect(parseTenantSecretRef({ tenantId, secretRef })).toEqual({
       tenantId,
       path: "channel-telegram/bot-token"
+    });
+
+    expect(
+      parseTenantSecretRef({
+        tenantId,
+        secretRef: createChannelConnectorSecretRef({
+          tenantId,
+          connectorId: "telegram_bot:tenant_secret_1",
+          secretName: "bot-token"
+        })
+      })
+    ).toEqual({
+      tenantId,
+      path: "channels/telegram_bot:tenant_secret_1/bot-token"
     });
 
     expect(() =>

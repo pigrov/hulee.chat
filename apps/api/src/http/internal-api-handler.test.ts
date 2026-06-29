@@ -217,6 +217,68 @@ function createHandler(input?: {
   const revokeDirectGrant = vi.fn(async () => ({
     revoked: true as const
   }));
+  const listChannelCatalog = vi.fn(async () => ({
+    channels: [
+      {
+        channelType: "telegram_bot" as const,
+        channelClass: "bot_bridge" as const,
+        provider: "telegram",
+        titleKey: "integrations.catalog.telegramBot.title",
+        descriptionKey: "integrations.catalog.telegramBot.description",
+        readiness: "available" as const,
+        supportsMultiple: true,
+        capabilities: ["inbound", "outbound", "webhook"]
+      }
+    ]
+  }));
+  const listChannelConnectors = vi.fn(async () => ({
+    connectors: [
+      {
+        connectorId: "telegram_bot:tenant-1",
+        channelType: "telegram_bot" as const,
+        channelClass: "bot_bridge" as const,
+        provider: "telegram",
+        displayName: "Telegram Bot",
+        status: "connected" as const,
+        healthStatus: "healthy" as const,
+        channelExternalId: "telegram-local",
+        diagnosticsStatus: "configured"
+      }
+    ]
+  }));
+  const createChannelConnector = vi.fn(async () => ({
+    connectorId: "telegram_bot:generated",
+    channelType: "telegram_bot" as const,
+    channelClass: "bot_bridge" as const,
+    provider: "telegram",
+    displayName: "Telegram Bot",
+    status: "draft" as const,
+    healthStatus: "unknown" as const,
+    channelExternalId: "telegram-generated",
+    diagnosticsStatus: "disabled"
+  }));
+  const disableChannelConnector = vi.fn(async () => ({
+    connectorId: "telegram_bot:tenant-1",
+    channelType: "telegram_bot" as const,
+    channelClass: "bot_bridge" as const,
+    provider: "telegram",
+    displayName: "Telegram Bot",
+    status: "disabled" as const,
+    healthStatus: "unknown" as const,
+    channelExternalId: "telegram-local",
+    diagnosticsStatus: "disabled"
+  }));
+  const deleteChannelConnector = vi.fn(async () => ({
+    connectorId: "telegram_bot:tenant-1",
+    channelType: "telegram_bot" as const,
+    channelClass: "bot_bridge" as const,
+    provider: "telegram",
+    displayName: "Telegram Bot",
+    status: "deleted" as const,
+    healthStatus: "unknown" as const,
+    channelExternalId: "telegram-local",
+    diagnosticsStatus: "disabled"
+  }));
   const loadTelegramIntegration = vi.fn(async () => ({
     moduleId: "channel-telegram" as const,
     enabled: true,
@@ -363,6 +425,11 @@ function createHandler(input?: {
     inboxQueries: { loadInboxView },
     inboxCommands: { sendReply, updateConversationRouting },
     integrations: {
+      listChannelCatalog,
+      listChannelConnectors,
+      createChannelConnector,
+      disableChannelConnector,
+      deleteChannelConnector,
       loadTelegramIntegration,
       updateTelegramIntegration,
       refreshTelegramDiagnostics,
@@ -401,6 +468,11 @@ function createHandler(input?: {
     loadInboxView,
     sendReply,
     updateConversationRouting,
+    listChannelCatalog,
+    listChannelConnectors,
+    createChannelConnector,
+    disableChannelConnector,
+    deleteChannelConnector,
     loadTelegramIntegration,
     updateTelegramIntegration,
     refreshTelegramDiagnostics,
@@ -1353,7 +1425,107 @@ describe("internal API handler", () => {
       enabled: true,
       webhookPath: "/webhooks/telegram/telegram-local"
     });
-    expect(loadTelegramIntegration).toHaveBeenCalledWith(modulesManageSession);
+    expect(loadTelegramIntegration).toHaveBeenCalledWith(modulesManageSession, {
+      connectorId: undefined
+    });
+  });
+
+  it("loads channel catalog and connector summaries through modules.manage permission", async () => {
+    const modulesManageSession = sessionWithPermissions(["modules.manage"]);
+    const { handler, listChannelCatalog, listChannelConnectors } =
+      createHandler({
+        session: modulesManageSession
+      });
+
+    const catalogResponse = await handler.handle({
+      method: "GET",
+      path: "/internal/v1/channels/catalog"
+    });
+    const connectorsResponse = await handler.handle({
+      method: "GET",
+      path: "/internal/v1/channels/connectors"
+    });
+
+    expect(catalogResponse.status).toBe(200);
+    expect(catalogResponse.body).toMatchObject({
+      channels: [
+        {
+          channelType: "telegram_bot",
+          readiness: "available"
+        }
+      ]
+    });
+    expect(connectorsResponse.status).toBe(200);
+    expect(connectorsResponse.body).toMatchObject({
+      connectors: [
+        {
+          connectorId: "telegram_bot:tenant-1",
+          channelType: "telegram_bot",
+          status: "connected"
+        }
+      ]
+    });
+    expect(listChannelCatalog).toHaveBeenCalledWith(modulesManageSession);
+    expect(listChannelConnectors).toHaveBeenCalledWith(modulesManageSession);
+  });
+
+  it("creates channel connectors through modules.manage permission", async () => {
+    const modulesManageSession = sessionWithPermissions(["modules.manage"]);
+    const { handler, createChannelConnector } = createHandler({
+      session: modulesManageSession
+    });
+
+    const response = await handler.handle({
+      method: "POST",
+      path: "/internal/v1/channels/connectors",
+      body: {
+        channelType: "telegram_bot"
+      }
+    });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toMatchObject({
+      connectorId: "telegram_bot:generated",
+      channelType: "telegram_bot",
+      status: "draft"
+    });
+    expect(createChannelConnector).toHaveBeenCalledWith(modulesManageSession, {
+      channelType: "telegram_bot"
+    });
+  });
+
+  it("updates channel connector lifecycle through modules.manage permission", async () => {
+    const modulesManageSession = sessionWithPermissions(["modules.manage"]);
+    const { handler, disableChannelConnector, deleteChannelConnector } =
+      createHandler({
+        session: modulesManageSession
+      });
+
+    const disableResponse = await handler.handle({
+      method: "POST",
+      path: "/internal/v1/channels/connectors/telegram_bot%3Atenant-1/disable"
+    });
+    const deleteResponse = await handler.handle({
+      method: "DELETE",
+      path: "/internal/v1/channels/connectors/telegram_bot%3Atenant-1"
+    });
+
+    expect(disableResponse.status).toBe(200);
+    expect(disableResponse.body).toMatchObject({
+      connectorId: "telegram_bot:tenant-1",
+      status: "disabled"
+    });
+    expect(deleteResponse.status).toBe(200);
+    expect(deleteResponse.body).toMatchObject({
+      connectorId: "telegram_bot:tenant-1",
+      status: "deleted"
+    });
+    expect(disableChannelConnector).toHaveBeenCalledWith(modulesManageSession, {
+      connectorId: "telegram_bot:tenant-1"
+    });
+    expect(deleteChannelConnector).toHaveBeenCalledWith(modulesManageSession, {
+      connectorId: "telegram_bot:tenant-1"
+    });
   });
 
   it("updates Telegram integration config after request validation", async () => {
@@ -1391,6 +1563,52 @@ describe("internal API handler", () => {
         outboundEnabled: true
       }
     );
+  });
+
+  it("passes selected connector id to Telegram admin commands", async () => {
+    const modulesManageSession = sessionWithPermissions(["modules.manage"]);
+    const {
+      handler,
+      loadTelegramIntegration,
+      refreshTelegramDiagnostics,
+      setTelegramWebhook,
+      deleteTelegramWebhook
+    } = createHandler({
+      session: modulesManageSession
+    });
+
+    await handler.handle({
+      method: "GET",
+      path: "/internal/v1/integrations/telegram?connectorId=telegram_bot%3Asecond"
+    });
+    await handler.handle({
+      method: "POST",
+      path: "/internal/v1/integrations/telegram/diagnostics?connectorId=telegram_bot%3Asecond"
+    });
+    await handler.handle({
+      method: "POST",
+      path: "/internal/v1/integrations/telegram/webhook?connectorId=telegram_bot%3Asecond"
+    });
+    await handler.handle({
+      method: "DELETE",
+      path: "/internal/v1/integrations/telegram/webhook?connectorId=telegram_bot%3Asecond"
+    });
+
+    expect(loadTelegramIntegration).toHaveBeenCalledWith(modulesManageSession, {
+      connectorId: "telegram_bot:second"
+    });
+    expect(refreshTelegramDiagnostics).toHaveBeenCalledWith(
+      modulesManageSession,
+      {
+        connectorId: "telegram_bot:second"
+      }
+    );
+    expect(setTelegramWebhook).toHaveBeenCalledWith(modulesManageSession, {
+      connectorId: "telegram_bot:second"
+    });
+    expect(deleteTelegramWebhook).toHaveBeenCalledWith(modulesManageSession, {
+      connectorId: "telegram_bot:second"
+    });
   });
 
   it("requires modules.manage for Telegram integration routes", async () => {
@@ -1684,7 +1902,10 @@ describe("internal API handler", () => {
       }
     });
     expect(refreshTelegramDiagnostics).toHaveBeenCalledWith(
-      modulesManageSession
+      modulesManageSession,
+      {
+        connectorId: undefined
+      }
     );
   });
 
@@ -1705,8 +1926,12 @@ describe("internal API handler", () => {
 
     expect(setResponse.status).toBe(200);
     expect(deleteResponse.status).toBe(200);
-    expect(setTelegramWebhook).toHaveBeenCalledWith(modulesManageSession);
-    expect(deleteTelegramWebhook).toHaveBeenCalledWith(modulesManageSession);
+    expect(setTelegramWebhook).toHaveBeenCalledWith(modulesManageSession, {
+      connectorId: undefined
+    });
+    expect(deleteTelegramWebhook).toHaveBeenCalledWith(modulesManageSession, {
+      connectorId: undefined
+    });
   });
 });
 

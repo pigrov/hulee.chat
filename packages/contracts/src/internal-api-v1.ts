@@ -469,9 +469,98 @@ export const internalRbacDirectGrantCreateRequestSchema = z
   })
   .strict();
 
+export const internalChannelTypeSchema = z.enum([
+  "telegram_bot",
+  "telegram_qr_bridge",
+  "whatsapp_qr_bridge",
+  "max_qr_bridge",
+  "max_bot",
+  "vk_community"
+]);
+
+export const internalChannelClassSchema = z.enum([
+  "bot_bridge",
+  "user_bridge",
+  "official_api"
+]);
+
+export const internalChannelConnectorStatusSchema = z.enum([
+  "draft",
+  "onboarding",
+  "authorizing",
+  "connected",
+  "degraded",
+  "reauth_required",
+  "disabled",
+  "failed",
+  "deleted"
+]);
+
+export const internalChannelConnectorHealthStatusSchema = z.enum([
+  "unknown",
+  "healthy",
+  "degraded",
+  "unhealthy"
+]);
+
+export const internalChannelCatalogItemSchema = z
+  .object({
+    channelType: internalChannelTypeSchema,
+    channelClass: internalChannelClassSchema,
+    provider: z.string().trim().min(1).max(80),
+    titleKey: z.string().trim().min(1).max(120),
+    descriptionKey: z.string().trim().min(1).max(160),
+    readiness: z.enum(["available", "coming_soon", "disabled"]),
+    supportsMultiple: z.boolean(),
+    capabilities: z.array(z.string().trim().min(1).max(80)).max(20)
+  })
+  .strict();
+
+export const internalChannelCatalogResponseSchema = z
+  .object({
+    channels: z.array(internalChannelCatalogItemSchema)
+  })
+  .strict();
+
+export const internalChannelConnectorSummarySchema = z
+  .object({
+    connectorId: z.string().trim().min(1).max(200),
+    channelType: internalChannelTypeSchema,
+    channelClass: internalChannelClassSchema,
+    provider: z.string().trim().min(1).max(80),
+    displayName: z.string().trim().min(1).max(120),
+    status: internalChannelConnectorStatusSchema,
+    healthStatus: internalChannelConnectorHealthStatusSchema,
+    channelExternalId: z.string().trim().min(1).max(200).optional(),
+    diagnosticsStatus: z.string().trim().min(1).max(80).optional()
+  })
+  .strict();
+
+export const internalChannelConnectorsResponseSchema = z
+  .object({
+    connectors: z.array(internalChannelConnectorSummarySchema)
+  })
+  .strict();
+
+export const internalChannelConnectorCreateRequestSchema = z
+  .object({
+    channelType: internalChannelTypeSchema,
+    displayName: z.string().trim().min(1).max(120).optional()
+  })
+  .strict();
+
 export const internalTelegramIntegrationModeSchema = z.enum([
   "webhook",
   "polling"
+]);
+
+export const internalTelegramSetupStepSchema = z.enum([
+  "name",
+  "token",
+  "mode",
+  "diagnostics",
+  "webhook",
+  "complete"
 ]);
 
 export const internalTelegramIntegrationConfigSchema = z
@@ -491,6 +580,9 @@ export const internalTelegramIntegrationConfigSchema = z
 
 export const internalTelegramIntegrationUpdateRequestSchema = z
   .object({
+    connectorId: z.string().trim().min(1).max(200).optional(),
+    displayName: z.string().trim().min(1).max(120).optional(),
+    setupStepCompleted: z.enum(["name", "token", "mode"]).optional(),
     enabled: z.boolean().default(true),
     channelExternalId: z.string().trim().min(1).max(200),
     mode: internalTelegramIntegrationModeSchema.default("webhook"),
@@ -559,6 +651,12 @@ export const internalTelegramIntegrationDiagnosticsSchema = z
 export const internalTelegramIntegrationResponseSchema = z
   .object({
     moduleId: z.literal("channel-telegram"),
+    connectorId: z.string().trim().min(1).optional(),
+    channelType: z.literal("telegram_bot").optional(),
+    channelClass: z.literal("bot_bridge").optional(),
+    displayName: z.string().trim().min(1).optional(),
+    status: internalChannelConnectorStatusSchema.optional(),
+    setupStep: internalTelegramSetupStepSchema.optional(),
     enabled: z.boolean(),
     config: internalTelegramIntegrationConfigSchema.optional(),
     webhookPath: z.string().trim().min(1).optional(),
@@ -691,8 +789,34 @@ export type InternalRbacRoleBindingCreateRequest = z.infer<
 export type InternalRbacDirectGrantCreateRequest = z.infer<
   typeof internalRbacDirectGrantCreateRequestSchema
 >;
+export type InternalChannelType = z.infer<typeof internalChannelTypeSchema>;
+export type InternalChannelClass = z.infer<typeof internalChannelClassSchema>;
+export type InternalChannelConnectorStatus = z.infer<
+  typeof internalChannelConnectorStatusSchema
+>;
+export type InternalChannelConnectorHealthStatus = z.infer<
+  typeof internalChannelConnectorHealthStatusSchema
+>;
+export type InternalChannelCatalogItem = z.infer<
+  typeof internalChannelCatalogItemSchema
+>;
+export type InternalChannelCatalogResponse = z.infer<
+  typeof internalChannelCatalogResponseSchema
+>;
+export type InternalChannelConnectorSummary = z.infer<
+  typeof internalChannelConnectorSummarySchema
+>;
+export type InternalChannelConnectorsResponse = z.infer<
+  typeof internalChannelConnectorsResponseSchema
+>;
+export type InternalChannelConnectorCreateRequest = z.infer<
+  typeof internalChannelConnectorCreateRequestSchema
+>;
 export type InternalTelegramIntegrationConfig = z.infer<
   typeof internalTelegramIntegrationConfigSchema
+>;
+export type InternalTelegramSetupStep = z.infer<
+  typeof internalTelegramSetupStepSchema
 >;
 export type InternalTelegramIntegrationUpdateRequest = z.infer<
   typeof internalTelegramIntegrationUpdateRequestSchema

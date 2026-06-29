@@ -7,7 +7,7 @@ import {
   getPlatformErrorDefinition,
   isPlatformErrorCode
 } from "@hulee/contracts";
-import type { TenantModuleConfigRepository } from "@hulee/db";
+import type { ChannelConnectorRepository } from "@hulee/db";
 import {
   createTelegramChannelAdapter,
   parseTelegramChannelConfig,
@@ -57,16 +57,16 @@ type RouteMatch = {
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8"
 };
-const telegramModuleId = "channel-telegram";
+const telegramChannelType = "telegram_bot";
 const telegramSecretTokenHeader = "x-telegram-bot-api-secret-token";
 
-export function createTenantModuleTelegramWebhookConnectorResolver(input: {
-  repository: TenantModuleConfigRepository;
+export function createChannelConnectorTelegramWebhookConnectorResolver(input: {
+  repository: ChannelConnectorRepository;
 }): TelegramWebhookConnectorResolver {
   return {
     async resolveConnector({ connectorId }) {
-      const record = await input.repository.findEnabledConfigByConfigString({
-        moduleId: telegramModuleId,
+      const record = await input.repository.findActiveConnectorByConfigString({
+        channelType: telegramChannelType,
         configKey: "webhookConnectorId",
         configValue: connectorId
       });

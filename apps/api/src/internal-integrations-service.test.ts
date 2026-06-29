@@ -1,11 +1,22 @@
-import type { EmployeeId, TenantId } from "@hulee/contracts";
 import type {
-  FindEnabledTenantModuleConfigInput,
-  FindTenantModuleConfigInput,
-  ListEnabledTenantModuleConfigsInput,
-  TenantModuleConfigRecord,
-  TenantModuleConfigRepository,
-  UpsertTenantModuleConfigInput
+  ChannelClass,
+  ChannelConnectorHealthStatus,
+  ChannelConnectorId,
+  ChannelConnectorStatus,
+  ChannelType,
+  EmployeeId,
+  TenantId
+} from "@hulee/contracts";
+import type {
+  ChannelConnectorRecord,
+  ChannelConnectorRepository,
+  FindActiveChannelConnectorByConfigStringInput,
+  FindActiveChannelConnectorByExternalIdInput,
+  FindChannelConnectorInput,
+  FindFirstChannelConnectorByTypeInput,
+  ListActiveChannelConnectorsByTypeInput,
+  ListTenantChannelConnectorsInput,
+  UpsertChannelConnectorInput
 } from "@hulee/db";
 import { describe, expect, it } from "vitest";
 
@@ -23,9 +34,111 @@ const context: InternalIntegrationContext = {
 const now = new Date("2026-06-22T10:00:00.000Z");
 
 describe("internal integrations service", () => {
+  it("creates draft Telegram Bot connectors with server-side identity", async () => {
+    const repository = new InMemoryChannelConnectorRepository();
+    const service = createInternalIntegrationService({
+      connectorRepository: repository,
+      now: () => now,
+      webhookConnectorIdFactory: () => "tgwh_created"
+    });
+
+    const response = await service.createChannelConnector(context, {
+      channelType: "telegram_bot"
+    });
+
+    expect(response).toMatchObject({
+      connectorId: expect.stringMatching(/^telegram_bot:/),
+      channelType: "telegram_bot",
+      channelClass: "bot_bridge",
+      provider: "telegram",
+      displayName: "Telegram Bot",
+      status: "draft",
+      healthStatus: "unknown",
+      diagnosticsStatus: "disabled"
+    });
+    expect(repository.records.get(response.connectorId)).toEqual(
+      expect.objectContaining({
+        id: response.connectorId,
+        tenantId,
+        status: "draft",
+        healthStatus: "unknown",
+        config: expect.objectContaining({
+          mode: "webhook",
+          webhookConnectorId: "tgwh_created",
+          outboundEnabled: false
+        }),
+        createdByEmployeeId: context.employeeId
+      })
+    );
+  });
+
+  it("disables and soft-deletes tenant channel connectors", async () => {
+    const repository = new InMemoryChannelConnectorRepository([
+      createTelegramConnector({
+        config: {
+          channelExternalId: "telegram-local",
+          mode: "webhook",
+          outboundEnabled: false
+        },
+        diagnostics: {
+          status: "configured",
+          checkedAt: now.toISOString(),
+          checks: {
+            moduleEnabled: true,
+            configValid: true,
+            inboundWebhookReady: false,
+            outboundEnabled: false,
+            botTokenSecretRefConfigured: false
+          }
+        }
+      })
+    ]);
+    const service = createInternalIntegrationService({
+      connectorRepository: repository,
+      now: () => now
+    });
+
+    await expect(
+      service.disableChannelConnector(context, {
+        connectorId: "telegram_bot:tenant-integrations"
+      })
+    ).resolves.toMatchObject({
+      connectorId: "telegram_bot:tenant-integrations",
+      status: "disabled",
+      healthStatus: "unknown",
+      diagnosticsStatus: "disabled"
+    });
+    expect(
+      repository.records.get("telegram_bot:tenant-integrations")
+    ).toMatchObject({
+      status: "disabled",
+      healthStatus: "unknown",
+      diagnostics: {
+        status: "disabled"
+      }
+    });
+
+    await expect(
+      service.deleteChannelConnector(context, {
+        connectorId: "telegram_bot:tenant-integrations"
+      })
+    ).resolves.toMatchObject({
+      connectorId: "telegram_bot:tenant-integrations",
+      status: "deleted",
+      healthStatus: "unknown",
+      diagnosticsStatus: "disabled"
+    });
+    expect(
+      repository.records.get("telegram_bot:tenant-integrations")
+    ).toMatchObject({
+      status: "deleted",
+      healthStatus: "unknown"
+    });
+  });
+
   it("returns disabled Telegram integration when no tenant module row exists", async () => {
     const service = createInternalIntegrationService({
-      repository: new InMemoryTenantModuleConfigRepository(),
+      connectorRepository: new InMemoryChannelConnectorRepository(),
       now: () => now
     });
 
@@ -47,9 +160,9 @@ describe("internal integrations service", () => {
   });
 
   it("updates Telegram config as tenant module config and returns safe diagnostics", async () => {
-    const repository = new InMemoryTenantModuleConfigRepository();
+    const repository = new InMemoryChannelConnectorRepository();
     const service = createInternalIntegrationService({
-      repository,
+      connectorRepository: repository,
       now: () => now,
       webhookConnectorIdFactory: () => "tgwh_test"
     });
@@ -64,6 +177,12 @@ describe("internal integrations service", () => {
 
     expect(response).toEqual({
       moduleId: "channel-telegram",
+      connectorId: "telegram_bot:tenant-integrations",
+      channelType: "telegram_bot",
+      channelClass: "bot_bridge",
+      displayName: "Telegram Bot",
+      status: "connected",
+      setupStep: "diagnostics",
       enabled: true,
       config: {
         channelExternalId: "telegram-local",
@@ -85,24 +204,83 @@ describe("internal integrations service", () => {
         }
       }
     });
-    expect(
-      repository.records.get(recordKey(tenantId, "channel-telegram"))
-    ).toEqual(
+    expect(repository.records.get("telegram_bot:tenant-integrations")).toEqual(
       expect.objectContaining({
+        id: "telegram_bot:tenant-integrations",
         tenantId,
-        moduleId: "channel-telegram",
-        enabled: true,
+        channelType: "telegram_bot",
+        channelClass: "bot_bridge",
+        provider: "telegram",
+        status: "connected",
         config: response.config,
         diagnostics: response.diagnostics
       })
     );
   });
 
+  it("advances draft Telegram setup steps before activation", async () => {
+    const repository = new InMemoryChannelConnectorRepository();
+    const service = createInternalIntegrationService({
+      connectorRepository: repository,
+      now: () => now,
+      webhookConnectorIdFactory: () => "tgwh_test"
+    });
+
+    const draft = await service.createChannelConnector(context, {
+      channelType: "telegram_bot"
+    });
+
+    const nameStep = await service.updateTelegramIntegration(context, {
+      connectorId: draft.connectorId,
+      displayName: "Sales Telegram",
+      enabled: false,
+      setupStepCompleted: "name",
+      channelExternalId: "telegram-local",
+      mode: "webhook",
+      outboundEnabled: false
+    });
+
+    expect(nameStep).toMatchObject({
+      connectorId: draft.connectorId,
+      displayName: "Sales Telegram",
+      status: "draft",
+      enabled: false,
+      setupStep: "token"
+    });
+
+    const tokenStep = await service.updateTelegramIntegration(context, {
+      connectorId: draft.connectorId,
+      displayName: "Sales Telegram",
+      enabled: false,
+      setupStepCompleted: "token",
+      channelExternalId: "telegram-local",
+      mode: "webhook",
+      botTokenSecretRef: "env:HULEE_TELEGRAM_BOT_TOKEN",
+      outboundEnabled: false
+    });
+
+    expect(tokenStep).toMatchObject({
+      connectorId: draft.connectorId,
+      status: "draft",
+      enabled: false,
+      setupStep: "mode",
+      config: {
+        botTokenSecretRef: "env:HULEE_TELEGRAM_BOT_TOKEN"
+      }
+    });
+    expect(repository.records.get(draft.connectorId)).toMatchObject({
+      status: "draft",
+      onboardingState: {
+        step: "mode"
+      }
+    });
+  });
+
   it("stores Telegram bot tokens in tenant secret storage and only keeps a secret ref in config", async () => {
-    const repository = new InMemoryTenantModuleConfigRepository();
+    const repository = new InMemoryChannelConnectorRepository();
     const secretWriter = new InMemorySecretWriter();
     const service = createInternalIntegrationService({
-      repository,
+      connectorRepository: repository,
       secretWriter,
       now: () => now,
       webhookConnectorIdFactory: () => "tgwh_test",
@@ -120,7 +298,8 @@ describe("internal integrations service", () => {
     expect(secretWriter.upserts).toEqual([
       {
         tenantId,
-        secretRef: "secret:tenant-integrations/channel-telegram/bot-token",
+        secretRef:
+          "secret:tenant-integrations/channels/telegram_bot:tenant-integrations/bot-token",
         purpose: "telegram.bot_token",
         plainText: "telegram-token-1",
         updatedAt: now
@@ -128,44 +307,39 @@ describe("internal integrations service", () => {
       {
         tenantId,
         secretRef:
-          "secret:tenant-integrations/channel-telegram/webhook-secret-token",
+          "secret:tenant-integrations/channels/telegram_bot:tenant-integrations/webhook-secret-token",
         purpose: "telegram.webhook_secret_token",
         plainText: "raw-telegram-webhook-secret-value",
         updatedAt: now
       }
     ]);
     expect(response.config?.botTokenSecretRef).toBe(
-      "secret:tenant-integrations/channel-telegram/bot-token"
+      "secret:tenant-integrations/channels/telegram_bot:tenant-integrations/bot-token"
     );
     expect(response.config?.webhookConnectorId).toBe("tgwh_test");
     expect(response.config?.webhookSecretTokenSecretRef).toBe(
-      "secret:tenant-integrations/channel-telegram/webhook-secret-token"
+      "secret:tenant-integrations/channels/telegram_bot:tenant-integrations/webhook-secret-token"
     );
     expect(JSON.stringify(response)).not.toContain("telegram-token-1");
     expect(JSON.stringify(response)).not.toContain(
       "raw-telegram-webhook-secret-value"
     );
     expect(
-      JSON.stringify(
-        repository.records.get(recordKey(tenantId, "channel-telegram"))
-      )
+      JSON.stringify(repository.records.get("telegram_bot:tenant-integrations"))
     ).not.toContain("telegram-token-1");
   });
 
   it("returns invalid diagnostics for malformed stored Telegram config", async () => {
-    const repository = new InMemoryTenantModuleConfigRepository([
-      {
-        tenantId,
-        moduleId: "channel-telegram",
-        enabled: true,
+    const repository = new InMemoryChannelConnectorRepository([
+      createTelegramConnector({
         config: {
           outboundEnabled: true
         },
         diagnostics: {}
-      }
+      })
     ]);
     const service = createInternalIntegrationService({
-      repository,
+      connectorRepository: repository,
       now: () => now
     });
 
@@ -184,12 +358,52 @@ describe("internal integrations service", () => {
     });
   });
 
+  it("loads Telegram integration by selected connector id", async () => {
+    const first = createTelegramConnector({
+      config: {
+        channelExternalId: "telegram-first",
+        mode: "webhook",
+        outboundEnabled: false
+      },
+      diagnostics: {}
+    });
+    const second = {
+      ...createTelegramConnector({
+        config: {
+          channelExternalId: "telegram-second",
+          mode: "polling",
+          outboundEnabled: false
+        },
+        diagnostics: {}
+      }),
+      id: "telegram_bot:second" as ChannelConnectorId,
+      displayName: "Telegram Bot Second"
+    };
+    const service = createInternalIntegrationService({
+      connectorRepository: new InMemoryChannelConnectorRepository([
+        first,
+        second
+      ]),
+      now: () => now
+    });
+
+    await expect(
+      service.loadTelegramIntegration(context, {
+        connectorId: "telegram_bot:second"
+      })
+    ).resolves.toMatchObject({
+      connectorId: "telegram_bot:second",
+      displayName: "Telegram Bot Second",
+      config: {
+        channelExternalId: "telegram-second",
+        mode: "polling"
+      }
+    });
+  });
+
   it("refreshes Telegram provider diagnostics without exposing the bot token", async () => {
-    const repository = new InMemoryTenantModuleConfigRepository([
-      {
-        tenantId,
-        moduleId: "channel-telegram",
-        enabled: true,
+    const repository = new InMemoryChannelConnectorRepository([
+      createTelegramConnector({
         config: {
           channelExternalId: "telegram-local",
           mode: "webhook",
@@ -198,10 +412,10 @@ describe("internal integrations service", () => {
           outboundEnabled: true
         },
         diagnostics: {}
-      }
+      })
     ]);
     const service = createInternalIntegrationService({
-      repository,
+      connectorRepository: repository,
       now: () => now,
       publicWebhookBaseUrl: "https://example.test/",
       secretResolver: {
@@ -266,35 +480,31 @@ describe("internal integrations service", () => {
     });
     expect(JSON.stringify(response)).not.toContain("token-1");
     expect(
-      repository.records.get(recordKey(tenantId, "channel-telegram"))
-        ?.diagnostics
+      repository.records.get("telegram_bot:tenant-integrations")?.diagnostics
     ).toEqual(response.diagnostics);
   });
 
   it("sets Telegram webhook to the public tenant callback URL", async () => {
-    const repository = new InMemoryTenantModuleConfigRepository([
-      {
-        tenantId,
-        moduleId: "channel-telegram",
-        enabled: true,
+    const repository = new InMemoryChannelConnectorRepository([
+      createTelegramConnector({
         config: {
           channelExternalId: "telegram-local",
           mode: "webhook",
           botTokenSecretRef: "env:HULEE_TELEGRAM_BOT_TOKEN",
           webhookConnectorId: "tgwh_test",
           webhookSecretTokenSecretRef:
-            "secret:tenant-integrations/channel-telegram/webhook-secret-token",
+            "secret:tenant-integrations/channels/telegram_bot:tenant-integrations/webhook-secret-token",
           outboundEnabled: true
         },
         diagnostics: {}
-      }
+      })
     ]);
     const setWebhookCalls: {
       url: string;
       secretToken: string | undefined;
     }[] = [];
     const service = createInternalIntegrationService({
-      repository,
+      connectorRepository: repository,
       now: () => now,
       publicWebhookBaseUrl: "https://example.test/",
       secretResolver: {
@@ -352,11 +562,8 @@ describe("internal integrations service", () => {
   });
 
   it("reports invalid Telegram diagnostics when the token secret cannot be resolved", async () => {
-    const repository = new InMemoryTenantModuleConfigRepository([
-      {
-        tenantId,
-        moduleId: "channel-telegram",
-        enabled: true,
+    const repository = new InMemoryChannelConnectorRepository([
+      createTelegramConnector({
         config: {
           channelExternalId: "telegram-local",
           mode: "webhook",
@@ -364,10 +571,10 @@ describe("internal integrations service", () => {
           outboundEnabled: true
         },
         diagnostics: {}
-      }
+      })
     ]);
     const service = createInternalIntegrationService({
-      repository,
+      connectorRepository: repository,
       now: () => now,
       publicWebhookBaseUrl: "https://example.test/",
       secretResolver: {
@@ -391,61 +598,107 @@ describe("internal integrations service", () => {
   });
 });
 
-class InMemoryTenantModuleConfigRepository implements TenantModuleConfigRepository {
-  readonly records = new Map<string, TenantModuleConfigRecord>();
+class InMemoryChannelConnectorRepository implements ChannelConnectorRepository {
+  readonly records = new Map<string, ChannelConnectorRecord>();
 
-  constructor(records: readonly TenantModuleConfigRecord[] = []) {
+  constructor(records: readonly ChannelConnectorRecord[] = []) {
     for (const record of records) {
-      this.records.set(recordKey(record.tenantId, record.moduleId), record);
+      this.records.set(record.id, record);
     }
   }
 
-  async findConfig(
-    input: FindTenantModuleConfigInput
-  ): Promise<TenantModuleConfigRecord | null> {
-    return this.records.get(recordKey(input.tenantId, input.moduleId)) ?? null;
+  async findConnector(
+    input: FindChannelConnectorInput
+  ): Promise<ChannelConnectorRecord | null> {
+    const record = this.records.get(String(input.connectorId)) ?? null;
+
+    return record?.tenantId === input.tenantId ? record : null;
   }
 
-  async findEnabledConfig(
-    input: FindEnabledTenantModuleConfigInput
-  ): Promise<TenantModuleConfigRecord | null> {
-    const record =
-      this.records.get(recordKey(input.tenantId, input.moduleId)) ?? null;
-
-    return record?.enabled ? record : null;
-  }
-
-  async listEnabledConfigs(
-    input: ListEnabledTenantModuleConfigsInput
-  ): Promise<TenantModuleConfigRecord[]> {
-    return [...this.records.values()].filter(
-      (record) => record.moduleId === input.moduleId && record.enabled
-    );
-  }
-
-  async findEnabledConfigByConfigString(input: {
-    moduleId: string;
-    configKey: string;
-    configValue: string;
-  }): Promise<TenantModuleConfigRecord | null> {
+  async findFirstConnectorByType(
+    input: FindFirstChannelConnectorByTypeInput
+  ): Promise<ChannelConnectorRecord | null> {
     return (
       [...this.records.values()].find(
         (record) =>
-          record.moduleId === input.moduleId &&
-          record.enabled &&
+          record.tenantId === input.tenantId &&
+          record.channelType === input.channelType &&
+          (input.includeDeleted || record.status !== "deleted")
+      ) ?? null
+    );
+  }
+
+  async listActiveConnectorsByType(
+    input: ListActiveChannelConnectorsByTypeInput
+  ): Promise<ChannelConnectorRecord[]> {
+    return [...this.records.values()].filter(
+      (record) =>
+        record.channelType === input.channelType &&
+        (record.status === "connected" || record.status === "degraded")
+    );
+  }
+
+  async listTenantConnectors(
+    input: ListTenantChannelConnectorsInput
+  ): Promise<ChannelConnectorRecord[]> {
+    return [...this.records.values()].filter(
+      (record) =>
+        record.tenantId === input.tenantId &&
+        (input.includeDeleted || record.status !== "deleted")
+    );
+  }
+
+  async findActiveConnectorByConfigString(
+    input: FindActiveChannelConnectorByConfigStringInput
+  ): Promise<ChannelConnectorRecord | null> {
+    return (
+      [...this.records.values()].find(
+        (record) =>
+          record.channelType === input.channelType &&
+          record.status !== "disabled" &&
+          record.status !== "deleted" &&
           isRecord(record.config) &&
           record.config[input.configKey] === input.configValue
       ) ?? null
     );
   }
 
-  async upsertConfig(input: UpsertTenantModuleConfigInput): Promise<void> {
-    this.records.set(recordKey(input.tenantId, input.moduleId), {
+  async findActiveConnectorByExternalId(
+    input: FindActiveChannelConnectorByExternalIdInput
+  ): Promise<ChannelConnectorRecord | null> {
+    return (
+      [...this.records.values()].find(
+        (record) =>
+          record.tenantId === input.tenantId &&
+          record.channelType === input.channelType &&
+          record.status !== "disabled" &&
+          record.status !== "deleted" &&
+          isRecord(record.config) &&
+          record.config.channelExternalId === input.channelExternalId
+      ) ?? null
+    );
+  }
+
+  async upsertConnector(input: UpsertChannelConnectorInput): Promise<void> {
+    const existing = this.records.get(String(input.id));
+    const updatedAt = input.updatedAt;
+
+    this.records.set(String(input.id), {
+      id: String(input.id) as ChannelConnectorId,
       tenantId: input.tenantId,
-      moduleId: input.moduleId,
-      enabled: input.enabled,
-      config: input.config,
-      diagnostics: input.diagnostics
+      channelType: input.channelType as ChannelType,
+      channelClass: input.channelClass as ChannelClass,
+      provider: input.provider,
+      displayName: input.displayName,
+      status: input.status as ChannelConnectorStatus,
+      healthStatus: input.healthStatus as ChannelConnectorHealthStatus,
+      capabilities: input.capabilities ?? {},
+      onboardingState: input.onboardingState ?? {},
+      config: input.config ?? {},
+      diagnostics: input.diagnostics ?? {},
+      createdByEmployeeId: input.createdByEmployeeId ?? null,
+      createdAt: existing?.createdAt ?? updatedAt,
+      updatedAt
     });
   }
 }
@@ -474,6 +727,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function recordKey(tenantIdInput: TenantId, moduleId: string): string {
-  return `${tenantIdInput}:${moduleId}`;
+function createTelegramConnector(input: {
+  config: unknown;
+  diagnostics: unknown;
+  status?: ChannelConnectorStatus;
+}): ChannelConnectorRecord {
+  return {
+    id: "telegram_bot:tenant-integrations" as ChannelConnectorId,
+    tenantId,
+    channelType: "telegram_bot",
+    channelClass: "bot_bridge",
+    provider: "telegram",
+    displayName: "Telegram Bot",
+    status: input.status ?? "connected",
+    healthStatus: "unknown",
+    capabilities: {},
+    onboardingState: {},
+    config: input.config,
+    diagnostics: input.diagnostics,
+    createdByEmployeeId: null,
+    createdAt: now,
+    updatedAt: now
+  };
 }

@@ -6,9 +6,9 @@ import type {
 } from "@hulee/contracts";
 import { CoreError } from "@hulee/core";
 import type {
+  ChannelConnectorRepository,
   OutboundDispatchRepository,
   QueuedOutboundMessageForDispatch,
-  TenantModuleConfigRepository,
   TenantSecretRepository
 } from "@hulee/db";
 import {
@@ -34,7 +34,7 @@ export type TelegramBotApiClientFactory = (
 
 export type TelegramOutboundDispatcherOptions = {
   outboundRepository: OutboundDispatchRepository;
-  moduleConfigRepository: TenantModuleConfigRepository;
+  connectorRepository: ChannelConnectorRepository;
   secretResolver: SecretResolver;
   botApiClientFactory?: TelegramBotApiClientFactory;
   now?: () => Date;
@@ -46,7 +46,7 @@ export type TelegramOutboundDispatcherOptions = {
   telegramApiBaseUrl?: string;
 };
 
-const telegramModuleId = "channel-telegram";
+const telegramChannelType = "telegram_bot";
 
 export function createTelegramOutboundDispatcher(
   options: TelegramOutboundDispatcherOptions
@@ -75,13 +75,14 @@ export function createTelegramOutboundDispatcher(
       }
 
       const configRecord =
-        await options.moduleConfigRepository.findEnabledConfig({
+        await options.connectorRepository.findActiveConnectorByExternalId({
           tenantId: record.tenantId,
-          moduleId: telegramModuleId
+          channelType: telegramChannelType,
+          channelExternalId: queuedMessage.channelExternalId
         });
 
       if (configRecord === null) {
-        throw new CoreError("module.disabled");
+        return;
       }
 
       const config = parseTelegramChannelConfig(configRecord.config);

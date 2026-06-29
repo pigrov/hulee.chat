@@ -5,7 +5,10 @@ import type {
 } from "@hulee/contracts";
 import { internalTelegramIntegrationDiagnosticsSchema } from "@hulee/contracts";
 import { CoreError, type ExternalChannelCommandService } from "@hulee/core";
-import type { TenantModuleConfigRepository } from "@hulee/db";
+import type {
+  ChannelConnectorRecord,
+  ChannelConnectorRepository
+} from "@hulee/db";
 import {
   createTelegramBotApiClient,
   createTelegramChannelAdapter,
@@ -32,7 +35,7 @@ export type TelegramPollingBotApiClientFactory = (
 ) => TelegramPollingBotApiClient;
 
 export type TelegramPollingSweepOptions = {
-  moduleConfigRepository: TenantModuleConfigRepository;
+  connectorRepository: ChannelConnectorRepository;
   secretResolver: SecretResolver;
   commands: ExternalChannelCommandService;
   botApiClientFactory?: TelegramPollingBotApiClientFactory;
@@ -55,7 +58,7 @@ export type TelegramPollingSweepResult = {
   updatesFailed: number;
 };
 
-const telegramModuleId = "channel-telegram";
+const telegramChannelType = "telegram_bot";
 const defaultConfigScanLimit = 100;
 const defaultUpdateLimit = 25;
 const pollingAllowedUpdates = [
@@ -69,8 +72,8 @@ export async function runTelegramPollingSweep(
   options: TelegramPollingSweepOptions
 ): Promise<TelegramPollingSweepResult> {
   const now = options.now ?? (() => new Date());
-  const records = await options.moduleConfigRepository.listEnabledConfigs({
-    moduleId: telegramModuleId,
+  const records = await options.connectorRepository.listActiveConnectorsByType({
+    channelType: telegramChannelType,
     limit: options.configScanLimit ?? defaultConfigScanLimit
   });
   const result: TelegramPollingSweepResult = {
@@ -93,7 +96,7 @@ export async function runTelegramPollingSweep(
     } catch {
       await persistPollingDiagnostics({
         ...options,
-        tenantId: record.tenantId,
+        connectorRecord: record,
         configInput: record.config,
         diagnostics: buildPollingDiagnostics({
           checkedAt,
@@ -101,7 +104,7 @@ export async function runTelegramPollingSweep(
           lastErrorCode: "validation.failed",
           operatorHint: "Telegram polling config is invalid.",
           checks: {
-            moduleEnabled: record.enabled,
+            moduleEnabled: true,
             configValid: false,
             inboundWebhookReady: false,
             outboundEnabled: false,
@@ -122,6 +125,7 @@ export async function runTelegramPollingSweep(
 
     await pollTelegramConfig({
       ...options,
+      connectorRecord: record,
       tenantId: record.tenantId,
       config,
       storedDiagnostics,
@@ -136,6 +140,7 @@ export async function runTelegramPollingSweep(
 
 async function pollTelegramConfig(
   input: TelegramPollingSweepOptions & {
+    connectorRecord: ChannelConnectorRecord;
     tenantId: TenantId;
     config: TelegramChannelConfig;
     storedDiagnostics: InternalTelegramIntegrationDiagnostics | null;
@@ -379,20 +384,62 @@ function pollingChecks(input: {
 }
 
 async function persistPollingDiagnostics(input: {
-  moduleConfigRepository: TenantModuleConfigRepository;
-  tenantId: TenantId;
+  connectorRepository: ChannelConnectorRepository;
+  connectorRecord: ChannelConnectorRecord;
   configInput: unknown;
   diagnostics: InternalTelegramIntegrationDiagnostics;
   updatedAt: Date;
 }): Promise<void> {
-  await input.moduleConfigRepository.upsertConfig({
-    tenantId: input.tenantId,
-    moduleId: telegramModuleId,
-    enabled: true,
+  await input.connectorRepository.upsertConnector({
+    id: input.connectorRecord.id,
+    tenantId: input.connectorRecord.tenantId,
+    channelType: input.connectorRecord.channelType,
+    channelClass: input.connectorRecord.channelClass,
+    provider: input.connectorRecord.provider,
+    displayName: input.connectorRecord.displayName,
+    status: telegramConnectorStatusFromDiagnostics(input.diagnostics),
+    healthStatus: telegramConnectorHealthFromDiagnostics(input.diagnostics),
+    capabilities: input.connectorRecord.capabilities,
+    onboardingState: input.connectorRecord.onboardingState,
     config: input.configInput,
     diagnostics: input.diagnostics,
+    createdByEmployeeId: input.connectorRecord.createdByEmployeeId,
     updatedAt: input.updatedAt
   });
+}
+
+function telegramConnectorStatusFromDiagnostics(
+  diagnostics: InternalTelegramIntegrationDiagnostics
+): ChannelConnectorRecord["status"] {
+  if (diagnostics.status === "invalid_config") {
+    return "reauth_required";
+  }
+
+  if (
+    diagnostics.status === "provider_unreachable" ||
+    diagnostics.status === "webhook_mismatch"
+  ) {
+    return "degraded";
+  }
+
+  return "connected";
+}
+
+function telegramConnectorHealthFromDiagnostics(
+  diagnostics: InternalTelegramIntegrationDiagnostics
+): ChannelConnectorRecord["healthStatus"] {
+  if (diagnostics.status === "configured") {
+    return "healthy";
+  }
+
+  if (
+    diagnostics.status === "provider_unreachable" ||
+    diagnostics.status === "webhook_mismatch"
+  ) {
+    return "degraded";
+  }
+
+  return "unhealthy";
 }
 
 function parseStoredTelegramDiagnostics(

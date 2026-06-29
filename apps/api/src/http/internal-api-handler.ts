@@ -1,6 +1,9 @@
 import type {
   EmployeeId,
   InternalAccessDecisionResponse,
+  InternalChannelCatalogResponse,
+  InternalChannelConnectorSummary,
+  InternalChannelConnectorsResponse,
   InternalInboxConversationRoutingUpdateResponse,
   InternalInboxReplyResponse,
   InternalInboxViewResponse,
@@ -21,6 +24,7 @@ import type {
 } from "@hulee/contracts";
 import {
   getPlatformErrorDefinition,
+  internalChannelConnectorCreateRequestSchema,
   internalAccessDecisionRequestSchema,
   internalInboxConversationRoutingUpdateRequestSchema,
   internalApiV1Version,
@@ -163,19 +167,40 @@ type RouteMatch =
       grantId: string;
     }
   | {
+      route: "channel_catalog_view";
+    }
+  | {
+      route: "channel_connectors_view";
+    }
+  | {
+      route: "channel_connector_create";
+    }
+  | {
+      route: "channel_connector_disable";
+      connectorId: string;
+    }
+  | {
+      route: "channel_connector_delete";
+      connectorId: string;
+    }
+  | {
       route: "telegram_integration_view";
+      connectorId?: string;
     }
   | {
       route: "telegram_integration_update";
     }
   | {
       route: "telegram_integration_diagnostics";
+      connectorId?: string;
     }
   | {
       route: "telegram_integration_webhook_set";
+      connectorId?: string;
     }
   | {
       route: "telegram_integration_webhook_delete";
+      connectorId?: string;
     };
 
 type InternalRouteAuthorizationPolicy =
@@ -578,9 +603,53 @@ async function handleAuthenticatedRoute(input: {
       return jsonResponse(200, response);
     }
 
+    case "channel_catalog_view": {
+      const response: InternalChannelCatalogResponse =
+        await input.integrations.listChannelCatalog(input.session);
+
+      return jsonResponse(200, response);
+    }
+
+    case "channel_connectors_view": {
+      const response: InternalChannelConnectorsResponse =
+        await input.integrations.listChannelConnectors(input.session);
+
+      return jsonResponse(200, response);
+    }
+
+    case "channel_connector_create": {
+      const request = internalChannelConnectorCreateRequestSchema.parse(
+        input.request.body
+      );
+      const response: InternalChannelConnectorSummary =
+        await input.integrations.createChannelConnector(input.session, request);
+
+      return jsonResponse(201, response);
+    }
+
+    case "channel_connector_disable": {
+      const response: InternalChannelConnectorSummary =
+        await input.integrations.disableChannelConnector(input.session, {
+          connectorId: input.route.connectorId
+        });
+
+      return jsonResponse(200, response);
+    }
+
+    case "channel_connector_delete": {
+      const response: InternalChannelConnectorSummary =
+        await input.integrations.deleteChannelConnector(input.session, {
+          connectorId: input.route.connectorId
+        });
+
+      return jsonResponse(200, response);
+    }
+
     case "telegram_integration_view": {
       const response: InternalTelegramIntegrationResponse =
-        await input.integrations.loadTelegramIntegration(input.session);
+        await input.integrations.loadTelegramIntegration(input.session, {
+          connectorId: input.route.connectorId
+        });
 
       return jsonResponse(200, response);
     }
@@ -600,21 +669,27 @@ async function handleAuthenticatedRoute(input: {
 
     case "telegram_integration_diagnostics": {
       const response: InternalTelegramIntegrationResponse =
-        await input.integrations.refreshTelegramDiagnostics(input.session);
+        await input.integrations.refreshTelegramDiagnostics(input.session, {
+          connectorId: input.route.connectorId
+        });
 
       return jsonResponse(200, response);
     }
 
     case "telegram_integration_webhook_set": {
       const response: InternalTelegramIntegrationResponse =
-        await input.integrations.setTelegramWebhook(input.session);
+        await input.integrations.setTelegramWebhook(input.session, {
+          connectorId: input.route.connectorId
+        });
 
       return jsonResponse(200, response);
     }
 
     case "telegram_integration_webhook_delete": {
       const response: InternalTelegramIntegrationResponse =
-        await input.integrations.deleteTelegramWebhook(input.session);
+        await input.integrations.deleteTelegramWebhook(input.session, {
+          connectorId: input.route.connectorId
+        });
 
       return jsonResponse(200, response);
     }
@@ -671,6 +746,11 @@ function internalRouteAuthorizationPolicy(
         kind: "signed_effective_permission_override",
         permission: "roles.manage"
       };
+    case "channel_catalog_view":
+    case "channel_connectors_view":
+    case "channel_connector_create":
+    case "channel_connector_disable":
+    case "channel_connector_delete":
     case "telegram_integration_view":
     case "telegram_integration_update":
     case "telegram_integration_diagnostics":
@@ -854,12 +934,56 @@ function matchRoute(request: ApiHttpRequest): RouteMatch | undefined {
     };
   }
 
+  if (request.method === "GET" && path === "/internal/v1/channels/catalog") {
+    return {
+      route: "channel_catalog_view"
+    };
+  }
+
+  if (request.method === "GET" && path === "/internal/v1/channels/connectors") {
+    return {
+      route: "channel_connectors_view"
+    };
+  }
+
+  if (
+    request.method === "POST" &&
+    path === "/internal/v1/channels/connectors"
+  ) {
+    return {
+      route: "channel_connector_create"
+    };
+  }
+
+  const connectorDisableMatch = path.match(
+    /^\/internal\/v1\/channels\/connectors\/([^/]+)\/disable$/
+  );
+
+  if (request.method === "POST" && connectorDisableMatch?.[1]) {
+    return {
+      route: "channel_connector_disable",
+      connectorId: decodeURIComponent(connectorDisableMatch[1])
+    };
+  }
+
+  const connectorDeleteMatch = path.match(
+    /^\/internal\/v1\/channels\/connectors\/([^/]+)$/
+  );
+
+  if (request.method === "DELETE" && connectorDeleteMatch?.[1]) {
+    return {
+      route: "channel_connector_delete",
+      connectorId: decodeURIComponent(connectorDeleteMatch[1])
+    };
+  }
+
   if (
     request.method === "GET" &&
     path === "/internal/v1/integrations/telegram"
   ) {
     return {
-      route: "telegram_integration_view"
+      route: "telegram_integration_view",
+      connectorId: nonEmptyQueryValue(url.searchParams.get("connectorId"))
     };
   }
 
@@ -877,7 +1001,8 @@ function matchRoute(request: ApiHttpRequest): RouteMatch | undefined {
     path === "/internal/v1/integrations/telegram/diagnostics"
   ) {
     return {
-      route: "telegram_integration_diagnostics"
+      route: "telegram_integration_diagnostics",
+      connectorId: nonEmptyQueryValue(url.searchParams.get("connectorId"))
     };
   }
 
@@ -886,7 +1011,8 @@ function matchRoute(request: ApiHttpRequest): RouteMatch | undefined {
     path === "/internal/v1/integrations/telegram/webhook"
   ) {
     return {
-      route: "telegram_integration_webhook_set"
+      route: "telegram_integration_webhook_set",
+      connectorId: nonEmptyQueryValue(url.searchParams.get("connectorId"))
     };
   }
 
@@ -895,7 +1021,8 @@ function matchRoute(request: ApiHttpRequest): RouteMatch | undefined {
     path === "/internal/v1/integrations/telegram/webhook"
   ) {
     return {
-      route: "telegram_integration_webhook_delete"
+      route: "telegram_integration_webhook_delete",
+      connectorId: nonEmptyQueryValue(url.searchParams.get("connectorId"))
     };
   }
 

@@ -71,13 +71,43 @@ describe("web internal API access policy", () => {
         path: "/internal/v1/integrations/telegram/webhook"
       })
     ).toBe("modules.manage");
+    expect(
+      resolveRequiredInternalApiEffectivePermissionOverride({
+        method: "GET",
+        path: "/internal/v1/channels/catalog"
+      })
+    ).toBe("modules.manage");
+    expect(
+      resolveRequiredInternalApiEffectivePermissionOverride({
+        method: "GET",
+        path: "/internal/v1/channels/connectors"
+      })
+    ).toBe("modules.manage");
+    expect(
+      resolveRequiredInternalApiEffectivePermissionOverride({
+        method: "POST",
+        path: "/internal/v1/channels/connectors"
+      })
+    ).toBe("modules.manage");
+    expect(
+      resolveRequiredInternalApiEffectivePermissionOverride({
+        method: "POST",
+        path: "/internal/v1/channels/connectors/telegram_bot%3Asecond/disable"
+      })
+    ).toBe("modules.manage");
+    expect(
+      resolveRequiredInternalApiEffectivePermissionOverride({
+        method: "DELETE",
+        path: "/internal/v1/channels/connectors/telegram_bot%3Asecond"
+      })
+    ).toBe("modules.manage");
   });
 
   it("rejects missing or mismatched overrides for admin routes", () => {
     expect(() =>
       assertInternalApiEffectivePermissionOverride({
         method: "GET",
-        path: "/internal/v1/integrations/telegram"
+        path: "/internal/v1/channels/catalog"
       })
     ).toThrow(new CoreError("permission.denied"));
     expect(() =>

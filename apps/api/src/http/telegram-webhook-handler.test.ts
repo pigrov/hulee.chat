@@ -1,7 +1,23 @@
-import type { NormalizedIncomingMessage, TenantId } from "@hulee/contracts";
+import type {
+  ChannelConnectorId,
+  NormalizedIncomingMessage,
+  TenantId
+} from "@hulee/contracts";
+import type {
+  ChannelConnectorRecord,
+  ChannelConnectorRepository,
+  FindActiveChannelConnectorByConfigStringInput,
+  FindActiveChannelConnectorByExternalIdInput,
+  FindChannelConnectorInput,
+  FindFirstChannelConnectorByTypeInput,
+  ListActiveChannelConnectorsByTypeInput,
+  ListTenantChannelConnectorsInput,
+  UpsertChannelConnectorInput
+} from "@hulee/db";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  createChannelConnectorTelegramWebhookConnectorResolver,
   createTelegramWebhookHandler,
   type TelegramWebhookConnector
 } from "./telegram-webhook-handler";
@@ -168,6 +184,30 @@ describe("telegram webhook handler", () => {
     });
     expect(acceptInboundMessage).not.toHaveBeenCalled();
   });
+
+  it("resolves webhook connectors from channel connector config", async () => {
+    const resolver = createChannelConnectorTelegramWebhookConnectorResolver({
+      repository: new InMemoryChannelConnectorRepository()
+    });
+
+    await expect(
+      resolver.resolveConnector({
+        connectorId: "tgwh_test"
+      })
+    ).resolves.toEqual({
+      tenantId,
+      config: {
+        channelExternalId: "telegram-local",
+        mode: "webhook",
+        botTokenSecretRef:
+          "secret:tenant-1/channels/telegram_bot:tenant-1/bot-token",
+        webhookConnectorId: "tgwh_test",
+        webhookSecretTokenSecretRef:
+          "secret:tenant-1/channels/telegram_bot:tenant-1/webhook-secret-token",
+        outboundEnabled: true
+      }
+    });
+  });
 });
 
 function createConnectorResolver(input?: { mode?: "webhook" | "polling" }): {
@@ -182,11 +222,82 @@ function createConnectorResolver(input?: { mode?: "webhook" | "polling" }): {
           mode: input?.mode ?? "webhook",
           webhookConnectorId: "tgwh_test",
           webhookSecretTokenSecretRef:
-            "secret:tenant-1/channel-telegram/webhook-secret-token",
+            "secret:tenant-1/channels/telegram_bot:tenant-1/webhook-secret-token",
           outboundEnabled: true
         }
       };
     }
+  };
+}
+
+class InMemoryChannelConnectorRepository implements ChannelConnectorRepository {
+  private readonly record = createTelegramConnector();
+
+  async findConnector(
+    _input: FindChannelConnectorInput
+  ): Promise<ChannelConnectorRecord | null> {
+    return this.record;
+  }
+
+  async findFirstConnectorByType(
+    _input: FindFirstChannelConnectorByTypeInput
+  ): Promise<ChannelConnectorRecord | null> {
+    return this.record;
+  }
+
+  async listActiveConnectorsByType(
+    _input: ListActiveChannelConnectorsByTypeInput
+  ): Promise<ChannelConnectorRecord[]> {
+    return [this.record];
+  }
+
+  async listTenantConnectors(
+    input: ListTenantChannelConnectorsInput
+  ): Promise<ChannelConnectorRecord[]> {
+    return this.record.tenantId === input.tenantId ? [this.record] : [];
+  }
+
+  async findActiveConnectorByConfigString(
+    input: FindActiveChannelConnectorByConfigStringInput
+  ): Promise<ChannelConnectorRecord | null> {
+    return input.configValue === "tgwh_test" ? this.record : null;
+  }
+
+  async findActiveConnectorByExternalId(
+    _input: FindActiveChannelConnectorByExternalIdInput
+  ): Promise<ChannelConnectorRecord | null> {
+    return null;
+  }
+
+  async upsertConnector(_input: UpsertChannelConnectorInput): Promise<void> {}
+}
+
+function createTelegramConnector(): ChannelConnectorRecord {
+  return {
+    id: "telegram_bot:tenant-1" as ChannelConnectorId,
+    tenantId,
+    channelType: "telegram_bot",
+    channelClass: "bot_bridge",
+    provider: "telegram",
+    displayName: "Telegram Bot",
+    status: "connected",
+    healthStatus: "healthy",
+    capabilities: {},
+    onboardingState: {},
+    config: {
+      channelExternalId: "telegram-local",
+      mode: "webhook",
+      botTokenSecretRef:
+        "secret:tenant-1/channels/telegram_bot:tenant-1/bot-token",
+      webhookConnectorId: "tgwh_test",
+      webhookSecretTokenSecretRef:
+        "secret:tenant-1/channels/telegram_bot:tenant-1/webhook-secret-token",
+      outboundEnabled: true
+    },
+    diagnostics: {},
+    createdByEmployeeId: null,
+    createdAt: new Date("2026-06-22T10:00:00.000Z"),
+    updatedAt: new Date("2026-06-22T10:00:00.000Z")
   };
 }
 

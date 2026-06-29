@@ -89,6 +89,16 @@ export function resolveRequiredInternalApiEffectivePermissionOverride(
   }
 
   if (
+    (method === "GET" &&
+      (pathname === "/internal/v1/channels/catalog" ||
+        pathname === "/internal/v1/channels/connectors")) ||
+    (method === "POST" && pathname === "/internal/v1/channels/connectors") ||
+    (method === "POST" &&
+      /^\/internal\/v1\/channels\/connectors\/[^/]+\/disable$/.test(
+        pathname
+      )) ||
+    (method === "DELETE" &&
+      /^\/internal\/v1\/channels\/connectors\/[^/]+$/.test(pathname)) ||
     ((method === "GET" || method === "PUT") &&
       pathname === "/internal/v1/integrations/telegram") ||
     (method === "POST" &&

@@ -1,16 +1,24 @@
 import type {
+  ChannelClass,
+  ChannelConnectorHealthStatus,
+  ChannelConnectorId,
+  ChannelConnectorStatus,
+  ChannelType,
   InternalTelegramIntegrationDiagnostics,
   NormalizedIncomingMessage,
   PublicApiInboundMessageResponse,
   TenantId
 } from "@hulee/contracts";
 import type {
-  FindEnabledTenantModuleConfigInput,
-  FindTenantModuleConfigInput,
-  ListEnabledTenantModuleConfigsInput,
-  TenantModuleConfigRecord,
-  TenantModuleConfigRepository,
-  UpsertTenantModuleConfigInput
+  ChannelConnectorRecord,
+  ChannelConnectorRepository,
+  FindActiveChannelConnectorByConfigStringInput,
+  FindActiveChannelConnectorByExternalIdInput,
+  FindChannelConnectorInput,
+  FindFirstChannelConnectorByTypeInput,
+  ListActiveChannelConnectorsByTypeInput,
+  ListTenantChannelConnectorsInput,
+  UpsertChannelConnectorInput
 } from "@hulee/db";
 import { TelegramAdapterError } from "@hulee/modules";
 import { describe, expect, it, vi } from "vitest";
@@ -22,8 +30,8 @@ const now = new Date("2026-06-22T10:00:00.000Z");
 
 describe("telegram polling sweeper", () => {
   it("polls Telegram updates through tenant config and accepts inbound messages", async () => {
-    const repository = new InMemoryModuleConfigRepository([
-      createModuleConfig({
+    const repository = new InMemoryChannelConnectorRepository([
+      createTelegramConnector({
         mode: "polling",
         diagnostics: {
           status: "configured",
@@ -65,7 +73,7 @@ describe("telegram polling sweeper", () => {
     ]);
 
     const result = await runTelegramPollingSweep({
-      moduleConfigRepository: repository,
+      connectorRepository: repository,
       secretResolver: {
         async resolveSecret() {
           return "token-1";
@@ -129,15 +137,15 @@ describe("telegram polling sweeper", () => {
   });
 
   it("skips enabled Telegram configs that are not in polling mode", async () => {
-    const repository = new InMemoryModuleConfigRepository([
-      createModuleConfig({
+    const repository = new InMemoryChannelConnectorRepository([
+      createTelegramConnector({
         mode: "webhook"
       })
     ]);
     const getUpdates = vi.fn(async () => []);
 
     const result = await runTelegramPollingSweep({
-      moduleConfigRepository: repository,
+      connectorRepository: repository,
       secretResolver: {
         async resolveSecret() {
           return "token-1";
@@ -157,14 +165,14 @@ describe("telegram polling sweeper", () => {
   });
 
   it("persists diagnosable provider errors when getUpdates fails", async () => {
-    const repository = new InMemoryModuleConfigRepository([
-      createModuleConfig({
+    const repository = new InMemoryChannelConnectorRepository([
+      createTelegramConnector({
         mode: "polling"
       })
     ]);
 
     const result = await runTelegramPollingSweep({
-      moduleConfigRepository: repository,
+      connectorRepository: repository,
       secretResolver: {
         async resolveSecret() {
           return "token-1";
@@ -204,43 +212,70 @@ describe("telegram polling sweeper", () => {
   });
 });
 
-class InMemoryModuleConfigRepository implements TenantModuleConfigRepository {
-  readonly upserts: UpsertTenantModuleConfigInput[] = [];
-  private readonly records = new Map<string, TenantModuleConfigRecord>();
+class InMemoryChannelConnectorRepository implements ChannelConnectorRepository {
+  readonly upserts: UpsertChannelConnectorInput[] = [];
+  private readonly records = new Map<string, ChannelConnectorRecord>();
 
-  constructor(records: readonly TenantModuleConfigRecord[]) {
+  constructor(records: readonly ChannelConnectorRecord[]) {
     for (const record of records) {
-      this.records.set(recordKey(record.tenantId, record.moduleId), record);
+      this.records.set(record.id, record);
     }
   }
 
-  async findConfig(
-    input: FindTenantModuleConfigInput
-  ): Promise<TenantModuleConfigRecord | null> {
-    return this.records.get(recordKey(input.tenantId, input.moduleId)) ?? null;
+  async findConnector(
+    input: FindChannelConnectorInput
+  ): Promise<ChannelConnectorRecord | null> {
+    const record = this.records.get(String(input.connectorId)) ?? null;
+
+    return record?.tenantId === input.tenantId ? record : null;
   }
 
-  async findEnabledConfig(
-    input: FindEnabledTenantModuleConfigInput
-  ): Promise<TenantModuleConfigRecord | null> {
-    const record = await this.findConfig(input);
-
-    return record?.enabled ? record : null;
-  }
-
-  async listEnabledConfigs(
-    input: ListEnabledTenantModuleConfigsInput
-  ): Promise<TenantModuleConfigRecord[]> {
-    return [...this.records.values()].filter(
-      (record) => record.moduleId === input.moduleId && record.enabled
+  async findFirstConnectorByType(
+    input: FindFirstChannelConnectorByTypeInput
+  ): Promise<ChannelConnectorRecord | null> {
+    return (
+      [...this.records.values()].find(
+        (record) =>
+          record.tenantId === input.tenantId &&
+          record.channelType === input.channelType &&
+          (input.includeDeleted || record.status !== "deleted")
+      ) ?? null
     );
   }
 
-  async findEnabledConfigByConfigString(): Promise<TenantModuleConfigRecord | null> {
+  async listActiveConnectorsByType(
+    input: ListActiveChannelConnectorsByTypeInput
+  ): Promise<ChannelConnectorRecord[]> {
+    return [...this.records.values()].filter(
+      (record) =>
+        record.channelType === input.channelType &&
+        (record.status === "connected" || record.status === "degraded")
+    );
+  }
+
+  async listTenantConnectors(
+    input: ListTenantChannelConnectorsInput
+  ): Promise<ChannelConnectorRecord[]> {
+    return [...this.records.values()].filter(
+      (record) =>
+        record.tenantId === input.tenantId &&
+        (input.includeDeleted || record.status !== "deleted")
+    );
+  }
+
+  async findActiveConnectorByConfigString(
+    _input: FindActiveChannelConnectorByConfigStringInput
+  ): Promise<ChannelConnectorRecord | null> {
     return null;
   }
 
-  async upsertConfig(input: UpsertTenantModuleConfigInput): Promise<void> {
+  async findActiveConnectorByExternalId(
+    _input: FindActiveChannelConnectorByExternalIdInput
+  ): Promise<ChannelConnectorRecord | null> {
+    return null;
+  }
+
+  async upsertConnector(input: UpsertChannelConnectorInput): Promise<void> {
     this.upserts.push(input);
   }
 }
@@ -274,24 +309,30 @@ class RecordingInboundCommands {
   }
 }
 
-function createModuleConfig(input: {
+function createTelegramConnector(input: {
   mode: "webhook" | "polling";
   diagnostics?: InternalTelegramIntegrationDiagnostics;
-}): TenantModuleConfigRecord {
+}): ChannelConnectorRecord {
   return {
+    id: "telegram_bot:tenant-polling" as ChannelConnectorId,
     tenantId,
-    moduleId: "channel-telegram",
-    enabled: true,
+    channelType: "telegram_bot" as ChannelType,
+    channelClass: "bot_bridge" as ChannelClass,
+    provider: "telegram",
+    displayName: "Telegram Bot",
+    status: "connected" as ChannelConnectorStatus,
+    healthStatus: "healthy" as ChannelConnectorHealthStatus,
+    capabilities: {},
+    onboardingState: {},
     config: {
       channelExternalId: "telegram-local",
       mode: input.mode,
       botTokenSecretRef: "env:HULEE_TELEGRAM_BOT_TOKEN",
       outboundEnabled: true
     },
-    diagnostics: input.diagnostics ?? {}
+    diagnostics: input.diagnostics ?? {},
+    createdByEmployeeId: null,
+    createdAt: now,
+    updatedAt: now
   };
-}
-
-function recordKey(tenantIdInput: TenantId, moduleId: string): string {
-  return `${tenantIdInput}:${moduleId}`;
 }

@@ -16,6 +16,13 @@ export const initialTables = [
   { name: "tenant_brand_profiles", scope: "tenant", requiresTenantId: true },
   { name: "tenant_brand_assets", scope: "tenant", requiresTenantId: true },
   { name: "tenant_modules", scope: "tenant", requiresTenantId: true },
+  { name: "channel_connectors", scope: "tenant", requiresTenantId: true },
+  { name: "channel_sessions", scope: "tenant", requiresTenantId: true },
+  {
+    name: "channel_auth_challenges",
+    scope: "tenant",
+    requiresTenantId: true
+  },
   { name: "tenant_secrets", scope: "tenant", requiresTenantId: true },
   { name: "tenant_entitlements", scope: "tenant", requiresTenantId: true },
   { name: "tenant_usage_policies", scope: "tenant", requiresTenantId: true },

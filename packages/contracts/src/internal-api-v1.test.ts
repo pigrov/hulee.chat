@@ -4,6 +4,9 @@ import {
   internalApiErrorResponseSchema,
   internalAccessDecisionRequestSchema,
   internalAccessDecisionResponseSchema,
+  internalChannelCatalogResponseSchema,
+  internalChannelConnectorCreateRequestSchema,
+  internalChannelConnectorsResponseSchema,
   internalInboxConversationRoutingUpdateRequestSchema,
   internalInboxConversationRoutingUpdateResponseSchema,
   internalInboxReplyRequestSchema,
@@ -589,6 +592,7 @@ describe("internal API v1 schemas", () => {
       internalTelegramIntegrationResponseSchema.parse({
         moduleId: "channel-telegram",
         enabled: true,
+        setupStep: "complete",
         config: {
           channelExternalId: "telegram-local",
           mode: "webhook",
@@ -625,9 +629,73 @@ describe("internal API v1 schemas", () => {
       })
     ).toMatchObject({
       moduleId: "channel-telegram",
+      setupStep: "complete",
       config: {
         botTokenSecretRef: "env:HULEE_TELEGRAM_BOT_TOKEN"
       }
+    });
+  });
+
+  it("parses channel catalog and connector summaries", () => {
+    expect(
+      internalChannelCatalogResponseSchema.parse({
+        channels: [
+          {
+            channelType: "telegram_bot",
+            channelClass: "bot_bridge",
+            provider: "telegram",
+            titleKey: "integrations.catalog.telegramBot.title",
+            descriptionKey: "integrations.catalog.telegramBot.description",
+            readiness: "available",
+            supportsMultiple: true,
+            capabilities: ["inbound", "outbound", "webhook"]
+          }
+        ]
+      })
+    ).toMatchObject({
+      channels: [
+        {
+          channelType: "telegram_bot",
+          readiness: "available"
+        }
+      ]
+    });
+
+    expect(
+      internalChannelConnectorsResponseSchema.parse({
+        connectors: [
+          {
+            connectorId: "telegram_bot:tenant-1",
+            channelType: "telegram_bot",
+            channelClass: "bot_bridge",
+            provider: "telegram",
+            displayName: "Telegram Bot",
+            status: "connected",
+            healthStatus: "healthy",
+            channelExternalId: "telegram-local",
+            diagnosticsStatus: "configured"
+          }
+        ]
+      })
+    ).toMatchObject({
+      connectors: [
+        {
+          connectorId: "telegram_bot:tenant-1",
+          status: "connected"
+        }
+      ]
+    });
+  });
+
+  it("parses channel connector create requests", () => {
+    expect(
+      internalChannelConnectorCreateRequestSchema.parse({
+        channelType: "telegram_bot",
+        displayName: "Sales Telegram"
+      })
+    ).toEqual({
+      channelType: "telegram_bot",
+      displayName: "Sales Telegram"
     });
   });
 
@@ -635,12 +703,14 @@ describe("internal API v1 schemas", () => {
     expect(
       internalTelegramIntegrationUpdateRequestSchema.parse({
         enabled: true,
+        setupStepCompleted: "token",
         channelExternalId: "telegram-local",
         botToken: "telegram-token",
         outboundEnabled: true
       })
     ).toEqual({
       enabled: true,
+      setupStepCompleted: "token",
       channelExternalId: "telegram-local",
       mode: "webhook",
       botToken: "telegram-token",

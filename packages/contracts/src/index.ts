@@ -8,8 +8,36 @@ export type ClientId = Brand<string, "ClientId">;
 export type ConversationId = Brand<string, "ConversationId">;
 export type MessageId = Brand<string, "MessageId">;
 export type EventId = Brand<string, "EventId">;
+export type ChannelConnectorId = Brand<string, "ChannelConnectorId">;
 
 export type DeploymentType = "saas_shared" | "saas_isolated" | "on_prem";
+
+export type ChannelClass = "bot_bridge" | "user_bridge" | "official_api";
+
+export type ChannelConnectorStatus =
+  | "draft"
+  | "onboarding"
+  | "authorizing"
+  | "connected"
+  | "degraded"
+  | "reauth_required"
+  | "disabled"
+  | "failed"
+  | "deleted";
+
+export type ChannelConnectorHealthStatus =
+  | "unknown"
+  | "healthy"
+  | "degraded"
+  | "unhealthy";
+
+export type ChannelType =
+  | "telegram_bot"
+  | "telegram_qr_bridge"
+  | "whatsapp_qr_bridge"
+  | "max_qr_bridge"
+  | "max_bot"
+  | "vk_community";
 
 export type EventSchemaVersion = "v1";
 

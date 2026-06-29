@@ -1,4 +1,8 @@
 import {
+  internalChannelConnectorCreateRequestSchema,
+  internalChannelConnectorSummarySchema,
+  internalChannelCatalogResponseSchema,
+  internalChannelConnectorsResponseSchema,
   internalInboxConversationRoutingUpdateRequestSchema,
   internalInboxConversationRoutingUpdateResponseSchema,
   internalInboxReplyResponseSchema,
@@ -17,6 +21,10 @@ import {
   internalTenantBrandUpdateRequestSchema,
   internalTelegramIntegrationResponseSchema,
   internalTelegramIntegrationUpdateRequestSchema,
+  type InternalChannelCatalogResponse,
+  type InternalChannelConnectorCreateRequest,
+  type InternalChannelConnectorSummary,
+  type InternalChannelConnectorsResponse,
   type InternalInboxConversation,
   type InternalInboxConversationRoutingUpdateRequest,
   type InternalInboxConversationRoutingUpdateResponse,
@@ -48,6 +56,9 @@ export type InboxConversation = InternalInboxConversation;
 export type InboxMessage = InternalInboxMessage;
 export type InboxViewModel = InternalInboxViewResponse;
 export type TenantBrandViewModel = InternalTenantBrandResponse;
+export type ChannelCatalogViewModel = InternalChannelCatalogResponse;
+export type ChannelConnectorsViewModel = InternalChannelConnectorsResponse;
+export type ChannelConnectorViewModel = InternalChannelConnectorSummary;
 export type TelegramIntegrationViewModel = InternalTelegramIntegrationResponse;
 export type RbacRolesViewModel = InternalRbacRolesResponse;
 export type RbacRoleBindingsViewModel = InternalRbacRoleBindingsResponse;
@@ -387,13 +398,173 @@ export async function updateTenantBrand(
   return internalTenantBrandResponseSchema.parse(await response.json());
 }
 
-export async function loadTelegramIntegration(
+export async function loadChannelCatalog(
   options: InternalApiAccessOptions<"modules.manage">
+): Promise<ChannelCatalogViewModel> {
+  const url = new URL(
+    "/internal/v1/channels/catalog",
+    resolveInternalApiBaseUrl()
+  );
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: await buildInternalApiHeaders({
+      method: "GET",
+      path: internalPath(url),
+      effectivePermissionOverride: requireEffectivePermissionOverride(
+        options,
+        "modules.manage"
+      )
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Internal channel catalog API returned HTTP ${response.status}.`
+    );
+  }
+
+  return internalChannelCatalogResponseSchema.parse(await response.json());
+}
+
+export async function loadChannelConnectors(
+  options: InternalApiAccessOptions<"modules.manage">
+): Promise<ChannelConnectorsViewModel> {
+  const url = new URL(
+    "/internal/v1/channels/connectors",
+    resolveInternalApiBaseUrl()
+  );
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: await buildInternalApiHeaders({
+      method: "GET",
+      path: internalPath(url),
+      effectivePermissionOverride: requireEffectivePermissionOverride(
+        options,
+        "modules.manage"
+      )
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Internal channel connectors API returned HTTP ${response.status}.`
+    );
+  }
+
+  return internalChannelConnectorsResponseSchema.parse(await response.json());
+}
+
+export async function createChannelConnector(
+  input: InternalChannelConnectorCreateRequest,
+  options: InternalApiAccessOptions<"modules.manage">
+): Promise<ChannelConnectorViewModel> {
+  const request = internalChannelConnectorCreateRequestSchema.parse(input);
+  const url = new URL(
+    "/internal/v1/channels/connectors",
+    resolveInternalApiBaseUrl()
+  );
+  const response = await fetch(url, {
+    method: "POST",
+    cache: "no-store",
+    headers: {
+      ...(await buildInternalApiHeaders({
+        method: "POST",
+        path: internalPath(url),
+        body: request,
+        effectivePermissionOverride: requireEffectivePermissionOverride(
+          options,
+          "modules.manage"
+        )
+      })),
+      "content-type": "application/json; charset=utf-8"
+    },
+    body: JSON.stringify(request)
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Internal channel connector create API returned HTTP ${response.status}.`
+    );
+  }
+
+  return internalChannelConnectorSummarySchema.parse(await response.json());
+}
+
+export async function disableChannelConnector(
+  input: { connectorId: string },
+  options: InternalApiAccessOptions<"modules.manage">
+): Promise<ChannelConnectorViewModel> {
+  const connectorId = input.connectorId.trim();
+  const url = new URL(
+    `/internal/v1/channels/connectors/${encodeURIComponent(
+      connectorId
+    )}/disable`,
+    resolveInternalApiBaseUrl()
+  );
+  const response = await fetch(url, {
+    method: "POST",
+    cache: "no-store",
+    headers: await buildInternalApiHeaders({
+      method: "POST",
+      path: internalPath(url),
+      effectivePermissionOverride: requireEffectivePermissionOverride(
+        options,
+        "modules.manage"
+      )
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Internal channel connector disable API returned HTTP ${response.status}.`
+    );
+  }
+
+  return internalChannelConnectorSummarySchema.parse(await response.json());
+}
+
+export async function deleteChannelConnector(
+  input: { connectorId: string },
+  options: InternalApiAccessOptions<"modules.manage">
+): Promise<ChannelConnectorViewModel> {
+  const connectorId = input.connectorId.trim();
+  const url = new URL(
+    `/internal/v1/channels/connectors/${encodeURIComponent(connectorId)}`,
+    resolveInternalApiBaseUrl()
+  );
+  const response = await fetch(url, {
+    method: "DELETE",
+    cache: "no-store",
+    headers: await buildInternalApiHeaders({
+      method: "DELETE",
+      path: internalPath(url),
+      effectivePermissionOverride: requireEffectivePermissionOverride(
+        options,
+        "modules.manage"
+      )
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Internal channel connector delete API returned HTTP ${response.status}.`
+    );
+  }
+
+  return internalChannelConnectorSummarySchema.parse(await response.json());
+}
+
+export async function loadTelegramIntegration(
+  options: InternalApiAccessOptions<"modules.manage">,
+  input?: { connectorId?: string }
 ): Promise<TelegramIntegrationViewModel> {
   const url = new URL(
     "/internal/v1/integrations/telegram",
     resolveInternalApiBaseUrl()
   );
+
+  appendConnectorId(url, input?.connectorId);
+
   const response = await fetch(url, {
     cache: "no-store",
     headers: await buildInternalApiHeaders({
@@ -452,32 +623,40 @@ export async function updateTelegramIntegration(
 }
 
 export async function refreshTelegramDiagnostics(
-  options: InternalApiAccessOptions<"modules.manage">
+  options: InternalApiAccessOptions<"modules.manage">,
+  input?: { connectorId?: string }
 ): Promise<TelegramIntegrationViewModel> {
   return postTelegramIntegrationCommand(
     "/internal/v1/integrations/telegram/diagnostics",
     "Internal Telegram diagnostics API returned",
-    options
+    options,
+    input
   );
 }
 
 export async function setTelegramWebhook(
-  options: InternalApiAccessOptions<"modules.manage">
+  options: InternalApiAccessOptions<"modules.manage">,
+  input?: { connectorId?: string }
 ): Promise<TelegramIntegrationViewModel> {
   return postTelegramIntegrationCommand(
     "/internal/v1/integrations/telegram/webhook",
     "Internal Telegram webhook sync API returned",
-    options
+    options,
+    input
   );
 }
 
 export async function deleteTelegramWebhook(
-  options: InternalApiAccessOptions<"modules.manage">
+  options: InternalApiAccessOptions<"modules.manage">,
+  input?: { connectorId?: string }
 ): Promise<TelegramIntegrationViewModel> {
   const url = new URL(
     "/internal/v1/integrations/telegram/webhook",
     resolveInternalApiBaseUrl()
   );
+
+  appendConnectorId(url, input?.connectorId);
+
   const response = await fetch(url, {
     method: "DELETE",
     cache: "no-store",
@@ -503,9 +682,13 @@ export async function deleteTelegramWebhook(
 async function postTelegramIntegrationCommand(
   path: string,
   errorPrefix: string,
-  options: InternalApiAccessOptions<"modules.manage">
+  options: InternalApiAccessOptions<"modules.manage">,
+  input?: { connectorId?: string }
 ): Promise<TelegramIntegrationViewModel> {
   const url = new URL(path, resolveInternalApiBaseUrl());
+
+  appendConnectorId(url, input?.connectorId);
+
   const response = await fetch(url, {
     method: "POST",
     cache: "no-store",
@@ -524,6 +707,14 @@ async function postTelegramIntegrationCommand(
   }
 
   return internalTelegramIntegrationResponseSchema.parse(await response.json());
+}
+
+function appendConnectorId(url: URL, connectorId: string | undefined): void {
+  const normalized = connectorId?.trim();
+
+  if (normalized && normalized.length > 0) {
+    url.searchParams.set("connectorId", normalized);
+  }
 }
 
 type InternalApiResponseSchema<TResponse> = {

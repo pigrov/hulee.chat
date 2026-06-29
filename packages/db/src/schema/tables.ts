@@ -192,6 +192,110 @@ export const tenantModules = pgTable(
   ]
 );
 
+export const channelConnectors = pgTable(
+  "channel_connectors",
+  {
+    id: text("id").primaryKey(),
+    tenantId: tenantIdColumn().references(() => tenants.id),
+    channelType: text("channel_type").notNull(),
+    channelClass: text("channel_class").notNull(),
+    provider: text("provider").notNull(),
+    displayName: text("display_name").notNull(),
+    status: text("status").notNull().default("onboarding"),
+    healthStatus: text("health_status").notNull().default("unknown"),
+    capabilities: jsonb("capabilities").notNull().default({}),
+    onboardingState: jsonb("onboarding_state").notNull().default({}),
+    config: jsonb("config").notNull().default({}),
+    diagnostics: jsonb("diagnostics").notNull().default({}),
+    createdByEmployeeId: text("created_by_employee_id"),
+    ...timestamps
+  },
+  (table) => [
+    index("channel_connectors_tenant_idx").on(table.tenantId),
+    index("channel_connectors_tenant_type_idx").on(
+      table.tenantId,
+      table.channelType
+    ),
+    index("channel_connectors_tenant_status_idx").on(
+      table.tenantId,
+      table.status
+    )
+  ]
+);
+
+export const channelSessions = pgTable(
+  "channel_sessions",
+  {
+    id: text("id").primaryKey(),
+    tenantId: tenantIdColumn().references(() => tenants.id),
+    connectorId: text("connector_id")
+      .notNull()
+      .references(() => channelConnectors.id),
+    sessionKey: text("session_key").notNull(),
+    status: text("status").notNull().default("not_started"),
+    sessionEncrypted: text("session_encrypted"),
+    publicState: jsonb("public_state").notNull().default({}),
+    challengeType: text("challenge_type"),
+    challengeExpiresAt: timestamp("challenge_expires_at", {
+      withTimezone: true
+    }),
+    lastConnectedAt: timestamp("last_connected_at", { withTimezone: true }),
+    lastErrorAt: timestamp("last_error_at", { withTimezone: true }),
+    lastErrorCode: text("last_error_code"),
+    lastErrorMessage: text("last_error_message"),
+    ...timestamps
+  },
+  (table) => [
+    uniqueIndex("channel_sessions_tenant_connector_key_unique").on(
+      table.tenantId,
+      table.connectorId,
+      table.sessionKey
+    ),
+    index("channel_sessions_tenant_idx").on(table.tenantId),
+    index("channel_sessions_tenant_connector_idx").on(
+      table.tenantId,
+      table.connectorId
+    ),
+    index("channel_sessions_tenant_status_idx").on(table.tenantId, table.status)
+  ]
+);
+
+export const channelAuthChallenges = pgTable(
+  "channel_auth_challenges",
+  {
+    id: text("id").primaryKey(),
+    tenantId: tenantIdColumn().references(() => tenants.id),
+    connectorId: text("connector_id")
+      .notNull()
+      .references(() => channelConnectors.id),
+    challengeType: text("challenge_type").notNull(),
+    status: text("status").notNull(),
+    publicPayload: jsonb("public_payload").notNull().default({}),
+    secretPayloadEncrypted: text("secret_payload_encrypted"),
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    createdByEmployeeId: text("created_by_employee_id"),
+    ...timestamps
+  },
+  (table) => [
+    index("channel_auth_challenges_tenant_idx").on(table.tenantId),
+    index("channel_auth_challenges_tenant_connector_idx").on(
+      table.tenantId,
+      table.connectorId
+    ),
+    index("channel_auth_challenges_tenant_status_idx").on(
+      table.tenantId,
+      table.status
+    ),
+    index("channel_auth_challenges_tenant_created_idx").on(
+      table.tenantId,
+      table.createdAt
+    )
+  ]
+);
+
 export const tenantSecrets = pgTable(
   "tenant_secrets",
   {

@@ -20,6 +20,16 @@ export type {
   DomainEventRepository
 } from "./sql-domain-event-repository";
 export {
+  buildFindActiveChannelConnectorByConfigStringSql,
+  buildFindActiveChannelConnectorByExternalIdSql,
+  buildFindChannelConnectorSql,
+  buildFindFirstChannelConnectorByTypeSql,
+  buildListActiveChannelConnectorsByTypeSql,
+  buildListTenantChannelConnectorsSql,
+  buildUpsertChannelConnectorSql,
+  createSqlChannelConnectorRepository
+} from "./sql-channel-connector-repository";
+export {
   buildFindEnabledTenantModuleConfigByConfigStringSql,
   buildFindEnabledTenantModuleConfigSql,
   buildFindTenantModuleConfigSql,
@@ -43,6 +53,7 @@ export {
   buildFindTenantSecretSql,
   buildUpsertTenantSecretSql,
   createAesGcmTenantSecretCipher,
+  createChannelConnectorSecretRef,
   createSqlTenantSecretRepository,
   createTenantSecretRef,
   parseTenantSecretRef
@@ -184,6 +195,17 @@ export type {
   RawSqlExecutor,
   RawSqlQueryResult
 } from "./sql-outbox-repository";
+export type {
+  ChannelConnectorRecord,
+  ChannelConnectorRepository,
+  FindActiveChannelConnectorByConfigStringInput,
+  FindActiveChannelConnectorByExternalIdInput,
+  FindChannelConnectorInput,
+  FindFirstChannelConnectorByTypeInput,
+  ListActiveChannelConnectorsByTypeInput,
+  ListTenantChannelConnectorsInput,
+  UpsertChannelConnectorInput
+} from "./sql-channel-connector-repository";
 export type {
   FindEnabledTenantModuleConfigByConfigStringInput,
   FindEnabledTenantModuleConfigInput,

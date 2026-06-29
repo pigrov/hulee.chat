@@ -1,19 +1,29 @@
 import type {
   EmployeeId,
+  InternalChannelCatalogResponse,
+  InternalChannelConnectorCreateRequest,
+  InternalChannelConnectorHealthStatus,
+  InternalChannelConnectorSummary,
+  InternalChannelConnectorStatus,
+  InternalChannelConnectorsResponse,
+  InternalChannelClass,
+  InternalChannelType,
   InternalTelegramIntegrationConfig,
   InternalTelegramIntegrationDiagnostics,
   InternalTelegramIntegrationResponse,
   InternalTelegramIntegrationUpdateRequest,
+  InternalTelegramSetupStep,
   PlatformErrorCode,
   TenantId
 } from "@hulee/contracts";
 import { internalTelegramIntegrationDiagnosticsSchema } from "@hulee/contracts";
 import { CoreError } from "@hulee/core";
 import type {
-  TenantModuleConfigRepository,
+  ChannelConnectorRecord,
+  ChannelConnectorRepository,
   TenantSecretRepository
 } from "@hulee/db";
-import { createTenantSecretRef } from "@hulee/db";
+import { createChannelConnectorSecretRef } from "@hulee/db";
 import {
   createTelegramBotApiClient,
   parseTelegramChannelConfig,
@@ -31,21 +41,43 @@ export type InternalIntegrationContext = {
 };
 
 export type InternalIntegrationService = {
-  loadTelegramIntegration(
+  listChannelCatalog(
     context: InternalIntegrationContext
+  ): Promise<InternalChannelCatalogResponse>;
+  listChannelConnectors(
+    context: InternalIntegrationContext
+  ): Promise<InternalChannelConnectorsResponse>;
+  createChannelConnector(
+    context: InternalIntegrationContext,
+    request: InternalChannelConnectorCreateRequest
+  ): Promise<InternalChannelConnectorSummary>;
+  disableChannelConnector(
+    context: InternalIntegrationContext,
+    input: { connectorId: string }
+  ): Promise<InternalChannelConnectorSummary>;
+  deleteChannelConnector(
+    context: InternalIntegrationContext,
+    input: { connectorId: string }
+  ): Promise<InternalChannelConnectorSummary>;
+  loadTelegramIntegration(
+    context: InternalIntegrationContext,
+    input?: { connectorId?: string }
   ): Promise<InternalTelegramIntegrationResponse>;
   updateTelegramIntegration(
     context: InternalIntegrationContext,
     request: InternalTelegramIntegrationUpdateRequest
   ): Promise<InternalTelegramIntegrationResponse>;
   refreshTelegramDiagnostics(
-    context: InternalIntegrationContext
+    context: InternalIntegrationContext,
+    input?: { connectorId?: string }
   ): Promise<InternalTelegramIntegrationResponse>;
   setTelegramWebhook(
-    context: InternalIntegrationContext
+    context: InternalIntegrationContext,
+    input?: { connectorId?: string }
   ): Promise<InternalTelegramIntegrationResponse>;
   deleteTelegramWebhook(
-    context: InternalIntegrationContext
+    context: InternalIntegrationContext,
+    input?: { connectorId?: string }
   ): Promise<InternalTelegramIntegrationResponse>;
 };
 
@@ -71,7 +103,7 @@ export type TelegramBotApiClientFactory = (
 ) => TelegramBotApiClient;
 
 export type InternalIntegrationServiceOptions = {
-  repository: TenantModuleConfigRepository;
+  connectorRepository: ChannelConnectorRepository;
   secretResolver?: SecretResolver;
   secretWriter?: SecretWriter;
   botApiClientFactory?: TelegramBotApiClientFactory;
@@ -86,6 +118,72 @@ export type InternalIntegrationServiceOptions = {
 };
 
 const telegramModuleId = "channel-telegram" as const;
+const telegramChannelType = "telegram_bot" as const;
+const telegramChannelClass = "bot_bridge" as const;
+const telegramProvider = "telegram";
+const defaultTelegramDisplayName = "Telegram Bot";
+const channelCatalogV1 = [
+  {
+    channelType: "telegram_bot",
+    channelClass: "bot_bridge",
+    provider: "telegram",
+    titleKey: "integrations.catalog.telegramBot.title",
+    descriptionKey: "integrations.catalog.telegramBot.description",
+    readiness: "available",
+    supportsMultiple: true,
+    capabilities: ["inbound", "outbound", "webhook", "polling"]
+  },
+  {
+    channelType: "telegram_qr_bridge",
+    channelClass: "user_bridge",
+    provider: "telegram",
+    titleKey: "integrations.catalog.telegramQr.title",
+    descriptionKey: "integrations.catalog.telegramQr.description",
+    readiness: "coming_soon",
+    supportsMultiple: true,
+    capabilities: ["inbound", "outbound", "qr_auth", "session_runtime"]
+  },
+  {
+    channelType: "whatsapp_qr_bridge",
+    channelClass: "user_bridge",
+    provider: "whatsapp",
+    titleKey: "integrations.catalog.whatsappQr.title",
+    descriptionKey: "integrations.catalog.whatsappQr.description",
+    readiness: "coming_soon",
+    supportsMultiple: true,
+    capabilities: ["inbound", "outbound", "qr_auth", "session_runtime"]
+  },
+  {
+    channelType: "max_bot",
+    channelClass: "bot_bridge",
+    provider: "max",
+    titleKey: "integrations.catalog.maxBot.title",
+    descriptionKey: "integrations.catalog.maxBot.description",
+    readiness: "coming_soon",
+    supportsMultiple: true,
+    capabilities: ["inbound", "outbound"]
+  },
+  {
+    channelType: "max_qr_bridge",
+    channelClass: "user_bridge",
+    provider: "max",
+    titleKey: "integrations.catalog.maxQr.title",
+    descriptionKey: "integrations.catalog.maxQr.description",
+    readiness: "coming_soon",
+    supportsMultiple: true,
+    capabilities: ["inbound", "outbound", "code_auth", "session_runtime"]
+  },
+  {
+    channelType: "vk_community",
+    channelClass: "official_api",
+    provider: "vk",
+    titleKey: "integrations.catalog.vkCommunity.title",
+    descriptionKey: "integrations.catalog.vkCommunity.description",
+    readiness: "coming_soon",
+    supportsMultiple: true,
+    capabilities: ["inbound", "outbound", "official_api"]
+  }
+] satisfies InternalChannelCatalogResponse["channels"];
 
 if (telegramChannelManifest.id !== telegramModuleId) {
   throw new CoreError("validation.failed");
@@ -105,16 +203,114 @@ export function createInternalIntegrationService(
     options.webhookSecretTokenFactory ?? createTelegramWebhookSecretToken;
 
   return {
-    async loadTelegramIntegration(context) {
-      const record = await options.repository.findConfig({
+    async listChannelCatalog() {
+      return {
+        channels: channelCatalogV1
+      };
+    },
+
+    async listChannelConnectors(context) {
+      const records = await options.connectorRepository.listTenantConnectors({
+        tenantId: context.tenantId
+      });
+
+      return {
+        connectors: records.flatMap((record) => {
+          const summary = channelConnectorSummaryFromRecord(record);
+
+          return summary ? [summary] : [];
+        })
+      };
+    },
+
+    async createChannelConnector(context, request) {
+      if (request.channelType !== telegramChannelType) {
+        throw new CoreError("validation.failed");
+      }
+
+      const updatedAt = now();
+      const connectorId = createRandomChannelConnectorId(request.channelType);
+      const channelExternalId = createDefaultTelegramChannelExternalId();
+      const config: InternalTelegramIntegrationConfig = {
+        channelExternalId,
+        mode: "webhook",
+        webhookConnectorId: webhookConnectorIdFactory({
+          tenantId: context.tenantId,
+          channelExternalId
+        }),
+        outboundEnabled: false
+      };
+      const diagnostics = buildTelegramDiagnostics({
+        enabled: false,
+        config,
+        checkedAt: updatedAt.toISOString()
+      });
+
+      await options.connectorRepository.upsertConnector({
+        id: connectorId,
         tenantId: context.tenantId,
-        moduleId: telegramModuleId
+        channelType: telegramChannelType,
+        channelClass: telegramChannelClass,
+        provider: telegramProvider,
+        displayName: request.displayName?.trim() || defaultTelegramDisplayName,
+        status: "draft",
+        healthStatus: "unknown",
+        capabilities: {
+          inbound: true,
+          outbound: true,
+          attachmentsMetadata: true
+        },
+        onboardingState: {
+          step: "name"
+        },
+        config,
+        diagnostics,
+        createdByEmployeeId: context.employeeId,
+        updatedAt
+      });
+
+      return {
+        connectorId,
+        channelType: telegramChannelType,
+        channelClass: telegramChannelClass,
+        provider: telegramProvider,
+        displayName: request.displayName?.trim() || defaultTelegramDisplayName,
+        status: "draft",
+        healthStatus: "unknown",
+        channelExternalId,
+        diagnosticsStatus: diagnostics.status
+      };
+    },
+
+    async disableChannelConnector(context, input) {
+      return updateChannelConnectorLifecycle({
+        context,
+        repository: options.connectorRepository,
+        connectorId: input.connectorId,
+        status: "disabled",
+        updatedAt: now()
+      });
+    },
+
+    async deleteChannelConnector(context, input) {
+      return updateChannelConnectorLifecycle({
+        context,
+        repository: options.connectorRepository,
+        connectorId: input.connectorId,
+        status: "deleted",
+        updatedAt: now()
+      });
+    },
+
+    async loadTelegramIntegration(context, input) {
+      const record = await loadExistingTelegramConnector({
+        repository: options.connectorRepository,
+        tenantId: context.tenantId,
+        connectorId: input?.connectorId
       });
 
       return telegramResponseFromRecord({
-        enabled: record?.enabled ?? false,
-        configInput: record?.config,
-        diagnosticsInput: record?.diagnostics,
+        record,
         publicWebhookBaseUrl: options.publicWebhookBaseUrl,
         checkedAt: now().toISOString()
       });
@@ -122,13 +318,24 @@ export function createInternalIntegrationService(
 
     async updateTelegramIntegration(context, request) {
       const updatedAt = now();
-      const existingConfig = await loadExistingTelegramConfig({
-        repository: options.repository,
-        tenantId: context.tenantId
+      const existingRecord = await loadExistingTelegramConnector({
+        repository: options.connectorRepository,
+        tenantId: context.tenantId,
+        connectorId: request.connectorId
       });
+      if (request.connectorId?.trim() && !existingRecord) {
+        throw new CoreError("validation.failed");
+      }
+
+      const existingConfig = parseTelegramConfigFromRecord(existingRecord);
+      const connectorId =
+        request.connectorId?.trim() ||
+        existingRecord?.id ||
+        createDefaultTelegramConnectorId(context.tenantId);
       const botTokenSecretRef = await resolveTelegramBotTokenSecretRef({
         context,
         request,
+        connectorId,
         existingConfig,
         secretWriter: options.secretWriter,
         updatedAt
@@ -142,6 +349,7 @@ export function createInternalIntegrationService(
       const webhookSecretTokenSecretRef =
         await resolveTelegramWebhookSecretTokenSecretRef({
           context,
+          connectorId,
           existingConfig,
           secretWriter: options.secretWriter,
           webhookSecretTokenFactory,
@@ -161,28 +369,58 @@ export function createInternalIntegrationService(
         config: parsedConfig,
         checkedAt: updatedAt.toISOString()
       });
+      const status = telegramConnectorStatusFromUpdate({
+        existingRecord,
+        enabled: request.enabled,
+        diagnostics
+      });
+      const onboardingState = updateTelegramOnboardingState({
+        existingState: existingRecord?.onboardingState,
+        completedStep: request.setupStepCompleted
+      });
+      const setupStep = resolveTelegramSetupStep({
+        onboardingState,
+        config: parsedConfig,
+        diagnostics
+      });
 
-      await options.repository.upsertConfig({
-        tenantId: context.tenantId,
-        moduleId: telegramModuleId,
+      await upsertTelegramConnector({
+        repository: options.connectorRepository,
+        context,
+        existingRecord,
+        connectorId,
+        displayName:
+          request.displayName?.trim() ||
+          existingRecord?.displayName ||
+          defaultTelegramDisplayName,
         enabled: request.enabled,
         config: parsedConfig,
         diagnostics,
+        status,
+        onboardingState,
         updatedAt
       });
 
       return telegramResponseFromConfig({
+        connectorId,
+        displayName:
+          request.displayName?.trim() ||
+          existingRecord?.displayName ||
+          defaultTelegramDisplayName,
+        status,
         enabled: request.enabled,
         config: parsedConfig,
         publicWebhookBaseUrl: options.publicWebhookBaseUrl,
-        diagnostics
+        diagnostics,
+        setupStep
       });
     },
 
-    async refreshTelegramDiagnostics(context) {
+    async refreshTelegramDiagnostics(context, input) {
       return runTelegramProviderDiagnostics({
         context,
-        repository: options.repository,
+        connectorId: input?.connectorId,
+        repository: options.connectorRepository,
         secretResolver,
         botApiClientFactory,
         telegramApiBaseUrl: options.telegramApiBaseUrl,
@@ -191,11 +429,12 @@ export function createInternalIntegrationService(
       });
     },
 
-    async setTelegramWebhook(context) {
+    async setTelegramWebhook(context, input) {
       return runTelegramWebhookSync({
         operation: "set",
         context,
-        repository: options.repository,
+        connectorId: input?.connectorId,
+        repository: options.connectorRepository,
         secretResolver,
         botApiClientFactory,
         telegramApiBaseUrl: options.telegramApiBaseUrl,
@@ -204,11 +443,12 @@ export function createInternalIntegrationService(
       });
     },
 
-    async deleteTelegramWebhook(context) {
+    async deleteTelegramWebhook(context, input) {
       return runTelegramWebhookSync({
         operation: "delete",
         context,
-        repository: options.repository,
+        connectorId: input?.connectorId,
+        repository: options.connectorRepository,
         secretResolver,
         botApiClientFactory,
         telegramApiBaseUrl: options.telegramApiBaseUrl,
@@ -221,7 +461,8 @@ export function createInternalIntegrationService(
 
 type TelegramProviderOperationOptions = {
   context: InternalIntegrationContext;
-  repository: TenantModuleConfigRepository;
+  connectorId?: string;
+  repository: ChannelConnectorRepository;
   secretResolver: SecretResolver;
   botApiClientFactory: TelegramBotApiClientFactory;
   telegramApiBaseUrl?: string;
@@ -268,15 +509,109 @@ export function createTenantSecretResolver(input: {
   };
 }
 
-async function loadExistingTelegramConfig(input: {
-  repository: TenantModuleConfigRepository;
+async function loadExistingTelegramConnector(input: {
+  repository: ChannelConnectorRepository;
   tenantId: TenantId;
-}): Promise<InternalTelegramIntegrationConfig | null> {
-  const record = await input.repository.findConfig({
+  connectorId?: string;
+}): Promise<ChannelConnectorRecord | null> {
+  const connectorId = input.connectorId?.trim();
+
+  if (connectorId) {
+    const record = await input.repository.findConnector({
+      tenantId: input.tenantId,
+      connectorId
+    });
+
+    return record?.channelType === telegramChannelType ? record : null;
+  }
+
+  return input.repository.findFirstConnectorByType({
     tenantId: input.tenantId,
-    moduleId: telegramModuleId
+    channelType: telegramChannelType
+  });
+}
+
+async function updateChannelConnectorLifecycle(input: {
+  context: InternalIntegrationContext;
+  repository: ChannelConnectorRepository;
+  connectorId: string;
+  status: "disabled" | "deleted";
+  updatedAt: Date;
+}): Promise<InternalChannelConnectorSummary> {
+  const connectorId = input.connectorId.trim();
+  const record = connectorId
+    ? await input.repository.findConnector({
+        tenantId: input.context.tenantId,
+        connectorId
+      })
+    : null;
+
+  if (!record || record.status === "deleted") {
+    throw new CoreError("validation.failed");
+  }
+
+  const updatedRecord: ChannelConnectorRecord = {
+    ...record,
+    status: input.status,
+    healthStatus: "unknown",
+    diagnostics: buildDisabledChannelConnectorDiagnostics({
+      record,
+      checkedAt: input.updatedAt.toISOString()
+    }),
+    updatedAt: input.updatedAt
+  };
+
+  await input.repository.upsertConnector({
+    id: updatedRecord.id,
+    tenantId: updatedRecord.tenantId,
+    channelType: updatedRecord.channelType,
+    channelClass: updatedRecord.channelClass,
+    provider: updatedRecord.provider,
+    displayName: updatedRecord.displayName,
+    status: updatedRecord.status,
+    healthStatus: updatedRecord.healthStatus,
+    capabilities: updatedRecord.capabilities,
+    onboardingState: updatedRecord.onboardingState,
+    config: updatedRecord.config,
+    diagnostics: updatedRecord.diagnostics,
+    createdByEmployeeId: updatedRecord.createdByEmployeeId,
+    updatedAt: updatedRecord.updatedAt
   });
 
+  const summary = channelConnectorSummaryFromRecord(updatedRecord);
+
+  if (!summary) {
+    throw new CoreError("validation.failed");
+  }
+
+  return summary;
+}
+
+function buildDisabledChannelConnectorDiagnostics(input: {
+  record: ChannelConnectorRecord;
+  checkedAt: string;
+}): unknown {
+  if (input.record.channelType === telegramChannelType) {
+    const config = parseTelegramConfigFromRecord(input.record);
+
+    if (config) {
+      return buildTelegramDiagnostics({
+        enabled: false,
+        config,
+        checkedAt: input.checkedAt
+      });
+    }
+  }
+
+  return {
+    status: "disabled",
+    checkedAt: input.checkedAt
+  };
+}
+
+function parseTelegramConfigFromRecord(
+  record: ChannelConnectorRecord | null
+): InternalTelegramIntegrationConfig | null {
   if (!record?.config) {
     return null;
   }
@@ -291,6 +626,7 @@ async function loadExistingTelegramConfig(input: {
 async function resolveTelegramBotTokenSecretRef(input: {
   context: InternalIntegrationContext;
   request: InternalTelegramIntegrationUpdateRequest;
+  connectorId: string;
   existingConfig: InternalTelegramIntegrationConfig | null;
   secretWriter?: SecretWriter;
   updatedAt: Date;
@@ -302,7 +638,10 @@ async function resolveTelegramBotTokenSecretRef(input: {
       throw new CoreError("validation.failed");
     }
 
-    const secretRef = buildTelegramBotTokenSecretRef(input.context.tenantId);
+    const secretRef = buildTelegramBotTokenSecretRef({
+      tenantId: input.context.tenantId,
+      connectorId: input.connectorId
+    });
 
     await input.secretWriter.upsertSecret({
       tenantId: input.context.tenantId,
@@ -321,16 +660,20 @@ async function resolveTelegramBotTokenSecretRef(input: {
   );
 }
 
-function buildTelegramBotTokenSecretRef(tenantId: TenantId): string {
-  return createTenantSecretRef({
-    tenantId,
-    moduleId: telegramModuleId,
+function buildTelegramBotTokenSecretRef(input: {
+  tenantId: TenantId;
+  connectorId: string;
+}): string {
+  return createChannelConnectorSecretRef({
+    tenantId: input.tenantId,
+    connectorId: input.connectorId,
     secretName: "bot-token"
   });
 }
 
 async function resolveTelegramWebhookSecretTokenSecretRef(input: {
   context: InternalIntegrationContext;
+  connectorId: string;
   existingConfig: InternalTelegramIntegrationConfig | null;
   secretWriter?: SecretWriter;
   webhookSecretTokenFactory: () => string;
@@ -344,9 +687,10 @@ async function resolveTelegramWebhookSecretTokenSecretRef(input: {
     return undefined;
   }
 
-  const secretRef = buildTelegramWebhookSecretTokenSecretRef(
-    input.context.tenantId
-  );
+  const secretRef = buildTelegramWebhookSecretTokenSecretRef({
+    tenantId: input.context.tenantId,
+    connectorId: input.connectorId
+  });
 
   await input.secretWriter.upsertSecret({
     tenantId: input.context.tenantId,
@@ -359,12 +703,29 @@ async function resolveTelegramWebhookSecretTokenSecretRef(input: {
   return secretRef;
 }
 
-function buildTelegramWebhookSecretTokenSecretRef(tenantId: TenantId): string {
-  return createTenantSecretRef({
-    tenantId,
-    moduleId: telegramModuleId,
+function buildTelegramWebhookSecretTokenSecretRef(input: {
+  tenantId: TenantId;
+  connectorId: string;
+}): string {
+  return createChannelConnectorSecretRef({
+    tenantId: input.tenantId,
+    connectorId: input.connectorId,
     secretName: "webhook-secret-token"
   });
+}
+
+function createDefaultTelegramConnectorId(tenantId: TenantId): string {
+  return `${telegramChannelType}:${tenantId}`;
+}
+
+function createRandomChannelConnectorId(
+  channelType: InternalChannelType
+): string {
+  return `${channelType}:${randomUUID()}`;
+}
+
+function createDefaultTelegramChannelExternalId(): string {
+  return `telegram-${randomUUID().slice(0, 8)}`;
 }
 
 function createTelegramWebhookConnectorId(input: {
@@ -403,6 +764,9 @@ async function runTelegramProviderDiagnostics(
 
   await persistTelegramDiagnostics({
     ...options,
+    existingRecord: state.record,
+    connectorId: state.connectorId,
+    displayName: state.displayName,
     enabled: state.enabled,
     config: state.config,
     diagnostics,
@@ -410,6 +774,17 @@ async function runTelegramProviderDiagnostics(
   });
 
   return telegramResponseFromConfig({
+    connectorId: state.connectorId,
+    displayName: state.displayName,
+    status: telegramConnectorStatusFromDiagnostics({
+      enabled: state.enabled,
+      diagnostics
+    }),
+    setupStep: resolveTelegramSetupStep({
+      onboardingState: state.record?.onboardingState,
+      config: state.config,
+      diagnostics
+    }),
     enabled: state.enabled,
     config: state.config,
     publicWebhookBaseUrl: options.publicWebhookBaseUrl,
@@ -465,6 +840,9 @@ async function runTelegramWebhookSync(
 
     await persistTelegramDiagnostics({
       ...options,
+      existingRecord: state.record,
+      connectorId: state.connectorId,
+      displayName: state.displayName,
       enabled: state.enabled,
       config: state.config,
       diagnostics,
@@ -472,6 +850,17 @@ async function runTelegramWebhookSync(
     });
 
     return telegramResponseFromConfig({
+      connectorId: state.connectorId,
+      displayName: state.displayName,
+      status: telegramConnectorStatusFromDiagnostics({
+        enabled: state.enabled,
+        diagnostics
+      }),
+      setupStep: resolveTelegramSetupStep({
+        onboardingState: state.record?.onboardingState,
+        config: state.config,
+        diagnostics
+      }),
       enabled: state.enabled,
       config: state.config,
       publicWebhookBaseUrl: options.publicWebhookBaseUrl,
@@ -505,6 +894,9 @@ async function runTelegramWebhookSync(
 
     await persistTelegramDiagnostics({
       ...options,
+      existingRecord: state.record,
+      connectorId: state.connectorId,
+      displayName: state.displayName,
       enabled: state.enabled,
       config: state.config,
       diagnostics,
@@ -512,6 +904,17 @@ async function runTelegramWebhookSync(
     });
 
     return telegramResponseFromConfig({
+      connectorId: state.connectorId,
+      displayName: state.displayName,
+      status: telegramConnectorStatusFromDiagnostics({
+        enabled: state.enabled,
+        diagnostics
+      }),
+      setupStep: resolveTelegramSetupStep({
+        onboardingState: state.record?.onboardingState,
+        config: state.config,
+        diagnostics
+      }),
       enabled: state.enabled,
       config: state.config,
       publicWebhookBaseUrl: options.publicWebhookBaseUrl,
@@ -525,19 +928,22 @@ async function runTelegramWebhookSync(
 async function loadTelegramState(options: TelegramProviderOperationOptions) {
   const updatedAt = options.now();
   const checkedAt = updatedAt.toISOString();
-  const record = await options.repository.findConfig({
+  const record = await loadExistingTelegramConnector({
+    repository: options.repository,
     tenantId: options.context.tenantId,
-    moduleId: telegramModuleId
+    connectorId: options.connectorId
   });
   const response = telegramResponseFromRecord({
-    enabled: record?.enabled ?? false,
-    configInput: record?.config,
-    diagnosticsInput: record?.diagnostics,
+    record,
     publicWebhookBaseUrl: options.publicWebhookBaseUrl,
     checkedAt
   });
 
   return {
+    record,
+    connectorId:
+      record?.id ?? createDefaultTelegramConnectorId(options.context.tenantId),
+    displayName: record?.displayName ?? defaultTelegramDisplayName,
     enabled: response.enabled,
     config: response.config,
     response,
@@ -548,18 +954,68 @@ async function loadTelegramState(options: TelegramProviderOperationOptions) {
 
 async function persistTelegramDiagnostics(input: {
   context: InternalIntegrationContext;
-  repository: TenantModuleConfigRepository;
+  repository: ChannelConnectorRepository;
+  existingRecord: ChannelConnectorRecord | null;
+  connectorId: string;
+  displayName: string;
   enabled: boolean;
   config: InternalTelegramIntegrationConfig;
   diagnostics: InternalTelegramIntegrationDiagnostics;
   updatedAt: Date;
 }): Promise<void> {
-  await input.repository.upsertConfig({
-    tenantId: input.context.tenantId,
-    moduleId: telegramModuleId,
+  await upsertTelegramConnector({
+    repository: input.repository,
+    context: input.context,
+    existingRecord: input.existingRecord,
+    connectorId: input.connectorId,
+    displayName: input.displayName,
     enabled: input.enabled,
     config: input.config,
     diagnostics: input.diagnostics,
+    status: telegramConnectorStatusFromDiagnostics({
+      enabled: input.enabled,
+      diagnostics: input.diagnostics
+    }),
+    updatedAt: input.updatedAt
+  });
+}
+
+async function upsertTelegramConnector(input: {
+  repository: ChannelConnectorRepository;
+  context: InternalIntegrationContext;
+  existingRecord: ChannelConnectorRecord | null;
+  connectorId: string;
+  displayName: string;
+  enabled: boolean;
+  config: InternalTelegramIntegrationConfig;
+  diagnostics: InternalTelegramIntegrationDiagnostics;
+  status: ChannelConnectorRecord["status"];
+  onboardingState?: unknown;
+  updatedAt: Date;
+}): Promise<void> {
+  await input.repository.upsertConnector({
+    id: input.connectorId,
+    tenantId: input.context.tenantId,
+    channelType: telegramChannelType,
+    channelClass: telegramChannelClass,
+    provider: telegramProvider,
+    displayName: input.displayName,
+    status: input.status,
+    healthStatus: telegramConnectorHealthFromDiagnostics({
+      enabled: input.enabled,
+      diagnostics: input.diagnostics
+    }),
+    capabilities: input.existingRecord?.capabilities ?? {
+      inbound: true,
+      outbound: true,
+      attachmentsMetadata: true
+    },
+    onboardingState:
+      input.onboardingState ?? input.existingRecord?.onboardingState ?? {},
+    config: input.config,
+    diagnostics: input.diagnostics,
+    createdByEmployeeId:
+      input.existingRecord?.createdByEmployeeId ?? input.context.employeeId,
     updatedAt: input.updatedAt
   });
 }
@@ -727,13 +1183,11 @@ function telegramProviderFailureDiagnostics(input: {
 }
 
 function telegramResponseFromRecord(input: {
-  enabled: boolean;
-  configInput: unknown;
-  diagnosticsInput: unknown;
+  record: ChannelConnectorRecord | null;
   publicWebhookBaseUrl?: string;
   checkedAt: string;
 }): InternalTelegramIntegrationResponse {
-  if (!input.configInput) {
+  if (!input.record?.config) {
     const diagnostics = buildDisabledTelegramDiagnostics(input.checkedAt);
 
     return {
@@ -744,35 +1198,162 @@ function telegramResponseFromRecord(input: {
   }
 
   try {
-    const config = parseTelegramChannelConfig(input.configInput);
+    const enabled = isTelegramConnectorEnabled(input.record);
+    const config = parseTelegramChannelConfig(input.record.config);
     const diagnostics = buildTelegramDiagnostics({
-      enabled: input.enabled,
+      enabled,
       config,
       checkedAt: input.checkedAt
     });
 
     const storedDiagnostics = parseStoredTelegramDiagnostics(
-      input.diagnosticsInput
+      input.record.diagnostics
     );
 
     return telegramResponseFromConfig({
-      enabled: input.enabled,
+      connectorId: input.record.id,
+      displayName: input.record.displayName,
+      status: input.record.status,
+      setupStep: resolveTelegramSetupStep({
+        onboardingState: input.record.onboardingState,
+        config,
+        diagnostics: enabled ? (storedDiagnostics ?? diagnostics) : diagnostics
+      }),
+      enabled,
       config,
       publicWebhookBaseUrl: input.publicWebhookBaseUrl,
-      diagnostics: input.enabled
-        ? (storedDiagnostics ?? diagnostics)
-        : diagnostics
+      diagnostics: enabled ? (storedDiagnostics ?? diagnostics) : diagnostics
     });
   } catch {
     return {
       moduleId: telegramModuleId,
-      enabled: input.enabled,
+      connectorId: input.record.id,
+      channelType: telegramChannelType,
+      channelClass: telegramChannelClass,
+      displayName: input.record.displayName,
+      status: internalTelegramConnectorStatus(input.record.status),
+      enabled: isTelegramConnectorEnabled(input.record),
       diagnostics: buildInvalidTelegramDiagnostics(input.checkedAt)
     };
   }
 }
 
+function channelConnectorSummaryFromRecord(
+  record: ChannelConnectorRecord
+): InternalChannelConnectorSummary | null {
+  const channelType = internalChannelType(record.channelType);
+  const channelClass = internalChannelClass(record.channelClass);
+  const status = internalChannelConnectorStatus(record.status);
+  const healthStatus = internalChannelConnectorHealthStatus(
+    record.healthStatus
+  );
+
+  if (!channelType || !channelClass || !status || !healthStatus) {
+    return null;
+  }
+
+  const channelExternalId = readRecordString(
+    record.config,
+    "channelExternalId"
+  );
+  const diagnosticsStatus = readRecordString(record.diagnostics, "status");
+
+  return {
+    connectorId: record.id,
+    channelType,
+    channelClass,
+    provider: record.provider,
+    displayName: record.displayName,
+    status,
+    healthStatus,
+    ...(channelExternalId ? { channelExternalId } : {}),
+    ...(diagnosticsStatus ? { diagnosticsStatus } : {})
+  };
+}
+
+function internalChannelType(
+  value: ChannelConnectorRecord["channelType"]
+): InternalChannelType | null {
+  switch (value) {
+    case "telegram_bot":
+    case "telegram_qr_bridge":
+    case "whatsapp_qr_bridge":
+    case "max_qr_bridge":
+    case "max_bot":
+    case "vk_community":
+      return value as InternalChannelType;
+    default:
+      return null;
+  }
+}
+
+function internalChannelClass(
+  value: ChannelConnectorRecord["channelClass"]
+): InternalChannelClass | null {
+  switch (value) {
+    case "bot_bridge":
+    case "user_bridge":
+    case "official_api":
+      return value as InternalChannelClass;
+    default:
+      return null;
+  }
+}
+
+function internalChannelConnectorStatus(
+  value: ChannelConnectorRecord["status"]
+): InternalChannelConnectorStatus | null {
+  switch (value) {
+    case "draft":
+    case "onboarding":
+    case "authorizing":
+    case "connected":
+    case "degraded":
+    case "reauth_required":
+    case "disabled":
+    case "failed":
+    case "deleted":
+      return value as InternalChannelConnectorStatus;
+    default:
+      return null;
+  }
+}
+
+function internalChannelConnectorHealthStatus(
+  value: ChannelConnectorRecord["healthStatus"]
+): InternalChannelConnectorHealthStatus | null {
+  switch (value) {
+    case "unknown":
+    case "healthy":
+    case "degraded":
+    case "unhealthy":
+      return value as InternalChannelConnectorHealthStatus;
+    default:
+      return null;
+  }
+}
+
+function readRecordString(input: unknown, key: string): string | undefined {
+  if (!isRecord(input)) {
+    return undefined;
+  }
+
+  const value = input[key];
+
+  return typeof value === "string" && value.trim().length > 0
+    ? value
+    : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function telegramResponseFromConfig(input: {
+  connectorId?: string;
+  displayName?: string;
+  status?: ChannelConnectorRecord["status"];
+  setupStep?: InternalTelegramSetupStep;
   enabled: boolean;
   config: InternalTelegramIntegrationConfig;
   publicWebhookBaseUrl?: string;
@@ -786,12 +1367,199 @@ function telegramResponseFromConfig(input: {
 
   return {
     moduleId: telegramModuleId,
+    ...(input.connectorId ? { connectorId: input.connectorId } : {}),
+    channelType: telegramChannelType,
+    channelClass: telegramChannelClass,
+    ...(input.displayName ? { displayName: input.displayName } : {}),
+    ...(input.status
+      ? { status: internalTelegramConnectorStatus(input.status) }
+      : {}),
+    ...(input.setupStep ? { setupStep: input.setupStep } : {}),
     enabled: input.enabled,
     config: input.config,
     webhookPath,
     ...(publicWebhookUrl ? { publicWebhookUrl } : {}),
     diagnostics: input.diagnostics
   };
+}
+
+function internalTelegramConnectorStatus(
+  status: ChannelConnectorRecord["status"]
+): InternalTelegramIntegrationResponse["status"] {
+  if (
+    status === "draft" ||
+    status === "onboarding" ||
+    status === "authorizing" ||
+    status === "connected" ||
+    status === "degraded" ||
+    status === "reauth_required" ||
+    status === "disabled" ||
+    status === "failed" ||
+    status === "deleted"
+  ) {
+    return status as InternalTelegramIntegrationResponse["status"];
+  }
+
+  return "failed";
+}
+
+function isTelegramConnectorEnabled(record: ChannelConnectorRecord): boolean {
+  return (
+    record.status !== "draft" &&
+    record.status !== "onboarding" &&
+    record.status !== "authorizing" &&
+    record.status !== "disabled" &&
+    record.status !== "deleted"
+  );
+}
+
+function telegramConnectorStatusFromDiagnostics(input: {
+  enabled: boolean;
+  diagnostics: InternalTelegramIntegrationDiagnostics;
+}): ChannelConnectorRecord["status"] {
+  if (!input.enabled) {
+    return "disabled";
+  }
+
+  if (input.diagnostics.status === "invalid_config") {
+    return "reauth_required";
+  }
+
+  if (
+    input.diagnostics.status === "provider_unreachable" ||
+    input.diagnostics.status === "webhook_mismatch"
+  ) {
+    return "degraded";
+  }
+
+  return "connected";
+}
+
+function telegramConnectorStatusFromUpdate(input: {
+  existingRecord: ChannelConnectorRecord | null;
+  enabled: boolean;
+  diagnostics: InternalTelegramIntegrationDiagnostics;
+}): ChannelConnectorRecord["status"] {
+  if (
+    !input.enabled &&
+    (input.existingRecord?.status === "draft" ||
+      input.existingRecord?.status === "onboarding")
+  ) {
+    return "draft";
+  }
+
+  return telegramConnectorStatusFromDiagnostics({
+    enabled: input.enabled,
+    diagnostics: input.diagnostics
+  });
+}
+
+function updateTelegramOnboardingState(input: {
+  existingState: unknown;
+  completedStep?: "name" | "token" | "mode";
+}): unknown {
+  const existingState = isRecord(input.existingState)
+    ? input.existingState
+    : {};
+
+  switch (input.completedStep) {
+    case "name":
+      return {
+        ...existingState,
+        step: "token"
+      };
+    case "token":
+      return {
+        ...existingState,
+        step: "mode"
+      };
+    case "mode":
+      return {
+        ...existingState,
+        step: "diagnostics"
+      };
+    default:
+      return existingState;
+  }
+}
+
+function resolveTelegramSetupStep(input: {
+  onboardingState: unknown;
+  config?: InternalTelegramIntegrationConfig;
+  diagnostics: InternalTelegramIntegrationDiagnostics;
+}): InternalTelegramSetupStep {
+  if (
+    input.config?.mode === "webhook" &&
+    input.diagnostics.checks.inboundWebhookReady
+  ) {
+    return "complete";
+  }
+
+  if (
+    input.config?.mode === "polling" &&
+    input.diagnostics.status === "configured"
+  ) {
+    return "complete";
+  }
+
+  if (
+    input.config?.mode === "webhook" &&
+    input.diagnostics.checks.botApiReachable === true &&
+    !input.diagnostics.checks.inboundWebhookReady
+  ) {
+    return "webhook";
+  }
+
+  const storedStep = readRecordString(input.onboardingState, "step");
+
+  if (isTelegramSetupStep(storedStep)) {
+    return storedStep;
+  }
+
+  if (!input.config?.botTokenSecretRef) {
+    return "token";
+  }
+
+  if (input.diagnostics.checks.botApiReachable !== true) {
+    return "diagnostics";
+  }
+
+  return input.config.mode === "webhook" ? "webhook" : "complete";
+}
+
+function isTelegramSetupStep(
+  value: string | undefined
+): value is InternalTelegramSetupStep {
+  return (
+    value === "name" ||
+    value === "token" ||
+    value === "mode" ||
+    value === "diagnostics" ||
+    value === "webhook" ||
+    value === "complete"
+  );
+}
+
+function telegramConnectorHealthFromDiagnostics(input: {
+  enabled: boolean;
+  diagnostics: InternalTelegramIntegrationDiagnostics;
+}): ChannelConnectorRecord["healthStatus"] {
+  if (!input.enabled) {
+    return "unknown";
+  }
+
+  if (input.diagnostics.status === "configured") {
+    return "healthy";
+  }
+
+  if (
+    input.diagnostics.status === "provider_unreachable" ||
+    input.diagnostics.status === "webhook_mismatch"
+  ) {
+    return "degraded";
+  }
+
+  return "unhealthy";
 }
 
 function buildTelegramDiagnostics(input: {

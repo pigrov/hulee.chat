@@ -1,0 +1,187 @@
+import type {
+  ChannelClass,
+  ChannelConnectorHealthStatus,
+  ChannelConnectorId,
+  ChannelConnectorStatus,
+  ChannelType,
+  TenantId
+} from "@hulee/contracts";
+import type { SQL } from "drizzle-orm";
+import { describe, expect, it } from "vitest";
+
+import type {
+  RawSqlExecutor,
+  RawSqlQueryResult
+} from "./sql-outbox-repository";
+import { createSqlChannelConnectorRepository } from "./sql-channel-connector-repository";
+
+const tenantId = "tenant_channel_connector" as TenantId;
+const connectorId =
+  "telegram_bot:tenant_channel_connector" as ChannelConnectorId;
+
+describe("SQL channel connector repository", () => {
+  it("maps channel connector records with tenant and channel metadata", async () => {
+    const executor = new RecordingSqlExecutor([createConnectorRow()]);
+    const repository = createSqlChannelConnectorRepository(executor);
+
+    await expect(
+      repository.findConnector({
+        tenantId,
+        connectorId
+      })
+    ).resolves.toEqual({
+      id: connectorId,
+      tenantId,
+      channelType: "telegram_bot",
+      channelClass: "bot_bridge",
+      provider: "telegram",
+      displayName: "Telegram Bot",
+      status: "connected",
+      healthStatus: "healthy",
+      capabilities: {
+        inbound: true
+      },
+      onboardingState: {},
+      config: {
+        channelExternalId: "telegram-local",
+        webhookConnectorId: "tgwh_test",
+        botTokenSecretRef: "secret-ref"
+      },
+      diagnostics: {
+        status: "configured"
+      },
+      createdByEmployeeId: null,
+      createdAt: new Date("2026-06-22T10:00:00.000Z"),
+      updatedAt: new Date("2026-06-22T10:00:00.000Z")
+    });
+    expect(executor.queries).toHaveLength(1);
+  });
+
+  it("finds active connectors by JSON config fields", async () => {
+    const executor = new RecordingSqlExecutor([createConnectorRow()]);
+    const repository = createSqlChannelConnectorRepository(executor);
+
+    await expect(
+      repository.findActiveConnectorByConfigString({
+        channelType: "telegram_bot",
+        configKey: "webhookConnectorId",
+        configValue: "tgwh_test"
+      })
+    ).resolves.toMatchObject({
+      id: connectorId,
+      tenantId,
+      config: {
+        webhookConnectorId: "tgwh_test"
+      }
+    });
+  });
+
+  it("finds active connectors by tenant and channel external id", async () => {
+    const executor = new RecordingSqlExecutor([createConnectorRow()]);
+    const repository = createSqlChannelConnectorRepository(executor);
+
+    await expect(
+      repository.findActiveConnectorByExternalId({
+        tenantId,
+        channelType: "telegram_bot",
+        channelExternalId: "telegram-local"
+      })
+    ).resolves.toMatchObject({
+      id: connectorId,
+      tenantId,
+      config: {
+        channelExternalId: "telegram-local"
+      }
+    });
+  });
+
+  it("lists tenant connectors without exposing deleted records by default", async () => {
+    const executor = new RecordingSqlExecutor([createConnectorRow()]);
+    const repository = createSqlChannelConnectorRepository(executor);
+
+    await expect(
+      repository.listTenantConnectors({
+        tenantId,
+        limit: 20
+      })
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: connectorId,
+        tenantId,
+        channelType: "telegram_bot"
+      })
+    ]);
+    expect(executor.queries).toHaveLength(1);
+  });
+
+  it("upserts connector config and diagnostics without raw provider secrets", async () => {
+    const executor = new RecordingSqlExecutor([]);
+    const repository = createSqlChannelConnectorRepository(executor);
+
+    await repository.upsertConnector({
+      id: connectorId,
+      tenantId,
+      channelType: "telegram_bot" as ChannelType,
+      channelClass: "bot_bridge" as ChannelClass,
+      provider: "telegram",
+      displayName: "Telegram Bot",
+      status: "connected" as ChannelConnectorStatus,
+      healthStatus: "healthy" as ChannelConnectorHealthStatus,
+      config: {
+        channelExternalId: "telegram-local",
+        botTokenSecretRef: "secret-ref"
+      },
+      diagnostics: {
+        status: "configured"
+      },
+      updatedAt: new Date("2026-06-22T10:00:00.000Z")
+    });
+
+    expect(executor.queries).toHaveLength(1);
+    expect(String(executor.queries[0])).not.toContain("telegram-token");
+  });
+});
+
+class RecordingSqlExecutor implements RawSqlExecutor {
+  readonly queries: SQL[] = [];
+
+  constructor(private readonly rows: readonly Record<string, unknown>[]) {}
+
+  async execute<Row extends Record<string, unknown>>(
+    query: SQL
+  ): Promise<RawSqlQueryResult<Row>> {
+    this.queries.push(query);
+
+    return {
+      rows: this.rows as readonly Row[]
+    };
+  }
+}
+
+function createConnectorRow(): Record<string, unknown> {
+  return {
+    id: connectorId,
+    tenant_id: tenantId,
+    channel_type: "telegram_bot",
+    channel_class: "bot_bridge",
+    provider: "telegram",
+    display_name: "Telegram Bot",
+    status: "connected",
+    health_status: "healthy",
+    capabilities: {
+      inbound: true
+    },
+    onboarding_state: {},
+    config: {
+      channelExternalId: "telegram-local",
+      webhookConnectorId: "tgwh_test",
+      botTokenSecretRef: "secret-ref"
+    },
+    diagnostics: {
+      status: "configured"
+    },
+    created_by_employee_id: null,
+    created_at: new Date("2026-06-22T10:00:00.000Z"),
+    updated_at: new Date("2026-06-22T10:00:00.000Z")
+  };
+}
