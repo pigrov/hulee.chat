@@ -32,6 +32,7 @@ import {
   formatTelegramBotIdentity,
   telegramStatusKey
 } from "./formatting";
+import { egressProfileKindKey, egressStatusKey } from "./egress-formatting";
 import type { TelegramIntegrationViewModel } from "./inbox-api-client";
 
 type Translator = ReturnType<typeof createTranslator>["t"];
@@ -470,6 +471,8 @@ function TelegramDiagnosticsGrid({
   locale: string;
   t: Translator;
 }): ReactNode {
+  const egress = integration.diagnostics.egress;
+
   return (
     <div className="diagnosticGrid">
       <DetailItem
@@ -483,6 +486,26 @@ function TelegramDiagnosticsGrid({
       <DetailItem
         label={t("integrations.telegram.providerStatus")}
         value={t(telegramStatusKey(integration.diagnostics.status))}
+      />
+      <DetailItem
+        label={t("integrations.egress.status")}
+        value={egress ? t(egressStatusKey(egress.status)) : t("common.unknown")}
+      />
+      <DetailItem
+        label={t("integrations.egress.profileKind")}
+        value={
+          egress?.profileKind
+            ? t(egressProfileKindKey(egress.profileKind))
+            : t("common.unknown")
+        }
+      />
+      <DetailItem
+        label={t("integrations.egress.profile")}
+        value={formatOptionalValue(egress?.profileId, t)}
+      />
+      <DetailItem
+        label={t("integrations.egress.checkedAt")}
+        value={formatOptionalDateTime(egress?.checkedAt, locale, t)}
       />
       <DetailItem
         label={t("integrations.telegram.configValid")}
@@ -581,6 +604,12 @@ function TelegramDiagnosticsGrid({
         <DetailItem
           label={t("integrations.telegram.operatorHint")}
           value={integration.diagnostics.operatorHint}
+        />
+      ) : null}
+      {egress?.operatorHint ? (
+        <DetailItem
+          label={t("integrations.egress.operatorHint")}
+          value={egress.operatorHint}
         />
       ) : null}
     </div>

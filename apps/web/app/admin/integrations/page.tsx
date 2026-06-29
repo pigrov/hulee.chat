@@ -7,13 +7,15 @@ import {
 import type {
   InternalChannelAuthChallenge,
   InternalChannelCatalogItem,
-  InternalChannelConnectorSummary
+  InternalChannelConnectorSummary,
+  InternalEgressProfileStatus
 } from "@hulee/contracts";
 import {
   Bot,
   CheckCircle2,
   Circle,
   MessageCircle,
+  Network,
   Smartphone
 } from "lucide-react";
 import Link from "next/link";
@@ -29,9 +31,17 @@ import {
   loadChannelCatalog,
   loadChannelAuthChallenge,
   loadChannelConnectors,
+  loadEgressStatus,
   loadTelegramIntegration,
+  type EgressStatusViewModel,
   type TelegramIntegrationViewModel
 } from "../../../src/inbox-api-client";
+import {
+  egressProfileKindKey,
+  egressStatusKey,
+  resolveOverallEgressStatus
+} from "../../../src/egress-formatting";
+import { formatOptionalDateTime } from "../../../src/formatting";
 import {
   getWebDatabase,
   resolveCurrentWebAccessSession
@@ -95,11 +105,13 @@ export default async function IntegrationsAdminPage({
   const requestedChallengeId = normalizeOptionalSearchParam(
     resolvedSearchParams?.challengeId
   );
-  const [model, channelCatalog, channelConnectors] = await Promise.all([
-    loadTenantAdminViewModel({ tenantId: access.tenantId, database }),
-    loadChannelCatalog(internalApiAccess),
-    loadChannelConnectors(internalApiAccess)
-  ]);
+  const [model, channelCatalog, channelConnectors, egressStatus] =
+    await Promise.all([
+      loadTenantAdminViewModel({ tenantId: access.tenantId, database }),
+      loadChannelCatalog(internalApiAccess),
+      loadChannelConnectors(internalApiAccess),
+      loadEgressStatus(internalApiAccess)
+    ]);
   const { t, locale } = createTranslator(model.tenant.locale);
   const selectedConnector = selectChannelConnector({
     connectors: channelConnectors.connectors,
@@ -208,6 +220,11 @@ export default async function IntegrationsAdminPage({
 
         <div className="adminStack">
           {integrationContent}
+          <EgressStatusPanel
+            egressStatus={egressStatus}
+            locale={locale}
+            t={t}
+          />
           <SlotMount slot="integration.settings.section" />
         </div>
       </div>
@@ -216,6 +233,111 @@ export default async function IntegrationsAdminPage({
 }
 
 type Translator = ReturnType<typeof createTranslator>["t"];
+
+function EgressStatusPanel({
+  egressStatus,
+  locale,
+  t
+}: {
+  egressStatus: EgressStatusViewModel;
+  locale: string;
+  t: Translator;
+}): ReactNode {
+  const overallStatus = resolveOverallEgressStatus(egressStatus.profiles);
+
+  return (
+    <section className="settingsPanel" aria-labelledby="egress-status-title">
+      <div className="sectionHeader">
+        <div>
+          <p className="eyebrow">{t("admin.integrations.egress")}</p>
+          <h2 className="sectionTitle" id="egress-status-title">
+            {t("admin.integrations.egressStatus")}
+          </h2>
+          <p className="metaText">
+            {t("admin.integrations.egressDescription")}
+          </p>
+        </div>
+        <span className="badge">
+          <Network size={14} aria-hidden="true" />
+          {t(egressStatusKey(overallStatus))}
+        </span>
+      </div>
+
+      {egressStatus.profiles.length > 0 ? (
+        <div className="integrationList">
+          {egressStatus.profiles.map((profile) => (
+            <EgressProfileStatusRow
+              key={profile.profileId}
+              locale={locale}
+              profile={profile}
+              t={t}
+            />
+          ))}
+        </div>
+      ) : (
+        <p className="metaText">{t("integrations.egress.empty")}</p>
+      )}
+    </section>
+  );
+}
+
+function EgressProfileStatusRow({
+  locale,
+  profile,
+  t
+}: {
+  locale: string;
+  profile: InternalEgressProfileStatus;
+  t: Translator;
+}): ReactNode {
+  return (
+    <div className="diagnosticGrid">
+      <DetailItem
+        label={t("integrations.egress.profile")}
+        value={profile.profileId}
+      />
+      <DetailItem
+        label={t("integrations.egress.status")}
+        value={t(egressStatusKey(profile.status))}
+      />
+      <DetailItem
+        label={t("integrations.egress.profileKind")}
+        value={t(egressProfileKindKey(profile.profileKind))}
+      />
+      <DetailItem
+        label={t("integrations.egress.checkedAt")}
+        value={formatOptionalDateTime(profile.checkedAt, locale, t)}
+      />
+      <DetailItem
+        label={t("integrations.egress.providers")}
+        value={formatList(profile.supportedProviders, t)}
+      />
+      <DetailItem
+        label={t("integrations.egress.channelTypes")}
+        value={formatList(profile.supportedChannelTypes, t)}
+      />
+      {profile.lastErrorCode ? (
+        <DetailItem
+          label={t("integrations.egress.error")}
+          value={profile.lastErrorCode}
+        />
+      ) : null}
+      {profile.operatorHint ? (
+        <DetailItem
+          label={t("integrations.egress.operatorHint")}
+          value={profile.operatorHint}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function formatList(
+  values: readonly string[] | undefined,
+  t: Translator
+): string {
+  return values && values.length > 0 ? values.join(", ") : t("common.unknown");
+}
 
 function GenericChannelConnectorPanel({
   catalog,
