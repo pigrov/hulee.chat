@@ -618,6 +618,12 @@ describe("internal API v1 schemas", () => {
             actualUrl: "https://example.test/webhooks/telegram/telegram-local",
             pendingUpdateCount: 0
           },
+          egress: {
+            required: true,
+            status: "unknown",
+            profileKind: "vpn_namespace",
+            checkedAt: "2026-06-22T10:00:00.000Z"
+          },
           checks: {
             moduleEnabled: true,
             configValid: true,
@@ -652,6 +658,17 @@ describe("internal API v1 schemas", () => {
             readiness: "available",
             supportsMultiple: true,
             capabilities: ["inbound", "outbound", "webhook"],
+            egressRequirement: {
+              required: true,
+              defaultProfileKind: "vpn_namespace",
+              allowedProfileKinds: [
+                "vpn_namespace",
+                "http_proxy",
+                "socks_proxy",
+                "customer_network"
+              ],
+              enforcementScope: "hulee_managed_saas"
+            },
             onboarding: {
               version: "v1",
               steps: [
@@ -676,6 +693,10 @@ describe("internal API v1 schemas", () => {
         {
           channelType: "telegram_bot",
           readiness: "available",
+          egressRequirement: {
+            required: true,
+            defaultProfileKind: "vpn_namespace"
+          },
           onboarding: {
             steps: expect.arrayContaining([
               expect.objectContaining({
@@ -686,6 +707,39 @@ describe("internal API v1 schemas", () => {
         }
       ]
     });
+
+    expect(() =>
+      internalChannelCatalogResponseSchema.parse({
+        channels: [
+          {
+            channelType: "telegram_bot",
+            channelClass: "bot_bridge",
+            provider: "telegram",
+            titleKey: "integrations.catalog.telegramBot.title",
+            descriptionKey: "integrations.catalog.telegramBot.description",
+            readiness: "available",
+            supportsMultiple: true,
+            capabilities: ["inbound", "outbound", "webhook"],
+            egressRequirement: {
+              required: true,
+              defaultProfileKind: "vpn_namespace",
+              allowedProfileKinds: ["http_proxy"],
+              enforcementScope: "hulee_managed_saas"
+            },
+            onboarding: {
+              version: "v1",
+              steps: [
+                {
+                  id: "complete",
+                  kind: "complete",
+                  titleKey: "integrations.channel.onboarding.complete"
+                }
+              ]
+            }
+          }
+        ]
+      })
+    ).toThrow();
 
     expect(
       internalChannelConnectorsResponseSchema.parse({

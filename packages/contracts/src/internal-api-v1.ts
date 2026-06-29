@@ -503,6 +503,54 @@ export const internalChannelConnectorHealthStatusSchema = z.enum([
   "unhealthy"
 ]);
 
+export const internalEgressProfileKindSchema = z.enum([
+  "direct",
+  "vpn_namespace",
+  "http_proxy",
+  "socks_proxy",
+  "customer_network",
+  "disabled"
+]);
+
+export const internalEgressRequirementSchema = z
+  .object({
+    required: z.boolean(),
+    defaultProfileKind: internalEgressProfileKindSchema,
+    allowedProfileKinds: z.array(internalEgressProfileKindSchema).min(1).max(8),
+    enforcementScope: z.enum([
+      "hulee_managed_saas",
+      "deployment_policy",
+      "none"
+    ])
+  })
+  .strict()
+  .refine(
+    (requirement) =>
+      requirement.allowedProfileKinds.includes(requirement.defaultProfileKind),
+    {
+      message: "defaultProfileKind must be listed in allowedProfileKinds.",
+      path: ["defaultProfileKind"]
+    }
+  );
+
+export const internalEgressDiagnosticsSchema = z
+  .object({
+    required: z.boolean(),
+    status: z.enum([
+      "unknown",
+      "ready",
+      "degraded",
+      "unavailable",
+      "misconfigured"
+    ]),
+    profileKind: internalEgressProfileKindSchema.optional(),
+    profileId: z.string().trim().min(1).max(200).optional(),
+    checkedAt: z.string().datetime({ offset: true }).optional(),
+    lastErrorCode: internalApiPlatformErrorCodeSchema.optional(),
+    operatorHint: z.string().trim().min(1).max(500).optional()
+  })
+  .strict();
+
 export const internalChannelOnboardingStepKindSchema = z.enum([
   "display_name",
   "secret_text",
@@ -556,6 +604,7 @@ export const internalChannelCatalogItemSchema = z
     readiness: z.enum(["available", "coming_soon", "disabled"]),
     supportsMultiple: z.boolean(),
     capabilities: z.array(z.string().trim().min(1).max(80)).max(20),
+    egressRequirement: internalEgressRequirementSchema,
     onboarding: internalChannelOnboardingFlowSchema
   })
   .strict();
@@ -751,6 +800,7 @@ export const internalTelegramIntegrationDiagnosticsSchema = z
       })
       .strict()
       .optional(),
+    egress: internalEgressDiagnosticsSchema.optional(),
     checks: z
       .object({
         moduleEnabled: z.boolean(),
@@ -915,6 +965,15 @@ export type InternalChannelConnectorStatus = z.infer<
 >;
 export type InternalChannelConnectorHealthStatus = z.infer<
   typeof internalChannelConnectorHealthStatusSchema
+>;
+export type InternalEgressProfileKind = z.infer<
+  typeof internalEgressProfileKindSchema
+>;
+export type InternalEgressRequirement = z.infer<
+  typeof internalEgressRequirementSchema
+>;
+export type InternalEgressDiagnostics = z.infer<
+  typeof internalEgressDiagnosticsSchema
 >;
 export type InternalChannelOnboardingStepKind = z.infer<
   typeof internalChannelOnboardingStepKindSchema

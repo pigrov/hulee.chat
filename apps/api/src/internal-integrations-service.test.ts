@@ -39,6 +39,12 @@ const context: InternalIntegrationContext = {
   employeeId: "employee-1" as EmployeeId
 };
 const now = new Date("2026-06-22T10:00:00.000Z");
+const telegramEgressDiagnostics = (checkedAt = now.toISOString()) => ({
+  required: true as const,
+  status: "unknown" as const,
+  profileKind: "vpn_namespace" as const,
+  checkedAt
+});
 
 describe("internal integrations service", () => {
   it("returns channel catalog entries with onboarding flows", async () => {
@@ -53,6 +59,17 @@ describe("internal integrations service", () => {
       expect.arrayContaining([
         expect.objectContaining({
           channelType: "telegram_bot",
+          egressRequirement: {
+            required: true,
+            defaultProfileKind: "vpn_namespace",
+            allowedProfileKinds: [
+              "vpn_namespace",
+              "http_proxy",
+              "socks_proxy",
+              "customer_network"
+            ],
+            enforcementScope: "hulee_managed_saas"
+          },
           onboarding: {
             version: "v1",
             steps: expect.arrayContaining([
@@ -72,6 +89,17 @@ describe("internal integrations service", () => {
         }),
         expect.objectContaining({
           channelType: "max_qr_bridge",
+          egressRequirement: {
+            required: false,
+            defaultProfileKind: "direct",
+            allowedProfileKinds: [
+              "direct",
+              "http_proxy",
+              "socks_proxy",
+              "customer_network"
+            ],
+            enforcementScope: "deployment_policy"
+          },
           onboarding: {
             version: "v1",
             steps: expect.arrayContaining([
@@ -279,6 +307,7 @@ describe("internal integrations service", () => {
       diagnostics: {
         status: "disabled",
         checkedAt: now.toISOString(),
+        egress: telegramEgressDiagnostics(),
         checks: {
           moduleEnabled: false,
           configValid: false,
@@ -333,6 +362,7 @@ describe("internal integrations service", () => {
       diagnostics: {
         status: "configured",
         checkedAt: now.toISOString(),
+        egress: telegramEgressDiagnostics(),
         checks: {
           moduleEnabled: true,
           configValid: true,
@@ -495,6 +525,7 @@ describe("internal integrations service", () => {
       diagnostics: {
         status: "disabled",
         checkedAt: now.toISOString(),
+        egress: telegramEgressDiagnostics(),
         checks: {
           moduleEnabled: false,
           configValid: false,

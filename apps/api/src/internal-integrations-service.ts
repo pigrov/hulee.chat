@@ -14,6 +14,8 @@ import type {
   InternalChannelClass,
   InternalChannelOnboardingFlow,
   InternalChannelType,
+  InternalEgressDiagnostics,
+  InternalEgressRequirement,
   InternalTelegramIntegrationConfig,
   InternalTelegramIntegrationDiagnostics,
   InternalTelegramIntegrationResponse,
@@ -157,6 +159,28 @@ const telegramChannelType = "telegram_bot" as const;
 const telegramChannelClass = "bot_bridge" as const;
 const telegramProvider = "telegram";
 const defaultTelegramDisplayName = "Telegram Bot";
+const managedMessengerVpnEgressRequirement = {
+  required: true,
+  defaultProfileKind: "vpn_namespace",
+  allowedProfileKinds: [
+    "vpn_namespace",
+    "http_proxy",
+    "socks_proxy",
+    "customer_network"
+  ],
+  enforcementScope: "hulee_managed_saas"
+} satisfies InternalEgressRequirement;
+const deploymentPolicyDirectEgressRequirement = {
+  required: false,
+  defaultProfileKind: "direct",
+  allowedProfileKinds: [
+    "direct",
+    "http_proxy",
+    "socks_proxy",
+    "customer_network"
+  ],
+  enforcementScope: "deployment_policy"
+} satisfies InternalEgressRequirement;
 const channelOnboardingFlows = {
   telegram_bot: {
     version: "v1",
@@ -370,6 +394,7 @@ const channelCatalogV1 = [
     readiness: "available",
     supportsMultiple: true,
     capabilities: ["inbound", "outbound", "webhook", "polling"],
+    egressRequirement: managedMessengerVpnEgressRequirement,
     onboarding: channelOnboardingFlows.telegram_bot
   },
   {
@@ -381,6 +406,7 @@ const channelCatalogV1 = [
     readiness: "coming_soon",
     supportsMultiple: true,
     capabilities: ["inbound", "outbound", "qr_auth", "session_runtime"],
+    egressRequirement: managedMessengerVpnEgressRequirement,
     onboarding: channelOnboardingFlows.telegram_qr_bridge
   },
   {
@@ -392,6 +418,7 @@ const channelCatalogV1 = [
     readiness: "coming_soon",
     supportsMultiple: true,
     capabilities: ["inbound", "outbound", "qr_auth", "session_runtime"],
+    egressRequirement: managedMessengerVpnEgressRequirement,
     onboarding: channelOnboardingFlows.whatsapp_qr_bridge
   },
   {
@@ -403,6 +430,7 @@ const channelCatalogV1 = [
     readiness: "coming_soon",
     supportsMultiple: true,
     capabilities: ["inbound", "outbound"],
+    egressRequirement: deploymentPolicyDirectEgressRequirement,
     onboarding: channelOnboardingFlows.max_bot
   },
   {
@@ -414,6 +442,7 @@ const channelCatalogV1 = [
     readiness: "coming_soon",
     supportsMultiple: true,
     capabilities: ["inbound", "outbound", "code_auth", "session_runtime"],
+    egressRequirement: deploymentPolicyDirectEgressRequirement,
     onboarding: channelOnboardingFlows.max_qr_bridge
   },
   {
@@ -425,6 +454,7 @@ const channelCatalogV1 = [
     readiness: "coming_soon",
     supportsMultiple: true,
     capabilities: ["inbound", "outbound", "official_api"],
+    egressRequirement: deploymentPolicyDirectEgressRequirement,
     onboarding: channelOnboardingFlows.vk_community
   }
 ] satisfies InternalChannelCatalogResponse["channels"];
@@ -2237,6 +2267,7 @@ function buildTelegramDiagnostics(input: {
   webhook?: InternalTelegramIntegrationDiagnostics["webhook"];
   checks?: Partial<InternalTelegramIntegrationDiagnostics["checks"]>;
   polling?: InternalTelegramIntegrationDiagnostics["polling"];
+  egress?: InternalTelegramIntegrationDiagnostics["egress"];
 }): InternalTelegramIntegrationDiagnostics {
   const webhookPath = buildTelegramWebhookPath(input.config);
   const expectedWebhookUrl = buildTelegramPublicWebhookUrl(
@@ -2270,7 +2301,8 @@ function buildTelegramDiagnostics(input: {
         operatorHint: input.operatorHint,
         bot: input.bot,
         webhook,
-        polling: input.polling
+        polling: input.polling,
+        egress: input.egress ?? buildTelegramEgressDiagnostics(input.checkedAt)
       }
     );
   }
@@ -2297,7 +2329,8 @@ function buildTelegramDiagnostics(input: {
       operatorHint: input.operatorHint,
       bot: input.bot,
       webhook,
-      polling: input.polling
+      polling: input.polling,
+      egress: input.egress ?? buildTelegramEgressDiagnostics(input.checkedAt)
     }
   );
 }
@@ -2310,6 +2343,7 @@ function withOptionalTelegramDiagnostics(
     bot?: InternalTelegramIntegrationDiagnostics["bot"];
     webhook?: InternalTelegramIntegrationDiagnostics["webhook"];
     polling?: InternalTelegramIntegrationDiagnostics["polling"];
+    egress?: InternalTelegramIntegrationDiagnostics["egress"];
   }
 ): InternalTelegramIntegrationDiagnostics {
   return {
@@ -2320,7 +2354,19 @@ function withOptionalTelegramDiagnostics(
     ...(optional.operatorHint ? { operatorHint: optional.operatorHint } : {}),
     ...(optional.bot ? { bot: optional.bot } : {}),
     ...(optional.webhook ? { webhook: optional.webhook } : {}),
-    ...(optional.polling ? { polling: optional.polling } : {})
+    ...(optional.polling ? { polling: optional.polling } : {}),
+    ...(optional.egress ? { egress: optional.egress } : {})
+  };
+}
+
+function buildTelegramEgressDiagnostics(
+  checkedAt: string
+): InternalEgressDiagnostics {
+  return {
+    required: true,
+    status: "unknown",
+    profileKind: managedMessengerVpnEgressRequirement.defaultProfileKind,
+    checkedAt
   };
 }
 
@@ -2330,6 +2376,7 @@ function buildDisabledTelegramDiagnostics(
   return {
     status: "disabled",
     checkedAt,
+    egress: buildTelegramEgressDiagnostics(checkedAt),
     checks: {
       moduleEnabled: false,
       configValid: false,
@@ -2347,6 +2394,7 @@ function buildInvalidTelegramDiagnostics(
     status: "invalid_config",
     lastErrorCode: "validation.failed" satisfies PlatformErrorCode,
     checkedAt,
+    egress: buildTelegramEgressDiagnostics(checkedAt),
     checks: {
       moduleEnabled: true,
       configValid: false,

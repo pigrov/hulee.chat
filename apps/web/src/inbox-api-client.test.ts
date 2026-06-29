@@ -220,6 +220,17 @@ describe("inbox API client", () => {
               readiness: "available",
               supportsMultiple: true,
               capabilities: ["inbound", "outbound", "webhook"],
+              egressRequirement: {
+                required: true,
+                defaultProfileKind: "vpn_namespace",
+                allowedProfileKinds: [
+                  "vpn_namespace",
+                  "http_proxy",
+                  "socks_proxy",
+                  "customer_network"
+                ],
+                enforcementScope: "hulee_managed_saas"
+              },
               onboarding: {
                 version: "v1",
                 steps: [
@@ -785,6 +796,12 @@ function telegramIntegrationResponse(): unknown {
     diagnostics: {
       status: "configured",
       checkedAt: "2026-01-01T00:00:00.000Z",
+      egress: {
+        required: true,
+        status: "unknown",
+        profileKind: "vpn_namespace",
+        checkedAt: "2026-01-01T00:00:00.000Z"
+      },
       checks: {
         moduleEnabled: true,
         configValid: true,

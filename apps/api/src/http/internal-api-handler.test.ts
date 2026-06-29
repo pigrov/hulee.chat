@@ -228,6 +228,17 @@ function createHandler(input?: {
         readiness: "available" as const,
         supportsMultiple: true,
         capabilities: ["inbound", "outbound", "webhook"],
+        egressRequirement: {
+          required: true,
+          defaultProfileKind: "vpn_namespace" as const,
+          allowedProfileKinds: [
+            "vpn_namespace" as const,
+            "http_proxy" as const,
+            "socks_proxy" as const,
+            "customer_network" as const
+          ],
+          enforcementScope: "hulee_managed_saas" as const
+        },
         onboarding: {
           version: "v1" as const,
           steps: [
@@ -308,6 +319,12 @@ function createHandler(input?: {
     diagnostics: {
       status: "configured" as const,
       checkedAt: "2026-06-22T10:00:00.000Z",
+      egress: {
+        required: true,
+        status: "unknown" as const,
+        profileKind: "vpn_namespace" as const,
+        checkedAt: "2026-06-22T10:00:00.000Z"
+      },
       checks: {
         moduleEnabled: true,
         configValid: true,
@@ -336,6 +353,12 @@ function createHandler(input?: {
           ? ("configured" as const)
           : ("disabled" as const),
         checkedAt: "2026-06-22T10:00:00.000Z",
+        egress: {
+          required: true,
+          status: "unknown" as const,
+          profileKind: "vpn_namespace" as const,
+          checkedAt: "2026-06-22T10:00:00.000Z"
+        },
         checks: {
           moduleEnabled: request.enabled,
           configValid: true,
@@ -360,6 +383,12 @@ function createHandler(input?: {
     diagnostics: {
       status: "configured" as const,
       checkedAt: "2026-06-22T10:00:00.000Z",
+      egress: {
+        required: true,
+        status: "unknown" as const,
+        profileKind: "vpn_namespace" as const,
+        checkedAt: "2026-06-22T10:00:00.000Z"
+      },
       bot: {
         id: "100",
         username: "hulee_test_bot"
