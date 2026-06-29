@@ -626,6 +626,25 @@ describe("internal API v1 schemas", () => {
             profileKind: "vpn_namespace",
             checkedAt: "2026-06-22T10:00:00.000Z"
           },
+          runtime: {
+            inbound: {
+              lastSource: "webhook",
+              lastReceivedAt: "2026-06-22T10:00:01.000Z",
+              lastAcceptedAt: "2026-06-22T10:00:01.000Z",
+              lastRequestId: "telegram-webhook-request-1",
+              lastUpdateId: 1001,
+              lastProviderMessageId: "9001:77",
+              lastBatchReceivedCount: 1,
+              lastBatchAcceptedCount: 1,
+              lastBatchFailedCount: 0
+            },
+            outbound: {
+              lastAttemptAt: "2026-06-22T10:01:00.000Z",
+              lastSentAt: "2026-06-22T10:01:00.000Z",
+              lastMessageId: "message-1",
+              lastProviderMessageId: "telegram-message-1"
+            }
+          },
           checks: {
             moduleEnabled: true,
             configValid: true,

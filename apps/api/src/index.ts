@@ -247,6 +247,7 @@ export function createTelegramWebhookDataPlaneHandler(
     commands: createExternalChannelCommandService({
       repository: externalMessageRepository
     }),
+    connectorRepository,
     connectorResolver: createChannelConnectorTelegramWebhookConnectorResolver({
       repository: connectorRepository
     }),

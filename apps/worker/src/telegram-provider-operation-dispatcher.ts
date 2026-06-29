@@ -543,6 +543,7 @@ function buildTelegramDiagnostics(input: {
       : {}),
     ...(webhook ? { webhook } : {}),
     ...(input.previous?.polling ? { polling: input.previous.polling } : {}),
+    ...(input.previous?.runtime ? { runtime: input.previous.runtime } : {}),
     egress:
       input.egress ??
       input.previous?.egress ??
@@ -567,6 +568,7 @@ function buildInvalidTelegramDiagnostics(input: {
     lastErrorCode: "validation.failed" satisfies PlatformErrorCode,
     checkedAt: input.checkedAt,
     ...(input.previous?.egress ? { egress: input.previous.egress } : {}),
+    ...(input.previous?.runtime ? { runtime: input.previous.runtime } : {}),
     checks: {
       moduleEnabled: true,
       configValid: false,

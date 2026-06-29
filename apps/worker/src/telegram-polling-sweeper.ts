@@ -253,6 +253,11 @@ async function pollTelegramConfig(
           acceptedUpdateCount: pollingResult.accepted,
           failedUpdateCount: pollingResult.failed
         },
+        runtime: buildPollingRuntimeDiagnostics({
+          checkedAt: input.checkedAt,
+          pollingResult,
+          previous: input.storedDiagnostics
+        }),
         egress: input.egressResolution.diagnostics,
         previous: input.storedDiagnostics
       }),
@@ -279,6 +284,12 @@ async function pollTelegramConfig(
           acceptedUpdateCount: 0,
           failedUpdateCount: 0
         },
+        runtime: buildPollingFailureRuntimeDiagnostics({
+          checkedAt: input.checkedAt,
+          errorCode: platformErrorCodeFromUnknown(error),
+          operatorHint: "Telegram getUpdates call failed.",
+          previous: input.storedDiagnostics
+        }),
         egress: input.egressResolution.diagnostics,
         previous: input.storedDiagnostics
       }),
@@ -300,6 +311,9 @@ async function acceptPollingUpdates(
   accepted: number;
   failed: number;
   lastUpdateId: number | undefined;
+  lastRequestId?: string;
+  lastProviderMessageId?: string;
+  lastErrorCode?: PlatformErrorCode;
 }> {
   const adapter = createTelegramChannelAdapter();
   const requestIdFactory =
@@ -318,12 +332,20 @@ async function acceptPollingUpdates(
   let accepted = 0;
   let failed = 0;
   let lastUpdateId = input.lastUpdateId;
+  let lastRequestId: string | undefined;
+  let lastProviderMessageId: string | undefined;
+  let lastErrorCode: PlatformErrorCode | undefined;
 
   for (const update of input.updates) {
     lastUpdateId =
       lastUpdateId === undefined
         ? update.updateId
         : Math.max(lastUpdateId, update.updateId);
+    const requestId = requestIdFactory({
+      tenantId: input.tenantId,
+      channelExternalId: input.config.channelExternalId,
+      updateId: update.updateId
+    });
 
     try {
       const normalized = await adapter.normalizeIncoming({
@@ -334,19 +356,19 @@ async function acceptPollingUpdates(
 
       await input.commands.acceptInboundMessage(
         {
-          requestId: requestIdFactory({
-            tenantId: input.tenantId,
-            channelExternalId: input.config.channelExternalId,
-            updateId: update.updateId
-          }),
+          requestId,
           tenantId: input.tenantId,
           channelId: input.config.channelExternalId
         },
         normalized
       );
       accepted += 1;
-    } catch {
+      lastRequestId = requestId;
+      lastProviderMessageId = normalized.providerMessageId;
+    } catch (error) {
       failed += 1;
+      lastRequestId = requestId;
+      lastErrorCode = platformErrorCodeFromUnknown(error);
     }
   }
 
@@ -354,7 +376,10 @@ async function acceptPollingUpdates(
     received: input.updates.length,
     accepted,
     failed,
-    lastUpdateId
+    lastUpdateId,
+    ...(lastRequestId ? { lastRequestId } : {}),
+    ...(lastProviderMessageId ? { lastProviderMessageId } : {}),
+    ...(lastErrorCode ? { lastErrorCode } : {})
   };
 }
 
@@ -412,6 +437,7 @@ function buildPollingDiagnostics(input: {
   operatorHint?: string;
   checks: InternalTelegramIntegrationDiagnostics["checks"];
   polling?: InternalTelegramIntegrationDiagnostics["polling"];
+  runtime?: InternalTelegramIntegrationDiagnostics["runtime"];
   egress?: InternalTelegramIntegrationDiagnostics["egress"];
   previous: InternalTelegramIntegrationDiagnostics | null;
 }): InternalTelegramIntegrationDiagnostics {
@@ -423,11 +449,115 @@ function buildPollingDiagnostics(input: {
     ...(input.previous?.bot ? { bot: input.previous.bot } : {}),
     ...(input.previous?.webhook ? { webhook: input.previous.webhook } : {}),
     ...(input.polling ? { polling: input.polling } : {}),
+    ...((input.runtime ?? input.previous?.runtime)
+      ? { runtime: input.runtime ?? input.previous?.runtime }
+      : {}),
     ...((input.egress ?? input.previous?.egress)
       ? { egress: input.egress ?? input.previous?.egress }
       : {}),
     checks: input.checks
   });
+}
+
+function buildPollingRuntimeDiagnostics(input: {
+  checkedAt: string;
+  pollingResult: {
+    received: number;
+    accepted: number;
+    failed: number;
+    lastUpdateId: number | undefined;
+    lastRequestId?: string;
+    lastProviderMessageId?: string;
+    lastErrorCode?: PlatformErrorCode;
+  };
+  previous: InternalTelegramIntegrationDiagnostics | null;
+}): InternalTelegramIntegrationDiagnostics["runtime"] {
+  const previousInbound = input.previous?.runtime?.inbound;
+
+  return {
+    ...(input.previous?.runtime?.outbound
+      ? { outbound: input.previous.runtime.outbound }
+      : {}),
+    inbound: {
+      lastSource: "polling",
+      lastReceivedAt: input.checkedAt,
+      ...(input.pollingResult.accepted > 0
+        ? { lastAcceptedAt: input.checkedAt }
+        : previousInbound?.lastAcceptedAt
+          ? { lastAcceptedAt: previousInbound.lastAcceptedAt }
+          : {}),
+      ...(input.pollingResult.failed > 0
+        ? { lastFailedAt: input.checkedAt }
+        : previousInbound?.lastFailedAt
+          ? { lastFailedAt: previousInbound.lastFailedAt }
+          : {}),
+      ...(input.pollingResult.lastRequestId
+        ? { lastRequestId: input.pollingResult.lastRequestId }
+        : previousInbound?.lastRequestId
+          ? { lastRequestId: previousInbound.lastRequestId }
+          : {}),
+      ...(input.pollingResult.lastUpdateId === undefined
+        ? {}
+        : { lastUpdateId: input.pollingResult.lastUpdateId }),
+      ...(input.pollingResult.lastProviderMessageId
+        ? { lastProviderMessageId: input.pollingResult.lastProviderMessageId }
+        : previousInbound?.lastProviderMessageId
+          ? { lastProviderMessageId: previousInbound.lastProviderMessageId }
+          : {}),
+      lastBatchReceivedCount: input.pollingResult.received,
+      lastBatchAcceptedCount: input.pollingResult.accepted,
+      lastBatchFailedCount: input.pollingResult.failed,
+      ...(input.pollingResult.lastErrorCode
+        ? { lastErrorCode: input.pollingResult.lastErrorCode }
+        : previousInbound?.lastErrorCode
+          ? { lastErrorCode: previousInbound.lastErrorCode }
+          : {}),
+      ...(input.pollingResult.failed > 0
+        ? {
+            operatorHint: "Some Telegram updates failed to normalize or ingest."
+          }
+        : {})
+    }
+  };
+}
+
+function buildPollingFailureRuntimeDiagnostics(input: {
+  checkedAt: string;
+  errorCode: PlatformErrorCode;
+  operatorHint: string;
+  previous: InternalTelegramIntegrationDiagnostics | null;
+}): InternalTelegramIntegrationDiagnostics["runtime"] {
+  const previousInbound = input.previous?.runtime?.inbound;
+
+  return {
+    ...(input.previous?.runtime?.outbound
+      ? { outbound: input.previous.runtime.outbound }
+      : {}),
+    inbound: {
+      lastSource: "polling",
+      ...(previousInbound?.lastReceivedAt
+        ? { lastReceivedAt: previousInbound.lastReceivedAt }
+        : {}),
+      ...(previousInbound?.lastAcceptedAt
+        ? { lastAcceptedAt: previousInbound.lastAcceptedAt }
+        : {}),
+      lastFailedAt: input.checkedAt,
+      ...(previousInbound?.lastRequestId
+        ? { lastRequestId: previousInbound.lastRequestId }
+        : {}),
+      ...(previousInbound?.lastUpdateId === undefined
+        ? {}
+        : { lastUpdateId: previousInbound.lastUpdateId }),
+      ...(previousInbound?.lastProviderMessageId
+        ? { lastProviderMessageId: previousInbound.lastProviderMessageId }
+        : {}),
+      lastBatchReceivedCount: 0,
+      lastBatchAcceptedCount: 0,
+      lastBatchFailedCount: 0,
+      lastErrorCode: input.errorCode,
+      operatorHint: input.operatorHint
+    }
+  };
 }
 
 function pollingChecks(input: {

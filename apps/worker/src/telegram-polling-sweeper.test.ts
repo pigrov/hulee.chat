@@ -129,6 +129,19 @@ describe("telegram polling sweeper", () => {
         acceptedUpdateCount: 1,
         failedUpdateCount: 0
       },
+      runtime: {
+        inbound: {
+          lastSource: "polling",
+          lastReceivedAt: now.toISOString(),
+          lastAcceptedAt: now.toISOString(),
+          lastRequestId: "poll-1002",
+          lastUpdateId: 1002,
+          lastProviderMessageId: "9001:77",
+          lastBatchReceivedCount: 1,
+          lastBatchAcceptedCount: 1,
+          lastBatchFailedCount: 0
+        }
+      },
       checks: {
         botTokenResolved: true,
         botApiReachable: true
@@ -290,6 +303,17 @@ describe("telegram polling sweeper", () => {
         receivedUpdateCount: 0,
         acceptedUpdateCount: 0,
         failedUpdateCount: 0
+      },
+      runtime: {
+        inbound: {
+          lastSource: "polling",
+          lastFailedAt: now.toISOString(),
+          lastBatchReceivedCount: 0,
+          lastBatchAcceptedCount: 0,
+          lastBatchFailedCount: 0,
+          lastErrorCode: "provider.temporary_failure",
+          operatorHint: "Telegram getUpdates call failed."
+        }
       },
       checks: {
         botTokenResolved: true,

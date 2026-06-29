@@ -912,6 +912,40 @@ export const internalTelegramIntegrationDiagnosticsSchema = z
       })
       .strict()
       .optional(),
+    runtime: z
+      .object({
+        inbound: z
+          .object({
+            lastSource: z.enum(["webhook", "polling"]).optional(),
+            lastReceivedAt: z.string().datetime({ offset: true }).optional(),
+            lastAcceptedAt: z.string().datetime({ offset: true }).optional(),
+            lastFailedAt: z.string().datetime({ offset: true }).optional(),
+            lastRequestId: z.string().trim().min(1).max(200).optional(),
+            lastUpdateId: z.number().int().nonnegative().optional(),
+            lastProviderMessageId: z.string().trim().min(1).max(200).optional(),
+            lastBatchReceivedCount: z.number().int().nonnegative().optional(),
+            lastBatchAcceptedCount: z.number().int().nonnegative().optional(),
+            lastBatchFailedCount: z.number().int().nonnegative().optional(),
+            lastErrorCode: internalApiPlatformErrorCodeSchema.optional(),
+            operatorHint: z.string().trim().min(1).max(500).optional()
+          })
+          .strict()
+          .optional(),
+        outbound: z
+          .object({
+            lastAttemptAt: z.string().datetime({ offset: true }).optional(),
+            lastSentAt: z.string().datetime({ offset: true }).optional(),
+            lastFailedAt: z.string().datetime({ offset: true }).optional(),
+            lastMessageId: z.string().trim().min(1).max(200).optional(),
+            lastProviderMessageId: z.string().trim().min(1).max(200).optional(),
+            lastErrorCode: internalApiPlatformErrorCodeSchema.optional(),
+            operatorHint: z.string().trim().min(1).max(500).optional()
+          })
+          .strict()
+          .optional()
+      })
+      .strict()
+      .optional(),
     egress: internalEgressDiagnosticsSchema.optional(),
     checks: z
       .object({

@@ -806,10 +806,14 @@ export function createInternalIntegrationService(
         outboundEnabled: request.outboundEnabled
       };
       const parsedConfig = parseTelegramChannelConfig(config);
+      const existingDiagnostics = parseStoredTelegramDiagnostics(
+        existingRecord.diagnostics
+      );
       const diagnostics = buildTelegramDiagnostics({
         enabled: request.enabled,
         config: parsedConfig,
-        checkedAt: updatedAt.toISOString()
+        checkedAt: updatedAt.toISOString(),
+        runtime: existingDiagnostics?.runtime
       });
       const status = telegramConnectorStatusFromUpdate({
         existingRecord,
@@ -1615,6 +1619,7 @@ async function runTelegramProviderDiagnostics(
     telegramApiBaseUrl: options.telegramApiBaseUrl,
     publicWebhookBaseUrl: options.publicWebhookBaseUrl,
     polling: state.response.diagnostics.polling,
+    runtime: state.response.diagnostics.runtime,
     checkedAt: state.checkedAt
   });
 
@@ -1692,6 +1697,7 @@ async function runTelegramWebhookSync(
         webhookSecretToken
       }),
       polling: state.response.diagnostics.polling,
+      runtime: state.response.diagnostics.runtime,
       egress: egressResolution.diagnostics,
       checks: {
         botTokenResolved: Boolean(token),
@@ -1758,6 +1764,7 @@ async function runTelegramWebhookSync(
       checkedAt: state.checkedAt,
       publicWebhookBaseUrl: options.publicWebhookBaseUrl,
       polling: state.response.diagnostics.polling,
+      runtime: state.response.diagnostics.runtime,
       egress: egressResolution.diagnostics,
       error
     });
@@ -1905,6 +1912,7 @@ async function buildTelegramProviderDiagnostics(input: {
   telegramApiBaseUrl?: string;
   publicWebhookBaseUrl?: string;
   polling?: InternalTelegramIntegrationDiagnostics["polling"];
+  runtime?: InternalTelegramIntegrationDiagnostics["runtime"];
   checkedAt: string;
 }): Promise<InternalTelegramIntegrationDiagnostics> {
   const egressResolution = await resolveTelegramEgressProfile({
@@ -1925,6 +1933,7 @@ async function buildTelegramProviderDiagnostics(input: {
       lastErrorCode: "validation.failed",
       operatorHint: "Bot token secret could not be resolved.",
       polling: input.polling,
+      runtime: input.runtime,
       egress: egressResolution.diagnostics,
       checks: {
         botTokenResolved: false,
@@ -1970,6 +1979,7 @@ async function buildTelegramProviderDiagnostics(input: {
           ? "Public webhook base URL is not configured."
           : undefined,
       polling: input.polling,
+      runtime: input.runtime,
       bot: {
         id: bot.id,
         username: bot.username,
@@ -1996,6 +2006,7 @@ async function buildTelegramProviderDiagnostics(input: {
       checkedAt: input.checkedAt,
       publicWebhookBaseUrl: input.publicWebhookBaseUrl,
       polling: input.polling,
+      runtime: input.runtime,
       egress: egressResolution.diagnostics,
       error
     });
@@ -2054,6 +2065,7 @@ function telegramProviderFailureDiagnostics(input: {
   checkedAt: string;
   publicWebhookBaseUrl?: string;
   polling?: InternalTelegramIntegrationDiagnostics["polling"];
+  runtime?: InternalTelegramIntegrationDiagnostics["runtime"];
   egress?: InternalTelegramIntegrationDiagnostics["egress"];
   error: unknown;
 }): InternalTelegramIntegrationDiagnostics {
@@ -2066,6 +2078,7 @@ function telegramProviderFailureDiagnostics(input: {
     lastErrorCode: platformErrorCodeFromTelegramError(input.error),
     operatorHint: "Telegram Bot API call failed.",
     polling: input.polling,
+    runtime: input.runtime,
     egress: input.egress,
     checks: {
       botTokenResolved: true,
@@ -2513,6 +2526,7 @@ function buildTelegramDiagnostics(input: {
   webhook?: InternalTelegramIntegrationDiagnostics["webhook"];
   checks?: Partial<InternalTelegramIntegrationDiagnostics["checks"]>;
   polling?: InternalTelegramIntegrationDiagnostics["polling"];
+  runtime?: InternalTelegramIntegrationDiagnostics["runtime"];
   egress?: InternalTelegramIntegrationDiagnostics["egress"];
 }): InternalTelegramIntegrationDiagnostics {
   const webhookPath = buildTelegramWebhookPath(input.config);
@@ -2548,6 +2562,7 @@ function buildTelegramDiagnostics(input: {
         bot: input.bot,
         webhook,
         polling: input.polling,
+        runtime: input.runtime,
         egress: input.egress ?? buildTelegramEgressDiagnostics(input.checkedAt)
       }
     );
@@ -2576,6 +2591,7 @@ function buildTelegramDiagnostics(input: {
       bot: input.bot,
       webhook,
       polling: input.polling,
+      runtime: input.runtime,
       egress: input.egress ?? buildTelegramEgressDiagnostics(input.checkedAt)
     }
   );
@@ -2589,6 +2605,7 @@ function withOptionalTelegramDiagnostics(
     bot?: InternalTelegramIntegrationDiagnostics["bot"];
     webhook?: InternalTelegramIntegrationDiagnostics["webhook"];
     polling?: InternalTelegramIntegrationDiagnostics["polling"];
+    runtime?: InternalTelegramIntegrationDiagnostics["runtime"];
     egress?: InternalTelegramIntegrationDiagnostics["egress"];
   }
 ): InternalTelegramIntegrationDiagnostics {
@@ -2601,6 +2618,7 @@ function withOptionalTelegramDiagnostics(
     ...(optional.bot ? { bot: optional.bot } : {}),
     ...(optional.webhook ? { webhook: optional.webhook } : {}),
     ...(optional.polling ? { polling: optional.polling } : {}),
+    ...(optional.runtime ? { runtime: optional.runtime } : {}),
     ...(optional.egress ? { egress: optional.egress } : {})
   };
 }

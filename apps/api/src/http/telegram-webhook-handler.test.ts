@@ -24,9 +24,11 @@ import {
 } from "./telegram-webhook-handler";
 
 const tenantId = "tenant-1" as TenantId;
+const now = new Date("2026-06-22T10:00:00.000Z");
 
 describe("telegram webhook handler", () => {
   it("normalizes Telegram webhook updates and accepts inbound messages", async () => {
+    const connectorRepository = new InMemoryChannelConnectorRepository();
     const acceptInboundMessage = vi.fn(
       async (_context, message: NormalizedIncomingMessage) => ({
         clientId: `client:${message.clientExternalId}`,
@@ -37,11 +39,17 @@ describe("telegram webhook handler", () => {
     );
     const handler = createTelegramWebhookHandler({
       requestIdFactory: () => "request-1",
-      connectorResolver: createConnectorResolver(),
+      connectorRepository,
+      connectorResolver: createChannelConnectorTelegramWebhookConnectorResolver(
+        {
+          repository: connectorRepository
+        }
+      ),
       secretResolver: createSecretResolver("secret-token"),
       commands: {
         acceptInboundMessage
-      }
+      },
+      now: () => now
     });
     const response = await handler.handle({
       method: "POST",
@@ -89,17 +97,41 @@ describe("telegram webhook handler", () => {
         text: "Hello"
       })
     );
+    expect(connectorRepository.upserts[0]?.diagnostics).toMatchObject({
+      status: "configured",
+      checkedAt: now.toISOString(),
+      runtime: {
+        inbound: {
+          lastSource: "webhook",
+          lastReceivedAt: now.toISOString(),
+          lastAcceptedAt: now.toISOString(),
+          lastRequestId: "request-1",
+          lastUpdateId: 1001,
+          lastProviderMessageId: "9001:77",
+          lastBatchReceivedCount: 1,
+          lastBatchAcceptedCount: 1,
+          lastBatchFailedCount: 0
+        }
+      }
+    });
   });
 
   it("returns a validation error for unsupported Telegram updates", async () => {
+    const connectorRepository = new InMemoryChannelConnectorRepository();
     const acceptInboundMessage = vi.fn();
     const handler = createTelegramWebhookHandler({
       requestIdFactory: () => "request-1",
-      connectorResolver: createConnectorResolver(),
+      connectorRepository,
+      connectorResolver: createChannelConnectorTelegramWebhookConnectorResolver(
+        {
+          repository: connectorRepository
+        }
+      ),
       secretResolver: createSecretResolver("secret-token"),
       commands: {
         acceptInboundMessage
-      }
+      },
+      now: () => now
     });
     const response = await handler.handle({
       method: "POST",
@@ -120,6 +152,21 @@ describe("telegram webhook handler", () => {
       }
     });
     expect(acceptInboundMessage).not.toHaveBeenCalled();
+    expect(connectorRepository.upserts[0]?.diagnostics).toMatchObject({
+      runtime: {
+        inbound: {
+          lastSource: "webhook",
+          lastReceivedAt: now.toISOString(),
+          lastFailedAt: now.toISOString(),
+          lastRequestId: "request-1",
+          lastUpdateId: 1002,
+          lastBatchReceivedCount: 1,
+          lastBatchAcceptedCount: 0,
+          lastBatchFailedCount: 1,
+          lastErrorCode: "validation.failed"
+        }
+      }
+    });
   });
 
   it("rejects Telegram webhooks with a missing connector secret token", async () => {
@@ -206,7 +253,8 @@ describe("telegram webhook handler", () => {
       resolver.resolveConnector({
         connectorId: "tgwh_second"
       })
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
+      connectorId: "telegram_bot:second",
       tenantId,
       config: {
         channelExternalId: "telegram-second",
@@ -260,6 +308,7 @@ function createConnectorResolver(input?: { mode?: "webhook" | "polling" }): {
 }
 
 class InMemoryChannelConnectorRepository implements ChannelConnectorRepository {
+  readonly upserts: UpsertChannelConnectorInput[] = [];
   private readonly records: readonly ChannelConnectorRecord[];
 
   constructor(
@@ -332,7 +381,9 @@ class InMemoryChannelConnectorRepository implements ChannelConnectorRepository {
     return null;
   }
 
-  async upsertConnector(_input: UpsertChannelConnectorInput): Promise<void> {}
+  async upsertConnector(input: UpsertChannelConnectorInput): Promise<void> {
+    this.upserts.push(input);
+  }
 }
 
 function createTelegramConnector(

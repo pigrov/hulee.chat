@@ -78,6 +78,18 @@ describe("telegram outbound dispatcher", () => {
       }
     ]);
     expect(outboundRepository.failed).toEqual([]);
+    expect(connectorRepository.upserts[0]?.diagnostics).toMatchObject({
+      status: "configured",
+      checkedAt: now.toISOString(),
+      runtime: {
+        outbound: {
+          lastAttemptAt: now.toISOString(),
+          lastSentAt: now.toISOString(),
+          lastMessageId: messageId,
+          lastProviderMessageId: "telegram-provider-message-1"
+        }
+      }
+    });
   });
 
   it("marks permanent adapter failures without throwing for outbox retry", async () => {
@@ -85,9 +97,10 @@ describe("telegram outbound dispatcher", () => {
       ...createQueuedMessage(),
       clientExternalId: "not-telegram:42"
     });
+    const connectorRepository = new InMemoryChannelConnectorRepository();
     const dispatcher = createTelegramOutboundDispatcher({
       outboundRepository,
-      connectorRepository: new InMemoryChannelConnectorRepository(),
+      connectorRepository,
       secretResolver: createEnvSecretResolver({
         HULEE_TELEGRAM_BOT_TOKEN: "token-1"
       }),
@@ -111,6 +124,16 @@ describe("telegram outbound dispatcher", () => {
         failedAt: now
       }
     ]);
+    expect(connectorRepository.upserts[0]?.diagnostics).toMatchObject({
+      runtime: {
+        outbound: {
+          lastAttemptAt: now.toISOString(),
+          lastFailedAt: now.toISOString(),
+          lastMessageId: messageId,
+          lastErrorCode: "provider.permanent_failure"
+        }
+      }
+    });
   });
 
   it("dispatches through the connector that owns the queued channel external id", async () => {
@@ -239,6 +262,7 @@ class InMemoryOutboundDispatchRepository implements OutboundDispatchRepository {
 }
 
 class InMemoryChannelConnectorRepository implements ChannelConnectorRepository {
+  readonly upserts: UpsertChannelConnectorInput[] = [];
   private readonly records: readonly ChannelConnectorRecord[];
 
   constructor(
@@ -320,7 +344,9 @@ class InMemoryChannelConnectorRepository implements ChannelConnectorRepository {
     return matches.length === 1 ? matches[0] : null;
   }
 
-  async upsertConnector(_input: UpsertChannelConnectorInput): Promise<void> {}
+  async upsertConnector(input: UpsertChannelConnectorInput): Promise<void> {
+    this.upserts.push(input);
+  }
 }
 
 function createTelegramConnector(

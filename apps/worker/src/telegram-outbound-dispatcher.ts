@@ -1,11 +1,14 @@
 import type {
   DeliveryResult,
+  InternalTelegramIntegrationDiagnostics,
   MessageId,
   PlatformErrorCode,
   TenantId
 } from "@hulee/contracts";
+import { internalTelegramIntegrationDiagnosticsSchema } from "@hulee/contracts";
 import { CoreError } from "@hulee/core";
 import type {
+  ChannelConnectorRecord,
   ChannelConnectorRepository,
   OutboundDispatchRepository,
   QueuedOutboundMessageForDispatch,
@@ -103,46 +106,80 @@ export function createTelegramOutboundDispatcher(
         return;
       }
 
-      const botToken = await resolveBotToken(
-        options.secretResolver,
-        record.tenantId,
-        config.botTokenSecretRef
-      );
-      const egressResolution = await resolveTelegramEgressProfile({
-        egressRuntime,
-        tenantId: record.tenantId,
-        connectorId: configRecord.id,
-        checkedAt: now().toISOString()
-      });
-      const adapter = createTelegramChannelAdapter({
-        botApiClient: botApiClientFactory({
-          apiBaseUrl: options.telegramApiBaseUrl,
-          botToken,
-          egress: buildTelegramBotApiEgressBinding({
-            egressRuntime,
-            resolution: egressResolution,
-            tenantId: record.tenantId,
-            connectorId: configRecord.id
+      try {
+        const botToken = await resolveBotToken(
+          options.secretResolver,
+          record.tenantId,
+          config.botTokenSecretRef
+        );
+        const egressResolution = await resolveTelegramEgressProfile({
+          egressRuntime,
+          tenantId: record.tenantId,
+          connectorId: configRecord.id,
+          checkedAt: now().toISOString()
+        });
+        const adapter = createTelegramChannelAdapter({
+          botApiClient: botApiClientFactory({
+            apiBaseUrl: options.telegramApiBaseUrl,
+            botToken,
+            egress: buildTelegramBotApiEgressBinding({
+              egressRuntime,
+              resolution: egressResolution,
+              tenantId: record.tenantId,
+              connectorId: configRecord.id
+            })
           })
-        })
-      });
-      const result = await adapter.sendMessage({
-        tenantId: queuedMessage.tenantId,
-        conversationId: queuedMessage.conversationId,
-        messageId: queuedMessage.messageId,
-        channelExternalId: queuedMessage.channelExternalId,
-        clientExternalId: queuedMessage.clientExternalId,
-        text: queuedMessage.text,
-        idempotencyKey: queuedMessage.idempotencyKey
-      });
+        });
+        const result = await adapter.sendMessage({
+          tenantId: queuedMessage.tenantId,
+          conversationId: queuedMessage.conversationId,
+          messageId: queuedMessage.messageId,
+          channelExternalId: queuedMessage.channelExternalId,
+          clientExternalId: queuedMessage.clientExternalId,
+          text: queuedMessage.text,
+          idempotencyKey: queuedMessage.idempotencyKey
+        });
+        const outcome = await persistDeliveryResult({
+          repository: options.outboundRepository,
+          attemptIdFactory,
+          now,
+          message: queuedMessage,
+          result
+        });
 
-      await persistDeliveryResult({
-        repository: options.outboundRepository,
-        attemptIdFactory,
-        now,
-        message: queuedMessage,
-        result
-      });
+        await persistOutboundRuntimeDiagnostics({
+          connectorRepository: options.connectorRepository,
+          connectorRecord: configRecord,
+          checkedAt: now().toISOString(),
+          event:
+            outcome === "sent"
+              ? {
+                  kind: "sent",
+                  messageId: queuedMessage.messageId,
+                  providerMessageId:
+                    result.providerMessageId ?? queuedMessage.messageId
+                }
+              : {
+                  kind: "failed",
+                  messageId: queuedMessage.messageId,
+                  errorCode: result.errorCode ?? "provider.permanent_failure",
+                  operatorHint: "Telegram outbound message was rejected."
+                }
+        });
+      } catch (error) {
+        await persistOutboundRuntimeDiagnostics({
+          connectorRepository: options.connectorRepository,
+          connectorRecord: configRecord,
+          checkedAt: now().toISOString(),
+          event: {
+            kind: "failed",
+            messageId: queuedMessage.messageId,
+            errorCode: platformErrorCodeFromUnknown(error),
+            operatorHint: "Telegram outbound message dispatch failed."
+          }
+        });
+        throw error;
+      }
     }
   };
 }
@@ -243,7 +280,7 @@ async function persistDeliveryResult(input: {
   now: () => Date;
   message: QueuedOutboundMessageForDispatch;
   result: DeliveryResult;
-}): Promise<void> {
+}): Promise<"sent" | "failed"> {
   if (input.result.status === "sent" || input.result.status === "accepted") {
     await input.repository.markSent({
       tenantId: input.message.tenantId,
@@ -257,7 +294,7 @@ async function persistDeliveryResult(input: {
       }),
       deliveredAt: input.now()
     });
-    return;
+    return "sent";
   }
 
   const errorCode = input.result.errorCode ?? "provider.permanent_failure";
@@ -277,6 +314,165 @@ async function persistDeliveryResult(input: {
     }),
     failedAt: input.now()
   });
+
+  return "failed";
+}
+
+async function persistOutboundRuntimeDiagnostics(input: {
+  connectorRepository: ChannelConnectorRepository;
+  connectorRecord: ChannelConnectorRecord;
+  checkedAt: string;
+  event:
+    | {
+        kind: "sent";
+        messageId: MessageId;
+        providerMessageId: string;
+      }
+    | {
+        kind: "failed";
+        messageId: MessageId;
+        errorCode: PlatformErrorCode;
+        operatorHint: string;
+      };
+}): Promise<void> {
+  try {
+    const record =
+      (await input.connectorRepository.findConnector({
+        tenantId: input.connectorRecord.tenantId,
+        connectorId: input.connectorRecord.id
+      })) ?? input.connectorRecord;
+    const diagnostics = buildOutboundRuntimeDiagnostics({
+      checkedAt: input.checkedAt,
+      event: input.event,
+      previous: parseStoredTelegramDiagnostics(record.diagnostics)
+    });
+
+    await input.connectorRepository.upsertConnector({
+      id: record.id,
+      tenantId: record.tenantId,
+      channelType: record.channelType,
+      channelClass: record.channelClass,
+      provider: record.provider,
+      displayName: record.displayName,
+      status: record.status,
+      healthStatus: record.healthStatus,
+      capabilities: record.capabilities,
+      onboardingState: record.onboardingState,
+      config: record.config,
+      diagnostics,
+      createdByEmployeeId: record.createdByEmployeeId,
+      updatedAt: new Date(input.checkedAt)
+    });
+  } catch {
+    return;
+  }
+}
+
+function buildOutboundRuntimeDiagnostics(input: {
+  checkedAt: string;
+  event:
+    | {
+        kind: "sent";
+        messageId: MessageId;
+        providerMessageId: string;
+      }
+    | {
+        kind: "failed";
+        messageId: MessageId;
+        errorCode: PlatformErrorCode;
+        operatorHint: string;
+      };
+  previous: InternalTelegramIntegrationDiagnostics | null;
+}): InternalTelegramIntegrationDiagnostics {
+  const previousOutbound = input.previous?.runtime?.outbound;
+  const outbound =
+    input.event.kind === "sent"
+      ? {
+          lastAttemptAt: input.checkedAt,
+          lastSentAt: input.checkedAt,
+          ...(previousOutbound?.lastFailedAt
+            ? { lastFailedAt: previousOutbound.lastFailedAt }
+            : {}),
+          lastMessageId: input.event.messageId,
+          lastProviderMessageId: input.event.providerMessageId,
+          ...(previousOutbound?.lastErrorCode
+            ? { lastErrorCode: previousOutbound.lastErrorCode }
+            : {})
+        }
+      : {
+          lastAttemptAt: input.checkedAt,
+          ...(previousOutbound?.lastSentAt
+            ? { lastSentAt: previousOutbound.lastSentAt }
+            : {}),
+          lastFailedAt: input.checkedAt,
+          lastMessageId: input.event.messageId,
+          ...(previousOutbound?.lastProviderMessageId
+            ? {
+                lastProviderMessageId: previousOutbound.lastProviderMessageId
+              }
+            : {}),
+          lastErrorCode: input.event.errorCode,
+          operatorHint: input.event.operatorHint
+        };
+
+  return internalTelegramIntegrationDiagnosticsSchema.parse({
+    status: input.previous?.status ?? "configured",
+    checkedAt: input.checkedAt,
+    ...(input.previous?.lastErrorCode
+      ? { lastErrorCode: input.previous.lastErrorCode }
+      : {}),
+    ...(input.previous?.operatorHint
+      ? { operatorHint: input.previous.operatorHint }
+      : {}),
+    ...(input.previous?.bot ? { bot: input.previous.bot } : {}),
+    ...(input.previous?.webhook ? { webhook: input.previous.webhook } : {}),
+    ...(input.previous?.polling ? { polling: input.previous.polling } : {}),
+    ...(input.previous?.egress ? { egress: input.previous.egress } : {}),
+    runtime: {
+      ...(input.previous?.runtime?.inbound
+        ? { inbound: input.previous.runtime.inbound }
+        : {}),
+      outbound
+    },
+    checks: input.previous?.checks ?? buildOutboundRuntimeFallbackChecks()
+  });
+}
+
+function buildOutboundRuntimeFallbackChecks(): InternalTelegramIntegrationDiagnostics["checks"] {
+  return {
+    moduleEnabled: true,
+    configValid: true,
+    inboundWebhookReady: false,
+    outboundEnabled: true,
+    botTokenSecretRefConfigured: true
+  };
+}
+
+function parseStoredTelegramDiagnostics(
+  input: unknown
+): InternalTelegramIntegrationDiagnostics | null {
+  const result = internalTelegramIntegrationDiagnosticsSchema.safeParse(input);
+
+  return result.success ? result.data : null;
+}
+
+function platformErrorCodeFromUnknown(error: unknown): PlatformErrorCode {
+  if (error instanceof CoreError) {
+    return error.code;
+  }
+
+  if (
+    error instanceof Error &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    (error.code === "provider.temporary_failure" ||
+      error.code === "provider.permanent_failure" ||
+      error.code === "validation.failed")
+  ) {
+    return error.code;
+  }
+
+  return "provider.temporary_failure";
 }
 
 function ensurePlatformErrorCode(code: PlatformErrorCode): PlatformErrorCode {

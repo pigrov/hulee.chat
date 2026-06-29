@@ -534,6 +534,8 @@ function TelegramDiagnosticsGrid({
   t: Translator;
 }): ReactNode {
   const egress = integration.diagnostics.egress;
+  const inbound = integration.diagnostics.runtime?.inbound;
+  const outbound = integration.diagnostics.runtime?.outbound;
 
   return (
     <div className="diagnosticGrid">
@@ -662,6 +664,66 @@ function TelegramDiagnosticsGrid({
           t
         )}
       />
+      <DetailItem
+        label={t("integrations.telegram.runtimeInboundSource")}
+        value={
+          inbound?.lastSource
+            ? t(telegramRuntimeInboundSourceKey(inbound.lastSource))
+            : t("common.unknown")
+        }
+      />
+      <DetailItem
+        label={t("integrations.telegram.runtimeInboundReceivedAt")}
+        value={formatOptionalDateTime(inbound?.lastReceivedAt, locale, t)}
+      />
+      <DetailItem
+        label={t("integrations.telegram.runtimeInboundAcceptedAt")}
+        value={formatOptionalDateTime(inbound?.lastAcceptedAt, locale, t)}
+      />
+      <DetailItem
+        label={t("integrations.telegram.runtimeInboundFailedAt")}
+        value={formatOptionalDateTime(inbound?.lastFailedAt, locale, t)}
+      />
+      <DetailItem
+        label={t("integrations.telegram.runtimeInboundUpdateId")}
+        value={formatOptionalValue(inbound?.lastUpdateId, t)}
+      />
+      <DetailItem
+        label={t("integrations.telegram.runtimeInboundProviderMessageId")}
+        value={formatOptionalValue(inbound?.lastProviderMessageId, t)}
+      />
+      <DetailItem
+        label={t("integrations.telegram.runtimeInboundBatch")}
+        value={formatRuntimeBatch(inbound, t)}
+      />
+      <DetailItem
+        label={t("integrations.telegram.runtimeOutboundSentAt")}
+        value={formatOptionalDateTime(outbound?.lastSentAt, locale, t)}
+      />
+      <DetailItem
+        label={t("integrations.telegram.runtimeOutboundFailedAt")}
+        value={formatOptionalDateTime(outbound?.lastFailedAt, locale, t)}
+      />
+      <DetailItem
+        label={t("integrations.telegram.runtimeOutboundMessageId")}
+        value={formatOptionalValue(outbound?.lastMessageId, t)}
+      />
+      <DetailItem
+        label={t("integrations.telegram.runtimeOutboundProviderMessageId")}
+        value={formatOptionalValue(outbound?.lastProviderMessageId, t)}
+      />
+      {inbound?.lastErrorCode ? (
+        <DetailItem
+          label={t("integrations.telegram.runtimeInboundError")}
+          value={inbound.lastErrorCode}
+        />
+      ) : null}
+      {outbound?.lastErrorCode ? (
+        <DetailItem
+          label={t("integrations.telegram.runtimeOutboundError")}
+          value={outbound.lastErrorCode}
+        />
+      ) : null}
       {integration.diagnostics.operatorHint ? (
         <DetailItem
           label={t("integrations.telegram.operatorHint")}
@@ -672,6 +734,18 @@ function TelegramDiagnosticsGrid({
         <DetailItem
           label={t("integrations.egress.operatorHint")}
           value={egress.operatorHint}
+        />
+      ) : null}
+      {inbound?.operatorHint ? (
+        <DetailItem
+          label={t("integrations.telegram.runtimeInboundHint")}
+          value={inbound.operatorHint}
+        />
+      ) : null}
+      {outbound?.operatorHint ? (
+        <DetailItem
+          label={t("integrations.telegram.runtimeOutboundHint")}
+          value={outbound.operatorHint}
         />
       ) : null}
     </div>
@@ -880,4 +954,33 @@ function channelConnectorStatusKey(
   status: NonNullable<TelegramIntegrationViewModel["status"]>
 ): I18nMessageKey {
   return `integrations.channel.status.${status}` as I18nMessageKey;
+}
+
+function telegramRuntimeInboundSourceKey(
+  source: "webhook" | "polling"
+): I18nMessageKey {
+  return `integrations.telegram.runtimeInboundSource.${source}` as I18nMessageKey;
+}
+
+function formatRuntimeBatch(
+  inbound:
+    | NonNullable<
+        TelegramIntegrationViewModel["diagnostics"]["runtime"]
+      >["inbound"]
+    | undefined,
+  t: Translator
+): string {
+  if (
+    inbound?.lastBatchReceivedCount === undefined &&
+    inbound?.lastBatchAcceptedCount === undefined &&
+    inbound?.lastBatchFailedCount === undefined
+  ) {
+    return t("common.unknown");
+  }
+
+  return [
+    inbound.lastBatchReceivedCount ?? 0,
+    inbound.lastBatchAcceptedCount ?? 0,
+    inbound.lastBatchFailedCount ?? 0
+  ].join(" / ");
 }
