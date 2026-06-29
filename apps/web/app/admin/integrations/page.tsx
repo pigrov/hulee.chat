@@ -5,20 +5,29 @@ import {
   createSqlTenantRbacRepository
 } from "@hulee/db";
 import type {
+  InternalChannelAuthChallenge,
   InternalChannelCatalogItem,
   InternalChannelConnectorSummary
 } from "@hulee/contracts";
-import { Bot, MessageCircle, Smartphone } from "lucide-react";
+import {
+  Bot,
+  CheckCircle2,
+  Circle,
+  MessageCircle,
+  Smartphone
+} from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AccessDeniedPage } from "../../../src/access-denied";
-import { SlotMount } from "../../../src/app-chrome";
+import { DetailItem, SlotMount } from "../../../src/app-chrome";
 import { loadTenantAdminViewModel } from "../../../src/admin-view-model";
 import { createChannelConnectorAction } from "../../../src/actions";
+import { ChannelAuthChallengePanel } from "../../../src/channel-auth-challenge-panel";
 import {
   loadChannelCatalog,
+  loadChannelAuthChallenge,
   loadChannelConnectors,
   loadTelegramIntegration
 } from "../../../src/inbox-api-client";
@@ -41,6 +50,7 @@ export default async function IntegrationsAdminPage({
   searchParams
 }: {
   searchParams?: Promise<{
+    challengeId?: string;
     connectorId?: string;
   }>;
 }): Promise<ReactNode> {
@@ -81,24 +91,54 @@ export default async function IntegrationsAdminPage({
   const requestedConnectorId = normalizeOptionalSearchParam(
     resolvedSearchParams?.connectorId
   );
-  const [model, channelCatalog, channelConnectors, telegramIntegration] =
-    await Promise.all([
-      loadTenantAdminViewModel({ tenantId: access.tenantId, database }),
-      loadChannelCatalog(internalApiAccess),
-      loadChannelConnectors(internalApiAccess),
-      loadTelegramIntegration(internalApiAccess, {
-        connectorId: requestedConnectorId
-      })
-    ]);
+  const requestedChallengeId = normalizeOptionalSearchParam(
+    resolvedSearchParams?.challengeId
+  );
+  const [model, channelCatalog, channelConnectors] = await Promise.all([
+    loadTenantAdminViewModel({ tenantId: access.tenantId, database }),
+    loadChannelCatalog(internalApiAccess),
+    loadChannelConnectors(internalApiAccess)
+  ]);
   const { t, locale } = createTranslator(model.tenant.locale);
-  const selectedConnectorId =
-    telegramIntegration.connectorId ??
-    channelConnectors.connectors.find(
-      (connector) => connector.channelType === "telegram_bot"
-    )?.connectorId;
+  const selectedConnector = selectChannelConnector({
+    connectors: channelConnectors.connectors,
+    requestedConnectorId
+  });
+  const selectedConnectorId = selectedConnector?.connectorId;
   const telegramChannel = channelCatalog.channels.find(
     (channel) => channel.channelType === "telegram_bot"
   );
+  const integrationContent =
+    selectedConnector?.channelType === "telegram_bot" || !selectedConnector ? (
+      <TelegramIntegrationPanel
+        channel={telegramChannel}
+        integration={await loadTelegramIntegration(internalApiAccess, {
+          connectorId:
+            selectedConnector?.channelType === "telegram_bot"
+              ? selectedConnector.connectorId
+              : undefined
+        })}
+        locale={locale}
+        t={t}
+      />
+    ) : (
+      <GenericChannelConnectorPanel
+        catalog={channelCatalog.channels}
+        challenge={
+          selectedConnector.channelClass === "user_bridge" &&
+          requestedChallengeId
+            ? await loadOptionalChannelAuthChallenge({
+                challengeId: requestedChallengeId,
+                connectorId: selectedConnector.connectorId,
+                options: internalApiAccess
+              })
+            : undefined
+        }
+        connector={selectedConnector}
+        locale={locale}
+        t={t}
+      />
+    );
 
   return (
     <TenantAdminShell
@@ -165,12 +205,7 @@ export default async function IntegrationsAdminPage({
         </aside>
 
         <div className="adminStack">
-          <TelegramIntegrationPanel
-            channel={telegramChannel}
-            integration={telegramIntegration}
-            locale={locale}
-            t={t}
-          />
+          {integrationContent}
           <SlotMount slot="integration.settings.section" />
         </div>
       </div>
@@ -179,6 +214,133 @@ export default async function IntegrationsAdminPage({
 }
 
 type Translator = ReturnType<typeof createTranslator>["t"];
+
+function GenericChannelConnectorPanel({
+  catalog,
+  challenge,
+  connector,
+  locale,
+  t
+}: {
+  catalog: readonly InternalChannelCatalogItem[];
+  challenge?: InternalChannelAuthChallenge;
+  connector: InternalChannelConnectorSummary;
+  locale: string;
+  t: Translator;
+}): ReactNode {
+  const channel = catalog.find(
+    (item) => item.channelType === connector.channelType
+  );
+  const step = resolveGenericChannelStep({ channel, challenge, connector });
+
+  return (
+    <section className="settingsPanel" aria-labelledby="channel-detail-title">
+      <div className="sectionHeader">
+        <div>
+          <p className="eyebrow">{t("admin.integrations.channelSettings")}</p>
+          <h2 className="sectionTitle" id="channel-detail-title">
+            {connector.displayName}
+          </h2>
+        </div>
+        <span className="badge">
+          <ChannelIcon channelClass={connector.channelClass} />
+          {t(channelConnectorStatusKey(connector.status))}
+        </span>
+      </div>
+
+      {channel ? (
+        <GenericChannelStepper
+          channel={channel}
+          currentStepId={step.id}
+          t={t}
+        />
+      ) : null}
+
+      <div className="diagnosticGrid">
+        <DetailItem
+          label={t("integrations.channel.details.type")}
+          value={
+            channel
+              ? t(channel.titleKey as I18nMessageKey)
+              : connector.channelType
+          }
+        />
+        <DetailItem
+          label={t("integrations.channel.details.health")}
+          value={t(channelHealthStatusKey(connector.healthStatus))}
+        />
+        <DetailItem
+          label={t("integrations.channel.details.provider")}
+          value={connector.provider}
+        />
+        <DetailItem
+          label={t("integrations.channel.details.class")}
+          value={t(channelClassKey(connector.channelClass))}
+        />
+      </div>
+
+      {isAuthChallengeStep(step.kind) ? (
+        <ChannelAuthChallengePanel
+          challenge={challenge}
+          challengeType={resolveChallengeType({
+            challenge,
+            stepKind: step.kind
+          })}
+          connectorId={connector.connectorId}
+          locale={locale}
+          stepKind={step.kind}
+          t={t}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+function GenericChannelStepper({
+  channel,
+  currentStepId,
+  t
+}: {
+  channel: InternalChannelCatalogItem;
+  currentStepId: string;
+  t: Translator;
+}): ReactNode {
+  const currentIndex = channel.onboarding.steps.findIndex(
+    (step) => step.id === currentStepId
+  );
+  const normalizedCurrentIndex = currentIndex >= 0 ? currentIndex : 0;
+
+  return (
+    <ol
+      className="setupStepList"
+      aria-label={t("integrations.channel.onboardingFlow")}
+    >
+      {channel.onboarding.steps.map((step, index) => {
+        const state =
+          index < normalizedCurrentIndex
+            ? "complete"
+            : step.id === currentStepId
+              ? "current"
+              : "pending";
+
+        return (
+          <li className="setupStep" data-state={state} key={step.id}>
+            <span className="setupStepMarker" aria-hidden="true">
+              {state === "complete" ? (
+                <CheckCircle2 size={16} />
+              ) : (
+                <Circle size={16} />
+              )}
+            </span>
+            <span className="setupStepLabel">
+              {t(step.titleKey as I18nMessageKey)}
+            </span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
 
 function ConnectorListItem({
   connector,
@@ -297,6 +459,194 @@ function channelHealthStatusKey(
   status: InternalChannelConnectorSummary["healthStatus"]
 ): I18nMessageKey {
   return `integrations.channel.health.${status}` as I18nMessageKey;
+}
+
+function channelClassKey(
+  channelClass: InternalChannelConnectorSummary["channelClass"]
+): I18nMessageKey {
+  return `integrations.channel.class.${channelClass}` as I18nMessageKey;
+}
+
+function selectChannelConnector(input: {
+  connectors: readonly InternalChannelConnectorSummary[];
+  requestedConnectorId?: string;
+}): InternalChannelConnectorSummary | undefined {
+  if (input.requestedConnectorId) {
+    const requested = input.connectors.find(
+      (connector) => connector.connectorId === input.requestedConnectorId
+    );
+
+    if (requested) {
+      return requested;
+    }
+  }
+
+  return (
+    input.connectors.find(
+      (connector) => connector.channelType === "telegram_bot"
+    ) ?? input.connectors[0]
+  );
+}
+
+async function loadOptionalChannelAuthChallenge(input: {
+  challengeId: string;
+  connectorId: string;
+  options: { effectivePermissionOverride: "modules.manage" };
+}): Promise<InternalChannelAuthChallenge | undefined> {
+  try {
+    const response = await loadChannelAuthChallenge(
+      {
+        challengeId: input.challengeId,
+        connectorId: input.connectorId
+      },
+      input.options
+    );
+
+    return response.challenge;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveGenericChannelStep(input: {
+  challenge?: InternalChannelAuthChallenge;
+  channel: InternalChannelCatalogItem | undefined;
+  connector: InternalChannelConnectorSummary;
+}): {
+  id: string;
+  kind: InternalChannelCatalogItem["onboarding"]["steps"][number]["kind"];
+} {
+  const challengeStepKind = resolveChallengeStepKind(input.challenge);
+
+  if (challengeStepKind) {
+    return (
+      findStepByKind(input.channel, challengeStepKind) ?? {
+        id: challengeStepKind,
+        kind: challengeStepKind
+      }
+    );
+  }
+
+  if (input.connector.status === "connected") {
+    return (
+      findStepByKind(input.channel, "complete") ?? {
+        id: "complete",
+        kind: "complete"
+      }
+    );
+  }
+
+  return (
+    findStepByKind(input.channel, "qr_code") ??
+    findStepByKind(input.channel, "phone_number") ??
+    findStepByKind(input.channel, "waiting") ?? {
+      id: "waiting",
+      kind: "waiting"
+    }
+  );
+}
+
+function resolveChallengeStepKind(
+  challenge: InternalChannelAuthChallenge | undefined
+):
+  | "qr_code"
+  | "phone_number"
+  | "verification_code"
+  | "password"
+  | "waiting"
+  | "complete"
+  | undefined {
+  if (!challenge) {
+    return undefined;
+  }
+
+  if (challenge.status === "succeeded") {
+    return "complete";
+  }
+
+  if (challenge.status === "requires_code") {
+    return "verification_code";
+  }
+
+  if (challenge.status === "requires_password") {
+    return "password";
+  }
+
+  if (
+    (challenge.status === "pending" || challenge.status === "waiting") &&
+    challenge.challengeType === "qr"
+  ) {
+    return "qr_code";
+  }
+
+  if (challenge.status === "pending" || challenge.status === "waiting") {
+    return "waiting";
+  }
+
+  return undefined;
+}
+
+function findStepByKind(
+  channel: InternalChannelCatalogItem | undefined,
+  kind: InternalChannelCatalogItem["onboarding"]["steps"][number]["kind"]
+):
+  | {
+      id: string;
+      kind: InternalChannelCatalogItem["onboarding"]["steps"][number]["kind"];
+    }
+  | undefined {
+  return channel?.onboarding.steps.find((step) => step.kind === kind);
+}
+
+function isAuthChallengeStep(
+  kind: InternalChannelCatalogItem["onboarding"]["steps"][number]["kind"]
+): kind is
+  | "qr_code"
+  | "phone_number"
+  | "verification_code"
+  | "password"
+  | "waiting"
+  | "complete" {
+  return (
+    kind === "qr_code" ||
+    kind === "phone_number" ||
+    kind === "verification_code" ||
+    kind === "password" ||
+    kind === "waiting" ||
+    kind === "complete"
+  );
+}
+
+function resolveChallengeType(input: {
+  challenge?: InternalChannelAuthChallenge;
+  stepKind:
+    | "qr_code"
+    | "phone_number"
+    | "verification_code"
+    | "password"
+    | "waiting"
+    | "complete";
+}): InternalChannelAuthChallenge["challengeType"] {
+  if (input.challenge) {
+    return input.challenge.challengeType;
+  }
+
+  if (
+    input.stepKind === "phone_number" ||
+    input.stepKind === "verification_code"
+  ) {
+    return "phone_code";
+  }
+
+  if (input.stepKind === "password") {
+    return "password";
+  }
+
+  if (input.stepKind === "qr_code") {
+    return "qr";
+  }
+
+  return "reauth";
 }
 
 function normalizeOptionalSearchParam(

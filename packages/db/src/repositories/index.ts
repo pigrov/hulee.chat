@@ -30,6 +30,12 @@ export {
   createSqlChannelConnectorRepository
 } from "./sql-channel-connector-repository";
 export {
+  buildFindChannelAuthChallengeSql,
+  buildFindLatestActiveChannelAuthChallengeSql,
+  buildUpsertChannelAuthChallengeSql,
+  createSqlChannelAuthChallengeRepository
+} from "./sql-channel-auth-challenge-repository";
+export {
   buildFindEnabledTenantModuleConfigByConfigStringSql,
   buildFindEnabledTenantModuleConfigSql,
   buildFindTenantModuleConfigSql,
@@ -206,6 +212,13 @@ export type {
   ListTenantChannelConnectorsInput,
   UpsertChannelConnectorInput
 } from "./sql-channel-connector-repository";
+export type {
+  ChannelAuthChallengeRecord,
+  ChannelAuthChallengeRepository,
+  FindChannelAuthChallengeInput,
+  FindLatestActiveChannelAuthChallengeInput,
+  UpsertChannelAuthChallengeInput
+} from "./sql-channel-auth-challenge-repository";
 export type {
   FindEnabledTenantModuleConfigByConfigStringInput,
   FindEnabledTenantModuleConfigInput,

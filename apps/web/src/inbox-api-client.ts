@@ -1,4 +1,7 @@
 import {
+  internalChannelAuthChallengeResponseSchema,
+  internalChannelAuthChallengeStartRequestSchema,
+  internalChannelAuthChallengeSubmitRequestSchema,
   internalChannelConnectorCreateRequestSchema,
   internalChannelConnectorSummarySchema,
   internalChannelCatalogResponseSchema,
@@ -22,6 +25,9 @@ import {
   internalTelegramIntegrationResponseSchema,
   internalTelegramIntegrationUpdateRequestSchema,
   type InternalChannelCatalogResponse,
+  type InternalChannelAuthChallengeResponse,
+  type InternalChannelAuthChallengeStartRequest,
+  type InternalChannelAuthChallengeSubmitRequest,
   type InternalChannelConnectorCreateRequest,
   type InternalChannelConnectorSummary,
   type InternalChannelConnectorsResponse,
@@ -57,6 +63,8 @@ export type InboxMessage = InternalInboxMessage;
 export type InboxViewModel = InternalInboxViewResponse;
 export type TenantBrandViewModel = InternalTenantBrandResponse;
 export type ChannelCatalogViewModel = InternalChannelCatalogResponse;
+export type ChannelAuthChallengeViewModel =
+  InternalChannelAuthChallengeResponse;
 export type ChannelConnectorsViewModel = InternalChannelConnectorsResponse;
 export type ChannelConnectorViewModel = InternalChannelConnectorSummary;
 export type TelegramIntegrationViewModel = InternalTelegramIntegrationResponse;
@@ -554,6 +562,151 @@ export async function deleteChannelConnector(
   return internalChannelConnectorSummarySchema.parse(await response.json());
 }
 
+export async function startChannelAuthChallenge(
+  input: {
+    connectorId: string;
+    request: InternalChannelAuthChallengeStartRequest;
+  },
+  options: InternalApiAccessOptions<"modules.manage">
+): Promise<ChannelAuthChallengeViewModel> {
+  const connectorId = input.connectorId.trim();
+  const request = internalChannelAuthChallengeStartRequestSchema.parse(
+    input.request
+  );
+  const url = channelAuthChallengeCollectionUrl(connectorId);
+  const response = await fetch(url, {
+    method: "POST",
+    cache: "no-store",
+    headers: {
+      ...(await buildInternalApiHeaders({
+        method: "POST",
+        path: internalPath(url),
+        body: request,
+        effectivePermissionOverride: requireEffectivePermissionOverride(
+          options,
+          "modules.manage"
+        )
+      })),
+      "content-type": "application/json; charset=utf-8"
+    },
+    body: JSON.stringify(request)
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Internal channel auth challenge start API returned HTTP ${response.status}.`
+    );
+  }
+
+  return internalChannelAuthChallengeResponseSchema.parse(
+    await response.json()
+  );
+}
+
+export async function loadChannelAuthChallenge(
+  input: { connectorId: string; challengeId: string },
+  options: InternalApiAccessOptions<"modules.manage">
+): Promise<ChannelAuthChallengeViewModel> {
+  const url = channelAuthChallengeItemUrl(input.connectorId, input.challengeId);
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: await buildInternalApiHeaders({
+      method: "GET",
+      path: internalPath(url),
+      effectivePermissionOverride: requireEffectivePermissionOverride(
+        options,
+        "modules.manage"
+      )
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Internal channel auth challenge load API returned HTTP ${response.status}.`
+    );
+  }
+
+  return internalChannelAuthChallengeResponseSchema.parse(
+    await response.json()
+  );
+}
+
+export async function submitChannelAuthChallenge(
+  input: {
+    connectorId: string;
+    challengeId: string;
+    request: InternalChannelAuthChallengeSubmitRequest;
+  },
+  options: InternalApiAccessOptions<"modules.manage">
+): Promise<ChannelAuthChallengeViewModel> {
+  const request = internalChannelAuthChallengeSubmitRequestSchema.parse(
+    input.request
+  );
+  const url = new URL(
+    `${channelAuthChallengeItemPath(input.connectorId, input.challengeId)}/submit`,
+    resolveInternalApiBaseUrl()
+  );
+  const response = await fetch(url, {
+    method: "POST",
+    cache: "no-store",
+    headers: {
+      ...(await buildInternalApiHeaders({
+        method: "POST",
+        path: internalPath(url),
+        body: request,
+        effectivePermissionOverride: requireEffectivePermissionOverride(
+          options,
+          "modules.manage"
+        )
+      })),
+      "content-type": "application/json; charset=utf-8"
+    },
+    body: JSON.stringify(request)
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Internal channel auth challenge submit API returned HTTP ${response.status}.`
+    );
+  }
+
+  return internalChannelAuthChallengeResponseSchema.parse(
+    await response.json()
+  );
+}
+
+export async function cancelChannelAuthChallenge(
+  input: { connectorId: string; challengeId: string },
+  options: InternalApiAccessOptions<"modules.manage">
+): Promise<ChannelAuthChallengeViewModel> {
+  const url = new URL(
+    `${channelAuthChallengeItemPath(input.connectorId, input.challengeId)}/cancel`,
+    resolveInternalApiBaseUrl()
+  );
+  const response = await fetch(url, {
+    method: "POST",
+    cache: "no-store",
+    headers: await buildInternalApiHeaders({
+      method: "POST",
+      path: internalPath(url),
+      effectivePermissionOverride: requireEffectivePermissionOverride(
+        options,
+        "modules.manage"
+      )
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Internal channel auth challenge cancel API returned HTTP ${response.status}.`
+    );
+  }
+
+  return internalChannelAuthChallengeResponseSchema.parse(
+    await response.json()
+  );
+}
+
 export async function loadTelegramIntegration(
   options: InternalApiAccessOptions<"modules.manage">,
   input?: { connectorId?: string }
@@ -715,6 +868,34 @@ function appendConnectorId(url: URL, connectorId: string | undefined): void {
   if (normalized && normalized.length > 0) {
     url.searchParams.set("connectorId", normalized);
   }
+}
+
+function channelAuthChallengeCollectionUrl(connectorId: string): URL {
+  return new URL(
+    `/internal/v1/channels/connectors/${encodeURIComponent(
+      connectorId.trim()
+    )}/auth-challenges`,
+    resolveInternalApiBaseUrl()
+  );
+}
+
+function channelAuthChallengeItemUrl(
+  connectorId: string,
+  challengeId: string
+): URL {
+  return new URL(
+    channelAuthChallengeItemPath(connectorId, challengeId),
+    resolveInternalApiBaseUrl()
+  );
+}
+
+function channelAuthChallengeItemPath(
+  connectorId: string,
+  challengeId: string
+): string {
+  return `/internal/v1/channels/connectors/${encodeURIComponent(
+    connectorId.trim()
+  )}/auth-challenges/${encodeURIComponent(challengeId.trim())}`;
 }
 
 type InternalApiResponseSchema<TResponse> = {

@@ -5,17 +5,24 @@ import type {
   ChannelConnectorStatus,
   ChannelType,
   EmployeeId,
+  InternalChannelAuthChallengeStatus,
+  InternalChannelAuthChallengeType,
   TenantId
 } from "@hulee/contracts";
 import type {
+  ChannelAuthChallengeRecord,
+  ChannelAuthChallengeRepository,
   ChannelConnectorRecord,
   ChannelConnectorRepository,
   FindActiveChannelConnectorByConfigStringInput,
   FindActiveChannelConnectorByExternalIdInput,
+  FindChannelAuthChallengeInput,
   FindChannelConnectorInput,
   FindFirstChannelConnectorByTypeInput,
+  FindLatestActiveChannelAuthChallengeInput,
   ListActiveChannelConnectorsByTypeInput,
   ListTenantChannelConnectorsInput,
+  UpsertChannelAuthChallengeInput,
   UpsertChannelConnectorInput
 } from "@hulee/db";
 import { describe, expect, it } from "vitest";
@@ -84,6 +91,78 @@ describe("internal integrations service", () => {
     expect(
       response.channels.every((channel) => channel.onboarding.steps.length > 0)
     ).toBe(true);
+  });
+
+  it("manages user-bridge auth challenge lifecycle without exposing secrets", async () => {
+    const authChallengeRepository =
+      new InMemoryChannelAuthChallengeRepository();
+    const connectorRepository = new InMemoryChannelConnectorRepository([
+      createUserBridgeConnector()
+    ]);
+    const service = createInternalIntegrationService({
+      connectorRepository,
+      authChallengeRepository,
+      now: () => now
+    });
+
+    const startResponse = await service.startChannelAuthChallenge(context, {
+      connectorId: "telegram_qr_bridge:tenant-integrations",
+      request: {
+        challengeType: "phone_code",
+        phoneNumber: "+79990000000"
+      }
+    });
+    const secondStartResponse = await service.startChannelAuthChallenge(
+      context,
+      {
+        connectorId: "telegram_qr_bridge:tenant-integrations",
+        request: {
+          challengeType: "phone_code",
+          phoneNumber: "+79990000000"
+        }
+      }
+    );
+
+    expect(startResponse).toMatchObject({
+      challenge: {
+        connectorId: "telegram_qr_bridge:tenant-integrations",
+        challengeType: "phone_code",
+        status: "requires_code",
+        publicPayload: {
+          phoneNumber: "+79990000000"
+        }
+      }
+    });
+    expect(secondStartResponse.challenge.challengeId).toBe(
+      startResponse.challenge.challengeId
+    );
+    expect(JSON.stringify(startResponse)).not.toContain("secret");
+
+    await expect(
+      service.submitChannelAuthChallenge(context, {
+        connectorId: "telegram_qr_bridge:tenant-integrations",
+        challengeId: startResponse.challenge.challengeId,
+        request: {
+          code: "12345"
+        }
+      })
+    ).resolves.toMatchObject({
+      challenge: {
+        status: "waiting"
+      }
+    });
+
+    await expect(
+      service.cancelChannelAuthChallenge(context, {
+        connectorId: "telegram_qr_bridge:tenant-integrations",
+        challengeId: startResponse.challenge.challengeId
+      })
+    ).resolves.toMatchObject({
+      challenge: {
+        status: "cancelled",
+        completedAt: now.toISOString()
+      }
+    });
   });
 
   it("creates draft Telegram Bot connectors with server-side identity", async () => {
@@ -755,6 +834,62 @@ class InMemoryChannelConnectorRepository implements ChannelConnectorRepository {
   }
 }
 
+class InMemoryChannelAuthChallengeRepository implements ChannelAuthChallengeRepository {
+  readonly records = new Map<string, ChannelAuthChallengeRecord>();
+
+  async findChallenge(
+    input: FindChannelAuthChallengeInput
+  ): Promise<ChannelAuthChallengeRecord | null> {
+    const record = this.records.get(input.challengeId) ?? null;
+
+    return record?.tenantId === input.tenantId ? record : null;
+  }
+
+  async findLatestActiveChallenge(
+    input: FindLatestActiveChannelAuthChallengeInput
+  ): Promise<ChannelAuthChallengeRecord | null> {
+    return (
+      [...this.records.values()]
+        .filter(
+          (record) =>
+            record.tenantId === input.tenantId &&
+            record.connectorId === input.connectorId &&
+            (!input.challengeType ||
+              record.challengeType === input.challengeType) &&
+            (record.status === "pending" ||
+              record.status === "waiting" ||
+              record.status === "requires_code" ||
+              record.status === "requires_password")
+        )
+        .sort(
+          (left, right) => right.createdAt.getTime() - left.createdAt.getTime()
+        )[0] ?? null
+    );
+  }
+
+  async upsertChallenge(input: UpsertChannelAuthChallengeInput): Promise<void> {
+    const existing = this.records.get(input.id);
+    const updatedAt = input.updatedAt;
+
+    this.records.set(input.id, {
+      id: input.id,
+      tenantId: input.tenantId,
+      connectorId: String(input.connectorId) as ChannelConnectorId,
+      challengeType: input.challengeType as InternalChannelAuthChallengeType,
+      status: input.status as InternalChannelAuthChallengeStatus,
+      publicPayload: input.publicPayload ?? {},
+      secretPayloadEncrypted: input.secretPayloadEncrypted ?? null,
+      errorCode: input.errorCode ?? null,
+      errorMessage: input.errorMessage ?? null,
+      expiresAt: input.expiresAt ?? null,
+      completedAt: input.completedAt ?? null,
+      createdByEmployeeId: input.createdByEmployeeId ?? null,
+      createdAt: existing?.createdAt ?? updatedAt,
+      updatedAt
+    });
+  }
+}
+
 class InMemorySecretWriter {
   readonly upserts: {
     tenantId: TenantId;
@@ -797,6 +932,28 @@ function createTelegramConnector(input: {
     onboardingState: {},
     config: input.config,
     diagnostics: input.diagnostics,
+    createdByEmployeeId: null,
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function createUserBridgeConnector(): ChannelConnectorRecord {
+  return {
+    id: "telegram_qr_bridge:tenant-integrations" as ChannelConnectorId,
+    tenantId,
+    channelType: "telegram_qr_bridge",
+    channelClass: "user_bridge",
+    provider: "telegram",
+    displayName: "Telegram personal",
+    status: "onboarding",
+    healthStatus: "unknown",
+    capabilities: {},
+    onboardingState: {
+      step: "qr"
+    },
+    config: {},
+    diagnostics: {},
     createdByEmployeeId: null,
     createdAt: now,
     updatedAt: now

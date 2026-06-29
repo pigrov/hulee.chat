@@ -4,6 +4,9 @@ import {
   internalApiErrorResponseSchema,
   internalAccessDecisionRequestSchema,
   internalAccessDecisionResponseSchema,
+  internalChannelAuthChallengeResponseSchema,
+  internalChannelAuthChallengeStartRequestSchema,
+  internalChannelAuthChallengeSubmitRequestSchema,
   internalChannelCatalogResponseSchema,
   internalChannelConnectorCreateRequestSchema,
   internalChannelConnectorsResponseSchema,
@@ -720,6 +723,66 @@ describe("internal API v1 schemas", () => {
       channelType: "telegram_bot",
       displayName: "Sales Telegram"
     });
+  });
+
+  it("parses channel auth challenge contracts without secret payloads", () => {
+    expect(
+      internalChannelAuthChallengeStartRequestSchema.parse({
+        challengeType: "phone_code",
+        phoneNumber: " +79990000000 "
+      })
+    ).toEqual({
+      challengeType: "phone_code",
+      phoneNumber: "+79990000000"
+    });
+
+    expect(
+      internalChannelAuthChallengeSubmitRequestSchema.parse({
+        code: " 12345 "
+      })
+    ).toEqual({
+      code: "12345"
+    });
+
+    expect(
+      internalChannelAuthChallengeResponseSchema.parse({
+        challenge: {
+          challengeId: "challenge-1",
+          connectorId: "telegram_qr_bridge:tenant-1",
+          challengeType: "qr",
+          status: "waiting",
+          publicPayload: {
+            qrPayloadRef: "qr-ref-1",
+            expiresAt: "2026-06-29T10:00:00.000Z"
+          },
+          expiresAt: "2026-06-29T10:00:00.000Z",
+          createdAt: "2026-06-29T09:55:00.000Z",
+          updatedAt: "2026-06-29T09:55:00.000Z"
+        }
+      })
+    ).toMatchObject({
+      challenge: {
+        challengeId: "challenge-1",
+        publicPayload: {
+          qrPayloadRef: "qr-ref-1"
+        }
+      }
+    });
+
+    expect(() =>
+      internalChannelAuthChallengeResponseSchema.parse({
+        challenge: {
+          challengeId: "challenge-1",
+          connectorId: "telegram_qr_bridge:tenant-1",
+          challengeType: "qr",
+          status: "waiting",
+          publicPayload: {},
+          secretPayloadEncrypted: "encrypted-session",
+          createdAt: "2026-06-29T09:55:00.000Z",
+          updatedAt: "2026-06-29T09:55:00.000Z"
+        }
+      })
+    ).toThrow();
   });
 
   it("allows Telegram updates to carry a write-only bot token", () => {

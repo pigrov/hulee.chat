@@ -378,6 +378,40 @@ function createHandler(input?: {
   }));
   const setTelegramWebhook = vi.fn(refreshTelegramDiagnostics);
   const deleteTelegramWebhook = vi.fn(refreshTelegramDiagnostics);
+  const channelAuthChallengeResponse = {
+    challenge: {
+      challengeId: "challenge-1",
+      connectorId: "telegram_qr_bridge:tenant-1",
+      challengeType: "phone_code" as const,
+      status: "requires_code" as const,
+      publicPayload: {
+        phoneNumber: "+79990000000",
+        expiresAt: "2026-06-29T10:00:00.000Z"
+      },
+      expiresAt: "2026-06-29T10:00:00.000Z",
+      createdAt: "2026-06-29T09:55:00.000Z",
+      updatedAt: "2026-06-29T09:55:00.000Z"
+    }
+  };
+  const startChannelAuthChallenge = vi.fn(
+    async () => channelAuthChallengeResponse
+  );
+  const loadChannelAuthChallenge = vi.fn(
+    async () => channelAuthChallengeResponse
+  );
+  const submitChannelAuthChallenge = vi.fn(async () => ({
+    challenge: {
+      ...channelAuthChallengeResponse.challenge,
+      status: "waiting" as const
+    }
+  }));
+  const cancelChannelAuthChallenge = vi.fn(async () => ({
+    challenge: {
+      ...channelAuthChallengeResponse.challenge,
+      status: "cancelled" as const,
+      completedAt: "2026-06-29T09:56:00.000Z"
+    }
+  }));
   const loadTenantBrand = vi.fn(async () => ({
     brand: inboxView.tenant.brand
   }));
@@ -446,6 +480,10 @@ function createHandler(input?: {
       createChannelConnector,
       disableChannelConnector,
       deleteChannelConnector,
+      startChannelAuthChallenge,
+      loadChannelAuthChallenge,
+      submitChannelAuthChallenge,
+      cancelChannelAuthChallenge,
       loadTelegramIntegration,
       updateTelegramIntegration,
       refreshTelegramDiagnostics,
@@ -489,6 +527,10 @@ function createHandler(input?: {
     createChannelConnector,
     disableChannelConnector,
     deleteChannelConnector,
+    startChannelAuthChallenge,
+    loadChannelAuthChallenge,
+    submitChannelAuthChallenge,
+    cancelChannelAuthChallenge,
     loadTelegramIntegration,
     updateTelegramIntegration,
     refreshTelegramDiagnostics,
@@ -1542,6 +1584,97 @@ describe("internal API handler", () => {
     expect(deleteChannelConnector).toHaveBeenCalledWith(modulesManageSession, {
       connectorId: "telegram_bot:tenant-1"
     });
+  });
+
+  it("manages channel auth challenges through modules.manage permission", async () => {
+    const modulesManageSession = sessionWithPermissions(["modules.manage"]);
+    const {
+      handler,
+      startChannelAuthChallenge,
+      loadChannelAuthChallenge,
+      submitChannelAuthChallenge,
+      cancelChannelAuthChallenge
+    } = createHandler({
+      session: modulesManageSession
+    });
+    const connectorPath = "telegram_qr_bridge%3Atenant-1";
+
+    const startResponse = await handler.handle({
+      method: "POST",
+      path: `/internal/v1/channels/connectors/${connectorPath}/auth-challenges`,
+      body: {
+        challengeType: "phone_code",
+        phoneNumber: "+79990000000"
+      }
+    });
+    const viewResponse = await handler.handle({
+      method: "GET",
+      path: `/internal/v1/channels/connectors/${connectorPath}/auth-challenges/challenge-1`
+    });
+    const submitResponse = await handler.handle({
+      method: "POST",
+      path: `/internal/v1/channels/connectors/${connectorPath}/auth-challenges/challenge-1/submit`,
+      body: {
+        code: "12345"
+      }
+    });
+    const cancelResponse = await handler.handle({
+      method: "POST",
+      path: `/internal/v1/channels/connectors/${connectorPath}/auth-challenges/challenge-1/cancel`
+    });
+
+    expect(startResponse.status).toBe(201);
+    expect(startResponse.body).toMatchObject({
+      challenge: {
+        challengeType: "phone_code",
+        status: "requires_code"
+      }
+    });
+    expect(viewResponse.status).toBe(200);
+    expect(submitResponse.body).toMatchObject({
+      challenge: {
+        status: "waiting"
+      }
+    });
+    expect(cancelResponse.body).toMatchObject({
+      challenge: {
+        status: "cancelled"
+      }
+    });
+    expect(startChannelAuthChallenge).toHaveBeenCalledWith(
+      modulesManageSession,
+      {
+        connectorId: "telegram_qr_bridge:tenant-1",
+        request: {
+          challengeType: "phone_code",
+          phoneNumber: "+79990000000"
+        }
+      }
+    );
+    expect(loadChannelAuthChallenge).toHaveBeenCalledWith(
+      modulesManageSession,
+      {
+        connectorId: "telegram_qr_bridge:tenant-1",
+        challengeId: "challenge-1"
+      }
+    );
+    expect(submitChannelAuthChallenge).toHaveBeenCalledWith(
+      modulesManageSession,
+      {
+        connectorId: "telegram_qr_bridge:tenant-1",
+        challengeId: "challenge-1",
+        request: {
+          code: "12345"
+        }
+      }
+    );
+    expect(cancelChannelAuthChallenge).toHaveBeenCalledWith(
+      modulesManageSession,
+      {
+        connectorId: "telegram_qr_bridge:tenant-1",
+        challengeId: "challenge-1"
+      }
+    );
   });
 
   it("updates Telegram integration config after request validation", async () => {

@@ -1,5 +1,10 @@
 import type {
   EmployeeId,
+  InternalChannelAuthChallengeResponse,
+  InternalChannelAuthChallengeStartRequest,
+  InternalChannelAuthChallengeStatus,
+  InternalChannelAuthChallengeSubmitRequest,
+  InternalChannelAuthChallengeType,
   InternalChannelCatalogResponse,
   InternalChannelConnectorCreateRequest,
   InternalChannelConnectorHealthStatus,
@@ -17,9 +22,14 @@ import type {
   PlatformErrorCode,
   TenantId
 } from "@hulee/contracts";
-import { internalTelegramIntegrationDiagnosticsSchema } from "@hulee/contracts";
+import {
+  internalTelegramIntegrationDiagnosticsSchema,
+  isPlatformErrorCode
+} from "@hulee/contracts";
 import { CoreError } from "@hulee/core";
 import type {
+  ChannelAuthChallengeRecord,
+  ChannelAuthChallengeRepository,
   ChannelConnectorRecord,
   ChannelConnectorRepository,
   TenantSecretRepository
@@ -60,6 +70,29 @@ export type InternalIntegrationService = {
     context: InternalIntegrationContext,
     input: { connectorId: string }
   ): Promise<InternalChannelConnectorSummary>;
+  startChannelAuthChallenge(
+    context: InternalIntegrationContext,
+    input: {
+      connectorId: string;
+      request: InternalChannelAuthChallengeStartRequest;
+    }
+  ): Promise<InternalChannelAuthChallengeResponse>;
+  loadChannelAuthChallenge(
+    context: InternalIntegrationContext,
+    input: { connectorId: string; challengeId: string }
+  ): Promise<InternalChannelAuthChallengeResponse>;
+  submitChannelAuthChallenge(
+    context: InternalIntegrationContext,
+    input: {
+      connectorId: string;
+      challengeId: string;
+      request: InternalChannelAuthChallengeSubmitRequest;
+    }
+  ): Promise<InternalChannelAuthChallengeResponse>;
+  cancelChannelAuthChallenge(
+    context: InternalIntegrationContext,
+    input: { connectorId: string; challengeId: string }
+  ): Promise<InternalChannelAuthChallengeResponse>;
   loadTelegramIntegration(
     context: InternalIntegrationContext,
     input?: { connectorId?: string }
@@ -105,6 +138,7 @@ export type TelegramBotApiClientFactory = (
 
 export type InternalIntegrationServiceOptions = {
   connectorRepository: ChannelConnectorRepository;
+  authChallengeRepository?: ChannelAuthChallengeRepository;
   secretResolver?: SecretResolver;
   secretWriter?: SecretWriter;
   botApiClientFactory?: TelegramBotApiClientFactory;
@@ -512,6 +546,182 @@ export function createInternalIntegrationService(
       });
     },
 
+    async startChannelAuthChallenge(context, input) {
+      const authChallengeRepository = requireAuthChallengeRepository(
+        options.authChallengeRepository
+      );
+      const updatedAt = now();
+      const connector = await loadUserBridgeConnector({
+        repository: options.connectorRepository,
+        tenantId: context.tenantId,
+        connectorId: input.connectorId
+      });
+      const existingChallenge =
+        await authChallengeRepository.findLatestActiveChallenge({
+          tenantId: context.tenantId,
+          connectorId: connector.id,
+          challengeType: input.request.challengeType
+        });
+
+      if (
+        existingChallenge &&
+        !isChannelAuthChallengeExpired(existingChallenge, updatedAt)
+      ) {
+        return channelAuthChallengeResponseFromRecord(existingChallenge);
+      }
+
+      if (
+        existingChallenge &&
+        isChannelAuthChallengeExpired(existingChallenge, updatedAt)
+      ) {
+        await authChallengeRepository.upsertChallenge({
+          ...authChallengePersistenceInputFromRecord(existingChallenge),
+          status: "expired",
+          updatedAt,
+          completedAt: updatedAt
+        });
+      }
+
+      const expiresAt = new Date(updatedAt.getTime() + 10 * 60 * 1000);
+      const status = initialChannelAuthChallengeStatus(
+        input.request.challengeType
+      );
+      const publicPayload = channelAuthChallengePublicPayload({
+        challengeType: input.request.challengeType,
+        phoneNumber: input.request.phoneNumber,
+        expiresAt
+      });
+      const challengeId = createRandomChannelAuthChallengeId();
+
+      await authChallengeRepository.upsertChallenge({
+        id: challengeId,
+        tenantId: context.tenantId,
+        connectorId: connector.id,
+        challengeType: input.request.challengeType,
+        status,
+        publicPayload,
+        expiresAt,
+        createdByEmployeeId: context.employeeId,
+        updatedAt
+      });
+
+      const challenge = await authChallengeRepository.findChallenge({
+        tenantId: context.tenantId,
+        challengeId
+      });
+
+      if (!challenge) {
+        throw new CoreError("validation.failed");
+      }
+
+      return channelAuthChallengeResponseFromRecord(challenge);
+    },
+
+    async loadChannelAuthChallenge(context, input) {
+      const authChallengeRepository = requireAuthChallengeRepository(
+        options.authChallengeRepository
+      );
+      const challenge = await loadConnectorAuthChallenge({
+        repository: authChallengeRepository,
+        tenantId: context.tenantId,
+        connectorId: input.connectorId,
+        challengeId: input.challengeId
+      });
+      const updatedAt = now();
+
+      if (isChannelAuthChallengeExpired(challenge, updatedAt)) {
+        await authChallengeRepository.upsertChallenge({
+          ...authChallengePersistenceInputFromRecord(challenge),
+          status: "expired",
+          completedAt: updatedAt,
+          updatedAt
+        });
+
+        const expiredChallenge = await authChallengeRepository.findChallenge({
+          tenantId: context.tenantId,
+          challengeId: challenge.id
+        });
+
+        if (expiredChallenge) {
+          return channelAuthChallengeResponseFromRecord(expiredChallenge);
+        }
+      }
+
+      return channelAuthChallengeResponseFromRecord(challenge);
+    },
+
+    async submitChannelAuthChallenge(context, input) {
+      const authChallengeRepository = requireAuthChallengeRepository(
+        options.authChallengeRepository
+      );
+      const challenge = await loadConnectorAuthChallenge({
+        repository: authChallengeRepository,
+        tenantId: context.tenantId,
+        connectorId: input.connectorId,
+        challengeId: input.challengeId
+      });
+      const updatedAt = now();
+
+      if (isChannelAuthChallengeTerminal(challenge.status)) {
+        return channelAuthChallengeResponseFromRecord(challenge);
+      }
+
+      const nextStatus = submittedChannelAuthChallengeStatus({
+        challengeType: challenge.challengeType,
+        currentStatus: challenge.status,
+        hasCode: Boolean(input.request.code),
+        hasPassword: Boolean(input.request.password)
+      });
+
+      await authChallengeRepository.upsertChallenge({
+        ...authChallengePersistenceInputFromRecord(challenge),
+        status: nextStatus,
+        updatedAt
+      });
+
+      const updatedChallenge = await authChallengeRepository.findChallenge({
+        tenantId: context.tenantId,
+        challengeId: challenge.id
+      });
+
+      if (!updatedChallenge) {
+        throw new CoreError("validation.failed");
+      }
+
+      return channelAuthChallengeResponseFromRecord(updatedChallenge);
+    },
+
+    async cancelChannelAuthChallenge(context, input) {
+      const authChallengeRepository = requireAuthChallengeRepository(
+        options.authChallengeRepository
+      );
+      const challenge = await loadConnectorAuthChallenge({
+        repository: authChallengeRepository,
+        tenantId: context.tenantId,
+        connectorId: input.connectorId,
+        challengeId: input.challengeId
+      });
+      const updatedAt = now();
+
+      await authChallengeRepository.upsertChallenge({
+        ...authChallengePersistenceInputFromRecord(challenge),
+        status: "cancelled",
+        completedAt: updatedAt,
+        updatedAt
+      });
+
+      const cancelledChallenge = await authChallengeRepository.findChallenge({
+        tenantId: context.tenantId,
+        challengeId: challenge.id
+      });
+
+      if (!cancelledChallenge) {
+        throw new CoreError("validation.failed");
+      }
+
+      return channelAuthChallengeResponseFromRecord(cancelledChallenge);
+    },
+
     async loadTelegramIntegration(context, input) {
       const record = await loadExistingTelegramConnector({
         repository: options.connectorRepository,
@@ -797,6 +1007,238 @@ async function updateChannelConnectorLifecycle(input: {
   return summary;
 }
 
+function requireAuthChallengeRepository(
+  repository: ChannelAuthChallengeRepository | undefined
+): ChannelAuthChallengeRepository {
+  if (!repository) {
+    throw new CoreError("validation.failed");
+  }
+
+  return repository;
+}
+
+async function loadUserBridgeConnector(input: {
+  repository: ChannelConnectorRepository;
+  tenantId: TenantId;
+  connectorId: string;
+}): Promise<ChannelConnectorRecord> {
+  const connectorId = input.connectorId.trim();
+  const record = connectorId
+    ? await input.repository.findConnector({
+        tenantId: input.tenantId,
+        connectorId
+      })
+    : null;
+
+  if (
+    !record ||
+    record.channelClass !== "user_bridge" ||
+    record.status === "deleted"
+  ) {
+    throw new CoreError("validation.failed");
+  }
+
+  return record;
+}
+
+async function loadConnectorAuthChallenge(input: {
+  repository: ChannelAuthChallengeRepository;
+  tenantId: TenantId;
+  connectorId: string;
+  challengeId: string;
+}): Promise<ChannelAuthChallengeRecord> {
+  const challenge = await input.repository.findChallenge({
+    tenantId: input.tenantId,
+    challengeId: input.challengeId
+  });
+
+  if (!challenge || challenge.connectorId !== input.connectorId.trim()) {
+    throw new CoreError("validation.failed");
+  }
+
+  return challenge;
+}
+
+function authChallengePersistenceInputFromRecord(
+  record: ChannelAuthChallengeRecord
+) {
+  return {
+    id: record.id,
+    tenantId: record.tenantId,
+    connectorId: record.connectorId,
+    challengeType: record.challengeType,
+    status: record.status,
+    publicPayload: record.publicPayload,
+    secretPayloadEncrypted: record.secretPayloadEncrypted,
+    errorCode: record.errorCode,
+    errorMessage: record.errorMessage,
+    expiresAt: record.expiresAt,
+    completedAt: record.completedAt,
+    createdByEmployeeId: record.createdByEmployeeId
+  };
+}
+
+function initialChannelAuthChallengeStatus(
+  challengeType: InternalChannelAuthChallengeType
+): InternalChannelAuthChallengeStatus {
+  switch (challengeType) {
+    case "phone_code":
+      return "requires_code";
+    case "password":
+      return "requires_password";
+    case "qr":
+    case "reauth":
+      return "waiting";
+  }
+}
+
+function submittedChannelAuthChallengeStatus(input: {
+  challengeType: string;
+  currentStatus: string;
+  hasCode: boolean;
+  hasPassword: boolean;
+}): InternalChannelAuthChallengeStatus {
+  if (input.currentStatus === "requires_code" && input.hasCode) {
+    return "waiting";
+  }
+
+  if (input.currentStatus === "requires_password" && input.hasPassword) {
+    return "waiting";
+  }
+
+  return internalChannelAuthChallengeStatus(input.currentStatus) ?? "failed";
+}
+
+function channelAuthChallengePublicPayload(input: {
+  challengeType: InternalChannelAuthChallengeType;
+  phoneNumber?: string;
+  expiresAt: Date;
+}): Record<string, string> {
+  const expiresAt = input.expiresAt.toISOString();
+
+  if (input.challengeType === "phone_code" && input.phoneNumber) {
+    return {
+      phoneNumber: input.phoneNumber,
+      expiresAt
+    };
+  }
+
+  if (input.challengeType === "qr") {
+    return {
+      qrPayloadRef: `challenge:${randomUUID()}`,
+      expiresAt
+    };
+  }
+
+  return {
+    expiresAt
+  };
+}
+
+function isChannelAuthChallengeExpired(
+  challenge: ChannelAuthChallengeRecord,
+  now: Date
+): boolean {
+  return (
+    !isChannelAuthChallengeTerminal(challenge.status) &&
+    challenge.expiresAt !== null &&
+    challenge.expiresAt.getTime() <= now.getTime()
+  );
+}
+
+function isChannelAuthChallengeTerminal(status: string): boolean {
+  return (
+    status === "succeeded" ||
+    status === "failed" ||
+    status === "expired" ||
+    status === "cancelled"
+  );
+}
+
+function channelAuthChallengeResponseFromRecord(
+  record: ChannelAuthChallengeRecord
+): InternalChannelAuthChallengeResponse {
+  return {
+    challenge: {
+      challengeId: record.id,
+      connectorId: record.connectorId,
+      challengeType: internalChannelAuthChallengeType(record.challengeType),
+      status: internalChannelAuthChallengeStatus(record.status) ?? "failed",
+      publicPayload: publicChannelAuthChallengePayload(record.publicPayload),
+      ...(record.errorCode && isPlatformErrorCode(record.errorCode)
+        ? { errorCode: record.errorCode }
+        : {}),
+      ...(record.errorMessage ? { errorMessage: record.errorMessage } : {}),
+      ...(record.expiresAt
+        ? { expiresAt: record.expiresAt.toISOString() }
+        : {}),
+      ...(record.completedAt
+        ? { completedAt: record.completedAt.toISOString() }
+        : {}),
+      createdAt: record.createdAt.toISOString(),
+      updatedAt: record.updatedAt.toISOString()
+    }
+  };
+}
+
+function internalChannelAuthChallengeType(
+  value: string
+): InternalChannelAuthChallengeType {
+  switch (value) {
+    case "qr":
+    case "phone_code":
+    case "password":
+    case "reauth":
+      return value;
+    default:
+      return "reauth";
+  }
+}
+
+function internalChannelAuthChallengeStatus(
+  value: string
+): InternalChannelAuthChallengeStatus | null {
+  switch (value) {
+    case "pending":
+    case "waiting":
+    case "requires_code":
+    case "requires_password":
+    case "succeeded":
+    case "failed":
+    case "expired":
+    case "cancelled":
+      return value;
+    default:
+      return null;
+  }
+}
+
+function publicChannelAuthChallengePayload(
+  payload: unknown
+): InternalChannelAuthChallengeResponse["challenge"]["publicPayload"] {
+  if (!isRecord(payload)) {
+    return {};
+  }
+
+  return {
+    ...(readRecordString(payload, "qrImageDataUrl")
+      ? { qrImageDataUrl: readRecordString(payload, "qrImageDataUrl") }
+      : {}),
+    ...(readRecordString(payload, "qrPayloadRef")
+      ? { qrPayloadRef: readRecordString(payload, "qrPayloadRef") }
+      : {}),
+    ...(readRecordString(payload, "phoneNumber")
+      ? { phoneNumber: readRecordString(payload, "phoneNumber") }
+      : {}),
+    ...(readRecordString(payload, "expiresAt")
+      ? { expiresAt: readRecordString(payload, "expiresAt") }
+      : {}),
+    ...(readRecordString(payload, "operatorHint")
+      ? { operatorHint: readRecordString(payload, "operatorHint") }
+      : {})
+  };
+}
+
 function buildDisabledChannelConnectorDiagnostics(input: {
   record: ChannelConnectorRecord;
   checkedAt: string;
@@ -932,6 +1374,10 @@ function createRandomChannelConnectorId(
   channelType: InternalChannelType
 ): string {
   return `${channelType}:${randomUUID()}`;
+}
+
+function createRandomChannelAuthChallengeId(): string {
+  return `cha_${randomUUID()}`;
 }
 
 function createDefaultTelegramChannelExternalId(): string {

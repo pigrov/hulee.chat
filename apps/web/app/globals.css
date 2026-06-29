@@ -575,6 +575,33 @@ button.iconButton:disabled {
   gap: 8px;
 }
 
+.authChallengeQrBox {
+  display: grid;
+  min-height: 128px;
+  place-items: center;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-raised);
+  color: var(--hulee-color-text-muted);
+}
+
+.authChallengeQrImage {
+  width: min(220px, 100%);
+  aspect-ratio: 1;
+  object-fit: contain;
+}
+
+.authChallengePayload {
+  max-width: 100%;
+  color: var(--hulee-color-text-default);
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
 .buttonRow {
   display: flex;
   flex-wrap: wrap;

@@ -17,6 +17,7 @@ vi.mock("./web-config", () => ({
 import { buildInternalApiHeaders } from "./session";
 import {
   archiveRbacRole,
+  cancelChannelAuthChallenge,
   createChannelConnector,
   createRbacDirectGrant,
   createRbacRole,
@@ -25,6 +26,7 @@ import {
   deleteTelegramWebhook,
   disableChannelConnector,
   loadChannelCatalog,
+  loadChannelAuthChallenge,
   loadChannelConnectors,
   loadRbacDirectGrants,
   loadRbacRoleBindings,
@@ -38,6 +40,8 @@ import {
   revokeRbacRoleBinding,
   sendInboxReply,
   setTelegramWebhook,
+  startChannelAuthChallenge,
+  submitChannelAuthChallenge,
   updateRbacRole,
   updateInboxConversationRouting,
   updateTelegramIntegration,
@@ -355,6 +359,89 @@ describe("inbox API client", () => {
     expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(2, {
       method: "DELETE",
       path: "/internal/v1/channels/connectors/telegram_bot%3Asecond",
+      effectivePermissionOverride: "modules.manage"
+    });
+  });
+
+  it("passes explicit effective permission override for channel auth challenge commands", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const status = String(init?.body ?? "").includes("12345")
+        ? "waiting"
+        : "requires_code";
+
+      return Response.json(channelAuthChallengeResponse(status));
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await startChannelAuthChallenge(
+      {
+        connectorId: "telegram_qr_bridge:second",
+        request: {
+          challengeType: "phone_code",
+          phoneNumber: "+79990000000"
+        }
+      },
+      {
+        effectivePermissionOverride: "modules.manage"
+      }
+    );
+    await loadChannelAuthChallenge(
+      {
+        connectorId: "telegram_qr_bridge:second",
+        challengeId: "challenge-1"
+      },
+      {
+        effectivePermissionOverride: "modules.manage"
+      }
+    );
+    await submitChannelAuthChallenge(
+      {
+        connectorId: "telegram_qr_bridge:second",
+        challengeId: "challenge-1",
+        request: {
+          code: "12345"
+        }
+      },
+      {
+        effectivePermissionOverride: "modules.manage"
+      }
+    );
+    await cancelChannelAuthChallenge(
+      {
+        connectorId: "telegram_qr_bridge:second",
+        challengeId: "challenge-1"
+      },
+      {
+        effectivePermissionOverride: "modules.manage"
+      }
+    );
+
+    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(1, {
+      method: "POST",
+      path: "/internal/v1/channels/connectors/telegram_qr_bridge%3Asecond/auth-challenges",
+      body: {
+        challengeType: "phone_code",
+        phoneNumber: "+79990000000"
+      },
+      effectivePermissionOverride: "modules.manage"
+    });
+    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(2, {
+      method: "GET",
+      path: "/internal/v1/channels/connectors/telegram_qr_bridge%3Asecond/auth-challenges/challenge-1",
+      effectivePermissionOverride: "modules.manage"
+    });
+    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(3, {
+      method: "POST",
+      path: "/internal/v1/channels/connectors/telegram_qr_bridge%3Asecond/auth-challenges/challenge-1/submit",
+      body: {
+        code: "12345"
+      },
+      effectivePermissionOverride: "modules.manage"
+    });
+    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(4, {
+      method: "POST",
+      path: "/internal/v1/channels/connectors/telegram_qr_bridge%3Asecond/auth-challenges/challenge-1/cancel",
       effectivePermissionOverride: "modules.manage"
     });
   });
@@ -700,6 +787,24 @@ function telegramIntegrationResponse(): unknown {
         botApiReachable: true,
         webhookMatchesConfig: true
       }
+    }
+  };
+}
+
+function channelAuthChallengeResponse(status = "requires_code"): unknown {
+  return {
+    challenge: {
+      challengeId: "challenge-1",
+      connectorId: "telegram_qr_bridge:second",
+      challengeType: "phone_code",
+      status,
+      publicPayload: {
+        phoneNumber: "+79990000000",
+        expiresAt: "2026-06-29T10:00:00.000Z"
+      },
+      expiresAt: "2026-06-29T10:00:00.000Z",
+      createdAt: "2026-06-29T09:55:00.000Z",
+      updatedAt: "2026-06-29T09:55:00.000Z"
     }
   };
 }

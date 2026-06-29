@@ -593,6 +593,81 @@ export const internalChannelConnectorCreateRequestSchema = z
   })
   .strict();
 
+export const internalChannelAuthChallengeTypeSchema = z.enum([
+  "qr",
+  "phone_code",
+  "password",
+  "reauth"
+]);
+
+export const internalChannelAuthChallengeStatusSchema = z.enum([
+  "pending",
+  "waiting",
+  "requires_code",
+  "requires_password",
+  "succeeded",
+  "failed",
+  "expired",
+  "cancelled"
+]);
+
+export const internalChannelAuthChallengePublicPayloadSchema = z
+  .object({
+    qrImageDataUrl: z.string().trim().min(1).max(20000).optional(),
+    qrPayloadRef: z.string().trim().min(1).max(500).optional(),
+    phoneNumber: z.string().trim().min(1).max(80).optional(),
+    expiresAt: z.string().datetime({ offset: true }).optional(),
+    operatorHint: z.string().trim().min(1).max(500).optional()
+  })
+  .strict();
+
+export const internalChannelAuthChallengeSchema = z
+  .object({
+    challengeId: z.string().trim().min(1).max(200),
+    connectorId: z.string().trim().min(1).max(200),
+    challengeType: internalChannelAuthChallengeTypeSchema,
+    status: internalChannelAuthChallengeStatusSchema,
+    publicPayload: internalChannelAuthChallengePublicPayloadSchema.default({}),
+    errorCode: internalApiPlatformErrorCodeSchema.optional(),
+    errorMessage: z.string().trim().min(1).max(500).optional(),
+    expiresAt: z.string().datetime({ offset: true }).optional(),
+    completedAt: z.string().datetime({ offset: true }).optional(),
+    createdAt: z.string().datetime({ offset: true }),
+    updatedAt: z.string().datetime({ offset: true })
+  })
+  .strict();
+
+export const internalChannelAuthChallengeResponseSchema = z
+  .object({
+    challenge: internalChannelAuthChallengeSchema
+  })
+  .strict();
+
+export const internalChannelAuthChallengeStartRequestSchema = z
+  .object({
+    challengeType: internalChannelAuthChallengeTypeSchema,
+    phoneNumber: z.string().trim().min(1).max(80).optional()
+  })
+  .strict()
+  .refine(
+    (request) =>
+      request.challengeType !== "phone_code" || Boolean(request.phoneNumber),
+    {
+      message: "phoneNumber is required for phone_code challenges.",
+      path: ["phoneNumber"]
+    }
+  );
+
+export const internalChannelAuthChallengeSubmitRequestSchema = z
+  .object({
+    code: z.string().trim().min(1).max(80).optional(),
+    password: z.string().trim().min(1).max(500).optional()
+  })
+  .strict()
+  .refine((request) => request.code || request.password, {
+    message: "code or password is required."
+  });
+
 export const internalTelegramIntegrationModeSchema = z.enum([
   "webhook",
   "polling"
@@ -867,6 +942,27 @@ export type InternalChannelConnectorsResponse = z.infer<
 >;
 export type InternalChannelConnectorCreateRequest = z.infer<
   typeof internalChannelConnectorCreateRequestSchema
+>;
+export type InternalChannelAuthChallengeType = z.infer<
+  typeof internalChannelAuthChallengeTypeSchema
+>;
+export type InternalChannelAuthChallengeStatus = z.infer<
+  typeof internalChannelAuthChallengeStatusSchema
+>;
+export type InternalChannelAuthChallengePublicPayload = z.infer<
+  typeof internalChannelAuthChallengePublicPayloadSchema
+>;
+export type InternalChannelAuthChallenge = z.infer<
+  typeof internalChannelAuthChallengeSchema
+>;
+export type InternalChannelAuthChallengeResponse = z.infer<
+  typeof internalChannelAuthChallengeResponseSchema
+>;
+export type InternalChannelAuthChallengeStartRequest = z.infer<
+  typeof internalChannelAuthChallengeStartRequestSchema
+>;
+export type InternalChannelAuthChallengeSubmitRequest = z.infer<
+  typeof internalChannelAuthChallengeSubmitRequestSchema
 >;
 export type InternalTelegramIntegrationConfig = z.infer<
   typeof internalTelegramIntegrationConfigSchema

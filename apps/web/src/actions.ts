@@ -8,10 +8,14 @@ import {
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
-import { internalChannelTypeSchema } from "@hulee/contracts";
+import {
+  internalChannelAuthChallengeTypeSchema,
+  internalChannelTypeSchema
+} from "@hulee/contracts";
 import type { Permission } from "@hulee/core";
 
 import {
+  cancelChannelAuthChallenge,
   createChannelConnector,
   deleteChannelConnector,
   deleteTelegramWebhook,
@@ -19,6 +23,8 @@ import {
   refreshTelegramDiagnostics,
   sendInboxReply,
   setTelegramWebhook,
+  startChannelAuthChallenge,
+  submitChannelAuthChallenge,
   updateInboxConversationRouting,
   updateTenantBrand,
   updateTelegramIntegration,
@@ -384,6 +390,106 @@ export async function deleteChannelConnectorAction(
   redirect("/admin/integrations?channelStatus=deleted");
 }
 
+export async function startChannelAuthChallengeAction(
+  formData: FormData
+): Promise<void> {
+  await assertWebActionRequest();
+  const internalApiAccess = await assertVerifiedTenantPermission(
+    "modules.manage",
+    "/admin/integrations"
+  );
+  const connectorId = readRequiredFormString(formData, "connectorId").trim();
+  const challengeType = internalChannelAuthChallengeTypeSchema.parse(
+    readRequiredFormString(formData, "challengeType")
+  );
+  const phoneNumber = normalizeOptionalFormValue(
+    readOptionalFormString(formData, "phoneNumber")
+  );
+  const response = await startChannelAuthChallenge(
+    {
+      connectorId,
+      request: {
+        challengeType,
+        phoneNumber
+      }
+    },
+    internalApiAccess
+  );
+
+  revalidateTelegramIntegrationPaths();
+  redirect(
+    channelAuthChallengeDestination({
+      connectorId,
+      challengeId: response.challenge.challengeId,
+      status: "started"
+    })
+  );
+}
+
+export async function submitChannelAuthChallengeAction(
+  formData: FormData
+): Promise<void> {
+  await assertWebActionRequest();
+  const internalApiAccess = await assertVerifiedTenantPermission(
+    "modules.manage",
+    "/admin/integrations"
+  );
+  const connectorId = readRequiredFormString(formData, "connectorId").trim();
+  const challengeId = readRequiredFormString(formData, "challengeId").trim();
+  const code = normalizeOptionalFormValue(
+    readOptionalFormString(formData, "code")
+  );
+  const password = normalizeOptionalFormValue(
+    readOptionalFormString(formData, "password")
+  );
+
+  await submitChannelAuthChallenge(
+    {
+      connectorId,
+      challengeId,
+      request: {
+        code,
+        password
+      }
+    },
+    internalApiAccess
+  );
+
+  revalidateTelegramIntegrationPaths();
+  redirect(
+    channelAuthChallengeDestination({
+      connectorId,
+      challengeId,
+      status: "submitted"
+    })
+  );
+}
+
+export async function cancelChannelAuthChallengeAction(
+  formData: FormData
+): Promise<void> {
+  await assertWebActionRequest();
+  const internalApiAccess = await assertVerifiedTenantPermission(
+    "modules.manage",
+    "/admin/integrations"
+  );
+  const connectorId = readRequiredFormString(formData, "connectorId").trim();
+  const challengeId = readRequiredFormString(formData, "challengeId").trim();
+
+  await cancelChannelAuthChallenge(
+    { connectorId, challengeId },
+    internalApiAccess
+  );
+  revalidateTelegramIntegrationPaths();
+  redirect(
+    channelAuthChallengeDestination({
+      connectorId,
+      challengeId,
+      status: "cancelled"
+    })
+  );
+}
+
 function readRequiredFormString(formData: FormData, name: string): string {
   const value = formData.get(name);
 
@@ -442,6 +548,20 @@ function inboxReplyActionDestination(
   status: InboxReplyActionStatus
 ): string {
   return addSearchParam(path, "replyStatus", status);
+}
+
+function channelAuthChallengeDestination(input: {
+  connectorId: string;
+  challengeId: string;
+  status: "started" | "submitted" | "cancelled";
+}): string {
+  const params = new URLSearchParams({
+    connectorId: input.connectorId,
+    challengeId: input.challengeId,
+    challengeStatus: input.status
+  });
+
+  return `/admin/integrations?${params.toString()}`;
 }
 
 function inboxActionReturnTo(

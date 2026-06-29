@@ -5,6 +5,7 @@ import {
   createDrizzlePersistenceExecutor,
   createExternalMessageRepository,
   createSqlPublicApiAuditSink,
+  createSqlChannelAuthChallengeRepository,
   createSqlChannelConnectorRepository,
   createSqlEmployeeDirectoryRepository,
   createSqlOrgStructureRepository,
@@ -154,6 +155,9 @@ export function createInternalApiDataPlaneHandler(
     }),
     integrations: createInternalIntegrationService({
       connectorRepository: createSqlChannelConnectorRepository(
+        options.database
+      ),
+      authChallengeRepository: createSqlChannelAuthChallengeRepository(
         options.database
       ),
       secretResolver: createTenantSecretResolver({

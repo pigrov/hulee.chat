@@ -1,6 +1,7 @@
 import type {
   EmployeeId,
   InternalAccessDecisionResponse,
+  InternalChannelAuthChallengeResponse,
   InternalChannelCatalogResponse,
   InternalChannelConnectorSummary,
   InternalChannelConnectorsResponse,
@@ -24,6 +25,8 @@ import type {
 } from "@hulee/contracts";
 import {
   getPlatformErrorDefinition,
+  internalChannelAuthChallengeStartRequestSchema,
+  internalChannelAuthChallengeSubmitRequestSchema,
   internalChannelConnectorCreateRequestSchema,
   internalAccessDecisionRequestSchema,
   internalInboxConversationRoutingUpdateRequestSchema,
@@ -182,6 +185,25 @@ type RouteMatch =
   | {
       route: "channel_connector_delete";
       connectorId: string;
+    }
+  | {
+      route: "channel_auth_challenge_start";
+      connectorId: string;
+    }
+  | {
+      route: "channel_auth_challenge_view";
+      connectorId: string;
+      challengeId: string;
+    }
+  | {
+      route: "channel_auth_challenge_submit";
+      connectorId: string;
+      challengeId: string;
+    }
+  | {
+      route: "channel_auth_challenge_cancel";
+      connectorId: string;
+      challengeId: string;
     }
   | {
       route: "telegram_integration_view";
@@ -645,6 +667,53 @@ async function handleAuthenticatedRoute(input: {
       return jsonResponse(200, response);
     }
 
+    case "channel_auth_challenge_start": {
+      const request = internalChannelAuthChallengeStartRequestSchema.parse(
+        input.request.body
+      );
+      const response: InternalChannelAuthChallengeResponse =
+        await input.integrations.startChannelAuthChallenge(input.session, {
+          connectorId: input.route.connectorId,
+          request
+        });
+
+      return jsonResponse(201, response);
+    }
+
+    case "channel_auth_challenge_view": {
+      const response: InternalChannelAuthChallengeResponse =
+        await input.integrations.loadChannelAuthChallenge(input.session, {
+          connectorId: input.route.connectorId,
+          challengeId: input.route.challengeId
+        });
+
+      return jsonResponse(200, response);
+    }
+
+    case "channel_auth_challenge_submit": {
+      const request = internalChannelAuthChallengeSubmitRequestSchema.parse(
+        input.request.body
+      );
+      const response: InternalChannelAuthChallengeResponse =
+        await input.integrations.submitChannelAuthChallenge(input.session, {
+          connectorId: input.route.connectorId,
+          challengeId: input.route.challengeId,
+          request
+        });
+
+      return jsonResponse(200, response);
+    }
+
+    case "channel_auth_challenge_cancel": {
+      const response: InternalChannelAuthChallengeResponse =
+        await input.integrations.cancelChannelAuthChallenge(input.session, {
+          connectorId: input.route.connectorId,
+          challengeId: input.route.challengeId
+        });
+
+      return jsonResponse(200, response);
+    }
+
     case "telegram_integration_view": {
       const response: InternalTelegramIntegrationResponse =
         await input.integrations.loadTelegramIntegration(input.session, {
@@ -751,6 +820,10 @@ function internalRouteAuthorizationPolicy(
     case "channel_connector_create":
     case "channel_connector_disable":
     case "channel_connector_delete":
+    case "channel_auth_challenge_start":
+    case "channel_auth_challenge_view":
+    case "channel_auth_challenge_submit":
+    case "channel_auth_challenge_cancel":
     case "telegram_integration_view":
     case "telegram_integration_update":
     case "telegram_integration_diagnostics":
@@ -963,6 +1036,65 @@ function matchRoute(request: ApiHttpRequest): RouteMatch | undefined {
     return {
       route: "channel_connector_disable",
       connectorId: decodeURIComponent(connectorDisableMatch[1])
+    };
+  }
+
+  const authChallengeStartMatch = path.match(
+    /^\/internal\/v1\/channels\/connectors\/([^/]+)\/auth-challenges$/
+  );
+
+  if (request.method === "POST" && authChallengeStartMatch?.[1]) {
+    return {
+      route: "channel_auth_challenge_start",
+      connectorId: decodeURIComponent(authChallengeStartMatch[1])
+    };
+  }
+
+  const authChallengeViewMatch = path.match(
+    /^\/internal\/v1\/channels\/connectors\/([^/]+)\/auth-challenges\/([^/]+)$/
+  );
+
+  if (
+    request.method === "GET" &&
+    authChallengeViewMatch?.[1] &&
+    authChallengeViewMatch[2]
+  ) {
+    return {
+      route: "channel_auth_challenge_view",
+      connectorId: decodeURIComponent(authChallengeViewMatch[1]),
+      challengeId: decodeURIComponent(authChallengeViewMatch[2])
+    };
+  }
+
+  const authChallengeSubmitMatch = path.match(
+    /^\/internal\/v1\/channels\/connectors\/([^/]+)\/auth-challenges\/([^/]+)\/submit$/
+  );
+
+  if (
+    request.method === "POST" &&
+    authChallengeSubmitMatch?.[1] &&
+    authChallengeSubmitMatch[2]
+  ) {
+    return {
+      route: "channel_auth_challenge_submit",
+      connectorId: decodeURIComponent(authChallengeSubmitMatch[1]),
+      challengeId: decodeURIComponent(authChallengeSubmitMatch[2])
+    };
+  }
+
+  const authChallengeCancelMatch = path.match(
+    /^\/internal\/v1\/channels\/connectors\/([^/]+)\/auth-challenges\/([^/]+)\/cancel$/
+  );
+
+  if (
+    request.method === "POST" &&
+    authChallengeCancelMatch?.[1] &&
+    authChallengeCancelMatch[2]
+  ) {
+    return {
+      route: "channel_auth_challenge_cancel",
+      connectorId: decodeURIComponent(authChallengeCancelMatch[1]),
+      challengeId: decodeURIComponent(authChallengeCancelMatch[2])
     };
   }
 
