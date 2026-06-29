@@ -12,6 +12,16 @@ export type EgressProfileResolution = {
   diagnostics: InternalEgressDiagnostics;
 };
 
+export type DeploymentEgressProfile = {
+  profileId: string;
+  profileKind: InternalEgressProfileKind;
+  status: InternalEgressDiagnostics["status"];
+  lastErrorCode?: PlatformErrorCode;
+  operatorHint?: string;
+  supportedProviders?: readonly string[];
+  supportedChannelTypes?: readonly string[];
+};
+
 export type EgressProfileResolveInput = {
   tenantId: TenantId;
   connectorId: string;
@@ -121,6 +131,58 @@ export function createPassthroughEgressRuntime(
   };
 }
 
+export function createDeploymentEgressRuntime(input: {
+  profiles: readonly DeploymentEgressProfile[];
+}): EgressRuntime {
+  return {
+    async resolveProfile(resolveInput) {
+      const profile = selectDeploymentEgressProfile(
+        input.profiles,
+        resolveInput
+      );
+
+      if (!profile) {
+        return {
+          profileKind: resolveInput.requirement.defaultProfileKind,
+          diagnostics: {
+            required: resolveInput.requirement.required,
+            status: "misconfigured",
+            profileKind: resolveInput.requirement.defaultProfileKind,
+            checkedAt: resolveInput.checkedAt,
+            lastErrorCode: "validation.failed",
+            operatorHint:
+              "No deployment egress profile matches the connector requirement."
+          }
+        };
+      }
+
+      return {
+        profileKind: profile.profileKind,
+        profileId: profile.profileId,
+        diagnostics: {
+          required: resolveInput.requirement.required,
+          status: profile.status,
+          profileKind: profile.profileKind,
+          profileId: profile.profileId,
+          checkedAt: resolveInput.checkedAt,
+          ...(profile.lastErrorCode
+            ? { lastErrorCode: profile.lastErrorCode }
+            : {}),
+          ...(profile.operatorHint
+            ? { operatorHint: profile.operatorHint }
+            : {})
+        }
+      };
+    },
+
+    async execute(executeInput, operation) {
+      assertEgressProfileUsable(executeInput.resolution.diagnostics);
+
+      return operation();
+    }
+  };
+}
+
 export function createStaticEgressRuntimeRegistry(
   input: {
     fallbackRuntime?: EgressRuntime;
@@ -135,6 +197,66 @@ export function createStaticEgressRuntimeRegistry(
       return input.runtimes?.[profileKind] ?? fallbackRuntime;
     }
   };
+}
+
+function selectDeploymentEgressProfile(
+  profiles: readonly DeploymentEgressProfile[],
+  input: EgressProfileResolveInput
+): DeploymentEgressProfile | null {
+  const candidates = profiles.filter(
+    (profile) =>
+      input.requirement.allowedProfileKinds.includes(profile.profileKind) &&
+      profileMatchesProvider(profile, input.provider) &&
+      profileMatchesChannelType(profile, input.channelType)
+  );
+  const defaultProfile = candidates.find(
+    (profile) => profile.profileKind === input.requirement.defaultProfileKind
+  );
+
+  return defaultProfile ?? candidates[0] ?? null;
+}
+
+function profileMatchesProvider(
+  profile: DeploymentEgressProfile,
+  provider: string
+): boolean {
+  return (
+    !profile.supportedProviders ||
+    profile.supportedProviders.length === 0 ||
+    profile.supportedProviders.includes(provider)
+  );
+}
+
+function profileMatchesChannelType(
+  profile: DeploymentEgressProfile,
+  channelType: string
+): boolean {
+  return (
+    !profile.supportedChannelTypes ||
+    profile.supportedChannelTypes.length === 0 ||
+    profile.supportedChannelTypes.includes(channelType)
+  );
+}
+
+function assertEgressProfileUsable(
+  diagnostics: InternalEgressDiagnostics
+): void {
+  if (diagnostics.required && diagnostics.status !== "ready") {
+    throw new EgressRuntimeError(
+      diagnostics.lastErrorCode ?? "provider.temporary_failure",
+      diagnostics.operatorHint ?? "Required egress profile is not ready."
+    );
+  }
+
+  if (
+    diagnostics.status === "unavailable" ||
+    diagnostics.status === "misconfigured"
+  ) {
+    throw new EgressRuntimeError(
+      diagnostics.lastErrorCode ?? "provider.temporary_failure",
+      diagnostics.operatorHint ?? "Egress profile is not usable."
+    );
+  }
 }
 
 function passthroughProfileStatus(

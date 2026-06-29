@@ -39,6 +39,7 @@ export type { LocalAuthProvider } from "./auth-local";
 export { createVkAuthProviderPlaceholder, vkAuthManifest } from "./auth-vk";
 export type { VkAuthProvider } from "./auth-vk";
 export {
+  createDeploymentEgressRuntime,
   createPassthroughEgressRuntime,
   createStaticEgressRuntimeRegistry,
   deploymentPolicyDirectEgressRequirement,
@@ -46,6 +47,7 @@ export {
   managedMessengerVpnEgressRequirement
 } from "./egress";
 export type {
+  DeploymentEgressProfile,
   EgressOperationInput,
   EgressProfileResolution,
   EgressProfileResolveInput,

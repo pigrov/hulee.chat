@@ -18,11 +18,13 @@ const database = createHuleeDatabase({
 const outboxRepository = createSqlOutboxRepository(database);
 const outboxHandler = createWorkerOutboxHandler({
   database,
-  secretEncryptionKey: runtime.config.secretEncryptionKey
+  secretEncryptionKey: runtime.config.secretEncryptionKey,
+  egressProfile: runtime.config.egressProfile
 });
 const telegramPollingSweeper = createWorkerTelegramPollingSweeper({
   database,
-  secretEncryptionKey: runtime.config.secretEncryptionKey
+  secretEncryptionKey: runtime.config.secretEncryptionKey,
+  egressProfile: runtime.config.egressProfile
 });
 
 let stopping = false;
@@ -30,7 +32,9 @@ let processing = false;
 
 runtime.logger.info("worker.started", {
   pollIntervalMs: runtime.config.pollIntervalMs,
-  outboxBatchSize: runtime.config.outboxBatchSize
+  outboxBatchSize: runtime.config.outboxBatchSize,
+  egressProfileKind: runtime.config.egressProfile.profileKind,
+  egressProfileStatus: runtime.config.egressProfile.status
 });
 
 void runLoop();

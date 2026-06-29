@@ -13,6 +13,12 @@ import {
   loadWorkerConfig
 } from "./index";
 
+const localEgressProfile = {
+  profileId: "deployment:direct",
+  profileKind: "direct",
+  status: "ready"
+};
+
 describe("app config", () => {
   it("loads development API defaults", () => {
     expect(loadApiConfig({})).toEqual({
@@ -22,6 +28,7 @@ describe("app config", () => {
       logLevel: "info",
       databaseUrl: defaultLocalDatabaseUrl,
       secretEncryptionKey: undefined,
+      egressProfile: localEgressProfile,
       host: "0.0.0.0",
       port: 3000,
       internalApiSecret: undefined,
@@ -108,6 +115,7 @@ describe("app config", () => {
       logLevel: "info",
       databaseUrl: defaultLocalDatabaseUrl,
       secretEncryptionKey: undefined,
+      egressProfile: localEgressProfile,
       internalApiBaseUrl: "http://127.0.0.1:4000",
       internalApiSecret: undefined,
       publicBaseUrl: undefined,
@@ -148,6 +156,40 @@ describe("app config", () => {
       })
     ).toMatchObject({
       secretEncryptionKey: "0123456789abcdef0123456789abcdef"
+    });
+  });
+
+  it("defaults production SaaS egress to misconfigured VPN until explicitly ready", () => {
+    expect(
+      loadWorkerConfig({
+        NODE_ENV: "production",
+        HULEE_DEPLOYMENT_TYPE: "saas_shared",
+        DATABASE_URL: "postgres://user:pass@example.test:5432/hulee"
+      })
+    ).toMatchObject({
+      egressProfile: {
+        profileId: "deployment:vpn_namespace",
+        profileKind: "vpn_namespace",
+        status: "misconfigured",
+        lastErrorCode: "validation.failed"
+      }
+    });
+
+    expect(
+      loadWorkerConfig({
+        NODE_ENV: "production",
+        HULEE_DEPLOYMENT_TYPE: "saas_shared",
+        DATABASE_URL: "postgres://user:pass@example.test:5432/hulee",
+        HULEE_EGRESS_PROFILE_ID: "hulee-chat-vpn",
+        HULEE_EGRESS_PROFILE_KIND: "vpn_namespace",
+        HULEE_EGRESS_PROFILE_STATUS: "ready"
+      })
+    ).toMatchObject({
+      egressProfile: {
+        profileId: "hulee-chat-vpn",
+        profileKind: "vpn_namespace",
+        status: "ready"
+      }
     });
   });
 

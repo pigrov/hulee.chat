@@ -1,4 +1,8 @@
-import type { DeploymentType } from "@hulee/contracts";
+import type {
+  DeploymentType,
+  InternalEgressDiagnostics,
+  InternalEgressProfileKind
+} from "@hulee/contracts";
 import type { LogLevel } from "@hulee/observability";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -40,6 +44,15 @@ export type BaseAppConfig = {
   logLevel: LogLevel;
   databaseUrl: string;
   secretEncryptionKey?: string;
+  egressProfile: DeploymentEgressProfileConfig;
+};
+
+export type DeploymentEgressProfileConfig = {
+  profileId: string;
+  profileKind: InternalEgressProfileKind;
+  status: InternalEgressDiagnostics["status"];
+  lastErrorCode?: "validation.failed" | "provider.temporary_failure";
+  operatorHint?: string;
 };
 
 export type ApiConfig = BaseAppConfig & {
@@ -81,6 +94,21 @@ const deploymentTypeSchema = z.enum([
 ]);
 
 const logLevelSchema = z.enum(["debug", "info", "warn", "error"]);
+const egressProfileKindSchema = z.enum([
+  "direct",
+  "vpn_namespace",
+  "http_proxy",
+  "socks_proxy",
+  "customer_network",
+  "disabled"
+]);
+const egressProfileStatusSchema = z.enum([
+  "unknown",
+  "ready",
+  "degraded",
+  "unavailable",
+  "misconfigured"
+]);
 
 const emptyToUndefined = (value: unknown): unknown => {
   if (typeof value === "string" && value.trim() === "") {
@@ -134,7 +162,17 @@ const baseEnvSchema = z.object({
   ),
   HULEE_LOG_LEVEL: z.preprocess(emptyToUndefined, logLevelSchema.optional()),
   DATABASE_URL: optionalUrl,
-  HULEE_SECRET_ENCRYPTION_KEY: optionalNonEmptyString
+  HULEE_SECRET_ENCRYPTION_KEY: optionalNonEmptyString,
+  HULEE_EGRESS_PROFILE_ID: optionalNonEmptyString,
+  HULEE_EGRESS_PROFILE_KIND: z.preprocess(
+    emptyToUndefined,
+    egressProfileKindSchema.optional()
+  ),
+  HULEE_EGRESS_PROFILE_STATUS: z.preprocess(
+    emptyToUndefined,
+    egressProfileStatusSchema.optional()
+  ),
+  HULEE_EGRESS_OPERATOR_HINT: optionalNonEmptyString
 });
 
 const apiEnvSchema = baseEnvSchema.extend({
@@ -171,6 +209,12 @@ const issueMessages: Record<string, string> = {
   DATABASE_URL: "must be a valid URL and is required in production",
   HULEE_SECRET_ENCRYPTION_KEY:
     "must be a base64, hex or 32-byte UTF-8 encryption key",
+  HULEE_EGRESS_PROFILE_ID: "must not be empty",
+  HULEE_EGRESS_PROFILE_KIND:
+    "must be direct, vpn_namespace, http_proxy, socks_proxy, customer_network or disabled",
+  HULEE_EGRESS_PROFILE_STATUS:
+    "must be unknown, ready, degraded, unavailable or misconfigured",
+  HULEE_EGRESS_OPERATOR_HINT: "must not be empty",
   HULEE_API_HOST: "must not be empty",
   HULEE_API_PORT: "must be an integer from 1 to 65535",
   HULEE_INTERNAL_API_SECRET: "must not be empty",
@@ -226,8 +270,115 @@ function buildBaseConfig(
     deploymentType: env.HULEE_DEPLOYMENT_TYPE ?? "on_prem",
     logLevel: env.HULEE_LOG_LEVEL ?? "info",
     databaseUrl: env.DATABASE_URL ?? defaultLocalDatabaseUrl,
-    secretEncryptionKey: env.HULEE_SECRET_ENCRYPTION_KEY
+    secretEncryptionKey: env.HULEE_SECRET_ENCRYPTION_KEY,
+    egressProfile: buildDeploymentEgressProfile({
+      nodeEnv,
+      deploymentType: env.HULEE_DEPLOYMENT_TYPE ?? "on_prem",
+      profileId: env.HULEE_EGRESS_PROFILE_ID,
+      profileKind: env.HULEE_EGRESS_PROFILE_KIND,
+      status: env.HULEE_EGRESS_PROFILE_STATUS,
+      operatorHint: env.HULEE_EGRESS_OPERATOR_HINT
+    })
   };
+}
+
+function buildDeploymentEgressProfile(input: {
+  nodeEnv: RuntimeEnvironment;
+  deploymentType: DeploymentType;
+  profileId: string | undefined;
+  profileKind: InternalEgressProfileKind | undefined;
+  status: InternalEgressDiagnostics["status"] | undefined;
+  operatorHint: string | undefined;
+}): DeploymentEgressProfileConfig {
+  const profileKind =
+    input.profileKind ??
+    defaultEgressProfileKind({
+      nodeEnv: input.nodeEnv,
+      deploymentType: input.deploymentType
+    });
+  const status =
+    input.status ??
+    defaultEgressProfileStatus({
+      nodeEnv: input.nodeEnv,
+      deploymentType: input.deploymentType,
+      profileKind
+    });
+  const operatorHint =
+    input.operatorHint ??
+    defaultEgressOperatorHint({
+      nodeEnv: input.nodeEnv,
+      deploymentType: input.deploymentType,
+      profileKind,
+      status
+    });
+
+  return {
+    profileId: input.profileId ?? `deployment:${profileKind}`,
+    profileKind,
+    status,
+    ...(status === "misconfigured"
+      ? { lastErrorCode: "validation.failed" as const }
+      : {}),
+    ...(operatorHint ? { operatorHint } : {})
+  };
+}
+
+function defaultEgressProfileKind(input: {
+  nodeEnv: RuntimeEnvironment;
+  deploymentType: DeploymentType;
+}): InternalEgressProfileKind {
+  if (input.nodeEnv !== "production") {
+    return "direct";
+  }
+
+  if (
+    input.deploymentType === "saas_shared" ||
+    input.deploymentType === "saas_isolated"
+  ) {
+    return "vpn_namespace";
+  }
+
+  return "customer_network";
+}
+
+function defaultEgressProfileStatus(input: {
+  nodeEnv: RuntimeEnvironment;
+  deploymentType: DeploymentType;
+  profileKind: InternalEgressProfileKind;
+}): InternalEgressDiagnostics["status"] {
+  if (
+    input.nodeEnv === "production" &&
+    (input.deploymentType === "saas_shared" ||
+      input.deploymentType === "saas_isolated") &&
+    input.profileKind === "vpn_namespace"
+  ) {
+    return "misconfigured";
+  }
+
+  if (input.profileKind === "disabled") {
+    return "unavailable";
+  }
+
+  return "ready";
+}
+
+function defaultEgressOperatorHint(input: {
+  nodeEnv: RuntimeEnvironment;
+  deploymentType: DeploymentType;
+  profileKind: InternalEgressProfileKind;
+  status: InternalEgressDiagnostics["status"];
+}): string | undefined {
+  if (
+    input.nodeEnv === "production" &&
+    (input.deploymentType === "saas_shared" ||
+      input.deploymentType === "saas_isolated") &&
+    input.profileKind === "vpn_namespace" &&
+    input.status === "misconfigured"
+  ) {
+    return "Configure a ready deployment VPN egress profile before enabling Telegram or WhatsApp provider traffic.";
+  }
+
+  return undefined;
 }
 
 export function loadApiConfig(env: EnvSource = process.env): ApiConfig {

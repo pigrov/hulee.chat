@@ -20,6 +20,10 @@ import {
   createJsonLogger,
   type Logger
 } from "@hulee/observability";
+import {
+  createDeploymentEgressRuntime,
+  type EgressRuntime
+} from "@hulee/modules";
 
 import {
   createPublicApiHandler,
@@ -115,6 +119,8 @@ export type InternalApiDataPlaneHandlerOptions = {
   env?: EnvSource;
   internalApiSecret?: string;
   secretEncryptionKey?: string;
+  egressRuntime?: EgressRuntime;
+  egressProfile?: ApiConfig["egressProfile"];
   publicWebhookBaseUrl?: string;
   telegramApiBaseUrl?: string;
   logger?: Logger;
@@ -165,6 +171,13 @@ export function createInternalApiDataPlaneHandler(
         tenantSecrets
       }),
       secretWriter: tenantSecrets,
+      egressRuntime:
+        options.egressRuntime ??
+        (options.egressProfile
+          ? createDeploymentEgressRuntime({
+              profiles: [options.egressProfile]
+            })
+          : undefined),
       telegramApiBaseUrl: options.telegramApiBaseUrl,
       publicWebhookBaseUrl: options.publicWebhookBaseUrl
     }),
@@ -243,6 +256,8 @@ export type ApiDataPlaneHandlerOptions = PublicApiDataPlaneHandlerOptions &
     | "env"
     | "internalApiSecret"
     | "secretEncryptionKey"
+    | "egressRuntime"
+    | "egressProfile"
     | "publicWebhookBaseUrl"
     | "telegramApiBaseUrl"
   >;
