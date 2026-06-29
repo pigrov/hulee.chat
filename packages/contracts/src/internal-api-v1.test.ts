@@ -648,7 +648,23 @@ describe("internal API v1 schemas", () => {
             descriptionKey: "integrations.catalog.telegramBot.description",
             readiness: "available",
             supportsMultiple: true,
-            capabilities: ["inbound", "outbound", "webhook"]
+            capabilities: ["inbound", "outbound", "webhook"],
+            onboarding: {
+              version: "v1",
+              steps: [
+                {
+                  id: "name",
+                  kind: "display_name",
+                  titleKey: "integrations.channel.onboarding.name",
+                  action: "update_connector"
+                },
+                {
+                  id: "complete",
+                  kind: "complete",
+                  titleKey: "integrations.channel.onboarding.complete"
+                }
+              ]
+            }
           }
         ]
       })
@@ -656,7 +672,14 @@ describe("internal API v1 schemas", () => {
       channels: [
         {
           channelType: "telegram_bot",
-          readiness: "available"
+          readiness: "available",
+          onboarding: {
+            steps: expect.arrayContaining([
+              expect.objectContaining({
+                id: "name"
+              })
+            ])
+          }
         }
       ]
     });

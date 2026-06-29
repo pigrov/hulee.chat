@@ -34,6 +34,58 @@ const context: InternalIntegrationContext = {
 const now = new Date("2026-06-22T10:00:00.000Z");
 
 describe("internal integrations service", () => {
+  it("returns channel catalog entries with onboarding flows", async () => {
+    const service = createInternalIntegrationService({
+      connectorRepository: new InMemoryChannelConnectorRepository(),
+      now: () => now
+    });
+
+    const response = await service.listChannelCatalog(context);
+
+    expect(response.channels).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          channelType: "telegram_bot",
+          onboarding: {
+            version: "v1",
+            steps: expect.arrayContaining([
+              expect.objectContaining({
+                id: "token",
+                kind: "secret_text",
+                action: "update_connector"
+              }),
+              expect.objectContaining({
+                id: "webhook",
+                kind: "webhook_sync",
+                action: "sync_webhook",
+                required: false
+              })
+            ])
+          }
+        }),
+        expect.objectContaining({
+          channelType: "max_qr_bridge",
+          onboarding: {
+            version: "v1",
+            steps: expect.arrayContaining([
+              expect.objectContaining({
+                id: "phone",
+                kind: "phone_number"
+              }),
+              expect.objectContaining({
+                id: "code",
+                kind: "verification_code"
+              })
+            ])
+          }
+        })
+      ])
+    );
+    expect(
+      response.channels.every((channel) => channel.onboarding.steps.length > 0)
+    ).toBe(true);
+  });
+
   it("creates draft Telegram Bot connectors with server-side identity", async () => {
     const repository = new InMemoryChannelConnectorRepository();
     const service = createInternalIntegrationService({

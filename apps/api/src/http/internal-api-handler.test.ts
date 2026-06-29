@@ -227,7 +227,23 @@ function createHandler(input?: {
         descriptionKey: "integrations.catalog.telegramBot.description",
         readiness: "available" as const,
         supportsMultiple: true,
-        capabilities: ["inbound", "outbound", "webhook"]
+        capabilities: ["inbound", "outbound", "webhook"],
+        onboarding: {
+          version: "v1" as const,
+          steps: [
+            {
+              id: "name",
+              kind: "display_name" as const,
+              titleKey: "integrations.channel.onboarding.name",
+              action: "update_connector" as const
+            },
+            {
+              id: "complete",
+              kind: "complete" as const,
+              titleKey: "integrations.channel.onboarding.complete"
+            }
+          ]
+        }
       }
     ]
   }));

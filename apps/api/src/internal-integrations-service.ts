@@ -7,6 +7,7 @@ import type {
   InternalChannelConnectorStatus,
   InternalChannelConnectorsResponse,
   InternalChannelClass,
+  InternalChannelOnboardingFlow,
   InternalChannelType,
   InternalTelegramIntegrationConfig,
   InternalTelegramIntegrationDiagnostics,
@@ -122,6 +123,209 @@ const telegramChannelType = "telegram_bot" as const;
 const telegramChannelClass = "bot_bridge" as const;
 const telegramProvider = "telegram";
 const defaultTelegramDisplayName = "Telegram Bot";
+const channelOnboardingFlows = {
+  telegram_bot: {
+    version: "v1",
+    steps: [
+      {
+        id: "name",
+        kind: "display_name",
+        titleKey: "integrations.channel.onboarding.name",
+        action: "update_connector"
+      },
+      {
+        id: "token",
+        kind: "secret_text",
+        titleKey: "integrations.channel.onboarding.token",
+        action: "update_connector"
+      },
+      {
+        id: "mode",
+        kind: "select",
+        titleKey: "integrations.channel.onboarding.mode",
+        action: "update_connector"
+      },
+      {
+        id: "diagnostics",
+        kind: "diagnostics",
+        titleKey: "integrations.channel.onboarding.diagnostics",
+        action: "refresh_diagnostics"
+      },
+      {
+        id: "webhook",
+        kind: "webhook_sync",
+        titleKey: "integrations.channel.onboarding.webhook",
+        action: "sync_webhook",
+        required: false
+      },
+      {
+        id: "complete",
+        kind: "complete",
+        titleKey: "integrations.channel.onboarding.complete"
+      }
+    ]
+  },
+  telegram_qr_bridge: {
+    version: "v1",
+    steps: [
+      {
+        id: "name",
+        kind: "display_name",
+        titleKey: "integrations.channel.onboarding.name",
+        action: "update_connector"
+      },
+      {
+        id: "qr",
+        kind: "qr_code",
+        titleKey: "integrations.channel.onboarding.qr",
+        action: "start_auth_challenge"
+      },
+      {
+        id: "password",
+        kind: "password",
+        titleKey: "integrations.channel.onboarding.password",
+        action: "submit_auth_password",
+        required: false
+      },
+      {
+        id: "waiting",
+        kind: "waiting",
+        titleKey: "integrations.channel.onboarding.waiting",
+        action: "poll_auth_challenge"
+      },
+      {
+        id: "complete",
+        kind: "complete",
+        titleKey: "integrations.channel.onboarding.complete"
+      }
+    ]
+  },
+  whatsapp_qr_bridge: {
+    version: "v1",
+    steps: [
+      {
+        id: "name",
+        kind: "display_name",
+        titleKey: "integrations.channel.onboarding.name",
+        action: "update_connector"
+      },
+      {
+        id: "qr",
+        kind: "qr_code",
+        titleKey: "integrations.channel.onboarding.qr",
+        action: "start_auth_challenge"
+      },
+      {
+        id: "waiting",
+        kind: "waiting",
+        titleKey: "integrations.channel.onboarding.waiting",
+        action: "poll_auth_challenge"
+      },
+      {
+        id: "complete",
+        kind: "complete",
+        titleKey: "integrations.channel.onboarding.complete"
+      }
+    ]
+  },
+  max_bot: {
+    version: "v1",
+    steps: [
+      {
+        id: "name",
+        kind: "display_name",
+        titleKey: "integrations.channel.onboarding.name",
+        action: "update_connector"
+      },
+      {
+        id: "token",
+        kind: "secret_text",
+        titleKey: "integrations.channel.onboarding.token",
+        action: "update_connector"
+      },
+      {
+        id: "diagnostics",
+        kind: "diagnostics",
+        titleKey: "integrations.channel.onboarding.diagnostics",
+        action: "refresh_diagnostics"
+      },
+      {
+        id: "complete",
+        kind: "complete",
+        titleKey: "integrations.channel.onboarding.complete"
+      }
+    ]
+  },
+  max_qr_bridge: {
+    version: "v1",
+    steps: [
+      {
+        id: "name",
+        kind: "display_name",
+        titleKey: "integrations.channel.onboarding.name",
+        action: "update_connector"
+      },
+      {
+        id: "phone",
+        kind: "phone_number",
+        titleKey: "integrations.channel.onboarding.phone",
+        action: "start_auth_challenge"
+      },
+      {
+        id: "code",
+        kind: "verification_code",
+        titleKey: "integrations.channel.onboarding.code",
+        action: "submit_auth_code"
+      },
+      {
+        id: "password",
+        kind: "password",
+        titleKey: "integrations.channel.onboarding.password",
+        action: "submit_auth_password",
+        required: false
+      },
+      {
+        id: "waiting",
+        kind: "waiting",
+        titleKey: "integrations.channel.onboarding.waiting",
+        action: "poll_auth_challenge"
+      },
+      {
+        id: "complete",
+        kind: "complete",
+        titleKey: "integrations.channel.onboarding.complete"
+      }
+    ]
+  },
+  vk_community: {
+    version: "v1",
+    steps: [
+      {
+        id: "name",
+        kind: "display_name",
+        titleKey: "integrations.channel.onboarding.name",
+        action: "update_connector"
+      },
+      {
+        id: "token",
+        kind: "secret_text",
+        titleKey: "integrations.channel.onboarding.token",
+        action: "update_connector"
+      },
+      {
+        id: "diagnostics",
+        kind: "diagnostics",
+        titleKey: "integrations.channel.onboarding.diagnostics",
+        action: "refresh_diagnostics"
+      },
+      {
+        id: "complete",
+        kind: "complete",
+        titleKey: "integrations.channel.onboarding.complete"
+      }
+    ]
+  }
+} satisfies Record<InternalChannelType, InternalChannelOnboardingFlow>;
 const channelCatalogV1 = [
   {
     channelType: "telegram_bot",
@@ -131,7 +335,8 @@ const channelCatalogV1 = [
     descriptionKey: "integrations.catalog.telegramBot.description",
     readiness: "available",
     supportsMultiple: true,
-    capabilities: ["inbound", "outbound", "webhook", "polling"]
+    capabilities: ["inbound", "outbound", "webhook", "polling"],
+    onboarding: channelOnboardingFlows.telegram_bot
   },
   {
     channelType: "telegram_qr_bridge",
@@ -141,7 +346,8 @@ const channelCatalogV1 = [
     descriptionKey: "integrations.catalog.telegramQr.description",
     readiness: "coming_soon",
     supportsMultiple: true,
-    capabilities: ["inbound", "outbound", "qr_auth", "session_runtime"]
+    capabilities: ["inbound", "outbound", "qr_auth", "session_runtime"],
+    onboarding: channelOnboardingFlows.telegram_qr_bridge
   },
   {
     channelType: "whatsapp_qr_bridge",
@@ -151,7 +357,8 @@ const channelCatalogV1 = [
     descriptionKey: "integrations.catalog.whatsappQr.description",
     readiness: "coming_soon",
     supportsMultiple: true,
-    capabilities: ["inbound", "outbound", "qr_auth", "session_runtime"]
+    capabilities: ["inbound", "outbound", "qr_auth", "session_runtime"],
+    onboarding: channelOnboardingFlows.whatsapp_qr_bridge
   },
   {
     channelType: "max_bot",
@@ -161,7 +368,8 @@ const channelCatalogV1 = [
     descriptionKey: "integrations.catalog.maxBot.description",
     readiness: "coming_soon",
     supportsMultiple: true,
-    capabilities: ["inbound", "outbound"]
+    capabilities: ["inbound", "outbound"],
+    onboarding: channelOnboardingFlows.max_bot
   },
   {
     channelType: "max_qr_bridge",
@@ -171,7 +379,8 @@ const channelCatalogV1 = [
     descriptionKey: "integrations.catalog.maxQr.description",
     readiness: "coming_soon",
     supportsMultiple: true,
-    capabilities: ["inbound", "outbound", "code_auth", "session_runtime"]
+    capabilities: ["inbound", "outbound", "code_auth", "session_runtime"],
+    onboarding: channelOnboardingFlows.max_qr_bridge
   },
   {
     channelType: "vk_community",
@@ -181,7 +390,8 @@ const channelCatalogV1 = [
     descriptionKey: "integrations.catalog.vkCommunity.description",
     readiness: "coming_soon",
     supportsMultiple: true,
-    capabilities: ["inbound", "outbound", "official_api"]
+    capabilities: ["inbound", "outbound", "official_api"],
+    onboarding: channelOnboardingFlows.vk_community
   }
 ] satisfies InternalChannelCatalogResponse["channels"];
 

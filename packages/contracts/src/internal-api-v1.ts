@@ -503,6 +503,49 @@ export const internalChannelConnectorHealthStatusSchema = z.enum([
   "unhealthy"
 ]);
 
+export const internalChannelOnboardingStepKindSchema = z.enum([
+  "display_name",
+  "secret_text",
+  "select",
+  "toggle",
+  "diagnostics",
+  "webhook_sync",
+  "qr_code",
+  "phone_number",
+  "verification_code",
+  "password",
+  "waiting",
+  "complete"
+]);
+
+export const internalChannelOnboardingActionSchema = z.enum([
+  "update_connector",
+  "refresh_diagnostics",
+  "sync_webhook",
+  "start_auth_challenge",
+  "poll_auth_challenge",
+  "submit_auth_code",
+  "submit_auth_password",
+  "none"
+]);
+
+export const internalChannelOnboardingStepSchema = z
+  .object({
+    id: z.string().trim().min(1).max(80),
+    kind: internalChannelOnboardingStepKindSchema,
+    titleKey: z.string().trim().min(1).max(140),
+    action: internalChannelOnboardingActionSchema.optional(),
+    required: z.boolean().optional()
+  })
+  .strict();
+
+export const internalChannelOnboardingFlowSchema = z
+  .object({
+    version: z.literal("v1"),
+    steps: z.array(internalChannelOnboardingStepSchema).min(1).max(20)
+  })
+  .strict();
+
 export const internalChannelCatalogItemSchema = z
   .object({
     channelType: internalChannelTypeSchema,
@@ -512,7 +555,8 @@ export const internalChannelCatalogItemSchema = z
     descriptionKey: z.string().trim().min(1).max(160),
     readiness: z.enum(["available", "coming_soon", "disabled"]),
     supportsMultiple: z.boolean(),
-    capabilities: z.array(z.string().trim().min(1).max(80)).max(20)
+    capabilities: z.array(z.string().trim().min(1).max(80)).max(20),
+    onboarding: internalChannelOnboardingFlowSchema
   })
   .strict();
 
@@ -796,6 +840,18 @@ export type InternalChannelConnectorStatus = z.infer<
 >;
 export type InternalChannelConnectorHealthStatus = z.infer<
   typeof internalChannelConnectorHealthStatusSchema
+>;
+export type InternalChannelOnboardingStepKind = z.infer<
+  typeof internalChannelOnboardingStepKindSchema
+>;
+export type InternalChannelOnboardingAction = z.infer<
+  typeof internalChannelOnboardingActionSchema
+>;
+export type InternalChannelOnboardingStep = z.infer<
+  typeof internalChannelOnboardingStepSchema
+>;
+export type InternalChannelOnboardingFlow = z.infer<
+  typeof internalChannelOnboardingFlowSchema
 >;
 export type InternalChannelCatalogItem = z.infer<
   typeof internalChannelCatalogItemSchema

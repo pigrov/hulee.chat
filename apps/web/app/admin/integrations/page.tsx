@@ -96,6 +96,9 @@ export default async function IntegrationsAdminPage({
     channelConnectors.connectors.find(
       (connector) => connector.channelType === "telegram_bot"
     )?.connectorId;
+  const telegramChannel = channelCatalog.channels.find(
+    (channel) => channel.channelType === "telegram_bot"
+  );
 
   return (
     <TenantAdminShell
@@ -163,6 +166,7 @@ export default async function IntegrationsAdminPage({
 
         <div className="adminStack">
           <TelegramIntegrationPanel
+            channel={telegramChannel}
             integration={telegramIntegration}
             locale={locale}
             t={t}

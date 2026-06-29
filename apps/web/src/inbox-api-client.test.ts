@@ -215,7 +215,23 @@ describe("inbox API client", () => {
               descriptionKey: "integrations.catalog.telegramBot.description",
               readiness: "available",
               supportsMultiple: true,
-              capabilities: ["inbound", "outbound", "webhook"]
+              capabilities: ["inbound", "outbound", "webhook"],
+              onboarding: {
+                version: "v1",
+                steps: [
+                  {
+                    id: "name",
+                    kind: "display_name",
+                    titleKey: "integrations.channel.onboarding.name",
+                    action: "update_connector"
+                  },
+                  {
+                    id: "complete",
+                    kind: "complete",
+                    titleKey: "integrations.channel.onboarding.complete"
+                  }
+                ]
+              }
             }
           ]
         });

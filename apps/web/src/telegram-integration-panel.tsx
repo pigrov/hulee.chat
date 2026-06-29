@@ -1,4 +1,5 @@
 import type { createTranslator, I18nMessageKey } from "@hulee/i18n";
+import type { InternalChannelCatalogItem } from "@hulee/contracts";
 import {
   Activity,
   CheckCircle2,
@@ -37,21 +38,45 @@ type Translator = ReturnType<typeof createTranslator>["t"];
 type TelegramConfig = NonNullable<TelegramIntegrationViewModel["config"]>;
 type TelegramSetupStep = NonNullable<TelegramIntegrationViewModel["setupStep"]>;
 type TelegramSetupEditableStep = "name" | "token" | "mode";
+type TelegramSetupStepDefinition = {
+  id: TelegramSetupStep;
+  titleKey: I18nMessageKey;
+};
 
-const telegramSetupSteps: readonly TelegramSetupStep[] = [
-  "name",
-  "token",
-  "mode",
-  "diagnostics",
-  "webhook",
-  "complete"
+const fallbackTelegramSetupSteps: readonly TelegramSetupStepDefinition[] = [
+  {
+    id: "name",
+    titleKey: "integrations.channel.onboarding.name" as I18nMessageKey
+  },
+  {
+    id: "token",
+    titleKey: "integrations.channel.onboarding.token" as I18nMessageKey
+  },
+  {
+    id: "mode",
+    titleKey: "integrations.channel.onboarding.mode" as I18nMessageKey
+  },
+  {
+    id: "diagnostics",
+    titleKey: "integrations.channel.onboarding.diagnostics" as I18nMessageKey
+  },
+  {
+    id: "webhook",
+    titleKey: "integrations.channel.onboarding.webhook" as I18nMessageKey
+  },
+  {
+    id: "complete",
+    titleKey: "integrations.channel.onboarding.complete" as I18nMessageKey
+  }
 ];
 
 export function TelegramIntegrationPanel({
+  channel,
   integration,
   locale,
   t
 }: {
+  channel?: InternalChannelCatalogItem;
   integration: TelegramIntegrationViewModel;
   locale: string;
   t: Translator;
@@ -82,6 +107,7 @@ export function TelegramIntegrationPanel({
   }
 
   const setupStep = currentTelegramSetupStep(integration);
+  const setupSteps = telegramSetupStepsFromCatalog(channel);
 
   return (
     <section
@@ -103,7 +129,7 @@ export function TelegramIntegrationPanel({
         </span>
       </div>
 
-      <TelegramSetupStepper currentStep={setupStep} t={t} />
+      <TelegramSetupStepper currentStep={setupStep} steps={setupSteps} t={t} />
 
       <TelegramSetupStepPanel
         config={config}
@@ -120,28 +146,31 @@ export function TelegramIntegrationPanel({
 
 function TelegramSetupStepper({
   currentStep,
+  steps,
   t
 }: {
   currentStep: TelegramSetupStep;
+  steps: readonly TelegramSetupStepDefinition[];
   t: Translator;
 }): ReactNode {
-  const currentIndex = telegramSetupSteps.indexOf(currentStep);
+  const currentIndex = steps.findIndex((step) => step.id === currentStep);
+  const normalizedCurrentIndex = currentIndex >= 0 ? currentIndex : 0;
 
   return (
     <ol
       className="setupStepList"
       aria-label={t("integrations.telegram.setupTitle")}
     >
-      {telegramSetupSteps.map((step, index) => {
+      {steps.map((step, index) => {
         const state =
-          index < currentIndex
+          index < normalizedCurrentIndex
             ? "complete"
-            : step === currentStep
+            : step.id === currentStep
               ? "current"
               : "pending";
 
         return (
-          <li className="setupStep" data-state={state} key={step}>
+          <li className="setupStep" data-state={state} key={step.id}>
             <span className="setupStepMarker" aria-hidden="true">
               {state === "complete" ? (
                 <CheckCircle2 size={16} />
@@ -149,9 +178,7 @@ function TelegramSetupStepper({
                 <Circle size={16} />
               )}
             </span>
-            <span className="setupStepLabel">
-              {t(telegramSetupStepKey(step))}
-            </span>
+            <span className="setupStepLabel">{t(step.titleKey)}</span>
           </li>
         );
       })}
@@ -728,8 +755,34 @@ function telegramDisplayName(
   return integration.displayName ?? t("integrations.telegram.title");
 }
 
-function telegramSetupStepKey(step: TelegramSetupStep): I18nMessageKey {
-  return `integrations.telegram.setup.${step}` as I18nMessageKey;
+function telegramSetupStepsFromCatalog(
+  channel: InternalChannelCatalogItem | undefined
+): readonly TelegramSetupStepDefinition[] {
+  const steps = channel?.onboarding.steps.flatMap((step) => {
+    if (!isTelegramSetupStep(step.id)) {
+      return [];
+    }
+
+    return [
+      {
+        id: step.id,
+        titleKey: step.titleKey as I18nMessageKey
+      }
+    ];
+  });
+
+  return steps && steps.length > 0 ? steps : fallbackTelegramSetupSteps;
+}
+
+function isTelegramSetupStep(value: string): value is TelegramSetupStep {
+  return (
+    value === "name" ||
+    value === "token" ||
+    value === "mode" ||
+    value === "diagnostics" ||
+    value === "webhook" ||
+    value === "complete"
+  );
 }
 
 function channelConnectorStatusKey(
