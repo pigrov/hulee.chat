@@ -93,6 +93,8 @@ describe("app config", () => {
         HULEE_LOG_LEVEL: "debug",
         DATABASE_URL: "postgres://user:pass@example.test:5432/hulee",
         HULEE_WORKER_FEATURES: "core, telegram_bot, telegram_bot",
+        HULEE_PUBLIC_BASE_URL: "https://chat.example.test",
+        HULEE_PUBLIC_WEBHOOK_BASE_URL: "https://hooks.example.test",
         HULEE_WORKER_POLL_INTERVAL_MS: "2500",
         HULEE_OUTBOX_BATCH_SIZE: "25",
         HULEE_OUTBOX_RETRY_DELAY_MS: "45000"
@@ -103,6 +105,8 @@ describe("app config", () => {
       deploymentType: "saas_shared",
       logLevel: "debug",
       workerFeatures: ["core", "telegram_bot"],
+      publicBaseUrl: "https://chat.example.test",
+      publicWebhookBaseUrl: "https://hooks.example.test",
       pollIntervalMs: 2500,
       outboxBatchSize: 25,
       outboxRetryDelayMs: 45000

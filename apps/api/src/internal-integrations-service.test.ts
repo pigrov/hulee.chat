@@ -7,6 +7,7 @@ import type {
   EmployeeId,
   InternalChannelAuthChallengeStatus,
   InternalChannelAuthChallengeType,
+  PlatformEvent,
   TenantId
 } from "@hulee/contracts";
 import type {
@@ -14,6 +15,7 @@ import type {
   ChannelAuthChallengeRepository,
   ChannelConnectorRecord,
   ChannelConnectorRepository,
+  DomainEventRepository,
   FindActiveChannelConnectorByConfigStringInput,
   FindActiveChannelConnectorByExternalIdInput,
   FindChannelAuthChallengeInput,
@@ -788,6 +790,70 @@ describe("internal integrations service", () => {
     expect(response.diagnostics.status).toBe("configured");
   });
 
+  it("queues Telegram provider operations when an outbox event repository is configured", async () => {
+    const repository = new InMemoryChannelConnectorRepository([
+      createTelegramConnector({
+        config: {
+          channelExternalId: "telegram-local",
+          mode: "webhook",
+          botTokenSecretRef: "env:HULEE_TELEGRAM_BOT_TOKEN",
+          webhookConnectorId: "tgwh_test",
+          webhookSecretTokenSecretRef:
+            "secret:tenant-integrations/channels/telegram_bot:tenant-integrations/webhook-secret-token",
+          outboundEnabled: true
+        },
+        diagnostics: {
+          status: "configured",
+          checkedAt: now.toISOString(),
+          egress: telegramEgressDiagnostics(),
+          checks: {
+            moduleEnabled: true,
+            configValid: true,
+            inboundWebhookReady: false,
+            outboundEnabled: true,
+            botTokenSecretRefConfigured: true
+          }
+        }
+      })
+    ]);
+    const events = new InMemoryDomainEventRepository();
+    const botApiClientFactory = vi.fn();
+    const service = createInternalIntegrationService({
+      connectorRepository: repository,
+      providerOperationEvents: events,
+      now: () => now,
+      publicWebhookBaseUrl: "https://example.test/",
+      botApiClientFactory
+    });
+
+    const response = await service.setTelegramWebhook(context, {
+      connectorId: "telegram_bot:tenant-integrations"
+    });
+
+    expect(botApiClientFactory).not.toHaveBeenCalled();
+    expect(events.events).toEqual([
+      expect.objectContaining({
+        type: "channel.provider_operation.requested",
+        tenantId,
+        idempotencyKey:
+          "request-1:telegram_bot:tenant-integrations:telegram.webhook.set",
+        payload: {
+          connectorId: "telegram_bot:tenant-integrations",
+          channelType: "telegram_bot",
+          provider: "telegram",
+          operation: "telegram.webhook.set",
+          actorEmployeeId: context.employeeId
+        }
+      })
+    ]);
+    expect(response.diagnostics.operatorHint).toBe(
+      "Telegram webhook sync is queued for the provider egress worker."
+    );
+    expect(
+      repository.records.get("telegram_bot:tenant-integrations")?.diagnostics
+    ).toEqual(response.diagnostics);
+  });
+
   it("reports invalid Telegram diagnostics when the token secret cannot be resolved", async () => {
     const repository = new InMemoryChannelConnectorRepository([
       createTelegramConnector({
@@ -985,6 +1051,20 @@ class InMemoryChannelAuthChallengeRepository implements ChannelAuthChallengeRepo
       createdAt: existing?.createdAt ?? updatedAt,
       updatedAt
     });
+  }
+}
+
+class InMemoryDomainEventRepository implements DomainEventRepository {
+  readonly events: PlatformEvent[] = [];
+
+  async append(input: {
+    tenantId: TenantId;
+    events: readonly PlatformEvent[];
+  }): Promise<void> {
+    expect(
+      input.events.every((event) => event.tenantId === input.tenantId)
+    ).toBe(true);
+    this.events.push(...input.events);
   }
 }
 

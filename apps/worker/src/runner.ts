@@ -23,7 +23,8 @@ const telegramBotServices = runtime.config.workerFeatures.includes(
       outboxHandler: createWorkerOutboxHandler({
         database,
         secretEncryptionKey: runtime.config.secretEncryptionKey,
-        egressProfile: runtime.config.egressProfile
+        egressProfile: runtime.config.egressProfile,
+        publicWebhookBaseUrl: runtime.config.publicWebhookBaseUrl
       }),
       pollingSweeper: createWorkerTelegramPollingSweeper({
         database,

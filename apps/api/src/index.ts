@@ -167,6 +167,7 @@ export function createInternalApiDataPlaneHandler(
       authChallengeRepository: createSqlChannelAuthChallengeRepository(
         options.database
       ),
+      providerOperationEvents: createSqlDomainEventRepository(options.database),
       secretResolver: createTenantSecretResolver({
         env: options.env,
         tenantSecrets

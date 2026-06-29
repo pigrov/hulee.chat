@@ -1,5 +1,8 @@
 import type {
+  ChannelConnectorId,
+  ChannelProviderOperation,
   EmployeeId,
+  EventId,
   InternalChannelAuthChallengeResponse,
   InternalChannelAuthChallengeStartRequest,
   InternalChannelAuthChallengeStatus,
@@ -21,6 +24,7 @@ import type {
   InternalTelegramIntegrationUpdateRequest,
   InternalTelegramSetupStep,
   PlatformErrorCode,
+  PlatformEvent,
   TenantId
 } from "@hulee/contracts";
 import {
@@ -33,6 +37,7 @@ import type {
   ChannelAuthChallengeRepository,
   ChannelConnectorRecord,
   ChannelConnectorRepository,
+  DomainEventRepository,
   TenantSecretRepository
 } from "@hulee/db";
 import { createChannelConnectorSecretRef } from "@hulee/db";
@@ -146,6 +151,7 @@ export type TelegramBotApiClientFactory = (
 export type InternalIntegrationServiceOptions = {
   connectorRepository: ChannelConnectorRepository;
   authChallengeRepository?: ChannelAuthChallengeRepository;
+  providerOperationEvents?: DomainEventRepository;
   secretResolver?: SecretResolver;
   secretWriter?: SecretWriter;
   botApiClientFactory?: TelegramBotApiClientFactory;
@@ -851,6 +857,18 @@ export function createInternalIntegrationService(
     },
 
     async refreshTelegramDiagnostics(context, input) {
+      if (options.providerOperationEvents) {
+        return enqueueTelegramProviderOperation({
+          context,
+          connectorId: requireTelegramConnectorId(input),
+          operation: "telegram.diagnostics.refresh",
+          repository: options.connectorRepository,
+          events: options.providerOperationEvents,
+          publicWebhookBaseUrl: options.publicWebhookBaseUrl,
+          now
+        });
+      }
+
       return runTelegramProviderDiagnostics({
         context,
         connectorId: requireTelegramConnectorId(input),
@@ -865,6 +883,18 @@ export function createInternalIntegrationService(
     },
 
     async setTelegramWebhook(context, input) {
+      if (options.providerOperationEvents) {
+        return enqueueTelegramProviderOperation({
+          context,
+          connectorId: requireTelegramConnectorId(input),
+          operation: "telegram.webhook.set",
+          repository: options.connectorRepository,
+          events: options.providerOperationEvents,
+          publicWebhookBaseUrl: options.publicWebhookBaseUrl,
+          now
+        });
+      }
+
       return runTelegramWebhookSync({
         operation: "set",
         context,
@@ -880,6 +910,18 @@ export function createInternalIntegrationService(
     },
 
     async deleteTelegramWebhook(context, input) {
+      if (options.providerOperationEvents) {
+        return enqueueTelegramProviderOperation({
+          context,
+          connectorId: requireTelegramConnectorId(input),
+          operation: "telegram.webhook.delete",
+          repository: options.connectorRepository,
+          events: options.providerOperationEvents,
+          publicWebhookBaseUrl: options.publicWebhookBaseUrl,
+          now
+        });
+      }
+
       return runTelegramWebhookSync({
         operation: "delete",
         context,
@@ -910,6 +952,16 @@ type TelegramProviderOperationOptions = {
 
 type TelegramWebhookSyncOptions = TelegramProviderOperationOptions & {
   operation: "set" | "delete";
+};
+
+type TelegramProviderOperationRequestOptions = {
+  context: InternalIntegrationContext;
+  connectorId: string;
+  operation: ChannelProviderOperation;
+  repository: ChannelConnectorRepository;
+  events: DomainEventRepository;
+  publicWebhookBaseUrl?: string;
+  now: () => Date;
 };
 
 export function createEnvSecretResolver(
@@ -1418,6 +1470,127 @@ function createTelegramWebhookConnectorId(input: {
 
 function createTelegramWebhookSecretToken(): string {
   return randomBytes(32).toString("base64url");
+}
+
+async function enqueueTelegramProviderOperation(
+  options: TelegramProviderOperationRequestOptions
+): Promise<InternalTelegramIntegrationResponse> {
+  const state = await loadTelegramState({
+    context: options.context,
+    connectorId: options.connectorId,
+    repository: options.repository,
+    secretResolver: createEnvSecretResolver({}),
+    botApiClientFactory: createTelegramBotApiClient,
+    egressRuntime: createPassthroughEgressRuntime(),
+    publicWebhookBaseUrl: options.publicWebhookBaseUrl,
+    now: options.now
+  });
+
+  if (!state.config || !state.enabled) {
+    return state.response;
+  }
+
+  const diagnostics = buildQueuedTelegramProviderOperationDiagnostics({
+    previous: state.response.diagnostics,
+    operation: options.operation,
+    checkedAt: state.checkedAt
+  });
+
+  await persistTelegramDiagnostics({
+    context: options.context,
+    repository: options.repository,
+    existingRecord: state.record,
+    connectorId: state.connectorId,
+    displayName: state.displayName,
+    enabled: state.enabled,
+    config: state.config,
+    diagnostics,
+    updatedAt: state.updatedAt
+  });
+
+  await options.events.append({
+    tenantId: options.context.tenantId,
+    events: [
+      buildTelegramProviderOperationRequestedEvent({
+        context: options.context,
+        connectorId: state.connectorId,
+        operation: options.operation,
+        occurredAt: state.checkedAt
+      })
+    ]
+  });
+
+  return telegramResponseFromConfig({
+    connectorId: state.connectorId,
+    displayName: state.displayName,
+    status: telegramConnectorStatusFromDiagnostics({
+      enabled: state.enabled,
+      diagnostics
+    }),
+    setupStep: resolveTelegramSetupStep({
+      onboardingState: state.record?.onboardingState,
+      config: state.config,
+      diagnostics
+    }),
+    enabled: state.enabled,
+    config: state.config,
+    publicWebhookBaseUrl: options.publicWebhookBaseUrl,
+    diagnostics
+  });
+}
+
+function buildTelegramProviderOperationRequestedEvent(input: {
+  context: InternalIntegrationContext;
+  connectorId: string;
+  operation: ChannelProviderOperation;
+  occurredAt: string;
+}): PlatformEvent {
+  return {
+    id: `event:channel-provider-operation:${randomUUID()}` as EventId,
+    type: "channel.provider_operation.requested",
+    version: "v1",
+    tenantId: input.context.tenantId,
+    occurredAt: input.occurredAt,
+    idempotencyKey: [
+      input.context.requestId,
+      input.connectorId,
+      input.operation
+    ].join(":"),
+    payload: {
+      connectorId: input.connectorId as ChannelConnectorId,
+      channelType: telegramChannelType,
+      provider: telegramProvider,
+      operation: input.operation,
+      actorEmployeeId: input.context.employeeId
+    }
+  };
+}
+
+function buildQueuedTelegramProviderOperationDiagnostics(input: {
+  previous: InternalTelegramIntegrationDiagnostics;
+  operation: ChannelProviderOperation;
+  checkedAt: string;
+}): InternalTelegramIntegrationDiagnostics {
+  return internalTelegramIntegrationDiagnosticsSchema.parse({
+    ...input.previous,
+    checkedAt: input.checkedAt,
+    operatorHint: telegramProviderOperationQueuedHint(input.operation),
+    egress:
+      input.previous.egress ?? buildTelegramEgressDiagnostics(input.checkedAt)
+  });
+}
+
+function telegramProviderOperationQueuedHint(
+  operation: ChannelProviderOperation
+): string {
+  switch (operation) {
+    case "telegram.diagnostics.refresh":
+      return "Telegram diagnostics refresh is queued for the provider egress worker.";
+    case "telegram.webhook.set":
+      return "Telegram webhook sync is queued for the provider egress worker.";
+    case "telegram.webhook.delete":
+      return "Telegram webhook deletion is queued for the provider egress worker.";
+  }
 }
 
 async function runTelegramProviderDiagnostics(

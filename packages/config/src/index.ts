@@ -95,6 +95,8 @@ export type WebConfig = BaseAppConfig & {
 export type WorkerConfig = BaseAppConfig & {
   appName: "worker";
   workerFeatures: readonly WorkerFeature[];
+  publicBaseUrl?: string;
+  publicWebhookBaseUrl?: string;
   pollIntervalMs: number;
   outboxBatchSize: number;
   outboxRetryDelayMs: number;
@@ -227,6 +229,8 @@ const webEnvSchema = baseEnvSchema.extend({
 
 const workerEnvSchema = baseEnvSchema.extend({
   HULEE_WORKER_FEATURES: optionalWorkerFeatures,
+  HULEE_PUBLIC_BASE_URL: optionalHttpUrl,
+  HULEE_PUBLIC_WEBHOOK_BASE_URL: optionalHttpUrl,
   HULEE_WORKER_POLL_INTERVAL_MS: optionalInteger(100, 60_000),
   HULEE_OUTBOX_BATCH_SIZE: optionalInteger(1, 500),
   HULEE_OUTBOX_RETRY_DELAY_MS: optionalInteger(100, 3_600_000)
@@ -522,6 +526,10 @@ export function loadWorkerConfig(env: EnvSource = process.env): WorkerConfig {
     ...buildBaseConfig("worker", result.data),
     appName: "worker",
     workerFeatures: normalizeWorkerFeatures(result.data.HULEE_WORKER_FEATURES),
+    publicBaseUrl: result.data.HULEE_PUBLIC_BASE_URL,
+    publicWebhookBaseUrl:
+      result.data.HULEE_PUBLIC_WEBHOOK_BASE_URL ??
+      result.data.HULEE_PUBLIC_BASE_URL,
     pollIntervalMs: result.data.HULEE_WORKER_POLL_INTERVAL_MS ?? 1_000,
     outboxBatchSize: result.data.HULEE_OUTBOX_BATCH_SIZE ?? 50,
     outboxRetryDelayMs: result.data.HULEE_OUTBOX_RETRY_DELAY_MS ?? 30_000

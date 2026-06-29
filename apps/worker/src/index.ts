@@ -31,6 +31,10 @@ import {
   type TelegramBotApiClientFactory
 } from "./telegram-outbound-dispatcher";
 import {
+  createTelegramProviderOperationDispatcher,
+  type TelegramProviderOperationBotApiClientFactory
+} from "./telegram-provider-operation-dispatcher";
+import {
   runTelegramPollingSweep,
   type TelegramPollingBotApiClientFactory,
   type TelegramPollingSweepOptions,
@@ -75,9 +79,11 @@ export type WorkerOutboxHandlerOptions = {
   secretEncryptionKey?: string;
   secretResolver?: SecretResolver;
   telegramBotApiClientFactory?: TelegramBotApiClientFactory;
+  telegramProviderBotApiClientFactory?: TelegramProviderOperationBotApiClientFactory;
   egressRuntime?: EgressRuntime;
   egressProfile?: WorkerConfig["egressProfile"];
   telegramApiBaseUrl?: string;
+  publicWebhookBaseUrl?: string;
 };
 
 export function createWorkerOutboxHandler(
@@ -92,24 +98,46 @@ export function createWorkerOutboxHandler(
       )
     : undefined;
 
-  return createTelegramOutboundDispatcher({
+  const connectorRepository = createSqlChannelConnectorRepository(
+    options.database
+  );
+  const secretResolver =
+    options.secretResolver ??
+    createTenantSecretResolver({
+      tenantSecrets
+    });
+  const egressRuntime =
+    options.egressRuntime ??
+    (options.egressProfile
+      ? createDeploymentEgressRuntime({
+          profiles: [options.egressProfile]
+        })
+      : undefined);
+  const providerOperationDispatcher = createTelegramProviderOperationDispatcher(
+    {
+      connectorRepository,
+      secretResolver,
+      botApiClientFactory: options.telegramProviderBotApiClientFactory,
+      egressRuntime,
+      telegramApiBaseUrl: options.telegramApiBaseUrl,
+      publicWebhookBaseUrl: options.publicWebhookBaseUrl
+    }
+  );
+  const outboundDispatcher = createTelegramOutboundDispatcher({
     outboundRepository: createSqlOutboundDispatchRepository(options.database),
-    connectorRepository: createSqlChannelConnectorRepository(options.database),
-    secretResolver:
-      options.secretResolver ??
-      createTenantSecretResolver({
-        tenantSecrets
-      }),
+    connectorRepository,
+    secretResolver,
     botApiClientFactory: options.telegramBotApiClientFactory,
-    egressRuntime:
-      options.egressRuntime ??
-      (options.egressProfile
-        ? createDeploymentEgressRuntime({
-            profiles: [options.egressProfile]
-          })
-        : undefined),
+    egressRuntime,
     telegramApiBaseUrl: options.telegramApiBaseUrl
   });
+
+  return {
+    async handle(record) {
+      await providerOperationDispatcher.handle(record);
+      await outboundDispatcher.handle(record);
+    }
+  };
 }
 
 export type WorkerTelegramPollingSweeperOptions = {
@@ -176,6 +204,7 @@ export {
   createTelegramOutboundDispatcher
 } from "./telegram-outbound-dispatcher";
 export { runTelegramPollingSweep } from "./telegram-polling-sweeper";
+export { createTelegramProviderOperationDispatcher } from "./telegram-provider-operation-dispatcher";
 export type {
   ClaimPendingOutboxInput,
   MarkOutboxFailedInput,
@@ -196,3 +225,8 @@ export type {
   TelegramPollingSweepOptions,
   TelegramPollingSweepResult
 } from "./telegram-polling-sweeper";
+export type {
+  TelegramProviderOperationBotApiClient,
+  TelegramProviderOperationBotApiClientFactory,
+  TelegramProviderOperationDispatcherOptions
+} from "./telegram-provider-operation-dispatcher";

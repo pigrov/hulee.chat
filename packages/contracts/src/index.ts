@@ -39,6 +39,11 @@ export type ChannelType =
   | "max_bot"
   | "vk_community";
 
+export type ChannelProviderOperation =
+  | "telegram.diagnostics.refresh"
+  | "telegram.webhook.set"
+  | "telegram.webhook.delete";
+
 export type EventSchemaVersion = "v1";
 
 export type EventEnvelope<TType extends string, TPayload> = {
@@ -97,6 +102,16 @@ export type PlatformEvent =
     >
   | EventEnvelope<"message.received", { messageId: MessageId }>
   | EventEnvelope<"message.sent", { messageId: MessageId }>
+  | EventEnvelope<
+      "channel.provider_operation.requested",
+      {
+        connectorId: ChannelConnectorId;
+        channelType: ChannelType;
+        provider: string;
+        operation: ChannelProviderOperation;
+        actorEmployeeId: EmployeeId;
+      }
+    >
   | EventEnvelope<
       "message.delivery_failed",
       { messageId: MessageId; errorCode: PlatformErrorCode }
