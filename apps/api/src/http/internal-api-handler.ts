@@ -739,7 +739,7 @@ async function handleAuthenticatedRoute(input: {
     case "telegram_integration_diagnostics": {
       const response: InternalTelegramIntegrationResponse =
         await input.integrations.refreshTelegramDiagnostics(input.session, {
-          connectorId: input.route.connectorId
+          connectorId: requireRouteConnectorId(input.route.connectorId)
         });
 
       return jsonResponse(200, response);
@@ -748,7 +748,7 @@ async function handleAuthenticatedRoute(input: {
     case "telegram_integration_webhook_set": {
       const response: InternalTelegramIntegrationResponse =
         await input.integrations.setTelegramWebhook(input.session, {
-          connectorId: input.route.connectorId
+          connectorId: requireRouteConnectorId(input.route.connectorId)
         });
 
       return jsonResponse(200, response);
@@ -757,12 +757,22 @@ async function handleAuthenticatedRoute(input: {
     case "telegram_integration_webhook_delete": {
       const response: InternalTelegramIntegrationResponse =
         await input.integrations.deleteTelegramWebhook(input.session, {
-          connectorId: input.route.connectorId
+          connectorId: requireRouteConnectorId(input.route.connectorId)
         });
 
       return jsonResponse(200, response);
     }
   }
+}
+
+function requireRouteConnectorId(connectorId: string | undefined): string {
+  const normalized = connectorId?.trim();
+
+  if (!normalized) {
+    throw new CoreError("validation.failed");
+  }
+
+  return normalized;
 }
 
 function assertInternalRouteAuthorization(

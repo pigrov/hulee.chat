@@ -233,7 +233,7 @@ export async function updateTelegramIntegrationAction(
     formData,
     "channelExternalId"
   ).trim();
-  const connectorId = optionalConnectorIdFromForm(formData);
+  const connectorId = requiredConnectorIdFromForm(formData);
   const displayName = readOptionalFormString(formData, "displayName")?.trim();
   const mode = readRequiredFormString(formData, "mode").trim();
   const botTokenSecretRef = readOptionalFormString(
@@ -316,7 +316,7 @@ export async function refreshTelegramDiagnosticsAction(
     "modules.manage",
     "/admin/integrations"
   );
-  const connectorId = optionalConnectorIdFromForm(formData);
+  const connectorId = requiredConnectorIdFromForm(formData);
 
   await refreshTelegramDiagnostics(internalApiAccess, {
     connectorId
@@ -332,7 +332,7 @@ export async function setTelegramWebhookAction(
     "modules.manage",
     "/admin/integrations"
   );
-  const connectorId = optionalConnectorIdFromForm(formData);
+  const connectorId = requiredConnectorIdFromForm(formData);
 
   await setTelegramWebhook(internalApiAccess, {
     connectorId
@@ -348,7 +348,7 @@ export async function deleteTelegramWebhookAction(
     "modules.manage",
     "/admin/integrations"
   );
-  const connectorId = optionalConnectorIdFromForm(formData);
+  const connectorId = requiredConnectorIdFromForm(formData);
 
   await deleteTelegramWebhook(internalApiAccess, {
     connectorId
@@ -500,10 +500,8 @@ function readRequiredFormString(formData: FormData, name: string): string {
   return value;
 }
 
-function optionalConnectorIdFromForm(formData: FormData): string | undefined {
-  const connectorId = readOptionalFormString(formData, "connectorId")?.trim();
-
-  return connectorId && connectorId.length > 0 ? connectorId : undefined;
+function requiredConnectorIdFromForm(formData: FormData): string {
+  return readRequiredFormString(formData, "connectorId").trim();
 }
 
 async function assertVerifiedTenantPermission<TPermission extends Permission>(

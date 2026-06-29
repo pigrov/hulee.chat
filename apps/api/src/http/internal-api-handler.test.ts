@@ -1686,6 +1686,7 @@ describe("internal API handler", () => {
       method: "PUT",
       path: "/internal/v1/integrations/telegram",
       body: {
+        connectorId: "telegram_bot:tenant-1",
         enabled: true,
         channelExternalId: "telegram-local",
         mode: "webhook",
@@ -1705,6 +1706,7 @@ describe("internal API handler", () => {
     expect(updateTelegramIntegration).toHaveBeenCalledWith(
       modulesManageSession,
       {
+        connectorId: "telegram_bot:tenant-1",
         enabled: true,
         channelExternalId: "telegram-local",
         mode: "webhook",
@@ -1805,7 +1807,7 @@ describe("internal API handler", () => {
     });
     const diagnosticsResponse = await handler.handle({
       method: "POST",
-      path: "/internal/v1/integrations/telegram/diagnostics"
+      path: "/internal/v1/integrations/telegram/diagnostics?connectorId=telegram_bot%3Atenant-1"
     });
     const setWebhookResponse = await handler.handle({
       method: "POST",
@@ -2039,7 +2041,7 @@ describe("internal API handler", () => {
     });
     const response = await handler.handle({
       method: "POST",
-      path: "/internal/v1/integrations/telegram/diagnostics"
+      path: "/internal/v1/integrations/telegram/diagnostics?connectorId=telegram_bot%3Atenant-1"
     });
 
     expect(response.status).toBe(200);
@@ -2053,9 +2055,28 @@ describe("internal API handler", () => {
     expect(refreshTelegramDiagnostics).toHaveBeenCalledWith(
       modulesManageSession,
       {
-        connectorId: undefined
+        connectorId: "telegram_bot:tenant-1"
       }
     );
+  });
+
+  it("rejects Telegram commands without selected connector id", async () => {
+    const modulesManageSession = sessionWithPermissions(["modules.manage"]);
+    const { handler, refreshTelegramDiagnostics } = createHandler({
+      session: modulesManageSession
+    });
+    const response = await handler.handle({
+      method: "POST",
+      path: "/internal/v1/integrations/telegram/diagnostics"
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      error: {
+        code: "validation.failed"
+      }
+    });
+    expect(refreshTelegramDiagnostics).not.toHaveBeenCalled();
   });
 
   it("syncs Telegram webhook through modules.manage permission", async () => {
@@ -2066,20 +2087,20 @@ describe("internal API handler", () => {
       });
     const setResponse = await handler.handle({
       method: "POST",
-      path: "/internal/v1/integrations/telegram/webhook"
+      path: "/internal/v1/integrations/telegram/webhook?connectorId=telegram_bot%3Atenant-1"
     });
     const deleteResponse = await handler.handle({
       method: "DELETE",
-      path: "/internal/v1/integrations/telegram/webhook"
+      path: "/internal/v1/integrations/telegram/webhook?connectorId=telegram_bot%3Atenant-1"
     });
 
     expect(setResponse.status).toBe(200);
     expect(deleteResponse.status).toBe(200);
     expect(setTelegramWebhook).toHaveBeenCalledWith(modulesManageSession, {
-      connectorId: undefined
+      connectorId: "telegram_bot:tenant-1"
     });
     expect(deleteTelegramWebhook).toHaveBeenCalledWith(modulesManageSession, {
-      connectorId: undefined
+      connectorId: "telegram_bot:tenant-1"
     });
   });
 });

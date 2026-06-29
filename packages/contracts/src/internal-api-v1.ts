@@ -699,7 +699,7 @@ export const internalTelegramIntegrationConfigSchema = z
 
 export const internalTelegramIntegrationUpdateRequestSchema = z
   .object({
-    connectorId: z.string().trim().min(1).max(200).optional(),
+    connectorId: z.string().trim().min(1).max(200),
     displayName: z.string().trim().min(1).max(120).optional(),
     setupStepCompleted: z.enum(["name", "token", "mode"]).optional(),
     enabled: z.boolean().default(true),

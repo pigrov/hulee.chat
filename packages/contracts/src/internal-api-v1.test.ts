@@ -788,6 +788,7 @@ describe("internal API v1 schemas", () => {
   it("allows Telegram updates to carry a write-only bot token", () => {
     expect(
       internalTelegramIntegrationUpdateRequestSchema.parse({
+        connectorId: "telegram_bot:tenant-1",
         enabled: true,
         setupStepCompleted: "token",
         channelExternalId: "telegram-local",
@@ -795,6 +796,7 @@ describe("internal API v1 schemas", () => {
         outboundEnabled: true
       })
     ).toEqual({
+      connectorId: "telegram_bot:tenant-1",
       enabled: true,
       setupStepCompleted: "token",
       channelExternalId: "telegram-local",

@@ -455,6 +455,7 @@ describe("inbox API client", () => {
 
     await updateTelegramIntegration(
       {
+        connectorId: "telegram_bot:second",
         enabled: true,
         channelExternalId: "telegram-local",
         mode: "webhook",
@@ -477,14 +478,20 @@ describe("inbox API client", () => {
         connectorId: "telegram_bot:second"
       }
     );
-    await deleteTelegramWebhook({
-      effectivePermissionOverride: "modules.manage"
-    });
+    await deleteTelegramWebhook(
+      {
+        effectivePermissionOverride: "modules.manage"
+      },
+      {
+        connectorId: "telegram_bot:second"
+      }
+    );
 
     expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(1, {
       method: "PUT",
       path: "/internal/v1/integrations/telegram",
       body: {
+        connectorId: "telegram_bot:second",
         enabled: true,
         channelExternalId: "telegram-local",
         mode: "webhook",
@@ -505,7 +512,7 @@ describe("inbox API client", () => {
     });
     expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(4, {
       method: "DELETE",
-      path: "/internal/v1/integrations/telegram/webhook",
+      path: "/internal/v1/integrations/telegram/webhook?connectorId=telegram_bot%3Asecond",
       effectivePermissionOverride: "modules.manage"
     });
   });

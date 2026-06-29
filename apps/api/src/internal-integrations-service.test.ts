@@ -290,8 +290,14 @@ describe("internal integrations service", () => {
     });
   });
 
-  it("updates Telegram config as tenant module config and returns safe diagnostics", async () => {
-    const repository = new InMemoryChannelConnectorRepository();
+  it("updates selected Telegram connector config and returns safe diagnostics", async () => {
+    const repository = new InMemoryChannelConnectorRepository([
+      createTelegramConnector({
+        config: {},
+        diagnostics: {},
+        status: "draft"
+      })
+    ]);
     const service = createInternalIntegrationService({
       connectorRepository: repository,
       now: () => now,
@@ -299,6 +305,7 @@ describe("internal integrations service", () => {
     });
 
     const response = await service.updateTelegramIntegration(context, {
+      connectorId: "telegram_bot:tenant-integrations",
       enabled: true,
       channelExternalId: "telegram-local",
       mode: "webhook",
@@ -408,7 +415,13 @@ describe("internal integrations service", () => {
   });
 
   it("stores Telegram bot tokens in tenant secret storage and only keeps a secret ref in config", async () => {
-    const repository = new InMemoryChannelConnectorRepository();
+    const repository = new InMemoryChannelConnectorRepository([
+      createTelegramConnector({
+        config: {},
+        diagnostics: {},
+        status: "draft"
+      })
+    ]);
     const secretWriter = new InMemorySecretWriter();
     const service = createInternalIntegrationService({
       connectorRepository: repository,
@@ -419,6 +432,7 @@ describe("internal integrations service", () => {
     });
 
     const response = await service.updateTelegramIntegration(context, {
+      connectorId: "telegram_bot:tenant-integrations",
       enabled: true,
       channelExternalId: "telegram-local",
       mode: "webhook",
@@ -460,6 +474,38 @@ describe("internal integrations service", () => {
     ).not.toContain("telegram-token-1");
   });
 
+  it("does not fall back to the first Telegram connector when none is selected", async () => {
+    const service = createInternalIntegrationService({
+      connectorRepository: new InMemoryChannelConnectorRepository([
+        createTelegramConnector({
+          config: {
+            channelExternalId: "telegram-local",
+            mode: "webhook",
+            outboundEnabled: false
+          },
+          diagnostics: {}
+        })
+      ]),
+      now: () => now
+    });
+
+    await expect(service.loadTelegramIntegration(context)).resolves.toEqual({
+      moduleId: "channel-telegram",
+      enabled: false,
+      diagnostics: {
+        status: "disabled",
+        checkedAt: now.toISOString(),
+        checks: {
+          moduleEnabled: false,
+          configValid: false,
+          inboundWebhookReady: false,
+          outboundEnabled: false,
+          botTokenSecretRefConfigured: false
+        }
+      }
+    });
+  });
+
   it("returns invalid diagnostics for malformed stored Telegram config", async () => {
     const repository = new InMemoryChannelConnectorRepository([
       createTelegramConnector({
@@ -475,7 +521,9 @@ describe("internal integrations service", () => {
     });
 
     await expect(
-      service.loadTelegramIntegration(context)
+      service.loadTelegramIntegration(context, {
+        connectorId: "telegram_bot:tenant-integrations"
+      })
     ).resolves.toMatchObject({
       moduleId: "channel-telegram",
       enabled: true,
@@ -586,7 +634,9 @@ describe("internal integrations service", () => {
       }
     });
 
-    const response = await service.refreshTelegramDiagnostics(context);
+    const response = await service.refreshTelegramDiagnostics(context, {
+      connectorId: "telegram_bot:tenant-integrations"
+    });
 
     expect(response).toMatchObject({
       publicWebhookUrl: "https://example.test/webhooks/telegram/tgwh_test",
@@ -681,7 +731,9 @@ describe("internal integrations service", () => {
       }
     });
 
-    const response = await service.setTelegramWebhook(context);
+    const response = await service.setTelegramWebhook(context, {
+      connectorId: "telegram_bot:tenant-integrations"
+    });
 
     expect(setWebhookCalls).toEqual([
       {
@@ -715,7 +767,9 @@ describe("internal integrations service", () => {
       }
     });
 
-    const response = await service.refreshTelegramDiagnostics(context);
+    const response = await service.refreshTelegramDiagnostics(context, {
+      connectorId: "telegram_bot:tenant-integrations"
+    });
 
     expect(response.diagnostics).toMatchObject({
       status: "invalid_config",

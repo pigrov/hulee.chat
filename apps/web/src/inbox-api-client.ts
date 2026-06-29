@@ -777,7 +777,7 @@ export async function updateTelegramIntegration(
 
 export async function refreshTelegramDiagnostics(
   options: InternalApiAccessOptions<"modules.manage">,
-  input?: { connectorId?: string }
+  input: { connectorId: string }
 ): Promise<TelegramIntegrationViewModel> {
   return postTelegramIntegrationCommand(
     "/internal/v1/integrations/telegram/diagnostics",
@@ -789,7 +789,7 @@ export async function refreshTelegramDiagnostics(
 
 export async function setTelegramWebhook(
   options: InternalApiAccessOptions<"modules.manage">,
-  input?: { connectorId?: string }
+  input: { connectorId: string }
 ): Promise<TelegramIntegrationViewModel> {
   return postTelegramIntegrationCommand(
     "/internal/v1/integrations/telegram/webhook",
@@ -801,7 +801,7 @@ export async function setTelegramWebhook(
 
 export async function deleteTelegramWebhook(
   options: InternalApiAccessOptions<"modules.manage">,
-  input?: { connectorId?: string }
+  input: { connectorId: string }
 ): Promise<TelegramIntegrationViewModel> {
   const url = new URL(
     "/internal/v1/integrations/telegram/webhook",
@@ -836,7 +836,7 @@ async function postTelegramIntegrationCommand(
   path: string,
   errorPrefix: string,
   options: InternalApiAccessOptions<"modules.manage">,
-  input?: { connectorId?: string }
+  input: { connectorId: string }
 ): Promise<TelegramIntegrationViewModel> {
   const url = new URL(path, resolveInternalApiBaseUrl());
 

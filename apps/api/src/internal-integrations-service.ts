@@ -103,15 +103,15 @@ export type InternalIntegrationService = {
   ): Promise<InternalTelegramIntegrationResponse>;
   refreshTelegramDiagnostics(
     context: InternalIntegrationContext,
-    input?: { connectorId?: string }
+    input: { connectorId: string }
   ): Promise<InternalTelegramIntegrationResponse>;
   setTelegramWebhook(
     context: InternalIntegrationContext,
-    input?: { connectorId?: string }
+    input: { connectorId: string }
   ): Promise<InternalTelegramIntegrationResponse>;
   deleteTelegramWebhook(
     context: InternalIntegrationContext,
-    input?: { connectorId?: string }
+    input: { connectorId: string }
   ): Promise<InternalTelegramIntegrationResponse>;
 };
 
@@ -738,20 +738,18 @@ export function createInternalIntegrationService(
 
     async updateTelegramIntegration(context, request) {
       const updatedAt = now();
+      const connectorId = requireTelegramConnectorId(request);
       const existingRecord = await loadExistingTelegramConnector({
         repository: options.connectorRepository,
         tenantId: context.tenantId,
-        connectorId: request.connectorId
+        connectorId
       });
-      if (request.connectorId?.trim() && !existingRecord) {
+
+      if (!existingRecord) {
         throw new CoreError("validation.failed");
       }
 
       const existingConfig = parseTelegramConfigFromRecord(existingRecord);
-      const connectorId =
-        request.connectorId?.trim() ||
-        existingRecord?.id ||
-        createDefaultTelegramConnectorId(context.tenantId);
       const botTokenSecretRef = await resolveTelegramBotTokenSecretRef({
         context,
         request,
@@ -839,7 +837,7 @@ export function createInternalIntegrationService(
     async refreshTelegramDiagnostics(context, input) {
       return runTelegramProviderDiagnostics({
         context,
-        connectorId: input?.connectorId,
+        connectorId: requireTelegramConnectorId(input),
         repository: options.connectorRepository,
         secretResolver,
         botApiClientFactory,
@@ -853,7 +851,7 @@ export function createInternalIntegrationService(
       return runTelegramWebhookSync({
         operation: "set",
         context,
-        connectorId: input?.connectorId,
+        connectorId: requireTelegramConnectorId(input),
         repository: options.connectorRepository,
         secretResolver,
         botApiClientFactory,
@@ -867,7 +865,7 @@ export function createInternalIntegrationService(
       return runTelegramWebhookSync({
         operation: "delete",
         context,
-        connectorId: input?.connectorId,
+        connectorId: requireTelegramConnectorId(input),
         repository: options.connectorRepository,
         secretResolver,
         botApiClientFactory,
@@ -881,7 +879,7 @@ export function createInternalIntegrationService(
 
 type TelegramProviderOperationOptions = {
   context: InternalIntegrationContext;
-  connectorId?: string;
+  connectorId: string;
   repository: ChannelConnectorRepository;
   secretResolver: SecretResolver;
   botApiClientFactory: TelegramBotApiClientFactory;
@@ -929,6 +927,18 @@ export function createTenantSecretResolver(input: {
   };
 }
 
+function requireTelegramConnectorId(
+  input: { connectorId?: string } | undefined
+): string {
+  const connectorId = input?.connectorId?.trim();
+
+  if (!connectorId) {
+    throw new CoreError("validation.failed");
+  }
+
+  return connectorId;
+}
+
 async function loadExistingTelegramConnector(input: {
   repository: ChannelConnectorRepository;
   tenantId: TenantId;
@@ -936,19 +946,16 @@ async function loadExistingTelegramConnector(input: {
 }): Promise<ChannelConnectorRecord | null> {
   const connectorId = input.connectorId?.trim();
 
-  if (connectorId) {
-    const record = await input.repository.findConnector({
-      tenantId: input.tenantId,
-      connectorId
-    });
-
-    return record?.channelType === telegramChannelType ? record : null;
+  if (!connectorId) {
+    return null;
   }
 
-  return input.repository.findFirstConnectorByType({
+  const record = await input.repository.findConnector({
     tenantId: input.tenantId,
-    channelType: telegramChannelType
+    connectorId
   });
+
+  return record?.channelType === telegramChannelType ? record : null;
 }
 
 async function updateChannelConnectorLifecycle(input: {
@@ -1366,10 +1373,6 @@ function buildTelegramWebhookSecretTokenSecretRef(input: {
   });
 }
 
-function createDefaultTelegramConnectorId(tenantId: TenantId): string {
-  return `${telegramChannelType}:${tenantId}`;
-}
-
 function createRandomChannelConnectorId(
   channelType: InternalChannelType
 ): string {
@@ -1589,6 +1592,11 @@ async function loadTelegramState(options: TelegramProviderOperationOptions) {
     tenantId: options.context.tenantId,
     connectorId: options.connectorId
   });
+
+  if (!record) {
+    throw new CoreError("validation.failed");
+  }
+
   const response = telegramResponseFromRecord({
     record,
     publicWebhookBaseUrl: options.publicWebhookBaseUrl,
@@ -1597,9 +1605,8 @@ async function loadTelegramState(options: TelegramProviderOperationOptions) {
 
   return {
     record,
-    connectorId:
-      record?.id ?? createDefaultTelegramConnectorId(options.context.tenantId),
-    displayName: record?.displayName ?? defaultTelegramDisplayName,
+    connectorId: record.id,
+    displayName: record.displayName,
     enabled: response.enabled,
     config: response.config,
     response,
