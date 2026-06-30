@@ -7,6 +7,7 @@ import {
 
 import {
   createWorkerEgressMonitor,
+  createWorkerTelegramAttachmentTransferSweeper,
   createWorkerOutboxHandler,
   createWorkerTelegramPollingSweeper,
   createWorkerRuntime,
@@ -32,7 +33,15 @@ const telegramBotServices = runtime.config.workerFeatures.includes(
         database,
         secretEncryptionKey: runtime.config.secretEncryptionKey,
         egressProfile: runtime.config.egressProfile
-      })
+      }),
+      attachmentTransferSweeper: runtime.config.objectStorage
+        ? createWorkerTelegramAttachmentTransferSweeper({
+            database,
+            objectStorageConfig: runtime.config.objectStorage,
+            secretEncryptionKey: runtime.config.secretEncryptionKey,
+            egressProfile: runtime.config.egressProfile
+          })
+        : undefined
     }
   : undefined;
 const egressMonitor = createWorkerEgressMonitor({
@@ -102,6 +111,22 @@ async function processNextBatch(): Promise<void> {
         updatesReceived: pollingResult.updatesReceived,
         updatesAccepted: pollingResult.updatesAccepted,
         updatesFailed: pollingResult.updatesFailed
+      });
+    }
+
+    const attachmentTransferResult =
+      await telegramBotServices.attachmentTransferSweeper?.sweep();
+
+    if (
+      attachmentTransferResult &&
+      (attachmentTransferResult.attempted > 0 ||
+        attachmentTransferResult.failed > 0)
+    ) {
+      runtime.logger.info("worker.telegram_attachment_transfer_processed", {
+        scanned: attachmentTransferResult.scanned,
+        attempted: attachmentTransferResult.attempted,
+        stored: attachmentTransferResult.stored,
+        failed: attachmentTransferResult.failed
       });
     }
   } catch (error) {

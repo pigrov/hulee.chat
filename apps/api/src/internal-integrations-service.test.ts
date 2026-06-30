@@ -651,6 +651,16 @@ describe("internal integrations service", () => {
       async getUpdates() {
         return [];
       },
+      async getFile() {
+        return {
+          fileId: "telegram-file-1",
+          filePath: "photos/file-1.jpg",
+          raw: {}
+        };
+      },
+      async downloadFile() {
+        return new Uint8Array();
+      },
       async setWebhook() {},
       async deleteWebhook() {}
     }));
@@ -765,6 +775,16 @@ describe("internal integrations service", () => {
           },
           async getUpdates() {
             return [];
+          },
+          async getFile() {
+            return {
+              fileId: "telegram-file-1",
+              filePath: "photos/file-1.jpg",
+              raw: {}
+            };
+          },
+          async downloadFile() {
+            return new Uint8Array();
           },
           async setWebhook(input) {
             setWebhookCalls.push({

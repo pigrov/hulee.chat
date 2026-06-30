@@ -28,6 +28,17 @@ Services:
 - MinIO console: `localhost:9001`.
 - Default bucket: `hulee-files`.
 
+Worker object storage settings for local media transfer:
+
+```powershell
+$env:HULEE_OBJECT_STORAGE_ENDPOINT = "http://localhost:9000"
+$env:HULEE_OBJECT_STORAGE_REGION = "us-east-1"
+$env:HULEE_OBJECT_STORAGE_BUCKET = "hulee-files"
+$env:HULEE_OBJECT_STORAGE_ACCESS_KEY_ID = "minioadmin"
+$env:HULEE_OBJECT_STORAGE_SECRET_ACCESS_KEY = "minioadmin"
+$env:HULEE_OBJECT_STORAGE_FORCE_PATH_STYLE = "true"
+```
+
 Useful commands:
 
 ```bash

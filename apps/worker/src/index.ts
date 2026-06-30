@@ -11,6 +11,7 @@ import {
 import type { EgressRuntime } from "@hulee/modules";
 import {
   createAesGcmTenantSecretCipher,
+  createSqlAttachmentTransferRepository,
   createSqlChannelConnectorRepository,
   createSqlDeploymentEgressProviderPolicyRepository,
   createDrizzlePersistenceExecutor,
@@ -20,8 +21,15 @@ import {
   type HuleeDatabase
 } from "@hulee/db";
 import { createExternalChannelCommandService } from "@hulee/core";
+import { createS3ObjectStorage, type ObjectStorage } from "@hulee/storage";
 
 import type { OutboxHandler } from "./outbox-processor";
+import {
+  createTelegramAttachmentTransferSweeper,
+  type TelegramAttachmentTransferBotApiClientFactory,
+  type TelegramAttachmentTransferSweepResult,
+  type TelegramAttachmentTransferSweeper
+} from "./telegram-attachment-transfer";
 import {
   createTenantSecretResolver,
   createTelegramOutboundDispatcher,
@@ -152,6 +160,22 @@ export type WorkerTelegramPollingSweeper = {
   sweep(): Promise<TelegramPollingSweepResult>;
 };
 
+export type WorkerTelegramAttachmentTransferSweeperOptions = {
+  database: HuleeDatabase;
+  objectStorageConfig: NonNullable<WorkerConfig["objectStorage"]>;
+  secretEncryptionKey?: string;
+  secretResolver?: SecretResolver;
+  objectStorage?: ObjectStorage;
+  telegramBotApiClientFactory?: TelegramAttachmentTransferBotApiClientFactory;
+  egressRuntime?: EgressRuntime;
+  egressProfile?: WorkerConfig["egressProfile"];
+  telegramApiBaseUrl?: string;
+};
+
+export type WorkerTelegramAttachmentTransferSweeper = {
+  sweep(): Promise<TelegramAttachmentTransferSweepResult>;
+};
+
 export function createWorkerTelegramPollingSweeper(
   options: WorkerTelegramPollingSweeperOptions
 ): WorkerTelegramPollingSweeper {
@@ -194,6 +218,41 @@ export function createWorkerTelegramPollingSweeper(
   };
 }
 
+export function createWorkerTelegramAttachmentTransferSweeper(
+  options: WorkerTelegramAttachmentTransferSweeperOptions
+): TelegramAttachmentTransferSweeper {
+  const tenantSecrets = options.secretEncryptionKey
+    ? createSqlTenantSecretRepository(
+        options.database,
+        createAesGcmTenantSecretCipher({
+          key: options.secretEncryptionKey
+        })
+      )
+    : undefined;
+  const egressRuntime =
+    options.egressRuntime ??
+    createWorkerDeploymentEgressRuntime({
+      database: options.database,
+      egressProfile: options.egressProfile
+    });
+
+  return createTelegramAttachmentTransferSweeper({
+    repository: createSqlAttachmentTransferRepository(options.database),
+    connectorRepository: createSqlChannelConnectorRepository(options.database),
+    secretResolver:
+      options.secretResolver ??
+      createTenantSecretResolver({
+        tenantSecrets
+      }),
+    objectStorage:
+      options.objectStorage ??
+      createS3ObjectStorage(options.objectStorageConfig),
+    botApiClientFactory: options.telegramBotApiClientFactory,
+    egressRuntime,
+    telegramApiBaseUrl: options.telegramApiBaseUrl
+  });
+}
+
 function createWorkerDeploymentEgressRuntime(input: {
   database: HuleeDatabase;
   egressProfile?: WorkerConfig["egressProfile"];
@@ -218,6 +277,7 @@ export {
   createTelegramOutboundDispatcher
 } from "./telegram-outbound-dispatcher";
 export { runTelegramPollingSweep } from "./telegram-polling-sweeper";
+export { createTelegramAttachmentTransferSweeper } from "./telegram-attachment-transfer";
 export { createTelegramProviderOperationDispatcher } from "./telegram-provider-operation-dispatcher";
 export {
   createWorkerEgressMonitor,
@@ -244,6 +304,14 @@ export type {
   TelegramPollingSweepOptions,
   TelegramPollingSweepResult
 } from "./telegram-polling-sweeper";
+export type {
+  TelegramAttachmentTransferBotApiClient,
+  TelegramAttachmentTransferBotApiClientFactory,
+  TelegramAttachmentTransferObjectStorage,
+  TelegramAttachmentTransferSweepResult,
+  TelegramAttachmentTransferSweeper,
+  TelegramAttachmentTransferSweeperOptions
+} from "./telegram-attachment-transfer";
 export type {
   TelegramProviderOperationBotApiClient,
   TelegramProviderOperationBotApiClientFactory,

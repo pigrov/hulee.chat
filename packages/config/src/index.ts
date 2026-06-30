@@ -97,12 +97,22 @@ export type WorkerConfig = BaseAppConfig & {
   workerFeatures: readonly WorkerFeature[];
   publicBaseUrl?: string;
   publicWebhookBaseUrl?: string;
+  objectStorage?: ObjectStorageConfig;
   pollIntervalMs: number;
   outboxBatchSize: number;
   outboxRetryDelayMs: number;
   egressProbesEnabled: boolean;
   egressProbeIntervalMs: number;
   egressProbeTimeoutMs: number;
+};
+
+export type ObjectStorageConfig = {
+  endpoint: string;
+  region: string;
+  bucket: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+  forcePathStyle: boolean;
 };
 
 const runtimeEnvironmentSchema = z.enum(["development", "test", "production"]);
@@ -234,6 +244,12 @@ const workerEnvSchema = baseEnvSchema.extend({
   HULEE_WORKER_FEATURES: optionalWorkerFeatures,
   HULEE_PUBLIC_BASE_URL: optionalHttpUrl,
   HULEE_PUBLIC_WEBHOOK_BASE_URL: optionalHttpUrl,
+  HULEE_OBJECT_STORAGE_ENDPOINT: optionalHttpUrl,
+  HULEE_OBJECT_STORAGE_REGION: optionalNonEmptyString,
+  HULEE_OBJECT_STORAGE_BUCKET: optionalNonEmptyString,
+  HULEE_OBJECT_STORAGE_ACCESS_KEY_ID: optionalNonEmptyString,
+  HULEE_OBJECT_STORAGE_SECRET_ACCESS_KEY: optionalNonEmptyString,
+  HULEE_OBJECT_STORAGE_FORCE_PATH_STYLE: optionalBoolean,
   HULEE_WORKER_POLL_INTERVAL_MS: optionalInteger(100, 60_000),
   HULEE_OUTBOX_BATCH_SIZE: optionalInteger(1, 500),
   HULEE_OUTBOX_RETRY_DELAY_MS: optionalInteger(100, 3_600_000),
@@ -270,6 +286,12 @@ const issueMessages: Record<string, string> = {
   HULEE_EMAIL_FROM: "must not be empty",
   HULEE_WORKER_FEATURES:
     "must be a comma-separated list of worker features: core, webhooks, telegram_bot, telegram_user, whatsapp_user, whatsapp_official or max_user",
+  HULEE_OBJECT_STORAGE_ENDPOINT: "must be a valid HTTP(S) URL",
+  HULEE_OBJECT_STORAGE_REGION: "must not be empty",
+  HULEE_OBJECT_STORAGE_BUCKET: "must not be empty",
+  HULEE_OBJECT_STORAGE_ACCESS_KEY_ID: "must not be empty",
+  HULEE_OBJECT_STORAGE_SECRET_ACCESS_KEY: "must not be empty",
+  HULEE_OBJECT_STORAGE_FORCE_PATH_STYLE: "must be true, false, 1 or 0",
   HULEE_WORKER_POLL_INTERVAL_MS:
     "must be an integer from 100 to 60000 milliseconds",
   HULEE_OUTBOX_BATCH_SIZE: "must be an integer from 1 to 500",
@@ -541,12 +563,35 @@ export function loadWorkerConfig(env: EnvSource = process.env): WorkerConfig {
     publicWebhookBaseUrl:
       result.data.HULEE_PUBLIC_WEBHOOK_BASE_URL ??
       result.data.HULEE_PUBLIC_BASE_URL,
+    objectStorage: buildObjectStorageConfig(result.data),
     pollIntervalMs: result.data.HULEE_WORKER_POLL_INTERVAL_MS ?? 1_000,
     outboxBatchSize: result.data.HULEE_OUTBOX_BATCH_SIZE ?? 50,
     outboxRetryDelayMs: result.data.HULEE_OUTBOX_RETRY_DELAY_MS ?? 30_000,
     egressProbesEnabled: result.data.HULEE_EGRESS_PROBES_ENABLED ?? true,
     egressProbeIntervalMs: result.data.HULEE_EGRESS_PROBE_INTERVAL_MS ?? 30_000,
     egressProbeTimeoutMs: result.data.HULEE_EGRESS_PROBE_TIMEOUT_MS ?? 8_000
+  };
+}
+
+function buildObjectStorageConfig(
+  env: z.infer<typeof workerEnvSchema>
+): ObjectStorageConfig | undefined {
+  if (
+    !env.HULEE_OBJECT_STORAGE_ENDPOINT ||
+    !env.HULEE_OBJECT_STORAGE_BUCKET ||
+    !env.HULEE_OBJECT_STORAGE_ACCESS_KEY_ID ||
+    !env.HULEE_OBJECT_STORAGE_SECRET_ACCESS_KEY
+  ) {
+    return undefined;
+  }
+
+  return {
+    endpoint: env.HULEE_OBJECT_STORAGE_ENDPOINT,
+    region: env.HULEE_OBJECT_STORAGE_REGION ?? "us-east-1",
+    bucket: env.HULEE_OBJECT_STORAGE_BUCKET,
+    accessKeyId: env.HULEE_OBJECT_STORAGE_ACCESS_KEY_ID,
+    secretAccessKey: env.HULEE_OBJECT_STORAGE_SECRET_ACCESS_KEY,
+    forcePathStyle: env.HULEE_OBJECT_STORAGE_FORCE_PATH_STYLE ?? true
   };
 }
 

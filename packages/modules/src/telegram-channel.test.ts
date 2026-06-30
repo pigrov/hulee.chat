@@ -166,11 +166,18 @@ describe("telegram channel adapter", () => {
 
   it("wraps Telegram Bot API diagnostics and webhook methods", async () => {
     const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
-      const method = url.split("/").at(-1);
+      const pathname = new URL(url).pathname;
+      const method = pathname.split("/").at(-1);
       const body = JSON.parse(String(init.body ?? "{}")) as Record<
         string,
         unknown
       >;
+
+      if (pathname === "/file/botbot-token/photos/file-1.jpg") {
+        expect(init.method).toBe("GET");
+
+        return new Response(new Uint8Array([1, 2, 3]));
+      }
 
       if (method === "getMe") {
         return jsonTelegramResponse({
@@ -220,6 +227,20 @@ describe("telegram channel adapter", () => {
               }
             }
           ]
+        });
+      }
+
+      if (method === "getFile") {
+        expect(body).toEqual({ file_id: "telegram-file-1" });
+
+        return jsonTelegramResponse({
+          ok: true,
+          result: {
+            file_id: "telegram-file-1",
+            file_unique_id: "unique-file-1",
+            file_size: 3,
+            file_path: "photos/file-1.jpg"
+          }
         });
       }
 
@@ -296,19 +317,38 @@ describe("telegram channel adapter", () => {
     await expect(
       client.deleteWebhook({ dropPendingUpdates: true })
     ).resolves.toBeUndefined();
-    expect(fetchMock).toHaveBeenCalledTimes(5);
+    await expect(client.getFile("telegram-file-1")).resolves.toEqual({
+      fileId: "telegram-file-1",
+      fileUniqueId: "unique-file-1",
+      fileSize: 3,
+      filePath: "photos/file-1.jpg",
+      raw: {
+        file_id: "telegram-file-1",
+        file_unique_id: "unique-file-1",
+        file_size: 3,
+        file_path: "photos/file-1.jpg"
+      }
+    });
+    await expect(client.downloadFile("photos/file-1.jpg")).resolves.toEqual(
+      new Uint8Array([1, 2, 3])
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(7);
   });
 
   it("routes Bot API HTTP calls through the configured egress runtime", async () => {
-    const fetchMock = vi.fn(async () =>
-      jsonTelegramResponse({
+    const fetchMock = vi.fn(async (url: string) => {
+      if (new URL(url).pathname.startsWith("/file/")) {
+        return new Response(new Uint8Array([1]));
+      }
+
+      return jsonTelegramResponse({
         ok: true,
         result: {
           id: 100,
           is_bot: true
         }
-      })
-    );
+      });
+    });
     const executeSpy = vi.fn((input: EgressOperationInput) => input);
     const egressRuntime: EgressRuntime = {
       async resolveProfile() {
@@ -343,6 +383,7 @@ describe("telegram channel adapter", () => {
     });
 
     await client.getMe();
+    await client.downloadFile("photos/file-1.jpg");
 
     expect(executeSpy).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -353,7 +394,16 @@ describe("telegram channel adapter", () => {
         operation: "telegram.bot_api.getMe"
       })
     );
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(executeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: "tenant-1",
+        connectorId: "telegram_bot:tenant-1",
+        channelType: "telegram_bot",
+        provider: "telegram",
+        operation: "telegram.bot_api.downloadFile"
+      })
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
 

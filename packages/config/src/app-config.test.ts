@@ -119,6 +119,33 @@ describe("app config", () => {
     });
   });
 
+  it("loads optional worker object storage settings", () => {
+    expect(
+      loadWorkerConfig({
+        NODE_ENV: "test",
+        HULEE_OBJECT_STORAGE_ENDPOINT: "http://localhost:9000",
+        HULEE_OBJECT_STORAGE_REGION: "eu-central-1",
+        HULEE_OBJECT_STORAGE_BUCKET: "hulee-files",
+        HULEE_OBJECT_STORAGE_ACCESS_KEY_ID: "storage-access",
+        HULEE_OBJECT_STORAGE_SECRET_ACCESS_KEY: "storage-secret",
+        HULEE_OBJECT_STORAGE_FORCE_PATH_STYLE: "true"
+      })
+    ).toMatchObject({
+      objectStorage: {
+        endpoint: "http://localhost:9000",
+        region: "eu-central-1",
+        bucket: "hulee-files",
+        accessKeyId: "storage-access",
+        secretAccessKey: "storage-secret",
+        forcePathStyle: true
+      }
+    });
+
+    expect(loadWorkerConfig({})).toMatchObject({
+      objectStorage: undefined
+    });
+  });
+
   it("defaults worker features to core and Telegram Bot for local bootstrap", () => {
     expect(loadWorkerConfig({})).toMatchObject({
       workerFeatures: ["core", "telegram_bot"]

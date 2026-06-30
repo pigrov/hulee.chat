@@ -99,6 +99,12 @@ export {
   createSqlOutboundDispatchRepository
 } from "./sql-outbound-dispatch-repository";
 export {
+  buildListPendingTelegramAttachmentTransfersSql,
+  buildMarkAttachmentTransferFailedSql,
+  buildMarkAttachmentTransferStoredSql,
+  createSqlAttachmentTransferRepository
+} from "./sql-attachment-transfer-repository";
+export {
   buildFindClientByExternalHandleSql,
   buildFindConversationByIdSql,
   buildFindDeliveryStatusSql,
@@ -190,6 +196,13 @@ export type {
   PersistedMessageSummary,
   UpdateConversationRoutingInput
 } from "./external-message-repository";
+export type {
+  AttachmentTransferRepository,
+  ListPendingTelegramAttachmentTransfersInput,
+  MarkAttachmentTransferFailedInput,
+  MarkAttachmentTransferStoredInput,
+  PendingTelegramAttachmentTransfer
+} from "./sql-attachment-transfer-repository";
 export type {
   ExternalMessageIngestionPersistenceRows,
   ExternalOutboundMessagePersistenceRows,

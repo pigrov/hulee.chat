@@ -60,6 +60,14 @@ export type TelegramUpdate = {
   raw: Record<string, unknown>;
 };
 
+export type TelegramFileInfo = {
+  fileId: string;
+  fileUniqueId?: string;
+  fileSize?: number;
+  filePath: string;
+  raw: Record<string, unknown>;
+};
+
 export type TelegramGetUpdatesInput = {
   offset?: number;
   limit?: number;
@@ -84,6 +92,8 @@ export type TelegramBotApiClient = {
   getMe(): Promise<TelegramBotIdentity>;
   getWebhookInfo(): Promise<TelegramWebhookInfo>;
   getUpdates(input?: TelegramGetUpdatesInput): Promise<TelegramUpdate[]>;
+  getFile(fileId: string): Promise<TelegramFileInfo>;
+  downloadFile(filePath: string): Promise<Uint8Array>;
   setWebhook(input: TelegramSetWebhookInput): Promise<void>;
   deleteWebhook(input?: TelegramDeleteWebhookInput): Promise<void>;
 };
@@ -357,6 +367,12 @@ export function createTelegramBotApiClient(
     async getUpdates(input) {
       return getTelegramUpdates(settings, input);
     },
+    async getFile(fileId) {
+      return getTelegramFile(settings, fileId);
+    },
+    async downloadFile(filePath) {
+      return downloadTelegramFile(settings, filePath);
+    },
     async setWebhook(input) {
       await setTelegramWebhook(settings, input);
     },
@@ -496,6 +512,86 @@ export async function getTelegramUpdates(
   });
 }
 
+export async function getTelegramFile(
+  settings: TelegramBotApiSettings,
+  fileId: string
+): Promise<TelegramFileInfo> {
+  const payload = await requestTelegramJson(settings, "getFile", {
+    file_id: fileId
+  });
+  const result = asRecord(payload.result);
+  const resolvedFileId =
+    typeof result?.file_id === "string" ? result.file_id : undefined;
+  const filePath =
+    typeof result?.file_path === "string" ? result.file_path : undefined;
+
+  if (!result || !resolvedFileId || !filePath) {
+    throw new TelegramAdapterError(
+      "provider.permanent_failure",
+      "Telegram getFile response did not include file_id and file_path."
+    );
+  }
+
+  return {
+    fileId: resolvedFileId,
+    fileUniqueId:
+      typeof result?.file_unique_id === "string"
+        ? result.file_unique_id
+        : undefined,
+    fileSize:
+      typeof result?.file_size === "number" ? result.file_size : undefined,
+    filePath,
+    raw: result
+  };
+}
+
+export async function downloadTelegramFile(
+  settings: TelegramBotApiSettings,
+  filePath: string
+): Promise<Uint8Array> {
+  assertSafeTelegramFilePath(filePath);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    settings.httpTimeoutMs ?? 30_000
+  );
+
+  try {
+    const response = await executeTelegramBotApiOperation(
+      settings,
+      "downloadFile",
+      async () =>
+        fetch(buildTelegramFileDownloadUrl(settings, filePath), {
+          method: "GET",
+          signal: controller.signal
+        })
+    );
+
+    if (!response.ok) {
+      throw new TelegramAdapterError(
+        response.status >= 500
+          ? "provider.temporary_failure"
+          : "provider.permanent_failure",
+        `Telegram file download returned HTTP ${response.status}.`
+      );
+    }
+
+    return new Uint8Array(await response.arrayBuffer());
+  } catch (error) {
+    if (error instanceof TelegramAdapterError) {
+      throw error;
+    }
+
+    throw new TelegramAdapterError(
+      "provider.temporary_failure",
+      error instanceof Error ? error.message : String(error)
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function setTelegramWebhook(
   settings: TelegramBotApiSettings,
   input: TelegramSetWebhookInput
@@ -608,6 +704,35 @@ function buildTelegramMethodUrl(
   ).replace(/\/+$/, "");
 
   return `${apiBaseUrl}/bot${settings.botToken}/${method}`;
+}
+
+function buildTelegramFileDownloadUrl(
+  settings: TelegramBotApiSettings,
+  filePath: string
+): string {
+  const apiBaseUrl = (
+    settings.apiBaseUrl ?? "https://api.telegram.org"
+  ).replace(/\/+$/, "");
+  const encodedPath = filePath
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+
+  return `${apiBaseUrl}/file/bot${settings.botToken}/${encodedPath}`;
+}
+
+function assertSafeTelegramFilePath(filePath: string): void {
+  if (
+    filePath.trim().length === 0 ||
+    filePath.startsWith("/") ||
+    filePath.includes("..") ||
+    filePath.includes("\\")
+  ) {
+    throw new TelegramAdapterError(
+      "provider.permanent_failure",
+      "Telegram file_path is not a safe relative path."
+    );
+  }
 }
 
 function extractTelegramMessage(
