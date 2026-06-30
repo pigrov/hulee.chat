@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Circle, RefreshCw } from "lucide-react";
+import { Check, Circle, Eye, EyeOff, RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import {
@@ -15,7 +15,9 @@ export type PasswordGuidanceLabels = {
   password: string;
   title: string;
   generate: string;
+  hidePassword: string;
   requirements: Record<PasswordGuidanceRequirementId, string>;
+  showPassword: string;
 };
 
 export type PasswordGuidanceProps = {
@@ -36,12 +38,17 @@ export function PasswordGuidance({
   required = true
 }: PasswordGuidanceProps) {
   const [password, setPassword] = useState("");
+  const [isPasswordVisible, setPasswordVisible] = useState(false);
   const requirements = useMemo(() => {
     return evaluatePasswordGuidance(password, { email }).filter(
       (requirement) => requirement.visible
     );
   }, [email, password]);
   const guidanceId = `${inputId}-guidance`;
+  const VisibilityIcon = isPasswordVisible ? EyeOff : Eye;
+  const visibilityLabel = isPasswordVisible
+    ? labels.hidePassword
+    : labels.showPassword;
 
   return (
     <div className="passwordGuidance">
@@ -49,21 +56,35 @@ export function PasswordGuidance({
         <label className="detailLabel" htmlFor={inputId}>
           {labels.password}
         </label>
-        <input
-          aria-describedby={guidanceId}
-          autoComplete={autoComplete}
-          className="textInput"
-          id={inputId}
-          maxLength={maximumPasswordLength}
-          minLength={minimumPasswordLength}
-          name={inputName}
-          onChange={(event) => {
-            setPassword(event.currentTarget.value);
-          }}
-          required={required}
-          type="password"
-          value={password}
-        />
+        <div className="passwordInputWrap">
+          <input
+            aria-describedby={guidanceId}
+            autoComplete={autoComplete}
+            className="textInput"
+            id={inputId}
+            maxLength={maximumPasswordLength}
+            minLength={minimumPasswordLength}
+            name={inputName}
+            onChange={(event) => {
+              setPassword(event.currentTarget.value);
+            }}
+            required={required}
+            type={isPasswordVisible ? "text" : "password"}
+            value={password}
+          />
+          <button
+            aria-label={visibilityLabel}
+            aria-pressed={isPasswordVisible}
+            className="passwordVisibilityButton"
+            onClick={() => {
+              setPasswordVisible((visible) => !visible);
+            }}
+            title={visibilityLabel}
+            type="button"
+          >
+            <VisibilityIcon size={18} aria-hidden="true" />
+          </button>
+        </div>
       </div>
 
       <div className="passwordGuidancePanel" id={guidanceId}>

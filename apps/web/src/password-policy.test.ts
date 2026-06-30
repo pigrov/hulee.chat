@@ -47,6 +47,13 @@ describe("password policy", () => {
     });
   });
 
+  it("rejects passwords containing Cyrillic letters", () => {
+    expect(validatePasswordPolicy("Secure2026!Пароль")).toMatchObject({
+      valid: false,
+      violations: expect.arrayContaining(["contains_cyrillic"])
+    });
+  });
+
   it("rejects passwords containing account identifiers", () => {
     expect(
       validatePasswordPolicy("Pigrov2026!Secure", {

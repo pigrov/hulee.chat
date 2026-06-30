@@ -585,6 +585,39 @@ button.iconButton:disabled {
   gap: 8px;
 }
 
+.passwordInputWrap {
+  position: relative;
+  display: grid;
+}
+
+.passwordInputWrap .textInput {
+  padding-right: 46px;
+}
+
+.passwordVisibilityButton {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--hulee-radius-control);
+  background: transparent;
+  color: var(--hulee-color-text-muted);
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.passwordVisibilityButton:hover,
+.passwordVisibilityButton:focus-visible {
+  border-color: var(--hulee-color-brand-primary);
+  color: var(--hulee-color-text-default);
+  outline: none;
+  box-shadow: var(--hulee-shadow-focus);
+}
+
 .passwordGuidancePanel {
   display: grid;
   gap: 8px;

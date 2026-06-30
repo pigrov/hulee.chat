@@ -18,6 +18,7 @@ describe("password guidance model", () => {
     expect(states.digit?.valid).toBe(true);
     expect(states.uppercase?.valid).toBe(true);
     expect(states.symbol?.valid).toBe(true);
+    expect(states.no_cyrillic?.valid).toBe(true);
     expect(states.no_surrounding_whitespace?.valid).toBe(true);
     expect(states.not_common_pattern?.valid).toBe(true);
     expect(states.no_account_identifier?.valid).toBe(true);
@@ -44,6 +45,15 @@ describe("password guidance model", () => {
     expect(states.not_common_pattern?.valid).toBe(false);
   });
 
+  it("marks Cyrillic letters invalid without treating them as password symbols", () => {
+    const states = indexRequirements(
+      evaluatePasswordGuidance("Secure2026Пароль")
+    );
+
+    expect(states.symbol?.valid).toBe(false);
+    expect(states.no_cyrillic?.valid).toBe(false);
+  });
+
   it("generates passwords that satisfy the reusable checklist", () => {
     const generated = generateStrongPassword(() => 0);
     const states = evaluatePasswordGuidance(generated, {
@@ -57,6 +67,7 @@ describe("password guidance model", () => {
         expect.objectContaining({ id: "digit", valid: true }),
         expect.objectContaining({ id: "uppercase", valid: true }),
         expect.objectContaining({ id: "symbol", valid: true }),
+        expect.objectContaining({ id: "no_cyrillic", valid: true }),
         expect.objectContaining({
           id: "no_surrounding_whitespace",
           valid: true

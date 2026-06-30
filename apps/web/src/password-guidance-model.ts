@@ -1,5 +1,6 @@
 import {
   containsCommonWeakPasswordPattern,
+  containsCyrillicCharacters,
   containsPasswordIdentifier,
   maximumPasswordLength,
   minimumPasswordLength
@@ -15,6 +16,7 @@ export const passwordGuidanceRequirementIds = [
   "digit",
   "uppercase",
   "symbol",
+  "no_cyrillic",
   "no_surrounding_whitespace",
   "not_common_pattern",
   "no_account_identifier"
@@ -73,7 +75,12 @@ export function evaluatePasswordGuidance(
     },
     {
       id: "symbol",
-      valid: /[^A-Za-z0-9\s]/.test(password),
+      valid: hasPasswordSymbol(password),
+      visible: true
+    },
+    {
+      id: "no_cyrillic",
+      valid: hasPassword && !containsCyrillicCharacters(password),
       visible: true
     },
     {
@@ -120,6 +127,12 @@ export function generateStrongPassword(
   return shuffleCharacters(characters, randomInt)
     .join("")
     .slice(0, maximumPasswordLength);
+}
+
+function hasPasswordSymbol(password: string): boolean {
+  return [...password].some((character) =>
+    symbolCharacters.includes(character)
+  );
 }
 
 function hasVisibleAccountIdentifier(

@@ -8,7 +8,8 @@ export type PasswordPolicyViolation =
   | "leading_or_trailing_whitespace"
   | "insufficient_complexity"
   | "contains_identifier"
-  | "common_pattern";
+  | "common_pattern"
+  | "contains_cyrillic";
 
 export type PasswordPolicyResult =
   | {
@@ -53,6 +54,10 @@ export function validatePasswordPolicy(
 
   if (containsCommonWeakPasswordPattern(password)) {
     violations.push("common_pattern");
+  }
+
+  if (containsCyrillicCharacters(password)) {
+    violations.push("contains_cyrillic");
   }
 
   return violations.length === 0
@@ -119,4 +124,8 @@ export function containsCommonWeakPasswordPattern(password: string): boolean {
   return commonWeakPatterns.some((pattern) => {
     return normalizedPassword.includes(pattern);
   });
+}
+
+export function containsCyrillicCharacters(password: string): boolean {
+  return /[\u0400-\u04ff]/.test(password);
 }

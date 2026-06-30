@@ -97,10 +97,12 @@ export default async function ResetPasswordPage({
               inputId="reset-password-password"
               labels={{
                 generate: t("auth.password.generateStrong"),
+                hidePassword: t("auth.password.hide"),
                 password: t("auth.password"),
                 requirements: {
                   digit: t("auth.password.requirement.digit"),
                   minimum_length: t("auth.password.requirement.minimumLength"),
+                  no_cyrillic: t("auth.password.requirement.noCyrillic"),
                   no_account_identifier: t(
                     "auth.password.requirement.noAccountIdentifier"
                   ),
@@ -113,6 +115,7 @@ export default async function ResetPasswordPage({
                   symbol: t("auth.password.requirement.symbol"),
                   uppercase: t("auth.password.requirement.uppercase")
                 },
+                showPassword: t("auth.password.show"),
                 title: t("auth.password.guidanceTitle")
               }}
             />
