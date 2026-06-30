@@ -125,6 +125,9 @@ export default async function IntegrationsAdminPage({
   const telegramChannel = channelCatalog.channels.find(
     (channel) => channel.channelType === "telegram_bot"
   );
+  const availableChannels = channelCatalog.channels.filter(
+    (channel) => channel.readiness === "available"
+  );
   const selectedTelegramIntegration =
     selectedConnector?.channelType === "telegram_bot"
       ? await loadTelegramIntegration(internalApiAccess, {
@@ -228,7 +231,7 @@ export default async function IntegrationsAdminPage({
               <h3 className="detailLabel">
                 {t("admin.integrations.availableChannels")}
               </h3>
-              {channelCatalog.channels.map((channel) => (
+              {availableChannels.map((channel) => (
                 <CatalogListItem
                   key={channel.channelType}
                   channel={channel}
@@ -653,17 +656,8 @@ function CatalogListItem({
           {resolveChannelDescription({ channel, locale, t })}
         </p>
       </div>
-      <span className="badge">{t(channelReadinessKey(channel.readiness))}</span>
     </>
   );
-
-  if (channel.readiness !== "available") {
-    return (
-      <div className="integrationListItem" aria-disabled="true">
-        {content}
-      </div>
-    );
-  }
 
   return (
     <form className="integrationListForm" action={createChannelConnectorAction}>
@@ -673,12 +667,6 @@ function CatalogListItem({
       </button>
     </form>
   );
-}
-
-function channelReadinessKey(
-  readiness: InternalChannelCatalogItem["readiness"]
-): I18nMessageKey {
-  return `integrations.channel.readiness.${readiness}` as I18nMessageKey;
 }
 
 function channelConnectorStatusKey(

@@ -980,7 +980,7 @@ a.secondaryButton {
 
 .adminGrid {
   display: grid;
-  grid-template-columns: minmax(210px, 250px) minmax(0, 1fr);
+  grid-template-columns: 200px minmax(0, 1fr);
   gap: var(--hulee-space-block);
   align-items: start;
 }
@@ -1014,7 +1014,7 @@ a.secondaryButton {
 .adminIntegrationGrid {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
+  grid-template-columns: 320px minmax(0, 1fr);
   gap: var(--hulee-space-block);
   align-items: start;
 }
@@ -1684,6 +1684,12 @@ button.managementRow:focus-visible {
 .integrationNavLink {
   justify-content: flex-start;
   text-align: left;
+}
+
+.adminNavLink {
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .adminNavLink[aria-current="page"],
