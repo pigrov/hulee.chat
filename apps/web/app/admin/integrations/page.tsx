@@ -11,16 +11,7 @@ import type {
   InternalEgressDiagnostics,
   InternalEgressProfileStatus
 } from "@hulee/contracts";
-import {
-  Bot,
-  CheckCircle2,
-  Circle,
-  MessageCircle,
-  Network,
-  PowerOff,
-  Smartphone,
-  Trash2
-} from "lucide-react";
+import { CheckCircle2, Circle, Network, PowerOff, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
@@ -34,6 +25,11 @@ import {
   disableChannelConnectorAction
 } from "../../../src/actions";
 import { ChannelAuthChallengePanel } from "../../../src/channel-auth-challenge-panel";
+import {
+  ChannelIcon,
+  resolveChannelDescription,
+  resolveChannelTitle
+} from "../../../src/channel-display";
 import {
   loadChannelCatalog,
   loadChannelAuthChallenge,
@@ -218,6 +214,7 @@ export default async function IntegrationsAdminPage({
                     catalog={channelCatalog.channels}
                     current={connector.connectorId === selectedConnectorId}
                     egressDiagnostics={connector.egress}
+                    locale={locale}
                     t={t}
                   />
                 ))
@@ -235,6 +232,7 @@ export default async function IntegrationsAdminPage({
                 <CatalogListItem
                   key={channel.channelType}
                   channel={channel}
+                  locale={locale}
                   t={t}
                 />
               ))}
@@ -427,7 +425,10 @@ function GenericChannelConnectorPanel({
           </h2>
         </div>
         <span className="badge">
-          <ChannelIcon channelClass={connector.channelClass} />
+          <ChannelIcon
+            channel={channel}
+            channelClass={connector.channelClass}
+          />
           {t(channelConnectorStatusKey(connector.status))}
         </span>
       </div>
@@ -447,7 +448,12 @@ function GenericChannelConnectorPanel({
           label={t("integrations.channel.details.type")}
           value={
             channel
-              ? t(channel.titleKey as I18nMessageKey)
+              ? resolveChannelTitle({
+                  channel,
+                  locale,
+                  t,
+                  fallback: connector.channelType
+                })
               : connector.channelType
           }
         />
@@ -564,12 +570,14 @@ function ConnectorListItem({
   catalog,
   current,
   egressDiagnostics,
+  locale,
   t
 }: {
   connector: InternalChannelConnectorSummary;
   catalog: readonly InternalChannelCatalogItem[];
   current: boolean;
   egressDiagnostics?: InternalEgressDiagnostics;
+  locale: string;
   t: Translator;
 }): ReactNode {
   const channel = catalog.find(
@@ -585,14 +593,19 @@ function ConnectorListItem({
       aria-current={current ? "page" : undefined}
     >
       <span className="metricIcon">
-        <ChannelIcon channelClass={connector.channelClass} />
+        <ChannelIcon channel={channel} channelClass={connector.channelClass} />
       </span>
       <div>
         <h3 className="listItemTitle">{connector.displayName}</h3>
         <p className="metaText">
           {[
             channel
-              ? t(channel.titleKey as I18nMessageKey)
+              ? resolveChannelTitle({
+                  channel,
+                  locale,
+                  t,
+                  fallback: connector.provider
+                })
               : connector.provider,
             t(channelConnectorStatusKey(connector.status))
           ].join(" / ")}
@@ -615,22 +628,29 @@ function ConnectorListItem({
 
 function CatalogListItem({
   channel,
+  locale,
   t
 }: {
   channel: InternalChannelCatalogItem;
+  locale: string;
   t: Translator;
 }): ReactNode {
   const content = (
     <>
       <span className="metricIcon">
-        <ChannelIcon channelClass={channel.channelClass} />
+        <ChannelIcon channel={channel} />
       </span>
       <div>
         <h3 className="listItemTitle">
-          {t(channel.titleKey as I18nMessageKey)}
+          {resolveChannelTitle({
+            channel,
+            locale,
+            t,
+            fallback: channel.channelType
+          })}
         </h3>
         <p className="metaText">
-          {t(channel.descriptionKey as I18nMessageKey)}
+          {resolveChannelDescription({ channel, locale, t })}
         </p>
       </div>
       <span className="badge">{t(channelReadinessKey(channel.readiness))}</span>
@@ -653,21 +673,6 @@ function CatalogListItem({
       </button>
     </form>
   );
-}
-
-function ChannelIcon({
-  channelClass
-}: {
-  channelClass: InternalChannelCatalogItem["channelClass"];
-}): ReactNode {
-  switch (channelClass) {
-    case "bot_bridge":
-      return <Bot size={18} aria-hidden="true" />;
-    case "user_bridge":
-      return <Smartphone size={18} aria-hidden="true" />;
-    case "official_api":
-      return <MessageCircle size={18} aria-hidden="true" />;
-  }
 }
 
 function channelReadinessKey(

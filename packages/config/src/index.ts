@@ -86,6 +86,7 @@ export type WebConfig = BaseAppConfig & {
   internalApiSecret?: string;
   publicBaseUrl?: string;
   publicWebhookBaseUrl?: string;
+  objectStorage?: ObjectStorageConfig;
   authChoiceSecret?: string;
   webAllowedOrigins: readonly string[];
   webAuthRequired: boolean;
@@ -240,6 +241,12 @@ const webEnvSchema = baseEnvSchema.extend({
   HULEE_INTERNAL_API_SECRET: optionalNonEmptyString,
   HULEE_PUBLIC_BASE_URL: optionalHttpUrl,
   HULEE_PUBLIC_WEBHOOK_BASE_URL: optionalHttpUrl,
+  HULEE_OBJECT_STORAGE_ENDPOINT: optionalHttpUrl,
+  HULEE_OBJECT_STORAGE_REGION: optionalNonEmptyString,
+  HULEE_OBJECT_STORAGE_BUCKET: optionalNonEmptyString,
+  HULEE_OBJECT_STORAGE_ACCESS_KEY_ID: optionalNonEmptyString,
+  HULEE_OBJECT_STORAGE_SECRET_ACCESS_KEY: optionalNonEmptyString,
+  HULEE_OBJECT_STORAGE_FORCE_PATH_STYLE: optionalBoolean,
   HULEE_AUTH_CHOICE_SECRET: optionalNonEmptyString,
   HULEE_WEB_ALLOWED_ORIGINS: optionalNonEmptyString,
   HULEE_WEB_AUTH_REQUIRED: optionalBoolean,
@@ -545,6 +552,7 @@ export function loadWebConfig(env: EnvSource = process.env): WebConfig {
     publicBaseUrl,
     publicWebhookBaseUrl:
       result.data.HULEE_PUBLIC_WEBHOOK_BASE_URL ?? publicBaseUrl,
+    objectStorage: buildObjectStorageConfig(result.data),
     authChoiceSecret: result.data.HULEE_AUTH_CHOICE_SECRET,
     webAllowedOrigins: webAllowedOrigins ?? [],
     webAuthRequired: result.data.HULEE_WEB_AUTH_REQUIRED ?? true,

@@ -6,6 +6,8 @@ import type {
   InternalEgressProfileStatus
 } from "@hulee/contracts";
 import {
+  createSqlDeploymentChannelCatalogOverrideRepository,
+  createSqlDeploymentChannelProviderPolicyRepository,
   createSqlDeploymentEgressProviderPolicyRepository,
   createSqlDeploymentEgressStatusRepository
 } from "@hulee/db";
@@ -14,10 +16,12 @@ import {
   Boxes,
   Building2,
   KeyRound,
+  MessageCircle,
   Network,
   Server,
   ShieldCheck
 } from "lucide-react";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
@@ -38,6 +42,16 @@ import {
   resolveOverallEgressStatus
 } from "../../src/egress-formatting";
 import { formatOptionalDateTime } from "../../src/formatting";
+import { resolveChannelTitle } from "../../src/channel-display";
+import { updatePlatformChannelProviderPolicyAction } from "../../src/platform-channel-actions";
+import {
+  loadPlatformChannelCatalog,
+  type PlatformChannelCatalogView
+} from "../../src/platform-channel-catalog";
+import {
+  loadPlatformChannelProviderPolicies,
+  type PlatformChannelProviderPolicyView
+} from "../../src/platform-channel-policies";
 import { updatePlatformEgressProviderPolicyAction } from "../../src/platform-egress-actions";
 import {
   loadPlatformEgressProviderPolicies,
@@ -53,6 +67,7 @@ export default async function PlatformAdminPage({
   searchParams
 }: {
   searchParams?: Promise<{
+    channelPolicy?: string;
     egressPolicy?: string;
   }>;
 }): Promise<ReactNode> {
@@ -80,10 +95,17 @@ export default async function PlatformAdminPage({
     config: webConfig,
     repository: createSqlDeploymentEgressStatusRepository(database)
   });
+  const channelCatalog = await loadPlatformChannelCatalog({
+    repository: createSqlDeploymentChannelCatalogOverrideRepository(database)
+  });
   const providerPolicies = await loadPlatformEgressProviderPolicies({
     config: webConfig,
     egressStatus,
     repository: createSqlDeploymentEgressProviderPolicyRepository(database)
+  });
+  const channelPolicies = await loadPlatformChannelProviderPolicies({
+    config: webConfig,
+    repository: createSqlDeploymentChannelProviderPolicyRepository(database)
   });
   const resolvedSearchParams = await searchParams;
   const overallEgressStatus = resolveOverallEgressStatus(egressStatus.profiles);
@@ -122,6 +144,19 @@ export default async function PlatformAdminPage({
               {resolvedSearchParams.egressPolicy === "updated"
                 ? t("platform.egressPolicyStatus.updated")
                 : t("platform.egressPolicyStatus.invalid")}
+            </p>
+          ) : null}
+          {resolvedSearchParams?.channelPolicy ? (
+            <p
+              className={
+                resolvedSearchParams.channelPolicy === "updated"
+                  ? "formNotice"
+                  : "formError"
+              }
+            >
+              {resolvedSearchParams.channelPolicy === "updated"
+                ? t("platform.channelPolicyStatus.updated")
+                : t("platform.channelPolicyStatus.invalid")}
             </p>
           ) : null}
 
@@ -232,6 +267,52 @@ export default async function PlatformAdminPage({
                     key={policy.provider}
                     locale={locale}
                     policy={policy}
+                    channelCatalog={channelCatalog}
+                    t={t}
+                  />
+                ))}
+              </div>
+            </section>
+
+            <section
+              className="settingsPanel"
+              aria-labelledby="channel-provider-policy-title"
+            >
+              <div className="sectionHeader">
+                <div>
+                  <p className="eyebrow">{t("platform.dataPlane")}</p>
+                  <h2
+                    className="sectionTitle"
+                    id="channel-provider-policy-title"
+                  >
+                    {t("platform.channelProviderBehavior")}
+                  </h2>
+                </div>
+                <MessageCircle size={18} aria-hidden="true" />
+              </div>
+              <p className="metaText">
+                {t("platform.channelProviderBehaviorDescription")}
+              </p>
+              <Link className="managementRow" href="/platform/channels">
+                <span>
+                  <span className="detailValue">
+                    {t("platform.channels.title")}
+                  </span>
+                  <span className="metaText">
+                    {t("platform.channels.description")}
+                  </span>
+                </span>
+                <span className="badge">
+                  {t("platform.channels.openCatalog")}
+                </span>
+              </Link>
+              <div className="managementList">
+                {channelPolicies.map((policy) => (
+                  <PlatformChannelProviderPolicy
+                    key={`${policy.provider}:${policy.channelType}`}
+                    channelCatalog={channelCatalog}
+                    locale={locale}
+                    policy={policy}
                     t={t}
                   />
                 ))}
@@ -296,6 +377,90 @@ export default async function PlatformAdminPage({
         </div>
       </section>
     </AppFrame>
+  );
+}
+
+function PlatformChannelProviderPolicy({
+  channelCatalog,
+  locale,
+  policy,
+  t
+}: {
+  channelCatalog: readonly PlatformChannelCatalogView[];
+  locale: string;
+  policy: PlatformChannelProviderPolicyView;
+  t: ReturnType<typeof createTranslator>["t"];
+}): ReactNode {
+  const channelTitle = formatChannelType({
+    channelCatalog,
+    channelType: policy.channelType,
+    fallbackKey: policy.titleKey,
+    locale,
+    t
+  });
+
+  return (
+    <form
+      action={updatePlatformChannelProviderPolicyAction}
+      className="managementRow channelProviderPolicyRow"
+    >
+      <input name="provider" type="hidden" value={policy.provider} />
+      <input name="channelType" type="hidden" value={policy.channelType} />
+
+      <div>
+        <p className="detailValue">{channelTitle}</p>
+        <p className="metaText">{policy.channelType}</p>
+        <div className="sourceList">
+          <span className="badge">
+            {t(channelPolicySourceKey(policy.source))}
+          </span>
+        </div>
+      </div>
+
+      <label className="fieldStack">
+        <span className="detailLabel">
+          {t("platform.channelPolicy.inboundMode")}
+        </span>
+        <select
+          className="selectInput"
+          defaultValue={policy.inboundMode}
+          name="inboundMode"
+        >
+          {policy.supportedInboundModes.map((mode) => (
+            <option key={mode} value={mode}>
+              {t(telegramModeKey(mode))}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label className="toggleRow">
+        <input
+          type="checkbox"
+          name="outboundEnabled"
+          defaultChecked={policy.outboundEnabled}
+        />
+        <span>{t("platform.channelPolicy.outboundEnabled")}</span>
+      </label>
+
+      <div className="egressProviderPolicyStatus">
+        {policy.updatedAt ? (
+          <DetailItem
+            label={t("platform.channelPolicy.updatedAt")}
+            value={formatOptionalDateTime(policy.updatedAt, locale, t)}
+          />
+        ) : (
+          <DetailItem
+            label={t("platform.channelPolicy.updatedAt")}
+            value={t("common.unknown")}
+          />
+        )}
+      </div>
+
+      <button className="primaryButton" type="submit">
+        {t("common.save")}
+      </button>
+    </form>
   );
 }
 
@@ -391,10 +556,12 @@ function PlatformEgressProfile({
 }
 
 function PlatformEgressProviderPolicy({
+  channelCatalog,
   locale,
   policy,
   t
 }: {
+  channelCatalog: readonly PlatformChannelCatalogView[];
   locale: string;
   policy: PlatformEgressProviderPolicyView;
   t: ReturnType<typeof createTranslator>["t"];
@@ -409,7 +576,15 @@ function PlatformEgressProviderPolicy({
         <p className="detailValue">{t(policy.titleKey)}</p>
         <p className="metaText">
           {policy.supportedChannelTypes
-            .map((channelType) => t(channelTypeKey(channelType)))
+            .map((channelType) =>
+              formatChannelType({
+                channelCatalog,
+                channelType,
+                fallbackKey: channelTypeKey(channelType),
+                locale,
+                t
+              })
+            )
             .join(", ")}
         </p>
         <div className="sourceList">
@@ -557,8 +732,22 @@ function egressPolicyApplyStateKey(
   return `platform.egressPolicy.applyState.${state}` as I18nMessageKey;
 }
 
+function channelPolicySourceKey(
+  source: PlatformChannelProviderPolicyView["source"]
+): I18nMessageKey {
+  return `platform.channelPolicy.source.${source}` as I18nMessageKey;
+}
+
+function telegramModeKey(
+  mode: PlatformChannelProviderPolicyView["inboundMode"]
+): I18nMessageKey {
+  return `integrations.telegram.mode.${mode}` as I18nMessageKey;
+}
+
 function channelTypeKey(
-  channelType: PlatformEgressProviderPolicyView["supportedChannelTypes"][number]
+  channelType:
+    | PlatformEgressProviderPolicyView["supportedChannelTypes"][number]
+    | PlatformChannelProviderPolicyView["channelType"]
 ): I18nMessageKey {
   const keys = {
     telegram_bot: "integrations.catalog.telegramBot.title",
@@ -570,4 +759,25 @@ function channelTypeKey(
   } satisfies Record<InternalChannelType, I18nMessageKey>;
 
   return keys[channelType];
+}
+
+function formatChannelType(input: {
+  channelCatalog: readonly PlatformChannelCatalogView[];
+  channelType: InternalChannelType;
+  fallbackKey: I18nMessageKey;
+  locale: string;
+  t: ReturnType<typeof createTranslator>["t"];
+}): string {
+  const channel = input.channelCatalog.find(
+    (item) => item.channelType === input.channelType
+  );
+
+  return channel
+    ? resolveChannelTitle({
+        channel,
+        locale: input.locale,
+        t: input.t,
+        fallback: input.t(input.fallbackKey)
+      })
+    : input.t(input.fallbackKey);
 }

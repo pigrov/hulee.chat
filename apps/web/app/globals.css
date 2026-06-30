@@ -1527,6 +1527,56 @@ a.secondaryButton {
   align-items: flex-start;
 }
 
+.managementRow.channelProviderPolicyRow {
+  display: grid;
+  grid-template-columns:
+    minmax(180px, 1fr) minmax(180px, 220px) minmax(180px, 220px)
+    minmax(180px, 1fr) auto;
+  align-items: flex-start;
+}
+
+.managementRow.channelCatalogRow {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.9fr) minmax(320px, 1.6fr) minmax(
+      220px,
+      0.8fr
+    );
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.channelCatalogIdentity {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.channelCatalogForm {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(140px, 1fr));
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.channelCatalogForm .primaryButton {
+  justify-self: start;
+}
+
+.channelCatalogDescriptionInput {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.channelCatalogIconForm {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  align-items: flex-start;
+}
+
 .egressProviderPolicyStatus {
   display: grid;
   min-width: 0;
@@ -1684,6 +1734,13 @@ button.managementRow:focus-visible {
   border-radius: var(--hulee-radius-control);
   background: var(--hulee-color-surface-muted);
   color: var(--hulee-color-text-muted);
+}
+
+.channelIconImage {
+  display: block;
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
 }
 
 .metricValue {
@@ -1855,6 +1912,9 @@ button.managementRow:focus-visible {
   .orgStructureInlineForm,
   .managementRow.orgStructureRow,
   .managementRow.egressProviderPolicyRow,
+  .managementRow.channelProviderPolicyRow,
+  .managementRow.channelCatalogRow,
+  .channelCatalogForm,
   .scopePickerGrid,
   .roleEditorGrid,
   .roleSubjectGrid,

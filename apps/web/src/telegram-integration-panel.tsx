@@ -56,7 +56,7 @@ const fallbackTelegramSetupSteps: readonly TelegramSetupStepDefinition[] = [
   },
   {
     id: "mode",
-    titleKey: "integrations.channel.onboarding.mode" as I18nMessageKey
+    titleKey: "integrations.channel.onboarding.activation" as I18nMessageKey
   },
   {
     id: "diagnostics",
@@ -436,30 +436,9 @@ function TelegramModeStep({
         t={t}
       />
 
-      <label className="fieldStack">
-        <span className="detailLabel">{t("integrations.telegram.mode")}</span>
-        <select
-          className="selectInput"
-          name="mode"
-          defaultValue={config.mode ?? "webhook"}
-        >
-          <option value="webhook">
-            {t("integrations.telegram.mode.webhook")}
-          </option>
-          <option value="polling">
-            {t("integrations.telegram.mode.polling")}
-          </option>
-        </select>
-      </label>
-
-      <label className="toggleRow">
-        <input
-          type="checkbox"
-          name="outboundEnabled"
-          defaultChecked={config.outboundEnabled ?? false}
-        />
-        <span>{t("integrations.telegram.outboundEnabled")}</span>
-      </label>
+      <p className="metaText">
+        {t("integrations.telegram.activationDescription")}
+      </p>
 
       <div className="buttonRow">
         <button className="primaryButton" type="submit">

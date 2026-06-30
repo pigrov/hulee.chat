@@ -10,9 +10,11 @@ import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import {
   internalChannelAuthChallengeTypeSchema,
-  internalChannelTypeSchema
+  internalChannelTypeSchema,
+  type InternalTelegramIntegrationConfig
 } from "@hulee/contracts";
 import type { Permission } from "@hulee/core";
+import { createSqlDeploymentChannelProviderPolicyRepository } from "@hulee/db";
 
 import {
   cancelChannelAuthChallenge,
@@ -35,7 +37,9 @@ import { assertWebTenantEmailVerified } from "./access";
 import {
   assertCurrentWebEffectiveTenantPermission,
   isEmailNotVerifiedError,
-  requireCurrentWebAccessSession
+  requireCurrentWebAccessSession,
+  getWebDatabase,
+  resolveWebConfig
 } from "./session";
 import {
   inboxReplyActionFailureStatus,
@@ -43,6 +47,10 @@ import {
   inboxRoutingActionFailureStatus,
   type InboxRoutingActionStatus
 } from "./inbox-action-status";
+import {
+  loadTelegramBotChannelProviderPolicy,
+  type PlatformChannelProviderPolicyView
+} from "./platform-channel-policies";
 
 export async function sendReplyAction(formData: FormData): Promise<void> {
   await assertWebActionRequest();
@@ -235,7 +243,7 @@ export async function updateTelegramIntegrationAction(
   ).trim();
   const connectorId = requiredConnectorIdFromForm(formData);
   const displayName = readOptionalFormString(formData, "displayName")?.trim();
-  const mode = readRequiredFormString(formData, "mode").trim();
+  const modeValue = readOptionalFormString(formData, "mode")?.trim();
   const botTokenSecretRef = readOptionalFormString(
     formData,
     "botTokenSecretRef"
@@ -243,6 +251,22 @@ export async function updateTelegramIntegrationAction(
   const botToken = readOptionalFormString(formData, "botToken");
   const enabled = readFormCheckbox(formData, "enabled");
   const setupStepCompleted = readTelegramSetupStepCompleted(formData);
+  const shouldApplyPlatformDefaults =
+    enabled &&
+    modeValue === undefined &&
+    !formData.has("outboundEnabled") &&
+    setupStepCompleted === "mode";
+  const platformDefaults = shouldApplyPlatformDefaults
+    ? await loadTelegramBotChannelProviderPolicy({
+        config: resolveWebConfig(),
+        repository:
+          createSqlDeploymentChannelProviderPolicyRepository(getWebDatabase())
+      })
+    : undefined;
+  const mode = resolveTelegramIntegrationMode(modeValue, platformDefaults);
+  const outboundEnabled = platformDefaults
+    ? platformDefaults.outboundEnabled
+    : readFormCheckbox(formData, "outboundEnabled");
 
   await updateTelegramIntegration(
     {
@@ -254,7 +278,7 @@ export async function updateTelegramIntegrationAction(
       enabled,
       setupStepCompleted,
       channelExternalId,
-      mode: mode === "polling" ? "polling" : "webhook",
+      mode,
       botTokenSecretRef:
         botTokenSecretRef === undefined || botTokenSecretRef.trim().length === 0
           ? undefined
@@ -263,7 +287,7 @@ export async function updateTelegramIntegrationAction(
         botToken === undefined || botToken.trim().length === 0
           ? undefined
           : botToken.trim(),
-      outboundEnabled: readFormCheckbox(formData, "outboundEnabled")
+      outboundEnabled
     },
     internalApiAccess
   );
@@ -626,6 +650,17 @@ function readTelegramSetupStepCompleted(
   return value === "name" || value === "token" || value === "mode"
     ? value
     : undefined;
+}
+
+function resolveTelegramIntegrationMode(
+  value: string | undefined,
+  platformDefaults: PlatformChannelProviderPolicyView | undefined
+): InternalTelegramIntegrationConfig["mode"] {
+  if (platformDefaults) {
+    return platformDefaults.inboundMode;
+  }
+
+  return value === "polling" ? "polling" : "webhook";
 }
 
 function revalidateBrandPaths(): void {

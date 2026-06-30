@@ -21,6 +21,16 @@ export const initialTables = [
     scope: "global",
     requiresTenantId: false
   },
+  {
+    name: "deployment_channel_provider_policies",
+    scope: "global",
+    requiresTenantId: false
+  },
+  {
+    name: "deployment_channel_catalog_overrides",
+    scope: "global",
+    requiresTenantId: false
+  },
   { name: "module_catalog", scope: "global", requiresTenantId: false },
   { name: "tenant_settings", scope: "tenant", requiresTenantId: true },
   { name: "tenant_brand_profiles", scope: "tenant", requiresTenantId: true },

@@ -134,6 +134,20 @@
       "when": 1782786421582,
       "tag": "0018_dashing_marauders",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1782833591974,
+      "tag": "0019_spicy_wolfsbane",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1782838203485,
+      "tag": "0020_cultured_puck",
+      "breakpoints": true
     }
   ]
 }

@@ -8,6 +8,7 @@ import {
   createSqlPublicApiAuditSink,
   createSqlChannelAuthChallengeRepository,
   createSqlChannelConnectorRepository,
+  createSqlDeploymentChannelCatalogOverrideRepository,
   createSqlDeploymentEgressStatusRepository,
   createSqlEmployeeDirectoryRepository,
   createSqlOrgStructureRepository,
@@ -180,6 +181,8 @@ export function createInternalApiDataPlaneHandler(
       connectorRepository: createSqlChannelConnectorRepository(
         options.database
       ),
+      channelCatalogOverrideRepository:
+        createSqlDeploymentChannelCatalogOverrideRepository(options.database),
       authChallengeRepository: createSqlChannelAuthChallengeRepository(
         options.database
       ),

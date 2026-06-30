@@ -165,6 +165,56 @@ export const deploymentEgressProviderPolicies = pgTable(
   ]
 );
 
+export const deploymentChannelProviderPolicies = pgTable(
+  "deployment_channel_provider_policies",
+  {
+    provider: text("provider").notNull(),
+    channelType: text("channel_type").notNull(),
+    inboundMode: text("inbound_mode").notNull(),
+    outboundEnabled: boolean("outbound_enabled").notNull().default(true),
+    updatedByPlatformAdminAccountId: text(
+      "updated_by_platform_admin_account_id"
+    ).references(() => platformAdminAccounts.id),
+    ...timestamps
+  },
+  (table) => [
+    primaryKey({
+      name: "deployment_channel_provider_policies_pk",
+      columns: [table.provider, table.channelType]
+    }),
+    index("deployment_channel_provider_policy_provider_idx").on(table.provider),
+    index("deployment_channel_provider_policy_channel_idx").on(
+      table.channelType
+    )
+  ]
+);
+
+export const deploymentChannelCatalogOverrides = pgTable(
+  "deployment_channel_catalog_overrides",
+  {
+    channelType: text("channel_type").primaryKey(),
+    titleOverrides: jsonb("title_overrides").notNull().default({}),
+    descriptionOverrides: jsonb("description_overrides").notNull().default({}),
+    iconAssetRef: text("icon_asset_ref"),
+    sortOrder: integer("sort_order"),
+    visibility: text("visibility").notNull().default("visible"),
+    readiness: text("readiness"),
+    updatedByPlatformAdminAccountId: text(
+      "updated_by_platform_admin_account_id"
+    ).references(() => platformAdminAccounts.id),
+    ...timestamps
+  },
+  (table) => [
+    index("deployment_channel_catalog_override_visibility_idx").on(
+      table.visibility
+    ),
+    index("deployment_channel_catalog_override_sort_idx").on(table.sortOrder),
+    index("deployment_channel_catalog_override_readiness_idx").on(
+      table.readiness
+    )
+  ]
+);
+
 export const moduleCatalog = pgTable(
   "module_catalog",
   {

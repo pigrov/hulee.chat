@@ -674,11 +674,24 @@ export const internalEgressProviderPolicySchema = z
     path: ["routingMode"]
   });
 
+export const internalChannelReadinessSchema = z.enum([
+  "available",
+  "coming_soon",
+  "disabled"
+]);
+
+export const internalChannelVisibilitySchema = z.enum(["visible", "hidden"]);
+
+export const internalLocalizedTextOverridesSchema = z
+  .record(z.string().trim().min(1).max(20), z.string().trim().min(1).max(500))
+  .default({});
+
 export const internalChannelOnboardingStepKindSchema = z.enum([
   "display_name",
   "secret_text",
   "select",
   "toggle",
+  "activation",
   "diagnostics",
   "webhook_sync",
   "qr_code",
@@ -724,7 +737,13 @@ export const internalChannelCatalogItemSchema = z
     provider: z.string().trim().min(1).max(80),
     titleKey: z.string().trim().min(1).max(120),
     descriptionKey: z.string().trim().min(1).max(160),
-    readiness: z.enum(["available", "coming_soon", "disabled"]),
+    titleOverrides: internalLocalizedTextOverridesSchema.optional(),
+    descriptionOverrides: internalLocalizedTextOverridesSchema.optional(),
+    iconAssetRef: z.string().trim().min(1).max(1_000).optional(),
+    iconUrl: z.string().trim().min(1).max(1_000).optional(),
+    sortOrder: z.number().int().min(-10_000).max(10_000).optional(),
+    visibility: internalChannelVisibilitySchema.default("visible"),
+    readiness: internalChannelReadinessSchema,
     supportsMultiple: z.boolean(),
     capabilities: z.array(z.string().trim().min(1).max(80)).max(20),
     egressRequirement: internalEgressRequirementSchema,
@@ -1175,6 +1194,12 @@ export type InternalEgressStatusResponse = z.infer<
 >;
 export type InternalEgressProviderPolicySource = z.infer<
   typeof internalEgressProviderPolicySourceSchema
+>;
+export type InternalChannelReadiness = z.infer<
+  typeof internalChannelReadinessSchema
+>;
+export type InternalChannelVisibility = z.infer<
+  typeof internalChannelVisibilitySchema
 >;
 export type InternalEgressProviderPolicy = z.infer<
   typeof internalEgressProviderPolicySchema

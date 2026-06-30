@@ -736,7 +736,17 @@ describe("internal API v1 schemas", () => {
             channelClass: "bot_bridge",
             provider: "telegram",
             titleKey: "integrations.catalog.telegramBot.title",
+            titleOverrides: {
+              ru: "Telegram"
+            },
             descriptionKey: "integrations.catalog.telegramBot.description",
+            descriptionOverrides: {
+              ru: "Telegram channel"
+            },
+            iconAssetRef: "deployment/channel-icons/telegram_bot/hash.webp",
+            iconUrl: "/channel-assets/telegram_bot/icon?v=hash.webp",
+            sortOrder: 10,
+            visibility: "visible",
             readiness: "available",
             supportsMultiple: true,
             capabilities: ["inbound", "outbound", "webhook"],

@@ -38,6 +38,8 @@ import type {
   ChannelAuthChallengeRepository,
   ChannelConnectorRecord,
   ChannelConnectorRepository,
+  DeploymentChannelCatalogOverrideRecord,
+  DeploymentChannelCatalogOverrideRepository,
   DomainEventRepository,
   TenantSecretRepository
 } from "@hulee/db";
@@ -151,6 +153,7 @@ export type TelegramBotApiClientFactory = (
 
 export type InternalIntegrationServiceOptions = {
   connectorRepository: ChannelConnectorRepository;
+  channelCatalogOverrideRepository?: DeploymentChannelCatalogOverrideRepository;
   authChallengeRepository?: ChannelAuthChallengeRepository;
   providerOperationEvents?: DomainEventRepository;
   secretResolver?: SecretResolver;
@@ -190,8 +193,8 @@ const channelOnboardingFlows = {
       },
       {
         id: "mode",
-        kind: "select",
-        titleKey: "integrations.channel.onboarding.mode",
+        kind: "activation",
+        titleKey: "integrations.channel.onboarding.activation",
         action: "update_connector"
       },
       {
@@ -383,6 +386,7 @@ const channelCatalogV1 = [
     titleKey: "integrations.catalog.telegramBot.title",
     descriptionKey: "integrations.catalog.telegramBot.description",
     readiness: "available",
+    visibility: "visible",
     supportsMultiple: true,
     capabilities: ["inbound", "outbound", "webhook", "polling"],
     egressRequirement: managedMessengerVpnEgressRequirement,
@@ -395,6 +399,7 @@ const channelCatalogV1 = [
     titleKey: "integrations.catalog.telegramQr.title",
     descriptionKey: "integrations.catalog.telegramQr.description",
     readiness: "coming_soon",
+    visibility: "visible",
     supportsMultiple: true,
     capabilities: ["inbound", "outbound", "qr_auth", "session_runtime"],
     egressRequirement: managedMessengerVpnEgressRequirement,
@@ -407,6 +412,7 @@ const channelCatalogV1 = [
     titleKey: "integrations.catalog.whatsappQr.title",
     descriptionKey: "integrations.catalog.whatsappQr.description",
     readiness: "coming_soon",
+    visibility: "visible",
     supportsMultiple: true,
     capabilities: ["inbound", "outbound", "qr_auth", "session_runtime"],
     egressRequirement: managedMessengerVpnEgressRequirement,
@@ -419,6 +425,7 @@ const channelCatalogV1 = [
     titleKey: "integrations.catalog.maxBot.title",
     descriptionKey: "integrations.catalog.maxBot.description",
     readiness: "coming_soon",
+    visibility: "visible",
     supportsMultiple: true,
     capabilities: ["inbound", "outbound"],
     egressRequirement: deploymentPolicyDirectEgressRequirement,
@@ -431,6 +438,7 @@ const channelCatalogV1 = [
     titleKey: "integrations.catalog.maxQr.title",
     descriptionKey: "integrations.catalog.maxQr.description",
     readiness: "coming_soon",
+    visibility: "visible",
     supportsMultiple: true,
     capabilities: ["inbound", "outbound", "code_auth", "session_runtime"],
     egressRequirement: deploymentPolicyDirectEgressRequirement,
@@ -443,12 +451,75 @@ const channelCatalogV1 = [
     titleKey: "integrations.catalog.vkCommunity.title",
     descriptionKey: "integrations.catalog.vkCommunity.description",
     readiness: "coming_soon",
+    visibility: "visible",
     supportsMultiple: true,
     capabilities: ["inbound", "outbound", "official_api"],
     egressRequirement: deploymentPolicyDirectEgressRequirement,
     onboarding: channelOnboardingFlows.vk_community
   }
 ] satisfies InternalChannelCatalogResponse["channels"];
+
+export function applyChannelCatalogOverrides(
+  catalog: readonly InternalChannelCatalogResponse["channels"][number][],
+  overrides: readonly DeploymentChannelCatalogOverrideRecord[]
+): InternalChannelCatalogResponse["channels"] {
+  const overridesByChannelType = new Map(
+    overrides.map((override) => [override.channelType, override])
+  );
+
+  return catalog
+    .flatMap((channel, index) => {
+      const override = overridesByChannelType.get(channel.channelType);
+
+      if (override?.visibility === "hidden") {
+        return [];
+      }
+
+      const iconAssetRef = override?.iconAssetRef;
+
+      return [
+        {
+          ...channel,
+          titleOverrides: override?.titleOverrides ?? {},
+          descriptionOverrides: override?.descriptionOverrides ?? {},
+          ...(iconAssetRef
+            ? {
+                iconAssetRef,
+                iconUrl: channelIconUrl({
+                  channelType: channel.channelType,
+                  iconAssetRef
+                })
+              }
+            : {}),
+          sortOrder: override?.sortOrder ?? index * 100,
+          visibility: override?.visibility ?? "visible",
+          readiness: override?.readiness ?? channel.readiness
+        }
+      ];
+    })
+    .sort((left, right) => {
+      const leftOrder = left.sortOrder ?? 100_000;
+      const rightOrder = right.sortOrder ?? 100_000;
+
+      if (leftOrder !== rightOrder) {
+        return leftOrder - rightOrder;
+      }
+
+      return left.channelType.localeCompare(right.channelType);
+    });
+}
+
+function channelIconUrl(input: {
+  channelType: InternalChannelType;
+  iconAssetRef: string;
+}): string {
+  const segments = input.iconAssetRef.split("/");
+  const assetVersion = segments[segments.length - 1] ?? input.iconAssetRef;
+
+  return `/channel-assets/${encodeURIComponent(input.channelType)}/icon?v=${encodeURIComponent(
+    assetVersion
+  )}`;
+}
 
 if (telegramChannelManifest.id !== telegramModuleId) {
   throw new CoreError("validation.failed");
@@ -471,8 +542,12 @@ export function createInternalIntegrationService(
 
   return {
     async listChannelCatalog() {
+      const overrides = options.channelCatalogOverrideRepository
+        ? await options.channelCatalogOverrideRepository.listOverrides()
+        : [];
+
       return {
-        channels: channelCatalogV1
+        channels: applyChannelCatalogOverrides(channelCatalogV1, overrides)
       };
     },
 

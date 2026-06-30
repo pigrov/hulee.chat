@@ -15,6 +15,8 @@ import type {
   ChannelAuthChallengeRepository,
   ChannelConnectorRecord,
   ChannelConnectorRepository,
+  DeploymentChannelCatalogOverrideRecord,
+  DeploymentChannelCatalogOverrideRepository,
   DomainEventRepository,
   FindActiveChannelConnectorByConfigStringInput,
   FindActiveChannelConnectorByExternalIdInput,
@@ -121,6 +123,59 @@ describe("internal integrations service", () => {
     expect(
       response.channels.every((channel) => channel.onboarding.steps.length > 0)
     ).toBe(true);
+  });
+
+  it("applies deployment channel catalog overrides", async () => {
+    const service = createInternalIntegrationService({
+      connectorRepository: new InMemoryChannelConnectorRepository(),
+      channelCatalogOverrideRepository: fakeChannelCatalogOverrideRepository([
+        {
+          channelType: "telegram_bot",
+          titleOverrides: {
+            ru: "Telegram"
+          },
+          descriptionOverrides: {
+            ru: "Bot channel"
+          },
+          iconAssetRef: "deployment/channel-icons/telegram_bot/hash.webp",
+          sortOrder: 20,
+          visibility: "visible",
+          readiness: "available",
+          updatedAt: now
+        },
+        {
+          channelType: "max_bot",
+          titleOverrides: {},
+          descriptionOverrides: {},
+          sortOrder: 1,
+          visibility: "hidden",
+          updatedAt: now
+        }
+      ]),
+      now: () => now
+    });
+
+    const response = await service.listChannelCatalog(context);
+    const telegram = response.channels.find(
+      (channel) => channel.channelType === "telegram_bot"
+    );
+
+    expect(telegram).toMatchObject({
+      titleOverrides: {
+        ru: "Telegram"
+      },
+      descriptionOverrides: {
+        ru: "Bot channel"
+      },
+      iconAssetRef: "deployment/channel-icons/telegram_bot/hash.webp",
+      iconUrl: "/channel-assets/telegram_bot/icon?v=hash.webp",
+      sortOrder: 20,
+      visibility: "visible",
+      readiness: "available"
+    });
+    expect(
+      response.channels.some((channel) => channel.channelType === "max_bot")
+    ).toBe(false);
   });
 
   it("manages user-bridge auth challenge lifecycle without exposing secrets", async () => {
@@ -1072,6 +1127,25 @@ class InMemoryChannelAuthChallengeRepository implements ChannelAuthChallengeRepo
       updatedAt
     });
   }
+}
+
+function fakeChannelCatalogOverrideRepository(
+  overrides: readonly DeploymentChannelCatalogOverrideRecord[]
+): DeploymentChannelCatalogOverrideRepository {
+  return {
+    async listOverrides() {
+      return [...overrides];
+    },
+    async findOverride(channelType) {
+      return (
+        overrides.find((override) => override.channelType === channelType) ??
+        null
+      );
+    },
+    async upsertOverride() {
+      return undefined;
+    }
+  };
 }
 
 class InMemoryDomainEventRepository implements DomainEventRepository {

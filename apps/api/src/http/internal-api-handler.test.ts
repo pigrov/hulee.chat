@@ -245,6 +245,7 @@ function createHandler(input?: {
         titleKey: "integrations.catalog.telegramBot.title",
         descriptionKey: "integrations.catalog.telegramBot.description",
         readiness: "available" as const,
+        visibility: "visible" as const,
         supportsMultiple: true,
         capabilities: ["inbound", "outbound", "webhook"],
         egressRequirement: {

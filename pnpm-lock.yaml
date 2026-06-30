@@ -150,6 +150,9 @@ importers:
       '@hulee/modules':
         specifier: workspace:*
         version: link:../../packages/modules
+      '@hulee/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
       '@hulee/ui':
         specifier: workspace:*
         version: link:../../packages/ui

@@ -55,6 +55,18 @@ export {
   createSqlDeploymentEgressProviderPolicyRepository
 } from "./sql-deployment-egress-provider-policy-repository";
 export {
+  buildFindDeploymentChannelProviderPolicySql,
+  buildListDeploymentChannelProviderPoliciesSql,
+  buildUpsertDeploymentChannelProviderPolicySql,
+  createSqlDeploymentChannelProviderPolicyRepository
+} from "./sql-deployment-channel-provider-policy-repository";
+export {
+  buildFindDeploymentChannelCatalogOverrideSql,
+  buildListDeploymentChannelCatalogOverridesSql,
+  buildUpsertDeploymentChannelCatalogOverrideSql,
+  createSqlDeploymentChannelCatalogOverrideRepository
+} from "./sql-deployment-channel-catalog-override-repository";
+export {
   buildListOrgUnitsSql,
   buildListWorkQueuesSql,
   buildSetEmployeeOrgUnitMembershipsSql,
@@ -274,6 +286,17 @@ export type {
   DeploymentEgressProviderPolicyRepository,
   UpsertDeploymentEgressProviderPolicyInput
 } from "./sql-deployment-egress-provider-policy-repository";
+export type {
+  DeploymentChannelProviderPolicyRecord,
+  DeploymentChannelProviderPolicyRepository,
+  UpsertDeploymentChannelProviderPolicyInput
+} from "./sql-deployment-channel-provider-policy-repository";
+export type {
+  DeploymentChannelCatalogOverrideRecord,
+  DeploymentChannelCatalogOverrideRepository,
+  LocalizedTextOverrides,
+  UpsertDeploymentChannelCatalogOverrideInput
+} from "./sql-deployment-channel-catalog-override-repository";
 export type {
   ListOrgUnitsInput,
   ListTeamsInput,
