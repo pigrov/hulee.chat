@@ -88,6 +88,28 @@ jobs:
           cd '${{ vars.DEPLOY_PATH }}'
           printf '%s' '${{ secrets.GHCR_TOKEN }}' | docker login ghcr.io -u '${{ github.repository_owner }}' --password-stdin >/dev/null
           expected_image='${{ env.IMAGE_NAME }}:${{ github.sha }}'
+          ensure_env_var() {
+            local key="$1"
+            local value="$2"
+            if ! grep -Eq "^[[:space:]]*${key}[[:space:]]*=[[:space:]]*[^[:space:]#]" .env; then
+              printf '\n%s=%s\n' "$key" "$value" >> .env
+            fi
+          }
+          random_secret() {
+            if command -v openssl >/dev/null 2>&1; then
+              openssl rand -hex 32
+            else
+              head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
+            fi
+          }
+          ensure_env_var HULEE_OBJECT_STORAGE_ENDPOINT http://minio:9000
+          ensure_env_var HULEE_OBJECT_STORAGE_REGION us-east-1
+          ensure_env_var HULEE_OBJECT_STORAGE_BUCKET hulee-files
+          ensure_env_var HULEE_OBJECT_STORAGE_ACCESS_KEY_ID hulee
+          if ! grep -Eq '^[[:space:]]*HULEE_OBJECT_STORAGE_SECRET_ACCESS_KEY[[:space:]]*=[[:space:]]*[^[:space:]#]' .env; then
+            ensure_env_var HULEE_OBJECT_STORAGE_SECRET_ACCESS_KEY "$(random_secret)"
+          fi
+          ensure_env_var HULEE_OBJECT_STORAGE_FORCE_PATH_STYLE true
           provider_egress_enabled=false
           if grep -Eiq '^[[:space:]]*HULEE_PROVIDER_EGRESS_ENABLED[[:space:]]*=[[:space:]]*(true|1|yes)[[:space:]]*$' .env; then
             provider_egress_enabled=true
@@ -97,8 +119,8 @@ jobs:
             exit 1
           fi
           compose=(docker compose --env-file .env --env-file .release.env -f docker-compose.yml)
-          core_services=(postgres api worker web)
-          pull_services=(postgres api worker web)
+          core_services=(postgres minio minio-create-bucket api worker web)
+          pull_services=(postgres minio minio-create-bucket api worker web)
           image_containers=(hulee_chat_api hulee_chat_web hulee_chat_worker)
           if [ "$provider_egress_enabled" = true ]; then
             compose+=(--profile provider-egress)
@@ -127,9 +149,15 @@ jobs:
               echo "Could not resolve provider egress internal hosts: postgres=$postgres_ip api=$api_ip" >&2
               exit 1
             fi
+            minio_ip=$(docker inspect --format '{{with index .NetworkSettings.Networks "hulee-chat_default"}}{{.IPAddress}}{{end}}' hulee_chat_minio)
+            if [ -z "$minio_ip" ]; then
+              echo "Could not resolve provider egress internal host: minio=$minio_ip" >&2
+              exit 1
+            fi
             cat > .provider-egress.env <<PROVIDER_EGRESS_ENV
           HULEE_PROVIDER_EGRESS_POSTGRES_HOST=$postgres_ip
           HULEE_PROVIDER_EGRESS_API_HOST=$api_ip
+          HULEE_PROVIDER_EGRESS_MINIO_HOST=$minio_ip
           PROVIDER_EGRESS_ENV
             compose+=(--env-file .provider-egress.env)
             "${compose[@]}" up -d --force-recreate --wait --wait-timeout 180 egress-gateway

@@ -32,6 +32,17 @@ The nginx config in `deploy/nginx/chat.hulee.ru.conf` is a template for the
 existing `transcribe_nginx` reverse proxy. Apply it only after the app container
 is running and the TLS certificate exists.
 
+## Object storage
+
+Production compose runs a private MinIO service for message files and provider
+media. The deploy workflow appends missing `HULEE_OBJECT_STORAGE_*` values to
+the server `.env`, including a generated storage secret. These values stay on
+the server and are not GitHub Secrets.
+
+The default internal endpoint is `http://minio:9000`, bucket `hulee-files`.
+Provider-egress workers resolve `minio` through an `/etc/hosts` entry because
+they run inside the VPN gateway network namespace.
+
 ## Provider egress
 
 Telegram and WhatsApp provider traffic for Hulee-managed SaaS must run through a
