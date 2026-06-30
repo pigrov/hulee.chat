@@ -110,7 +110,8 @@ describe("telegram polling sweeper", () => {
         context: {
           requestId: "poll-1002",
           tenantId,
-          channelId: "telegram-local"
+          channelId: "telegram-local",
+          channelProvider: "telegram"
         },
         message: expect.objectContaining({
           tenantId,

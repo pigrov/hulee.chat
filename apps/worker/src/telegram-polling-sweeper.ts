@@ -358,7 +358,8 @@ async function acceptPollingUpdates(
         {
           requestId,
           tenantId: input.tenantId,
-          channelId: input.config.channelExternalId
+          channelId: input.config.channelExternalId,
+          channelProvider: "telegram"
         },
         normalized
       );

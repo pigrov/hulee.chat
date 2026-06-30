@@ -55,6 +55,8 @@ describe("external message persistence mapper", () => {
     expect(rows.clientContacts).toHaveLength(1);
     expect(rows.conversations).toHaveLength(1);
     expect(rows.messages).toHaveLength(1);
+    expect(rows.files).toHaveLength(0);
+    expect(rows.messageAttachments).toHaveLength(0);
     expect(rows.eventStore.map((event) => event.type)).toEqual([
       "client.created",
       "conversation.created",
@@ -101,6 +103,54 @@ describe("external message persistence mapper", () => {
     expect(rows.eventStore.map((event) => event.type)).toEqual([
       "message.received"
     ]);
+  });
+
+  it("maps inbound external message attachments into file and attachment rows", () => {
+    const result = ingestExternalIncomingMessage({
+      now,
+      tenantId,
+      idFactory: createSequentialIdFactory("mapper-inbound-file"),
+      channelExternalId: "telegram-local",
+      clientExternalId: "telegram-user-1",
+      providerMessageId: "chat-1:message-1",
+      occurredAt: now,
+      idempotencyKey: "telegram:message-1",
+      channelProvider: "telegram",
+      attachments: [
+        {
+          id: "telegram-file-1",
+          fileName: "photo.jpg",
+          mediaType: "image/jpeg",
+          sizeBytes: 1234
+        }
+      ]
+    });
+    const rows = mapExternalMessageIngestionToPersistenceRows(result);
+
+    expect(rows.files).toEqual([
+      expect.objectContaining({
+        tenantId,
+        fileName: "photo.jpg",
+        mediaType: "image/jpeg",
+        sizeBytes: 1234,
+        status: "pending_download"
+      })
+    ]);
+    expect(rows.messageAttachments).toEqual([
+      expect.objectContaining({
+        tenantId,
+        messageId: rows.messages[0]?.id,
+        fileId: rows.files[0]?.id,
+        provider: "telegram",
+        providerAttachmentId: "telegram-file-1",
+        sortOrder: 0
+      })
+    ]);
+    expect(
+      collectExternalMessageIngestionTenantScopedRows(rows).every(
+        (row) => row.tenantId === tenantId
+      )
+    ).toBe(true);
   });
 
   it("maps outbound messages into message/event/outbox rows", () => {

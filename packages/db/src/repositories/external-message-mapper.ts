@@ -2,8 +2,10 @@ import type { PlatformEvent, TenantId } from "@hulee/contracts";
 import { CoreError } from "@hulee/core";
 import type {
   ClientContact,
+  FileRecord,
   IngestExternalIncomingMessageResult,
   Message,
+  MessageAttachment,
   QueueExternalOutboundMessageResult,
   RegisterExternalClientResult
 } from "@hulee/core";
@@ -13,6 +15,8 @@ import {
   clients as clientsTable,
   conversations as conversationsTable,
   eventStore as eventStoreTable,
+  files as filesTable,
+  messageAttachments as messageAttachmentsTable,
   messages as messagesTable,
   outbox as outboxTable
 } from "../schema/tables";
@@ -22,6 +26,8 @@ type ClientInsert = typeof clientsTable.$inferInsert;
 type ClientContactInsert = typeof clientContactsTable.$inferInsert;
 type ConversationInsert = typeof conversationsTable.$inferInsert;
 type MessageInsert = typeof messagesTable.$inferInsert;
+type FileInsert = typeof filesTable.$inferInsert;
+type MessageAttachmentInsert = typeof messageAttachmentsTable.$inferInsert;
 type EventStoreInsert = typeof eventStoreTable.$inferInsert;
 type OutboxInsert = typeof outboxTable.$inferInsert;
 
@@ -37,6 +43,8 @@ export type ExternalMessageIngestionPersistenceRows = {
   clientContacts: ClientContactInsert[];
   conversations: ConversationInsert[];
   messages: MessageInsert[];
+  files: FileInsert[];
+  messageAttachments: MessageAttachmentInsert[];
   eventStore: EventStoreInsert[];
   outbox: OutboxInsert[];
 };
@@ -111,6 +119,8 @@ export function mapExternalMessageIngestionToPersistenceRows(
         ]
       : [],
     messages: [mapMessage(result.message)],
+    files: result.files.map(mapFile),
+    messageAttachments: result.attachments.map(mapMessageAttachment),
     eventStore: result.events.map(mapEventStoreRow),
     outbox: result.events.map(mapOutboxRow)
   };
@@ -159,6 +169,8 @@ export function collectExternalMessageIngestionTenantScopedRows(
     ...rows.clientContacts.map(requireTenantScope),
     ...rows.conversations.map(requireTenantScope),
     ...rows.messages.map(requireTenantScope),
+    ...rows.files.map(requireTenantScope),
+    ...rows.messageAttachments.map(requireTenantScope),
     ...rows.eventStore.map(requireTenantScope),
     ...rows.outbox.map(requireTenantScope)
   ];
@@ -199,6 +211,43 @@ function mapMessage(message: Message): MessageInsert {
     text: message.text ?? null,
     status: message.status,
     idempotencyKey: message.idempotencyKey,
+    createdAt,
+    updatedAt: createdAt
+  };
+}
+
+function mapFile(file: FileRecord): FileInsert {
+  const createdAt = parseTimestamp(file.createdAt);
+
+  return {
+    id: file.id,
+    tenantId: file.tenantId,
+    storageKey: file.storageKey,
+    fileName: file.fileName,
+    mediaType: file.mediaType,
+    sizeBytes: file.sizeBytes,
+    status: file.status,
+    metadata: file.metadata,
+    createdAt,
+    updatedAt: createdAt
+  };
+}
+
+function mapMessageAttachment(
+  attachment: MessageAttachment
+): MessageAttachmentInsert {
+  const createdAt = parseTimestamp(attachment.createdAt);
+
+  return {
+    id: attachment.id,
+    tenantId: attachment.tenantId,
+    messageId: attachment.messageId,
+    fileId: attachment.fileId,
+    provider: attachment.provider,
+    providerAttachmentId: attachment.providerAttachmentId ?? null,
+    sourceUrl: attachment.sourceUrl ?? null,
+    sortOrder: attachment.sortOrder,
+    metadata: attachment.metadata,
     createdAt,
     updatedAt: createdAt
   };

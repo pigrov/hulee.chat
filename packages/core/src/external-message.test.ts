@@ -96,6 +96,79 @@ describe("external message core use cases", () => {
     ]);
   });
 
+  it("materializes inbound attachment metadata under a tenant storage prefix", () => {
+    const result = ingestExternalIncomingMessage({
+      now,
+      tenantId,
+      idFactory: createSequentialIdFactory("inbound-attachment"),
+      channelExternalId: "telegram-local",
+      clientExternalId: "telegram-user-1",
+      providerMessageId: "chat-1:message-1",
+      occurredAt: "2026-06-22T09:59:00.000Z",
+      idempotencyKey: "telegram:message-1",
+      channelProvider: "telegram",
+      attachments: [
+        {
+          id: "telegram-file-1",
+          fileName: "photo.jpg",
+          mediaType: "image/jpeg",
+          sizeBytes: 1234
+        }
+      ]
+    });
+
+    expect(result.files).toHaveLength(1);
+    expect(result.files[0]).toMatchObject({
+      tenantId,
+      fileName: "photo.jpg",
+      mediaType: "image/jpeg",
+      sizeBytes: 1234,
+      status: "pending_download"
+    });
+    expect(result.files[0]?.storageKey).toContain(
+      `tenants/${tenantId}/messages/${result.message.id}/attachments/`
+    );
+    expect(result.attachments).toEqual([
+      expect.objectContaining({
+        tenantId,
+        messageId: result.message.id,
+        fileId: result.files[0]?.id,
+        provider: "telegram",
+        providerAttachmentId: "telegram-file-1",
+        sortOrder: 0
+      })
+    ]);
+  });
+
+  it("rejects inbound attachments with cross-tenant storage keys", () => {
+    let error: unknown;
+
+    try {
+      ingestExternalIncomingMessage({
+        now,
+        tenantId,
+        idFactory: createSequentialIdFactory("cross-storage"),
+        channelExternalId: "public-api",
+        clientExternalId: "client-1",
+        providerMessageId: "message-1",
+        occurredAt: now,
+        idempotencyKey: "message-1",
+        attachments: [
+          {
+            fileName: "invoice.pdf",
+            mediaType: "application/pdf",
+            storageKey: "tenants/tenant-other/messages/message-1/invoice.pdf"
+          }
+        ]
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(CoreError);
+    expect(error).toMatchObject({ code: "tenant.boundary_violation" });
+  });
+
   it("reuses existing client and conversation for known external sender", () => {
     const existingClient: Client = {
       id: "client_existing" as never,

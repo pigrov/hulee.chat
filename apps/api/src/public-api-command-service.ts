@@ -137,6 +137,8 @@ export function createPublicApiCommandService(
         occurredAt: message.occurredAt,
         idempotencyKey: message.idempotencyKey,
         text: message.text,
+        attachments: message.attachments,
+        channelProvider: "public_api",
         existingClient: existingClient ?? undefined,
         existingConversation: existingConversation ?? undefined,
         clientDisplayName:

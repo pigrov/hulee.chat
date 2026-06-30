@@ -95,6 +95,7 @@ export const initialTables = [
     requiresTenantId: true
   },
   { name: "files", scope: "tenant", requiresTenantId: true },
+  { name: "message_attachments", scope: "tenant", requiresTenantId: true },
   { name: "event_store", scope: "tenant", requiresTenantId: true },
   { name: "outbox", scope: "tenant", requiresTenantId: true },
   { name: "audit_log", scope: "tenant", requiresTenantId: true },

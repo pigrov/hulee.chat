@@ -5,6 +5,7 @@ import type {
   EmployeeId,
   EventEnvelope,
   MessageId,
+  NormalizedAttachment,
   PlatformEvent,
   TenantId
 } from "@hulee/contracts";
@@ -77,6 +78,31 @@ export type Message = TenantScope & {
 };
 
 export type MessageStatus = "received" | "queued" | "sent" | "failed";
+
+export type FileStatus = "pending_download" | "stored" | "failed";
+
+export type FileRecord = TenantScope & {
+  id: string;
+  storageKey: string;
+  fileName: string;
+  mediaType: string;
+  sizeBytes: number;
+  status: FileStatus;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type MessageAttachment = TenantScope & {
+  id: string;
+  messageId: MessageId;
+  fileId: string;
+  provider: string;
+  providerAttachmentId?: string;
+  sourceUrl?: string;
+  sortOrder: number;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
 
 export type MvpTenantWorkspace = {
   tenant: Tenant;
@@ -151,6 +177,8 @@ export type IngestExternalIncomingMessageInput = {
   occurredAt: string;
   idempotencyKey: string;
   text?: string;
+  attachments?: readonly NormalizedAttachment[];
+  channelProvider?: string;
   existingClient?: Client;
   existingConversation?: Conversation;
   clientDisplayName?: string;
@@ -162,6 +190,8 @@ export type IngestExternalIncomingMessageResult = {
   externalContact?: ClientContact;
   conversation: Conversation;
   message: Message;
+  files: readonly FileRecord[];
+  attachments: readonly MessageAttachment[];
   events: readonly PlatformEvent[];
   createdClient: boolean;
   createdConversation: boolean;
@@ -435,6 +465,16 @@ export function ingestExternalIncomingMessage(
     idempotencyKey: input.idempotencyKey,
     createdAt: input.occurredAt
   };
+  const materializedAttachments = buildInboundMessageAttachments({
+    now: input.now,
+    tenantId: input.tenantId,
+    idFactory: input.idFactory,
+    message,
+    channelExternalId: input.channelExternalId,
+    providerMessageId: input.providerMessageId,
+    provider: input.channelProvider ?? "external_channel",
+    attachments: input.attachments ?? []
+  });
   const events: PlatformEvent[] = [];
 
   if (createdClient) {
@@ -477,6 +517,8 @@ export function ingestExternalIncomingMessage(
     externalContact,
     conversation,
     message,
+    files: materializedAttachments.files,
+    attachments: materializedAttachments.attachments,
     events,
     createdClient,
     createdConversation
@@ -519,6 +561,150 @@ export function buildExternalClientHandle(input: {
   clientExternalId: string;
 }): string {
   return `channel:${input.channelExternalId}:client:${input.clientExternalId}`;
+}
+
+function buildInboundMessageAttachments(input: {
+  now: string;
+  tenantId: TenantId;
+  idFactory: IdFactory;
+  message: Message;
+  channelExternalId: string;
+  providerMessageId: string;
+  provider: string;
+  attachments: readonly NormalizedAttachment[];
+}): { files: FileRecord[]; attachments: MessageAttachment[] } {
+  const files: FileRecord[] = [];
+  const attachments: MessageAttachment[] = [];
+
+  input.attachments.forEach((attachment, index) => {
+    const fileId = input.idFactory.stringId("file");
+    const fileName = normalizeAttachmentFileName(attachment, index + 1);
+    const storageKey =
+      attachment.storageKey ??
+      buildTenantMessageAttachmentStorageKey({
+        tenantId: input.tenantId,
+        messageId: input.message.id,
+        fileId,
+        fileName
+      });
+
+    assertTenantStorageKey(input.tenantId, storageKey);
+
+    const metadata = {
+      source: {
+        channelExternalId: input.channelExternalId,
+        providerMessageId: input.providerMessageId,
+        ...(attachment.id ? { providerAttachmentId: attachment.id } : {}),
+        ...(attachment.sourceUrl ? { sourceUrl: attachment.sourceUrl } : {})
+      }
+    };
+
+    files.push({
+      id: fileId,
+      tenantId: input.tenantId,
+      storageKey,
+      fileName,
+      mediaType: attachment.mediaType,
+      sizeBytes: attachment.sizeBytes ?? 0,
+      status: attachment.storageKey ? "stored" : "pending_download",
+      metadata,
+      createdAt: input.now
+    });
+    attachments.push({
+      id: input.idFactory.stringId("message_attachment"),
+      tenantId: input.tenantId,
+      messageId: input.message.id,
+      fileId,
+      provider: input.provider,
+      providerAttachmentId: attachment.id,
+      sourceUrl: attachment.sourceUrl,
+      sortOrder: index,
+      metadata,
+      createdAt: input.now
+    });
+  });
+
+  return { files, attachments };
+}
+
+function buildTenantMessageAttachmentStorageKey(input: {
+  tenantId: TenantId;
+  messageId: MessageId;
+  fileId: string;
+  fileName: string;
+}): string {
+  return [
+    "tenants",
+    sanitizeStoragePathSegment(input.tenantId),
+    "messages",
+    sanitizeStoragePathSegment(input.messageId),
+    "attachments",
+    sanitizeStoragePathSegment(input.fileId),
+    sanitizeStoragePathSegment(input.fileName)
+  ].join("/");
+}
+
+function assertTenantStorageKey(tenantId: TenantId, storageKey: string): void {
+  const expectedPrefix = `tenants/${sanitizeStoragePathSegment(tenantId)}/`;
+
+  if (!storageKey.startsWith(expectedPrefix)) {
+    throw new CoreError(
+      "tenant.boundary_violation",
+      "Attachment storage key must be tenant-scoped."
+    );
+  }
+}
+
+function normalizeAttachmentFileName(
+  attachment: NormalizedAttachment,
+  sequence: number
+): string {
+  const explicitName = attachment.fileName?.trim();
+
+  if (explicitName) {
+    return explicitName;
+  }
+
+  const extension = inferFileExtension(attachment.mediaType);
+
+  return `attachment-${sequence}${extension}`;
+}
+
+function inferFileExtension(mediaType: string): string {
+  const normalized = mediaType.toLowerCase();
+
+  switch (normalized) {
+    case "image/jpeg":
+      return ".jpg";
+    case "image/png":
+      return ".png";
+    case "image/gif":
+      return ".gif";
+    case "image/webp":
+      return ".webp";
+    case "application/pdf":
+      return ".pdf";
+    case "text/plain":
+      return ".txt";
+    default:
+      return ".bin";
+  }
+}
+
+function sanitizeStoragePathSegment(value: string): string {
+  const sanitized = value
+    .trim()
+    .replaceAll("\\", "_")
+    .replaceAll("/", "_")
+    .split("")
+    .map((character) => {
+      const code = character.charCodeAt(0);
+
+      return code < 32 || code === 127 ? "_" : character;
+    })
+    .join("");
+
+  return sanitized.length > 0 ? sanitized : "unnamed";
 }
 
 function createExternalClient(input: {

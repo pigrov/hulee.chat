@@ -1016,6 +1016,8 @@ export const files = pgTable(
     fileName: text("file_name").notNull(),
     mediaType: text("media_type").notNull(),
     sizeBytes: integer("size_bytes").notNull(),
+    status: text("status").notNull().default("stored"),
+    metadata: jsonb("metadata").notNull().default({}),
     ...timestamps
   },
   (table) => [
@@ -1024,6 +1026,36 @@ export const files = pgTable(
       table.storageKey
     ),
     index("files_tenant_idx").on(table.tenantId)
+  ]
+);
+
+export const messageAttachments = pgTable(
+  "message_attachments",
+  {
+    id: text("id").primaryKey(),
+    tenantId: tenantIdColumn().references(() => tenants.id),
+    messageId: text("message_id")
+      .notNull()
+      .references(() => messages.id),
+    fileId: text("file_id")
+      .notNull()
+      .references(() => files.id),
+    provider: text("provider").notNull(),
+    providerAttachmentId: text("provider_attachment_id"),
+    sourceUrl: text("source_url"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    metadata: jsonb("metadata").notNull().default({}),
+    ...timestamps
+  },
+  (table) => [
+    index("message_attachments_tenant_message_idx").on(
+      table.tenantId,
+      table.messageId
+    ),
+    index("message_attachments_tenant_file_idx").on(
+      table.tenantId,
+      table.fileId
+    )
   ]
 );
 

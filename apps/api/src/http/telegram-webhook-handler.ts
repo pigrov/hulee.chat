@@ -141,7 +141,8 @@ export function createTelegramWebhookHandler(
             {
               requestId,
               tenantId: connector.tenantId,
-              channelId: connector.config.channelExternalId
+              channelId: connector.config.channelExternalId,
+              channelProvider: "telegram"
             },
             normalized
           );

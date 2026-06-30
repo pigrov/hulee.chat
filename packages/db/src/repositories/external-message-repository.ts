@@ -24,6 +24,8 @@ import {
   clients,
   conversations,
   eventStore,
+  files,
+  messageAttachments,
   messages,
   outbox
 } from "../schema/tables";
@@ -143,6 +145,8 @@ const tableRefs = {
   clientContacts: tableRef("client_contacts", clientContacts),
   conversations: tableRef("conversations", conversations),
   messages: tableRef("messages", messages),
+  files: tableRef("files", files),
+  messageAttachments: tableRef("message_attachments", messageAttachments),
   eventStore: tableRef("event_store", eventStore),
   outbox: tableRef("outbox", outbox)
 };
@@ -249,6 +253,11 @@ export function createExternalMessageRepository(input: {
           rows.conversations
         );
         await transaction.insertRows(tableRefs.messages, rows.messages);
+        await transaction.insertRows(tableRefs.files, rows.files);
+        await transaction.insertRows(
+          tableRefs.messageAttachments,
+          rows.messageAttachments
+        );
         await transaction.insertRows(tableRefs.eventStore, rows.eventStore);
         await transaction.insertRows(tableRefs.outbox, rows.outbox);
       });

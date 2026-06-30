@@ -87,7 +87,8 @@ describe("telegram webhook handler", () => {
       {
         requestId: "request-1",
         tenantId,
-        channelId: "telegram-local"
+        channelId: "telegram-local",
+        channelProvider: "telegram"
       },
       expect.objectContaining({
         tenantId,

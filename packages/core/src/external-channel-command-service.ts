@@ -21,6 +21,7 @@ export type ExternalChannelCommandContext = {
   requestId: string;
   tenantId: TenantId;
   channelId: string;
+  channelProvider?: string;
 };
 
 export type PersistedMessageSummary = {
@@ -111,6 +112,8 @@ export function createExternalChannelCommandService(
         occurredAt: message.occurredAt,
         idempotencyKey: message.idempotencyKey,
         text: message.text,
+        attachments: message.attachments,
+        channelProvider: context.channelProvider,
         existingClient: existingClient ?? undefined,
         existingConversation: existingConversation ?? undefined,
         clientDisplayName:

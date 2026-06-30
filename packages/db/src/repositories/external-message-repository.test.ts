@@ -72,10 +72,54 @@ describe("external message repository", () => {
         "client_contacts",
         "conversations",
         "messages",
+        "files",
+        "message_attachments",
         "event_store",
         "outbox"
       ]
     );
+  });
+
+  it("persists inbound message attachments after messages and files", async () => {
+    const executor = new RecordingPersistenceExecutor();
+    const repository = createRepository(executor);
+    const inbound = ingestExternalIncomingMessage({
+      now,
+      tenantId,
+      idFactory: createSequentialIdFactory("repo-inbound-attachment"),
+      channelExternalId: "telegram-local",
+      clientExternalId: "telegram-user-1",
+      providerMessageId: "chat-1:message-1",
+      occurredAt: now,
+      idempotencyKey: "telegram:message-1",
+      channelProvider: "telegram",
+      attachments: [
+        {
+          id: "telegram-file-1",
+          fileName: "photo.jpg",
+          mediaType: "image/jpeg",
+          sizeBytes: 1234
+        }
+      ]
+    });
+
+    await repository.saveExternalMessageIngestion(inbound);
+
+    expect(
+      executor.operations.map((operation) => [
+        operation.tableName,
+        operation.rowCount
+      ])
+    ).toEqual([
+      ["clients", 1],
+      ["client_contacts", 1],
+      ["conversations", 1],
+      ["messages", 1],
+      ["files", 1],
+      ["message_attachments", 1],
+      ["event_store", 3],
+      ["outbox", 3]
+    ]);
   });
 
   it("persists outbound messages in message/event/outbox order", async () => {
