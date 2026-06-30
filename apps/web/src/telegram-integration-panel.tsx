@@ -85,7 +85,7 @@ export function TelegramIntegrationPanel({
 }): ReactNode {
   const config = integration.config;
 
-  if (!integration.connectorId || !config) {
+  if (!integration.connectorId) {
     return (
       <section
         className="settingsPanel"
@@ -104,6 +104,38 @@ export function TelegramIntegrationPanel({
           </span>
         </div>
         <p className="metaText">{t("integrations.telegram.noConnector")}</p>
+      </section>
+    );
+  }
+
+  if (!config) {
+    return (
+      <section
+        className="settingsPanel"
+        aria-labelledby="telegram-integration-title"
+      >
+        <div className="sectionHeader">
+          <div>
+            <p className="eyebrow">{t("admin.integrations.channelSettings")}</p>
+            <h2 className="sectionTitle" id="telegram-integration-title">
+              {telegramDisplayName(integration, t)}
+            </h2>
+          </div>
+          <span className="badge">
+            <Plug size={14} aria-hidden="true" />
+            {integration.status
+              ? t(channelConnectorStatusKey(integration.status))
+              : t(telegramStatusKey(integration.diagnostics.status))}
+          </span>
+        </div>
+
+        <TelegramLifecycleActions integration={integration} t={t} />
+
+        <TelegramDiagnosticsGrid
+          integration={integration}
+          locale={locale}
+          t={t}
+        />
       </section>
     );
   }
