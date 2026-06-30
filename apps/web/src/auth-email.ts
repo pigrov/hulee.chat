@@ -40,6 +40,11 @@ export type PasswordResetPreviewResult =
     }
   | { status: "invalid" };
 
+export type PasswordResetCompletionStatus =
+  | "complete"
+  | "invalid"
+  | "weak_password";
+
 export async function requestEmailVerificationForTenantAccount(
   tenantAccount: TenantAuthAccount
 ): Promise<SendEmailResult> {
@@ -154,7 +159,7 @@ export async function completeEmailVerificationToken(
 export async function resetPasswordWithToken(input: {
   token: string;
   password: string;
-}): Promise<"complete" | "invalid"> {
+}): Promise<PasswordResetCompletionStatus> {
   const repository = createSqlAuthEmailTokenRepository(getWebDatabase());
   const preview = await findValidAuthEmailToken(input.token, "password_reset");
 
@@ -167,7 +172,7 @@ export async function resetPasswordWithToken(input: {
   });
 
   if (!passwordResult.valid) {
-    return "invalid";
+    return "weak_password";
   }
 
   const now = new Date();

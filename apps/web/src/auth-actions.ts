@@ -152,6 +152,10 @@ export async function resetPasswordAction(formData: FormData): Promise<void> {
 
     if (status === "complete") {
       destination = "/login?reset=complete";
+    } else if (status === "weak_password") {
+      destination = `/reset-password/${encodeURIComponent(
+        token
+      )}?error=password_policy`;
     }
   } catch {
     destination =

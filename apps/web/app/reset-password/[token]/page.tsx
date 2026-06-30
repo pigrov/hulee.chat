@@ -98,12 +98,21 @@ export default async function ResetPasswordPage({
                 name="password"
                 type="password"
                 autoComplete="new-password"
-                minLength={8}
+                minLength={12}
+                maxLength={256}
+                aria-describedby="reset-password-requirements"
                 required
               />
             </label>
+            <p className="metaText" id="reset-password-requirements">
+              {t("auth.password.requirements")}
+            </p>
             {resolvedSearchParams?.error === "invalid" ? (
               <p className="formError">{t("auth.resetPassword.invalid")}</p>
+            ) : resolvedSearchParams?.error === "password_policy" ? (
+              <p className="formError">
+                {t("auth.resetPassword.passwordPolicy")}
+              </p>
             ) : null}
             <button className="primaryButton" type="submit">
               <KeyRound size={18} aria-hidden="true" />
