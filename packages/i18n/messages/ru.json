@@ -662,6 +662,8 @@
   "integrations.channel.auth.submitPassword": "Отправить пароль",
   "integrations.channel.auth.cancel": "Отменить",
   "integrations.channel.auth.complete": "Готово",
+  "integrations.channel.disableConnector": "Выключить канал",
+  "integrations.channel.deleteConnector": "Удалить канал",
   "integrations.channel.auth.status": "Статус",
   "integrations.channel.auth.expiresAt": "Истекает",
   "integrations.channel.auth.status.pending": "Ожидает",

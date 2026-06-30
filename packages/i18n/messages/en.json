@@ -655,6 +655,8 @@
   "integrations.channel.auth.submitPassword": "Submit password",
   "integrations.channel.auth.cancel": "Cancel",
   "integrations.channel.auth.complete": "Ready",
+  "integrations.channel.disableConnector": "Disable channel",
+  "integrations.channel.deleteConnector": "Delete channel",
   "integrations.channel.auth.status": "Status",
   "integrations.channel.auth.expiresAt": "Expires",
   "integrations.channel.auth.status.pending": "Pending",

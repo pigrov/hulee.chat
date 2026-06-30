@@ -17,7 +17,9 @@ import {
   Circle,
   MessageCircle,
   Network,
-  Smartphone
+  PowerOff,
+  Smartphone,
+  Trash2
 } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -26,7 +28,11 @@ import type { ReactNode } from "react";
 import { AccessDeniedPage } from "../../../src/access-denied";
 import { DetailItem, SlotMount } from "../../../src/app-chrome";
 import { loadTenantAdminViewModel } from "../../../src/admin-view-model";
-import { createChannelConnectorAction } from "../../../src/actions";
+import {
+  createChannelConnectorAction,
+  deleteChannelConnectorAction,
+  disableChannelConnectorAction
+} from "../../../src/actions";
 import { ChannelAuthChallengePanel } from "../../../src/channel-auth-challenge-panel";
 import {
   loadChannelCatalog,
@@ -426,6 +432,8 @@ function GenericChannelConnectorPanel({
         </span>
       </div>
 
+      <GenericChannelLifecycleActions connector={connector} t={t} />
+
       {channel ? (
         <GenericChannelStepper
           channel={channel}
@@ -471,6 +479,37 @@ function GenericChannelConnectorPanel({
         />
       ) : null}
     </section>
+  );
+}
+
+function GenericChannelLifecycleActions({
+  connector,
+  t
+}: {
+  connector: InternalChannelConnectorSummary;
+  t: Translator;
+}): ReactNode {
+  return (
+    <div className="buttonRow">
+      <form action={disableChannelConnectorAction}>
+        <input type="hidden" name="connectorId" value={connector.connectorId} />
+        <button
+          className="secondaryButton"
+          type="submit"
+          disabled={connector.status === "disabled"}
+        >
+          <PowerOff size={16} aria-hidden="true" />
+          {t("integrations.channel.disableConnector")}
+        </button>
+      </form>
+      <form action={deleteChannelConnectorAction}>
+        <input type="hidden" name="connectorId" value={connector.connectorId} />
+        <button className="dangerButton" type="submit">
+          <Trash2 size={16} aria-hidden="true" />
+          {t("integrations.channel.deleteConnector")}
+        </button>
+      </form>
+    </div>
   );
 }
 

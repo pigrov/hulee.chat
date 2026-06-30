@@ -131,6 +131,8 @@ export function TelegramIntegrationPanel({
         </span>
       </div>
 
+      <TelegramLifecycleActions integration={integration} t={t} />
+
       <TelegramSetupStepper currentStep={setupStep} steps={setupSteps} t={t} />
 
       <TelegramEgressSummary integration={integration} locale={locale} t={t} />
@@ -142,8 +144,6 @@ export function TelegramIntegrationPanel({
         setupStep={setupStep}
         t={t}
       />
-
-      <TelegramLifecycleActions integration={integration} t={t} />
     </section>
   );
 }
