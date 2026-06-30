@@ -64,14 +64,56 @@ export type TelegramPollingSweepResult = {
   updatesFailed: number;
 };
 
+type TelegramPollingFailedUpdateDiagnostic = NonNullable<
+  NonNullable<
+    InternalTelegramIntegrationDiagnostics["polling"]
+  >["recentFailedUpdates"]
+>[number];
+
 const telegramChannelType = "telegram_bot";
 const defaultConfigScanLimit = 100;
 const defaultUpdateLimit = 25;
+const maxRecentFailedUpdates = 10;
 const pollingAllowedUpdates = [
   "message",
   "edited_message",
   "channel_post",
   "edited_channel_post"
+] as const;
+const telegramUpdatePayloadKeys = [
+  "message",
+  "edited_message",
+  "channel_post",
+  "edited_channel_post",
+  "callback_query",
+  "message_reaction",
+  "message_reaction_count",
+  "inline_query",
+  "chosen_inline_result",
+  "poll",
+  "poll_answer",
+  "my_chat_member",
+  "chat_member"
+] as const;
+const telegramMessageContentKeys = [
+  "text",
+  "caption",
+  "photo",
+  "document",
+  "sticker",
+  "animation",
+  "video",
+  "voice",
+  "audio",
+  "video_note",
+  "contact",
+  "location",
+  "venue",
+  "poll",
+  "dice",
+  "new_chat_members",
+  "left_chat_member",
+  "pinned_message"
 ] as const;
 
 export async function runTelegramPollingSweep(
@@ -229,6 +271,11 @@ async function pollTelegramConfig(
     input.result.updatesAccepted += pollingResult.accepted;
     input.result.updatesFailed += pollingResult.failed;
 
+    const recentFailedUpdates = mergeRecentFailedUpdates({
+      current: pollingResult.failedUpdates,
+      previous: input.storedDiagnostics?.polling?.recentFailedUpdates
+    });
+
     await persistPollingDiagnostics({
       ...input,
       configInput: input.config,
@@ -251,7 +298,8 @@ async function pollTelegramConfig(
           lastRunAt: input.checkedAt,
           receivedUpdateCount: pollingResult.received,
           acceptedUpdateCount: pollingResult.accepted,
-          failedUpdateCount: pollingResult.failed
+          failedUpdateCount: pollingResult.failed,
+          ...(recentFailedUpdates.length > 0 ? { recentFailedUpdates } : {})
         },
         runtime: buildPollingRuntimeDiagnostics({
           checkedAt: input.checkedAt,
@@ -314,6 +362,7 @@ async function acceptPollingUpdates(
   lastRequestId?: string;
   lastProviderMessageId?: string;
   lastErrorCode?: PlatformErrorCode;
+  failedUpdates: readonly TelegramPollingFailedUpdateDiagnostic[];
 }> {
   const adapter = createTelegramChannelAdapter();
   const requestIdFactory =
@@ -335,6 +384,7 @@ async function acceptPollingUpdates(
   let lastRequestId: string | undefined;
   let lastProviderMessageId: string | undefined;
   let lastErrorCode: PlatformErrorCode | undefined;
+  const failedUpdates: TelegramPollingFailedUpdateDiagnostic[] = [];
 
   for (const update of input.updates) {
     lastUpdateId =
@@ -367,9 +417,20 @@ async function acceptPollingUpdates(
       lastRequestId = requestId;
       lastProviderMessageId = normalized.providerMessageId;
     } catch (error) {
+      const errorCode = platformErrorCodeFromUnknown(error);
+
       failed += 1;
       lastRequestId = requestId;
-      lastErrorCode = platformErrorCodeFromUnknown(error);
+      lastErrorCode = errorCode;
+      failedUpdates.push(
+        buildFailedUpdateDiagnostic({
+          update,
+          requestId,
+          failedAt: input.checkedAt,
+          error,
+          errorCode
+        })
+      );
     }
   }
 
@@ -380,7 +441,8 @@ async function acceptPollingUpdates(
     lastUpdateId,
     ...(lastRequestId ? { lastRequestId } : {}),
     ...(lastProviderMessageId ? { lastProviderMessageId } : {}),
-    ...(lastErrorCode ? { lastErrorCode } : {})
+    ...(lastErrorCode ? { lastErrorCode } : {}),
+    failedUpdates
   };
 }
 
@@ -661,4 +723,153 @@ function platformErrorCodeFromUnknown(error: unknown): PlatformErrorCode {
   }
 
   return "provider.temporary_failure";
+}
+
+function buildFailedUpdateDiagnostic(input: {
+  update: TelegramUpdate;
+  requestId: string;
+  failedAt: string;
+  error: unknown;
+  errorCode: PlatformErrorCode;
+}): TelegramPollingFailedUpdateDiagnostic {
+  const summary = summarizeTelegramUpdate(input.update.raw);
+  const errorMessage = safeErrorMessage(input.error);
+
+  return {
+    updateId: input.update.updateId,
+    requestId: input.requestId,
+    failedAt: input.failedAt,
+    errorCode: input.errorCode,
+    ...(errorMessage ? { errorMessage } : {}),
+    ...summary
+  };
+}
+
+function summarizeTelegramUpdate(
+  raw: unknown
+): Pick<
+  TelegramPollingFailedUpdateDiagnostic,
+  "updateType" | "providerMessageId" | "chatType" | "contentTypes"
+> {
+  const update = asRecord(raw);
+
+  if (!update) {
+    return {};
+  }
+
+  const updateType = telegramUpdatePayloadKeys.find(
+    (key) => update[key] !== undefined
+  );
+  const payload = updateType ? asRecord(update[updateType]) : null;
+  const chat = payload ? asRecord(payload.chat) : null;
+  const providerMessageId = telegramProviderMessageId(payload, chat);
+  const chatType = safeDiagnosticString(chat?.type, 80);
+  const contentTypes = collectTelegramContentTypes(update, payload);
+
+  return {
+    ...(updateType ? { updateType } : {}),
+    ...(providerMessageId ? { providerMessageId } : {}),
+    ...(chatType ? { chatType } : {}),
+    ...(contentTypes.length > 0 ? { contentTypes } : {})
+  };
+}
+
+function collectTelegramContentTypes(
+  update: Record<string, unknown>,
+  payload: Record<string, unknown> | null
+): string[] {
+  if (payload) {
+    const contentTypes = telegramMessageContentKeys.filter(
+      (key) => payload[key] !== undefined
+    );
+
+    if (contentTypes.length > 0) {
+      return [...contentTypes];
+    }
+  }
+
+  return Object.keys(update)
+    .filter((key) => key !== "update_id")
+    .sort()
+    .slice(0, 20);
+}
+
+function telegramProviderMessageId(
+  payload: Record<string, unknown> | null,
+  chat: Record<string, unknown> | null
+): string | undefined {
+  const messageId = safeDiagnosticString(payload?.message_id, 80);
+  const chatId = safeDiagnosticString(chat?.id, 80);
+
+  if (chatId && messageId) {
+    return `${chatId}:${messageId}`;
+  }
+
+  return messageId;
+}
+
+function mergeRecentFailedUpdates(input: {
+  current: readonly TelegramPollingFailedUpdateDiagnostic[];
+  previous?: readonly TelegramPollingFailedUpdateDiagnostic[];
+}): TelegramPollingFailedUpdateDiagnostic[] {
+  const seen = new Set<string>();
+  const merged: TelegramPollingFailedUpdateDiagnostic[] = [];
+
+  for (const diagnostic of [...input.current, ...(input.previous ?? [])]) {
+    const key = `${diagnostic.updateId}:${diagnostic.requestId}`;
+
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    merged.push(diagnostic);
+
+    if (merged.length >= maxRecentFailedUpdates) {
+      break;
+    }
+  }
+
+  return merged;
+}
+
+function safeErrorMessage(error: unknown): string | undefined {
+  if (error instanceof TelegramAdapterError || error instanceof CoreError) {
+    return safeDiagnosticString(error.message, 500);
+  }
+
+  if (
+    error instanceof Error &&
+    "code" in error &&
+    (error.code === "provider.temporary_failure" ||
+      error.code === "provider.permanent_failure" ||
+      error.code === "validation.failed")
+  ) {
+    return safeDiagnosticString(error.message, 500);
+  }
+
+  return undefined;
+}
+
+function safeDiagnosticString(
+  value: unknown,
+  maxLength: number
+): string | undefined {
+  if (typeof value !== "string" && typeof value !== "number") {
+    return undefined;
+  }
+
+  const text = String(value).trim();
+
+  if (text.length === 0) {
+    return undefined;
+  }
+
+  return text.length > maxLength ? text.slice(0, maxLength) : text;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }

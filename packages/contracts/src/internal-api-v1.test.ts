@@ -674,6 +674,27 @@ describe("internal API v1 schemas", () => {
               lastProviderMessageId: "telegram-message-1"
             }
           },
+          polling: {
+            lastUpdateId: 1002,
+            lastRunAt: "2026-06-22T10:00:02.000Z",
+            receivedUpdateCount: 2,
+            acceptedUpdateCount: 1,
+            failedUpdateCount: 1,
+            recentFailedUpdates: [
+              {
+                updateId: 1002,
+                requestId: "telegram-polling:tenant-1:telegram-local:1002",
+                failedAt: "2026-06-22T10:00:02.000Z",
+                errorCode: "validation.failed",
+                errorMessage:
+                  "Telegram update does not contain text or supported attachments.",
+                updateType: "message",
+                providerMessageId: "9001:77",
+                chatType: "private",
+                contentTypes: ["sticker"]
+              }
+            ]
+          },
           checks: {
             moduleEnabled: true,
             configValid: true,
@@ -691,6 +712,17 @@ describe("internal API v1 schemas", () => {
       setupStep: "complete",
       config: {
         botTokenSecretRef: "env:HULEE_TELEGRAM_BOT_TOKEN"
+      },
+      diagnostics: {
+        polling: {
+          recentFailedUpdates: [
+            {
+              updateId: 1002,
+              errorCode: "validation.failed",
+              contentTypes: ["sticker"]
+            }
+          ]
+        }
       }
     });
   });

@@ -178,6 +178,141 @@ describe("telegram polling sweeper", () => {
     expect(repository.upserts).toEqual([]);
   });
 
+  it("persists safe diagnostics for Telegram updates that fail normalization", async () => {
+    const repository = new InMemoryChannelConnectorRepository([
+      createTelegramConnector({
+        mode: "polling",
+        diagnostics: {
+          status: "configured",
+          checkedAt: "2026-06-22T09:00:00.000Z",
+          checks: {
+            moduleEnabled: true,
+            configValid: true,
+            inboundWebhookReady: false,
+            outboundEnabled: true,
+            botTokenSecretRefConfigured: true
+          },
+          polling: {
+            lastUpdateId: 1001,
+            recentFailedUpdates: [
+              {
+                updateId: 900,
+                requestId: "poll-900",
+                failedAt: "2026-06-22T09:00:00.000Z",
+                errorCode: "validation.failed",
+                updateType: "message",
+                contentTypes: ["sticker"]
+              }
+            ]
+          }
+        }
+      })
+    ]);
+    const commands = new RecordingInboundCommands();
+
+    const result = await runTelegramPollingSweep({
+      connectorRepository: repository,
+      secretResolver: {
+        async resolveSecret() {
+          return "token-1";
+        }
+      },
+      commands,
+      botApiClientFactory: () => ({
+        async getUpdates() {
+          return [
+            {
+              updateId: 1002,
+              raw: telegramUpdate(1002, 77, "Hello")
+            },
+            {
+              updateId: 1003,
+              raw: {
+                update_id: 1003,
+                message: {
+                  message_id: 78,
+                  date: 1782115200,
+                  chat: {
+                    id: 9001,
+                    type: "private"
+                  },
+                  from: {
+                    id: 42,
+                    first_name: "Alice"
+                  },
+                  sticker: {
+                    file_id: "provider-secret-file-id",
+                    emoji: "ok"
+                  }
+                }
+              }
+            }
+          ];
+        }
+      }),
+      now: () => now,
+      requestIdFactory: ({ updateId }) => `poll-${updateId}`
+    });
+
+    expect(result).toEqual({
+      configsScanned: 1,
+      configsPolled: 1,
+      updatesReceived: 2,
+      updatesAccepted: 1,
+      updatesFailed: 1
+    });
+    expect(commands.messages).toHaveLength(1);
+    expect(repository.upserts[0]?.diagnostics).toMatchObject({
+      status: "configured",
+      lastErrorCode: "validation.failed",
+      operatorHint: "Some Telegram updates failed to normalize or ingest.",
+      polling: {
+        lastUpdateId: 1003,
+        lastRunAt: now.toISOString(),
+        receivedUpdateCount: 2,
+        acceptedUpdateCount: 1,
+        failedUpdateCount: 1,
+        recentFailedUpdates: [
+          {
+            updateId: 1003,
+            requestId: "poll-1003",
+            failedAt: now.toISOString(),
+            errorCode: "validation.failed",
+            errorMessage:
+              "Telegram update does not contain text or supported attachments.",
+            updateType: "message",
+            providerMessageId: "9001:78",
+            chatType: "private",
+            contentTypes: ["sticker"]
+          },
+          {
+            updateId: 900,
+            requestId: "poll-900"
+          }
+        ]
+      },
+      runtime: {
+        inbound: {
+          lastSource: "polling",
+          lastReceivedAt: now.toISOString(),
+          lastAcceptedAt: now.toISOString(),
+          lastFailedAt: now.toISOString(),
+          lastRequestId: "poll-1003",
+          lastUpdateId: 1003,
+          lastProviderMessageId: "9001:77",
+          lastBatchReceivedCount: 2,
+          lastBatchAcceptedCount: 1,
+          lastBatchFailedCount: 1,
+          lastErrorCode: "validation.failed",
+          operatorHint: "Some Telegram updates failed to normalize or ingest."
+        }
+      }
+    });
+    expect(JSON.stringify(repository.upserts[0]?.diagnostics)).not.toContain(
+      "provider-secret-file-id"
+    );
+  });
+
   it("polls each active Telegram polling connector independently", async () => {
     const repository = new InMemoryChannelConnectorRepository([
       createTelegramConnector({

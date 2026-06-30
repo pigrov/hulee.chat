@@ -536,6 +536,8 @@ function TelegramDiagnosticsGrid({
   const egress = integration.diagnostics.egress;
   const inbound = integration.diagnostics.runtime?.inbound;
   const outbound = integration.diagnostics.runtime?.outbound;
+  const recentFailedUpdate =
+    integration.diagnostics.polling?.recentFailedUpdates?.[0];
 
   return (
     <div className="diagnosticGrid">
@@ -663,6 +665,10 @@ function TelegramDiagnosticsGrid({
           integration.diagnostics.polling?.failedUpdateCount,
           t
         )}
+      />
+      <DetailItem
+        label={t("integrations.telegram.pollingRecentFailure")}
+        value={formatPollingFailedUpdate(recentFailedUpdate, locale, t)}
       />
       <DetailItem
         label={t("integrations.telegram.runtimeInboundSource")}
@@ -983,4 +989,37 @@ function formatRuntimeBatch(
     inbound.lastBatchAcceptedCount ?? 0,
     inbound.lastBatchFailedCount ?? 0
   ].join(" / ");
+}
+
+function formatPollingFailedUpdate(
+  failedUpdate:
+    | NonNullable<
+        NonNullable<
+          TelegramIntegrationViewModel["diagnostics"]["polling"]
+        >["recentFailedUpdates"]
+      >[number]
+    | undefined,
+  locale: string,
+  t: Translator
+): string {
+  if (!failedUpdate) {
+    return t("common.unknown");
+  }
+
+  return [
+    t("integrations.telegram.pollingFailureUpdate", {
+      id: failedUpdate.updateId
+    }),
+    failedUpdate.providerMessageId
+      ? t("integrations.telegram.pollingFailureMessage", {
+          id: failedUpdate.providerMessageId
+        })
+      : undefined,
+    failedUpdate.updateType,
+    failedUpdate.contentTypes?.join(", "),
+    failedUpdate.errorCode,
+    formatOptionalDateTime(failedUpdate.failedAt, locale, t)
+  ]
+    .filter(Boolean)
+    .join(" / ");
 }

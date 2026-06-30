@@ -920,7 +920,28 @@ export const internalTelegramIntegrationDiagnosticsSchema = z
         lastRunAt: z.string().datetime({ offset: true }).optional(),
         receivedUpdateCount: z.number().int().nonnegative().optional(),
         acceptedUpdateCount: z.number().int().nonnegative().optional(),
-        failedUpdateCount: z.number().int().nonnegative().optional()
+        failedUpdateCount: z.number().int().nonnegative().optional(),
+        recentFailedUpdates: z
+          .array(
+            z
+              .object({
+                updateId: z.number().int().nonnegative(),
+                requestId: z.string().trim().min(1).max(200),
+                failedAt: z.string().datetime({ offset: true }),
+                errorCode: internalApiPlatformErrorCodeSchema,
+                errorMessage: z.string().trim().min(1).max(500).optional(),
+                updateType: z.string().trim().min(1).max(80).optional(),
+                providerMessageId: z.string().trim().min(1).max(200).optional(),
+                chatType: z.string().trim().min(1).max(80).optional(),
+                contentTypes: z
+                  .array(z.string().trim().min(1).max(80))
+                  .max(20)
+                  .optional()
+              })
+              .strict()
+          )
+          .max(10)
+          .optional()
       })
       .strict()
       .optional(),
