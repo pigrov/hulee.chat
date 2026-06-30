@@ -3,7 +3,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from "http";
 import type {
   ApiHttpHandler,
   ApiHttpMethod,
-  ApiHttpRequest
+  ApiHttpRequest,
+  ApiHttpResponse
 } from "./public-api-handler";
 
 const supportedMethods = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const;
@@ -21,14 +22,20 @@ export function createApiNodeServer(options: ApiNodeServerOptions) {
       const apiRequest = await toApiHttpRequest(request, maxBodyBytes);
       const apiResponse = await options.handler.handle(apiRequest);
 
-      writeJsonResponse(response, apiResponse.status, apiResponse.body);
+      writeApiResponse(response, apiResponse);
     } catch {
-      writeJsonResponse(response, 400, {
-        error: {
-          code: "validation.failed",
-          messageKey: "errors.validation.failed",
-          retryability: "not_retryable",
-          requestId: "unparsed-request"
+      writeApiResponse(response, {
+        status: 400,
+        headers: {
+          "content-type": "application/json; charset=utf-8"
+        },
+        body: {
+          error: {
+            code: "validation.failed",
+            messageKey: "errors.validation.failed",
+            retryability: "not_retryable",
+            requestId: "unparsed-request"
+          }
         }
       });
     }
@@ -101,12 +108,20 @@ async function readJsonBody(
   return JSON.parse(raw);
 }
 
-function writeJsonResponse(
+function writeApiResponse(
   response: ServerResponse,
-  status: number,
-  body: unknown
+  apiResponse: ApiHttpResponse
 ): void {
-  response.statusCode = status;
-  response.setHeader("content-type", "application/json; charset=utf-8");
-  response.end(JSON.stringify(body));
+  response.statusCode = apiResponse.status;
+
+  for (const [name, value] of Object.entries(apiResponse.headers)) {
+    response.setHeader(name, value);
+  }
+
+  if (apiResponse.body instanceof Uint8Array) {
+    response.end(apiResponse.body);
+    return;
+  }
+
+  response.end(JSON.stringify(apiResponse.body));
 }

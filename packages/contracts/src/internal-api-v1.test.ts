@@ -71,7 +71,26 @@ describe("internal API v1 schemas", () => {
             queuedCount: 0
           }
         ],
-        messages: []
+        messages: [
+          {
+            id: "message-1",
+            conversationId: "conversation-1",
+            direction: "inbound",
+            text: "Photo",
+            status: "received",
+            attachments: [
+              {
+                id: "attachment-1",
+                fileId: "file-1",
+                fileName: "photo.jpg",
+                mediaType: "image/jpeg",
+                sizeBytes: 123,
+                status: "stored"
+              }
+            ],
+            createdAt: "2026-06-22T10:00:00.000Z"
+          }
+        ]
       })
     ).toMatchObject({
       tenant: {
@@ -85,6 +104,16 @@ describe("internal API v1 schemas", () => {
           currentQueueName: "Sales",
           assignedEmployeeDisplayName: "Agent",
           assignedTeamName: "Sales team"
+        }
+      ],
+      messages: [
+        {
+          attachments: [
+            {
+              fileId: "file-1",
+              status: "stored"
+            }
+          ]
         }
       ]
     });

@@ -74,6 +74,17 @@ export const internalInboxConversationSchema = z
   })
   .strict();
 
+export const internalInboxMessageAttachmentSchema = z
+  .object({
+    id: z.string().trim().min(1),
+    fileId: z.string().trim().min(1),
+    fileName: z.string().trim().min(1),
+    mediaType: z.string().trim().min(1),
+    sizeBytes: z.number().int().nonnegative(),
+    status: z.enum(["pending_download", "stored", "failed"])
+  })
+  .strict();
+
 export const internalInboxMessageSchema = z
   .object({
     id: z.string().trim().min(1),
@@ -81,6 +92,7 @@ export const internalInboxMessageSchema = z
     direction: z.enum(["inbound", "outbound"]),
     text: z.string().optional(),
     status: z.enum(["received", "queued", "sent", "failed"]),
+    attachments: z.array(internalInboxMessageAttachmentSchema).default([]),
     createdAt: z.string().datetime({ offset: true })
   })
   .strict();
@@ -1003,6 +1015,9 @@ export type InternalInboxConversation = z.infer<
   typeof internalInboxConversationSchema
 >;
 export type InternalInboxMessage = z.infer<typeof internalInboxMessageSchema>;
+export type InternalInboxMessageAttachment = z.infer<
+  typeof internalInboxMessageAttachmentSchema
+>;
 export type InternalInboxViewResponse = z.infer<
   typeof internalInboxViewResponseSchema
 >;

@@ -1139,7 +1139,12 @@ function MessageBubble({
 }): ReactNode {
   return (
     <article className="messageBubble" data-direction={message.direction}>
-      <p className="messageBody">{message.text ?? ""}</p>
+      {message.text ? <p className="messageBody">{message.text}</p> : null}
+      <MessageAttachments
+        attachments={message.attachments}
+        locale={locale}
+        t={t}
+      />
       <div className="messageMeta">
         <span>{t(`message.direction.${message.direction}`)}</span>
         <span>{t(`message.status.${message.status}`)}</span>
@@ -1150,4 +1155,108 @@ function MessageBubble({
       <SlotMount slot="conversation.message.action" />
     </article>
   );
+}
+
+function MessageAttachments({
+  attachments,
+  locale,
+  t
+}: {
+  attachments: InboxMessage["attachments"];
+  locale: string;
+  t: ReturnType<typeof createTranslator>["t"];
+}): ReactNode {
+  if (attachments.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="messageAttachments">
+      {attachments.map((attachment) => {
+        const isReady = attachment.status === "stored";
+        const isImage =
+          isReady && attachment.mediaType.toLowerCase().startsWith("image/");
+        const content = (
+          <>
+            {isImage ? (
+              <img
+                className="messageAttachmentImage"
+                src={fileContentPath(attachment.fileId)}
+                alt={attachment.fileName}
+              />
+            ) : (
+              <span className="messageAttachmentIcon" aria-hidden="true">
+                <Paperclip size={16} />
+              </span>
+            )}
+            <span className="messageAttachmentInfo">
+              <span className="messageAttachmentName">
+                {attachment.fileName}
+              </span>
+              <span className="messageAttachmentMeta">
+                <span>{formatFileSize(attachment.sizeBytes, locale, t)}</span>
+                <span>
+                  {t(
+                    `inbox.attachment.status.${attachment.status}` as I18nMessageKey
+                  )}
+                </span>
+              </span>
+            </span>
+          </>
+        );
+
+        return isReady ? (
+          <a
+            key={attachment.id}
+            className="messageAttachment"
+            data-preview={isImage ? "image" : "file"}
+            href={fileContentPath(attachment.fileId)}
+            aria-label={`${t("inbox.attachment.download")}: ${
+              attachment.fileName
+            }`}
+          >
+            {content}
+          </a>
+        ) : (
+          <div
+            key={attachment.id}
+            className="messageAttachment"
+            data-preview={isImage ? "image" : "file"}
+          >
+            {content}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function fileContentPath(fileId: string): string {
+  return `/files/${encodeURIComponent(fileId)}`;
+}
+
+function formatFileSize(
+  sizeBytes: number,
+  locale: string,
+  t: ReturnType<typeof createTranslator>["t"]
+): string {
+  const formatter = new Intl.NumberFormat(locale, {
+    maximumFractionDigits: 1
+  });
+
+  if (sizeBytes < 1024) {
+    return t("inbox.fileSize.bytes", {
+      count: new Intl.NumberFormat(locale).format(sizeBytes)
+    });
+  }
+
+  if (sizeBytes < 1024 * 1024) {
+    return t("inbox.fileSize.kilobytes", {
+      count: formatter.format(sizeBytes / 1024)
+    });
+  }
+
+  return t("inbox.fileSize.megabytes", {
+    count: formatter.format(sizeBytes / (1024 * 1024))
+  });
 }

@@ -56,6 +56,7 @@ import type {
   InternalInboxCommandService,
   InternalInboxQueryService
 } from "../internal-inbox-service";
+import type { InternalFileService } from "../internal-file-service";
 import type { InternalAccessDecisionService } from "../internal-access-decision-service";
 import type { InternalEgressStatusService } from "../internal-egress-status-service";
 import type { InternalIntegrationService } from "../internal-integrations-service";
@@ -84,6 +85,7 @@ export type InternalApiHandlerOptions = {
   sessionResolver: InternalApiSessionResolver;
   inboxQueries: InternalInboxQueryService;
   inboxCommands: InternalInboxCommandService;
+  files: InternalFileService;
   integrations: InternalIntegrationService;
   tenantSettings: InternalTenantSettingsService;
   orgStructure: InternalOrgStructureService;
@@ -115,6 +117,10 @@ type RouteMatch =
   | {
       route: "inbox_routing_update";
       conversationId: string;
+    }
+  | {
+      route: "file_content";
+      fileId: string;
     }
   | {
       route: "tenant_brand_view";
@@ -282,6 +288,7 @@ export function createInternalApiHandler(
           session,
           inboxQueries: options.inboxQueries,
           inboxCommands: options.inboxCommands,
+          files: options.files,
           integrations: options.integrations,
           tenantSettings: options.tenantSettings,
           orgStructure: options.orgStructure,
@@ -419,6 +426,7 @@ async function handleAuthenticatedRoute(input: {
   session: InternalApiSession;
   inboxQueries: InternalInboxQueryService;
   inboxCommands: InternalInboxCommandService;
+  files: InternalFileService;
   integrations: InternalIntegrationService;
   tenantSettings: InternalTenantSettingsService;
   orgStructure: InternalOrgStructureService;
@@ -464,6 +472,20 @@ async function handleAuthenticatedRoute(input: {
         });
 
       return jsonResponse(200, response);
+    }
+
+    case "file_content": {
+      const file = await input.files.loadFileContent(input.session, {
+        fileId: input.route.fileId
+      });
+
+      return binaryResponse(200, file.body, {
+        "content-type": file.mediaType,
+        "content-length": String(file.body.byteLength),
+        "content-disposition": contentDispositionHeader(file.fileName),
+        "cache-control": "private, max-age=60",
+        "x-content-type-options": "nosniff"
+      });
     }
 
     case "tenant_brand_view": {
@@ -810,6 +832,7 @@ function internalRouteAuthorizationPolicy(
     case "inbox_view":
     case "inbox_reply":
     case "inbox_routing_update":
+    case "file_content":
       return {
         kind: "service_effective_access"
       };
@@ -885,6 +908,17 @@ function matchRoute(request: ApiHttpRequest): RouteMatch | undefined {
   if (request.method === "GET" && path === "/internal/v1/tenant/brand") {
     return {
       route: "tenant_brand_view"
+    };
+  }
+
+  const fileContentMatch = path.match(
+    /^\/internal\/v1\/files\/([^/]+)\/content$/
+  );
+
+  if (request.method === "GET" && fileContentMatch?.[1]) {
+    return {
+      route: "file_content",
+      fileId: decodeURIComponent(fileContentMatch[1])
     };
   }
 
@@ -1303,6 +1337,30 @@ function jsonResponse(status: number, body: unknown): ApiHttpResponse {
     headers: jsonHeaders,
     body
   };
+}
+
+function binaryResponse(
+  status: number,
+  body: Uint8Array,
+  headers: Record<string, string>
+): ApiHttpResponse {
+  return {
+    status,
+    headers,
+    body
+  };
+}
+
+function contentDispositionHeader(fileName: string): string {
+  const fallback = fileName
+    .replace(/[\\"]/g, "_")
+    .replace(/[^\x20-\x7E]/g, "_")
+    .trim();
+  const safeFallback = fallback.length > 0 ? fallback : "download";
+
+  return `inline; filename="${safeFallback}"; filename*=UTF-8''${encodeURIComponent(
+    fileName
+  )}`;
 }
 
 function defaultRequestIdFactory(): string {

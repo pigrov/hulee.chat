@@ -78,6 +78,9 @@ importers:
       '@hulee/observability':
         specifier: workspace:*
         version: link:../../packages/observability
+      '@hulee/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
 
   apps/desktop:
     dependencies:

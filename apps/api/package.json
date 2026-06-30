@@ -16,6 +16,7 @@
     "@hulee/db": "workspace:*",
     "@hulee/entitlements": "workspace:*",
     "@hulee/modules": "workspace:*",
-    "@hulee/observability": "workspace:*"
+    "@hulee/observability": "workspace:*",
+    "@hulee/storage": "workspace:*"
   }
 }

@@ -4,6 +4,7 @@ import {
   createSqlDomainEventRepository,
   createDrizzlePersistenceExecutor,
   createExternalMessageRepository,
+  createSqlFileAccessRepository,
   createSqlPublicApiAuditSink,
   createSqlChannelAuthChallengeRepository,
   createSqlChannelConnectorRepository,
@@ -25,6 +26,7 @@ import {
   createDeploymentEgressRuntime,
   type EgressRuntime
 } from "@hulee/modules";
+import { createS3ObjectStorage, type ObjectStorage } from "@hulee/storage";
 
 import {
   createPublicApiHandler,
@@ -43,6 +45,7 @@ import {
 } from "./internal-inbox-service";
 import { createInternalAccessDecisionService } from "./internal-access-decision-service";
 import { createInternalEgressStatusService } from "./internal-egress-status-service";
+import { createInternalFileService } from "./internal-file-service";
 import {
   createTenantSecretResolver,
   createInternalIntegrationService
@@ -123,6 +126,8 @@ export type InternalApiDataPlaneHandlerOptions = {
   secretEncryptionKey?: string;
   egressRuntime?: EgressRuntime;
   egressProfile?: ApiConfig["egressProfile"];
+  objectStorageConfig?: ApiConfig["objectStorage"];
+  objectStorage?: ObjectStorage;
   publicWebhookBaseUrl?: string;
   telegramApiBaseUrl?: string;
   logger?: Logger;
@@ -147,6 +152,11 @@ export function createInternalApiDataPlaneHandler(
   const inboxAuthorization = createSqlInternalInboxAuthorizationService({
     database: options.database
   });
+  const objectStorage =
+    options.objectStorage ??
+    (options.objectStorageConfig
+      ? createS3ObjectStorage(options.objectStorageConfig)
+      : undefined);
 
   return createInternalApiHandler({
     sessionResolver: createSignedInternalSessionResolver({
@@ -160,6 +170,11 @@ export function createInternalApiDataPlaneHandler(
       repository: externalMessageRepository,
       authorization: inboxAuthorization,
       audit: createSqlSecurityAuditRepository(options.database)
+    }),
+    files: createInternalFileService({
+      repository: createSqlFileAccessRepository(options.database),
+      authorization: inboxAuthorization,
+      objectStorage
     }),
     integrations: createInternalIntegrationService({
       connectorRepository: createSqlChannelConnectorRepository(
@@ -268,6 +283,8 @@ export type ApiDataPlaneHandlerOptions = PublicApiDataPlaneHandlerOptions &
     | "secretEncryptionKey"
     | "egressRuntime"
     | "egressProfile"
+    | "objectStorageConfig"
+    | "objectStorage"
     | "publicWebhookBaseUrl"
     | "telegramApiBaseUrl"
   >;
@@ -303,6 +320,7 @@ export { createTelegramWebhookHandler } from "./http/telegram-webhook-handler";
 export { createExternalChannelCommandService } from "./external-channel-command-service";
 export { createInternalAccessDecisionService } from "./internal-access-decision-service";
 export { createInternalEgressStatusService } from "./internal-egress-status-service";
+export { createInternalFileService } from "./internal-file-service";
 export {
   createInternalInboxAuthorizationService,
   createInternalInboxCommandService,
@@ -329,6 +347,11 @@ export type {
   InternalEgressStatusService,
   InternalEgressStatusServiceOptions
 } from "./internal-egress-status-service";
+export type {
+  InternalFileContent,
+  InternalFileService,
+  InternalFileServiceOptions
+} from "./internal-file-service";
 export type {
   InternalInboxAuthorizationService,
   InternalInboxAuthorizationServiceOptions,

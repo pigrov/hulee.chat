@@ -76,6 +76,7 @@ export type ApiConfig = BaseAppConfig & {
   internalApiSecret?: string;
   publicBaseUrl?: string;
   publicWebhookBaseUrl?: string;
+  objectStorage?: ObjectStorageConfig;
   sseEnabled: boolean;
 };
 
@@ -225,6 +226,12 @@ const apiEnvSchema = baseEnvSchema.extend({
   HULEE_INTERNAL_API_SECRET: optionalNonEmptyString,
   HULEE_PUBLIC_BASE_URL: optionalHttpUrl,
   HULEE_PUBLIC_WEBHOOK_BASE_URL: optionalHttpUrl,
+  HULEE_OBJECT_STORAGE_ENDPOINT: optionalHttpUrl,
+  HULEE_OBJECT_STORAGE_REGION: optionalNonEmptyString,
+  HULEE_OBJECT_STORAGE_BUCKET: optionalNonEmptyString,
+  HULEE_OBJECT_STORAGE_ACCESS_KEY_ID: optionalNonEmptyString,
+  HULEE_OBJECT_STORAGE_SECRET_ACCESS_KEY: optionalNonEmptyString,
+  HULEE_OBJECT_STORAGE_FORCE_PATH_STYLE: optionalBoolean,
   HULEE_SSE_ENABLED: optionalBoolean
 });
 
@@ -481,6 +488,7 @@ export function loadApiConfig(env: EnvSource = process.env): ApiConfig {
     publicWebhookBaseUrl:
       result.data.HULEE_PUBLIC_WEBHOOK_BASE_URL ??
       result.data.HULEE_PUBLIC_BASE_URL,
+    objectStorage: buildObjectStorageConfig(result.data),
     sseEnabled: result.data.HULEE_SSE_ENABLED ?? true
   };
 }
@@ -573,9 +581,14 @@ export function loadWorkerConfig(env: EnvSource = process.env): WorkerConfig {
   };
 }
 
-function buildObjectStorageConfig(
-  env: z.infer<typeof workerEnvSchema>
-): ObjectStorageConfig | undefined {
+function buildObjectStorageConfig(env: {
+  HULEE_OBJECT_STORAGE_ENDPOINT?: string;
+  HULEE_OBJECT_STORAGE_REGION?: string;
+  HULEE_OBJECT_STORAGE_BUCKET?: string;
+  HULEE_OBJECT_STORAGE_ACCESS_KEY_ID?: string;
+  HULEE_OBJECT_STORAGE_SECRET_ACCESS_KEY?: string;
+  HULEE_OBJECT_STORAGE_FORCE_PATH_STYLE?: boolean;
+}): ObjectStorageConfig | undefined {
   if (
     !env.HULEE_OBJECT_STORAGE_ENDPOINT ||
     !env.HULEE_OBJECT_STORAGE_BUCKET ||

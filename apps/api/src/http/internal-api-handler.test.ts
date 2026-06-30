@@ -79,6 +79,13 @@ function createHandler(input?: {
     currentQueueId: "queue-sales",
     assignedEmployeeId: "employee-2"
   }));
+  const loadFileContent = vi.fn(async () => ({
+    fileId: "file-1",
+    fileName: "photo.jpg",
+    mediaType: "image/jpeg",
+    sizeBytes: 3,
+    body: new Uint8Array([1, 2, 3])
+  }));
   const inspectAccessDecision = vi.fn(
     async (
       _context: unknown,
@@ -515,6 +522,7 @@ function createHandler(input?: {
     },
     inboxQueries: { loadInboxView },
     inboxCommands: { sendReply, updateConversationRouting },
+    files: { loadFileContent },
     integrations: {
       listChannelCatalog,
       listChannelConnectors,
@@ -566,6 +574,7 @@ function createHandler(input?: {
     loadInboxView,
     sendReply,
     updateConversationRouting,
+    loadFileContent,
     listChannelCatalog,
     listChannelConnectors,
     createChannelConnector,
@@ -705,6 +714,59 @@ describe("internal API handler", () => {
       filters: {
         queueId: undefined,
         assignedToMe: false
+      }
+    });
+  });
+
+  it("streams file content through the file service without coarse route permissions", async () => {
+    const scopedSession: InternalApiSession = {
+      ...session,
+      permissions: []
+    };
+    const { handler, loadFileContent } = createHandler({
+      session: scopedSession
+    });
+    const response = await handler.handle({
+      method: "GET",
+      path: "/internal/v1/files/file-1/content"
+    });
+
+    expect(response).toEqual({
+      status: 200,
+      headers: {
+        "content-type": "image/jpeg",
+        "content-length": "3",
+        "content-disposition":
+          "inline; filename=\"photo.jpg\"; filename*=UTF-8''photo.jpg",
+        "cache-control": "private, max-age=60",
+        "x-content-type-options": "nosniff"
+      },
+      body: new Uint8Array([1, 2, 3])
+    });
+    expect(loadFileContent).toHaveBeenCalledWith(scopedSession, {
+      fileId: "file-1"
+    });
+  });
+
+  it("returns file permission errors from the file service", async () => {
+    const scopedSession: InternalApiSession = {
+      ...session,
+      permissions: []
+    };
+    const { handler, loadFileContent } = createHandler({
+      session: scopedSession
+    });
+    loadFileContent.mockRejectedValueOnce(new CoreError("permission.denied"));
+
+    const response = await handler.handle({
+      method: "GET",
+      path: "/internal/v1/files/file-1/content"
+    });
+
+    expect(response.status).toBe(403);
+    expect(response.body).toMatchObject({
+      error: {
+        code: "permission.denied"
       }
     });
   });

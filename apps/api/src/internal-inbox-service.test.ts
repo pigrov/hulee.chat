@@ -8,6 +8,7 @@ import type {
 } from "@hulee/contracts";
 import type {
   ExternalMessageRepository,
+  HuleeDatabase,
   PersistedMessageSummary,
   TenantEmployeeRecord,
   UpdateConversationRoutingInput
@@ -23,11 +24,12 @@ import type {
   RegisterExternalClientResult
 } from "@hulee/core";
 import { CoreError, createSequentialIdFactory } from "@hulee/core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   createInternalInboxAuthorizationService,
   createInternalInboxCommandService,
+  createSqlInternalInboxQueryService,
   filterInboxConversations,
   type InternalInboxAuthorizationService,
   type InternalInboxConversationAccessResource,
@@ -95,6 +97,121 @@ describe("internal inbox query filters", () => {
         assignedToMe: true
       })
     ).toEqual([conversations[0]]);
+  });
+});
+
+describe("internal inbox query service", () => {
+  it("groups message attachments into the selected conversation messages", async () => {
+    const database = new SequentialInboxDatabase([
+      [
+        {
+          tenant_id: tenantId,
+          display_name: "Acme",
+          deployment_type: "saas_shared",
+          locale: "en",
+          timezone: "UTC",
+          brand_id: null,
+          product_name: null,
+          short_product_name: null,
+          assets: null,
+          theme_tokens: null,
+          links: null
+        }
+      ],
+      [
+        {
+          tenant_id: tenantId,
+          conversation_id: "conversation-1",
+          client_id: "client-1",
+          client_display_name: "Alice",
+          status: "open",
+          source: "telegram",
+          current_queue_id: "queue-sales",
+          current_queue_name: "Sales",
+          current_queue_owning_org_unit_id: null,
+          assigned_employee_id: null,
+          assigned_employee_display_name: null,
+          assigned_team_id: null,
+          assigned_team_name: null,
+          message_count: 1,
+          queued_count: 0,
+          last_message_text: "Photo",
+          last_message_at: "2026-06-22T10:00:00.000Z"
+        }
+      ],
+      [
+        {
+          id: "message-1",
+          conversation_id: "conversation-1",
+          direction: "inbound",
+          text: "Photo",
+          status: "received",
+          created_at: "2026-06-22T10:00:00.000Z",
+          attachment_id: "attachment-1",
+          file_id: "file-1",
+          file_name: "photo.jpg",
+          media_type: "image/jpeg",
+          size_bytes: "123",
+          file_status: "stored"
+        },
+        {
+          id: "message-1",
+          conversation_id: "conversation-1",
+          direction: "inbound",
+          text: "Photo",
+          status: "received",
+          created_at: "2026-06-22T10:00:00.000Z",
+          attachment_id: "attachment-2",
+          file_id: "file-2",
+          file_name: "document.pdf",
+          media_type: "application/pdf",
+          size_bytes: 456,
+          file_status: "pending_download"
+        }
+      ]
+    ]);
+    const authorization: InternalInboxAuthorizationService = {
+      filterConversations: async (_context, input) => input.conversations,
+      assertConversationAccess: async () => undefined
+    };
+    const service = createSqlInternalInboxQueryService({
+      database: database as unknown as HuleeDatabase,
+      authorization
+    });
+
+    await expect(
+      service.loadInboxView(context, {
+        selectedConversationId: "conversation-1"
+      })
+    ).resolves.toMatchObject({
+      selectedConversation: {
+        id: "conversation-1"
+      },
+      messages: [
+        {
+          id: "message-1",
+          attachments: [
+            {
+              id: "attachment-1",
+              fileId: "file-1",
+              fileName: "photo.jpg",
+              mediaType: "image/jpeg",
+              sizeBytes: 123,
+              status: "stored"
+            },
+            {
+              id: "attachment-2",
+              fileId: "file-2",
+              fileName: "document.pdf",
+              mediaType: "application/pdf",
+              sizeBytes: 456,
+              status: "pending_download"
+            }
+          ]
+        }
+      ]
+    });
+    expect(database.execute).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -1402,6 +1519,24 @@ function emptyAccessSources(): {
     roleBindings: [],
     directGrants: []
   };
+}
+
+class SequentialInboxDatabase {
+  readonly execute = vi.fn(
+    async <Row extends Record<string, unknown>>(): Promise<{
+      rows: readonly Row[];
+    }> => {
+      return {
+        rows: (this.responses.shift() ?? []) as readonly Row[]
+      };
+    }
+  );
+
+  private readonly responses: Array<readonly Record<string, unknown>[]>;
+
+  constructor(responses: Array<readonly Record<string, unknown>[]>) {
+    this.responses = [...responses];
+  }
 }
 
 class InMemoryExternalMessageRepository implements ExternalMessageRepository {

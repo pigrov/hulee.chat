@@ -9,6 +9,7 @@ import type {
   InternalInboxConversation,
   InternalInboxConversationRoutingUpdateRequest,
   InternalInboxConversationRoutingUpdateResponse,
+  InternalInboxMessageAttachment,
   InternalInboxMessage,
   InternalInboxReplyRequest,
   InternalInboxReplyResponse,
@@ -175,6 +176,12 @@ type MessageRow = {
   text: string | null;
   status: InternalInboxMessage["status"];
   created_at: Date | string;
+  attachment_id: string | null;
+  file_id: string | null;
+  file_name: string | null;
+  media_type: string | null;
+  size_bytes: number | string | null;
+  file_status: InternalInboxMessageAttachment["status"] | null;
 };
 
 export function createInternalInboxCommandService(
@@ -789,27 +796,81 @@ async function loadMessages(
   conversationId: string
 ): Promise<InternalInboxMessage[]> {
   const result = await db.execute<MessageRow>(sql`
-    select id,
-           conversation_id,
-           direction,
-           text,
-           status,
-           created_at
-    from messages
-    where tenant_id = ${tenantId}
-      and conversation_id = ${conversationId}
-    order by created_at asc, id asc
-    limit 200
+    with selected_messages as (
+      select id,
+             conversation_id,
+             direction,
+             text,
+             status,
+             created_at
+      from messages
+      where tenant_id = ${tenantId}
+        and conversation_id = ${conversationId}
+      order by created_at asc,
+               id asc
+      limit 200
+    )
+    select m.id,
+           m.conversation_id,
+           m.direction,
+           m.text,
+           m.status,
+           m.created_at,
+           ma.id as attachment_id,
+           f.id as file_id,
+           f.file_name,
+           f.media_type,
+           f.size_bytes,
+           f.status as file_status
+    from selected_messages m
+    left join message_attachments ma
+      on ma.tenant_id = ${tenantId}
+     and ma.message_id = m.id
+    left join files f
+      on f.tenant_id = ma.tenant_id
+     and f.id = ma.file_id
+    order by m.created_at asc,
+             m.id asc,
+             ma.sort_order asc nulls last,
+             ma.id asc nulls last
   `);
+  const messages = new Map<string, InternalInboxMessage>();
 
-  return result.rows.map((row) => ({
-    id: row.id,
-    conversationId: row.conversation_id,
-    direction: row.direction,
-    text: row.text ?? undefined,
-    status: row.status,
-    createdAt: toIsoTimestamp(row.created_at)
-  }));
+  for (const row of result.rows) {
+    const existing =
+      messages.get(row.id) ??
+      ({
+        id: row.id,
+        conversationId: row.conversation_id,
+        direction: row.direction,
+        text: row.text ?? undefined,
+        status: row.status,
+        attachments: [],
+        createdAt: toIsoTimestamp(row.created_at)
+      } satisfies InternalInboxMessage);
+
+    if (
+      row.attachment_id !== null &&
+      row.file_id !== null &&
+      row.file_name !== null &&
+      row.media_type !== null &&
+      row.size_bytes !== null &&
+      row.file_status !== null
+    ) {
+      existing.attachments.push({
+        id: row.attachment_id,
+        fileId: row.file_id,
+        fileName: row.file_name,
+        mediaType: row.media_type,
+        sizeBytes: Number(row.size_bytes),
+        status: row.file_status
+      });
+    }
+
+    messages.set(row.id, existing);
+  }
+
+  return [...messages.values()];
 }
 
 function resolveLocale(locale: string): InternalInboxTenantContext["locale"] {

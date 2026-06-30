@@ -105,6 +105,10 @@ export {
   createSqlAttachmentTransferRepository
 } from "./sql-attachment-transfer-repository";
 export {
+  buildFindFileContentAccessSql,
+  createSqlFileAccessRepository
+} from "./sql-file-access-repository";
+export {
   buildFindClientByExternalHandleSql,
   buildFindConversationByIdSql,
   buildFindDeliveryStatusSql,
@@ -203,6 +207,11 @@ export type {
   MarkAttachmentTransferStoredInput,
   PendingTelegramAttachmentTransfer
 } from "./sql-attachment-transfer-repository";
+export type {
+  FileAccessRepository,
+  FileContentAccessRecord,
+  FindFileContentAccessInput
+} from "./sql-file-access-repository";
 export type {
   ExternalMessageIngestionPersistenceRows,
   ExternalOutboundMessagePersistenceRows,
