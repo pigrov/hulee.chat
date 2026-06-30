@@ -88,11 +88,12 @@ function stableStringify(value: unknown): string {
   }
 
   if (Array.isArray(value)) {
-    return `[${value.map(stableStringify).join(",")}]`;
+    return `[${value.map((item) => (item === undefined ? "null" : stableStringify(item))).join(",")}]`;
   }
 
   const record = value as Record<string, unknown>;
   const entries = Object.keys(record)
+    .filter((key) => record[key] !== undefined)
     .sort()
     .map((key) => {
       return `${JSON.stringify(key)}:${stableStringify(record[key])}`;

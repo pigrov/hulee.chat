@@ -42,6 +42,34 @@ describe("internal API signing", () => {
     expect(canonicalInternalApiSignaturePayload(input)).toContain("employee-1");
   });
 
+  it("canonicalizes JSON body values the same way as request serialization", () => {
+    const withUndefinedField = createInternalApiSignature("secret", {
+      ...input,
+      body: {
+        channelType: "telegram_bot",
+        displayName: undefined
+      }
+    });
+    const withoutUndefinedField = createInternalApiSignature("secret", {
+      ...input,
+      body: {
+        channelType: "telegram_bot"
+      }
+    });
+    const withUndefinedArrayItem = canonicalInternalApiSignaturePayload({
+      ...input,
+      body: [undefined, "value"]
+    });
+
+    expect(withUndefinedField).toBe(withoutUndefinedField);
+    expect(withUndefinedArrayItem).toBe(
+      canonicalInternalApiSignaturePayload({
+        ...input,
+        body: [null, "value"]
+      })
+    );
+  });
+
   it("verifies fresh signatures and rejects tampering", () => {
     const signature = createInternalApiSignature("secret", input);
 
