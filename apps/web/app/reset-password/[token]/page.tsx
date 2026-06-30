@@ -11,6 +11,7 @@ import {
   brandProfileToCssProperties,
   buildBrandMarkLabel
 } from "../../../src/brand-style";
+import { PasswordGuidance } from "../../../src/password-guidance";
 import { resolveCurrentWebAccessSession } from "../../../src/session";
 
 export const dynamic = "force-dynamic";
@@ -91,22 +92,30 @@ export default async function ResetPasswordPage({
                 readOnly
               />
             </label>
-            <label className="fieldStack">
-              <span className="detailLabel">{t("auth.password")}</span>
-              <input
-                className="textInput"
-                name="password"
-                type="password"
-                autoComplete="new-password"
-                minLength={12}
-                maxLength={256}
-                aria-describedby="reset-password-requirements"
-                required
-              />
-            </label>
-            <p className="metaText" id="reset-password-requirements">
-              {t("auth.password.requirements")}
-            </p>
+            <PasswordGuidance
+              email={activePreview.token.email}
+              inputId="reset-password-password"
+              labels={{
+                generate: t("auth.password.generateStrong"),
+                password: t("auth.password"),
+                requirements: {
+                  digit: t("auth.password.requirement.digit"),
+                  minimum_length: t("auth.password.requirement.minimumLength"),
+                  no_account_identifier: t(
+                    "auth.password.requirement.noAccountIdentifier"
+                  ),
+                  no_surrounding_whitespace: t(
+                    "auth.password.requirement.noSurroundingWhitespace"
+                  ),
+                  not_common_pattern: t(
+                    "auth.password.requirement.notCommonPattern"
+                  ),
+                  symbol: t("auth.password.requirement.symbol"),
+                  uppercase: t("auth.password.requirement.uppercase")
+                },
+                title: t("auth.password.guidanceTitle")
+              }}
+            />
             {resolvedSearchParams?.error === "invalid" ? (
               <p className="formError">{t("auth.resetPassword.invalid")}</p>
             ) : resolvedSearchParams?.error === "password_policy" ? (

@@ -20,9 +20,9 @@ export type PasswordPolicyResult =
       violations: readonly PasswordPolicyViolation[];
     };
 
-const minimumPasswordLength = 12;
-const passphraseLength = 16;
-const maximumPasswordLength = 256;
+export const minimumPasswordLength = 12;
+export const passphraseLength = 16;
+export const maximumPasswordLength = 256;
 const commonWeakPatterns = ["password", "qwerty", "123456", "admin", "letmein"];
 
 export function validatePasswordPolicy(
@@ -43,15 +43,15 @@ export function validatePasswordPolicy(
     violations.push("leading_or_trailing_whitespace");
   }
 
-  if (!hasSufficientComplexity(password)) {
+  if (!hasSufficientPasswordComplexity(password)) {
     violations.push("insufficient_complexity");
   }
 
-  if (containsIdentifier(password, context)) {
+  if (containsPasswordIdentifier(password, context)) {
     violations.push("contains_identifier");
   }
 
-  if (containsCommonWeakPattern(password)) {
+  if (containsCommonWeakPasswordPattern(password)) {
     violations.push("common_pattern");
   }
 
@@ -79,7 +79,7 @@ export function requireValidPassword(
   return result.password;
 }
 
-function hasSufficientComplexity(password: string): boolean {
+export function hasSufficientPasswordComplexity(password: string): boolean {
   const categories = [
     /[a-z]/.test(password),
     /[A-Z]/.test(password),
@@ -92,7 +92,7 @@ function hasSufficientComplexity(password: string): boolean {
     : categories >= 3;
 }
 
-function containsIdentifier(
+export function containsPasswordIdentifier(
   password: string,
   context: PasswordPolicyContext
 ): boolean {
@@ -109,7 +109,7 @@ function containsIdentifier(
   return terms.some((term) => normalizedPassword.includes(term));
 }
 
-function containsCommonWeakPattern(password: string): boolean {
+export function containsCommonWeakPasswordPattern(password: string): boolean {
   const normalizedPassword = password.toLowerCase();
 
   if (/^(.)\1+$/.test(password)) {

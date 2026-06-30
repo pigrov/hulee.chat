@@ -12,6 +12,7 @@
   --hulee-color-brand-primary: #177f75;
   --hulee-color-brand-foreground: #ffffff;
   --hulee-color-accent: #c9822b;
+  --hulee-color-success: #217a4d;
   --hulee-color-danger: #b5474a;
   --hulee-shadow-focus: 0 0 0 3px rgb(23 127 117 / 18%);
   --hulee-radius-control: 8px;
@@ -35,6 +36,7 @@
     --hulee-color-brand-primary: #53c5b9;
     --hulee-color-brand-foreground: #10211f;
     --hulee-color-accent: #e0a64c;
+    --hulee-color-success: #70d69b;
     --hulee-color-danger: #e07478;
   }
 }
@@ -576,6 +578,58 @@ button.iconButton:disabled {
 
 .textInput[readonly] {
   color: var(--hulee-color-text-muted);
+}
+
+.passwordGuidance {
+  display: grid;
+  gap: 8px;
+}
+
+.passwordGuidancePanel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-raised);
+}
+
+.passwordGuidanceTitle {
+  margin: 0;
+}
+
+.passwordChecklist {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.passwordChecklistItem {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  color: var(--hulee-color-text-muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.passwordChecklistItem[data-valid="true"] {
+  color: var(--hulee-color-success);
+}
+
+.passwordChecklistIcon {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+}
+
+.passwordGenerateButton {
+  justify-self: start;
 }
 
 .toggleRow {
