@@ -86,16 +86,20 @@ describe("SQL deployment egress status repository", () => {
   });
 
   it("builds filtered snapshot queries by profile id", () => {
-    const query = sqlText(
+    const query = sqlQuery(
       buildListDeploymentEgressStatusSnapshotsSql({
         profileIds: ["hulee_chat_vpn_gateway"],
         limit: 5
       })
     );
 
-    expect(query).toContain("deployment_egress_status_snapshots");
-    expect(query).toContain("profile_id = any");
-    expect(query).toContain("limit $2");
+    expect(query.sql).toContain("deployment_egress_status_snapshots");
+    expect(query.sql).toContain("jsonb_array_elements_text");
+    expect(query.sql).toContain("limit $2");
+    expect(query.params).toEqual([
+      JSON.stringify(["hulee_chat_vpn_gateway"]),
+      5
+    ]);
   });
 
   it("upserts safe snapshot details", async () => {
@@ -137,6 +141,11 @@ class RecordingSqlExecutor implements RawSqlExecutor {
   }
 }
 
-function sqlText(query: SQL): string {
-  return new PgDialect().sqlToQuery(query).sql;
+function sqlQuery(query: SQL): { sql: string; params: unknown[] } {
+  const dialectQuery = new PgDialect().sqlToQuery(query);
+
+  return {
+    sql: dialectQuery.sql,
+    params: dialectQuery.params
+  };
 }

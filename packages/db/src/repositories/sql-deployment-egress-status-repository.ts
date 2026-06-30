@@ -118,7 +118,13 @@ export function buildListDeploymentEgressStatusSnapshotsSql(
            public_ip,
            details
     from deployment_egress_status_snapshots
-    where ${profileIds && profileIds.length > 0 ? sql`profile_id = any(${profileIds})` : sql`true`}
+    where ${
+      profileIds && profileIds.length > 0
+        ? sql`profile_id in (
+            select value from jsonb_array_elements_text(${JSON.stringify(profileIds)}::jsonb)
+          )`
+        : sql`true`
+    }
     order by checked_at desc,
              profile_id asc
     limit ${limit}
