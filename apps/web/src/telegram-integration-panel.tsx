@@ -9,7 +9,6 @@ import {
   Plug,
   Power,
   PowerOff,
-  Save,
   Settings2,
   Trash2,
   Unlink
@@ -48,12 +47,8 @@ type TelegramSetupStepDefinition = {
 
 const fallbackTelegramSetupSteps: readonly TelegramSetupStepDefinition[] = [
   {
-    id: "name",
-    titleKey: "integrations.channel.onboarding.name" as I18nMessageKey
-  },
-  {
     id: "token",
-    titleKey: "integrations.channel.onboarding.token" as I18nMessageKey
+    titleKey: "integrations.channel.onboarding.credentials" as I18nMessageKey
   },
   {
     id: "mode",
@@ -177,7 +172,6 @@ export function TelegramIntegrationPanel({
       <TelegramSetupStepPanel
         config={config}
         integration={integration}
-        locale={locale}
         setupStep={setupStep}
         t={t}
       />
@@ -230,47 +224,38 @@ function TelegramSetupStepper({
 function TelegramSetupStepPanel({
   config,
   integration,
-  locale,
   setupStep,
   t
 }: {
   config: TelegramConfig;
   integration: TelegramIntegrationViewModel;
-  locale: string;
   setupStep: TelegramSetupStep;
   t: Translator;
 }): ReactNode {
   switch (setupStep) {
     case "name":
-      return (
-        <TelegramNameStep config={config} integration={integration} t={t} />
-      );
     case "token":
       return (
-        <TelegramTokenStep config={config} integration={integration} t={t} />
+        <TelegramCredentialsStep
+          config={config}
+          integration={integration}
+          t={t}
+        />
       );
     case "mode":
       return (
         <TelegramModeStep config={config} integration={integration} t={t} />
       );
     case "diagnostics":
-      return (
-        <TelegramDiagnosticsStep
-          integration={integration}
-          locale={locale}
-          t={t}
-        />
-      );
+      return <TelegramDiagnosticsStep integration={integration} t={t} />;
     case "webhook":
       return <TelegramWebhookStep integration={integration} t={t} />;
     case "complete":
-      return (
-        <TelegramCompleteStep integration={integration} locale={locale} t={t} />
-      );
+      return <TelegramCompleteStep integration={integration} t={t} />;
   }
 }
 
-function TelegramNameStep({
+function TelegramCredentialsStep({
   config,
   integration,
   t
@@ -287,7 +272,7 @@ function TelegramNameStep({
       <TelegramStateFields
         config={config}
         integration={integration}
-        setupStepCompleted="name"
+        setupStepCompleted="token"
       />
 
       <label className="fieldStack">
@@ -301,38 +286,6 @@ function TelegramNameStep({
           required
         />
       </label>
-
-      <div className="buttonRow">
-        <button className="primaryButton" type="submit">
-          <Save size={16} aria-hidden="true" />
-          {t("integrations.telegram.continue")}
-        </button>
-      </div>
-    </form>
-  );
-}
-
-function TelegramTokenStep({
-  config,
-  integration,
-  t
-}: {
-  config: TelegramConfig;
-  integration: TelegramIntegrationViewModel;
-  t: Translator;
-}): ReactNode {
-  return (
-    <form
-      className="settingsForm setupStepPanel"
-      action={updateTelegramIntegrationAction}
-    >
-      <TelegramStateFields
-        config={config}
-        integration={integration}
-        includeDisplayName
-        setupStepCompleted="token"
-        t={t}
-      />
 
       <label className="fieldStack">
         <span className="detailLabel">
@@ -350,7 +303,7 @@ function TelegramTokenStep({
       <div className="buttonRow">
         <button className="primaryButton" type="submit">
           <KeyRound size={16} aria-hidden="true" />
-          {t("integrations.telegram.saveToken")}
+          {t("integrations.telegram.saveCredentials")}
         </button>
       </div>
     </form>
@@ -398,20 +351,13 @@ function TelegramModeStep({
 
 function TelegramDiagnosticsStep({
   integration,
-  locale,
   t
 }: {
   integration: TelegramIntegrationViewModel;
-  locale: string;
   t: Translator;
 }): ReactNode {
   return (
     <div className="setupStepPanel">
-      <TelegramConnectorCompactStatus
-        integration={integration}
-        locale={locale}
-        t={t}
-      />
       <div className="buttonRow">
         <TelegramRefreshDiagnosticsForm integration={integration} t={t} />
       </div>
@@ -459,20 +405,13 @@ function TelegramWebhookStep({
 
 function TelegramCompleteStep({
   integration,
-  locale,
   t
 }: {
   integration: TelegramIntegrationViewModel;
-  locale: string;
   t: Translator;
 }): ReactNode {
   return (
     <div className="setupStepPanel">
-      <TelegramConnectorCompactStatus
-        integration={integration}
-        locale={locale}
-        t={t}
-      />
       <div className="buttonRow">
         <TelegramRefreshDiagnosticsForm integration={integration} t={t} />
         <TelegramWebhookActions integration={integration} t={t} />
@@ -932,7 +871,7 @@ function currentTelegramSetupStep(
   integration: TelegramIntegrationViewModel
 ): TelegramSetupStep {
   if (integration.setupStep) {
-    return integration.setupStep;
+    return integration.setupStep === "name" ? "token" : integration.setupStep;
   }
 
   if (!integration.config?.botTokenSecretRef) {
@@ -953,6 +892,10 @@ function telegramSetupStepsFromCatalog(
   channel: InternalChannelCatalogItem | undefined
 ): readonly TelegramSetupStepDefinition[] {
   const steps = channel?.onboarding.steps.flatMap((step) => {
+    if (step.id === "name") {
+      return [];
+    }
+
     if (!isTelegramSetupStep(step.id)) {
       return [];
     }
@@ -960,7 +903,10 @@ function telegramSetupStepsFromCatalog(
     return [
       {
         id: step.id,
-        titleKey: step.titleKey as I18nMessageKey
+        titleKey:
+          step.id === "token"
+            ? ("integrations.channel.onboarding.credentials" as I18nMessageKey)
+            : (step.titleKey as I18nMessageKey)
       }
     ];
   });
