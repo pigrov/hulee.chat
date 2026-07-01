@@ -258,9 +258,12 @@ function PlatformChannelCatalogRow({
           <textarea
             className="textInput channelCatalogDescriptionInput"
             defaultValue={channel.descriptionOverrides.ru ?? ""}
-            maxLength={500}
+            maxLength={4000}
             name="descriptionRu"
           />
+          <span className="metaText">
+            {t("platform.channels.descriptionMarkdownHelp")}
+          </span>
         </label>
         <label className="fieldStack">
           <span className="detailLabel">
@@ -269,9 +272,12 @@ function PlatformChannelCatalogRow({
           <textarea
             className="textInput channelCatalogDescriptionInput"
             defaultValue={channel.descriptionOverrides.en ?? ""}
-            maxLength={500}
+            maxLength={4000}
             name="descriptionEn"
           />
+          <span className="metaText">
+            {t("platform.channels.descriptionMarkdownHelp")}
+          </span>
         </label>
         <label className="fieldStack">
           <span className="detailLabel">

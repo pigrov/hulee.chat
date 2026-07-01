@@ -2,6 +2,7 @@ import {
   internalChannelReadinessSchema,
   internalChannelTypeSchema,
   internalChannelVisibilitySchema,
+  internalLocalizedMarkdownTextOverridesSchema,
   internalLocalizedTextOverridesSchema,
   type InternalChannelReadiness,
   type InternalChannelType,
@@ -169,8 +170,8 @@ function mapDeploymentChannelCatalogOverrideRow(
 ): DeploymentChannelCatalogOverrideRecord {
   return {
     channelType: parseChannelType(row.channel_type),
-    titleOverrides: parseLocalizedTextOverrides(row.title_overrides),
-    descriptionOverrides: parseLocalizedTextOverrides(
+    titleOverrides: parseLocalizedShortTextOverrides(row.title_overrides),
+    descriptionOverrides: parseLocalizedMarkdownTextOverrides(
       row.description_overrides
     ),
     ...(row.icon_asset_ref ? { iconAssetRef: row.icon_asset_ref } : {}),
@@ -197,8 +198,18 @@ function parseChannelType(value: string): InternalChannelType {
   return parsed.data;
 }
 
-function parseLocalizedTextOverrides(value: unknown): LocalizedTextOverrides {
+function parseLocalizedShortTextOverrides(
+  value: unknown
+): LocalizedTextOverrides {
   const parsed = internalLocalizedTextOverridesSchema.safeParse(value);
+
+  return parsed.success ? parsed.data : {};
+}
+
+function parseLocalizedMarkdownTextOverrides(
+  value: unknown
+): LocalizedTextOverrides {
+  const parsed = internalLocalizedMarkdownTextOverridesSchema.safeParse(value);
 
   return parsed.success ? parsed.data : {};
 }

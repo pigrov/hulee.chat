@@ -686,6 +686,10 @@ export const internalLocalizedTextOverridesSchema = z
   .record(z.string().trim().min(1).max(20), z.string().trim().min(1).max(500))
   .default({});
 
+export const internalLocalizedMarkdownTextOverridesSchema = z
+  .record(z.string().trim().min(1).max(20), z.string().trim().min(1).max(4_000))
+  .default({});
+
 export const internalChannelOnboardingStepKindSchema = z.enum([
   "display_name",
   "secret_text",
@@ -738,7 +742,8 @@ export const internalChannelCatalogItemSchema = z
     titleKey: z.string().trim().min(1).max(120),
     descriptionKey: z.string().trim().min(1).max(160),
     titleOverrides: internalLocalizedTextOverridesSchema.optional(),
-    descriptionOverrides: internalLocalizedTextOverridesSchema.optional(),
+    descriptionOverrides:
+      internalLocalizedMarkdownTextOverridesSchema.optional(),
     iconAssetRef: z.string().trim().min(1).max(1_000).optional(),
     iconUrl: z.string().trim().min(1).max(1_000).optional(),
     sortOrder: z.number().int().min(-10_000).max(10_000).optional(),

@@ -1566,8 +1566,58 @@ a.secondaryButton {
 }
 
 .channelCatalogDescriptionInput {
-  min-height: 72px;
+  min-height: 132px;
   resize: vertical;
+}
+
+.markdownContent {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  color: var(--hulee-color-text-default);
+  font-size: 14px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.markdownContent > * {
+  margin: 0;
+}
+
+.markdownContent h2,
+.markdownContent h3,
+.markdownContent h4 {
+  color: var(--hulee-color-text-default);
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.markdownContent ul,
+.markdownContent ol {
+  display: grid;
+  gap: 6px;
+  padding-left: 20px;
+}
+
+.markdownContent a {
+  color: var(--hulee-color-brand-primary);
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.markdownContent a:hover,
+.markdownContent a:focus-visible {
+  text-decoration: underline;
+}
+
+.markdownContent code {
+  padding: 1px 5px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-muted);
+  color: var(--hulee-color-text-default);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
 }
 
 .channelCatalogIconForm {

@@ -728,6 +728,19 @@ describe("internal API v1 schemas", () => {
   });
 
   it("parses channel catalog and connector summaries", () => {
+    const markdownDescription = [
+      "## Telegram Bot",
+      "",
+      "Use **BotFather** to create a bot.",
+      "",
+      "- inbound messages",
+      "- outbound messages",
+      "",
+      "Open [Telegram](https://telegram.org) after setup.",
+      "",
+      "Detailed setup notes. ".repeat(40)
+    ].join("\n");
+
     expect(
       internalChannelCatalogResponseSchema.parse({
         channels: [
@@ -741,7 +754,7 @@ describe("internal API v1 schemas", () => {
             },
             descriptionKey: "integrations.catalog.telegramBot.description",
             descriptionOverrides: {
-              ru: "Telegram channel"
+              ru: markdownDescription
             },
             iconAssetRef: "deployment/channel-icons/telegram_bot/hash.webp",
             iconUrl: "/channel-assets/telegram_bot/icon?v=hash.webp",

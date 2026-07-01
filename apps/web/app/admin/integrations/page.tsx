@@ -9,7 +9,14 @@ import type {
   InternalChannelCatalogItem,
   InternalChannelConnectorSummary
 } from "@hulee/contracts";
-import { CheckCircle2, Circle, Power, PowerOff, Trash2 } from "lucide-react";
+import {
+  CheckCircle2,
+  Circle,
+  Plus,
+  Power,
+  PowerOff,
+  Trash2
+} from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
@@ -40,6 +47,7 @@ import {
   getWebDatabase,
   resolveCurrentWebAccessSession
 } from "../../../src/session";
+import { MarkdownContent } from "../../../src/markdown";
 import {
   hasEffectivePermission,
   resolveEmployeeEffectiveAccess
@@ -59,6 +67,7 @@ export default async function IntegrationsAdminPage({
     channelStatus?: string;
     challengeId?: string;
     connectorId?: string;
+    channelType?: string;
   }>;
 }): Promise<ReactNode> {
   const access = await resolveCurrentWebAccessSession();
@@ -98,6 +107,9 @@ export default async function IntegrationsAdminPage({
   const requestedConnectorId = normalizeOptionalSearchParam(
     resolvedSearchParams?.connectorId
   );
+  const requestedChannelType = normalizeOptionalSearchParam(
+    resolvedSearchParams?.channelType
+  );
   const requestedChallengeId = normalizeOptionalSearchParam(
     resolvedSearchParams?.challengeId
   );
@@ -129,6 +141,12 @@ export default async function IntegrationsAdminPage({
   const availableChannels = channelCatalog.channels.filter(
     (channel) => channel.readiness === "available"
   );
+  const selectedCatalogChannel =
+    selectedConnector === undefined && requestedChannelType
+      ? availableChannels.find(
+          (channel) => channel.channelType === requestedChannelType
+        )
+      : undefined;
   const selectedTelegramIntegration =
     selectedConnector?.channelType === "telegram_bot"
       ? await loadTelegramIntegration(internalApiAccess, {
@@ -136,19 +154,17 @@ export default async function IntegrationsAdminPage({
         })
       : undefined;
   const integrationContent =
-    selectedConnector?.channelType === "telegram_bot" || !selectedConnector ? (
+    selectedConnector?.channelType === "telegram_bot" ? (
       <TelegramIntegrationPanel
         channel={telegramChannel}
         integration={
-          selectedConnector?.channelType === "telegram_bot"
-            ? (selectedTelegramIntegration ??
-              createEmptyTelegramIntegrationViewModel())
-            : createEmptyTelegramIntegrationViewModel()
+          selectedTelegramIntegration ??
+          createEmptyTelegramIntegrationViewModel()
         }
         locale={locale}
         t={t}
       />
-    ) : (
+    ) : selectedConnector ? (
       <GenericChannelConnectorPanel
         catalog={channelCatalog.channels}
         challenge={
@@ -165,6 +181,14 @@ export default async function IntegrationsAdminPage({
         locale={locale}
         t={t}
       />
+    ) : selectedCatalogChannel ? (
+      <ChannelCatalogDetailPanel
+        channel={selectedCatalogChannel}
+        locale={locale}
+        t={t}
+      />
+    ) : (
+      <NoChannelSelectedPanel t={t} />
     );
 
   return (
@@ -226,6 +250,7 @@ export default async function IntegrationsAdminPage({
                 <CatalogListItem
                   key={channel.channelType}
                   channel={channel}
+                  current={channel.channelType === requestedChannelType}
                   locale={locale}
                   t={t}
                 />
@@ -244,6 +269,80 @@ export default async function IntegrationsAdminPage({
 }
 
 type Translator = ReturnType<typeof createTranslator>["t"];
+
+function ChannelCatalogDetailPanel({
+  channel,
+  locale,
+  t
+}: {
+  channel: InternalChannelCatalogItem;
+  locale: string;
+  t: Translator;
+}): ReactNode {
+  const title = resolveChannelTitle({
+    channel,
+    locale,
+    t,
+    fallback: channel.channelType
+  });
+  const description = resolveChannelDescription({ channel, locale, t });
+
+  return (
+    <section className="settingsPanel" aria-labelledby="channel-preview-title">
+      <div className="sectionHeader">
+        <div>
+          <p className="eyebrow">{t("admin.integrations.availableChannels")}</p>
+          <h2 className="sectionTitle" id="channel-preview-title">
+            {title}
+          </h2>
+        </div>
+        <span className="badge">
+          <ChannelIcon channel={channel} />
+          {t("admin.integrations.channelPreview")}
+        </span>
+      </div>
+
+      <MarkdownContent value={description} />
+
+      <div className="diagnosticGrid">
+        <DetailItem
+          label={t("integrations.channel.details.provider")}
+          value={channel.provider}
+        />
+        <DetailItem
+          label={t("integrations.channel.details.class")}
+          value={t(channelClassKey(channel.channelClass))}
+        />
+      </div>
+
+      <form className="buttonRow" action={createChannelConnectorAction}>
+        <input type="hidden" name="channelType" value={channel.channelType} />
+        <button className="primaryButton" type="submit">
+          <Plus size={16} aria-hidden="true" />
+          {t("admin.integrations.createChannel")}
+        </button>
+      </form>
+    </section>
+  );
+}
+
+function NoChannelSelectedPanel({ t }: { t: Translator }): ReactNode {
+  return (
+    <section className="settingsPanel" aria-labelledby="channel-empty-title">
+      <div className="sectionHeader">
+        <div>
+          <p className="eyebrow">{t("admin.integrations.channelSettings")}</p>
+          <h2 className="sectionTitle" id="channel-empty-title">
+            {t("admin.integrations.selectChannel")}
+          </h2>
+          <p className="metaText">
+            {t("admin.integrations.selectChannelDescription")}
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
 
 function GenericChannelConnectorPanel({
   catalog,
@@ -484,15 +583,23 @@ function ConnectorListItem({
 
 function CatalogListItem({
   channel,
+  current,
   locale,
   t
 }: {
   channel: InternalChannelCatalogItem;
+  current: boolean;
   locale: string;
   t: Translator;
 }): ReactNode {
-  const content = (
-    <>
+  return (
+    <Link
+      className="integrationListItem integrationNavLink"
+      href={`/admin/integrations?channelType=${encodeURIComponent(
+        channel.channelType
+      )}`}
+      aria-current={current ? "page" : undefined}
+    >
       <span className="metricIcon">
         <ChannelIcon channel={channel} />
       </span>
@@ -505,20 +612,9 @@ function CatalogListItem({
             fallback: channel.channelType
           })}
         </h3>
-        <p className="metaText">
-          {resolveChannelDescription({ channel, locale, t })}
-        </p>
+        <p className="metaText">{channel.provider}</p>
       </div>
-    </>
-  );
-
-  return (
-    <form className="integrationListForm" action={createChannelConnectorAction}>
-      <input type="hidden" name="channelType" value={channel.channelType} />
-      <button className="integrationListItem integrationNavLink" type="submit">
-        {content}
-      </button>
-    </form>
+    </Link>
   );
 }
 
@@ -532,6 +628,12 @@ function channelHealthStatusKey(
   status: InternalChannelConnectorSummary["healthStatus"]
 ): I18nMessageKey {
   return `integrations.channel.health.${status}` as I18nMessageKey;
+}
+
+function channelClassKey(
+  channelClass: InternalChannelCatalogItem["channelClass"]
+): I18nMessageKey {
+  return `integrations.channel.class.${channelClass}` as I18nMessageKey;
 }
 
 function channelActionStatusKey(status: string): I18nMessageKey {
@@ -555,20 +657,12 @@ function selectChannelConnector(input: {
   connectors: readonly InternalChannelConnectorSummary[];
   requestedConnectorId?: string;
 }): InternalChannelConnectorSummary | undefined {
-  if (input.requestedConnectorId) {
-    const requested = input.connectors.find(
-      (connector) => connector.connectorId === input.requestedConnectorId
-    );
-
-    if (requested) {
-      return requested;
-    }
+  if (!input.requestedConnectorId) {
+    return undefined;
   }
 
-  return (
-    input.connectors.find(
-      (connector) => connector.channelType === "telegram_bot"
-    ) ?? input.connectors[0]
+  return input.connectors.find(
+    (connector) => connector.connectorId === input.requestedConnectorId
   );
 }
 
