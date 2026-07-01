@@ -347,6 +347,11 @@ export async function refreshTelegramDiagnosticsAction(
     connectorId
   });
   revalidateTelegramIntegrationPaths();
+  redirect(
+    `/admin/integrations?connectorId=${encodeURIComponent(
+      connectorId
+    )}&channelStatus=diagnosticsQueued`
+  );
 }
 
 export async function setTelegramWebhookAction(

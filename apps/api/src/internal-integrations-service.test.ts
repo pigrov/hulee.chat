@@ -801,6 +801,89 @@ describe("internal integrations service", () => {
     ).toEqual(response.diagnostics);
   });
 
+  it("reports active Telegram webhooks as a polling diagnostics conflict", async () => {
+    const repository = new InMemoryChannelConnectorRepository([
+      createTelegramConnector({
+        config: {
+          channelExternalId: "telegram-local",
+          mode: "polling",
+          botTokenSecretRef: "env:HULEE_TELEGRAM_BOT_TOKEN",
+          webhookConnectorId: "tgwh_test",
+          outboundEnabled: true
+        },
+        diagnostics: {}
+      })
+    ]);
+    const service = createInternalIntegrationService({
+      connectorRepository: repository,
+      now: () => now,
+      publicWebhookBaseUrl: "https://example.test/",
+      secretResolver: {
+        async resolveSecret() {
+          return "token-1";
+        }
+      },
+      botApiClientFactory: () => ({
+        async sendTextMessage() {
+          return {
+            messageId: "1",
+            chatId: "1",
+            raw: {}
+          };
+        },
+        async getMe() {
+          return {
+            id: "100",
+            raw: {}
+          };
+        },
+        async getWebhookInfo() {
+          return {
+            url: "https://example.test/webhooks/telegram/old-webhook",
+            pendingUpdateCount: 2,
+            raw: {}
+          };
+        },
+        async getUpdates() {
+          return [];
+        },
+        async getFile() {
+          return {
+            fileId: "telegram-file-1",
+            filePath: "photos/file-1.jpg",
+            raw: {}
+          };
+        },
+        async downloadFile() {
+          return new Uint8Array();
+        },
+        async setWebhook() {},
+        async deleteWebhook() {}
+      })
+    });
+
+    const response = await service.refreshTelegramDiagnostics(context, {
+      connectorId: "telegram_bot:tenant-integrations"
+    });
+
+    expect(response.diagnostics).toMatchObject({
+      status: "webhook_mismatch",
+      operatorHint:
+        "Telegram has an active webhook while this channel uses polling. Delete the webhook before polling can receive updates.",
+      webhook: {
+        actualUrl: "https://example.test/webhooks/telegram/old-webhook"
+      },
+      checks: {
+        botApiReachable: true,
+        webhookMatchesConfig: false
+      }
+    });
+    expect(response.status).toBe("degraded");
+    expect(
+      repository.records.get("telegram_bot:tenant-integrations")?.healthStatus
+    ).toBe("degraded");
+  });
+
   it("sets Telegram webhook to the public tenant callback URL", async () => {
     const repository = new InMemoryChannelConnectorRepository([
       createTelegramConnector({
@@ -946,9 +1029,7 @@ describe("internal integrations service", () => {
         }
       })
     ]);
-    expect(response.diagnostics.operatorHint).toBe(
-      "Telegram webhook sync is queued for the provider egress worker."
-    );
+    expect(response.diagnostics.operatorHint).toBeUndefined();
     expect(
       repository.records.get("telegram_bot:tenant-integrations")?.diagnostics
     ).toEqual(response.diagnostics);

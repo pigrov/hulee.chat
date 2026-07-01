@@ -122,12 +122,168 @@ export type TelegramChannelConfig = z.infer<typeof telegramChannelConfigSchema>;
 
 export class TelegramAdapterError extends Error {
   readonly code: PlatformErrorCode;
+  readonly httpStatus?: number;
+  readonly method?: string;
+  readonly providerDescription?: string;
 
-  constructor(code: PlatformErrorCode, message: string = code) {
+  constructor(
+    code: PlatformErrorCode,
+    message: string = code,
+    options: {
+      httpStatus?: number;
+      method?: string;
+      providerDescription?: string;
+    } = {}
+  ) {
     super(message);
     this.name = "TelegramAdapterError";
     this.code = code;
+    this.httpStatus = options.httpStatus;
+    this.method = options.method;
+    this.providerDescription = options.providerDescription;
   }
+}
+
+export function buildTelegramProviderFailureOperatorHint(input: {
+  error: unknown;
+  operation: "diagnostics" | "getUpdates" | "setWebhook" | "deleteWebhook";
+}): string {
+  const context = telegramOperationContext(input.operation);
+  const details = telegramErrorDetails(input.error);
+  const normalizedDetails = details.message.toLowerCase();
+
+  if (
+    details.httpStatus === 401 ||
+    normalizedDetails.includes("unauthorized")
+  ) {
+    return trimDiagnosticHint(
+      `${context} failed because Telegram rejected the bot token. Paste a valid BotFather token, save the channel, then run the check again.`
+    );
+  }
+
+  if (details.httpStatus === 403 || normalizedDetails.includes("forbidden")) {
+    return trimDiagnosticHint(
+      `${context} failed because Telegram rejected the bot request. Check that the bot is active and allowed to use the requested operation, then run the check again.`
+    );
+  }
+
+  if (
+    details.httpStatus === 409 ||
+    (normalizedDetails.includes("conflict") &&
+      (normalizedDetails.includes("webhook") ||
+        normalizedDetails.includes("getupdates")))
+  ) {
+    return trimDiagnosticHint(
+      `${context} failed because Telegram polling conflicts with an active webhook or another polling consumer. Delete the webhook, stop the other consumer or switch this channel to webhook mode, then run the check again.`
+    );
+  }
+
+  if (details.code === "provider.temporary_failure") {
+    return trimDiagnosticHint(
+      `${context} could not reach Telegram through the provider egress route. Check VPN/Egress health, then run the check again.`
+    );
+  }
+
+  if (details.message.length > 0) {
+    return trimDiagnosticHint(
+      `${context} failed: ${details.message}. Check the bot token, Telegram mode and provider settings, then run the check again.`
+    );
+  }
+
+  return trimDiagnosticHint(
+    `${context} failed. Check the bot token, Telegram mode and provider egress health, then run the check again.`
+  );
+}
+
+function telegramOperationContext(
+  operation: "diagnostics" | "getUpdates" | "setWebhook" | "deleteWebhook"
+): string {
+  switch (operation) {
+    case "diagnostics":
+      return "Telegram diagnostics";
+    case "getUpdates":
+      return "Telegram getUpdates";
+    case "setWebhook":
+      return "Telegram webhook sync";
+    case "deleteWebhook":
+      return "Telegram webhook deletion";
+  }
+}
+
+function telegramErrorDetails(error: unknown): {
+  code?: PlatformErrorCode;
+  httpStatus?: number;
+  message: string;
+} {
+  if (error instanceof TelegramAdapterError) {
+    return {
+      code: error.code,
+      ...(error.httpStatus === undefined
+        ? {}
+        : { httpStatus: error.httpStatus }),
+      message: safeDiagnosticText(
+        error.providerDescription ?? error.message,
+        220
+      )
+    };
+  }
+
+  if (error instanceof Error) {
+    const code =
+      "code" in error && isKnownProviderErrorCode(error.code)
+        ? error.code
+        : undefined;
+
+    return {
+      ...(code ? { code } : {}),
+      message: safeDiagnosticText(error.message, 220)
+    };
+  }
+
+  return {
+    message: safeDiagnosticText(String(error), 220)
+  };
+}
+
+function buildTelegramFailureMessage(input: {
+  method: string;
+  httpStatus: number;
+  description: string;
+}): string {
+  const description = safeDiagnosticText(input.description, 220);
+
+  return description
+    ? `Telegram ${input.method} failed with HTTP ${input.httpStatus}: ${description}.`
+    : `Telegram ${input.method} failed with HTTP ${input.httpStatus}.`;
+}
+
+function safeDiagnosticText(value: unknown, maxLength: number): string {
+  if (typeof value !== "string" && typeof value !== "number") {
+    return "";
+  }
+
+  const text = String(value)
+    .replace(/bot\d{5,}:[A-Za-z0-9_-]+/g, "bot<redacted>")
+    .replace(/\d{5,}:[A-Za-z0-9_-]{20,}/g, "<redacted-token>")
+    .trim();
+
+  if (text.length === 0) {
+    return "";
+  }
+
+  return text.length > maxLength ? text.slice(0, maxLength) : text;
+}
+
+function trimDiagnosticHint(value: string): string {
+  return value.length > 500 ? value.slice(0, 500) : value;
+}
+
+function isKnownProviderErrorCode(value: unknown): value is PlatformErrorCode {
+  return (
+    value === "provider.temporary_failure" ||
+    value === "provider.permanent_failure" ||
+    value === "validation.failed"
+  );
 }
 
 const telegramUserSchema = z
@@ -573,7 +729,11 @@ export async function downloadTelegramFile(
         response.status >= 500
           ? "provider.temporary_failure"
           : "provider.permanent_failure",
-        `Telegram file download returned HTTP ${response.status}.`
+        `Telegram file download returned HTTP ${response.status}.`,
+        {
+          httpStatus: response.status,
+          method: "downloadFile"
+        }
       );
     }
 
@@ -642,11 +802,26 @@ async function requestTelegramJson(
     const ok = record?.ok === true;
 
     if (!response.ok || !ok) {
+      const description = safeDiagnosticText(
+        typeof record?.description === "string" ? record.description : "",
+        220
+      );
+      const message = buildTelegramFailureMessage({
+        method,
+        httpStatus: response.status,
+        description
+      });
+
       throw new TelegramAdapterError(
         response.status >= 500
           ? "provider.temporary_failure"
           : "provider.permanent_failure",
-        `Telegram Bot API returned HTTP ${response.status}.`
+        message,
+        {
+          httpStatus: response.status,
+          method,
+          ...(description ? { providerDescription: description } : {})
+        }
       );
     }
 

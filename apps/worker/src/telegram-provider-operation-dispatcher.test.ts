@@ -149,6 +149,53 @@ describe("telegram provider operation dispatcher", () => {
     });
   });
 
+  it("reports active Telegram webhooks as a polling mode conflict", async () => {
+    const repository = new InMemoryChannelConnectorRepository([
+      createTelegramConnector({ mode: "polling" })
+    ]);
+    const dispatcher = createTelegramProviderOperationDispatcher({
+      connectorRepository: repository,
+      secretResolver: envSecretResolver(),
+      botApiClientFactory: () => ({
+        async getMe() {
+          return {
+            id: "100",
+            raw: {}
+          };
+        },
+        async getWebhookInfo() {
+          return {
+            url: "https://example.test/webhooks/telegram/old-webhook",
+            pendingUpdateCount: 2,
+            raw: {}
+          };
+        },
+        async setWebhook() {},
+        async deleteWebhook() {}
+      }),
+      egressRuntime: readyVpnEgressRuntime(),
+      publicWebhookBaseUrl: "https://example.test/",
+      now: () => now
+    });
+
+    await dispatcher.handle(createOutboxRecord("telegram.diagnostics.refresh"));
+
+    expect(repository.records.get(connectorId)?.diagnostics).toMatchObject({
+      status: "webhook_mismatch",
+      operatorHint:
+        "Telegram has an active webhook while this channel uses polling. Delete the webhook before polling can receive updates.",
+      checks: {
+        botApiReachable: true,
+        webhookMatchesConfig: false
+      },
+      webhook: {
+        actualUrl: "https://example.test/webhooks/telegram/old-webhook"
+      }
+    });
+    expect(repository.records.get(connectorId)?.status).toBe("degraded");
+    expect(repository.records.get(connectorId)?.healthStatus).toBe("degraded");
+  });
+
   it("ignores non-Telegram provider operation events", async () => {
     const repository = new InMemoryChannelConnectorRepository([
       createTelegramConnector()
@@ -350,7 +397,9 @@ function createProviderOperationEvent(
   };
 }
 
-function createTelegramConnector(): ChannelConnectorRecord {
+function createTelegramConnector(
+  input: { mode?: "webhook" | "polling" } = {}
+): ChannelConnectorRecord {
   return {
     id: connectorId,
     tenantId,
@@ -364,7 +413,7 @@ function createTelegramConnector(): ChannelConnectorRecord {
     onboardingState: {},
     config: {
       channelExternalId: "telegram-local",
-      mode: "webhook",
+      mode: input.mode ?? "webhook",
       botTokenSecretRef:
         "secret:tenant_worker_provider_ops/channels/telegram_bot:provider-ops/bot-token",
       webhookConnectorId: "tgwh_test",

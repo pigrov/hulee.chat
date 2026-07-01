@@ -544,6 +544,8 @@ function channelActionStatusKey(status: string): I18nMessageKey {
       return "admin.integrations.actionStatus.disabled";
     case "deleted":
       return "admin.integrations.actionStatus.deleted";
+    case "diagnosticsQueued":
+      return "admin.integrations.actionStatus.diagnosticsQueued";
     default:
       return "admin.integrations.actionStatus.invalid";
   }

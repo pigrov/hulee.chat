@@ -86,7 +86,8 @@ function telegramConnectorRecord(): ChannelConnectorRecord {
     diagnostics: {
       status: "provider_unreachable",
       lastErrorCode: "provider.permanent_failure",
-      operatorHint: "Telegram getUpdates call failed.",
+      operatorHint:
+        "Telegram getUpdates failed because Telegram polling conflicts with an active webhook or another polling consumer. Delete the webhook, stop the other consumer or switch this channel to webhook mode, then run the check again.",
       checkedAt: "2026-07-01T01:01:00.000Z",
       bot: {
         id: "42",
@@ -110,7 +111,8 @@ function telegramConnectorRecord(): ChannelConnectorRecord {
           lastReceivedAt: "2026-07-01T01:00:00.000Z",
           lastFailedAt: "2026-07-01T01:01:00.000Z",
           lastErrorCode: "provider.permanent_failure",
-          operatorHint: "Telegram getUpdates call failed."
+          operatorHint:
+            "Telegram getUpdates failed because Telegram polling conflicts with an active webhook or another polling consumer. Delete the webhook, stop the other consumer or switch this channel to webhook mode, then run the check again."
         },
         outbound: {
           lastSentAt: "2026-07-01T01:02:00.000Z"

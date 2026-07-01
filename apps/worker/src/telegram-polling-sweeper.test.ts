@@ -418,8 +418,8 @@ describe("telegram polling sweeper", () => {
       botApiClientFactory: () => ({
         async getUpdates() {
           throw new TelegramAdapterError(
-            "provider.temporary_failure",
-            "webhook is active"
+            "provider.permanent_failure",
+            "Conflict: can't use getUpdates method while webhook is active"
           );
         }
       }),
@@ -432,8 +432,9 @@ describe("telegram polling sweeper", () => {
     });
     expect(repository.upserts[0]?.diagnostics).toMatchObject({
       status: "provider_unreachable",
-      lastErrorCode: "provider.temporary_failure",
-      operatorHint: "Telegram getUpdates call failed.",
+      lastErrorCode: "provider.permanent_failure",
+      operatorHint:
+        "Telegram getUpdates failed because Telegram polling conflicts with an active webhook or another polling consumer. Delete the webhook, stop the other consumer or switch this channel to webhook mode, then run the check again.",
       polling: {
         lastRunAt: now.toISOString(),
         receivedUpdateCount: 0,
@@ -447,8 +448,9 @@ describe("telegram polling sweeper", () => {
           lastBatchReceivedCount: 0,
           lastBatchAcceptedCount: 0,
           lastBatchFailedCount: 0,
-          lastErrorCode: "provider.temporary_failure",
-          operatorHint: "Telegram getUpdates call failed."
+          lastErrorCode: "provider.permanent_failure",
+          operatorHint:
+            "Telegram getUpdates failed because Telegram polling conflicts with an active webhook or another polling consumer. Delete the webhook, stop the other consumer or switch this channel to webhook mode, then run the check again."
         }
       },
       checks: {

@@ -10,6 +10,7 @@ import type {
   ChannelConnectorRepository
 } from "@hulee/db";
 import {
+  buildTelegramProviderFailureOperatorHint,
   createPassthroughEgressRuntime,
   createTelegramBotApiClient,
   createTelegramChannelAdapter,
@@ -312,14 +313,20 @@ async function pollTelegramConfig(
       updatedAt: input.updatedAt
     });
   } catch (error) {
+    const errorCode = platformErrorCodeFromUnknown(error);
+    const operatorHint = buildTelegramProviderFailureOperatorHint({
+      error,
+      operation: "getUpdates"
+    });
+
     await persistPollingDiagnostics({
       ...input,
       configInput: input.config,
       diagnostics: buildPollingDiagnostics({
         checkedAt: input.checkedAt,
         status: "provider_unreachable",
-        lastErrorCode: platformErrorCodeFromUnknown(error),
-        operatorHint: "Telegram getUpdates call failed.",
+        lastErrorCode: errorCode,
+        operatorHint,
         checks: pollingChecks({
           config: input.config,
           botTokenResolved: true,
@@ -334,8 +341,8 @@ async function pollTelegramConfig(
         },
         runtime: buildPollingFailureRuntimeDiagnostics({
           checkedAt: input.checkedAt,
-          errorCode: platformErrorCodeFromUnknown(error),
-          operatorHint: "Telegram getUpdates call failed.",
+          errorCode,
+          operatorHint,
           previous: input.storedDiagnostics
         }),
         egress: input.egressResolution.diagnostics,

@@ -65,6 +65,7 @@ export {
   createTelegramBotApiClient,
   createTelegramChannelAdapter,
   deleteTelegramWebhook,
+  buildTelegramProviderFailureOperatorHint,
   getTelegramBotIdentity,
   getTelegramUpdates,
   getTelegramWebhookInfo,

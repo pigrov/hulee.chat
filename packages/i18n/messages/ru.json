@@ -506,6 +506,7 @@
   "admin.integrations.actionStatus.enabled": "Канал включен",
   "admin.integrations.actionStatus.disabled": "Канал выключен",
   "admin.integrations.actionStatus.deleted": "Канал удален",
+  "admin.integrations.actionStatus.diagnosticsQueued": "Проверка отправлена в worker. Подождите несколько секунд и обновите статус канала.",
   "admin.integrations.actionStatus.invalid": "Действие с каналом не выполнено",
   "integrations.telegram.setupTitle": "Настройка Telegram",
   "integrations.telegram.setup.name": "Название",

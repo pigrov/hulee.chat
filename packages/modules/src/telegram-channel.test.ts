@@ -3,11 +3,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EgressOperationInput, EgressRuntime } from "./egress";
 import {
+  buildTelegramProviderFailureOperatorHint,
   createTelegramBotApiClient,
   createTelegramChannelAdapter,
   normalizeTelegramIncomingMessage,
   parseTelegramChannelConfig,
-  telegramChannelManifest
+  telegramChannelManifest,
+  TelegramAdapterError
 } from "./telegram-channel";
 
 describe("telegram channel adapter", () => {
@@ -405,11 +407,56 @@ describe("telegram channel adapter", () => {
     );
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it("preserves sanitized Telegram Bot API error descriptions for diagnostics", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonTelegramResponse(
+          {
+            ok: false,
+            error_code: 409,
+            description:
+              "Conflict: can't use getUpdates method while webhook is active for bot123456:secret-token"
+          },
+          409
+        )
+      )
+    );
+    const client = createTelegramBotApiClient({
+      apiBaseUrl: "https://telegram.example",
+      botToken: "bot123456:secret-token"
+    });
+
+    try {
+      await client.getUpdates();
+      throw new Error("Expected getUpdates to fail");
+    } catch (error) {
+      expect(error).toBeInstanceOf(TelegramAdapterError);
+      expect(error).toMatchObject({
+        code: "provider.permanent_failure",
+        httpStatus: 409,
+        method: "getUpdates",
+        providerDescription:
+          "Conflict: can't use getUpdates method while webhook is active for bot<redacted>"
+      });
+      expect((error as Error).message).toContain("HTTP 409");
+      expect((error as Error).message).not.toContain("secret-token");
+      expect(
+        buildTelegramProviderFailureOperatorHint({
+          error,
+          operation: "getUpdates"
+        })
+      ).toBe(
+        "Telegram getUpdates failed because Telegram polling conflicts with an active webhook or another polling consumer. Delete the webhook, stop the other consumer or switch this channel to webhook mode, then run the check again."
+      );
+    }
+  });
 });
 
-function jsonTelegramResponse(body: unknown): Response {
+function jsonTelegramResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
-    status: 200,
+    status,
     headers: {
       "content-type": "application/json"
     }

@@ -12,6 +12,7 @@ import type {
   ChannelConnectorRepository
 } from "@hulee/db";
 import {
+  buildTelegramProviderFailureOperatorHint,
   createPassthroughEgressRuntime,
   createTelegramBotApiClient,
   managedMessengerVpnEgressRequirement,
@@ -273,7 +274,9 @@ async function syncTelegramWebhook(input: {
         publicWebhookBaseUrl: input.publicWebhookBaseUrl,
         previous,
         egress: egressResolution.diagnostics,
-        error
+        error,
+        operation:
+          input.webhookOperation === "set" ? "setWebhook" : "deleteWebhook"
       }),
       updatedAt: input.updatedAt
     });
@@ -347,6 +350,12 @@ async function buildTelegramProviderDiagnostics(input: {
     );
     const webhookMatchesConfig =
       expectedUrl === undefined ? false : webhook.url === expectedUrl;
+    const webhookState = telegramWebhookStateDiagnostics({
+      config: input.config,
+      expectedUrl,
+      actualUrl: webhook.url,
+      webhookMatchesConfig
+    });
 
     return buildTelegramDiagnostics({
       enabled: true,
@@ -354,14 +363,10 @@ async function buildTelegramProviderDiagnostics(input: {
       checkedAt: input.checkedAt,
       publicWebhookBaseUrl: input.publicWebhookBaseUrl,
       previous,
-      status:
-        input.config.mode === "webhook" && !webhookMatchesConfig
-          ? "webhook_mismatch"
-          : "configured",
-      operatorHint:
-        expectedUrl === undefined
-          ? "Public webhook base URL is not configured."
-          : undefined,
+      status: webhookState.status,
+      ...(webhookState.operatorHint
+        ? { operatorHint: webhookState.operatorHint }
+        : {}),
       bot: {
         id: bot.id,
         username: bot.username,
@@ -598,6 +603,7 @@ function telegramProviderFailureDiagnostics(input: {
   previous: InternalTelegramIntegrationDiagnostics | null;
   egress?: InternalTelegramIntegrationDiagnostics["egress"];
   error: unknown;
+  operation?: "diagnostics" | "setWebhook" | "deleteWebhook";
 }): InternalTelegramIntegrationDiagnostics {
   return buildTelegramDiagnostics({
     enabled: input.enabled,
@@ -607,7 +613,10 @@ function telegramProviderFailureDiagnostics(input: {
     previous: input.previous,
     status: "provider_unreachable",
     lastErrorCode: platformErrorCodeFromTelegramError(input.error),
-    operatorHint: "Telegram Bot API call failed.",
+    operatorHint: buildTelegramProviderFailureOperatorHint({
+      error: input.error,
+      operation: input.operation ?? "diagnostics"
+    }),
     egress: input.egress,
     checks: {
       botTokenResolved: true,
@@ -631,6 +640,42 @@ function telegramWebhookInvalidConfigHint(input: {
   }
 
   return "Public webhook base URL is not configured.";
+}
+
+function telegramWebhookStateDiagnostics(input: {
+  config: TelegramChannelConfig;
+  expectedUrl: string | undefined;
+  actualUrl: string | undefined;
+  webhookMatchesConfig: boolean;
+}): Pick<InternalTelegramIntegrationDiagnostics, "status" | "operatorHint"> {
+  if (input.config.mode === "webhook" && !input.webhookMatchesConfig) {
+    return {
+      status: "webhook_mismatch",
+      operatorHint:
+        input.expectedUrl === undefined
+          ? "Public webhook base URL is not configured."
+          : "Telegram webhook URL does not match this channel configuration."
+    };
+  }
+
+  if (
+    input.config.mode === "polling" &&
+    isActiveTelegramWebhook(input.actualUrl)
+  ) {
+    return {
+      status: "webhook_mismatch",
+      operatorHint:
+        "Telegram has an active webhook while this channel uses polling. Delete the webhook before polling can receive updates."
+    };
+  }
+
+  return {
+    status: "configured"
+  };
+}
+
+function isActiveTelegramWebhook(value: string | undefined): boolean {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function telegramConnectorStatusFromDiagnostics(

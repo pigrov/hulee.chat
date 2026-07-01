@@ -499,6 +499,7 @@
   "admin.integrations.actionStatus.enabled": "Channel enabled",
   "admin.integrations.actionStatus.disabled": "Channel disabled",
   "admin.integrations.actionStatus.deleted": "Channel deleted",
+  "admin.integrations.actionStatus.diagnosticsQueued": "The check was queued for the provider worker. Wait a few seconds, then refresh the channel status.",
   "admin.integrations.actionStatus.invalid": "Channel action was not completed",
   "integrations.telegram.setupTitle": "Telegram setup",
   "integrations.telegram.setup.name": "Name",
