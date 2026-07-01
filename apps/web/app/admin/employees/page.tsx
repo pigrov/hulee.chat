@@ -9,7 +9,6 @@ import {
 } from "@hulee/db";
 
 import { AccessDeniedPage } from "../../../src/access-denied";
-import { DetailItem } from "../../../src/app-chrome";
 import {
   deactivateEmployeeAction,
   inviteEmployeeAction,
@@ -29,6 +28,7 @@ import {
 } from "../../../src/rbac-effective-access";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
 import { navigationAccessFromTenantAdminAccess } from "../../../src/tenant-admin-nav";
+import { buildActionStatusToast } from "../../../src/toast-messages";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -85,6 +85,27 @@ export default async function EmployeesAdminPage({
   const manualInviteUrl = inviteToken
     ? new URL(`/invite/${inviteToken}`, resolvePublicBaseUrl()).href
     : undefined;
+  const inviteStatusToast = resolvedSearchParams?.inviteStatus
+    ? buildActionStatusToast({
+        id: `employee-invite-status:${resolvedSearchParams.inviteStatus}`,
+        status: resolvedSearchParams.inviteStatus,
+        titleKey: "admin.employees.inviteStatus",
+        descriptionKey: inviteStatusKey(resolvedSearchParams.inviteStatus),
+        t
+      })
+    : undefined;
+  const actionStatusToast = resolvedSearchParams?.actionStatus
+    ? buildActionStatusToast({
+        id: `employee-action-status:${resolvedSearchParams.actionStatus}`,
+        status: resolvedSearchParams.actionStatus,
+        titleKey: "admin.employees.actionStatus",
+        descriptionKey: actionStatusKey(resolvedSearchParams.actionStatus),
+        t
+      })
+    : undefined;
+  const toasts = [inviteStatusToast, actionStatusToast].filter(
+    (toast) => toast !== undefined
+  );
 
   return (
     <TenantAdminShell
@@ -96,10 +117,6 @@ export default async function EmployeesAdminPage({
         <>
           {manualInviteUrl ? (
             <div className="detailGrid">
-              <DetailItem
-                label={t("admin.employees.inviteStatus")}
-                value={t(inviteStatusKey(resolvedSearchParams?.inviteStatus))}
-              />
               <label className="fieldStack">
                 <span className="detailLabel">
                   {t("admin.employees.manualInviteLink")}
@@ -113,19 +130,13 @@ export default async function EmployeesAdminPage({
               </label>
             </div>
           ) : null}
-
-          {resolvedSearchParams?.actionStatus ? (
-            <DetailItem
-              label={t("admin.employees.actionStatus")}
-              value={t(actionStatusKey(resolvedSearchParams.actionStatus))}
-            />
-          ) : null}
         </>
       }
       t={t}
       tenantDisplayName={model.tenant.displayName}
       title={t("admin.employees")}
       titleId="employees-title"
+      toasts={toasts}
     >
       <div className="adminStack">
         <section
@@ -167,9 +178,6 @@ export default async function EmployeesAdminPage({
                 autoComplete="name"
               />
             </label>
-            {resolvedSearchParams?.inviteStatus === "invalid" ? (
-              <p className="formError">{t("admin.employees.inviteInvalid")}</p>
-            ) : null}
             <button className="primaryButton" type="submit">
               <UserPlus size={18} aria-hidden="true" />
               {t("admin.employees.sendInvite")}

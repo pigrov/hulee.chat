@@ -56,6 +56,7 @@ import {
 import { TelegramIntegrationPanel } from "../../../src/telegram-integration-panel";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
 import { navigationAccessFromTenantAdminAccess } from "../../../src/tenant-admin-nav";
+import { buildActionStatusToast } from "../../../src/toast-messages";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -117,6 +118,17 @@ export default async function IntegrationsAdminPage({
       loadEgressStatus(internalApiAccess)
     ]);
   const { t, locale } = createTranslator(model.tenant.locale);
+  const channelStatusToast = resolvedSearchParams?.channelStatus
+    ? buildActionStatusToast({
+        id: `channel-status:${resolvedSearchParams.channelStatus}`,
+        status: resolvedSearchParams.channelStatus,
+        titleKey: "admin.integrations.actionStatus",
+        descriptionKey: channelActionStatusKey(
+          resolvedSearchParams.channelStatus
+        ),
+        t
+      })
+    : undefined;
   const selectedConnector = selectChannelConnector({
     connectors: channelConnectors.connectors,
     requestedConnectorId
@@ -172,20 +184,11 @@ export default async function IntegrationsAdminPage({
       brand={model.tenant.brand}
       current="integrations"
       effectiveAccess={accessSnapshot}
-      sidebarContent={
-        resolvedSearchParams?.channelStatus ? (
-          <DetailItem
-            label={t("admin.integrations.actionStatus")}
-            value={t(
-              channelActionStatusKey(resolvedSearchParams.channelStatus)
-            )}
-          />
-        ) : null
-      }
       t={t}
       tenantDisplayName={model.tenant.displayName}
       title={t("admin.integrations")}
       titleId="admin-title"
+      toasts={channelStatusToast ? [channelStatusToast] : []}
     >
       <div className="adminIntegrationGrid">
         <aside

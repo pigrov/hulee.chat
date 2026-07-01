@@ -11,6 +11,8 @@ import {
   buildBrandMarkLabel
 } from "../../src/brand-style";
 import { resolveCurrentWebAccessSession } from "../../src/session";
+import { ToastViewport } from "../../src/toast";
+import { buildToast } from "../../src/toast-messages";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -36,12 +38,27 @@ export default async function LoginPage({
   const hasInvalidCredentialsError = resolvedSearchParams?.error === "invalid";
   const hasPasswordResetNotice = resolvedSearchParams?.reset === "complete";
   const { t } = createTranslator("ru");
+  const toasts = hasPasswordResetNotice
+    ? [
+        buildToast({
+          id: "password-reset-complete",
+          variant: "success",
+          title: t("auth.resetPassword.title"),
+          description: t("auth.login.passwordResetComplete")
+        })
+      ]
+    : [];
 
   return (
     <main
       className="loginPage"
       style={brandProfileToCssProperties(defaultBrandProfile)}
     >
+      <ToastViewport
+        closeLabel={t("notifications.close")}
+        regionLabel={t("notifications.region")}
+        toasts={toasts}
+      />
       <section className="loginPanel" aria-labelledby="login-title">
         <div className="brandMark" aria-label={defaultBrandProfile.productName}>
           {buildBrandMarkLabel(defaultBrandProfile)}
@@ -76,11 +93,6 @@ export default async function LoginPage({
           </label>
           {hasInvalidCredentialsError ? (
             <p className="formError">{t("auth.login.invalidCredentials")}</p>
-          ) : null}
-          {hasPasswordResetNotice ? (
-            <p className="formNotice">
-              {t("auth.login.passwordResetComplete")}
-            </p>
           ) : null}
           <button className="primaryButton" type="submit">
             <LogIn size={18} aria-hidden="true" />

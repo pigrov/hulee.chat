@@ -39,7 +39,6 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AccessDeniedPage } from "../../../src/access-denied";
-import { DetailItem } from "../../../src/app-chrome";
 import { loadTenantAdminViewModel } from "../../../src/admin-view-model";
 import {
   archiveCustomTenantRoleAction,
@@ -74,6 +73,7 @@ import {
 } from "../../../src/rbac-effective-access";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
 import { navigationAccessFromTenantAdminAccess } from "../../../src/tenant-admin-nav";
+import { buildActionStatusToast } from "../../../src/toast-messages";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -184,6 +184,17 @@ export default async function RolesAdminPage({
     searchParams
   ]);
   const { t, locale } = createTranslator(model.tenant.locale);
+  const roleStatusToast = resolvedSearchParams?.roleActionStatus
+    ? buildActionStatusToast({
+        id: `role-status:${resolvedSearchParams.roleActionStatus}`,
+        status: resolvedSearchParams.roleActionStatus,
+        titleKey: "admin.roles.actionStatus",
+        descriptionKey: roleActionStatusKey(
+          resolvedSearchParams.roleActionStatus
+        ),
+        t
+      })
+    : undefined;
   const activeRoles = roles.filter((role) => role.status === "active");
   const activeEmployees = employees.filter(
     (employee) => employee.deactivatedAt === null
@@ -250,20 +261,11 @@ export default async function RolesAdminPage({
       brand={model.tenant.brand}
       current="roles"
       effectiveAccess={accessSnapshot}
-      sidebarContent={
-        resolvedSearchParams?.roleActionStatus ? (
-          <DetailItem
-            label={t("admin.roles.actionStatus")}
-            value={t(
-              roleActionStatusKey(resolvedSearchParams.roleActionStatus)
-            )}
-          />
-        ) : null
-      }
       t={t}
       tenantDisplayName={model.tenant.displayName}
       title={t("admin.roles")}
       titleId="roles-title"
+      toasts={roleStatusToast ? [roleStatusToast] : []}
     >
       <div className="adminStack">
         <section className="settingsPanel" aria-labelledby="role-create-title">

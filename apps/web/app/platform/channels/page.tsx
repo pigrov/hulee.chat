@@ -34,6 +34,7 @@ import {
   getWebDatabase,
   resolveCurrentWebAccessSession
 } from "../../../src/session";
+import { buildActionStatusToast } from "../../../src/toast-messages";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -78,6 +79,18 @@ export default async function PlatformChannelsPage({
     repository: createSqlDeploymentChannelCatalogOverrideRepository(database)
   });
   const resolvedSearchParams = await searchParams;
+  const channelCatalogToast = resolvedSearchParams?.channelCatalog
+    ? buildActionStatusToast({
+        id: `channel-catalog:${resolvedSearchParams.channelCatalog}`,
+        status: resolvedSearchParams.channelCatalog,
+        titleKey: "platform.channels.title",
+        descriptionKey:
+          resolvedSearchParams.channelCatalog === "updated"
+            ? "platform.channels.status.updated"
+            : "platform.channels.status.invalid",
+        t
+      })
+    : undefined;
 
   return (
     <AppFrame
@@ -86,6 +99,7 @@ export default async function PlatformChannelsPage({
       frameClassName="adminFrame"
       navigationAccess={navigationAccessFromSession(access)}
       t={t}
+      toasts={channelCatalogToast ? [channelCatalogToast] : []}
     >
       <section
         className="adminWorkspace"
@@ -105,20 +119,6 @@ export default async function PlatformChannelsPage({
         </header>
 
         <div className="adminContent">
-          {resolvedSearchParams?.channelCatalog ? (
-            <p
-              className={
-                resolvedSearchParams.channelCatalog === "updated"
-                  ? "formNotice"
-                  : "formError"
-              }
-            >
-              {resolvedSearchParams.channelCatalog === "updated"
-                ? t("platform.channels.status.updated")
-                : t("platform.channels.status.invalid")}
-            </p>
-          ) : null}
-
           <section
             className="settingsPanel"
             aria-labelledby="platform-channel-catalog-title"

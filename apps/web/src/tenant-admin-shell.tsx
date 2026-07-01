@@ -25,6 +25,7 @@ import {
   type TenantAdminSectionId
 } from "./tenant-admin-nav";
 import type { WebEffectiveAccessSnapshot } from "./rbac-effective-access";
+import type { ToastMessage } from "./toast";
 
 type Translator = ReturnType<typeof createTranslator>["t"];
 
@@ -44,7 +45,8 @@ export function TenantAdminShell({
   t,
   tenantDisplayName,
   title,
-  titleId
+  titleId,
+  toasts
 }: {
   access: WebAccessSession;
   brand: BrandProfileView;
@@ -56,6 +58,7 @@ export function TenantAdminShell({
   tenantDisplayName: string;
   title: string;
   titleId: string;
+  toasts?: readonly ToastMessage[];
 }): ReactNode {
   const adminAccess = {
     session: access,
@@ -77,6 +80,7 @@ export function TenantAdminShell({
       frameClassName="adminFrame"
       navigationAccess={navigationAccessFromTenantAdminAccess(adminAccess)}
       t={t}
+      toasts={toasts}
     >
       <section className="adminWorkspace" aria-labelledby={titleId}>
         <header className="adminHeader">

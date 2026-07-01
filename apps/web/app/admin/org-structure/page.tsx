@@ -22,7 +22,6 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AccessDeniedPage } from "../../../src/access-denied";
-import { DetailItem } from "../../../src/app-chrome";
 import { loadTenantAdminViewModel } from "../../../src/admin-view-model";
 import {
   isOrgStructureSectionId,
@@ -48,6 +47,7 @@ import {
 } from "../../../src/rbac-effective-access";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
 import { navigationAccessFromTenantAdminAccess } from "../../../src/tenant-admin-nav";
+import { buildActionStatusToast } from "../../../src/toast-messages";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -120,6 +120,17 @@ export default async function OrgStructureAdminPage({
   const selectedSection = resolveOrgStructureSection(
     resolvedSearchParams?.section
   );
+  const orgStructureStatusToast = resolvedSearchParams?.orgStructureStatus
+    ? buildActionStatusToast({
+        id: `org-structure-status:${resolvedSearchParams.orgStructureStatus}`,
+        status: resolvedSearchParams.orgStructureStatus,
+        titleKey: "admin.orgStructure.actionStatus",
+        descriptionKey: orgStructureActionStatusKey(
+          resolvedSearchParams.orgStructureStatus
+        ),
+        t
+      })
+    : undefined;
   const sections: readonly OrgStructureSection[] = [
     {
       id: "org_units",
@@ -153,22 +164,11 @@ export default async function OrgStructureAdminPage({
       brand={model.tenant.brand}
       current="orgStructure"
       effectiveAccess={accessSnapshot}
-      sidebarContent={
-        resolvedSearchParams?.orgStructureStatus ? (
-          <DetailItem
-            label={t("admin.orgStructure.actionStatus")}
-            value={t(
-              orgStructureActionStatusKey(
-                resolvedSearchParams.orgStructureStatus
-              )
-            )}
-          />
-        ) : null
-      }
       t={t}
       tenantDisplayName={model.tenant.displayName}
       title={t("admin.orgStructure")}
       titleId="org-structure-title"
+      toasts={orgStructureStatusToast ? [orgStructureStatusToast] : []}
     >
       <div className="adminStack">
         <OrgStructureSectionNavigation

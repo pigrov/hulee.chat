@@ -1749,6 +1749,161 @@ button.managementRow:focus-visible {
   object-fit: contain;
 }
 
+.toastViewport {
+  position: fixed;
+  z-index: 50;
+  top: 16px;
+  right: 16px;
+  display: grid;
+  width: min(420px, calc(100vw - 32px));
+  gap: 8px;
+  pointer-events: none;
+}
+
+.toastCard {
+  --toast-accent: var(--hulee-color-brand-primary);
+  position: relative;
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  overflow: hidden;
+  padding: 14px 14px 18px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-default);
+  box-shadow: 0 14px 40px
+    color-mix(in srgb, var(--hulee-color-text-default) 14%, transparent);
+  color: var(--hulee-color-text-default);
+  pointer-events: auto;
+  animation: toastEnter 180ms ease-out;
+}
+
+.toastCard[data-variant="success"] {
+  --toast-accent: var(--hulee-color-success);
+}
+
+.toastCard[data-variant="warning"] {
+  --toast-accent: var(--hulee-color-accent);
+}
+
+.toastCard[data-variant="error"] {
+  --toast-accent: var(--hulee-color-danger);
+}
+
+.toastCard[data-variant="info"] {
+  --toast-accent: var(--hulee-color-brand-primary);
+}
+
+.toastCard[data-state="closing"] {
+  animation: toastExit 220ms ease-in forwards;
+}
+
+.toastIcon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 999px;
+  background: color-mix(
+    in srgb,
+    var(--toast-accent) 16%,
+    var(--hulee-color-surface-muted)
+  );
+  color: var(--toast-accent);
+}
+
+.toastText {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.toastTitle {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.toastDescription {
+  margin: 0;
+  color: var(--hulee-color-text-muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.toastCloseButton {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--hulee-radius-control);
+  background: transparent;
+  color: var(--hulee-color-text-muted);
+  cursor: pointer;
+}
+
+.toastCloseButton:hover,
+.toastCloseButton:focus-visible {
+  border-color: var(--hulee-color-border);
+  color: var(--hulee-color-text-default);
+  outline: none;
+  box-shadow: var(--hulee-shadow-focus);
+}
+
+.toastProgress {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 4px;
+  background: var(--toast-accent);
+  transform-origin: left center;
+  animation-name: toastProgress;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+.toastCard:hover .toastProgress,
+.toastCard:focus-within .toastProgress {
+  animation-play-state: paused;
+}
+
+@keyframes toastEnter {
+  from {
+    opacity: 0;
+    transform: translateX(28px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes toastExit {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateX(calc(100% + 24px));
+  }
+}
+
+@keyframes toastProgress {
+  from {
+    transform: scaleX(1);
+  }
+
+  to {
+    transform: scaleX(0);
+  }
+}
+
 .metricValue {
   margin: 3px 0 0;
   overflow-wrap: anywhere;

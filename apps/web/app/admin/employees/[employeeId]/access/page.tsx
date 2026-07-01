@@ -73,6 +73,7 @@ import {
 } from "../../../../../src/rbac-effective-access";
 import { TenantAdminShell } from "../../../../../src/tenant-admin-shell";
 import { navigationAccessFromTenantAdminAccess } from "../../../../../src/tenant-admin-nav";
+import { buildActionStatusToast } from "../../../../../src/toast-messages";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -266,6 +267,15 @@ export default async function EmployeeAccessAdminPage({
   });
   const isDeactivated = employee.deactivatedAt !== null;
   const selectedSection = resolveEmployeeAccessSection(resolvedSearch?.section);
+  const roleStatusToast = resolvedSearch?.roleActionStatus
+    ? buildActionStatusToast({
+        id: `employee-access-status:${resolvedSearch.roleActionStatus}`,
+        status: resolvedSearch.roleActionStatus,
+        titleKey: "admin.roles.actionStatus",
+        descriptionKey: roleActionStatusKey(resolvedSearch.roleActionStatus),
+        t
+      })
+    : undefined;
   const membershipCount =
     employee.orgUnitIds.length +
     employee.teamIds.length +
@@ -319,18 +329,11 @@ export default async function EmployeeAccessAdminPage({
       brand={model.tenant.brand}
       current="employees"
       effectiveAccess={accessSnapshot}
-      sidebarContent={
-        resolvedSearch?.roleActionStatus ? (
-          <DetailItem
-            label={t("admin.roles.actionStatus")}
-            value={t(roleActionStatusKey(resolvedSearch.roleActionStatus))}
-          />
-        ) : null
-      }
       t={t}
       tenantDisplayName={model.tenant.displayName}
       title={t("admin.employeeAccess")}
       titleId="employee-access-title"
+      toasts={roleStatusToast ? [roleStatusToast] : []}
     >
       <div className="adminStack">
         <section

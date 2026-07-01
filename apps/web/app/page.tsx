@@ -65,6 +65,8 @@ import {
   type InboxMessage
 } from "../src/inbox-api-client";
 import { navigationAccessFromTenantAdminAccess } from "../src/tenant-admin-nav";
+import { buildToast } from "../src/toast-messages";
+import type { ToastMessage } from "../src/toast";
 import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
@@ -184,6 +186,48 @@ export default async function InboxPage({
   const replyActionStatus = resolveReplyActionStatus(
     resolvedSearchParams?.replyStatus
   );
+  const toasts: ToastMessage[] = [];
+
+  if (emailVerificationNotice) {
+    toasts.push(
+      buildToast({
+        id: `email-verification:${emailVerificationNotice}`,
+        variant:
+          emailVerificationNotice === "sent"
+            ? "success"
+            : emailVerificationNotice === "not_configured"
+              ? "warning"
+              : "error",
+        title: t("auth.emailVerification.eyebrow"),
+        description: t(
+          `auth.emailVerification.status.${emailVerificationNotice}` as I18nMessageKey
+        )
+      })
+    );
+  }
+
+  if (routingActionStatus) {
+    toasts.push(
+      buildToast({
+        id: `routing-status:${routingActionStatus}`,
+        variant: routingActionStatus === "saved" ? "success" : "error",
+        title: t("inbox.routing.title"),
+        description: t(routingActionStatusKey(routingActionStatus))
+      })
+    );
+  }
+
+  if (replyActionStatus) {
+    toasts.push(
+      buildToast({
+        id: `reply-status:${replyActionStatus}`,
+        variant: replyActionStatus === "sent" ? "success" : "error",
+        title: t("inbox.reply.title"),
+        description: t(replyActionStatusKey(replyActionStatus))
+      })
+    );
+  }
+
   const isTenantWriteBlocked = isTenantEmailVerificationRequired(access);
   const shouldShowEmailVerificationBanner =
     emailVerificationNotice === undefined && isTenantWriteBlocked;
@@ -230,6 +274,7 @@ export default async function InboxPage({
         effectiveAccess: accessSnapshot
       })}
       t={t}
+      toasts={toasts}
     >
       <section className="queuePane" aria-labelledby="inbox-title">
         <div className="paneHeader">
@@ -240,19 +285,6 @@ export default async function InboxPage({
                 {t("inbox.title")}
               </h1>
               <p className="metaText">{model.tenant.displayName}</p>
-              {emailVerificationNotice ? (
-                <p
-                  className={
-                    emailVerificationNotice === "sent"
-                      ? "formNotice"
-                      : "formError"
-                  }
-                >
-                  {t(
-                    `auth.emailVerification.status.${emailVerificationNotice}`
-                  )}
-                </p>
-              ) : null}
               {shouldShowEmailVerificationBanner ? (
                 <form
                   className="inlineNoticeForm"
@@ -270,24 +302,6 @@ export default async function InboxPage({
                     {t("auth.emailVerification.resend")}
                   </button>
                 </form>
-              ) : null}
-              {routingActionStatus ? (
-                <p
-                  className={
-                    routingActionStatus === "saved" ? "formNotice" : "formError"
-                  }
-                >
-                  {t(routingActionStatusKey(routingActionStatus))}
-                </p>
-              ) : null}
-              {replyActionStatus ? (
-                <p
-                  className={
-                    replyActionStatus === "sent" ? "formNotice" : "formError"
-                  }
-                >
-                  {t(replyActionStatusKey(replyActionStatus))}
-                </p>
               ) : null}
             </div>
             <Link

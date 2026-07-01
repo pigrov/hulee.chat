@@ -17,7 +17,7 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AccessDeniedPage } from "../../../src/access-denied";
-import { DetailItem, SlotMount } from "../../../src/app-chrome";
+import { SlotMount } from "../../../src/app-chrome";
 import {
   applyBrandPresetAction,
   updateTenantBrandAction
@@ -37,6 +37,7 @@ import {
 } from "../../../src/rbac-effective-access";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
 import { navigationAccessFromTenantAdminAccess } from "../../../src/tenant-admin-nav";
+import { buildActionStatusToast } from "../../../src/toast-messages";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -101,6 +102,16 @@ export default async function BrandingAdminPage({
     themeTokens: currentTokens
   };
   const statusKey = brandStatusKey(resolvedSearchParams?.brandStatus);
+  const brandStatusToast =
+    resolvedSearchParams?.brandStatus && statusKey
+      ? buildActionStatusToast({
+          id: `brand-status:${resolvedSearchParams.brandStatus}`,
+          status: resolvedSearchParams.brandStatus,
+          titleKey: "admin.branding.status",
+          descriptionKey: statusKey,
+          t
+        })
+      : undefined;
 
   return (
     <TenantAdminShell
@@ -108,22 +119,12 @@ export default async function BrandingAdminPage({
       brand={model.tenant.brand}
       current="branding"
       effectiveAccess={accessSnapshot}
-      sidebarContent={
-        <>
-          {statusKey ? (
-            <DetailItem
-              label={t("admin.branding.status")}
-              value={t(statusKey)}
-            />
-          ) : null}
-
-          <SlotMount slot="tenant.settings.section" />
-        </>
-      }
+      sidebarContent={<SlotMount slot="tenant.settings.section" />}
       t={t}
       tenantDisplayName={model.tenant.displayName}
       title={t("admin.branding")}
       titleId="branding-title"
+      toasts={brandStatusToast ? [brandStatusToast] : []}
     >
       <div className="adminStack">
         <section className="settingsPanel" aria-labelledby="brand-preset-title">
@@ -249,9 +250,6 @@ export default async function BrandingAdminPage({
                 />
               </label>
             </div>
-            {resolvedSearchParams?.brandStatus === "invalid" ? (
-              <p className="formError">{t("admin.branding.invalid")}</p>
-            ) : null}
             <button className="primaryButton" type="submit">
               <Save size={18} aria-hidden="true" />
               {t("common.save")}

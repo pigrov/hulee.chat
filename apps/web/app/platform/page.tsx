@@ -59,6 +59,7 @@ import {
   type PlatformEgressProviderPolicyView
 } from "../../src/platform-egress-policies";
 import { loadPlatformEgressStatus } from "../../src/platform-egress-status";
+import { buildActionStatusToast } from "../../src/toast-messages";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -109,6 +110,33 @@ export default async function PlatformAdminPage({
   });
   const resolvedSearchParams = await searchParams;
   const overallEgressStatus = resolveOverallEgressStatus(egressStatus.profiles);
+  const egressPolicyToast = resolvedSearchParams?.egressPolicy
+    ? buildActionStatusToast({
+        id: `egress-policy:${resolvedSearchParams.egressPolicy}`,
+        status: resolvedSearchParams.egressPolicy,
+        titleKey: "platform.egressProviderRouting",
+        descriptionKey:
+          resolvedSearchParams.egressPolicy === "updated"
+            ? "platform.egressPolicyStatus.updated"
+            : "platform.egressPolicyStatus.invalid",
+        t
+      })
+    : undefined;
+  const channelPolicyToast = resolvedSearchParams?.channelPolicy
+    ? buildActionStatusToast({
+        id: `channel-policy:${resolvedSearchParams.channelPolicy}`,
+        status: resolvedSearchParams.channelPolicy,
+        titleKey: "platform.channelProviderBehavior",
+        descriptionKey:
+          resolvedSearchParams.channelPolicy === "updated"
+            ? "platform.channelPolicyStatus.updated"
+            : "platform.channelPolicyStatus.invalid",
+        t
+      })
+    : undefined;
+  const toasts = [egressPolicyToast, channelPolicyToast].filter(
+    (toast) => toast !== undefined
+  );
 
   return (
     <AppFrame
@@ -117,6 +145,7 @@ export default async function PlatformAdminPage({
       frameClassName="adminFrame"
       navigationAccess={navigationAccessFromSession(access)}
       t={t}
+      toasts={toasts}
     >
       <section className="adminWorkspace" aria-labelledby="platform-title">
         <header className="adminHeader">
@@ -133,33 +162,6 @@ export default async function PlatformAdminPage({
         </header>
 
         <div className="adminContent">
-          {resolvedSearchParams?.egressPolicy ? (
-            <p
-              className={
-                resolvedSearchParams.egressPolicy === "updated"
-                  ? "formNotice"
-                  : "formError"
-              }
-            >
-              {resolvedSearchParams.egressPolicy === "updated"
-                ? t("platform.egressPolicyStatus.updated")
-                : t("platform.egressPolicyStatus.invalid")}
-            </p>
-          ) : null}
-          {resolvedSearchParams?.channelPolicy ? (
-            <p
-              className={
-                resolvedSearchParams.channelPolicy === "updated"
-                  ? "formNotice"
-                  : "formError"
-              }
-            >
-              {resolvedSearchParams.channelPolicy === "updated"
-                ? t("platform.channelPolicyStatus.updated")
-                : t("platform.channelPolicyStatus.invalid")}
-            </p>
-          ) : null}
-
           <section
             className="platformMetricGrid"
             aria-label={t("platform.overview")}

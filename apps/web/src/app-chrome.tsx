@@ -9,6 +9,7 @@ import {
   brandProfileToCssProperties
 } from "./brand-style";
 import { logoutAction } from "./auth-actions";
+import { ToastViewport, type ToastMessage } from "./toast";
 
 const emptySlotRegistry = createSlotRegistry([]);
 
@@ -33,7 +34,8 @@ export function AppFrame({
   current,
   frameClassName,
   navigationAccess,
-  t
+  t,
+  toasts
 }: {
   brand: BrandProfileView;
   children: ReactNode;
@@ -41,6 +43,7 @@ export function AppFrame({
   frameClassName?: string;
   navigationAccess?: NavigationAccess;
   t: Translator;
+  toasts?: readonly ToastMessage[];
 }): ReactNode {
   const productName = t("app.name", {
     productName: brand.productName
@@ -91,6 +94,11 @@ export function AppFrame({
           </button>
         </form>
       </nav>
+      <ToastViewport
+        closeLabel={t("notifications.close")}
+        regionLabel={t("notifications.region")}
+        toasts={toasts}
+      />
       {children}
     </main>
   );
