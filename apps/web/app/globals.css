@@ -1190,14 +1190,16 @@ a.secondaryButton {
 
 .adminGrid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: 240px minmax(0, 1fr);
   gap: 12px;
   align-items: start;
 }
 
 .adminNavPanel {
-  gap: var(--hulee-space-block);
-  padding: var(--hulee-space-block);
+  position: sticky;
+  top: 12px;
+  gap: 12px;
+  padding: 12px;
 }
 
 .adminStack {
@@ -2002,8 +2004,8 @@ button.managementRow:focus-visible {
 }
 
 .adminNavLink {
-  padding: 0;
-  border: 0;
+  padding: 10px 12px;
+  border-color: transparent;
   background: transparent;
 }
 
@@ -2013,6 +2015,11 @@ button.managementRow:focus-visible {
     in srgb,
     var(--hulee-color-brand-primary) 42%,
     var(--hulee-color-border)
+  );
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 12%,
+    var(--hulee-color-surface-raised)
   );
 }
 
@@ -2024,14 +2031,14 @@ button.managementRow:focus-visible {
 
 .platformAdminGrid {
   display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
-  gap: var(--hulee-space-block);
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 12px;
   align-items: start;
 }
 
 .platformNavPanel {
   position: sticky;
-  top: 20px;
+  top: 12px;
 }
 
 .platformNavGroups,

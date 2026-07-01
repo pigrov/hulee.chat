@@ -10,6 +10,7 @@ import {
   Settings,
   ShieldCheck
 } from "lucide-react";
+import Link from "next/link";
 import type { ReactNode } from "react";
 
 import type { WebAccessSession } from "./access";
@@ -68,7 +69,6 @@ export function PlatformAdminShell({
 }): ReactNode {
   const navigationAccess = navigationAccessFromSession(access);
   const menuGroups = buildPlatformMenuGroups({
-    current,
     navigationAccess,
     t
   });
@@ -95,7 +95,16 @@ export function PlatformAdminShell({
         />
 
         <div className="adminContent">
-          <div className="adminStack">{children}</div>
+          <div className="platformAdminGrid">
+            <aside
+              className="settingsPanel platformNavPanel"
+              aria-label={t("platform.navigation")}
+            >
+              <PlatformNavigation current={current} t={t} />
+            </aside>
+
+            <div className="adminStack">{children}</div>
+          </div>
         </div>
       </section>
     </AppFrame>
@@ -103,11 +112,9 @@ export function PlatformAdminShell({
 }
 
 function buildPlatformMenuGroups({
-  current,
   navigationAccess,
   t
 }: {
-  current: PlatformAdminSectionId;
   navigationAccess: {
     readonly tenantAdmin: boolean;
     readonly platformAdmin: boolean;
@@ -134,17 +141,61 @@ function buildPlatformMenuGroups({
     {
       title: t("navigation.primary"),
       items: primaryItems
-    },
-    ...platformNavigationGroups.map((group) => ({
-      title: t(group.titleKey),
-      items: group.sections.map((sectionId) => ({
-        href: platformSectionHref(sectionId),
-        icon: <PlatformSectionIcon sectionId={sectionId} />,
-        title: t(platformSectionTitleKey(sectionId)),
-        current: current === sectionId
-      }))
-    }))
+    }
   ];
+}
+
+function PlatformNavigation({
+  current,
+  t
+}: {
+  current: PlatformAdminSectionId;
+  t: Translator;
+}): ReactNode {
+  return (
+    <nav className="platformNavGroups" aria-label={t("platform.navigation")}>
+      {platformNavigationGroups.map((group) => (
+        <div className="platformNavGroup" key={group.titleKey}>
+          <p className="detailLabel">{t(group.titleKey)}</p>
+          <div className="managementList">
+            {group.sections.map((sectionId) => (
+              <PlatformNavLink
+                current={current === sectionId}
+                key={sectionId}
+                sectionId={sectionId}
+                t={t}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
+    </nav>
+  );
+}
+
+function PlatformNavLink({
+  current,
+  sectionId,
+  t
+}: {
+  current: boolean;
+  sectionId: PlatformAdminSectionId;
+  t: Translator;
+}): ReactNode {
+  return (
+    <Link
+      className="managementRow adminNavLink platformNavLink"
+      href={platformSectionHref(sectionId)}
+      aria-current={current ? "page" : undefined}
+    >
+      <span className="metricIcon">
+        <PlatformSectionIcon sectionId={sectionId} />
+      </span>
+      <span className="listItemTitle">
+        {t(platformSectionTitleKey(sectionId))}
+      </span>
+    </Link>
+  );
 }
 
 function PlatformSectionIcon({

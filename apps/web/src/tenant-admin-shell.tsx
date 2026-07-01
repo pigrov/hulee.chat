@@ -7,10 +7,10 @@ import {
   Palette,
   Plug,
   ScrollText,
-  ShieldCheck,
   Settings,
   Users
 } from "lucide-react";
+import Link from "next/link";
 import type { ReactNode } from "react";
 
 import {
@@ -83,7 +83,6 @@ export function TenantAdminShell({
   const menuGroups = buildTenantAdminMenuGroups({
     current,
     navigationAccess,
-    sections: visibleSections,
     t
   });
 
@@ -109,27 +108,46 @@ export function TenantAdminShell({
         />
 
         <div className="adminContent">
-          {shouldRequireEmailVerification ? (
-            <form
-              className="settingsPanel inlineNoticeForm adminNoticePanel"
-              action={resendEmailVerificationAction}
+          <div className="adminGrid">
+            <aside
+              className="settingsPanel adminNavPanel"
+              aria-label={t("admin.navigation")}
             >
-              <input name="returnTo" type="hidden" value={currentPath} />
-              <p className="formNotice">
-                {t("auth.emailVerification.status.required")}
-              </p>
-              <button className="secondaryButton" type="submit">
-                {t("auth.emailVerification.resend")}
-              </button>
-            </form>
-          ) : null}
-          {sidebarContent ? (
-            <aside className="settingsPanel adminAuxPanel">
+              <nav
+                className="managementList"
+                aria-label={t("admin.navigation")}
+              >
+                {visibleSections.map((section) => (
+                  <TenantAdminNavLink
+                    current={current === section.id}
+                    key={section.id}
+                    section={section}
+                    t={t}
+                  />
+                ))}
+              </nav>
+
+              {shouldRequireEmailVerification ? (
+                <form
+                  className="inlineNoticeForm"
+                  action={resendEmailVerificationAction}
+                >
+                  <input name="returnTo" type="hidden" value={currentPath} />
+                  <p className="formNotice">
+                    {t("auth.emailVerification.status.required")}
+                  </p>
+                  <button className="secondaryButton" type="submit">
+                    {t("auth.emailVerification.resend")}
+                  </button>
+                </form>
+              ) : null}
+
               {sidebarContent}
+              <SlotMount slot="admin.section" />
             </aside>
-          ) : null}
-          <SlotMount slot="admin.section" />
-          {children}
+
+            {children}
+          </div>
         </div>
       </section>
     </AppFrame>
@@ -139,7 +157,6 @@ export function TenantAdminShell({
 function buildTenantAdminMenuGroups({
   current,
   navigationAccess,
-  sections,
   t
 }: {
   current: TenantAdminSectionId;
@@ -147,7 +164,6 @@ function buildTenantAdminMenuGroups({
     readonly tenantAdmin: boolean;
     readonly platformAdmin: boolean;
   };
-  sections: readonly TenantAdminSection[];
   t: Translator;
 }): readonly AdminTopBarMenuGroup[] {
   const primaryItems: AdminTopBarMenuItem[] = [
@@ -167,29 +183,35 @@ function buildTenantAdminMenuGroups({
     });
   }
 
-  if (navigationAccess.platformAdmin) {
-    primaryItems.push({
-      href: "/platform",
-      icon: <ShieldCheck size={16} aria-hidden="true" />,
-      title: t("navigation.platformAdmin")
-    });
-  }
-
   return [
     {
       title: t("navigation.primary"),
       items: primaryItems
-    },
-    {
-      title: t("admin.sections"),
-      items: sections.map((section) => ({
-        href: section.href,
-        icon: <TenantAdminSectionIcon sectionId={section.id} />,
-        title: t(section.titleKey),
-        current: current === section.id
-      }))
     }
   ];
+}
+
+function TenantAdminNavLink({
+  current,
+  section,
+  t
+}: {
+  current: boolean;
+  section: TenantAdminSection;
+  t: Translator;
+}): ReactNode {
+  return (
+    <Link
+      className="managementRow adminNavLink"
+      href={section.href}
+      aria-current={current ? "page" : undefined}
+    >
+      <span className="metricIcon">
+        <TenantAdminSectionIcon sectionId={section.id} />
+      </span>
+      <span className="listItemTitle">{t(section.titleKey)}</span>
+    </Link>
+  );
 }
 
 function TenantAdminSectionIcon({

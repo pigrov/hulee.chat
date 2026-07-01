@@ -1,5 +1,5 @@
 import type { createTranslator } from "@hulee/i18n";
-import { ChevronDown, CircleHelp, LogOut, Menu } from "lucide-react";
+import { ChevronDown, CircleHelp, LogOut, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 
@@ -76,7 +76,7 @@ export function AdminTopBar({
 
         <details className="topNavMenu">
           <summary className="topNavTrigger" aria-label={t("navigation.menu")}>
-            <Menu size={17} aria-hidden="true" />
+            <ShieldCheck size={17} aria-hidden="true" />
             <span>{roleLabel}</span>
             <ChevronDown size={15} aria-hidden="true" />
           </summary>
