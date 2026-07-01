@@ -11,17 +11,23 @@ describe("markdown content", () => {
           "",
           "Use **BotFather** to create a bot.",
           "",
+          "## Setup",
+          "",
           "- inbound messages",
           "- outbound messages",
           "",
+          "---",
+          "",
           "1. Create bot",
-          "2. Paste token"
+          "2. Paste token",
+          "",
+          "###### Fine print"
         ].join("\n")
       )
     ).toEqual([
       {
         kind: "heading",
-        level: 2,
+        level: 1,
         text: "Telegram Bot"
       },
       {
@@ -29,14 +35,27 @@ describe("markdown content", () => {
         text: "Use **BotFather** to create a bot."
       },
       {
+        kind: "heading",
+        level: 2,
+        text: "Setup"
+      },
+      {
         kind: "list",
         ordered: false,
         items: ["inbound messages", "outbound messages"]
       },
       {
+        kind: "divider"
+      },
+      {
         kind: "list",
         ordered: true,
         items: ["Create bot", "Paste token"]
+      },
+      {
+        kind: "heading",
+        level: 6,
+        text: "Fine print"
       }
     ]);
   });

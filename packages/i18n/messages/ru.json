@@ -779,7 +779,7 @@
   "platform.channels.shortDescriptionHelp": "Короткий текст для списков каналов и компактных блоков UI.",
   "platform.channels.descriptionRu": "Подробное Markdown-описание на русском",
   "platform.channels.descriptionEn": "Подробное Markdown-описание на английском",
-  "platform.channels.descriptionMarkdownHelp": "Поддерживается Markdown: заголовки, списки, ссылки, **жирный**, _курсив_ и `код`.",
+  "platform.channels.descriptionMarkdownHelp": "Поддерживается Markdown: уровни заголовков, разделители (---), списки, ссылки, **жирный**, _курсив_ и `код`.",
   "platform.channels.sortOrder": "Порядок",
   "platform.channels.visibility": "Видимость",
   "platform.channels.visibility.visible": "Показывать",

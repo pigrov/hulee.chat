@@ -779,7 +779,7 @@
   "platform.channels.shortDescriptionHelp": "Short text for channel lists and compact UI surfaces.",
   "platform.channels.descriptionRu": "Russian Markdown description",
   "platform.channels.descriptionEn": "English Markdown description",
-  "platform.channels.descriptionMarkdownHelp": "Markdown is supported: headings, lists, links, **bold**, _italic_ and `code`.",
+  "platform.channels.descriptionMarkdownHelp": "Markdown is supported: heading levels, dividers (---), lists, links, **bold**, _italic_ and `code`.",
   "platform.channels.sortOrder": "Order",
   "platform.channels.visibility": "Visibility",
   "platform.channels.visibility.visible": "Visible",

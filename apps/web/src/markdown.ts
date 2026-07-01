@@ -1,9 +1,11 @@
 import { createElement, type ReactNode } from "react";
 
+type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
+
 type MarkdownBlock =
   | {
       kind: "heading";
-      level: 2 | 3 | 4;
+      level: HeadingLevel;
       text: string;
     }
   | {
@@ -14,6 +16,9 @@ type MarkdownBlock =
       kind: "list";
       ordered: boolean;
       items: string[];
+    }
+  | {
+      kind: "divider";
     };
 
 export function MarkdownContent({ value }: { value: string }): ReactNode {
@@ -61,16 +66,23 @@ export function parseMarkdownBlocks(value: string): MarkdownBlock[] {
       continue;
     }
 
-    const heading = /^(#{1,4})\s+(.+)$/.exec(line);
+    const heading = /^(#{1,6})\s+(.+)$/.exec(line);
 
     if (heading) {
       flushParagraph();
       flushList();
       blocks.push({
         kind: "heading",
-        level: Math.min(heading[1].length + 1, 4) as 2 | 3 | 4,
+        level: heading[1].length as HeadingLevel,
         text: heading[2].trim()
       });
+      continue;
+    }
+
+    if (/^-{3,}$/.test(line)) {
+      flushParagraph();
+      flushList();
+      blocks.push({ kind: "divider" });
       continue;
     }
 
@@ -110,7 +122,13 @@ export function parseMarkdownBlocks(value: string): MarkdownBlock[] {
 function renderMarkdownBlock(block: MarkdownBlock, index: number): ReactNode {
   switch (block.kind) {
     case "heading": {
-      const headingTag = `h${block.level}` as "h2" | "h3" | "h4";
+      const headingTag = `h${block.level}` as
+        | "h1"
+        | "h2"
+        | "h3"
+        | "h4"
+        | "h5"
+        | "h6";
 
       return createElement(
         headingTag,
@@ -135,6 +153,8 @@ function renderMarkdownBlock(block: MarkdownBlock, index: number): ReactNode {
         )
       );
     }
+    case "divider":
+      return createElement("hr", { key: index });
   }
 }
 
