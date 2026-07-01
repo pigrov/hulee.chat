@@ -1707,28 +1707,45 @@ button.managementRow:focus-visible {
   line-height: 1.2;
 }
 
-.platformMetricGrid {
+.platformAdminGrid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.platformGrid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: var(--hulee-space-block);
   align-items: start;
 }
 
-.metricCard {
-  display: flex;
-  min-width: 0;
+.platformNavPanel {
+  position: sticky;
+  top: 20px;
+}
+
+.platformNavGroups,
+.platformNavGroup {
+  display: grid;
+  gap: 8px;
+}
+
+.platformNavGroup + .platformNavGroup {
+  padding-top: 8px;
+  border-top: 1px solid var(--hulee-color-border);
+}
+
+.platformNavLink {
   align-items: center;
-  gap: 12px;
-  padding: 14px;
-  border: 1px solid var(--hulee-color-border);
-  border-radius: var(--hulee-radius-control);
-  background: var(--hulee-color-surface-default);
+}
+
+.platformSectionAnchor {
+  scroll-margin-top: 16px;
+}
+
+.managementRow.platformTenantRow {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(180px, 1fr) minmax(150px, 0.6fr) minmax(
+      150px,
+      0.6fr
+    );
+  align-items: flex-start;
 }
 
 .metricIcon {
@@ -1996,11 +2013,6 @@ button.managementRow:focus-visible {
     display: none;
   }
 
-  .platformMetricGrid,
-  .platformGrid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .setupStepList {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -2052,6 +2064,7 @@ button.managementRow:focus-visible {
   }
 
   .adminGrid,
+  .platformAdminGrid,
   .adminIntegrationGrid,
   .adminOverviewGrid,
   .employeeAccessTabs,
@@ -2075,6 +2088,7 @@ button.managementRow:focus-visible {
   .managementRow.egressProviderPolicyRow,
   .managementRow.channelProviderPolicyRow,
   .managementRow.channelCatalogRow,
+  .managementRow.platformTenantRow,
   .channelCatalogForm,
   .scopePickerGrid,
   .roleEditorGrid,
@@ -2082,13 +2096,12 @@ button.managementRow:focus-visible {
   .employeeMembershipGrid,
   .permissionEditorGrid,
   .brandPresetGrid,
-  .brandColorGrid,
-  .platformMetricGrid,
-  .platformGrid {
+  .brandColorGrid {
     grid-template-columns: 1fr;
   }
 
-  .integrationCatalog {
+  .integrationCatalog,
+  .platformNavPanel {
     position: static;
   }
 

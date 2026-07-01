@@ -77,6 +77,10 @@ export type InternalIntegrationService = {
     context: InternalIntegrationContext,
     request: InternalChannelConnectorCreateRequest
   ): Promise<InternalChannelConnectorSummary>;
+  enableChannelConnector(
+    context: InternalIntegrationContext,
+    input: { connectorId: string }
+  ): Promise<InternalChannelConnectorSummary>;
   disableChannelConnector(
     context: InternalIntegrationContext,
     input: { connectorId: string }
@@ -625,12 +629,22 @@ export function createInternalIntegrationService(
       };
     },
 
+    async enableChannelConnector(context, input) {
+      return updateChannelConnectorLifecycle({
+        context,
+        repository: options.connectorRepository,
+        connectorId: input.connectorId,
+        action: "enable",
+        updatedAt: now()
+      });
+    },
+
     async disableChannelConnector(context, input) {
       return updateChannelConnectorLifecycle({
         context,
         repository: options.connectorRepository,
         connectorId: input.connectorId,
-        status: "disabled",
+        action: "disable",
         updatedAt: now()
       });
     },
@@ -640,7 +654,7 @@ export function createInternalIntegrationService(
         context,
         repository: options.connectorRepository,
         connectorId: input.connectorId,
-        status: "deleted",
+        action: "delete",
         updatedAt: now()
       });
     },
@@ -1115,7 +1129,7 @@ async function updateChannelConnectorLifecycle(input: {
   context: InternalIntegrationContext;
   repository: ChannelConnectorRepository;
   connectorId: string;
-  status: "disabled" | "deleted";
+  action: "enable" | "disable" | "delete";
   updatedAt: Date;
 }): Promise<InternalChannelConnectorSummary> {
   const connectorId = input.connectorId.trim();
@@ -1130,16 +1144,17 @@ async function updateChannelConnectorLifecycle(input: {
     throw new CoreError("validation.failed");
   }
 
-  const updatedRecord: ChannelConnectorRecord = {
-    ...record,
-    status: input.status,
-    healthStatus: "unknown",
-    diagnostics: buildDisabledChannelConnectorDiagnostics({
-      record,
-      checkedAt: input.updatedAt.toISOString()
-    }),
-    updatedAt: input.updatedAt
-  };
+  const updatedRecord =
+    input.action === "enable"
+      ? buildEnabledChannelConnectorRecord({
+          record,
+          updatedAt: input.updatedAt
+        })
+      : buildDisabledChannelConnectorRecord({
+          record,
+          status: input.action === "delete" ? "deleted" : "disabled",
+          updatedAt: input.updatedAt
+        });
 
   await input.repository.upsertConnector({
     id: updatedRecord.id,
@@ -1165,6 +1180,75 @@ async function updateChannelConnectorLifecycle(input: {
   }
 
   return summary;
+}
+
+function buildEnabledChannelConnectorRecord(input: {
+  record: ChannelConnectorRecord;
+  updatedAt: Date;
+}): ChannelConnectorRecord {
+  const checkedAt = input.updatedAt.toISOString();
+
+  if (input.record.channelType === telegramChannelType) {
+    const config = parseTelegramConfigFromRecord(input.record);
+
+    if (!config?.botTokenSecretRef) {
+      return {
+        ...input.record,
+        status: "onboarding",
+        healthStatus: "unknown",
+        diagnostics: buildInvalidTelegramDiagnostics(checkedAt),
+        updatedAt: input.updatedAt
+      };
+    }
+
+    const diagnostics = buildTelegramDiagnostics({
+      enabled: true,
+      config,
+      checkedAt
+    });
+
+    return {
+      ...input.record,
+      status: telegramConnectorStatusFromDiagnostics({
+        enabled: true,
+        diagnostics
+      }),
+      healthStatus: telegramConnectorHealthFromDiagnostics({
+        enabled: true,
+        diagnostics
+      }),
+      diagnostics,
+      updatedAt: input.updatedAt
+    };
+  }
+
+  return {
+    ...input.record,
+    status: "onboarding",
+    healthStatus: "unknown",
+    diagnostics: {
+      status: "unknown",
+      checkedAt
+    },
+    updatedAt: input.updatedAt
+  };
+}
+
+function buildDisabledChannelConnectorRecord(input: {
+  record: ChannelConnectorRecord;
+  status: "disabled" | "deleted";
+  updatedAt: Date;
+}): ChannelConnectorRecord {
+  return {
+    ...input.record,
+    status: input.status,
+    healthStatus: "unknown",
+    diagnostics: buildDisabledChannelConnectorDiagnostics({
+      record: input.record,
+      checkedAt: input.updatedAt.toISOString()
+    }),
+    updatedAt: input.updatedAt
+  };
 }
 
 function requireAuthChallengeRepository(

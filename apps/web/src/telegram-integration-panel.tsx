@@ -6,8 +6,8 @@ import {
   Circle,
   KeyRound,
   LinkIcon,
-  Network,
   Plug,
+  Power,
   PowerOff,
   Save,
   Settings2,
@@ -20,6 +20,7 @@ import {
   deleteTelegramWebhookAction,
   deleteChannelConnectorAction,
   disableChannelConnectorAction,
+  enableChannelConnectorAction,
   refreshTelegramDiagnosticsAction,
   setTelegramWebhookAction,
   updateTelegramIntegrationAction
@@ -131,7 +132,7 @@ export function TelegramIntegrationPanel({
 
         <TelegramLifecycleActions integration={integration} t={t} />
 
-        <TelegramDiagnosticsGrid
+        <TelegramConnectorCompactStatus
           integration={integration}
           locale={locale}
           t={t}
@@ -167,7 +168,11 @@ export function TelegramIntegrationPanel({
 
       <TelegramSetupStepper currentStep={setupStep} steps={setupSteps} t={t} />
 
-      <TelegramEgressSummary integration={integration} locale={locale} t={t} />
+      <TelegramConnectorCompactStatus
+        integration={integration}
+        locale={locale}
+        t={t}
+      />
 
       <TelegramSetupStepPanel
         config={config}
@@ -177,65 +182,6 @@ export function TelegramIntegrationPanel({
         t={t}
       />
     </section>
-  );
-}
-
-function TelegramEgressSummary({
-  integration,
-  locale,
-  t
-}: {
-  integration: TelegramIntegrationViewModel;
-  locale: string;
-  t: Translator;
-}): ReactNode {
-  const egress = integration.diagnostics.egress;
-
-  return (
-    <div
-      className="diagnosticGrid egressSummaryGrid"
-      aria-label={t("integrations.egress.summary")}
-    >
-      <DetailItem
-        label={t("integrations.egress.status")}
-        value={egress ? t(egressStatusKey(egress.status)) : t("common.unknown")}
-      />
-      <DetailItem
-        label={t("integrations.egress.profileKind")}
-        value={
-          egress?.profileKind
-            ? t(egressProfileKindKey(egress.profileKind))
-            : t("common.unknown")
-        }
-      />
-      <DetailItem
-        label={t("integrations.egress.profile")}
-        value={formatOptionalValue(egress?.profileId, t)}
-      />
-      <DetailItem
-        label={t("integrations.egress.required")}
-        value={formatOptionalBoolean(egress?.required, t)}
-      />
-      <DetailItem
-        label={t("integrations.egress.checkedAt")}
-        value={formatOptionalDateTime(egress?.checkedAt, locale, t)}
-      />
-      {egress?.lastErrorCode ? (
-        <DetailItem
-          label={t("integrations.egress.error")}
-          value={egress.lastErrorCode}
-        />
-      ) : null}
-      {egress?.operatorHint ? (
-        <DetailItem
-          label={t("integrations.egress.operatorHint")}
-          value={egress.operatorHint}
-        />
-      ) : null}
-      <span className="egressSummaryIcon" aria-hidden="true">
-        <Network size={18} />
-      </span>
-    </div>
   );
 }
 
@@ -461,7 +407,7 @@ function TelegramDiagnosticsStep({
 }): ReactNode {
   return (
     <div className="setupStepPanel">
-      <TelegramDiagnosticsGrid
+      <TelegramConnectorCompactStatus
         integration={integration}
         locale={locale}
         t={t}
@@ -522,7 +468,7 @@ function TelegramCompleteStep({
 }): ReactNode {
   return (
     <div className="setupStepPanel">
-      <TelegramDiagnosticsGrid
+      <TelegramConnectorCompactStatus
         integration={integration}
         locale={locale}
         t={t}
@@ -535,7 +481,67 @@ function TelegramCompleteStep({
   );
 }
 
-function TelegramDiagnosticsGrid({
+export function TelegramConnectorCompactStatus({
+  integration,
+  locale,
+  t
+}: {
+  integration: TelegramIntegrationViewModel;
+  locale: string;
+  t: Translator;
+}): ReactNode {
+  const inbound = integration.diagnostics.runtime?.inbound;
+  const outbound = integration.diagnostics.runtime?.outbound;
+  const errorCode =
+    integration.diagnostics.lastErrorCode ??
+    inbound?.lastErrorCode ??
+    outbound?.lastErrorCode ??
+    integration.diagnostics.egress?.lastErrorCode;
+  const operatorHint =
+    integration.diagnostics.operatorHint ??
+    inbound?.operatorHint ??
+    outbound?.operatorHint ??
+    integration.diagnostics.egress?.operatorHint;
+
+  return (
+    <div className="diagnosticGrid">
+      <DetailItem
+        label={t("integrations.telegram.lifecycleStatus")}
+        value={
+          integration.status
+            ? t(channelConnectorStatusKey(integration.status))
+            : t("common.unknown")
+        }
+      />
+      <DetailItem
+        label={t("integrations.telegram.providerStatus")}
+        value={t(telegramStatusKey(integration.diagnostics.status))}
+      />
+      <DetailItem
+        label={t("integrations.telegram.runtimeInboundReceivedAt")}
+        value={formatOptionalDateTime(inbound?.lastReceivedAt, locale, t)}
+      />
+      <DetailItem
+        label={t("integrations.telegram.runtimeOutboundSentAt")}
+        value={formatOptionalDateTime(outbound?.lastSentAt, locale, t)}
+      />
+      {errorCode ? (
+        <DetailItem
+          label={t("integrations.channel.details.error")}
+          value={errorCode}
+        />
+      ) : null}
+      {operatorHint ? (
+        <DetailItem
+          label={t("integrations.telegram.operatorHint")}
+          value={operatorHint}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+export function TelegramDiagnosticsGrid({
   integration,
   locale,
   t
@@ -823,17 +829,23 @@ function TelegramLifecycleActions({
 }): ReactNode {
   return (
     <div className="buttonRow">
-      <form action={disableChannelConnectorAction}>
-        <ConnectorIdField integration={integration} />
-        <button
-          className="secondaryButton"
-          type="submit"
-          disabled={integration.status === "disabled"}
-        >
-          <PowerOff size={16} aria-hidden="true" />
-          {t("integrations.telegram.disableConnector")}
-        </button>
-      </form>
+      {integration.status === "disabled" ? (
+        <form action={enableChannelConnectorAction}>
+          <ConnectorIdField integration={integration} />
+          <button className="secondaryButton" type="submit">
+            <Power size={16} aria-hidden="true" />
+            {t("integrations.telegram.enableConnector")}
+          </button>
+        </form>
+      ) : (
+        <form action={disableChannelConnectorAction}>
+          <ConnectorIdField integration={integration} />
+          <button className="secondaryButton" type="submit">
+            <PowerOff size={16} aria-hidden="true" />
+            {t("integrations.telegram.disableConnector")}
+          </button>
+        </form>
+      )}
       <form action={deleteChannelConnectorAction}>
         <ConnectorIdField integration={integration} />
         <button className="dangerButton" type="submit">

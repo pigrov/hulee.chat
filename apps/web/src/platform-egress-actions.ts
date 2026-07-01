@@ -25,7 +25,7 @@ import {
 export async function updatePlatformEgressProviderPolicyAction(
   formData: FormData
 ): Promise<void> {
-  let destination = "/platform?egressPolicy=invalid";
+  let destination = "/platform/providers?egressPolicy=invalid";
 
   try {
     await assertWebActionRequest();
@@ -67,12 +67,12 @@ export async function updatePlatformEgressProviderPolicyAction(
       occurredAt: updatedAt
     });
 
-    destination = "/platform?egressPolicy=updated";
+    destination = "/platform/providers?egressPolicy=updated";
   } catch {
-    destination = "/platform?egressPolicy=invalid";
+    destination = "/platform/providers?egressPolicy=invalid";
   }
 
-  revalidatePath("/platform");
+  revalidatePath("/platform/providers");
   redirect(destination);
 }
 

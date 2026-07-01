@@ -7,11 +7,9 @@ import {
 import type {
   InternalChannelAuthChallenge,
   InternalChannelCatalogItem,
-  InternalChannelConnectorSummary,
-  InternalEgressDiagnostics,
-  InternalEgressProfileStatus
+  InternalChannelConnectorSummary
 } from "@hulee/contracts";
-import { CheckCircle2, Circle, Network, PowerOff, Trash2 } from "lucide-react";
+import { CheckCircle2, Circle, Power, PowerOff, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
@@ -22,7 +20,8 @@ import { loadTenantAdminViewModel } from "../../../src/admin-view-model";
 import {
   createChannelConnectorAction,
   deleteChannelConnectorAction,
-  disableChannelConnectorAction
+  disableChannelConnectorAction,
+  enableChannelConnectorAction
 } from "../../../src/actions";
 import { ChannelAuthChallengePanel } from "../../../src/channel-auth-challenge-panel";
 import {
@@ -34,17 +33,9 @@ import {
   loadChannelCatalog,
   loadChannelAuthChallenge,
   loadChannelConnectors,
-  loadEgressStatus,
   loadTelegramIntegration,
-  type EgressStatusViewModel,
   type TelegramIntegrationViewModel
 } from "../../../src/inbox-api-client";
-import {
-  egressProfileKindKey,
-  egressStatusKey,
-  resolveOverallEgressStatus
-} from "../../../src/egress-formatting";
-import { formatOptionalDateTime } from "../../../src/formatting";
 import {
   getWebDatabase,
   resolveCurrentWebAccessSession
@@ -110,13 +101,11 @@ export default async function IntegrationsAdminPage({
   const requestedChallengeId = normalizeOptionalSearchParam(
     resolvedSearchParams?.challengeId
   );
-  const [model, channelCatalog, channelConnectors, egressStatus] =
-    await Promise.all([
-      loadTenantAdminViewModel({ tenantId: access.tenantId, database }),
-      loadChannelCatalog(internalApiAccess),
-      loadChannelConnectors(internalApiAccess),
-      loadEgressStatus(internalApiAccess)
-    ]);
+  const [model, channelCatalog, channelConnectors] = await Promise.all([
+    loadTenantAdminViewModel({ tenantId: access.tenantId, database }),
+    loadChannelCatalog(internalApiAccess),
+    loadChannelConnectors(internalApiAccess)
+  ]);
   const { t, locale } = createTranslator(model.tenant.locale);
   const channelStatusToast = resolvedSearchParams?.channelStatus
     ? buildActionStatusToast({
@@ -219,7 +208,6 @@ export default async function IntegrationsAdminPage({
                     connector={connector}
                     catalog={channelCatalog.channels}
                     current={connector.connectorId === selectedConnectorId}
-                    egressDiagnostics={connector.egress}
                     locale={locale}
                     t={t}
                   />
@@ -248,11 +236,6 @@ export default async function IntegrationsAdminPage({
 
         <div className="adminStack">
           {integrationContent}
-          <EgressStatusPanel
-            egressStatus={egressStatus}
-            locale={locale}
-            t={t}
-          />
           <SlotMount slot="integration.settings.section" />
         </div>
       </div>
@@ -261,147 +244,6 @@ export default async function IntegrationsAdminPage({
 }
 
 type Translator = ReturnType<typeof createTranslator>["t"];
-
-function EgressStatusPanel({
-  egressStatus,
-  locale,
-  t
-}: {
-  egressStatus: EgressStatusViewModel;
-  locale: string;
-  t: Translator;
-}): ReactNode {
-  const overallStatus = resolveOverallEgressStatus(egressStatus.profiles);
-
-  return (
-    <section className="settingsPanel" aria-labelledby="egress-status-title">
-      <div className="sectionHeader">
-        <div>
-          <p className="eyebrow">{t("admin.integrations.egress")}</p>
-          <h2 className="sectionTitle" id="egress-status-title">
-            {t("admin.integrations.egressStatus")}
-          </h2>
-          <p className="metaText">
-            {t("admin.integrations.egressDescription")}
-          </p>
-        </div>
-        <span className="badge">
-          <Network size={14} aria-hidden="true" />
-          {t(egressStatusKey(overallStatus))}
-        </span>
-      </div>
-
-      {egressStatus.profiles.length > 0 ? (
-        <div className="integrationList">
-          {egressStatus.profiles.map((profile) => (
-            <EgressProfileStatusRow
-              key={profile.profileId}
-              locale={locale}
-              profile={profile}
-              t={t}
-            />
-          ))}
-        </div>
-      ) : (
-        <p className="metaText">{t("integrations.egress.empty")}</p>
-      )}
-    </section>
-  );
-}
-
-function EgressProfileStatusRow({
-  locale,
-  profile,
-  t
-}: {
-  locale: string;
-  profile: InternalEgressProfileStatus;
-  t: Translator;
-}): ReactNode {
-  return (
-    <div className="diagnosticGrid">
-      <DetailItem
-        label={t("integrations.egress.profile")}
-        value={profile.profileId}
-      />
-      <DetailItem
-        label={t("integrations.egress.status")}
-        value={t(egressStatusKey(profile.status))}
-      />
-      <DetailItem
-        label={t("integrations.egress.profileKind")}
-        value={t(egressProfileKindKey(profile.profileKind))}
-      />
-      <DetailItem
-        label={t("integrations.egress.checkedAt")}
-        value={formatOptionalDateTime(profile.checkedAt, locale, t)}
-      />
-      <DetailItem
-        label={t("integrations.egress.source")}
-        value={t(egressSourceKey(profile.source))}
-      />
-      <DetailItem
-        label={t("integrations.egress.publicIp")}
-        value={profile.publicIp ?? t("common.unknown")}
-      />
-      <DetailItem
-        label={t("integrations.egress.consecutiveFailures")}
-        value={String(profile.consecutiveFailures ?? 0)}
-      />
-      <DetailItem
-        label={t("integrations.egress.providers")}
-        value={formatList(profile.supportedProviders, t)}
-      />
-      <DetailItem
-        label={t("integrations.egress.channelTypes")}
-        value={formatList(profile.supportedChannelTypes, t)}
-      />
-      {profile.lastErrorCode ? (
-        <DetailItem
-          label={t("integrations.egress.error")}
-          value={profile.lastErrorCode}
-        />
-      ) : null}
-      {profile.operatorHint ? (
-        <DetailItem
-          label={t("integrations.egress.operatorHint")}
-          value={profile.operatorHint}
-        />
-      ) : null}
-      {profile.alerts && profile.alerts.length > 0 ? (
-        <DetailItem
-          label={t("integrations.egress.alerts")}
-          value={profile.alerts.map((alert) => alert.code).join(", ")}
-        />
-      ) : null}
-      {profile.probes && profile.probes.length > 0 ? (
-        <DetailItem
-          label={t("integrations.egress.probes")}
-          value={profile.probes
-            .map((probe) =>
-              [
-                probe.name,
-                t(egressProbeStatusKey(probe.status)),
-                probe.latencyMs === undefined
-                  ? undefined
-                  : `${probe.latencyMs} ms`
-              ]
-                .filter(Boolean)
-                .join(" / ")
-            )
-            .join("; ")}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-function formatList(
-  values: readonly string[] | undefined,
-  t: Translator
-): string {
-  return values && values.length > 0 ? values.join(", ") : t("common.unknown");
-}
 
 function GenericChannelConnectorPanel({
   catalog,
@@ -451,6 +293,10 @@ function GenericChannelConnectorPanel({
 
       <div className="diagnosticGrid">
         <DetailItem
+          label={t("integrations.telegram.lifecycleStatus")}
+          value={t(channelConnectorStatusKey(connector.status))}
+        />
+        <DetailItem
           label={t("integrations.channel.details.type")}
           value={
             channel
@@ -467,14 +313,12 @@ function GenericChannelConnectorPanel({
           label={t("integrations.channel.details.health")}
           value={t(channelHealthStatusKey(connector.healthStatus))}
         />
-        <DetailItem
-          label={t("integrations.channel.details.provider")}
-          value={connector.provider}
-        />
-        <DetailItem
-          label={t("integrations.channel.details.class")}
-          value={t(channelClassKey(connector.channelClass))}
-        />
+        {connector.diagnosticsStatus ? (
+          <DetailItem
+            label={t("integrations.channel.details.diagnosticsStatus")}
+            value={connector.diagnosticsStatus}
+          />
+        ) : null}
       </div>
 
       {isAuthChallengeStep(step.kind) ? (
@@ -503,17 +347,31 @@ function GenericChannelLifecycleActions({
 }): ReactNode {
   return (
     <div className="buttonRow">
-      <form action={disableChannelConnectorAction}>
-        <input type="hidden" name="connectorId" value={connector.connectorId} />
-        <button
-          className="secondaryButton"
-          type="submit"
-          disabled={connector.status === "disabled"}
-        >
-          <PowerOff size={16} aria-hidden="true" />
-          {t("integrations.channel.disableConnector")}
-        </button>
-      </form>
+      {connector.status === "disabled" ? (
+        <form action={enableChannelConnectorAction}>
+          <input
+            type="hidden"
+            name="connectorId"
+            value={connector.connectorId}
+          />
+          <button className="secondaryButton" type="submit">
+            <Power size={16} aria-hidden="true" />
+            {t("integrations.channel.enableConnector")}
+          </button>
+        </form>
+      ) : (
+        <form action={disableChannelConnectorAction}>
+          <input
+            type="hidden"
+            name="connectorId"
+            value={connector.connectorId}
+          />
+          <button className="secondaryButton" type="submit">
+            <PowerOff size={16} aria-hidden="true" />
+            {t("integrations.channel.disableConnector")}
+          </button>
+        </form>
+      )}
       <form action={deleteChannelConnectorAction}>
         <input type="hidden" name="connectorId" value={connector.connectorId} />
         <button className="dangerButton" type="submit">
@@ -575,14 +433,12 @@ function ConnectorListItem({
   connector,
   catalog,
   current,
-  egressDiagnostics,
   locale,
   t
 }: {
   connector: InternalChannelConnectorSummary;
   catalog: readonly InternalChannelCatalogItem[];
   current: boolean;
-  egressDiagnostics?: InternalEgressDiagnostics;
   locale: string;
   t: Translator;
 }): ReactNode {
@@ -618,12 +474,6 @@ function ConnectorListItem({
         </p>
       </div>
       <span className="integrationListBadges">
-        {egressDiagnostics ? (
-          <span className="badge">
-            <Network size={14} aria-hidden="true" />
-            {t(egressStatusKey(egressDiagnostics.status))}
-          </span>
-        ) : null}
         <span className="badge">
           {t(channelHealthStatusKey(connector.healthStatus))}
         </span>
@@ -684,28 +534,12 @@ function channelHealthStatusKey(
   return `integrations.channel.health.${status}` as I18nMessageKey;
 }
 
-function egressSourceKey(
-  source: InternalEgressProfileStatus["source"]
-): I18nMessageKey {
-  return `integrations.egress.source.${source}` as I18nMessageKey;
-}
-
-function egressProbeStatusKey(
-  status: NonNullable<InternalEgressProfileStatus["probes"]>[number]["status"]
-): I18nMessageKey {
-  return `integrations.egress.probeStatus.${status}` as I18nMessageKey;
-}
-
-function channelClassKey(
-  channelClass: InternalChannelConnectorSummary["channelClass"]
-): I18nMessageKey {
-  return `integrations.channel.class.${channelClass}` as I18nMessageKey;
-}
-
 function channelActionStatusKey(status: string): I18nMessageKey {
   switch (status) {
     case "created":
       return "admin.integrations.actionStatus.created";
+    case "enabled":
+      return "admin.integrations.actionStatus.enabled";
     case "disabled":
       return "admin.integrations.actionStatus.disabled";
     case "deleted":

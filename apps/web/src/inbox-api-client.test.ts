@@ -25,6 +25,7 @@ import {
   deleteChannelConnector,
   deleteTelegramWebhook,
   disableChannelConnector,
+  enableChannelConnector,
   loadChannelCatalog,
   loadChannelAuthChallenge,
   loadChannelConnectors,
@@ -351,7 +352,13 @@ describe("inbox API client", () => {
 
   it("passes explicit effective permission override when changing connector lifecycle", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
-      const status = init?.method === "DELETE" ? "deleted" : "disabled";
+      const path = String(_input);
+      const status =
+        init?.method === "DELETE"
+          ? "deleted"
+          : path.endsWith("/enable")
+            ? "connected"
+            : "disabled";
 
       return Response.json({
         connectorId: "telegram_bot:second",
@@ -360,14 +367,22 @@ describe("inbox API client", () => {
         provider: "telegram",
         displayName: "Telegram Bot",
         status,
-        healthStatus: "unknown",
+        healthStatus: status === "connected" ? "healthy" : "unknown",
         channelExternalId: "telegram-local",
-        diagnosticsStatus: "disabled"
+        diagnosticsStatus: status === "connected" ? "configured" : "disabled"
       });
     });
 
     vi.stubGlobal("fetch", fetchMock);
 
+    await enableChannelConnector(
+      {
+        connectorId: "telegram_bot:second"
+      },
+      {
+        effectivePermissionOverride: "modules.manage"
+      }
+    );
     await disableChannelConnector(
       {
         connectorId: "telegram_bot:second"
@@ -387,10 +402,15 @@ describe("inbox API client", () => {
 
     expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(1, {
       method: "POST",
-      path: "/internal/v1/channels/connectors/telegram_bot%3Asecond/disable",
+      path: "/internal/v1/channels/connectors/telegram_bot%3Asecond/enable",
       effectivePermissionOverride: "modules.manage"
     });
     expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(2, {
+      method: "POST",
+      path: "/internal/v1/channels/connectors/telegram_bot%3Asecond/disable",
+      effectivePermissionOverride: "modules.manage"
+    });
+    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(3, {
       method: "DELETE",
       path: "/internal/v1/channels/connectors/telegram_bot%3Asecond",
       effectivePermissionOverride: "modules.manage"

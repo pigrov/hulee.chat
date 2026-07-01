@@ -22,7 +22,7 @@ import { getWebDatabase, requireCurrentWebAccessSession } from "./session";
 export async function updatePlatformChannelProviderPolicyAction(
   formData: FormData
 ): Promise<void> {
-  let destination = "/platform?channelPolicy=invalid";
+  let destination = "/platform/channels?channelPolicy=invalid";
 
   try {
     await assertWebActionRequest();
@@ -71,12 +71,12 @@ export async function updatePlatformChannelProviderPolicyAction(
       occurredAt: updatedAt
     });
 
-    destination = "/platform?channelPolicy=updated";
+    destination = "/platform/channels?channelPolicy=updated";
   } catch {
-    destination = "/platform?channelPolicy=invalid";
+    destination = "/platform/channels?channelPolicy=invalid";
   }
 
-  revalidatePath("/platform");
+  revalidatePath("/platform/channels");
   redirect(destination);
 }
 

@@ -315,6 +315,17 @@ function createHandler(input?: {
     channelExternalId: "telegram-local",
     diagnosticsStatus: "disabled"
   }));
+  const enableChannelConnector = vi.fn(async () => ({
+    connectorId: "telegram_bot:tenant-1",
+    channelType: "telegram_bot" as const,
+    channelClass: "bot_bridge" as const,
+    provider: "telegram",
+    displayName: "Telegram Bot",
+    status: "connected" as const,
+    healthStatus: "healthy" as const,
+    channelExternalId: "telegram-local",
+    diagnosticsStatus: "configured"
+  }));
   const deleteChannelConnector = vi.fn(async () => ({
     connectorId: "telegram_bot:tenant-1",
     channelType: "telegram_bot" as const,
@@ -528,6 +539,7 @@ function createHandler(input?: {
       listChannelCatalog,
       listChannelConnectors,
       createChannelConnector,
+      enableChannelConnector,
       disableChannelConnector,
       deleteChannelConnector,
       startChannelAuthChallenge,
@@ -579,6 +591,7 @@ function createHandler(input?: {
     listChannelCatalog,
     listChannelConnectors,
     createChannelConnector,
+    enableChannelConnector,
     disableChannelConnector,
     deleteChannelConnector,
     startChannelAuthChallenge,
@@ -1689,11 +1702,19 @@ describe("internal API handler", () => {
 
   it("updates channel connector lifecycle through modules.manage permission", async () => {
     const modulesManageSession = sessionWithPermissions(["modules.manage"]);
-    const { handler, disableChannelConnector, deleteChannelConnector } =
-      createHandler({
-        session: modulesManageSession
-      });
+    const {
+      handler,
+      enableChannelConnector,
+      disableChannelConnector,
+      deleteChannelConnector
+    } = createHandler({
+      session: modulesManageSession
+    });
 
+    const enableResponse = await handler.handle({
+      method: "POST",
+      path: "/internal/v1/channels/connectors/telegram_bot%3Atenant-1/enable"
+    });
     const disableResponse = await handler.handle({
       method: "POST",
       path: "/internal/v1/channels/connectors/telegram_bot%3Atenant-1/disable"
@@ -1703,7 +1724,12 @@ describe("internal API handler", () => {
       path: "/internal/v1/channels/connectors/telegram_bot%3Atenant-1"
     });
 
+    expect(enableResponse.status).toBe(200);
     expect(disableResponse.status).toBe(200);
+    expect(enableResponse.body).toMatchObject({
+      connectorId: "telegram_bot:tenant-1",
+      status: "connected"
+    });
     expect(disableResponse.body).toMatchObject({
       connectorId: "telegram_bot:tenant-1",
       status: "disabled"
@@ -1712,6 +1738,9 @@ describe("internal API handler", () => {
     expect(deleteResponse.body).toMatchObject({
       connectorId: "telegram_bot:tenant-1",
       status: "deleted"
+    });
+    expect(enableChannelConnector).toHaveBeenCalledWith(modulesManageSession, {
+      connectorId: "telegram_bot:tenant-1"
     });
     expect(disableChannelConnector).toHaveBeenCalledWith(modulesManageSession, {
       connectorId: "telegram_bot:tenant-1"

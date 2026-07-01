@@ -1,13 +1,14 @@
-import { defaultBrandProfile } from "@hulee/branding";
 import type {
   InternalChannelReadiness,
   InternalChannelVisibility
 } from "@hulee/contracts";
-import { createSqlDeploymentChannelCatalogOverrideRepository } from "@hulee/db";
+import {
+  createSqlDeploymentChannelCatalogOverrideRepository,
+  createSqlDeploymentChannelProviderPolicyRepository
+} from "@hulee/db";
 import { createTranslator } from "@hulee/i18n";
 import type { I18nMessageKey } from "@hulee/i18n";
-import { ArrowLeft, ImageUp, Save, Settings2 } from "lucide-react";
-import Link from "next/link";
+import { ImageUp, MessageCircle, Save, Settings2 } from "lucide-react";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
@@ -16,12 +17,14 @@ import {
   canPlatformAdmin,
   navigationAccessFromSession
 } from "../../../src/access";
-import { AppFrame, DetailItem } from "../../../src/app-chrome";
+import { DetailItem } from "../../../src/app-chrome";
 import {
   ChannelIcon,
   resolveChannelDescription,
   resolveChannelTitle
 } from "../../../src/channel-display";
+import { PlatformChannelProviderPolicy } from "../../../src/platform-admin-components";
+import { PlatformAdminShell } from "../../../src/platform-admin-shell";
 import {
   updatePlatformChannelCatalogOverrideAction,
   uploadPlatformChannelIconAction
@@ -30,9 +33,11 @@ import {
   loadPlatformChannelCatalog,
   type PlatformChannelCatalogView
 } from "../../../src/platform-channel-catalog";
+import { loadPlatformChannelProviderPolicies } from "../../../src/platform-channel-policies";
 import {
   getWebDatabase,
-  resolveCurrentWebAccessSession
+  resolveCurrentWebAccessSession,
+  resolveWebConfig
 } from "../../../src/session";
 import { buildActionStatusToast } from "../../../src/toast-messages";
 
@@ -55,6 +60,7 @@ export default async function PlatformChannelsPage({
   searchParams
 }: {
   searchParams?: Promise<{
+    channelPolicy?: string;
     channelCatalog?: string;
   }>;
 }): Promise<ReactNode> {
@@ -75,10 +81,26 @@ export default async function PlatformChannelsPage({
 
   const { t, locale } = createTranslator("ru");
   const database = getWebDatabase();
-  const catalog = await loadPlatformChannelCatalog({
+  const channelCatalog = await loadPlatformChannelCatalog({
     repository: createSqlDeploymentChannelCatalogOverrideRepository(database)
   });
+  const channelPolicies = await loadPlatformChannelProviderPolicies({
+    config: resolveWebConfig(),
+    repository: createSqlDeploymentChannelProviderPolicyRepository(database)
+  });
   const resolvedSearchParams = await searchParams;
+  const channelPolicyToast = resolvedSearchParams?.channelPolicy
+    ? buildActionStatusToast({
+        id: `channel-policy:${resolvedSearchParams.channelPolicy}`,
+        status: resolvedSearchParams.channelPolicy,
+        titleKey: "platform.channelProviderBehavior",
+        descriptionKey:
+          resolvedSearchParams.channelPolicy === "updated"
+            ? "platform.channelPolicyStatus.updated"
+            : "platform.channelPolicyStatus.invalid",
+        t
+      })
+    : undefined;
   const channelCatalogToast = resolvedSearchParams?.channelCatalog
     ? buildActionStatusToast({
         id: `channel-catalog:${resolvedSearchParams.channelCatalog}`,
@@ -91,71 +113,80 @@ export default async function PlatformChannelsPage({
         t
       })
     : undefined;
+  const toasts = [channelPolicyToast, channelCatalogToast].filter(
+    (toast) => toast !== undefined
+  );
 
   return (
-    <AppFrame
-      brand={defaultBrandProfile}
-      current="platform-admin"
-      frameClassName="adminFrame"
-      navigationAccess={navigationAccessFromSession(access)}
+    <PlatformAdminShell
+      access={access}
+      current="channels"
       t={t}
-      toasts={channelCatalogToast ? [channelCatalogToast] : []}
+      title={t("platform.channels.navTitle")}
+      titleId="platform-channels-title"
+      toasts={toasts}
     >
       <section
-        className="adminWorkspace"
-        aria-labelledby="platform-channels-title"
+        className="settingsPanel"
+        aria-labelledby="channel-provider-policy-title"
       >
-        <header className="adminHeader">
+        <div className="sectionHeader">
           <div>
-            <p className="eyebrow">{t("platform.controlPlane")}</p>
-            <h1 className="adminTitle" id="platform-channels-title">
-              {t("platform.channels.title")}
-            </h1>
+            <p className="eyebrow">{t("platform.dataPlane")}</p>
+            <h2 className="sectionTitle" id="channel-provider-policy-title">
+              {t("platform.channelProviderBehavior")}
+            </h2>
+            <p className="metaText">
+              {t("platform.channelProviderBehaviorDescription")}
+            </p>
           </div>
-          <Link className="secondaryButton" href="/platform">
-            <ArrowLeft size={16} aria-hidden="true" />
-            {t("platform.channels.backToPlatform")}
-          </Link>
-        </header>
-
-        <div className="adminContent">
-          <section
-            className="settingsPanel"
-            aria-labelledby="platform-channel-catalog-title"
-          >
-            <div className="sectionHeader">
-              <div>
-                <p className="eyebrow">{t("platform.channels.catalog")}</p>
-                <h2
-                  className="sectionTitle"
-                  id="platform-channel-catalog-title"
-                >
-                  {t("platform.channels.catalogTitle")}
-                </h2>
-                <p className="metaText">
-                  {t("platform.channels.catalogDescription")}
-                </p>
-              </div>
-              <span className="badge">
-                <Settings2 size={14} aria-hidden="true" />
-                {catalog.length}
-              </span>
-            </div>
-
-            <div className="managementList">
-              {catalog.map((channel) => (
-                <PlatformChannelCatalogRow
-                  key={channel.channelType}
-                  channel={channel}
-                  locale={locale}
-                  t={t}
-                />
-              ))}
-            </div>
-          </section>
+          <MessageCircle size={18} aria-hidden="true" />
+        </div>
+        <div className="managementList">
+          {channelPolicies.map((policy) => (
+            <PlatformChannelProviderPolicy
+              key={`${policy.provider}:${policy.channelType}`}
+              channelCatalog={channelCatalog}
+              locale={locale}
+              policy={policy}
+              t={t}
+            />
+          ))}
         </div>
       </section>
-    </AppFrame>
+
+      <section
+        className="settingsPanel"
+        aria-labelledby="platform-channel-catalog-title"
+      >
+        <div className="sectionHeader">
+          <div>
+            <p className="eyebrow">{t("platform.channels.catalog")}</p>
+            <h2 className="sectionTitle" id="platform-channel-catalog-title">
+              {t("platform.channels.catalogTitle")}
+            </h2>
+            <p className="metaText">
+              {t("platform.channels.catalogDescription")}
+            </p>
+          </div>
+          <span className="badge">
+            <Settings2 size={14} aria-hidden="true" />
+            {channelCatalog.length}
+          </span>
+        </div>
+
+        <div className="managementList">
+          {channelCatalog.map((channel) => (
+            <PlatformChannelCatalogRow
+              key={channel.channelType}
+              channel={channel}
+              locale={locale}
+              t={t}
+            />
+          ))}
+        </div>
+      </section>
+    </PlatformAdminShell>
   );
 }
 

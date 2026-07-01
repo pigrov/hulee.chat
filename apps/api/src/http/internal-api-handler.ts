@@ -188,6 +188,10 @@ type RouteMatch =
       route: "channel_connector_create";
     }
   | {
+      route: "channel_connector_enable";
+      connectorId: string;
+    }
+  | {
       route: "channel_connector_disable";
       connectorId: string;
     }
@@ -680,6 +684,15 @@ async function handleAuthenticatedRoute(input: {
       return jsonResponse(201, response);
     }
 
+    case "channel_connector_enable": {
+      const response: InternalChannelConnectorSummary =
+        await input.integrations.enableChannelConnector(input.session, {
+          connectorId: input.route.connectorId
+        });
+
+      return jsonResponse(200, response);
+    }
+
     case "channel_connector_disable": {
       const response: InternalChannelConnectorSummary =
         await input.integrations.disableChannelConnector(input.session, {
@@ -868,6 +881,7 @@ function internalRouteAuthorizationPolicy(
     case "channel_catalog_view":
     case "channel_connectors_view":
     case "channel_connector_create":
+    case "channel_connector_enable":
     case "channel_connector_disable":
     case "channel_connector_delete":
     case "channel_auth_challenge_start":
@@ -1099,6 +1113,17 @@ function matchRoute(request: ApiHttpRequest): RouteMatch | undefined {
   const connectorDisableMatch = path.match(
     /^\/internal\/v1\/channels\/connectors\/([^/]+)\/disable$/
   );
+
+  const connectorEnableMatch = path.match(
+    /^\/internal\/v1\/channels\/connectors\/([^/]+)\/enable$/
+  );
+
+  if (request.method === "POST" && connectorEnableMatch?.[1]) {
+    return {
+      route: "channel_connector_enable",
+      connectorId: decodeURIComponent(connectorEnableMatch[1])
+    };
+  }
 
   if (request.method === "POST" && connectorDisableMatch?.[1]) {
     return {

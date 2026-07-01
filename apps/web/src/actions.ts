@@ -22,6 +22,7 @@ import {
   deleteChannelConnector,
   deleteTelegramWebhook,
   disableChannelConnector,
+  enableChannelConnector,
   refreshTelegramDiagnostics,
   sendInboxReply,
   setTelegramWebhook,
@@ -396,6 +397,25 @@ export async function disableChannelConnectorAction(
     `/admin/integrations?connectorId=${encodeURIComponent(
       connectorId
     )}&channelStatus=disabled`
+  );
+}
+
+export async function enableChannelConnectorAction(
+  formData: FormData
+): Promise<void> {
+  await assertWebActionRequest();
+  const internalApiAccess = await assertVerifiedTenantPermission(
+    "modules.manage",
+    "/admin/integrations"
+  );
+  const connectorId = readRequiredFormString(formData, "connectorId").trim();
+
+  await enableChannelConnector({ connectorId }, internalApiAccess);
+  revalidateTelegramIntegrationPaths();
+  redirect(
+    `/admin/integrations?connectorId=${encodeURIComponent(
+      connectorId
+    )}&channelStatus=enabled`
   );
 }
 

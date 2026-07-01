@@ -288,12 +288,13 @@ describe("internal integrations service", () => {
     );
   });
 
-  it("disables and soft-deletes tenant channel connectors", async () => {
+  it("disables, enables and soft-deletes tenant channel connectors", async () => {
     const repository = new InMemoryChannelConnectorRepository([
       createTelegramConnector({
         config: {
           channelExternalId: "telegram-local",
           mode: "webhook",
+          botTokenSecretRef: "secret:telegram",
           outboundEnabled: false
         },
         diagnostics: {
@@ -304,7 +305,7 @@ describe("internal integrations service", () => {
             configValid: true,
             inboundWebhookReady: false,
             outboundEnabled: false,
-            botTokenSecretRefConfigured: false
+            botTokenSecretRefConfigured: true
           }
         }
       })
@@ -331,6 +332,30 @@ describe("internal integrations service", () => {
       healthStatus: "unknown",
       diagnostics: {
         status: "disabled"
+      }
+    });
+
+    await expect(
+      service.enableChannelConnector(context, {
+        connectorId: "telegram_bot:tenant-integrations"
+      })
+    ).resolves.toMatchObject({
+      connectorId: "telegram_bot:tenant-integrations",
+      status: "connected",
+      healthStatus: "healthy",
+      diagnosticsStatus: "configured"
+    });
+    expect(
+      repository.records.get("telegram_bot:tenant-integrations")
+    ).toMatchObject({
+      status: "connected",
+      healthStatus: "healthy",
+      diagnostics: {
+        status: "configured",
+        checks: {
+          moduleEnabled: true,
+          botTokenSecretRefConfigured: true
+        }
       }
     });
 

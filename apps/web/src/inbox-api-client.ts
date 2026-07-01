@@ -547,6 +547,39 @@ export async function disableChannelConnector(
   return internalChannelConnectorSummarySchema.parse(await response.json());
 }
 
+export async function enableChannelConnector(
+  input: { connectorId: string },
+  options: InternalApiAccessOptions<"modules.manage">
+): Promise<ChannelConnectorViewModel> {
+  const connectorId = input.connectorId.trim();
+  const url = new URL(
+    `/internal/v1/channels/connectors/${encodeURIComponent(
+      connectorId
+    )}/enable`,
+    resolveInternalApiBaseUrl()
+  );
+  const response = await fetch(url, {
+    method: "POST",
+    cache: "no-store",
+    headers: await buildInternalApiHeaders({
+      method: "POST",
+      path: internalPath(url),
+      effectivePermissionOverride: requireEffectivePermissionOverride(
+        options,
+        "modules.manage"
+      )
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Internal channel connector enable API returned HTTP ${response.status}.`
+    );
+  }
+
+  return internalChannelConnectorSummarySchema.parse(await response.json());
+}
+
 export async function deleteChannelConnector(
   input: { connectorId: string },
   options: InternalApiAccessOptions<"modules.manage">
