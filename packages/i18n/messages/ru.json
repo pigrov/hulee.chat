@@ -4,6 +4,8 @@
   "navigation.inbox": "Входящие",
   "navigation.admin": "Администрирование",
   "navigation.platformAdmin": "Админ платформы",
+  "navigation.help": "Есть вопросы?",
+  "navigation.menu": "Открыть меню",
   "access.denied.eyebrow": "Доступ",
   "access.denied.title": "Недостаточно прав",
   "access.denied.description": "Этот раздел недоступен для текущей роли.",

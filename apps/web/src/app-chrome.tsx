@@ -33,6 +33,7 @@ export function AppFrame({
   children,
   current,
   frameClassName,
+  navigationMode = "rail",
   navigationAccess,
   t,
   toasts
@@ -41,6 +42,7 @@ export function AppFrame({
   children: ReactNode;
   current: AppNavigationSection;
   frameClassName?: string;
+  navigationMode?: "rail" | "none";
   navigationAccess?: NavigationAccess;
   t: Translator;
   toasts?: readonly ToastMessage[];
@@ -52,48 +54,50 @@ export function AppFrame({
 
   return (
     <main className={className} style={brandProfileToCssProperties(brand)}>
-      <nav className="navigationRail" aria-label={t("navigation.primary")}>
-        <div className="brandMark" title={productName}>
-          {buildBrandMarkLabel(brand)}
-        </div>
-        <Link
-          className="railButton"
-          href="/"
-          aria-label={t("navigation.inbox")}
-          aria-current={current === "inbox" ? "page" : undefined}
-        >
-          <Inbox size={20} aria-hidden="true" />
-        </Link>
-        {(navigationAccess?.tenantAdmin ?? true) ? (
+      {navigationMode === "rail" ? (
+        <nav className="navigationRail" aria-label={t("navigation.primary")}>
+          <div className="brandMark" title={productName}>
+            {buildBrandMarkLabel(brand)}
+          </div>
           <Link
             className="railButton"
-            href="/admin"
-            aria-label={t("navigation.admin")}
-            aria-current={current === "tenant-admin" ? "page" : undefined}
+            href="/"
+            aria-label={t("navigation.inbox")}
+            aria-current={current === "inbox" ? "page" : undefined}
           >
-            <Settings size={20} aria-hidden="true" />
+            <Inbox size={20} aria-hidden="true" />
           </Link>
-        ) : null}
-        {(navigationAccess?.platformAdmin ?? true) ? (
-          <Link
-            className="railButton"
-            href="/platform"
-            aria-label={t("navigation.platformAdmin")}
-            aria-current={current === "platform-admin" ? "page" : undefined}
-          >
-            <ShieldCheck size={20} aria-hidden="true" />
-          </Link>
-        ) : null}
-        <form className="railForm" action={logoutAction}>
-          <button
-            className="railButton"
-            type="submit"
-            aria-label={t("auth.logout")}
-          >
-            <LogOut size={20} aria-hidden="true" />
-          </button>
-        </form>
-      </nav>
+          {(navigationAccess?.tenantAdmin ?? true) ? (
+            <Link
+              className="railButton"
+              href="/admin"
+              aria-label={t("navigation.admin")}
+              aria-current={current === "tenant-admin" ? "page" : undefined}
+            >
+              <Settings size={20} aria-hidden="true" />
+            </Link>
+          ) : null}
+          {(navigationAccess?.platformAdmin ?? true) ? (
+            <Link
+              className="railButton"
+              href="/platform"
+              aria-label={t("navigation.platformAdmin")}
+              aria-current={current === "platform-admin" ? "page" : undefined}
+            >
+              <ShieldCheck size={20} aria-hidden="true" />
+            </Link>
+          ) : null}
+          <form className="railForm" action={logoutAction}>
+            <button
+              className="railButton"
+              type="submit"
+              aria-label={t("auth.logout")}
+            >
+              <LogOut size={20} aria-hidden="true" />
+            </button>
+          </form>
+        </nav>
+      ) : null}
       <ToastViewport
         closeLabel={t("notifications.close")}
         regionLabel={t("notifications.region")}
@@ -101,6 +105,23 @@ export function AppFrame({
       />
       {children}
     </main>
+  );
+}
+
+export function BrandIdentity({
+  brand,
+  productName
+}: {
+  brand: BrandProfileView;
+  productName: string;
+}): ReactNode {
+  return (
+    <div className="appBrandIdentity">
+      <div className="brandMark" title={productName}>
+        {buildBrandMarkLabel(brand)}
+      </div>
+      <span className="brandWordmark">{productName}</span>
+    </div>
   );
 }
 

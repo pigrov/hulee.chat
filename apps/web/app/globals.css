@@ -1,20 +1,21 @@
 :root {
   color-scheme: var(--hulee-color-scheme);
   --hulee-color-scheme: light;
-  --hulee-color-page: #f4f6f3;
+  --hulee-color-page: #f7f9fa;
   --hulee-color-surface-default: #ffffff;
-  --hulee-color-surface-raised: #fbfcfb;
-  --hulee-color-surface-muted: #eef2ed;
-  --hulee-color-border: #d7ded5;
-  --hulee-color-border-strong: #b8c4b4;
-  --hulee-color-text-default: #1f2723;
-  --hulee-color-text-muted: #667269;
-  --hulee-color-brand-primary: #177f75;
+  --hulee-color-surface-raised: #fbfdfc;
+  --hulee-color-surface-muted: #eef7f2;
+  --hulee-color-border: #dbe3e7;
+  --hulee-color-border-strong: #b5c2ca;
+  --hulee-color-text-default: #111827;
+  --hulee-color-text-muted: #64748b;
+  --hulee-color-brand-primary: #047857;
   --hulee-color-brand-foreground: #ffffff;
-  --hulee-color-accent: #c9822b;
-  --hulee-color-success: #217a4d;
-  --hulee-color-danger: #b5474a;
-  --hulee-shadow-focus: 0 0 0 3px rgb(23 127 117 / 18%);
+  --hulee-color-accent: #0f766e;
+  --hulee-color-success: #059669;
+  --hulee-color-danger: #dc2626;
+  --hulee-shadow-focus: 0 0 0 3px
+    color-mix(in srgb, var(--hulee-color-brand-primary) 20%, transparent);
   --hulee-radius-control: 8px;
   --hulee-space-block: 8px;
   --hulee-font-sans:
@@ -25,19 +26,19 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --hulee-color-scheme: dark;
-    --hulee-color-page: #171b19;
-    --hulee-color-surface-default: #202622;
-    --hulee-color-surface-raised: #252d29;
-    --hulee-color-surface-muted: #2f3934;
-    --hulee-color-border: #3d4943;
-    --hulee-color-border-strong: #56655d;
-    --hulee-color-text-default: #eef4ef;
-    --hulee-color-text-muted: #aeb9b1;
-    --hulee-color-brand-primary: #53c5b9;
-    --hulee-color-brand-foreground: #10211f;
-    --hulee-color-accent: #e0a64c;
-    --hulee-color-success: #70d69b;
-    --hulee-color-danger: #e07478;
+    --hulee-color-page: #081015;
+    --hulee-color-surface-default: #111a20;
+    --hulee-color-surface-raised: #151f26;
+    --hulee-color-surface-muted: #1c2a31;
+    --hulee-color-border: #26343d;
+    --hulee-color-border-strong: #40515c;
+    --hulee-color-text-default: #f4f7f8;
+    --hulee-color-text-muted: #a8b6bf;
+    --hulee-color-brand-primary: #34d399;
+    --hulee-color-brand-foreground: #06251a;
+    --hulee-color-accent: #38bdf8;
+    --hulee-color-success: #34d399;
+    --hulee-color-danger: #fb7185;
   }
 }
 
@@ -99,6 +100,25 @@ textarea {
   font-weight: 700;
   overflow: hidden;
   text-transform: uppercase;
+}
+
+.appBrandIdentity {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+}
+
+.brandWordmark {
+  min-width: 0;
+  color: var(--hulee-color-text-default);
+  font-size: 16px;
+  font-weight: 750;
+  letter-spacing: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .railButton {
@@ -984,7 +1004,9 @@ a.secondaryButton {
 }
 
 .adminFrame {
-  grid-template-columns: 72px minmax(0, 1fr);
+  display: block;
+  min-height: 100vh;
+  background: var(--hulee-color-page);
 }
 
 .adminWorkspace {
@@ -993,15 +1015,165 @@ a.secondaryButton {
   background: var(--hulee-color-page);
 }
 
-.adminHeader {
+.adminTopBar {
   display: flex;
-  min-height: 88px;
+  min-height: 80px;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 18px 24px;
+  gap: 20px;
+  padding: 20px 28px;
   border-bottom: 1px solid var(--hulee-color-border);
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-surface-default) 90%,
+    transparent
+  );
+}
+
+.adminTopIdentity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 28px;
+}
+
+.adminTitleBlock {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.adminTopActions {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 14px;
+}
+
+.topHelpLink {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 7px;
+  color: var(--hulee-color-text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.topHelpLink[href]:hover,
+.topHelpLink[href]:focus-visible {
+  color: var(--hulee-color-text-default);
+  outline: none;
+}
+
+.topHelpLink[aria-disabled="true"] {
+  cursor: default;
+}
+
+.topNavMenu {
+  position: relative;
+}
+
+.topNavTrigger {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--hulee-radius-control);
+  color: var(--hulee-color-text-default);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+  list-style: none;
+}
+
+.topNavTrigger::-webkit-details-marker {
+  display: none;
+}
+
+.topNavTrigger:hover,
+.topNavTrigger:focus-visible,
+.topNavMenu[open] .topNavTrigger {
+  border-color: var(--hulee-color-border);
+  background: var(--hulee-color-surface-raised);
+  outline: none;
+  box-shadow: var(--hulee-shadow-focus);
+}
+
+.topNavMenuPanel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 10px);
+  right: 0;
+  display: grid;
+  width: min(320px, calc(100vw - 24px));
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
   background: var(--hulee-color-surface-default);
+  box-shadow: 0 20px 48px
+    color-mix(in srgb, var(--hulee-color-text-default) 16%, transparent);
+}
+
+.topNavMenuGroup,
+.topNavLogoutForm {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.topNavMenuGroup + .topNavMenuGroup,
+.topNavLogoutForm {
+  padding-top: 8px;
+  border-top: 1px solid var(--hulee-color-border);
+}
+
+.topNavMenuItem {
+  display: grid;
+  min-height: 38px;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--hulee-radius-control);
+  background: transparent;
+  color: var(--hulee-color-text-default);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+}
+
+.topNavMenuItem:hover,
+.topNavMenuItem:focus-visible,
+.topNavMenuItem[aria-current="page"] {
+  border-color: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 34%,
+    var(--hulee-color-border)
+  );
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 11%,
+    var(--hulee-color-surface-raised)
+  );
+  outline: none;
+}
+
+.topNavMenuIcon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-muted);
+  color: var(--hulee-color-brand-primary);
 }
 
 .adminTitle {
@@ -1012,14 +1184,14 @@ a.secondaryButton {
 
 .adminContent {
   display: grid;
-  gap: var(--hulee-space-block);
-  padding: var(--hulee-space-block);
+  gap: 12px;
+  padding: 12px;
 }
 
 .adminGrid {
   display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
-  gap: var(--hulee-space-block);
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
   align-items: start;
 }
 
@@ -1037,23 +1209,27 @@ a.secondaryButton {
 .settingsPanel {
   display: grid;
   min-width: 0;
-  gap: var(--hulee-space-block);
-  padding: var(--hulee-space-block);
+  gap: 16px;
+  padding: 20px;
   border: 1px solid var(--hulee-color-border);
   border-radius: var(--hulee-radius-control);
-  background: var(--hulee-color-surface-default);
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-surface-default) 92%,
+    transparent
+  );
 }
 
 .integrationCatalog {
   position: sticky;
-  top: 20px;
+  top: 12px;
 }
 
 .adminIntegrationGrid {
   display: grid;
   min-width: 0;
-  grid-template-columns: 320px minmax(0, 1fr);
-  gap: var(--hulee-space-block);
+  grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
+  gap: 12px;
   align-items: start;
 }
 
@@ -1522,8 +1698,8 @@ a.secondaryButton {
   min-width: 0;
   align-items: center;
   justify-content: space-between;
-  gap: var(--hulee-space-block);
-  padding: var(--hulee-space-block);
+  gap: 12px;
+  padding: 14px;
   border: 1px solid var(--hulee-color-border);
   border-radius: var(--hulee-radius-control);
   background: var(--hulee-color-surface-raised);
@@ -2209,14 +2385,31 @@ button.managementRow:focus-visible {
     width: 100%;
   }
 
-  .adminHeader {
+  .adminTopBar {
     align-items: flex-start;
     flex-direction: column;
     padding: 16px;
   }
 
+  .adminTopIdentity {
+    width: 100%;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .adminTopActions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .topNavMenuPanel {
+    left: auto;
+    right: 0;
+  }
+
   .adminContent {
-    padding: var(--hulee-space-block);
+    padding: 8px;
   }
 
   .adminGrid,

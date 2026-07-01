@@ -1,5 +1,6 @@
 import type { createTranslator } from "@hulee/i18n";
 import {
+  Inbox,
   KeyRound,
   LayoutDashboard,
   Network,
@@ -7,15 +8,20 @@ import {
   Plug,
   ScrollText,
   ShieldCheck,
+  Settings,
   Users
 } from "lucide-react";
-import Link from "next/link";
 import type { ReactNode } from "react";
 
 import {
   isTenantEmailVerificationRequired,
   type WebAccessSession
 } from "./access";
+import {
+  AdminTopBar,
+  type AdminTopBarMenuGroup,
+  type AdminTopBarMenuItem
+} from "./admin-top-bar";
 import { AppFrame, SlotMount } from "./app-chrome";
 import { resendEmailVerificationAction } from "./auth-actions";
 import {
@@ -33,6 +39,7 @@ type BrandProfileView = {
   productName: string;
   shortProductName?: string;
   themeTokens: Record<string, string>;
+  links?: Record<string, string>;
 };
 
 export function TenantAdminShell({
@@ -72,102 +79,117 @@ export function TenantAdminShell({
       ? "/admin"
       : (visibleSections.find((section) => section.id === current)?.href ??
         "/admin");
+  const navigationAccess = navigationAccessFromTenantAdminAccess(adminAccess);
+  const menuGroups = buildTenantAdminMenuGroups({
+    current,
+    navigationAccess,
+    sections: visibleSections,
+    t
+  });
 
   return (
     <AppFrame
       brand={brand}
       current="tenant-admin"
       frameClassName="adminFrame"
-      navigationAccess={navigationAccessFromTenantAdminAccess(adminAccess)}
+      navigationAccess={navigationAccess}
+      navigationMode="none"
       t={t}
       toasts={toasts}
     >
       <section className="adminWorkspace" aria-labelledby={titleId}>
-        <header className="adminHeader">
-          <div>
-            <p className="eyebrow">{tenantDisplayName}</p>
-            <h1 className="adminTitle" id={titleId}>
-              {title}
-            </h1>
-          </div>
-          <span className="badge">
-            <ShieldCheck size={14} aria-hidden="true" />
-            {t("admin.scope.tenant")}
-          </span>
-        </header>
+        <AdminTopBar
+          brand={brand}
+          eyebrow={tenantDisplayName}
+          menuGroups={menuGroups}
+          roleLabel={t("admin.scope.tenant")}
+          t={t}
+          title={title}
+          titleId={titleId}
+        />
 
         <div className="adminContent">
-          <div className="adminGrid">
-            <aside
-              className="settingsPanel adminNavPanel"
-              aria-labelledby="admin-nav-title"
+          {shouldRequireEmailVerification ? (
+            <form
+              className="settingsPanel inlineNoticeForm adminNoticePanel"
+              action={resendEmailVerificationAction}
             >
-              <h2 className="sectionTitle" id="admin-nav-title">
-                {t("admin.sections")}
-              </h2>
-
-              <nav
-                className="managementList"
-                aria-label={t("admin.navigation")}
-              >
-                {visibleSections.map((section) => (
-                  <TenantAdminNavLink
-                    current={current === section.id}
-                    key={section.id}
-                    section={section}
-                    t={t}
-                  />
-                ))}
-              </nav>
-
-              {shouldRequireEmailVerification ? (
-                <form
-                  className="inlineNoticeForm"
-                  action={resendEmailVerificationAction}
-                >
-                  <input name="returnTo" type="hidden" value={currentPath} />
-                  <p className="formNotice">
-                    {t("auth.emailVerification.status.required")}
-                  </p>
-                  <button className="secondaryButton" type="submit">
-                    {t("auth.emailVerification.resend")}
-                  </button>
-                </form>
-              ) : null}
-
+              <input name="returnTo" type="hidden" value={currentPath} />
+              <p className="formNotice">
+                {t("auth.emailVerification.status.required")}
+              </p>
+              <button className="secondaryButton" type="submit">
+                {t("auth.emailVerification.resend")}
+              </button>
+            </form>
+          ) : null}
+          {sidebarContent ? (
+            <aside className="settingsPanel adminAuxPanel">
               {sidebarContent}
-              <SlotMount slot="admin.section" />
             </aside>
-
-            {children}
-          </div>
+          ) : null}
+          <SlotMount slot="admin.section" />
+          {children}
         </div>
       </section>
     </AppFrame>
   );
 }
 
-function TenantAdminNavLink({
+function buildTenantAdminMenuGroups({
   current,
-  section,
+  navigationAccess,
+  sections,
   t
 }: {
-  current: boolean;
-  section: TenantAdminSection;
+  current: TenantAdminSectionId;
+  navigationAccess: {
+    readonly tenantAdmin: boolean;
+    readonly platformAdmin: boolean;
+  };
+  sections: readonly TenantAdminSection[];
   t: Translator;
-}): ReactNode {
-  return (
-    <Link
-      className="managementRow adminNavLink"
-      href={section.href}
-      aria-current={current ? "page" : undefined}
-    >
-      <span className="metricIcon">
-        <TenantAdminSectionIcon sectionId={section.id} />
-      </span>
-      <span className="listItemTitle">{t(section.titleKey)}</span>
-    </Link>
-  );
+}): readonly AdminTopBarMenuGroup[] {
+  const primaryItems: AdminTopBarMenuItem[] = [
+    {
+      href: "/",
+      icon: <Inbox size={16} aria-hidden="true" />,
+      title: t("navigation.inbox")
+    }
+  ];
+
+  if (navigationAccess.tenantAdmin) {
+    primaryItems.push({
+      href: "/admin",
+      icon: <Settings size={16} aria-hidden="true" />,
+      title: t("navigation.admin"),
+      current: current === "overview"
+    });
+  }
+
+  if (navigationAccess.platformAdmin) {
+    primaryItems.push({
+      href: "/platform",
+      icon: <ShieldCheck size={16} aria-hidden="true" />,
+      title: t("navigation.platformAdmin")
+    });
+  }
+
+  return [
+    {
+      title: t("navigation.primary"),
+      items: primaryItems
+    },
+    {
+      title: t("admin.sections"),
+      items: sections.map((section) => ({
+        href: section.href,
+        icon: <TenantAdminSectionIcon sectionId={section.id} />,
+        title: t(section.titleKey),
+        current: current === section.id
+      }))
+    }
+  ];
 }
 
 function TenantAdminSectionIcon({
