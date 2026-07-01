@@ -18,6 +18,7 @@ export type LocalizedTextOverrides = Readonly<Record<string, string>>;
 export type DeploymentChannelCatalogOverrideRecord = {
   channelType: InternalChannelType;
   titleOverrides: LocalizedTextOverrides;
+  shortDescriptionOverrides: LocalizedTextOverrides;
   descriptionOverrides: LocalizedTextOverrides;
   iconAssetRef?: string;
   sortOrder?: number;
@@ -47,6 +48,7 @@ export type DeploymentChannelCatalogOverrideRepository = {
 type DeploymentChannelCatalogOverrideRow = {
   channel_type: string;
   title_overrides: unknown;
+  short_description_overrides: unknown;
   description_overrides: unknown;
   icon_asset_ref: string | null;
   sort_order: number | null;
@@ -93,6 +95,7 @@ export function buildListDeploymentChannelCatalogOverridesSql(): SQL {
   return sql`
     select channel_type,
            title_overrides,
+           short_description_overrides,
            description_overrides,
            icon_asset_ref,
            sort_order,
@@ -112,6 +115,7 @@ export function buildFindDeploymentChannelCatalogOverrideSql(
   return sql`
     select channel_type,
            title_overrides,
+           short_description_overrides,
            description_overrides,
            icon_asset_ref,
            sort_order,
@@ -132,6 +136,7 @@ export function buildUpsertDeploymentChannelCatalogOverrideSql(
     insert into deployment_channel_catalog_overrides (
       channel_type,
       title_overrides,
+      short_description_overrides,
       description_overrides,
       icon_asset_ref,
       sort_order,
@@ -144,6 +149,7 @@ export function buildUpsertDeploymentChannelCatalogOverrideSql(
     values (
       ${input.channelType},
       ${JSON.stringify(input.titleOverrides)}::jsonb,
+      ${JSON.stringify(input.shortDescriptionOverrides)}::jsonb,
       ${JSON.stringify(input.descriptionOverrides)}::jsonb,
       ${input.iconAssetRef ?? null},
       ${input.sortOrder ?? null},
@@ -155,6 +161,7 @@ export function buildUpsertDeploymentChannelCatalogOverrideSql(
     )
     on conflict (channel_type) do update
     set title_overrides = excluded.title_overrides,
+        short_description_overrides = excluded.short_description_overrides,
         description_overrides = excluded.description_overrides,
         icon_asset_ref = excluded.icon_asset_ref,
         sort_order = excluded.sort_order,
@@ -171,6 +178,9 @@ function mapDeploymentChannelCatalogOverrideRow(
   return {
     channelType: parseChannelType(row.channel_type),
     titleOverrides: parseLocalizedShortTextOverrides(row.title_overrides),
+    shortDescriptionOverrides: parseLocalizedShortTextOverrides(
+      row.short_description_overrides
+    ),
     descriptionOverrides: parseLocalizedMarkdownTextOverrides(
       row.description_overrides
     ),

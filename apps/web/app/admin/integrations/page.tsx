@@ -34,6 +34,7 @@ import { ChannelAuthChallengePanel } from "../../../src/channel-auth-challenge-p
 import {
   ChannelIcon,
   resolveChannelDescription,
+  resolveChannelShortDescription,
   resolveChannelTitle
 } from "../../../src/channel-display";
 import {
@@ -612,7 +613,9 @@ function CatalogListItem({
             fallback: channel.channelType
           })}
         </h3>
-        <p className="metaText">{channel.provider}</p>
+        <p className="metaText">
+          {resolveChannelShortDescription({ channel, locale, t })}
+        </p>
       </div>
     </Link>
   );

@@ -194,6 +194,9 @@ export const deploymentChannelCatalogOverrides = pgTable(
   {
     channelType: text("channel_type").primaryKey(),
     titleOverrides: jsonb("title_overrides").notNull().default({}),
+    shortDescriptionOverrides: jsonb("short_description_overrides")
+      .notNull()
+      .default({}),
     descriptionOverrides: jsonb("description_overrides").notNull().default({}),
     iconAssetRef: text("icon_asset_ref"),
     sortOrder: integer("sort_order"),

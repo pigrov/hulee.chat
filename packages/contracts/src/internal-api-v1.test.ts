@@ -752,6 +752,10 @@ describe("internal API v1 schemas", () => {
             titleOverrides: {
               ru: "Telegram"
             },
+            shortDescriptionKey: "integrations.catalog.telegramBot.description",
+            shortDescriptionOverrides: {
+              ru: "Telegram bot"
+            },
             descriptionKey: "integrations.catalog.telegramBot.description",
             descriptionOverrides: {
               ru: markdownDescription

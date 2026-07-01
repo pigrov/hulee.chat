@@ -134,6 +134,9 @@ describe("internal integrations service", () => {
           titleOverrides: {
             ru: "Telegram"
           },
+          shortDescriptionOverrides: {
+            ru: "Telegram bot"
+          },
           descriptionOverrides: {
             ru: "Bot channel"
           },
@@ -146,6 +149,7 @@ describe("internal integrations service", () => {
         {
           channelType: "max_bot",
           titleOverrides: {},
+          shortDescriptionOverrides: {},
           descriptionOverrides: {},
           sortOrder: 1,
           visibility: "hidden",
@@ -163,6 +167,9 @@ describe("internal integrations service", () => {
     expect(telegram).toMatchObject({
       titleOverrides: {
         ru: "Telegram"
+      },
+      shortDescriptionOverrides: {
+        ru: "Telegram bot"
       },
       descriptionOverrides: {
         ru: "Bot channel"

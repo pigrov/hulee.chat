@@ -16,6 +16,7 @@ export type PlatformChannelCatalogDefinition = {
   channelClass: InternalChannelClass;
   provider: string;
   titleKey: I18nMessageKey;
+  shortDescriptionKey: I18nMessageKey;
   descriptionKey: I18nMessageKey;
   defaultReadiness: InternalChannelReadiness;
   defaultSortOrder: number;
@@ -23,6 +24,7 @@ export type PlatformChannelCatalogDefinition = {
 
 export type PlatformChannelCatalogView = PlatformChannelCatalogDefinition & {
   titleOverrides: LocalizedTextOverrides;
+  shortDescriptionOverrides: LocalizedTextOverrides;
   descriptionOverrides: LocalizedTextOverrides;
   iconAssetRef?: string;
   iconUrl?: string;
@@ -40,6 +42,7 @@ export const platformChannelCatalogDefinitions = [
     channelClass: "bot_bridge",
     provider: "telegram",
     titleKey: "integrations.catalog.telegramBot.title",
+    shortDescriptionKey: "integrations.catalog.telegramBot.description",
     descriptionKey: "integrations.catalog.telegramBot.description",
     defaultReadiness: "available",
     defaultSortOrder: 100
@@ -49,6 +52,7 @@ export const platformChannelCatalogDefinitions = [
     channelClass: "user_bridge",
     provider: "telegram",
     titleKey: "integrations.catalog.telegramQr.title",
+    shortDescriptionKey: "integrations.catalog.telegramQr.description",
     descriptionKey: "integrations.catalog.telegramQr.description",
     defaultReadiness: "coming_soon",
     defaultSortOrder: 200
@@ -58,6 +62,7 @@ export const platformChannelCatalogDefinitions = [
     channelClass: "user_bridge",
     provider: "whatsapp",
     titleKey: "integrations.catalog.whatsappQr.title",
+    shortDescriptionKey: "integrations.catalog.whatsappQr.description",
     descriptionKey: "integrations.catalog.whatsappQr.description",
     defaultReadiness: "coming_soon",
     defaultSortOrder: 300
@@ -67,6 +72,7 @@ export const platformChannelCatalogDefinitions = [
     channelClass: "bot_bridge",
     provider: "max",
     titleKey: "integrations.catalog.maxBot.title",
+    shortDescriptionKey: "integrations.catalog.maxBot.description",
     descriptionKey: "integrations.catalog.maxBot.description",
     defaultReadiness: "coming_soon",
     defaultSortOrder: 400
@@ -76,6 +82,7 @@ export const platformChannelCatalogDefinitions = [
     channelClass: "user_bridge",
     provider: "max",
     titleKey: "integrations.catalog.maxQr.title",
+    shortDescriptionKey: "integrations.catalog.maxQr.description",
     descriptionKey: "integrations.catalog.maxQr.description",
     defaultReadiness: "coming_soon",
     defaultSortOrder: 500
@@ -85,6 +92,7 @@ export const platformChannelCatalogDefinitions = [
     channelClass: "official_api",
     provider: "vk",
     titleKey: "integrations.catalog.vkCommunity.title",
+    shortDescriptionKey: "integrations.catalog.vkCommunity.description",
     descriptionKey: "integrations.catalog.vkCommunity.description",
     defaultReadiness: "coming_soon",
     defaultSortOrder: 600
@@ -119,6 +127,7 @@ export function buildChannelCatalogOverridePersistenceInput(input: {
   definition: PlatformChannelCatalogDefinition;
   previous?: DeploymentChannelCatalogOverrideRecord | null;
   titleOverrides: LocalizedTextOverrides;
+  shortDescriptionOverrides: LocalizedTextOverrides;
   descriptionOverrides: LocalizedTextOverrides;
   iconAssetRef?: string;
   sortOrder?: number;
@@ -130,6 +139,7 @@ export function buildChannelCatalogOverridePersistenceInput(input: {
   return {
     channelType: input.definition.channelType,
     titleOverrides: input.titleOverrides,
+    shortDescriptionOverrides: input.shortDescriptionOverrides,
     descriptionOverrides: input.descriptionOverrides,
     sortOrder: input.sortOrder ?? input.definition.defaultSortOrder,
     visibility: input.visibility,
@@ -183,6 +193,7 @@ function viewFromDefinition(input: {
   return {
     ...input.definition,
     titleOverrides: input.override?.titleOverrides ?? {},
+    shortDescriptionOverrides: input.override?.shortDescriptionOverrides ?? {},
     descriptionOverrides: input.override?.descriptionOverrides ?? {},
     ...(iconAssetRef
       ? {

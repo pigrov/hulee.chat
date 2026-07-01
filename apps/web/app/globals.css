@@ -1019,6 +1019,14 @@ a.secondaryButton {
   align-items: start;
 }
 
+.platformChannelGrid {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: var(--hulee-space-block);
+  align-items: start;
+}
+
 .integrationList,
 .managementList {
   display: grid;
@@ -1561,8 +1569,24 @@ a.secondaryButton {
   align-items: flex-start;
 }
 
+.channelCatalogSettingsForm {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 8px;
+  align-items: flex-start;
+}
+
 .channelCatalogForm .primaryButton {
   justify-self: start;
+}
+
+.channelCatalogSettingsForm .primaryButton {
+  justify-self: start;
+}
+
+.channelCatalogDescriptionField {
+  grid-column: 1 / -1;
 }
 
 .channelCatalogDescriptionInput {
@@ -2116,6 +2140,7 @@ button.managementRow:focus-visible {
   .adminGrid,
   .platformAdminGrid,
   .adminIntegrationGrid,
+  .platformChannelGrid,
   .adminOverviewGrid,
   .employeeAccessTabs,
   .orgStructureTabs,
@@ -2140,6 +2165,7 @@ button.managementRow:focus-visible {
   .managementRow.channelCatalogRow,
   .managementRow.platformTenantRow,
   .channelCatalogForm,
+  .channelCatalogSettingsForm,
   .scopePickerGrid,
   .roleEditorGrid,
   .roleSubjectGrid,

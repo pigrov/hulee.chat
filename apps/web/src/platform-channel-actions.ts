@@ -22,6 +22,7 @@ import { getWebDatabase, requireCurrentWebAccessSession } from "./session";
 export async function updatePlatformChannelProviderPolicyAction(
   formData: FormData
 ): Promise<void> {
+  let selectedChannelType: string | undefined;
   let destination = "/platform/channels?channelPolicy=invalid";
 
   try {
@@ -35,6 +36,7 @@ export async function updatePlatformChannelProviderPolicyAction(
     const channelType = internalChannelTypeSchema.parse(
       readRequiredFormString(formData, "channelType")
     );
+    selectedChannelType = channelType;
     const inboundMode = internalTelegramIntegrationModeSchema.parse(
       readRequiredFormString(formData, "inboundMode")
     );
@@ -71,13 +73,34 @@ export async function updatePlatformChannelProviderPolicyAction(
       occurredAt: updatedAt
     });
 
-    destination = "/platform/channels?channelPolicy=updated";
+    destination = platformChannelsDestination({
+      channelType,
+      status: "updated"
+    });
   } catch {
-    destination = "/platform/channels?channelPolicy=invalid";
+    destination = platformChannelsDestination({
+      channelType: selectedChannelType,
+      status: "invalid"
+    });
   }
 
   revalidatePath("/platform/channels");
   redirect(destination);
+}
+
+function platformChannelsDestination(input: {
+  channelType?: string;
+  status: "updated" | "invalid";
+}): string {
+  const params = new URLSearchParams({
+    channelPolicy: input.status
+  });
+
+  if (input.channelType) {
+    params.set("channelType", input.channelType);
+  }
+
+  return `/platform/channels?${params.toString()}`;
 }
 
 function serializePolicyForAudit(

@@ -39,6 +39,29 @@ export function resolveChannelDescription(input: {
   );
 }
 
+export function resolveChannelShortDescription(input: {
+  channel: Pick<
+    InternalChannelCatalogItem,
+    | "descriptionKey"
+    | "descriptionOverrides"
+    | "shortDescriptionKey"
+    | "shortDescriptionOverrides"
+  >;
+  locale: string;
+  t: Translator;
+}): string {
+  return (
+    resolveLocalizedOverride(
+      input.channel.shortDescriptionOverrides,
+      input.locale
+    ) ??
+    (input.channel.shortDescriptionKey
+      ? input.t(input.channel.shortDescriptionKey as I18nMessageKey)
+      : undefined) ??
+    resolveChannelDescription(input)
+  );
+}
+
 export function ChannelIcon({
   channel,
   channelClass

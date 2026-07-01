@@ -740,6 +740,8 @@ export const internalChannelCatalogItemSchema = z
     channelClass: internalChannelClassSchema,
     provider: z.string().trim().min(1).max(80),
     titleKey: z.string().trim().min(1).max(120),
+    shortDescriptionKey: z.string().trim().min(1).max(160).optional(),
+    shortDescriptionOverrides: internalLocalizedTextOverridesSchema.optional(),
     descriptionKey: z.string().trim().min(1).max(160),
     titleOverrides: internalLocalizedTextOverridesSchema.optional(),
     descriptionOverrides:

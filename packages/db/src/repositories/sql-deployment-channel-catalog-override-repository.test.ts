@@ -23,6 +23,9 @@ describe("SQL deployment channel catalog override repository", () => {
             ru: "Telegram",
             en: "Telegram"
           },
+          short_description_overrides: {
+            ru: "Bot"
+          },
           description_overrides: {
             ru: "Bot channel"
           },
@@ -42,6 +45,9 @@ describe("SQL deployment channel catalog override repository", () => {
         titleOverrides: {
           ru: "Telegram",
           en: "Telegram"
+        },
+        shortDescriptionOverrides: {
+          ru: "Bot"
         },
         descriptionOverrides: {
           ru: "Bot channel"
@@ -70,6 +76,9 @@ describe("SQL deployment channel catalog override repository", () => {
         titleOverrides: {
           ru: "Telegram"
         },
+        shortDescriptionOverrides: {
+          ru: "Bot"
+        },
         descriptionOverrides: {},
         iconAssetRef: "deployment/channel-icons/telegram_bot/hash.png",
         sortOrder: 1,
@@ -93,6 +102,7 @@ describe("SQL deployment channel catalog override repository", () => {
         titleOverrides: {
           ru: "Telegram"
         },
+        shortDescriptionOverrides: {},
         descriptionOverrides: {},
         sortOrder: 1,
         visibility: "visible",

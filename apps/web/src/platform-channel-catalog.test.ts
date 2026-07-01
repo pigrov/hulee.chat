@@ -43,6 +43,9 @@ describe("platform channel catalog", () => {
           titleOverrides: {
             ru: "Telegram"
           },
+          shortDescriptionOverrides: {
+            ru: "Telegram bot"
+          },
           descriptionOverrides: {
             ru: "Bot"
           },
@@ -61,6 +64,9 @@ describe("platform channel catalog", () => {
       titleOverrides: {
         ru: "Telegram"
       },
+      shortDescriptionOverrides: {
+        ru: "Telegram bot"
+      },
       iconUrl: "/channel-assets/telegram_bot/icon?v=hash.webp",
       sortOrder: 5,
       visibility: "hidden",
@@ -77,6 +83,7 @@ describe("platform channel catalog", () => {
       previous: {
         channelType: "telegram_bot",
         titleOverrides: {},
+        shortDescriptionOverrides: {},
         descriptionOverrides: {},
         iconAssetRef: "deployment/channel-icons/telegram_bot/hash.webp",
         visibility: "visible",
@@ -84,6 +91,9 @@ describe("platform channel catalog", () => {
       },
       titleOverrides: {
         ru: "Telegram"
+      },
+      shortDescriptionOverrides: {
+        ru: "Telegram bot"
       },
       descriptionOverrides: {},
       sortOrder: 10,

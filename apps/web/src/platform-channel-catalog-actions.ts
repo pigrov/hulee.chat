@@ -38,6 +38,7 @@ const channelIconMediaTypes = {
 export async function updatePlatformChannelCatalogOverrideAction(
   formData: FormData
 ): Promise<void> {
+  let selectedChannelType: string | undefined;
   let destination = "/platform/channels?channelCatalog=invalid";
 
   try {
@@ -48,6 +49,7 @@ export async function updatePlatformChannelCatalogOverrideAction(
     const channelType = internalChannelTypeSchema.parse(
       readRequiredFormString(formData, "channelType")
     );
+    selectedChannelType = channelType;
     const definition = findPlatformChannelCatalogDefinition(channelType);
     const visibility = internalChannelVisibilitySchema.parse(
       readRequiredFormString(formData, "visibility")
@@ -64,6 +66,10 @@ export async function updatePlatformChannelCatalogOverrideAction(
       definition,
       previous,
       titleOverrides: localizedOverridesFromForm(formData, "title"),
+      shortDescriptionOverrides: localizedOverridesFromForm(
+        formData,
+        "shortDescription"
+      ),
       descriptionOverrides: localizedOverridesFromForm(formData, "description"),
       sortOrder: readOptionalInteger(formData, "sortOrder"),
       visibility,
@@ -87,9 +93,17 @@ export async function updatePlatformChannelCatalogOverrideAction(
       occurredAt: updatedAt
     });
 
-    destination = "/platform/channels?channelCatalog=updated";
+    destination = platformChannelsDestination({
+      channelType,
+      statusName: "channelCatalog",
+      status: "updated"
+    });
   } catch {
-    destination = "/platform/channels?channelCatalog=invalid";
+    destination = platformChannelsDestination({
+      channelType: selectedChannelType,
+      statusName: "channelCatalog",
+      status: "invalid"
+    });
   }
 
   revalidateChannelCatalogPaths();
@@ -99,6 +113,7 @@ export async function updatePlatformChannelCatalogOverrideAction(
 export async function uploadPlatformChannelIconAction(
   formData: FormData
 ): Promise<void> {
+  let selectedChannelType: string | undefined;
   let destination = "/platform/channels?channelCatalog=invalid";
 
   try {
@@ -109,6 +124,7 @@ export async function uploadPlatformChannelIconAction(
     const channelType = internalChannelTypeSchema.parse(
       readRequiredFormString(formData, "channelType")
     );
+    selectedChannelType = channelType;
     const definition = findPlatformChannelCatalogDefinition(channelType);
     const iconFile = readRequiredFormFile(formData, "iconFile");
     const mediaType = iconFile.type;
@@ -149,6 +165,7 @@ export async function uploadPlatformChannelIconAction(
       definition,
       previous,
       titleOverrides: previous?.titleOverrides ?? {},
+      shortDescriptionOverrides: previous?.shortDescriptionOverrides ?? {},
       descriptionOverrides: previous?.descriptionOverrides ?? {},
       iconAssetRef: storageKey,
       sortOrder: previous?.sortOrder,
@@ -178,9 +195,17 @@ export async function uploadPlatformChannelIconAction(
       occurredAt: updatedAt
     });
 
-    destination = "/platform/channels?channelCatalog=updated";
+    destination = platformChannelsDestination({
+      channelType,
+      statusName: "channelCatalog",
+      status: "updated"
+    });
   } catch {
-    destination = "/platform/channels?channelCatalog=invalid";
+    destination = platformChannelsDestination({
+      channelType: selectedChannelType,
+      statusName: "channelCatalog",
+      status: "invalid"
+    });
   }
 
   revalidateChannelCatalogPaths();
@@ -189,7 +214,7 @@ export async function uploadPlatformChannelIconAction(
 
 function localizedOverridesFromForm(
   formData: FormData,
-  prefix: "title" | "description"
+  prefix: "title" | "shortDescription" | "description"
 ): LocalizedTextOverrides {
   return {
     ...localizedOverride(formData, `${prefix}Ru`, "ru"),
@@ -219,6 +244,7 @@ function serializeOverrideForAudit(
   return {
     channelType: override.channelType,
     titleOverrides: override.titleOverrides,
+    shortDescriptionOverrides: override.shortDescriptionOverrides,
     descriptionOverrides: override.descriptionOverrides,
     iconAssetRef: override.iconAssetRef,
     sortOrder: override.sortOrder,
@@ -227,6 +253,22 @@ function serializeOverrideForAudit(
     updatedAt: override.updatedAt.toISOString(),
     updatedByPlatformAdminAccountId: override.updatedByPlatformAdminAccountId
   };
+}
+
+function platformChannelsDestination(input: {
+  channelType?: string;
+  statusName: "channelCatalog";
+  status: "updated" | "invalid";
+}): string {
+  const params = new URLSearchParams({
+    [input.statusName]: input.status
+  });
+
+  if (input.channelType) {
+    params.set("channelType", input.channelType);
+  }
+
+  return `/platform/channels?${params.toString()}`;
 }
 
 function readRequiredFormString(formData: FormData, name: string): string {
