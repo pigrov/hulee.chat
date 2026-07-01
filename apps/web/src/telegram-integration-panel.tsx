@@ -1,12 +1,11 @@
 import type { createTranslator, I18nMessageKey } from "@hulee/i18n";
-import { KeyRound, Plug, Power, PowerOff, Trash2 } from "lucide-react";
+import { Plug, Power, PowerOff, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
 
 import {
   deleteChannelConnectorAction,
   disableChannelConnectorAction,
-  enableChannelConnectorAction,
-  updateTelegramIntegrationAction
+  enableChannelConnectorAction
 } from "./actions";
 import { DetailItem } from "./app-chrome";
 import {
@@ -19,10 +18,10 @@ import {
 } from "./formatting";
 import { egressProfileKindKey, egressStatusKey } from "./egress-formatting";
 import type { TelegramIntegrationViewModel } from "./inbox-api-client";
+import { TelegramConnectionForm } from "./telegram-connection-form";
 
 type Translator = ReturnType<typeof createTranslator>["t"];
 type TelegramConfig = NonNullable<TelegramIntegrationViewModel["config"]>;
-type TelegramSetupEditableStep = "name" | "token" | "mode";
 
 export function TelegramIntegrationPanel({
   integration,
@@ -136,74 +135,40 @@ function TelegramCredentialsStep({
   integration: TelegramIntegrationViewModel;
   t: Translator;
 }): ReactNode {
+  const connectorId = integration.connectorId;
+
+  if (!connectorId) {
+    return null;
+  }
+
   return (
-    <>
-      <form
-        id="telegram-connection-form"
-        className="settingsForm setupStepPanel"
-        action={updateTelegramIntegrationAction}
-      >
-        <TelegramStateFields
-          config={config}
-          enableConnector
-          includeMode={false}
-          includeOutbound={false}
-          integration={integration}
-          setupStepCompleted="mode"
-        />
-
-        <p className="metaText">
-          {t("integrations.telegram.connectionDescription")}
-        </p>
-
-        <label className="fieldStack">
-          <span className="detailLabel">
-            {t("integrations.telegram.displayName")}
-          </span>
-          <input
-            className="textInput"
-            name="displayName"
-            defaultValue={telegramDisplayName(integration, t)}
-            required
-          />
-        </label>
-
-        <label className="fieldStack">
-          <span className="detailLabel">
-            {t("integrations.telegram.botToken")}
-          </span>
-          <input
-            className="textInput"
-            type="password"
-            name="botToken"
-            placeholder={t("integrations.telegram.botTokenPlaceholder")}
-            required={!config.botTokenSecretRef}
-          />
-        </label>
-
-        {config.botTokenSecretRef ? (
-          <p className="metaText">
-            {t("integrations.telegram.botTokenAlreadySaved")}
-          </p>
-        ) : null}
-      </form>
-
-      <div className="buttonRow">
-        <button
-          className="primaryButton"
-          form="telegram-connection-form"
-          type="submit"
-        >
-          <KeyRound size={16} aria-hidden="true" />
-          {t(
-            config.botTokenSecretRef
-              ? "integrations.telegram.saveAndCheck"
-              : "integrations.telegram.connectBot"
-          )}
-        </button>
+    <TelegramConnectionForm
+      botTokenSecretRef={config.botTokenSecretRef}
+      channelExternalId={config.channelExternalId}
+      connectorId={connectorId}
+      defaultDisplayName={telegramDisplayName(integration, t)}
+      diagnostics={{
+        checkedAt: integration.diagnostics.checkedAt,
+        botApiReachable: integration.diagnostics.checks.botApiReachable
+      }}
+      labels={{
+        botToken: t("integrations.telegram.botToken"),
+        botTokenAlreadySaved: t("integrations.telegram.botTokenAlreadySaved"),
+        botTokenPlaceholder: t("integrations.telegram.botTokenPlaceholder"),
+        checking: t("integrations.telegram.connectionChecking"),
+        connectBot: t("integrations.telegram.connectBot"),
+        connecting: t("integrations.telegram.connectionConnecting"),
+        connectionDescription: t("integrations.telegram.connectionDescription"),
+        failed: t("integrations.telegram.connectionFailed"),
+        saveAndCheck: t("integrations.telegram.saveAndCheck"),
+        slow: t("integrations.telegram.connectionSlow"),
+        statusUpdated: t("integrations.telegram.connectionStatusUpdated"),
+        displayName: t("integrations.telegram.displayName")
+      }}
+      lifecycleActions={
         <TelegramLifecycleActions integration={integration} t={t} />
-      </div>
-    </>
+      }
+    />
   );
 }
 
@@ -500,67 +465,6 @@ function TelegramLifecycleActions({
           {t("integrations.telegram.deleteConnector")}
         </button>
       </form>
-    </>
-  );
-}
-
-function TelegramStateFields({
-  config,
-  enableConnector = false,
-  includeDisplayName = false,
-  includeMode = true,
-  includeOutbound = true,
-  integration,
-  setupStepCompleted,
-  t
-}: {
-  config: TelegramConfig;
-  enableConnector?: boolean;
-  includeDisplayName?: boolean;
-  includeMode?: boolean;
-  includeOutbound?: boolean;
-  integration: TelegramIntegrationViewModel;
-  setupStepCompleted?: TelegramSetupEditableStep;
-  t?: Translator;
-}): ReactNode {
-  return (
-    <>
-      <ConnectorIdField integration={integration} />
-      <input
-        type="hidden"
-        name="channelExternalId"
-        value={config.channelExternalId}
-      />
-      {includeDisplayName && t ? (
-        <input
-          type="hidden"
-          name="displayName"
-          value={telegramDisplayName(integration, t)}
-        />
-      ) : null}
-      {includeMode ? (
-        <input type="hidden" name="mode" value={config.mode ?? "webhook"} />
-      ) : null}
-      {config.botTokenSecretRef ? (
-        <input
-          type="hidden"
-          name="botTokenSecretRef"
-          value={config.botTokenSecretRef}
-        />
-      ) : null}
-      {includeOutbound && config.outboundEnabled ? (
-        <input type="hidden" name="outboundEnabled" value="on" />
-      ) : null}
-      {enableConnector ? (
-        <input type="hidden" name="enabled" value="on" />
-      ) : null}
-      {setupStepCompleted ? (
-        <input
-          type="hidden"
-          name="setupStepCompleted"
-          value={setupStepCompleted}
-        />
-      ) : null}
     </>
   );
 }

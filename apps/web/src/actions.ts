@@ -53,6 +53,12 @@ import {
   type PlatformChannelProviderPolicyView
 } from "./platform-channel-policies";
 
+type TelegramConnectionActionState = {
+  status: "idle" | "queued" | "error";
+  connectorId?: string;
+  submittedAt?: string;
+};
+
 export async function sendReplyAction(formData: FormData): Promise<void> {
   await assertWebActionRequest();
 
@@ -237,7 +243,53 @@ export async function updateTelegramIntegrationAction(
     "modules.manage",
     "/admin/integrations"
   );
+  const result = await applyTelegramIntegrationUpdate(
+    formData,
+    internalApiAccess
+  );
 
+  revalidateTelegramIntegrationPaths();
+  redirect(
+    `/admin/integrations?connectorId=${encodeURIComponent(
+      result.connectorId
+    )}&channelStatus=setupQueued`
+  );
+}
+
+export async function connectTelegramIntegrationAction(
+  _previousState: TelegramConnectionActionState,
+  formData: FormData
+): Promise<TelegramConnectionActionState> {
+  await assertWebActionRequest();
+  const internalApiAccess = await assertVerifiedTenantPermission(
+    "modules.manage",
+    "/admin/integrations"
+  );
+
+  try {
+    const result = await applyTelegramIntegrationUpdate(
+      formData,
+      internalApiAccess
+    );
+
+    revalidateTelegramIntegrationPaths();
+
+    return {
+      status: "queued",
+      connectorId: result.connectorId,
+      submittedAt: new Date().toISOString()
+    };
+  } catch {
+    return {
+      status: "error"
+    };
+  }
+}
+
+async function applyTelegramIntegrationUpdate(
+  formData: FormData,
+  internalApiAccess: InternalApiAccessOptions<"modules.manage">
+): Promise<{ connectorId: string }> {
   const channelExternalId = readRequiredFormString(
     formData,
     "channelExternalId"
@@ -305,12 +357,7 @@ export async function updateTelegramIntegrationAction(
     }
   }
 
-  revalidateTelegramIntegrationPaths();
-  redirect(
-    `/admin/integrations?connectorId=${encodeURIComponent(
-      connectorId
-    )}&channelStatus=setupQueued`
-  );
+  return { connectorId };
 }
 
 export async function createChannelConnectorAction(
