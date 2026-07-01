@@ -43,7 +43,7 @@ export function formatOptionalValue(
 }
 
 export function formatOptionalDateTime(
-  value: string | undefined,
+  value: Date | string | undefined,
   locale: string,
   t: Translator
 ): string {
@@ -65,7 +65,7 @@ export function formatTelegramBotIdentity(
   return bot.username ? `@${bot.username}` : bot.id;
 }
 
-export function formatDateTime(value: string, locale: string): string {
+export function formatDateTime(value: Date | string, locale: string): string {
   return new Intl.DateTimeFormat(locale, {
     day: "2-digit",
     month: "2-digit",

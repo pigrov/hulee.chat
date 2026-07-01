@@ -242,11 +242,7 @@ function CompanyEmployeeRow({
       </span>
       <DetailItem
         label={t("platform.company.createdAt")}
-        value={formatOptionalDateTime(
-          employee.createdAt.toISOString(),
-          locale,
-          t
-        )}
+        value={formatOptionalDateTime(employee.createdAt, locale, t)}
       />
     </article>
   );

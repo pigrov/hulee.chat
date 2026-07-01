@@ -29,6 +29,19 @@ describe("platform company data", () => {
     });
   });
 
+  it("maps channel connector metadata when repository dates are strings", () => {
+    const connector = platformChannelConnectorFromRecord({
+      ...telegramConnectorRecord(),
+      createdAt: "2026-07-01T00:00:00.000Z",
+      updatedAt: "2026-07-01T01:01:00.000Z"
+    } as unknown as ChannelConnectorRecord);
+
+    expect(connector).toMatchObject({
+      createdAt: "2026-07-01T00:00:00.000Z",
+      updatedAt: "2026-07-01T01:01:00.000Z"
+    });
+  });
+
   it("builds a Telegram diagnostics view without raw secrets", () => {
     const integration = platformTelegramIntegrationFromRecord({
       publicWebhookBaseUrl: "https://chat.example.test",

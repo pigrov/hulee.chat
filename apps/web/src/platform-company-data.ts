@@ -163,8 +163,8 @@ export function platformChannelConnectorFromRecord(
 
   return {
     ...result.data,
-    createdAt: record.createdAt.toISOString(),
-    updatedAt: record.updatedAt.toISOString()
+    createdAt: dateLikeToIsoString(record.createdAt),
+    updatedAt: dateLikeToIsoString(record.updatedAt)
   };
 }
 
