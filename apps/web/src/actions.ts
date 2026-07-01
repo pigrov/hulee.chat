@@ -294,12 +294,23 @@ export async function updateTelegramIntegrationAction(
   );
 
   if (enabled) {
-    await refreshTelegramDiagnostics(internalApiAccess, {
-      connectorId
-    });
+    if (mode === "webhook") {
+      await setTelegramWebhook(internalApiAccess, {
+        connectorId
+      });
+    } else {
+      await deleteTelegramWebhook(internalApiAccess, {
+        connectorId
+      });
+    }
   }
 
   revalidateTelegramIntegrationPaths();
+  redirect(
+    `/admin/integrations?connectorId=${encodeURIComponent(
+      connectorId
+    )}&channelStatus=setupQueued`
+  );
 }
 
 export async function createChannelConnectorAction(

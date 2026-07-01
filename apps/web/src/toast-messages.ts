@@ -45,6 +45,7 @@ function toastVariantFromStatus(status: string): ToastVariant {
     case "email_verification_required":
       return "warning";
     case "diagnosticsQueued":
+    case "setupQueued":
       return "info";
     default:
       return "success";

@@ -136,9 +136,6 @@ export default async function IntegrationsAdminPage({
     requestedConnectorId
   });
   const selectedConnectorId = selectedConnector?.connectorId;
-  const telegramChannel = channelCatalog.channels.find(
-    (channel) => channel.channelType === "telegram_bot"
-  );
   const availableChannels = channelCatalog.channels.filter(
     (channel) => channel.readiness === "available"
   );
@@ -157,7 +154,6 @@ export default async function IntegrationsAdminPage({
   const integrationContent =
     selectedConnector?.channelType === "telegram_bot" ? (
       <TelegramIntegrationPanel
-        channel={telegramChannel}
         integration={
           selectedTelegramIntegration ??
           createEmptyTelegramIntegrationViewModel()
@@ -649,6 +645,8 @@ function channelActionStatusKey(status: string): I18nMessageKey {
       return "admin.integrations.actionStatus.disabled";
     case "deleted":
       return "admin.integrations.actionStatus.deleted";
+    case "setupQueued":
+      return "admin.integrations.actionStatus.setupQueued";
     case "diagnosticsQueued":
       return "admin.integrations.actionStatus.diagnosticsQueued";
     default:

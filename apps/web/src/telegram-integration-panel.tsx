@@ -1,27 +1,11 @@
 import type { createTranslator, I18nMessageKey } from "@hulee/i18n";
-import type { InternalChannelCatalogItem } from "@hulee/contracts";
-import {
-  Activity,
-  CheckCircle2,
-  Circle,
-  KeyRound,
-  LinkIcon,
-  Plug,
-  Power,
-  PowerOff,
-  Settings2,
-  Trash2,
-  Unlink
-} from "lucide-react";
+import { KeyRound, Plug, Power, PowerOff, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
 
 import {
-  deleteTelegramWebhookAction,
   deleteChannelConnectorAction,
   disableChannelConnectorAction,
   enableChannelConnectorAction,
-  refreshTelegramDiagnosticsAction,
-  setTelegramWebhookAction,
   updateTelegramIntegrationAction
 } from "./actions";
 import { DetailItem } from "./app-chrome";
@@ -38,43 +22,13 @@ import type { TelegramIntegrationViewModel } from "./inbox-api-client";
 
 type Translator = ReturnType<typeof createTranslator>["t"];
 type TelegramConfig = NonNullable<TelegramIntegrationViewModel["config"]>;
-type TelegramSetupStep = NonNullable<TelegramIntegrationViewModel["setupStep"]>;
 type TelegramSetupEditableStep = "name" | "token" | "mode";
-type TelegramSetupStepDefinition = {
-  id: TelegramSetupStep;
-  titleKey: I18nMessageKey;
-};
-
-const fallbackTelegramSetupSteps: readonly TelegramSetupStepDefinition[] = [
-  {
-    id: "token",
-    titleKey: "integrations.channel.onboarding.credentials" as I18nMessageKey
-  },
-  {
-    id: "mode",
-    titleKey: "integrations.channel.onboarding.activation" as I18nMessageKey
-  },
-  {
-    id: "diagnostics",
-    titleKey: "integrations.channel.onboarding.diagnostics" as I18nMessageKey
-  },
-  {
-    id: "webhook",
-    titleKey: "integrations.channel.onboarding.webhook" as I18nMessageKey
-  },
-  {
-    id: "complete",
-    titleKey: "integrations.channel.onboarding.complete" as I18nMessageKey
-  }
-];
 
 export function TelegramIntegrationPanel({
-  channel,
   integration,
   locale,
   t
 }: {
-  channel?: InternalChannelCatalogItem;
   integration: TelegramIntegrationViewModel;
   locale: string;
   t: Translator;
@@ -136,9 +90,6 @@ export function TelegramIntegrationPanel({
     );
   }
 
-  const setupStep = currentTelegramSetupStep(integration);
-  const setupSteps = telegramSetupStepsFromCatalog(channel);
-
   return (
     <section
       className="settingsPanel"
@@ -161,98 +112,19 @@ export function TelegramIntegrationPanel({
 
       <TelegramLifecycleActions integration={integration} t={t} />
 
-      <TelegramSetupStepper currentStep={setupStep} steps={setupSteps} t={t} />
+      <TelegramCredentialsStep
+        config={config}
+        integration={integration}
+        t={t}
+      />
 
       <TelegramConnectorCompactStatus
         integration={integration}
         locale={locale}
         t={t}
       />
-
-      <TelegramSetupStepPanel
-        config={config}
-        integration={integration}
-        setupStep={setupStep}
-        t={t}
-      />
     </section>
   );
-}
-
-function TelegramSetupStepper({
-  currentStep,
-  steps,
-  t
-}: {
-  currentStep: TelegramSetupStep;
-  steps: readonly TelegramSetupStepDefinition[];
-  t: Translator;
-}): ReactNode {
-  const currentIndex = steps.findIndex((step) => step.id === currentStep);
-  const normalizedCurrentIndex = currentIndex >= 0 ? currentIndex : 0;
-
-  return (
-    <ol
-      className="setupStepList"
-      aria-label={t("integrations.telegram.setupTitle")}
-    >
-      {steps.map((step, index) => {
-        const state =
-          index < normalizedCurrentIndex
-            ? "complete"
-            : step.id === currentStep
-              ? "current"
-              : "pending";
-
-        return (
-          <li className="setupStep" data-state={state} key={step.id}>
-            <span className="setupStepMarker" aria-hidden="true">
-              {state === "complete" ? (
-                <CheckCircle2 size={16} />
-              ) : (
-                <Circle size={16} />
-              )}
-            </span>
-            <span className="setupStepLabel">{t(step.titleKey)}</span>
-          </li>
-        );
-      })}
-    </ol>
-  );
-}
-
-function TelegramSetupStepPanel({
-  config,
-  integration,
-  setupStep,
-  t
-}: {
-  config: TelegramConfig;
-  integration: TelegramIntegrationViewModel;
-  setupStep: TelegramSetupStep;
-  t: Translator;
-}): ReactNode {
-  switch (setupStep) {
-    case "name":
-    case "token":
-      return (
-        <TelegramCredentialsStep
-          config={config}
-          integration={integration}
-          t={t}
-        />
-      );
-    case "mode":
-      return (
-        <TelegramModeStep config={config} integration={integration} t={t} />
-      );
-    case "diagnostics":
-      return <TelegramDiagnosticsStep integration={integration} t={t} />;
-    case "webhook":
-      return <TelegramWebhookStep integration={integration} t={t} />;
-    case "complete":
-      return <TelegramCompleteStep integration={integration} t={t} />;
-  }
 }
 
 function TelegramCredentialsStep({
@@ -271,9 +143,16 @@ function TelegramCredentialsStep({
     >
       <TelegramStateFields
         config={config}
+        enableConnector
+        includeMode={false}
+        includeOutbound={false}
         integration={integration}
-        setupStepCompleted="token"
+        setupStepCompleted="mode"
       />
+
+      <p className="metaText">
+        {t("integrations.telegram.connectionDescription")}
+      </p>
 
       <label className="fieldStack">
         <span className="detailLabel">
@@ -300,123 +179,23 @@ function TelegramCredentialsStep({
         />
       </label>
 
+      {config.botTokenSecretRef ? (
+        <p className="metaText">
+          {t("integrations.telegram.botTokenAlreadySaved")}
+        </p>
+      ) : null}
+
       <div className="buttonRow">
         <button className="primaryButton" type="submit">
           <KeyRound size={16} aria-hidden="true" />
-          {t("integrations.telegram.saveCredentials")}
+          {t(
+            config.botTokenSecretRef
+              ? "integrations.telegram.saveAndCheck"
+              : "integrations.telegram.connectBot"
+          )}
         </button>
       </div>
     </form>
-  );
-}
-
-function TelegramModeStep({
-  config,
-  integration,
-  t
-}: {
-  config: TelegramConfig;
-  integration: TelegramIntegrationViewModel;
-  t: Translator;
-}): ReactNode {
-  return (
-    <form
-      className="settingsForm setupStepPanel"
-      action={updateTelegramIntegrationAction}
-    >
-      <TelegramStateFields
-        config={config}
-        enableConnector
-        includeDisplayName
-        includeMode={false}
-        includeOutbound={false}
-        integration={integration}
-        setupStepCompleted="mode"
-        t={t}
-      />
-
-      <p className="metaText">
-        {t("integrations.telegram.activationDescription")}
-      </p>
-
-      <div className="buttonRow">
-        <button className="primaryButton" type="submit">
-          <Settings2 size={16} aria-hidden="true" />
-          {t("integrations.telegram.saveAndActivate")}
-        </button>
-      </div>
-    </form>
-  );
-}
-
-function TelegramDiagnosticsStep({
-  integration,
-  t
-}: {
-  integration: TelegramIntegrationViewModel;
-  t: Translator;
-}): ReactNode {
-  return (
-    <div className="setupStepPanel">
-      <div className="buttonRow">
-        <TelegramRefreshDiagnosticsForm integration={integration} t={t} />
-      </div>
-    </div>
-  );
-}
-
-function TelegramWebhookStep({
-  integration,
-  t
-}: {
-  integration: TelegramIntegrationViewModel;
-  t: Translator;
-}): ReactNode {
-  return (
-    <div className="settingsForm setupStepPanel">
-      <label className="fieldStack">
-        <span className="detailLabel">
-          {t("integrations.telegram.webhookPath")}
-        </span>
-        <input
-          className="textInput"
-          value={integration.webhookPath ?? ""}
-          readOnly
-        />
-      </label>
-
-      <label className="fieldStack">
-        <span className="detailLabel">
-          {t("integrations.telegram.publicWebhookUrl")}
-        </span>
-        <input
-          className="textInput"
-          value={integration.publicWebhookUrl ?? ""}
-          readOnly
-        />
-      </label>
-
-      <div className="buttonRow">
-        <TelegramWebhookActions integration={integration} t={t} />
-      </div>
-    </div>
-  );
-}
-
-function TelegramCompleteStep({
-  integration,
-  t
-}: {
-  integration: TelegramIntegrationViewModel;
-  t: Translator;
-}): ReactNode {
-  return (
-    <div className="setupStepPanel">
-      <div className="buttonRow">
-        <TelegramRefreshDiagnosticsForm integration={integration} t={t} />
-        <TelegramWebhookActions integration={integration} t={t} />
-      </div>
-    </div>
   );
 }
 
@@ -714,51 +493,6 @@ export function TelegramDiagnosticsGrid({
   );
 }
 
-function TelegramWebhookActions({
-  integration,
-  t
-}: {
-  integration: TelegramIntegrationViewModel;
-  t: Translator;
-}): ReactNode {
-  return (
-    <>
-      <form action={setTelegramWebhookAction}>
-        <ConnectorIdField integration={integration} />
-        <button className="secondaryButton" type="submit">
-          <LinkIcon size={16} aria-hidden="true" />
-          {t("integrations.telegram.setWebhook")}
-        </button>
-      </form>
-      <form action={deleteTelegramWebhookAction}>
-        <ConnectorIdField integration={integration} />
-        <button className="secondaryButton" type="submit">
-          <Unlink size={16} aria-hidden="true" />
-          {t("integrations.telegram.deleteWebhook")}
-        </button>
-      </form>
-    </>
-  );
-}
-
-function TelegramRefreshDiagnosticsForm({
-  integration,
-  t
-}: {
-  integration: TelegramIntegrationViewModel;
-  t: Translator;
-}): ReactNode {
-  return (
-    <form action={refreshTelegramDiagnosticsAction}>
-      <ConnectorIdField integration={integration} />
-      <button className="secondaryButton" type="submit">
-        <Activity size={16} aria-hidden="true" />
-        {t("integrations.telegram.refreshDiagnostics")}
-      </button>
-    </form>
-  );
-}
-
 function TelegramLifecycleActions({
   integration,
   t
@@ -867,62 +601,11 @@ function ConnectorIdField({
   ) : null;
 }
 
-function currentTelegramSetupStep(
-  integration: TelegramIntegrationViewModel
-): TelegramSetupStep {
-  if (integration.setupStep) {
-    return integration.setupStep === "name" ? "token" : integration.setupStep;
-  }
-
-  if (!integration.config?.botTokenSecretRef) {
-    return "token";
-  }
-
-  return integration.enabled ? "diagnostics" : "name";
-}
-
 function telegramDisplayName(
   integration: TelegramIntegrationViewModel,
   t: Translator
 ): string {
   return integration.displayName ?? t("integrations.telegram.title");
-}
-
-function telegramSetupStepsFromCatalog(
-  channel: InternalChannelCatalogItem | undefined
-): readonly TelegramSetupStepDefinition[] {
-  const steps = channel?.onboarding.steps.flatMap((step) => {
-    if (step.id === "name") {
-      return [];
-    }
-
-    if (!isTelegramSetupStep(step.id)) {
-      return [];
-    }
-
-    return [
-      {
-        id: step.id,
-        titleKey:
-          step.id === "token"
-            ? ("integrations.channel.onboarding.credentials" as I18nMessageKey)
-            : (step.titleKey as I18nMessageKey)
-      }
-    ];
-  });
-
-  return steps && steps.length > 0 ? steps : fallbackTelegramSetupSteps;
-}
-
-function isTelegramSetupStep(value: string): value is TelegramSetupStep {
-  return (
-    value === "name" ||
-    value === "token" ||
-    value === "mode" ||
-    value === "diagnostics" ||
-    value === "webhook" ||
-    value === "complete"
-  );
 }
 
 function channelConnectorStatusKey(
