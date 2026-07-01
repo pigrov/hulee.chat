@@ -79,7 +79,9 @@ export function TelegramIntegrationPanel({
           </span>
         </div>
 
-        <TelegramLifecycleActions integration={integration} t={t} />
+        <div className="buttonRow">
+          <TelegramLifecycleActions integration={integration} t={t} />
+        </div>
 
         <TelegramConnectorCompactStatus
           integration={integration}
@@ -110,8 +112,6 @@ export function TelegramIntegrationPanel({
         </span>
       </div>
 
-      <TelegramLifecycleActions integration={integration} t={t} />
-
       <TelegramCredentialsStep
         config={config}
         integration={integration}
@@ -137,56 +137,63 @@ function TelegramCredentialsStep({
   t: Translator;
 }): ReactNode {
   return (
-    <form
-      className="settingsForm setupStepPanel"
-      action={updateTelegramIntegrationAction}
-    >
-      <TelegramStateFields
-        config={config}
-        enableConnector
-        includeMode={false}
-        includeOutbound={false}
-        integration={integration}
-        setupStepCompleted="mode"
-      />
-
-      <p className="metaText">
-        {t("integrations.telegram.connectionDescription")}
-      </p>
-
-      <label className="fieldStack">
-        <span className="detailLabel">
-          {t("integrations.telegram.displayName")}
-        </span>
-        <input
-          className="textInput"
-          name="displayName"
-          defaultValue={telegramDisplayName(integration, t)}
-          required
+    <>
+      <form
+        id="telegram-connection-form"
+        className="settingsForm setupStepPanel"
+        action={updateTelegramIntegrationAction}
+      >
+        <TelegramStateFields
+          config={config}
+          enableConnector
+          includeMode={false}
+          includeOutbound={false}
+          integration={integration}
+          setupStepCompleted="mode"
         />
-      </label>
 
-      <label className="fieldStack">
-        <span className="detailLabel">
-          {t("integrations.telegram.botToken")}
-        </span>
-        <input
-          className="textInput"
-          type="password"
-          name="botToken"
-          placeholder={t("integrations.telegram.botTokenPlaceholder")}
-          required={!config.botTokenSecretRef}
-        />
-      </label>
-
-      {config.botTokenSecretRef ? (
         <p className="metaText">
-          {t("integrations.telegram.botTokenAlreadySaved")}
+          {t("integrations.telegram.connectionDescription")}
         </p>
-      ) : null}
+
+        <label className="fieldStack">
+          <span className="detailLabel">
+            {t("integrations.telegram.displayName")}
+          </span>
+          <input
+            className="textInput"
+            name="displayName"
+            defaultValue={telegramDisplayName(integration, t)}
+            required
+          />
+        </label>
+
+        <label className="fieldStack">
+          <span className="detailLabel">
+            {t("integrations.telegram.botToken")}
+          </span>
+          <input
+            className="textInput"
+            type="password"
+            name="botToken"
+            placeholder={t("integrations.telegram.botTokenPlaceholder")}
+            required={!config.botTokenSecretRef}
+          />
+        </label>
+
+        {config.botTokenSecretRef ? (
+          <p className="metaText">
+            {t("integrations.telegram.botTokenAlreadySaved")}
+          </p>
+        ) : null}
+      </form>
 
       <div className="buttonRow">
-        <button className="primaryButton" type="submit">
+        <button
+          className="primaryButton"
+          form="telegram-connection-form"
+          type="submit"
+        >
           <KeyRound size={16} aria-hidden="true" />
           {t(
             config.botTokenSecretRef
@@ -194,8 +201,9 @@ function TelegramCredentialsStep({
               : "integrations.telegram.connectBot"
           )}
         </button>
+        <TelegramLifecycleActions integration={integration} t={t} />
       </div>
-    </form>
+    </>
   );
 }
 
@@ -210,31 +218,9 @@ export function TelegramConnectorCompactStatus({
 }): ReactNode {
   const inbound = integration.diagnostics.runtime?.inbound;
   const outbound = integration.diagnostics.runtime?.outbound;
-  const errorCode =
-    integration.diagnostics.lastErrorCode ??
-    inbound?.lastErrorCode ??
-    outbound?.lastErrorCode ??
-    integration.diagnostics.egress?.lastErrorCode;
-  const operatorHint =
-    integration.diagnostics.operatorHint ??
-    inbound?.operatorHint ??
-    outbound?.operatorHint ??
-    integration.diagnostics.egress?.operatorHint;
 
   return (
     <div className="diagnosticGrid">
-      <DetailItem
-        label={t("integrations.telegram.lifecycleStatus")}
-        value={
-          integration.status
-            ? t(channelConnectorStatusKey(integration.status))
-            : t("common.unknown")
-        }
-      />
-      <DetailItem
-        label={t("integrations.telegram.providerStatus")}
-        value={t(telegramStatusKey(integration.diagnostics.status))}
-      />
       <DetailItem
         label={t("integrations.telegram.runtimeInboundReceivedAt")}
         value={formatOptionalDateTime(inbound?.lastReceivedAt, locale, t)}
@@ -243,18 +229,6 @@ export function TelegramConnectorCompactStatus({
         label={t("integrations.telegram.runtimeOutboundSentAt")}
         value={formatOptionalDateTime(outbound?.lastSentAt, locale, t)}
       />
-      {errorCode ? (
-        <DetailItem
-          label={t("integrations.channel.details.error")}
-          value={errorCode}
-        />
-      ) : null}
-      {operatorHint ? (
-        <DetailItem
-          label={t("integrations.telegram.operatorHint")}
-          value={operatorHint}
-        />
-      ) : null}
     </div>
   );
 }
@@ -501,7 +475,7 @@ function TelegramLifecycleActions({
   t: Translator;
 }): ReactNode {
   return (
-    <div className="buttonRow">
+    <>
       {integration.status === "disabled" ? (
         <form action={enableChannelConnectorAction}>
           <ConnectorIdField integration={integration} />
@@ -526,7 +500,7 @@ function TelegramLifecycleActions({
           {t("integrations.telegram.deleteConnector")}
         </button>
       </form>
-    </div>
+    </>
   );
 }
 

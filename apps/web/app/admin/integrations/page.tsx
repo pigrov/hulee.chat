@@ -207,7 +207,6 @@ export default async function IntegrationsAdminPage({
         >
           <div className="sectionHeader">
             <div>
-              <p className="eyebrow">{t("admin.integrations.channels")}</p>
               <h2 className="sectionTitle" id="integration-channel-list-title">
                 {t("admin.integrations.channelList")}
               </h2>
@@ -285,32 +284,8 @@ function ChannelCatalogDetailPanel({
   const description = resolveChannelDescription({ channel, locale, t });
 
   return (
-    <section className="settingsPanel" aria-labelledby="channel-preview-title">
-      <div className="sectionHeader">
-        <div>
-          <p className="eyebrow">{t("admin.integrations.availableChannels")}</p>
-          <h2 className="sectionTitle" id="channel-preview-title">
-            {title}
-          </h2>
-        </div>
-        <span className="badge">
-          <ChannelIcon channel={channel} />
-          {t("admin.integrations.channelPreview")}
-        </span>
-      </div>
-
+    <section className="settingsPanel" aria-label={title}>
       <MarkdownContent value={description} />
-
-      <div className="diagnosticGrid">
-        <DetailItem
-          label={t("integrations.channel.details.provider")}
-          value={channel.provider}
-        />
-        <DetailItem
-          label={t("integrations.channel.details.class")}
-          value={t(channelClassKey(channel.channelClass))}
-        />
-      </div>
 
       <form className="buttonRow" action={createChannelConnectorAction}>
         <input type="hidden" name="channelType" value={channel.channelType} />
@@ -551,7 +526,11 @@ function ConnectorListItem({
       aria-current={current ? "page" : undefined}
     >
       <span className="metricIcon">
-        <ChannelIcon channel={channel} channelClass={connector.channelClass} />
+        <ChannelIcon
+          channel={channel}
+          channelClass={connector.channelClass}
+          size="large"
+        />
       </span>
       <div>
         <h3 className="listItemTitle">{connector.displayName}</h3>
@@ -598,7 +577,7 @@ function CatalogListItem({
       aria-current={current ? "page" : undefined}
     >
       <span className="metricIcon">
-        <ChannelIcon channel={channel} />
+        <ChannelIcon channel={channel} size="large" />
       </span>
       <div>
         <h3 className="listItemTitle">
@@ -627,12 +606,6 @@ function channelHealthStatusKey(
   status: InternalChannelConnectorSummary["healthStatus"]
 ): I18nMessageKey {
   return `integrations.channel.health.${status}` as I18nMessageKey;
-}
-
-function channelClassKey(
-  channelClass: InternalChannelCatalogItem["channelClass"]
-): I18nMessageKey {
-  return `integrations.channel.class.${channelClass}` as I18nMessageKey;
 }
 
 function channelActionStatusKey(status: string): I18nMessageKey {

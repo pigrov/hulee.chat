@@ -1867,6 +1867,11 @@ button.managementRow:focus-visible {
   object-fit: contain;
 }
 
+.channelIconImageLarge {
+  width: 36px;
+  height: 36px;
+}
+
 .toastViewport {
   position: fixed;
   z-index: 50;

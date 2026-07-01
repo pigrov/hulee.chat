@@ -64,15 +64,23 @@ export function resolveChannelShortDescription(input: {
 
 export function ChannelIcon({
   channel,
-  channelClass
+  channelClass,
+  size = "default"
 }: {
   channel?: Pick<InternalChannelCatalogItem, "iconUrl" | "channelClass">;
   channelClass?: InternalChannelClass;
+  size?: "default" | "large";
 }): ReactNode {
+  const iconSize = size === "large" ? 36 : 18;
+
   if (channel?.iconUrl) {
     return (
       <img
-        className="channelIconImage"
+        className={
+          size === "large"
+            ? "channelIconImage channelIconImageLarge"
+            : "channelIconImage"
+        }
         src={channel.iconUrl}
         alt=""
         aria-hidden="true"
@@ -82,13 +90,13 @@ export function ChannelIcon({
 
   switch (channel?.channelClass ?? channelClass) {
     case "bot_bridge":
-      return <Bot size={18} aria-hidden="true" />;
+      return <Bot size={iconSize} aria-hidden="true" />;
     case "user_bridge":
-      return <Smartphone size={18} aria-hidden="true" />;
+      return <Smartphone size={iconSize} aria-hidden="true" />;
     case "official_api":
-      return <MessageCircle size={18} aria-hidden="true" />;
+      return <MessageCircle size={iconSize} aria-hidden="true" />;
     default:
-      return <MessageCircle size={18} aria-hidden="true" />;
+      return <MessageCircle size={iconSize} aria-hidden="true" />;
   }
 }
 
