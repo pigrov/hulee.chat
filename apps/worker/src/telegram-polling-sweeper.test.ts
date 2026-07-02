@@ -400,6 +400,77 @@ describe("telegram polling sweeper", () => {
     ]);
   });
 
+  it("does not move inbound received time when polling returns no updates", async () => {
+    const previousReceivedAt = "2026-06-22T09:55:00.000Z";
+    const repository = new InMemoryChannelConnectorRepository([
+      createTelegramConnector({
+        mode: "polling",
+        diagnostics: {
+          status: "configured",
+          checkedAt: previousReceivedAt,
+          checks: {
+            moduleEnabled: true,
+            configValid: true,
+            inboundWebhookReady: false,
+            outboundEnabled: true,
+            botTokenSecretRefConfigured: true
+          },
+          runtime: {
+            inbound: {
+              lastSource: "polling",
+              lastReceivedAt: previousReceivedAt,
+              lastAcceptedAt: previousReceivedAt,
+              lastBatchReceivedCount: 1,
+              lastBatchAcceptedCount: 1,
+              lastBatchFailedCount: 0
+            }
+          }
+        }
+      })
+    ]);
+
+    const result = await runTelegramPollingSweep({
+      connectorRepository: repository,
+      secretResolver: {
+        async resolveSecret() {
+          return "token-1";
+        }
+      },
+      commands: new RecordingInboundCommands(),
+      botApiClientFactory: () => ({
+        async getUpdates() {
+          return [];
+        }
+      }),
+      now: () => now
+    });
+
+    expect(result).toMatchObject({
+      configsPolled: 1,
+      updatesReceived: 0,
+      updatesAccepted: 0,
+      updatesFailed: 0
+    });
+    expect(repository.upserts[0]?.diagnostics).toMatchObject({
+      polling: {
+        lastRunAt: now.toISOString(),
+        receivedUpdateCount: 0,
+        acceptedUpdateCount: 0,
+        failedUpdateCount: 0
+      },
+      runtime: {
+        inbound: {
+          lastSource: "polling",
+          lastReceivedAt: previousReceivedAt,
+          lastAcceptedAt: previousReceivedAt,
+          lastBatchReceivedCount: 0,
+          lastBatchAcceptedCount: 0,
+          lastBatchFailedCount: 0
+        }
+      }
+    });
+  });
+
   it("persists diagnosable provider errors when getUpdates fails", async () => {
     const repository = new InMemoryChannelConnectorRepository([
       createTelegramConnector({

@@ -54,7 +54,7 @@ import {
 } from "./platform-channel-policies";
 
 type TelegramConnectionActionState = {
-  status: "idle" | "queued" | "error";
+  status: "idle" | "queued" | "saved" | "error";
   connectorId?: string;
   submittedAt?: string;
 };
@@ -271,6 +271,7 @@ export async function connectTelegramIntegrationAction(
   );
 
   try {
+    const submittedAt = new Date().toISOString();
     const result = await applyTelegramIntegrationUpdate(
       formData,
       internalApiAccess
@@ -279,9 +280,9 @@ export async function connectTelegramIntegrationAction(
     revalidateTelegramIntegrationPaths();
 
     return {
-      status: "queued",
+      status: result.providerCheckQueued ? "queued" : "saved",
       connectorId: result.connectorId,
-      submittedAt: new Date().toISOString()
+      ...(result.providerCheckQueued ? { submittedAt } : {})
     };
   } catch {
     return {
@@ -293,7 +294,7 @@ export async function connectTelegramIntegrationAction(
 async function applyTelegramIntegrationUpdate(
   formData: FormData,
   internalApiAccess: InternalApiAccessOptions<"modules.manage">
-): Promise<{ connectorId: string }> {
+): Promise<{ connectorId: string; providerCheckQueued: boolean }> {
   const channelExternalId = readRequiredFormString(
     formData,
     "channelExternalId"
@@ -306,6 +307,7 @@ async function applyTelegramIntegrationUpdate(
     "botTokenSecretRef"
   );
   const botToken = readOptionalFormString(formData, "botToken");
+  const normalizedBotToken = normalizeOptionalFormValue(botToken);
   const enabled = readFormCheckbox(formData, "enabled");
   const setupStepCompleted = readTelegramSetupStepCompleted(formData);
   const shouldApplyPlatformDefaults =
@@ -340,16 +342,15 @@ async function applyTelegramIntegrationUpdate(
         botTokenSecretRef === undefined || botTokenSecretRef.trim().length === 0
           ? undefined
           : botTokenSecretRef.trim(),
-      botToken:
-        botToken === undefined || botToken.trim().length === 0
-          ? undefined
-          : botToken.trim(),
+      botToken: normalizedBotToken,
       outboundEnabled
     },
     internalApiAccess
   );
 
-  if (enabled) {
+  const providerCheckQueued = enabled && normalizedBotToken !== undefined;
+
+  if (providerCheckQueued) {
     if (mode === "webhook") {
       await setTelegramWebhook(internalApiAccess, {
         connectorId
@@ -361,7 +362,7 @@ async function applyTelegramIntegrationUpdate(
     }
   }
 
-  return { connectorId };
+  return { connectorId, providerCheckQueued };
 }
 
 export async function createChannelConnectorAction(
@@ -423,6 +424,7 @@ export async function connectTelegramBotChannelAction(
 
   try {
     const displayName = defaultTelegramDisplayName;
+    const submittedAt = new Date().toISOString();
     const connector = await createChannelConnector(
       {
         channelType,
@@ -447,7 +449,9 @@ export async function connectTelegramBotChannelAction(
     revalidateTelegramIntegrationPaths();
     destination = `/admin/integrations?connectorId=${encodeURIComponent(
       connector.connectorId
-    )}&channelStatus=setupQueued`;
+    )}&channelStatus=setupQueued&connectionPendingAt=${encodeURIComponent(
+      submittedAt
+    )}`;
   } catch {
     if (connectorId) {
       await deleteChannelConnector(

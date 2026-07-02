@@ -2,7 +2,6 @@ import type { createTranslator, I18nMessageKey } from "@hulee/i18n";
 import {
   ArrowDown,
   ArrowUp,
-  CircleHelp,
   Plug,
   Power,
   PowerOff,
@@ -33,10 +32,12 @@ type Translator = ReturnType<typeof createTranslator>["t"];
 type TelegramConfig = NonNullable<TelegramIntegrationViewModel["config"]>;
 
 export function TelegramIntegrationPanel({
+  initialConnectionSubmittedAt,
   integration,
   locale,
   t
 }: {
+  initialConnectionSubmittedAt?: string;
   integration: TelegramIntegrationViewModel;
   locale: string;
   t: Translator;
@@ -122,6 +123,7 @@ export function TelegramIntegrationPanel({
 
       <TelegramCredentialsStep
         config={config}
+        initialConnectionSubmittedAt={initialConnectionSubmittedAt}
         integration={integration}
         t={t}
       />
@@ -137,10 +139,12 @@ export function TelegramIntegrationPanel({
 
 function TelegramCredentialsStep({
   config,
+  initialConnectionSubmittedAt,
   integration,
   t
 }: {
   config: TelegramConfig;
+  initialConnectionSubmittedAt?: string;
   integration: TelegramIntegrationViewModel;
   t: Translator;
 }): ReactNode {
@@ -158,25 +162,37 @@ function TelegramCredentialsStep({
       defaultDisplayName={telegramDisplayName(integration, t)}
       diagnostics={{
         checkedAt: integration.diagnostics.checkedAt,
-        botApiReachable: integration.diagnostics.checks.botApiReachable
+        botApiReachable: integration.diagnostics.checks.botApiReachable,
+        botFirstName: integration.diagnostics.bot?.firstName,
+        botUsername: integration.diagnostics.bot?.username,
+        status: integration.diagnostics.status
       }}
+      initialSubmittedAt={initialConnectionSubmittedAt}
       labels={{
         botToken: t("integrations.telegram.botToken"),
         botTokenAlreadySaved: t("integrations.telegram.botTokenAlreadySaved"),
         botTokenPlaceholder: t("integrations.telegram.botTokenPlaceholder"),
+        botTokenSavedPlaceholder: t(
+          "integrations.telegram.botTokenSavedPlaceholder"
+        ),
         checking: t("integrations.telegram.connectionChecking"),
         connectBot: t("integrations.telegram.connectBot"),
         connecting: t("integrations.telegram.connectionConnecting"),
         connectionDescription: t("integrations.telegram.connectionDescription"),
         failed: t("integrations.telegram.connectionFailed"),
         saveAndCheck: t("integrations.telegram.saveAndCheck"),
+        saveChanges: t("integrations.telegram.saveChanges"),
+        saved: t("integrations.telegram.connectionSaved"),
         slow: t("integrations.telegram.connectionSlow"),
         statusUpdated: t("integrations.telegram.connectionStatusUpdated"),
-        displayName: t("integrations.telegram.displayName")
+        displayName: t("integrations.telegram.displayName"),
+        editToken: t("integrations.telegram.editToken")
       }}
       lifecycleActions={
         <TelegramLifecycleActions integration={integration} t={t} />
       }
+      mode={config.mode}
+      outboundEnabled={config.outboundEnabled}
     />
   );
 }
@@ -241,10 +257,7 @@ function TelegramStatusMetric({
         <Icon size={22} />
       </span>
       <span className="telegramStatusBody">
-        <span className="telegramStatusLabel">
-          {label}
-          <CircleHelp size={16} aria-hidden="true" />
-        </span>
+        <span className="telegramStatusLabel">{label}</span>
         <strong className="telegramStatusValue">
           <LocalDateTime fallback={fallback} locale={locale} value={value} />
         </strong>

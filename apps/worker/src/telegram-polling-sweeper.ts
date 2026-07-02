@@ -543,6 +543,7 @@ function buildPollingRuntimeDiagnostics(input: {
   previous: InternalTelegramIntegrationDiagnostics | null;
 }): InternalTelegramIntegrationDiagnostics["runtime"] {
   const previousInbound = input.previous?.runtime?.inbound;
+  const receivedUpdates = input.pollingResult.received > 0;
 
   return {
     ...(input.previous?.runtime?.outbound
@@ -550,7 +551,11 @@ function buildPollingRuntimeDiagnostics(input: {
       : {}),
     inbound: {
       lastSource: "polling",
-      lastReceivedAt: input.checkedAt,
+      ...(receivedUpdates
+        ? { lastReceivedAt: input.checkedAt }
+        : previousInbound?.lastReceivedAt
+          ? { lastReceivedAt: previousInbound.lastReceivedAt }
+          : {}),
       ...(input.pollingResult.accepted > 0
         ? { lastAcceptedAt: input.checkedAt }
         : previousInbound?.lastAcceptedAt

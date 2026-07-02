@@ -665,6 +665,75 @@ describe("internal integrations service", () => {
     ).not.toContain("telegram-token-1");
   });
 
+  it("preserves Telegram diagnostics when only display name changes", async () => {
+    const diagnostics = {
+      status: "configured",
+      checkedAt: "2026-06-22T09:55:00.000Z",
+      bot: {
+        id: "100",
+        username: "hulee_test_bot"
+      },
+      webhook: {
+        expectedUrl: "https://example.test/webhooks/telegram/tgwh_test",
+        actualUrl: "https://example.test/webhooks/telegram/tgwh_test",
+        pendingUpdateCount: 0
+      },
+      runtime: {
+        inbound: {
+          lastSource: "webhook",
+          lastReceivedAt: "2026-06-22T09:54:00.000Z",
+          lastAcceptedAt: "2026-06-22T09:54:00.000Z",
+          lastBatchReceivedCount: 1,
+          lastBatchAcceptedCount: 1,
+          lastBatchFailedCount: 0
+        }
+      },
+      checks: {
+        moduleEnabled: true,
+        configValid: true,
+        inboundWebhookReady: true,
+        outboundEnabled: true,
+        botTokenSecretRefConfigured: true,
+        botTokenResolved: true,
+        botApiReachable: true,
+        webhookMatchesConfig: true
+      }
+    };
+    const repository = new InMemoryChannelConnectorRepository([
+      createTelegramConnector({
+        config: {
+          channelExternalId: "telegram-local",
+          mode: "webhook",
+          botTokenSecretRef: "secret:bot-token",
+          webhookConnectorId: "tgwh_test",
+          webhookSecretTokenSecretRef: "secret:webhook-token",
+          outboundEnabled: true
+        },
+        diagnostics
+      })
+    ]);
+    const service = createInternalIntegrationService({
+      connectorRepository: repository,
+      now: () => now
+    });
+
+    const response = await service.updateTelegramIntegration(context, {
+      connectorId: "telegram_bot:tenant-integrations",
+      displayName: "Sales Telegram",
+      enabled: true,
+      channelExternalId: "telegram-local",
+      mode: "webhook",
+      botTokenSecretRef: "secret:bot-token",
+      outboundEnabled: true
+    });
+
+    expect(response.displayName).toBe("Sales Telegram");
+    expect(response.diagnostics).toEqual(diagnostics);
+    expect(
+      repository.records.get("telegram_bot:tenant-integrations")?.diagnostics
+    ).toEqual(diagnostics);
+  });
+
   it("does not fall back to the first Telegram connector when none is selected", async () => {
     const service = createInternalIntegrationService({
       connectorRepository: new InMemoryChannelConnectorRepository([

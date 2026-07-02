@@ -70,6 +70,7 @@ export default async function IntegrationsAdminPage({
     challengeId?: string;
     connectorId?: string;
     channelType?: string;
+    connectionPendingAt?: string;
   }>;
 }): Promise<ReactNode> {
   const access = await resolveCurrentWebAccessSession();
@@ -111,6 +112,9 @@ export default async function IntegrationsAdminPage({
   );
   const requestedChannelType = normalizeOptionalSearchParam(
     resolvedSearchParams?.channelType
+  );
+  const connectionPendingAt = normalizeOptionalSearchParam(
+    resolvedSearchParams?.connectionPendingAt
   );
   const requestedChallengeId = normalizeOptionalSearchParam(
     resolvedSearchParams?.challengeId
@@ -158,6 +162,11 @@ export default async function IntegrationsAdminPage({
         integration={
           selectedTelegramIntegration ??
           createEmptyTelegramIntegrationViewModel()
+        }
+        initialConnectionSubmittedAt={
+          selectedConnector.connectorId === requestedConnectorId
+            ? connectionPendingAt
+            : undefined
         }
         locale={locale}
         t={t}

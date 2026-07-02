@@ -926,16 +926,15 @@ a.secondaryButton {
 .telegramConnectionActions .primaryButton,
 .telegramConnectionActions .secondaryButton,
 .telegramConnectionActions .dangerButton {
-  min-height: 52px;
-  padding: 0 22px;
-  font-size: 15px;
+  min-height: 40px;
+  padding: 0 16px;
+  font-size: 14px;
   font-weight: 650;
 }
 
 .telegramConnectionActions .primaryButton {
   min-width: min(100%, 260px);
-  box-shadow: 0 16px 28px
-    color-mix(in srgb, var(--hulee-color-brand-primary) 22%, transparent);
+  box-shadow: none;
 }
 
 .telegramConnectionActions .secondaryButton,
@@ -969,6 +968,39 @@ a.secondaryButton {
 
 .telegramConnectionStatus {
   min-height: 20px;
+}
+
+.tokenInputControl {
+  position: relative;
+  display: grid;
+  min-width: 0;
+}
+
+.tokenInputControl .textInput {
+  padding-right: 44px;
+}
+
+.tokenInputEditButton {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 0;
+  border-radius: var(--hulee-radius-control);
+  background: transparent;
+  color: var(--hulee-color-text-muted);
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.tokenInputEditButton:hover,
+.tokenInputEditButton:focus-visible {
+  background: var(--hulee-color-surface-muted);
+  color: var(--hulee-color-text-default);
+  outline: none;
 }
 
 .telegramStatusCard {
@@ -2186,12 +2218,12 @@ button.integrationListItem {
   opacity: 0.72;
 }
 
-a.managementRow:hover,
-a.managementRow:focus-visible,
-a.integrationListItem:hover,
-a.integrationListItem:focus-visible,
-button.integrationListItem:hover,
-button.integrationListItem:focus-visible,
+a.managementRow:not(.adminNavLink):not(.integrationNavLink):hover,
+a.managementRow:not(.adminNavLink):not(.integrationNavLink):focus-visible,
+a.integrationListItem:not(.integrationNavLink):hover,
+a.integrationListItem:not(.integrationNavLink):focus-visible,
+button.integrationListItem:not(.integrationNavLink):hover,
+button.integrationListItem:not(.integrationNavLink):focus-visible,
 button.managementRow:not(.adminNavLink):not(.integrationNavLink):hover,
 button.managementRow:not(.adminNavLink):not(.integrationNavLink):focus-visible {
   border-color: var(--hulee-color-brand-primary);
@@ -2239,6 +2271,12 @@ button.managementRow:not(.adminNavLink):not(.integrationNavLink):focus-visible {
     var(--hulee-color-brand-primary) 8%,
     transparent
   );
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.integrationNavLink:hover,
+.integrationNavLink:focus-visible {
   box-shadow: none;
 }
 

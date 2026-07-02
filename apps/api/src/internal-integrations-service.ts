@@ -939,12 +939,20 @@ export function createInternalIntegrationService(
       const existingDiagnostics = parseStoredTelegramDiagnostics(
         existingRecord.diagnostics
       );
-      const diagnostics = buildTelegramDiagnostics({
-        enabled: request.enabled,
-        config: parsedConfig,
-        checkedAt: updatedAt.toISOString(),
-        runtime: existingDiagnostics?.runtime
-      });
+      const diagnostics =
+        shouldPreserveTelegramDiagnostics({
+          existingConfig,
+          existingDiagnostics,
+          request,
+          nextConfig: parsedConfig
+        }) && existingDiagnostics
+          ? existingDiagnostics
+          : buildTelegramDiagnostics({
+              enabled: request.enabled,
+              config: parsedConfig,
+              checkedAt: updatedAt.toISOString(),
+              runtime: existingDiagnostics?.runtime
+            });
       const status = telegramConnectorStatusFromUpdate({
         existingRecord,
         enabled: request.enabled,
@@ -2087,6 +2095,40 @@ function telegramDisplayNameFromDiagnostics(input: {
     input.currentDisplayName.startsWith(`${defaultTelegramDisplayName} (`)
     ? nextDisplayName
     : input.currentDisplayName;
+}
+
+function shouldPreserveTelegramDiagnostics(input: {
+  existingConfig: InternalTelegramIntegrationConfig | null;
+  existingDiagnostics: InternalTelegramIntegrationDiagnostics | null;
+  nextConfig: InternalTelegramIntegrationConfig;
+  request: InternalTelegramIntegrationUpdateRequest;
+}): boolean {
+  return (
+    !hasNewTelegramBotToken(input.request) &&
+    input.existingDiagnostics !== null &&
+    input.existingConfig !== null &&
+    telegramConfigEquals(input.existingConfig, input.nextConfig)
+  );
+}
+
+function hasNewTelegramBotToken(
+  request: InternalTelegramIntegrationUpdateRequest
+): boolean {
+  return request.botToken?.trim().length ? true : false;
+}
+
+function telegramConfigEquals(
+  left: InternalTelegramIntegrationConfig,
+  right: InternalTelegramIntegrationConfig
+): boolean {
+  return (
+    left.channelExternalId === right.channelExternalId &&
+    left.mode === right.mode &&
+    left.botTokenSecretRef === right.botTokenSecretRef &&
+    left.webhookConnectorId === right.webhookConnectorId &&
+    left.webhookSecretTokenSecretRef === right.webhookSecretTokenSecretRef &&
+    left.outboundEnabled === right.outboundEnabled
+  );
 }
 
 async function upsertTelegramConnector(input: {
