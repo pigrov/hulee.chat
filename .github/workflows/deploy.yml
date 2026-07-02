@@ -119,9 +119,9 @@ jobs:
             exit 1
           fi
           compose=(docker compose --env-file .env --env-file .release.env -f docker-compose.yml)
-          core_services=(postgres minio minio-create-bucket api worker web)
-          pull_services=(postgres minio minio-create-bucket api worker web)
-          image_containers=(hulee_chat_api hulee_chat_web hulee_chat_worker)
+          core_services=(postgres minio minio-create-bucket api worker web site)
+          pull_services=(postgres minio minio-create-bucket api worker web site)
+          image_containers=(hulee_chat_api hulee_chat_web hulee_chat_worker hulee_site)
           if [ "$provider_egress_enabled" = true ]; then
             compose+=(--profile provider-egress)
             pull_services+=(worker-provider-egress)

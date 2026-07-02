@@ -32,6 +32,12 @@ The nginx config in `deploy/nginx/chat.hulee.ru.conf` is a template for the
 existing `transcribe_nginx` reverse proxy. Apply it only after the app container
 is running and the TLS certificate exists.
 
+The marketing site for `hulee.ru` runs as a separate `hulee_site` container
+from the same production image. The nginx config in
+`deploy/nginx/hulee.ru.conf` replaces the current inline placeholder page and
+proxies the apex domain to that container. Keep `chat.hulee.ru` pointed at
+`hulee_chat_web`.
+
 ## Object storage
 
 Production compose runs a private MinIO service for message files and provider

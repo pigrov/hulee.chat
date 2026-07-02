@@ -16,6 +16,7 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "api:dev": "pnpm --filter @hulee/api dev",
+    "site:dev": "pnpm --filter @hulee/site exec next dev --hostname 127.0.0.1 --port 3002",
     "infra:up": "docker compose -f infra/docker-compose/docker-compose.yml up -d",
     "infra:down": "docker compose -f infra/docker-compose/docker-compose.yml down",
     "infra:logs": "docker compose -f infra/docker-compose/docker-compose.yml logs",

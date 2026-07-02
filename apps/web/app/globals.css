@@ -1542,6 +1542,10 @@ a.secondaryButton {
   );
 }
 
+.settingsPanel[hidden] {
+  display: none !important;
+}
+
 .settingsPanel.adminNavPanel,
 .settingsPanel.platformNavPanel {
   display: flex;
@@ -1579,7 +1583,7 @@ a.secondaryButton {
   display: grid;
   min-height: calc(100vh - 104px);
   min-width: 0;
-  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+  grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
   gap: 12px;
   align-items: stretch;
 }
@@ -1600,16 +1604,12 @@ a.secondaryButton {
   overscroll-behavior: contain;
 }
 
-.roleSectionNavLink .integrationListText {
-  min-width: 0;
-}
-
-.roleSectionNavLink .integrationListType {
-  display: -webkit-box;
-  overflow: hidden;
-  white-space: normal;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+.adminRolesContent {
+  min-height: calc(100vh - 104px);
+  max-height: calc(100vh - 104px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
 }
 
 .platformChannelGrid {
@@ -2994,6 +2994,13 @@ button.managementRow:not(.adminNavLink):not(.integrationNavLink):focus-visible {
   .adminRolesNav .integrationList,
   .integrationCatalog .integrationList {
     overflow: visible;
+  }
+
+  .adminRolesContent {
+    min-height: auto;
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
   }
 
   .setupStepList {

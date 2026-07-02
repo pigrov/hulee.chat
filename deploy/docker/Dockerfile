@@ -14,6 +14,7 @@ COPY . .
 
 RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @hulee/web build
+RUN pnpm --filter @hulee/site build
 
 EXPOSE 3000
 

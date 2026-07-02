@@ -33,6 +33,7 @@ import {
   Save,
   Search,
   ShieldCheck,
+  UserPlus,
   XCircle
 } from "lucide-react";
 import Link from "next/link";
@@ -122,8 +123,7 @@ type RoleAdminSectionId = (typeof roleAdminSectionIds)[number];
 type RoleAdminSectionNavItem = {
   id: RoleAdminSectionId;
   titleKey: I18nMessageKey;
-  descriptionKey: I18nMessageKey;
-  count: number;
+  icon: ReactNode;
 };
 
 export default async function RolesAdminPage({
@@ -286,68 +286,57 @@ export default async function RolesAdminPage({
     {
       id: "definitions",
       titleKey: "admin.roles.roleDefinitions",
-      descriptionKey: "admin.roles.roleDefinitions.description",
-      count: roles.length
+      icon: <KeyRound size={18} aria-hidden="true" />
     },
     {
       id: "create",
       titleKey: "admin.roles.createRole",
-      descriptionKey: "admin.roles.createRole.description",
-      count: permissionCatalog.length
+      icon: <Plus size={18} aria-hidden="true" />
     },
     {
       id: "templates",
       titleKey: "admin.roles.createFromTemplate",
-      descriptionKey: "admin.roles.createFromTemplate.description",
-      count: roleTemplateCatalog.length
+      icon: <ShieldCheck size={18} aria-hidden="true" />
     },
     {
       id: "assign",
       titleKey: "admin.roles.assignRole",
-      descriptionKey: "admin.roles.assignRole.description",
-      count: roleAssignmentSubjectCount
+      icon: <UserPlus size={18} aria-hidden="true" />
     },
     {
       id: "preview",
       titleKey: "admin.roles.effectiveAccessPreview",
-      descriptionKey: "admin.roles.effectiveAccessPreview.description",
-      count: effectiveAccessPreview?.length ?? activeEmployees.length
+      icon: <Search size={18} aria-hidden="true" />
     },
     {
       id: "activeAssignments",
       titleKey: "admin.roles.activeAssignments",
-      descriptionKey: "admin.roles.activeAssignments.description",
-      count: roleBindings.length
+      icon: <ListChecks size={18} aria-hidden="true" />
     },
     {
       id: "expiredAssignments",
       titleKey: "admin.roles.expiredAssignments",
-      descriptionKey: "admin.roles.expiredAssignments.description",
-      count: expiredRoleBindings.length
+      icon: <Archive size={18} aria-hidden="true" />
     },
     {
       id: "directGrantCreate",
       titleKey: "admin.roles.addDirectGrant",
-      descriptionKey: "admin.roles.addDirectGrant.description",
-      count: permissionCatalog.length
+      icon: <Plus size={18} aria-hidden="true" />
     },
     {
       id: "activeDirectGrants",
       titleKey: "admin.roles.activeDirectGrants",
-      descriptionKey: "admin.roles.activeDirectGrants.description",
-      count: directGrants.length
+      icon: <KeyRound size={18} aria-hidden="true" />
     },
     {
       id: "expiredDirectGrants",
       titleKey: "admin.roles.expiredDirectGrants",
-      descriptionKey: "admin.roles.expiredDirectGrants.description",
-      count: expiredDirectGrants.length
+      icon: <ArchiveRestore size={18} aria-hidden="true" />
     },
     {
       id: "permissionCatalog",
       titleKey: "admin.roles.permissionCatalog",
-      descriptionKey: "admin.roles.permissionCatalog.description",
-      count: permissionCatalog.length
+      icon: <ShieldCheck size={18} aria-hidden="true" />
     }
   ];
 
@@ -388,7 +377,7 @@ export default async function RolesAdminPage({
           </nav>
         </aside>
 
-        <div className="adminStack">
+        <div className="adminStack adminRolesContent">
           <section
             className="settingsPanel"
             aria-labelledby="role-create-title"
@@ -900,15 +889,10 @@ function RoleAdminSectionLink({
       href={roleAdminSectionHref(section.id)}
       aria-current={current ? "page" : undefined}
     >
+      <span className="metricIcon">{section.icon}</span>
       <div className="integrationListText">
         <h3 className="listItemTitle">{t(section.titleKey)}</h3>
-        <p className="metaText integrationListType">
-          {t(section.descriptionKey)}
-        </p>
       </div>
-      <span className="integrationListBadges">
-        <span className="badge">{section.count}</span>
-      </span>
     </Link>
   );
 }
