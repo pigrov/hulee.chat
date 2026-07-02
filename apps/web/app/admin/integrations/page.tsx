@@ -53,6 +53,7 @@ import {
   hasEffectivePermission,
   resolveEmployeeEffectiveAccess
 } from "../../../src/rbac-effective-access";
+import { TelegramBotCatalogConnectForm } from "../../../src/telegram-bot-catalog-connect-form";
 import { TelegramIntegrationPanel } from "../../../src/telegram-integration-panel";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
 import { navigationAccessFromTenantAdminAccess } from "../../../src/tenant-admin-nav";
@@ -287,13 +288,26 @@ function ChannelCatalogDetailPanel({
     <section className="settingsPanel" aria-label={title}>
       <MarkdownContent value={description} />
 
-      <form className="buttonRow" action={createChannelConnectorAction}>
-        <input type="hidden" name="channelType" value={channel.channelType} />
-        <button className="primaryButton" type="submit">
-          <Plus size={16} aria-hidden="true" />
-          {t("admin.integrations.createChannel")}
-        </button>
-      </form>
+      {channel.channelType === "telegram_bot" ? (
+        <TelegramBotCatalogConnectForm
+          channelType="telegram_bot"
+          labels={{
+            botToken: t("integrations.telegram.botToken"),
+            botTokenPlaceholder: t("integrations.telegram.botTokenPlaceholder"),
+            connect: t("admin.integrations.connectChannel"),
+            connecting: t("integrations.telegram.connectionConnecting"),
+            invalidToken: t("integrations.telegram.invalidTokenFormat")
+          }}
+        />
+      ) : (
+        <form className="buttonRow" action={createChannelConnectorAction}>
+          <input type="hidden" name="channelType" value={channel.channelType} />
+          <button className="primaryButton" type="submit">
+            <Plus size={16} aria-hidden="true" />
+            {t("admin.integrations.createChannel")}
+          </button>
+        </form>
+      )}
     </section>
   );
 }

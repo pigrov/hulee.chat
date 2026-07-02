@@ -475,6 +475,78 @@ describe("internal integrations service", () => {
     );
   });
 
+  it("validates Telegram bot tokens through provider egress without persisting connectors", async () => {
+    const repository = new InMemoryChannelConnectorRepository();
+    const botApiClientFactory = vi.fn(() => ({
+      async sendTextMessage() {
+        return {
+          messageId: "1",
+          chatId: "1",
+          raw: {}
+        };
+      },
+      async getMe() {
+        return {
+          id: "100",
+          username: "hulee_test_bot",
+          raw: {}
+        };
+      },
+      async getWebhookInfo() {
+        return {
+          url: "",
+          pendingUpdateCount: 0,
+          raw: {}
+        };
+      },
+      async getUpdates() {
+        return [];
+      },
+      async getFile() {
+        return {
+          fileId: "telegram-file-1",
+          filePath: "photos/file-1.jpg",
+          raw: {}
+        };
+      },
+      async downloadFile() {
+        return new Uint8Array();
+      },
+      async setWebhook() {},
+      async deleteWebhook() {}
+    }));
+    const service = createInternalIntegrationService({
+      connectorRepository: repository,
+      botApiClientFactory,
+      now: () => now
+    });
+
+    await expect(
+      service.validateTelegramBotToken(context, {
+        botToken: "123456789:AAExampleTokenValue_000000000000000000"
+      })
+    ).resolves.toEqual({
+      bot: {
+        id: "100",
+        username: "hulee_test_bot"
+      }
+    });
+    expect(botApiClientFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        botToken: "123456789:AAExampleTokenValue_000000000000000000",
+        egress: expect.objectContaining({
+          tenantId,
+          channelType: "telegram_bot",
+          provider: "telegram",
+          resolution: expect.objectContaining({
+            profileKind: "vpn_namespace"
+          })
+        })
+      })
+    );
+    expect(repository.records.size).toBe(0);
+  });
+
   it("advances draft Telegram setup steps before activation", async () => {
     const repository = new InMemoryChannelConnectorRepository();
     const service = createInternalIntegrationService({
@@ -769,6 +841,7 @@ describe("internal integrations service", () => {
 
     expect(response).toMatchObject({
       publicWebhookUrl: "https://example.test/webhooks/telegram/tgwh_test",
+      displayName: "Telegram Bot (@hulee_test_bot)",
       diagnostics: {
         status: "configured",
         bot: {
@@ -806,6 +879,9 @@ describe("internal integrations service", () => {
     expect(
       repository.records.get("telegram_bot:tenant-integrations")?.diagnostics
     ).toEqual(response.diagnostics);
+    expect(
+      repository.records.get("telegram_bot:tenant-integrations")?.displayName
+    ).toBe("Telegram Bot (@hulee_test_bot)");
   });
 
   it("reports active Telegram webhooks as a polling diagnostics conflict", async () => {

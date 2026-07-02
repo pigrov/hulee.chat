@@ -23,6 +23,8 @@ import {
   internalRbacRolesResponseSchema,
   internalTenantBrandResponseSchema,
   internalTenantBrandUpdateRequestSchema,
+  internalTelegramBotTokenValidateRequestSchema,
+  internalTelegramBotTokenValidateResponseSchema,
   internalTelegramIntegrationResponseSchema,
   internalTelegramIntegrationUpdateRequestSchema,
   type InternalChannelCatalogResponse,
@@ -51,6 +53,8 @@ import {
   type InternalRbacRolesResponse,
   type InternalTenantBrandResponse,
   type InternalTenantBrandUpdateRequest,
+  type InternalTelegramBotTokenValidateRequest,
+  type InternalTelegramBotTokenValidateResponse,
   type InternalTelegramIntegrationResponse,
   type InternalTelegramIntegrationUpdateRequest
 } from "@hulee/contracts";
@@ -71,6 +75,8 @@ export type ChannelConnectorsViewModel = InternalChannelConnectorsResponse;
 export type ChannelConnectorViewModel = InternalChannelConnectorSummary;
 export type EgressStatusViewModel = InternalEgressStatusResponse;
 export type TelegramIntegrationViewModel = InternalTelegramIntegrationResponse;
+export type TelegramBotTokenValidationViewModel =
+  InternalTelegramBotTokenValidateResponse;
 export type RbacRolesViewModel = InternalRbacRolesResponse;
 export type RbacRoleBindingsViewModel = InternalRbacRoleBindingsResponse;
 export type RbacDirectGrantsViewModel = InternalRbacDirectGrantsResponse;
@@ -814,6 +820,23 @@ export async function updateTelegramIntegration(
   }
 
   return internalTelegramIntegrationResponseSchema.parse(await response.json());
+}
+
+export async function validateTelegramBotToken(
+  input: InternalTelegramBotTokenValidateRequest,
+  options: InternalApiAccessOptions<"modules.manage">
+): Promise<TelegramBotTokenValidationViewModel> {
+  const request = internalTelegramBotTokenValidateRequestSchema.parse(input);
+
+  return requestInternalApiJson({
+    method: "POST",
+    path: "/internal/v1/channels/telegram-bot/token/validate",
+    body: request,
+    schema: internalTelegramBotTokenValidateResponseSchema,
+    errorPrefix: "Internal Telegram bot token validation API returned",
+    options,
+    permission: "modules.manage"
+  });
 }
 
 export async function refreshTelegramDiagnostics(

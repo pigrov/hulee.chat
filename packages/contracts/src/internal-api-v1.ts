@@ -910,6 +910,24 @@ export const internalTelegramIntegrationUpdateRequestSchema = z
   })
   .strict();
 
+export const internalTelegramBotTokenValidateRequestSchema = z
+  .object({
+    botToken: z.string().trim().min(1).max(4096)
+  })
+  .strict();
+
+export const internalTelegramBotTokenValidateResponseSchema = z
+  .object({
+    bot: z
+      .object({
+        id: z.string().trim().min(1),
+        username: z.string().trim().min(1).optional(),
+        firstName: z.string().trim().min(1).optional()
+      })
+      .strict()
+  })
+  .strict();
+
 export const internalTelegramIntegrationDiagnosticsSchema = z
   .object({
     status: z.enum([
@@ -1267,6 +1285,12 @@ export type InternalTelegramSetupStep = z.infer<
 >;
 export type InternalTelegramIntegrationUpdateRequest = z.infer<
   typeof internalTelegramIntegrationUpdateRequestSchema
+>;
+export type InternalTelegramBotTokenValidateRequest = z.infer<
+  typeof internalTelegramBotTokenValidateRequestSchema
+>;
+export type InternalTelegramBotTokenValidateResponse = z.infer<
+  typeof internalTelegramBotTokenValidateResponseSchema
 >;
 export type InternalTelegramIntegrationDiagnostics = z.infer<
   typeof internalTelegramIntegrationDiagnosticsSchema

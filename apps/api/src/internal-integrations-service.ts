@@ -18,6 +18,8 @@ import type {
   InternalChannelOnboardingFlow,
   InternalChannelType,
   InternalEgressDiagnostics,
+  InternalTelegramBotTokenValidateRequest,
+  InternalTelegramBotTokenValidateResponse,
   InternalTelegramIntegrationConfig,
   InternalTelegramIntegrationDiagnostics,
   InternalTelegramIntegrationResponse,
@@ -57,7 +59,8 @@ import {
   type EgressRuntime,
   type TelegramBotApiEgressBinding,
   type TelegramBotApiClient,
-  type TelegramBotApiSettings
+  type TelegramBotApiSettings,
+  type TelegramBotIdentity
 } from "@hulee/modules";
 import { randomBytes, randomUUID } from "node:crypto";
 
@@ -117,6 +120,10 @@ export type InternalIntegrationService = {
     context: InternalIntegrationContext,
     input?: { connectorId?: string }
   ): Promise<InternalTelegramIntegrationResponse>;
+  validateTelegramBotToken(
+    context: InternalIntegrationContext,
+    request: InternalTelegramBotTokenValidateRequest
+  ): Promise<InternalTelegramBotTokenValidateResponse>;
   updateTelegramIntegration(
     context: InternalIntegrationContext,
     request: InternalTelegramIntegrationUpdateRequest
@@ -855,6 +862,32 @@ export function createInternalIntegrationService(
         publicWebhookBaseUrl: options.publicWebhookBaseUrl,
         checkedAt: now().toISOString()
       });
+    },
+
+    async validateTelegramBotToken(context, request) {
+      const checkedAt = now().toISOString();
+      const connectorId = createTelegramTokenValidationConnectorId(context);
+      const egressResolution = await resolveTelegramEgressProfile({
+        egressRuntime,
+        tenantId: context.tenantId,
+        connectorId,
+        checkedAt
+      });
+      const client = botApiClientFactory({
+        apiBaseUrl: options.telegramApiBaseUrl,
+        botToken: request.botToken.trim(),
+        egress: buildTelegramBotApiEgressBinding({
+          egressRuntime,
+          resolution: egressResolution,
+          tenantId: context.tenantId,
+          connectorId
+        })
+      });
+      const bot = await client.getMe();
+
+      return {
+        bot: telegramBotTokenValidationIdentity(bot)
+      };
     },
 
     async updateTelegramIntegration(context, request) {
@@ -1778,7 +1811,10 @@ async function runTelegramProviderDiagnostics(
     ...options,
     existingRecord: state.record,
     connectorId: state.connectorId,
-    displayName: state.displayName,
+    displayName: telegramDisplayNameFromDiagnostics({
+      currentDisplayName: state.displayName,
+      diagnostics
+    }),
     enabled: state.enabled,
     config: state.config,
     diagnostics,
@@ -1787,7 +1823,10 @@ async function runTelegramProviderDiagnostics(
 
   return telegramResponseFromConfig({
     connectorId: state.connectorId,
-    displayName: state.displayName,
+    displayName: telegramDisplayNameFromDiagnostics({
+      currentDisplayName: state.displayName,
+      diagnostics
+    }),
     status: telegramConnectorStatusFromDiagnostics({
       enabled: state.enabled,
       diagnostics
@@ -2010,6 +2049,44 @@ async function persistTelegramDiagnostics(input: {
     }),
     updatedAt: input.updatedAt
   });
+}
+
+function createTelegramTokenValidationConnectorId(
+  context: InternalIntegrationContext
+): string {
+  return `${telegramChannelType}:token-validation:${context.employeeId}`;
+}
+
+function telegramBotTokenValidationIdentity(
+  bot: TelegramBotIdentity
+): InternalTelegramBotTokenValidateResponse["bot"] {
+  return {
+    id: bot.id,
+    ...(bot.username ? { username: bot.username } : {}),
+    ...(bot.firstName ? { firstName: bot.firstName } : {})
+  };
+}
+
+function telegramDisplayNameFromDiagnostics(input: {
+  currentDisplayName: string;
+  diagnostics: InternalTelegramIntegrationDiagnostics;
+}): string {
+  const providerName =
+    input.diagnostics.bot?.username ?? input.diagnostics.bot?.firstName;
+
+  if (!providerName) {
+    return input.currentDisplayName;
+  }
+
+  const normalizedProviderName = input.diagnostics.bot?.username
+    ? `@${providerName}`
+    : providerName;
+  const nextDisplayName = `${defaultTelegramDisplayName} (${normalizedProviderName})`;
+
+  return input.currentDisplayName === defaultTelegramDisplayName ||
+    input.currentDisplayName.startsWith(`${defaultTelegramDisplayName} (`)
+    ? nextDisplayName
+    : input.currentDisplayName;
 }
 
 async function upsertTelegramConnector(input: {

@@ -436,6 +436,12 @@ function createHandler(input?: {
       }
     }
   }));
+  const validateTelegramBotToken = vi.fn(async () => ({
+    bot: {
+      id: "100",
+      username: "hulee_test_bot"
+    }
+  }));
   const setTelegramWebhook = vi.fn(refreshTelegramDiagnostics);
   const deleteTelegramWebhook = vi.fn(refreshTelegramDiagnostics);
   const channelAuthChallengeResponse = {
@@ -547,6 +553,7 @@ function createHandler(input?: {
       submitChannelAuthChallenge,
       cancelChannelAuthChallenge,
       loadTelegramIntegration,
+      validateTelegramBotToken,
       updateTelegramIntegration,
       refreshTelegramDiagnostics,
       setTelegramWebhook,
@@ -599,6 +606,7 @@ function createHandler(input?: {
     submitChannelAuthChallenge,
     cancelChannelAuthChallenge,
     loadTelegramIntegration,
+    validateTelegramBotToken,
     updateTelegramIntegration,
     refreshTelegramDiagnostics,
     setTelegramWebhook,
@@ -1876,6 +1884,34 @@ describe("internal API handler", () => {
         mode: "webhook",
         botTokenSecretRef: "env:HULEE_TELEGRAM_BOT_TOKEN",
         outboundEnabled: true
+      }
+    );
+  });
+
+  it("validates Telegram bot tokens before connector creation", async () => {
+    const modulesManageSession = sessionWithPermissions(["modules.manage"]);
+    const { handler, validateTelegramBotToken } = createHandler({
+      session: modulesManageSession
+    });
+    const response = await handler.handle({
+      method: "POST",
+      path: "/internal/v1/channels/telegram-bot/token/validate",
+      body: {
+        botToken: "123456789:AAExampleTokenValue_000000000000000000"
+      }
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      bot: {
+        id: "100",
+        username: "hulee_test_bot"
+      }
+    });
+    expect(validateTelegramBotToken).toHaveBeenCalledWith(
+      modulesManageSession,
+      {
+        botToken: "123456789:AAExampleTokenValue_000000000000000000"
       }
     );
   });

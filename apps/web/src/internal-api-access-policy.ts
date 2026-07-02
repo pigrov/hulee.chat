@@ -95,6 +95,8 @@ export function resolveRequiredInternalApiEffectivePermissionOverride(
         pathname === "/internal/v1/egress/status")) ||
     (method === "POST" && pathname === "/internal/v1/channels/connectors") ||
     (method === "POST" &&
+      pathname === "/internal/v1/channels/telegram-bot/token/validate") ||
+    (method === "POST" &&
       /^\/internal\/v1\/channels\/connectors\/[^/]+\/disable$/.test(
         pathname
       )) ||

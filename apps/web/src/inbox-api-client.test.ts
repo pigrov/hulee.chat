@@ -47,7 +47,8 @@ import {
   updateRbacRole,
   updateInboxConversationRouting,
   updateTelegramIntegration,
-  updateTenantBrand
+  updateTenantBrand,
+  validateTelegramBotToken
 } from "./inbox-api-client";
 
 describe("inbox API client", () => {
@@ -496,6 +497,44 @@ describe("inbox API client", () => {
     expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(4, {
       method: "POST",
       path: "/internal/v1/channels/connectors/telegram_qr_bridge%3Asecond/auth-challenges/challenge-1/cancel",
+      effectivePermissionOverride: "modules.manage"
+    });
+  });
+
+  it("passes explicit effective permission override when validating Telegram bot tokens", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => {
+      return Response.json({
+        bot: {
+          id: "100",
+          username: "hulee_test_bot"
+        }
+      });
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      validateTelegramBotToken(
+        {
+          botToken: "123456789:AAExampleTokenValue_000000000000000000"
+        },
+        {
+          effectivePermissionOverride: "modules.manage"
+        }
+      )
+    ).resolves.toEqual({
+      bot: {
+        id: "100",
+        username: "hulee_test_bot"
+      }
+    });
+
+    expect(buildInternalApiHeaders).toHaveBeenCalledWith({
+      method: "POST",
+      path: "/internal/v1/channels/telegram-bot/token/validate",
+      body: {
+        botToken: "123456789:AAExampleTokenValue_000000000000000000"
+      },
       effectivePermissionOverride: "modules.manage"
     });
   });

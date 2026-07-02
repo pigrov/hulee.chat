@@ -31,6 +31,7 @@ import {
   updateInboxConversationRouting,
   updateTenantBrand,
   updateTelegramIntegration,
+  validateTelegramBotToken,
   type InternalApiAccessOptions
 } from "./inbox-api-client";
 import { assertWebActionRequest } from "./action-security";
@@ -58,6 +59,10 @@ type TelegramConnectionActionState = {
   connectorId?: string;
   submittedAt?: string;
 };
+
+const telegramBotChannelType = "telegram_bot" as const;
+const defaultTelegramDisplayName = "Telegram Bot";
+const telegramBotTokenPattern = /^\d{6,14}:[A-Za-z0-9_-]{30,}$/;
 
 export async function sendReplyAction(formData: FormData): Promise<void> {
   await assertWebActionRequest();
@@ -389,6 +394,81 @@ export async function createChannelConnectorAction(
       connector.connectorId
     )}&channelStatus=created`
   );
+}
+
+export async function connectTelegramBotChannelAction(
+  formData: FormData
+): Promise<void> {
+  await assertWebActionRequest();
+  const internalApiAccess = await assertVerifiedTenantPermission(
+    "modules.manage",
+    "/admin/integrations"
+  );
+  const channelType = internalChannelTypeSchema.parse(
+    readRequiredFormString(formData, "channelType")
+  );
+  const botToken = readRequiredFormString(formData, "botToken").trim();
+
+  if (channelType !== telegramBotChannelType || !isTelegramBotToken(botToken)) {
+    redirect(
+      `/admin/integrations?channelType=${encodeURIComponent(
+        telegramBotChannelType
+      )}&channelStatus=invalid`
+    );
+  }
+
+  let connectorId: string | undefined;
+  let destination = `/admin/integrations?channelType=${encodeURIComponent(
+    telegramBotChannelType
+  )}&channelStatus=invalid`;
+
+  try {
+    const validation = await validateTelegramBotToken(
+      {
+        botToken
+      },
+      internalApiAccess
+    );
+    const displayName = telegramBotDisplayName(validation.bot);
+    const connector = await createChannelConnector(
+      {
+        channelType,
+        displayName
+      },
+      internalApiAccess
+    );
+    connectorId = connector.connectorId;
+
+    const setupFormData = new FormData();
+    setupFormData.set("connectorId", connector.connectorId);
+    setupFormData.set(
+      "channelExternalId",
+      connector.channelExternalId ?? connector.connectorId
+    );
+    setupFormData.set("displayName", displayName);
+    setupFormData.set("enabled", "on");
+    setupFormData.set("setupStepCompleted", "mode");
+    setupFormData.set("botToken", botToken);
+
+    await applyTelegramIntegrationUpdate(setupFormData, internalApiAccess);
+    revalidateTelegramIntegrationPaths();
+    destination = `/admin/integrations?connectorId=${encodeURIComponent(
+      connector.connectorId
+    )}&channelStatus=setupQueued`;
+  } catch {
+    if (connectorId) {
+      await deleteChannelConnector(
+        {
+          connectorId
+        },
+        internalApiAccess
+      ).catch(() => undefined);
+    }
+
+    revalidateTelegramIntegrationPaths();
+  }
+
+  redirect(destination);
 }
 
 export async function refreshTelegramDiagnosticsAction(
@@ -733,6 +813,23 @@ function readTelegramSetupStepCompleted(
   return value === "name" || value === "token" || value === "mode"
     ? value
     : undefined;
+}
+
+function isTelegramBotToken(value: string): boolean {
+  return telegramBotTokenPattern.test(value.trim());
+}
+
+function telegramBotDisplayName(input: {
+  username?: string;
+  firstName?: string;
+}): string {
+  const providerName = input.username
+    ? `@${input.username}`
+    : input.firstName?.trim();
+
+  return providerName
+    ? `${defaultTelegramDisplayName} (${providerName})`
+    : defaultTelegramDisplayName;
 }
 
 function resolveTelegramIntegrationMode(

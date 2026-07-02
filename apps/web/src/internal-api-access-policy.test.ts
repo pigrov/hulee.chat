@@ -98,6 +98,12 @@ describe("web internal API access policy", () => {
     expect(
       resolveRequiredInternalApiEffectivePermissionOverride({
         method: "POST",
+        path: "/internal/v1/channels/telegram-bot/token/validate"
+      })
+    ).toBe("modules.manage");
+    expect(
+      resolveRequiredInternalApiEffectivePermissionOverride({
+        method: "POST",
         path: "/internal/v1/channels/connectors/telegram_bot%3Asecond/disable"
       })
     ).toBe("modules.manage");

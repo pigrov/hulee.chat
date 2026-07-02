@@ -20,6 +20,7 @@ import type {
   InternalRbacRolesResponse,
   InternalWorkQueue,
   InternalTenantBrandResponse,
+  InternalTelegramBotTokenValidateResponse,
   InternalTelegramIntegrationResponse,
   PlatformErrorCode,
   TenantId
@@ -38,6 +39,7 @@ import {
   internalRbacRoleBindingCreateRequestSchema,
   internalRbacRoleMutationRequestSchema,
   internalTenantBrandUpdateRequestSchema,
+  internalTelegramBotTokenValidateRequestSchema,
   internalTelegramIntegrationUpdateRequestSchema,
   internalWorkQueueUpsertRequestSchema,
   isPlatformErrorCode
@@ -221,6 +223,9 @@ type RouteMatch =
   | {
       route: "channel_connector_telegram_view";
       connectorId: string;
+    }
+  | {
+      route: "channel_connector_telegram_token_validate";
     }
   | {
       route: "channel_connector_telegram_update";
@@ -767,6 +772,19 @@ async function handleAuthenticatedRoute(input: {
       return jsonResponse(200, response);
     }
 
+    case "channel_connector_telegram_token_validate": {
+      const request = internalTelegramBotTokenValidateRequestSchema.parse(
+        input.request.body
+      );
+      const response: InternalTelegramBotTokenValidateResponse =
+        await input.integrations.validateTelegramBotToken(
+          input.session,
+          request
+        );
+
+      return jsonResponse(200, response);
+    }
+
     case "channel_connector_telegram_update": {
       const request = internalTelegramIntegrationUpdateRequestSchema.parse(
         input.request.body
@@ -889,6 +907,7 @@ function internalRouteAuthorizationPolicy(
     case "channel_auth_challenge_submit":
     case "channel_auth_challenge_cancel":
     case "channel_connector_telegram_view":
+    case "channel_connector_telegram_token_validate":
     case "channel_connector_telegram_update":
     case "channel_connector_telegram_diagnostics":
     case "channel_connector_telegram_webhook_set":
@@ -1210,6 +1229,15 @@ function matchRoute(request: ApiHttpRequest): RouteMatch | undefined {
     return {
       route: "channel_connector_telegram_view",
       connectorId: decodeURIComponent(telegramConnectorMatch[1])
+    };
+  }
+
+  if (
+    request.method === "POST" &&
+    path === "/internal/v1/channels/telegram-bot/token/validate"
+  ) {
+    return {
+      route: "channel_connector_telegram_token_validate"
     };
   }
 
