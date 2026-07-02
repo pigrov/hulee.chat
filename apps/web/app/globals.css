@@ -1065,8 +1065,6 @@ a.secondaryButton {
 .adminWorkspace:has(.adminNavToggleInput:checked) .adminNavPanel > .slotHost,
 .adminWorkspace:has(.adminNavToggleInput:checked) .adminNavCollapseExpandedIcon,
 .adminWorkspace:has(.adminNavToggleInput:checked) .adminNavCollapseExpandedText,
-.adminWorkspace:has(.adminNavToggleInput:checked)
-  .adminNavCollapseCollapsedText,
 .adminWorkspace:not(:has(.adminNavToggleInput:checked))
   .adminNavCollapseCollapsedIcon {
   display: none;
@@ -2141,11 +2139,6 @@ button.managementRow:focus-visible {
     transparent
   );
   box-shadow: none;
-}
-
-.adminNavLink:hover::before,
-.adminNavLink:focus-visible::before {
-  opacity: 0.52;
 }
 
 .adminNavLink[aria-current="page"] {

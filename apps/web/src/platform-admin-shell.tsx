@@ -126,9 +126,6 @@ export function PlatformAdminShell({
                 <span className="adminNavCollapseExpandedText">
                   {t("navigation.collapseMenu")}
                 </span>
-                <span className="adminNavCollapseCollapsedText">
-                  {t("navigation.expandMenu")}
-                </span>
               </label>
             </aside>
 
