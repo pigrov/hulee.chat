@@ -31,7 +31,6 @@ import {
   updateInboxConversationRouting,
   updateTenantBrand,
   updateTelegramIntegration,
-  validateTelegramBotToken,
   type InternalApiAccessOptions
 } from "./inbox-api-client";
 import { assertWebActionRequest } from "./action-security";
@@ -423,13 +422,7 @@ export async function connectTelegramBotChannelAction(
   )}&channelStatus=invalid`;
 
   try {
-    const validation = await validateTelegramBotToken(
-      {
-        botToken
-      },
-      internalApiAccess
-    );
-    const displayName = telegramBotDisplayName(validation.bot);
+    const displayName = defaultTelegramDisplayName;
     const connector = await createChannelConnector(
       {
         channelType,
@@ -817,19 +810,6 @@ function readTelegramSetupStepCompleted(
 
 function isTelegramBotToken(value: string): boolean {
   return telegramBotTokenPattern.test(value.trim());
-}
-
-function telegramBotDisplayName(input: {
-  username?: string;
-  firstName?: string;
-}): string {
-  const providerName = input.username
-    ? `@${input.username}`
-    : input.firstName?.trim();
-
-  return providerName
-    ? `${defaultTelegramDisplayName} (${providerName})`
-    : defaultTelegramDisplayName;
 }
 
 function resolveTelegramIntegrationMode(
