@@ -1010,16 +1010,30 @@ a.secondaryButton {
 }
 
 .adminWorkspace {
+  --admin-nav-width: 260px;
+  --admin-nav-collapsed-width: 72px;
   min-width: 0;
   min-height: 100vh;
   background: var(--hulee-color-page);
 }
 
+.adminWorkspace:has(.adminNavToggleInput:checked) {
+  --admin-nav-width: var(--admin-nav-collapsed-width);
+}
+
+.adminNavToggleInput {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .adminTopBar {
-  display: flex;
+  display: grid;
   min-height: 80px;
+  grid-template-columns: var(--admin-nav-width) minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 20px;
   padding: 20px 28px;
   border-bottom: 1px solid var(--hulee-color-border);
@@ -1030,17 +1044,57 @@ a.secondaryButton {
   );
 }
 
-.adminTopIdentity {
-  display: flex;
+.adminTopBrand {
+  display: grid;
   min-width: 0;
   align-items: center;
-  gap: 28px;
+}
+
+.adminWorkspace:has(.adminNavToggleInput:checked) .adminTopBrand,
+.adminWorkspace:has(.adminNavToggleInput:checked) .appBrandIdentity {
+  justify-content: center;
+}
+
+.adminWorkspace:has(.adminNavToggleInput:checked) .brandWordmark,
+.adminWorkspace:has(.adminNavToggleInput:checked) .adminNavLink .listItemTitle,
+.adminWorkspace:has(.adminNavToggleInput:checked)
+  .platformNavGroup
+  > .detailLabel,
+.adminWorkspace:has(.adminNavToggleInput:checked) .inlineNoticeForm,
+.adminWorkspace:has(.adminNavToggleInput:checked) .adminNavPanel > .detailGrid,
+.adminWorkspace:has(.adminNavToggleInput:checked) .adminNavPanel > .slotHost,
+.adminWorkspace:has(.adminNavToggleInput:checked) .adminNavCollapseExpandedIcon,
+.adminWorkspace:has(.adminNavToggleInput:checked) .adminNavCollapseExpandedText,
+.adminWorkspace:not(:has(.adminNavToggleInput:checked))
+  .adminNavCollapseCollapsedIcon,
+.adminWorkspace:not(:has(.adminNavToggleInput:checked))
+  .adminNavCollapseCollapsedText {
+  display: none;
+}
+
+.adminWorkspace:has(.adminNavToggleInput:checked) .adminNavLink,
+.adminWorkspace:has(.adminNavToggleInput:checked) .adminNavCollapseButton {
+  justify-content: center;
+}
+
+.adminWorkspace:has(.adminNavToggleInput:checked) .adminNavLink {
+  padding-right: 0;
+  padding-left: 0;
+}
+
+.adminWorkspace:has(.adminNavToggleInput:checked)
+  .platformNavGroup
+  + .platformNavGroup {
+  padding-top: 0;
+  border-top: 0;
 }
 
 .adminTitleBlock {
   display: grid;
   min-width: 0;
   gap: 4px;
+  padding-left: 20px;
+  border-left: 1px solid var(--hulee-color-border);
 }
 
 .adminTopActions {
@@ -1190,16 +1244,50 @@ a.secondaryButton {
 
 .adminGrid {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: var(--admin-nav-width) minmax(0, 1fr);
+  gap: 20px;
   align-items: start;
 }
 
 .adminNavPanel {
   position: sticky;
   top: 12px;
+  min-height: calc(100vh - 104px);
+  align-content: start;
   gap: 12px;
   padding: 12px;
+  border: 0;
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-surface-default) 70%,
+    transparent
+  );
+}
+
+.adminGrid > :not(.adminNavPanel),
+.platformAdminGrid > .adminStack {
+  min-width: 0;
+  padding-left: 20px;
+  border-left: 1px solid var(--hulee-color-border);
+}
+
+.adminNavCollapseButton {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding: 10px 12px;
+  border-top: 1px solid var(--hulee-color-border);
+  color: var(--hulee-color-text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.adminNavCollapseButton:hover,
+.adminNavCollapseButton:focus-visible {
+  color: var(--hulee-color-text-default);
 }
 
 .adminStack {
@@ -1218,6 +1306,18 @@ a.secondaryButton {
   background: color-mix(
     in srgb,
     var(--hulee-color-surface-default) 92%,
+    transparent
+  );
+}
+
+.settingsPanel.adminNavPanel,
+.settingsPanel.platformNavPanel {
+  gap: 12px;
+  padding: 12px;
+  border: 0;
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-surface-default) 70%,
     transparent
   );
 }
@@ -2005,11 +2105,36 @@ button.managementRow:focus-visible {
 
 .adminNavLink {
   padding: 10px 12px;
-  border-color: transparent;
+  border: 0;
+  border-left: 4px solid transparent;
   background: transparent;
 }
 
-.adminNavLink[aria-current="page"],
+.adminNavLink:hover,
+.adminNavLink:focus-visible {
+  border-color: transparent;
+  border-left-color: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 42%,
+    transparent
+  );
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 8%,
+    transparent
+  );
+  box-shadow: none;
+}
+
+.adminNavLink[aria-current="page"] {
+  border-left-color: var(--hulee-color-brand-primary);
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 12%,
+    var(--hulee-color-surface-raised)
+  );
+}
+
 .integrationListItem[aria-current="page"] {
   border-color: color-mix(
     in srgb,
@@ -2031,14 +2156,15 @@ button.managementRow:focus-visible {
 
 .platformAdminGrid {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: var(--admin-nav-width) minmax(0, 1fr);
+  gap: 20px;
   align-items: start;
 }
 
 .platformNavPanel {
   position: sticky;
   top: 12px;
+  min-height: calc(100vh - 104px);
 }
 
 .platformNavGroups,
@@ -2393,21 +2519,24 @@ button.managementRow:focus-visible {
   }
 
   .adminTopBar {
+    grid-template-columns: 1fr;
     align-items: flex-start;
-    flex-direction: column;
     padding: 16px;
   }
 
-  .adminTopIdentity {
+  .adminTopBrand {
     width: 100%;
-    flex-direction: column;
     align-items: flex-start;
-    gap: 12px;
   }
 
   .adminTopActions {
     width: 100%;
     justify-content: space-between;
+  }
+
+  .adminTitleBlock {
+    padding-left: 0;
+    border-left: 0;
   }
 
   .topNavMenuPanel {
@@ -2458,9 +2587,17 @@ button.managementRow:focus-visible {
     grid-template-columns: 1fr;
   }
 
+  .adminGrid > :not(.adminNavPanel),
+  .platformAdminGrid > .adminStack {
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .adminNavPanel,
   .integrationCatalog,
   .platformNavPanel {
     position: static;
+    min-height: auto;
   }
 
   .setupStepList {

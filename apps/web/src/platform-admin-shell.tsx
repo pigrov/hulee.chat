@@ -2,6 +2,8 @@ import { defaultBrandProfile } from "@hulee/branding";
 import type { createTranslator, I18nMessageKey } from "@hulee/i18n";
 import {
   Building2,
+  ChevronsLeft,
+  ChevronsRight,
   Inbox,
   KeyRound,
   MessageCircle,
@@ -84,6 +86,12 @@ export function PlatformAdminShell({
       toasts={toasts}
     >
       <section className="adminWorkspace" aria-labelledby={titleId}>
+        <input
+          aria-label={t("navigation.collapseMenu")}
+          className="adminNavToggleInput"
+          id="platform-admin-nav-toggle"
+          type="checkbox"
+        />
         <AdminTopBar
           brand={defaultBrandProfile}
           eyebrow={t("platform.controlPlane")}
@@ -101,6 +109,27 @@ export function PlatformAdminShell({
               aria-label={t("platform.navigation")}
             >
               <PlatformNavigation current={current} t={t} />
+              <label
+                className="adminNavCollapseButton"
+                htmlFor="platform-admin-nav-toggle"
+              >
+                <ChevronsLeft
+                  className="adminNavCollapseExpandedIcon"
+                  size={16}
+                  aria-hidden="true"
+                />
+                <ChevronsRight
+                  className="adminNavCollapseCollapsedIcon"
+                  size={16}
+                  aria-hidden="true"
+                />
+                <span className="adminNavCollapseExpandedText">
+                  {t("navigation.collapseMenu")}
+                </span>
+                <span className="adminNavCollapseCollapsedText">
+                  {t("navigation.expandMenu")}
+                </span>
+              </label>
             </aside>
 
             <div className="adminStack">{children}</div>

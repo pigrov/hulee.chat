@@ -51,14 +51,14 @@ export function AdminTopBar({
 
   return (
     <header className="adminTopBar">
-      <div className="adminTopIdentity">
+      <div className="adminTopBrand">
         <BrandIdentity brand={brand} productName={productName} />
-        <div className="adminTitleBlock">
-          <p className="eyebrow">{eyebrow}</p>
-          <h1 className="adminTitle" id={titleId}>
-            {title}
-          </h1>
-        </div>
+      </div>
+      <div className="adminTitleBlock">
+        <p className="eyebrow">{eyebrow}</p>
+        <h1 className="adminTitle" id={titleId}>
+          {title}
+        </h1>
       </div>
 
       <div className="adminTopActions">

@@ -1,5 +1,7 @@
 import type { createTranslator } from "@hulee/i18n";
 import {
+  ChevronsLeft,
+  ChevronsRight,
   Inbox,
   KeyRound,
   LayoutDashboard,
@@ -97,6 +99,12 @@ export function TenantAdminShell({
       toasts={toasts}
     >
       <section className="adminWorkspace" aria-labelledby={titleId}>
+        <input
+          aria-label={t("navigation.collapseMenu")}
+          className="adminNavToggleInput"
+          id="tenant-admin-nav-toggle"
+          type="checkbox"
+        />
         <AdminTopBar
           brand={brand}
           eyebrow={tenantDisplayName}
@@ -144,6 +152,28 @@ export function TenantAdminShell({
 
               {sidebarContent}
               <SlotMount slot="admin.section" />
+
+              <label
+                className="adminNavCollapseButton"
+                htmlFor="tenant-admin-nav-toggle"
+              >
+                <ChevronsLeft
+                  className="adminNavCollapseExpandedIcon"
+                  size={16}
+                  aria-hidden="true"
+                />
+                <ChevronsRight
+                  className="adminNavCollapseCollapsedIcon"
+                  size={16}
+                  aria-hidden="true"
+                />
+                <span className="adminNavCollapseExpandedText">
+                  {t("navigation.collapseMenu")}
+                </span>
+                <span className="adminNavCollapseCollapsedText">
+                  {t("navigation.expandMenu")}
+                </span>
+              </label>
             </aside>
 
             {children}

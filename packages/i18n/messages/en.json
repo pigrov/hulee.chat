@@ -6,6 +6,8 @@
   "navigation.platformAdmin": "Platform admin",
   "navigation.help": "Need help?",
   "navigation.menu": "Open menu",
+  "navigation.collapseMenu": "Collapse menu",
+  "navigation.expandMenu": "Expand menu",
   "access.denied.eyebrow": "Access",
   "access.denied.title": "Permission required",
   "access.denied.description": "This section is not available for the current role.",

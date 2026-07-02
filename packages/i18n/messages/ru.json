@@ -6,6 +6,8 @@
   "navigation.platformAdmin": "Админ платформы",
   "navigation.help": "Есть вопросы?",
   "navigation.menu": "Открыть меню",
+  "navigation.collapseMenu": "Свернуть меню",
+  "navigation.expandMenu": "Развернуть меню",
   "access.denied.eyebrow": "Доступ",
   "access.denied.title": "Недостаточно прав",
   "access.denied.description": "Этот раздел недоступен для текущей роли.",
