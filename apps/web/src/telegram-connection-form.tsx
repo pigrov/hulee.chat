@@ -47,7 +47,7 @@ const initialConnectionState: TelegramConnectionActionState = {
 export function TelegramConnectionForm({
   botTokenSecretRef,
   channelExternalId,
-  connectionProblem,
+  connectionProblemMessage,
   connectorId,
   defaultDisplayName,
   diagnostics,
@@ -59,7 +59,7 @@ export function TelegramConnectionForm({
 }: {
   botTokenSecretRef?: string;
   channelExternalId: string;
-  connectionProblem?: ReactNode;
+  connectionProblemMessage?: string;
   connectorId: string;
   defaultDisplayName: string;
   diagnostics: TelegramConnectionDiagnosticsState;
@@ -114,6 +114,13 @@ export function TelegramConnectionForm({
     providerCheck,
     state
   });
+  const notice = connectionProblemMessage
+    ? { message: connectionProblemMessage, variant: "error" as const }
+    : connectionStatusNotice({
+        providerCheck,
+        statusText,
+        state
+      });
 
   useEffect(() => {
     if (state.status !== "queued" || !state.submittedAt) {
@@ -274,11 +281,13 @@ export function TelegramConnectionForm({
         </span>
       </div>
 
-      {connectionProblem}
-
-      {statusText ? (
-        <p className="metaText telegramConnectionStatus" role="status">
-          {statusText}
+      {notice ? (
+        <p
+          className="telegramConnectionNotice"
+          data-variant={notice.variant}
+          role="status"
+        >
+          {notice.message}
         </p>
       ) : null}
     </>
@@ -354,4 +363,33 @@ function connectionStatusText(input: {
   }
 
   return undefined;
+}
+
+function connectionStatusNotice(input: {
+  providerCheck: "idle" | "pending" | "succeeded" | "failed";
+  statusText?: string;
+  state: TelegramConnectionActionState;
+}): { message: string; variant: "error" | "success" | "info" } | undefined {
+  if (!input.statusText) {
+    return undefined;
+  }
+
+  if (input.state.status === "error" || input.providerCheck === "failed") {
+    return {
+      message: input.statusText,
+      variant: "error"
+    };
+  }
+
+  if (input.state.status === "saved" || input.providerCheck === "succeeded") {
+    return {
+      message: input.statusText,
+      variant: "success"
+    };
+  }
+
+  return {
+    message: input.statusText,
+    variant: "info"
+  };
 }

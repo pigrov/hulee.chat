@@ -23,6 +23,8 @@ import {
   deleteTelegramWebhook,
   disableChannelConnector,
   enableChannelConnector,
+  loadChannelConnectors,
+  loadTelegramIntegration,
   refreshTelegramDiagnostics,
   sendInboxReply,
   setTelegramWebhook,
@@ -31,6 +33,7 @@ import {
   updateInboxConversationRouting,
   updateTenantBrand,
   updateTelegramIntegration,
+  validateTelegramBotToken,
   type InternalApiAccessOptions
 } from "./inbox-api-client";
 import { assertWebActionRequest } from "./action-security";
@@ -52,6 +55,10 @@ import {
   loadTelegramBotChannelProviderPolicy,
   type PlatformChannelProviderPolicyView
 } from "./platform-channel-policies";
+import {
+  selectDuplicateTelegramBotConnector,
+  telegramDisplayNameFromValidatedBot
+} from "./telegram-bot-connector-rules";
 
 type TelegramConnectionActionState = {
   status: "idle" | "queued" | "saved" | "error";
@@ -60,7 +67,6 @@ type TelegramConnectionActionState = {
 };
 
 const telegramBotChannelType = "telegram_bot" as const;
-const defaultTelegramDisplayName = "Telegram Bot";
 const telegramBotTokenPattern = /^\d{6,14}:[A-Za-z0-9_-]{30,}$/;
 
 export async function sendReplyAction(formData: FormData): Promise<void> {
@@ -413,7 +419,37 @@ export async function connectTelegramBotChannelAction(
     redirect(
       `/admin/integrations?channelType=${encodeURIComponent(
         telegramBotChannelType
-      )}&channelStatus=invalid`
+      )}&channelStatus=telegramTokenInvalid`
+    );
+  }
+
+  let validation: Awaited<ReturnType<typeof validateTelegramBotToken>>;
+
+  try {
+    validation = await validateTelegramBotToken(
+      { botToken },
+      internalApiAccess
+    );
+  } catch {
+    redirect(
+      `/admin/integrations?channelType=${encodeURIComponent(
+        telegramBotChannelType
+      )}&channelStatus=telegramTokenInvalid`
+    );
+  }
+
+  const duplicate = await findDuplicateTelegramBotConnector({
+    bot: validation.bot,
+    internalApiAccess
+  });
+
+  if (duplicate) {
+    redirect(
+      `/admin/integrations?channelType=${encodeURIComponent(
+        telegramBotChannelType
+      )}&channelStatus=telegramTokenDuplicate&duplicateConnectorId=${encodeURIComponent(
+        duplicate.connectorId
+      )}`
     );
   }
 
@@ -423,7 +459,7 @@ export async function connectTelegramBotChannelAction(
   )}&channelStatus=invalid`;
 
   try {
-    const displayName = defaultTelegramDisplayName;
+    const displayName = telegramDisplayNameFromValidatedBot(validation.bot);
     const submittedAt = new Date().toISOString();
     const connector = await createChannelConnector(
       {
@@ -466,6 +502,31 @@ export async function connectTelegramBotChannelAction(
   }
 
   redirect(destination);
+}
+
+async function findDuplicateTelegramBotConnector(input: {
+  bot: Awaited<ReturnType<typeof validateTelegramBotToken>>["bot"];
+  internalApiAccess: InternalApiAccessOptions<"modules.manage">;
+}): Promise<{ connectorId: string } | undefined> {
+  const connectors = await loadChannelConnectors(input.internalApiAccess);
+  const telegramConnectors = connectors.connectors.filter(
+    (connector) =>
+      connector.channelType === telegramBotChannelType &&
+      connector.status !== "deleted"
+  );
+  const integrations = await Promise.all(
+    telegramConnectors.map(async (connector) => ({
+      connector,
+      integration: await loadTelegramIntegration(input.internalApiAccess, {
+        connectorId: connector.connectorId
+      }).catch(() => undefined)
+    }))
+  );
+
+  return selectDuplicateTelegramBotConnector({
+    bot: input.bot,
+    candidates: integrations
+  });
 }
 
 export async function refreshTelegramDiagnosticsAction(

@@ -53,7 +53,10 @@ import {
   hasEffectivePermission,
   resolveEmployeeEffectiveAccess
 } from "../../../src/rbac-effective-access";
-import { TelegramBotCatalogConnectForm } from "../../../src/telegram-bot-catalog-connect-form";
+import {
+  TelegramBotCatalogConnectForm,
+  type TelegramBotCatalogConnectFormNotice
+} from "../../../src/telegram-bot-catalog-connect-form";
 import { TelegramIntegrationPanel } from "../../../src/telegram-integration-panel";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
 import { navigationAccessFromTenantAdminAccess } from "../../../src/tenant-admin-nav";
@@ -71,6 +74,7 @@ export default async function IntegrationsAdminPage({
     connectorId?: string;
     channelType?: string;
     connectionPendingAt?: string;
+    duplicateConnectorId?: string;
   }>;
 }): Promise<ReactNode> {
   const access = await resolveCurrentWebAccessSession();
@@ -116,6 +120,12 @@ export default async function IntegrationsAdminPage({
   const connectionPendingAt = normalizeOptionalSearchParam(
     resolvedSearchParams?.connectionPendingAt
   );
+  const channelStatus = normalizeOptionalSearchParam(
+    resolvedSearchParams?.channelStatus
+  );
+  const duplicateConnectorId = normalizeOptionalSearchParam(
+    resolvedSearchParams?.duplicateConnectorId
+  );
   const requestedChallengeId = normalizeOptionalSearchParam(
     resolvedSearchParams?.challengeId
   );
@@ -125,17 +135,16 @@ export default async function IntegrationsAdminPage({
     loadChannelConnectors(internalApiAccess)
   ]);
   const { t, locale } = createTranslator(model.tenant.locale);
-  const channelStatusToast = resolvedSearchParams?.channelStatus
-    ? buildActionStatusToast({
-        id: `channel-status:${resolvedSearchParams.channelStatus}`,
-        status: resolvedSearchParams.channelStatus,
-        titleKey: "admin.integrations.actionStatus",
-        descriptionKey: channelActionStatusKey(
-          resolvedSearchParams.channelStatus
-        ),
-        t
-      })
-    : undefined;
+  const channelStatusToast =
+    channelStatus && !isInlineChannelStatus(channelStatus)
+      ? buildActionStatusToast({
+          id: `channel-status:${channelStatus}`,
+          status: channelStatus,
+          titleKey: "admin.integrations.actionStatus",
+          descriptionKey: channelActionStatusKey(channelStatus),
+          t
+        })
+      : undefined;
   const selectedConnector = selectChannelConnector({
     connectors: channelConnectors.connectors,
     requestedConnectorId
@@ -191,7 +200,9 @@ export default async function IntegrationsAdminPage({
     ) : selectedCatalogChannel ? (
       <ChannelCatalogDetailPanel
         channel={selectedCatalogChannel}
+        duplicateConnectorId={duplicateConnectorId}
         locale={locale}
+        status={channelStatus}
         t={t}
       />
     ) : (
@@ -278,11 +289,15 @@ type Translator = ReturnType<typeof createTranslator>["t"];
 
 function ChannelCatalogDetailPanel({
   channel,
+  duplicateConnectorId,
   locale,
+  status,
   t
 }: {
   channel: InternalChannelCatalogItem;
+  duplicateConnectorId?: string;
   locale: string;
+  status?: string;
   t: Translator;
 }): ReactNode {
   const title = resolveChannelTitle({
@@ -307,6 +322,11 @@ function ChannelCatalogDetailPanel({
             connecting: t("integrations.telegram.connectionConnecting"),
             invalidToken: t("integrations.telegram.invalidTokenFormat")
           }}
+          notice={telegramBotCatalogNotice({
+            duplicateConnectorId,
+            status,
+            t
+          })}
         />
       ) : (
         <form className="buttonRow" action={createChannelConnectorAction}>
@@ -630,6 +650,44 @@ function channelHealthStatusKey(
   status: InternalChannelConnectorSummary["healthStatus"]
 ): I18nMessageKey {
   return `integrations.channel.health.${status}` as I18nMessageKey;
+}
+
+function telegramBotCatalogNotice(input: {
+  duplicateConnectorId?: string;
+  status?: string;
+  t: Translator;
+}): TelegramBotCatalogConnectFormNotice | undefined {
+  if (input.status === "telegramTokenInvalid") {
+    return {
+      message: input.t("admin.integrations.telegramTokenInvalid"),
+      variant: "error"
+    };
+  }
+
+  if (input.status === "telegramTokenDuplicate") {
+    return {
+      message: input.t("admin.integrations.telegramTokenDuplicate"),
+      variant: "error",
+      ...(input.duplicateConnectorId
+        ? {
+            actionHref: `/admin/integrations?connectorId=${encodeURIComponent(
+              input.duplicateConnectorId
+            )}`,
+            actionLabel: input.t(
+              "admin.integrations.telegramTokenDuplicateLink"
+            )
+          }
+        : {})
+    };
+  }
+
+  return undefined;
+}
+
+function isInlineChannelStatus(status: string): boolean {
+  return (
+    status === "telegramTokenInvalid" || status === "telegramTokenDuplicate"
+  );
 }
 
 type ConnectorListBadgeState = "ok" | "error" | "new";

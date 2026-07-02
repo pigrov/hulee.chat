@@ -1,6 +1,7 @@
 "use client";
 
 import { LoaderCircle, Plug } from "lucide-react";
+import Link from "next/link";
 import { useState, type ReactNode } from "react";
 import { useFormStatus } from "react-dom";
 
@@ -16,17 +17,33 @@ export type TelegramBotCatalogConnectFormLabels = {
   readonly invalidToken: string;
 };
 
+export type TelegramBotCatalogConnectFormNotice = {
+  readonly message: string;
+  readonly variant: "error" | "success" | "info";
+  readonly actionHref?: string;
+  readonly actionLabel?: string;
+};
+
 export function TelegramBotCatalogConnectForm({
   channelType,
-  labels
+  labels,
+  notice
 }: {
   readonly channelType: "telegram_bot";
   readonly labels: TelegramBotCatalogConnectFormLabels;
+  readonly notice?: TelegramBotCatalogConnectFormNotice;
 }): ReactNode {
   const [botToken, setBotToken] = useState("");
   const normalizedToken = botToken.trim();
   const hasToken = normalizedToken.length > 0;
   const isTokenValid = telegramBotTokenPattern.test(normalizedToken);
+  const visibleNotice =
+    hasToken && !isTokenValid
+      ? {
+          message: labels.invalidToken,
+          variant: "error" as const
+        }
+      : notice;
 
   return (
     <form
@@ -47,15 +64,27 @@ export function TelegramBotCatalogConnectForm({
           required
         />
       </label>
-      {hasToken && !isTokenValid ? (
-        <p className="metaText" role="status">
-          {labels.invalidToken}
-        </p>
-      ) : null}
       <TelegramBotCatalogSubmitButton
         isTokenValid={isTokenValid}
         labels={labels}
       />
+      {visibleNotice ? (
+        <p
+          className="telegramConnectionNotice"
+          data-variant={visibleNotice.variant}
+          role="status"
+        >
+          <span>{visibleNotice.message}</span>
+          {visibleNotice.actionHref && visibleNotice.actionLabel ? (
+            <Link
+              className="telegramConnectionNoticeLink"
+              href={visibleNotice.actionHref}
+            >
+              {visibleNotice.actionLabel}
+            </Link>
+          ) : null}
+        </p>
+      ) : null}
     </form>
   );
 }

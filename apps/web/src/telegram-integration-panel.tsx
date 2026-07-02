@@ -1,12 +1,5 @@
 import type { createTranslator, I18nMessageKey } from "@hulee/i18n";
-import {
-  ArrowDown,
-  ArrowUp,
-  Plug,
-  Power,
-  PowerOff,
-  Trash2
-} from "lucide-react";
+import { ArrowDown, ArrowUp, Power, PowerOff, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
 
 import {
@@ -57,10 +50,7 @@ export function TelegramIntegrationPanel({
               {t("integrations.telegram.title")}
             </h2>
           </div>
-          <span className="badge">
-            <Plug size={14} aria-hidden="true" />
-            {t("integrations.telegram.noConnectorStatus")}
-          </span>
+          <TelegramConnectionStateBadge state="new" t={t} />
         </div>
         <p className="metaText">{t("integrations.telegram.noConnector")}</p>
       </section>
@@ -80,12 +70,10 @@ export function TelegramIntegrationPanel({
               {telegramDisplayName(integration, t)}
             </h2>
           </div>
-          <span className="badge">
-            <Plug size={14} aria-hidden="true" />
-            {integration.status
-              ? t(channelConnectorStatusKey(integration.status))
-              : t(telegramStatusKey(integration.diagnostics.status))}
-          </span>
+          <TelegramConnectionStateBadge
+            state={telegramConnectionState(integration, t)}
+            t={t}
+          />
         </div>
 
         <div className="buttonRow">
@@ -115,12 +103,10 @@ export function TelegramIntegrationPanel({
             {telegramDisplayName(integration, t)}
           </h2>
         </div>
-        <span className="badge">
-          <Plug size={14} aria-hidden="true" />
-          {integration.status
-            ? t(channelConnectorStatusKey(integration.status))
-            : t(telegramStatusKey(integration.diagnostics.status))}
-        </span>
+        <TelegramConnectionStateBadge
+          state={telegramConnectionState(integration, t)}
+          t={t}
+        />
       </div>
 
       <TelegramCredentialsStep
@@ -160,9 +146,7 @@ function TelegramCredentialsStep({
     <TelegramConnectionForm
       botTokenSecretRef={config.botTokenSecretRef}
       channelExternalId={config.channelExternalId}
-      connectionProblem={
-        <TelegramConnectorProblemMessage integration={integration} t={t} />
-      }
+      connectionProblemMessage={telegramProblemMessage(integration, t)}
       connectorId={connectorId}
       defaultDisplayName={telegramDisplayName(integration, t)}
       diagnostics={{
@@ -200,6 +184,41 @@ function TelegramCredentialsStep({
       outboundEnabled={config.outboundEnabled}
     />
   );
+}
+
+type TelegramConnectionState = "ok" | "error" | "new";
+
+function TelegramConnectionStateBadge({
+  state,
+  t
+}: {
+  state: TelegramConnectionState;
+  t: Translator;
+}): ReactNode {
+  return (
+    <span className="telegramConnectionBadge" data-state={state}>
+      {t(`integrations.telegram.connectionBadge.${state}` as I18nMessageKey)}
+    </span>
+  );
+}
+
+function telegramConnectionState(
+  integration: TelegramIntegrationViewModel,
+  t: Translator
+): TelegramConnectionState {
+  if (telegramProblemMessage(integration, t)) {
+    return "error";
+  }
+
+  if (
+    integration.status === "connected" &&
+    integration.diagnostics.status === "configured" &&
+    integration.diagnostics.checks.botApiReachable === true
+  ) {
+    return "ok";
+  }
+
+  return "new";
 }
 
 export function TelegramConnectorCompactStatus({
@@ -247,7 +266,7 @@ function TelegramConnectorProblemMessage({
   const problemMessage = telegramProblemMessage(integration, t);
 
   return problemMessage ? (
-    <p className="telegramStatusProblem" role="status">
+    <p className="telegramConnectionNotice" data-variant="error" role="status">
       {problemMessage}
     </p>
   ) : null;
