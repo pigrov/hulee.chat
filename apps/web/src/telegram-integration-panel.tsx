@@ -210,11 +210,7 @@ function telegramConnectionState(
     return "error";
   }
 
-  if (
-    integration.status === "connected" &&
-    integration.diagnostics.status === "configured" &&
-    integration.diagnostics.checks.botApiReachable === true
-  ) {
+  if (integration.status === "connected") {
     return "ok";
   }
 

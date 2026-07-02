@@ -459,6 +459,7 @@
   "admin.integrations.connectChannel": "Подключить",
   "admin.integrations.connectorBadge.ok": "ОК",
   "admin.integrations.connectorBadge.error": "ОШИБКА",
+  "admin.integrations.connectorBadge.disabled": "ОТКЛЮЧЕН",
   "admin.integrations.connectorBadge.new": "НОВЫЙ",
   "admin.integrations.telegramTokenInvalid": "Telegram отклонил токен. Проверьте, что токен корректный и принадлежит активному боту.",
   "admin.integrations.telegramTokenCheckUnavailable": "Не удалось проверить токен через маршрут провайдера. Проверьте VPN/Egress и попробуйте еще раз.",

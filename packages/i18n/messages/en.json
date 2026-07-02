@@ -452,6 +452,7 @@
   "admin.integrations.connectChannel": "Connect",
   "admin.integrations.connectorBadge.ok": "OK",
   "admin.integrations.connectorBadge.error": "ERROR",
+  "admin.integrations.connectorBadge.disabled": "DISABLED",
   "admin.integrations.connectorBadge.new": "NEW",
   "admin.integrations.telegramTokenInvalid": "Telegram rejected the token. Check that it is correct and belongs to an active bot.",
   "admin.integrations.telegramTokenCheckUnavailable": "Could not validate the token through the provider route. Check VPN/Egress and try again.",

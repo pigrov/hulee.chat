@@ -699,7 +699,7 @@ function isInlineChannelStatus(status: string): boolean {
   );
 }
 
-type ConnectorListBadgeState = "ok" | "error" | "new";
+type ConnectorListBadgeState = "ok" | "error" | "disabled" | "new";
 
 function connectorListBadgeState(
   connector: InternalChannelConnectorSummary
@@ -716,6 +716,10 @@ function connectorListBadgeState(
 
   if (connector.status === "connected") {
     return "ok";
+  }
+
+  if (connector.status === "disabled") {
+    return "disabled";
   }
 
   return "new";
