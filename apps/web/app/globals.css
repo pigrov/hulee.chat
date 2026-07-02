@@ -1035,7 +1035,7 @@ a.secondaryButton {
   grid-template-columns: var(--admin-nav-width) minmax(0, 1fr) auto;
   align-items: center;
   gap: 20px;
-  padding: 20px 28px;
+  padding: 12px;
   border-bottom: 1px solid var(--hulee-color-border);
   background: color-mix(
     in srgb,
@@ -1065,10 +1065,10 @@ a.secondaryButton {
 .adminWorkspace:has(.adminNavToggleInput:checked) .adminNavPanel > .slotHost,
 .adminWorkspace:has(.adminNavToggleInput:checked) .adminNavCollapseExpandedIcon,
 .adminWorkspace:has(.adminNavToggleInput:checked) .adminNavCollapseExpandedText,
+.adminWorkspace:has(.adminNavToggleInput:checked)
+  .adminNavCollapseCollapsedText,
 .adminWorkspace:not(:has(.adminNavToggleInput:checked))
-  .adminNavCollapseCollapsedIcon,
-.adminWorkspace:not(:has(.adminNavToggleInput:checked))
-  .adminNavCollapseCollapsedText {
+  .adminNavCollapseCollapsedIcon {
   display: none;
 }
 
@@ -1312,6 +1312,9 @@ a.secondaryButton {
 
 .settingsPanel.adminNavPanel,
 .settingsPanel.platformNavPanel {
+  display: flex;
+  min-height: calc(100vh - 88px);
+  flex-direction: column;
   gap: 12px;
   padding: 12px;
   border: 0;
@@ -2104,20 +2107,34 @@ button.managementRow:focus-visible {
 }
 
 .adminNavLink {
-  padding: 10px 12px;
+  position: relative;
+  padding: 10px 12px 10px 14px;
   border: 0;
-  border-left: 4px solid transparent;
   background: transparent;
+}
+
+.adminNavLink .metricIcon {
+  background: transparent;
+  color: var(--hulee-color-text-muted);
+}
+
+.adminNavLink::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 4px;
+  height: 68%;
+  border-radius: 999px;
+  background: var(--hulee-color-brand-primary);
+  box-shadow: 10px 0 18px
+    color-mix(in srgb, var(--hulee-color-brand-primary) 26%, transparent);
+  content: "";
+  opacity: 0;
+  transform: translateY(-50%);
 }
 
 .adminNavLink:hover,
 .adminNavLink:focus-visible {
-  border-color: transparent;
-  border-left-color: color-mix(
-    in srgb,
-    var(--hulee-color-brand-primary) 42%,
-    transparent
-  );
   background: color-mix(
     in srgb,
     var(--hulee-color-brand-primary) 8%,
@@ -2126,13 +2143,25 @@ button.managementRow:focus-visible {
   box-shadow: none;
 }
 
+.adminNavLink:hover::before,
+.adminNavLink:focus-visible::before {
+  opacity: 0.52;
+}
+
 .adminNavLink[aria-current="page"] {
-  border-left-color: var(--hulee-color-brand-primary);
   background: color-mix(
     in srgb,
     var(--hulee-color-brand-primary) 12%,
     var(--hulee-color-surface-raised)
   );
+}
+
+.adminNavLink[aria-current="page"]::before {
+  opacity: 1;
+}
+
+.adminNavLink[aria-current="page"] .metricIcon {
+  color: var(--hulee-color-brand-primary);
 }
 
 .integrationListItem[aria-current="page"] {
@@ -2597,6 +2626,11 @@ button.managementRow:focus-visible {
   .integrationCatalog,
   .platformNavPanel {
     position: static;
+    min-height: auto;
+  }
+
+  .settingsPanel.adminNavPanel,
+  .settingsPanel.platformNavPanel {
     min-height: auto;
   }
 
