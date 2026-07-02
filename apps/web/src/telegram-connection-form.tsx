@@ -1,6 +1,6 @@
 "use client";
 
-import { KeyRound, LoaderCircle } from "lucide-react";
+import { Check, LoaderCircle } from "lucide-react";
 import { useActionState, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useRouter } from "next/navigation";
@@ -186,7 +186,7 @@ export function TelegramConnectionForm({
               aria-hidden="true"
             />
           ) : (
-            <KeyRound size={16} aria-hidden="true" />
+            <Check size={16} aria-hidden="true" />
           )}
           {isBusy
             ? labels.connecting

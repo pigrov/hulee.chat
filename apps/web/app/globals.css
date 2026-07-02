@@ -926,17 +926,40 @@ a.secondaryButton {
 .telegramConnectionActions .primaryButton,
 .telegramConnectionActions .secondaryButton,
 .telegramConnectionActions .dangerButton {
-  min-height: 40px;
-  padding: 0 12px;
-  font-size: 13px;
+  min-height: 52px;
+  padding: 0 22px;
+  font-size: 15px;
   font-weight: 650;
+}
+
+.telegramConnectionActions .primaryButton {
+  min-width: min(100%, 260px);
+  box-shadow: 0 16px 28px
+    color-mix(in srgb, var(--hulee-color-brand-primary) 22%, transparent);
+}
+
+.telegramConnectionActions .secondaryButton,
+.telegramConnectionActions .dangerButton {
+  min-width: min(100%, 220px);
+}
+
+.telegramConnectionActions .dangerButton {
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-danger) 11%,
+    var(--hulee-color-surface-default)
+  );
 }
 
 .telegramLifecycleActions {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
+}
+
+.telegramConnectionActions {
+  gap: 12px;
 }
 
 .telegramConnectionActions[data-busy="true"] .telegramLifecycleActions {
@@ -946,6 +969,84 @@ a.secondaryButton {
 
 .telegramConnectionStatus {
   min-height: 20px;
+}
+
+.telegramStatusCard {
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-surface-raised) 92%,
+    transparent
+  );
+}
+
+.telegramStatusTitle {
+  margin: 0;
+  color: var(--hulee-color-text-default);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.telegramStatusMetric {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+}
+
+.telegramStatusIcon {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 999px;
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 20%,
+    transparent
+  );
+  color: var(--hulee-color-brand-primary);
+}
+
+.telegramStatusBody {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.telegramStatusLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--hulee-color-text-muted);
+  font-size: 14px;
+}
+
+.telegramStatusValue {
+  color: var(--hulee-color-text-default);
+  font-size: 17px;
+  font-weight: 750;
+}
+
+.telegramStatusProblem {
+  margin: 2px 0 0;
+  padding: 10px 12px;
+  border: 1px solid
+    color-mix(in srgb, var(--hulee-color-danger) 38%, transparent);
+  border-radius: var(--hulee-radius-control);
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-danger) 9%,
+    var(--hulee-color-surface-default)
+  );
+  color: var(--hulee-color-danger);
+  font-size: 14px;
+  line-height: 1.35;
 }
 
 .buttonSpinner {

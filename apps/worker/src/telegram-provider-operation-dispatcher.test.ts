@@ -102,6 +102,9 @@ describe("telegram provider operation dispatcher", () => {
     });
     expect(repository.records.get(connectorId)?.status).toBe("connected");
     expect(repository.records.get(connectorId)?.healthStatus).toBe("healthy");
+    expect(repository.records.get(connectorId)?.displayName).toBe(
+      "Telegram Bot (@hulee_test_bot)"
+    );
   });
 
   it("sets Telegram webhook from a queued provider operation", async () => {

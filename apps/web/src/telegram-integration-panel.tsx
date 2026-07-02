@@ -1,5 +1,13 @@
 import type { createTranslator, I18nMessageKey } from "@hulee/i18n";
-import { Plug, Power, PowerOff, Trash2 } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  CircleHelp,
+  Plug,
+  Power,
+  PowerOff,
+  Trash2
+} from "lucide-react";
 import type { ReactNode } from "react";
 
 import {
@@ -18,6 +26,7 @@ import {
 } from "./formatting";
 import { egressProfileKindKey, egressStatusKey } from "./egress-formatting";
 import type { TelegramIntegrationViewModel } from "./inbox-api-client";
+import { LocalDateTime } from "./local-date-time";
 import { TelegramConnectionForm } from "./telegram-connection-form";
 
 type Translator = ReturnType<typeof createTranslator>["t"];
@@ -100,7 +109,7 @@ export function TelegramIntegrationPanel({
         <div>
           <p className="eyebrow">{t("admin.integrations.channelSettings")}</p>
           <h2 className="sectionTitle" id="telegram-integration-title">
-            {t("integrations.telegram.title")}
+            {telegramDisplayName(integration, t)}
           </h2>
         </div>
         <span className="badge">
@@ -183,19 +192,131 @@ export function TelegramConnectorCompactStatus({
 }): ReactNode {
   const inbound = integration.diagnostics.runtime?.inbound;
   const outbound = integration.diagnostics.runtime?.outbound;
+  const problemMessage = telegramProblemMessage(integration, t);
 
   return (
-    <div className="diagnosticGrid">
-      <DetailItem
+    <div className="telegramStatusCard">
+      <h3 className="telegramStatusTitle">
+        {t("integrations.telegram.connectionStatusTitle")}
+      </h3>
+      <TelegramStatusMetric
+        icon="inbound"
         label={t("integrations.telegram.runtimeInboundReceivedAt")}
-        value={formatOptionalDateTime(inbound?.lastReceivedAt, locale, t)}
+        locale={locale}
+        value={inbound?.lastReceivedAt}
+        fallback={formatOptionalDateTime(inbound?.lastReceivedAt, locale, t)}
       />
-      <DetailItem
+      <TelegramStatusMetric
+        icon="outbound"
         label={t("integrations.telegram.runtimeOutboundSentAt")}
-        value={formatOptionalDateTime(outbound?.lastSentAt, locale, t)}
+        locale={locale}
+        value={outbound?.lastSentAt}
+        fallback={formatOptionalDateTime(outbound?.lastSentAt, locale, t)}
       />
+      {problemMessage ? (
+        <p className="telegramStatusProblem">{problemMessage}</p>
+      ) : null}
     </div>
   );
+}
+
+function TelegramStatusMetric({
+  fallback,
+  icon,
+  label,
+  locale,
+  value
+}: {
+  fallback: string;
+  icon: "inbound" | "outbound";
+  label: string;
+  locale: string;
+  value?: string;
+}): ReactNode {
+  const Icon = icon === "inbound" ? ArrowDown : ArrowUp;
+
+  return (
+    <div className="telegramStatusMetric">
+      <span className="telegramStatusIcon" aria-hidden="true">
+        <Icon size={22} />
+      </span>
+      <span className="telegramStatusBody">
+        <span className="telegramStatusLabel">
+          {label}
+          <CircleHelp size={16} aria-hidden="true" />
+        </span>
+        <strong className="telegramStatusValue">
+          <LocalDateTime fallback={fallback} locale={locale} value={value} />
+        </strong>
+      </span>
+    </div>
+  );
+}
+
+function telegramProblemMessage(
+  integration: TelegramIntegrationViewModel,
+  t: Translator
+): string | undefined {
+  const diagnostics = integration.diagnostics;
+  const inbound = diagnostics.runtime?.inbound;
+  const outbound = diagnostics.runtime?.outbound;
+  const errorCode =
+    diagnostics.lastErrorCode ??
+    inbound?.lastErrorCode ??
+    outbound?.lastErrorCode;
+
+  if (
+    diagnostics.status === "configured" &&
+    !inbound?.lastErrorCode &&
+    !outbound?.lastErrorCode
+  ) {
+    return undefined;
+  }
+
+  if (
+    diagnostics.checks.botTokenSecretRefConfigured === false ||
+    diagnostics.checks.botTokenResolved === false
+  ) {
+    return t("integrations.telegram.problem.tokenMissing");
+  }
+
+  if (
+    diagnostics.egress?.required &&
+    diagnostics.egress.status !== "ready" &&
+    diagnostics.egress.status !== "unknown"
+  ) {
+    return t("integrations.telegram.problem.egressNotReady");
+  }
+
+  if (diagnostics.status === "webhook_mismatch") {
+    return t("integrations.telegram.problem.webhookMismatch");
+  }
+
+  if (diagnostics.status === "invalid_config") {
+    return t("integrations.telegram.problem.invalidConfig");
+  }
+
+  if (errorCode === "provider.permanent_failure") {
+    return t("integrations.telegram.problem.providerRejected");
+  }
+
+  if (errorCode === "provider.temporary_failure") {
+    return t("integrations.telegram.problem.providerTemporary");
+  }
+
+  if (inbound?.lastErrorCode) {
+    return t("integrations.telegram.problem.inboundFailed");
+  }
+
+  if (outbound?.lastErrorCode) {
+    return t("integrations.telegram.problem.outboundFailed");
+  }
+
+  if (diagnostics.status === "provider_unreachable") {
+    return t("integrations.telegram.problem.providerUnavailable");
+  }
+
+  return undefined;
 }
 
 export function TelegramDiagnosticsGrid({

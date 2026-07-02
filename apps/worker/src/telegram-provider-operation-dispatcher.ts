@@ -411,7 +411,10 @@ async function persistTelegramDiagnostics(input: {
     channelType: input.record.channelType,
     channelClass: input.record.channelClass,
     provider: input.record.provider,
-    displayName: input.record.displayName,
+    displayName: telegramDisplayNameFromDiagnostics({
+      currentDisplayName: input.record.displayName,
+      diagnostics: input.diagnostics
+    }),
     status: telegramConnectorStatusFromDiagnostics(input.diagnostics),
     healthStatus: telegramConnectorHealthFromDiagnostics(input.diagnostics),
     capabilities: input.record.capabilities,
@@ -421,6 +424,28 @@ async function persistTelegramDiagnostics(input: {
     createdByEmployeeId: input.record.createdByEmployeeId,
     updatedAt: input.updatedAt
   });
+}
+
+function telegramDisplayNameFromDiagnostics(input: {
+  currentDisplayName: string;
+  diagnostics: InternalTelegramIntegrationDiagnostics;
+}): string {
+  const providerName =
+    input.diagnostics.bot?.username ?? input.diagnostics.bot?.firstName;
+
+  if (!providerName) {
+    return input.currentDisplayName;
+  }
+
+  const normalizedProviderName = input.diagnostics.bot?.username
+    ? `@${providerName}`
+    : providerName;
+  const nextDisplayName = `Telegram Bot (${normalizedProviderName})`;
+
+  return input.currentDisplayName === "Telegram Bot" ||
+    input.currentDisplayName.startsWith("Telegram Bot (")
+    ? nextDisplayName
+    : input.currentDisplayName;
 }
 
 function parseTelegramProviderOperationRequest(event: PlatformEvent): {
