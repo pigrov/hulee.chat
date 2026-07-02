@@ -539,6 +539,15 @@ function ConnectorListItem({
   const channel = catalog.find(
     (item) => item.channelType === connector.channelType
   );
+  const channelTypeTitle = channel
+    ? resolveChannelTitle({
+        channel,
+        locale,
+        t,
+        fallback: connector.channelType
+      })
+    : connector.channelType;
+  const badgeState = connectorListBadgeState(connector);
 
   return (
     <Link
@@ -555,25 +564,17 @@ function ConnectorListItem({
           size="large"
         />
       </span>
-      <div>
-        <h3 className="listItemTitle">{connector.displayName}</h3>
-        <p className="metaText">
-          {[
-            channel
-              ? resolveChannelTitle({
-                  channel,
-                  locale,
-                  t,
-                  fallback: connector.provider
-                })
-              : connector.provider,
-            t(channelConnectorStatusKey(connector.status))
-          ].join(" / ")}
+      <div className="integrationListText">
+        <h3 className="listItemTitle" title={connector.displayName}>
+          {connector.displayName}
+        </h3>
+        <p className="metaText integrationListType" title={channelTypeTitle}>
+          {channelTypeTitle}
         </p>
       </div>
       <span className="integrationListBadges">
-        <span className="badge">
-          {t(channelHealthStatusKey(connector.healthStatus))}
+        <span className="channelStatusBadge" data-state={badgeState}>
+          {t(connectorListBadgeKey(badgeState))}
         </span>
       </span>
     </Link>
@@ -629,6 +630,32 @@ function channelHealthStatusKey(
   status: InternalChannelConnectorSummary["healthStatus"]
 ): I18nMessageKey {
   return `integrations.channel.health.${status}` as I18nMessageKey;
+}
+
+type ConnectorListBadgeState = "ok" | "error" | "new";
+
+function connectorListBadgeState(
+  connector: InternalChannelConnectorSummary
+): ConnectorListBadgeState {
+  if (
+    connector.status === "failed" ||
+    connector.status === "degraded" ||
+    connector.status === "reauth_required" ||
+    connector.healthStatus === "degraded" ||
+    connector.healthStatus === "unhealthy"
+  ) {
+    return "error";
+  }
+
+  if (connector.status === "connected") {
+    return "ok";
+  }
+
+  return "new";
+}
+
+function connectorListBadgeKey(state: ConnectorListBadgeState): I18nMessageKey {
+  return `admin.integrations.connectorBadge.${state}` as I18nMessageKey;
 }
 
 function channelActionStatusKey(status: string): I18nMessageKey {

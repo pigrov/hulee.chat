@@ -2209,9 +2209,85 @@ button.integrationListItem {
 
 .integrationListBadges {
   display: inline-flex;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: var(--hulee-space-inline);
+}
+
+.integrationListText {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: 4px;
+}
+
+.integrationListType,
+.integrationListItem .listItemTitle {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channelStatusBadge {
+  display: inline-flex;
+  min-width: 64px;
+  max-width: 100%;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 14px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  color: var(--hulee-color-text-muted);
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.channelStatusBadge::before {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: currentColor;
+  content: "";
+}
+
+.channelStatusBadge[data-state="ok"] {
+  border-color: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 30%,
+    transparent
+  );
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 17%,
+    var(--hulee-color-surface-raised)
+  );
+  color: var(--hulee-color-brand-primary);
+}
+
+.channelStatusBadge[data-state="error"] {
+  border-color: color-mix(in srgb, var(--hulee-color-danger) 36%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-danger) 14%,
+    var(--hulee-color-surface-raised)
+  );
+  color: var(--hulee-color-danger);
+}
+
+.channelStatusBadge[data-state="new"] {
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-text-muted) 10%,
+    var(--hulee-color-surface-raised)
+  );
 }
 
 .integrationListItem[aria-disabled="true"] {
