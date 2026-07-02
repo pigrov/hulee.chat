@@ -2,6 +2,7 @@ import type {
   InternalChannelConnectorSummary,
   InternalTelegramIntegrationResponse
 } from "@hulee/contracts";
+import { CoreError } from "@hulee/core";
 
 const defaultTelegramDisplayName = "Telegram Bot";
 
@@ -18,6 +19,24 @@ export type TelegramBotDuplicateCandidate = {
     "diagnostics"
   >;
 };
+
+export type TelegramTokenValidationFailureStatus =
+  | "telegramTokenInvalid"
+  | "telegramTokenCheckUnavailable";
+
+export function telegramTokenValidationFailureStatus(
+  error: unknown
+): TelegramTokenValidationFailureStatus {
+  if (
+    error instanceof CoreError &&
+    (error.code === "provider.permanent_failure" ||
+      error.code === "validation.failed")
+  ) {
+    return "telegramTokenInvalid";
+  }
+
+  return "telegramTokenCheckUnavailable";
+}
 
 export function selectDuplicateTelegramBotConnector(input: {
   readonly bot: TelegramBotIdentity;

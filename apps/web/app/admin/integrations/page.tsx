@@ -664,6 +664,13 @@ function telegramBotCatalogNotice(input: {
     };
   }
 
+  if (input.status === "telegramTokenCheckUnavailable") {
+    return {
+      message: input.t("admin.integrations.telegramTokenCheckUnavailable"),
+      variant: "error"
+    };
+  }
+
   if (input.status === "telegramTokenDuplicate") {
     return {
       message: input.t("admin.integrations.telegramTokenDuplicate"),
@@ -686,7 +693,9 @@ function telegramBotCatalogNotice(input: {
 
 function isInlineChannelStatus(status: string): boolean {
   return (
-    status === "telegramTokenInvalid" || status === "telegramTokenDuplicate"
+    status === "telegramTokenInvalid" ||
+    status === "telegramTokenCheckUnavailable" ||
+    status === "telegramTokenDuplicate"
   );
 }
 

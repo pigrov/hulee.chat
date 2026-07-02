@@ -3,10 +3,12 @@ import type {
   InternalChannelConnectorSummary,
   InternalTelegramIntegrationResponse
 } from "@hulee/contracts";
+import { CoreError } from "@hulee/core";
 
 import {
   selectDuplicateTelegramBotConnector,
   telegramDisplayNameFromValidatedBot,
+  telegramTokenValidationFailureStatus,
   type TelegramBotDuplicateCandidate
 } from "./telegram-bot-connector-rules";
 
@@ -82,6 +84,25 @@ describe("telegram bot connector rules", () => {
         ]
       })
     ).toBeUndefined();
+  });
+
+  it("keeps token rejection separate from provider route failures", () => {
+    expect(
+      telegramTokenValidationFailureStatus(
+        new CoreError("provider.permanent_failure")
+      )
+    ).toBe("telegramTokenInvalid");
+    expect(
+      telegramTokenValidationFailureStatus(new CoreError("validation.failed"))
+    ).toBe("telegramTokenInvalid");
+    expect(
+      telegramTokenValidationFailureStatus(
+        new CoreError("provider.temporary_failure")
+      )
+    ).toBe("telegramTokenCheckUnavailable");
+    expect(telegramTokenValidationFailureStatus(new Error("timeout"))).toBe(
+      "telegramTokenCheckUnavailable"
+    );
   });
 });
 

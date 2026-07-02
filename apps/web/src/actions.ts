@@ -57,7 +57,8 @@ import {
 } from "./platform-channel-policies";
 import {
   selectDuplicateTelegramBotConnector,
-  telegramDisplayNameFromValidatedBot
+  telegramDisplayNameFromValidatedBot,
+  telegramTokenValidationFailureStatus
 } from "./telegram-bot-connector-rules";
 
 type TelegramConnectionActionState = {
@@ -430,11 +431,11 @@ export async function connectTelegramBotChannelAction(
       { botToken },
       internalApiAccess
     );
-  } catch {
+  } catch (error) {
     redirect(
       `/admin/integrations?channelType=${encodeURIComponent(
         telegramBotChannelType
-      )}&channelStatus=telegramTokenInvalid`
+      )}&channelStatus=${telegramTokenValidationFailureStatus(error)}`
     );
   }
 

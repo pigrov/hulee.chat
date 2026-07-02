@@ -461,6 +461,7 @@
   "admin.integrations.connectorBadge.error": "ОШИБКА",
   "admin.integrations.connectorBadge.new": "НОВЫЙ",
   "admin.integrations.telegramTokenInvalid": "Telegram отклонил токен. Проверьте, что токен корректный и принадлежит активному боту.",
+  "admin.integrations.telegramTokenCheckUnavailable": "Не удалось проверить токен через маршрут провайдера. Проверьте VPN/Egress и попробуйте еще раз.",
   "admin.integrations.telegramTokenDuplicate": "Этот Telegram-бот уже подключен в другом канале.",
   "admin.integrations.telegramTokenDuplicateLink": "Открыть канал",
   "admin.integrations.selectChannel": "Выберите канал",

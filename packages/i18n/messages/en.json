@@ -454,6 +454,7 @@
   "admin.integrations.connectorBadge.error": "ERROR",
   "admin.integrations.connectorBadge.new": "NEW",
   "admin.integrations.telegramTokenInvalid": "Telegram rejected the token. Check that it is correct and belongs to an active bot.",
+  "admin.integrations.telegramTokenCheckUnavailable": "Could not validate the token through the provider route. Check VPN/Egress and try again.",
   "admin.integrations.telegramTokenDuplicate": "This Telegram bot is already connected in another channel.",
   "admin.integrations.telegramTokenDuplicateLink": "Open channel",
   "admin.integrations.selectChannel": "Select a channel",
