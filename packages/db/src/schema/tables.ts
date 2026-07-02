@@ -394,6 +394,37 @@ export const channelAuthChallenges = pgTable(
   ]
 );
 
+export const channelProviderValidationJobs = pgTable(
+  "channel_provider_validation_jobs",
+  {
+    id: text("id").primaryKey(),
+    tenantId: tenantIdColumn().references(() => tenants.id),
+    channelType: text("channel_type").notNull(),
+    provider: text("provider").notNull(),
+    validationKind: text("validation_kind").notNull(),
+    status: text("status").notNull().default("pending"),
+    botTokenSecretRef: text("bot_token_secret_ref").notNull(),
+    resultPayload: jsonb("result_payload").notNull().default({}),
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    createdByEmployeeId: text("created_by_employee_id"),
+    ...timestamps
+  },
+  (table) => [
+    index("channel_provider_validation_jobs_tenant_idx").on(table.tenantId),
+    index("channel_provider_validation_jobs_tenant_status_idx").on(
+      table.tenantId,
+      table.status
+    ),
+    index("channel_provider_validation_jobs_tenant_created_idx").on(
+      table.tenantId,
+      table.createdAt
+    )
+  ]
+);
+
 export const tenantSecrets = pgTable(
   "tenant_secrets",
   {

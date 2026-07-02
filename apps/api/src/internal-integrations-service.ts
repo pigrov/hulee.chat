@@ -31,6 +31,7 @@ import type {
 } from "@hulee/contracts";
 import {
   internalEgressDiagnosticsSchema,
+  internalTelegramBotTokenValidateResponseSchema,
   internalTelegramIntegrationDiagnosticsSchema,
   isPlatformErrorCode
 } from "@hulee/contracts";
@@ -40,12 +41,16 @@ import type {
   ChannelAuthChallengeRepository,
   ChannelConnectorRecord,
   ChannelConnectorRepository,
+  ChannelProviderValidationJobRepository,
   DeploymentChannelCatalogOverrideRecord,
   DeploymentChannelCatalogOverrideRepository,
   DomainEventRepository,
   TenantSecretRepository
 } from "@hulee/db";
-import { createChannelConnectorSecretRef } from "@hulee/db";
+import {
+  createChannelConnectorSecretRef,
+  createTenantSecretRef
+} from "@hulee/db";
 import {
   buildTelegramProviderFailureOperatorHint,
   createPassthroughEgressRuntime,
@@ -153,7 +158,10 @@ export type SecretWriter = {
   upsertSecret(input: {
     tenantId: TenantId;
     secretRef: string;
-    purpose: "telegram.bot_token" | "telegram.webhook_secret_token";
+    purpose:
+      | "telegram.bot_token"
+      | "telegram.bot_token_validation"
+      | "telegram.webhook_secret_token";
     plainText: string;
     updatedAt: Date;
   }): Promise<void>;
@@ -167,6 +175,7 @@ export type InternalIntegrationServiceOptions = {
   connectorRepository: ChannelConnectorRepository;
   channelCatalogOverrideRepository?: DeploymentChannelCatalogOverrideRepository;
   authChallengeRepository?: ChannelAuthChallengeRepository;
+  providerValidationJobRepository?: ChannelProviderValidationJobRepository;
   providerOperationEvents?: DomainEventRepository;
   secretResolver?: SecretResolver;
   secretWriter?: SecretWriter;
@@ -179,6 +188,8 @@ export type InternalIntegrationServiceOptions = {
     channelExternalId: string;
   }) => string;
   webhookSecretTokenFactory?: () => string;
+  providerValidationTimeoutMs?: number;
+  providerValidationPollIntervalMs?: number;
   now?: () => Date;
 };
 
@@ -187,6 +198,9 @@ const telegramChannelType = "telegram_bot" as const;
 const telegramChannelClass = "bot_bridge" as const;
 const telegramProvider = "telegram";
 const defaultTelegramDisplayName = "Telegram Bot";
+const telegramBotTokenValidationKind = "telegram_bot_token" as const;
+const defaultProviderValidationTimeoutMs = 15_000;
+const defaultProviderValidationPollIntervalMs = 250;
 const channelOnboardingFlows = {
   telegram_bot: {
     version: "v1",
@@ -865,6 +879,27 @@ export function createInternalIntegrationService(
     },
 
     async validateTelegramBotToken(context, request) {
+      if (
+        options.providerOperationEvents &&
+        options.providerValidationJobRepository &&
+        options.secretWriter
+      ) {
+        return validateTelegramBotTokenViaProviderWorker({
+          context,
+          request,
+          validationJobRepository: options.providerValidationJobRepository,
+          events: options.providerOperationEvents,
+          secretWriter: options.secretWriter,
+          timeoutMs:
+            options.providerValidationTimeoutMs ??
+            defaultProviderValidationTimeoutMs,
+          pollIntervalMs:
+            options.providerValidationPollIntervalMs ??
+            defaultProviderValidationPollIntervalMs,
+          now
+        });
+      }
+
       const checkedAt = now().toISOString();
       const connectorId = createTelegramTokenValidationConnectorId(context);
       const egressResolution = await resolveTelegramEgressProfile({
@@ -1684,6 +1719,148 @@ function createTelegramWebhookConnectorId(input: {
 
 function createTelegramWebhookSecretToken(): string {
   return randomBytes(32).toString("base64url");
+}
+
+async function validateTelegramBotTokenViaProviderWorker(input: {
+  context: InternalIntegrationContext;
+  request: InternalTelegramBotTokenValidateRequest;
+  validationJobRepository: ChannelProviderValidationJobRepository;
+  events: DomainEventRepository;
+  secretWriter: SecretWriter;
+  timeoutMs: number;
+  pollIntervalMs: number;
+  now: () => Date;
+}): Promise<InternalTelegramBotTokenValidateResponse> {
+  const updatedAt = input.now();
+  const jobId = createTelegramProviderValidationJobId();
+  const botTokenSecretRef = createTelegramProviderValidationSecretRef({
+    tenantId: input.context.tenantId,
+    jobId
+  });
+  const expiresAt = new Date(updatedAt.getTime() + input.timeoutMs + 30_000);
+
+  await input.secretWriter.upsertSecret({
+    tenantId: input.context.tenantId,
+    secretRef: botTokenSecretRef,
+    purpose: "telegram.bot_token_validation",
+    plainText: input.request.botToken,
+    updatedAt
+  });
+
+  await input.validationJobRepository.upsertJob({
+    id: jobId,
+    tenantId: input.context.tenantId,
+    channelType: telegramChannelType,
+    provider: telegramProvider,
+    validationKind: telegramBotTokenValidationKind,
+    status: "pending",
+    botTokenSecretRef,
+    expiresAt,
+    createdByEmployeeId: input.context.employeeId,
+    updatedAt
+  });
+
+  await input.events.append({
+    tenantId: input.context.tenantId,
+    events: [
+      buildTelegramProviderValidationRequestedEvent({
+        context: input.context,
+        jobId,
+        occurredAt: updatedAt.toISOString()
+      })
+    ]
+  });
+
+  return waitForTelegramProviderValidationJob({
+    context: input.context,
+    validationJobRepository: input.validationJobRepository,
+    timeoutMs: input.timeoutMs,
+    pollIntervalMs: input.pollIntervalMs,
+    now: input.now,
+    jobId
+  });
+}
+
+async function waitForTelegramProviderValidationJob(input: {
+  context: InternalIntegrationContext;
+  validationJobRepository: ChannelProviderValidationJobRepository;
+  timeoutMs: number;
+  pollIntervalMs: number;
+  now: () => Date;
+  jobId: string;
+}): Promise<InternalTelegramBotTokenValidateResponse> {
+  const startedAt = Date.now();
+  const deadlineAt = startedAt + input.timeoutMs;
+
+  for (;;) {
+    const job = await input.validationJobRepository.findJob({
+      tenantId: input.context.tenantId,
+      jobId: input.jobId
+    });
+
+    if (!job) {
+      throw new CoreError("validation.failed");
+    }
+
+    if (job.status === "succeeded") {
+      return internalTelegramBotTokenValidateResponseSchema.parse(
+        job.resultPayload
+      );
+    }
+
+    if (job.status === "failed") {
+      throw new CoreError(
+        typeof job.errorCode === "string" && isPlatformErrorCode(job.errorCode)
+          ? job.errorCode
+          : "provider.temporary_failure"
+      );
+    }
+
+    if (input.now() >= job.expiresAt || Date.now() >= deadlineAt) {
+      throw new CoreError("provider.temporary_failure");
+    }
+
+    await sleep(
+      Math.min(input.pollIntervalMs, Math.max(deadlineAt - Date.now(), 0))
+    );
+  }
+}
+
+function createTelegramProviderValidationJobId(): string {
+  return `channel-provider-validation:${randomUUID()}`;
+}
+
+function createTelegramProviderValidationSecretRef(input: {
+  tenantId: TenantId;
+  jobId: string;
+}): string {
+  return createTenantSecretRef({
+    tenantId: input.tenantId,
+    moduleId: telegramModuleId,
+    secretName: `${input.jobId.replaceAll(":", "-")}-bot-token`
+  });
+}
+
+function buildTelegramProviderValidationRequestedEvent(input: {
+  context: InternalIntegrationContext;
+  jobId: string;
+  occurredAt: string;
+}): PlatformEvent {
+  return {
+    id: `event:channel-provider-validation:${randomUUID()}` as EventId,
+    type: "channel.provider_validation.requested",
+    version: "v1",
+    tenantId: input.context.tenantId,
+    occurredAt: input.occurredAt,
+    idempotencyKey: [input.context.requestId, input.jobId].join(":"),
+    payload: {
+      jobId: input.jobId,
+      channelType: telegramChannelType,
+      provider: telegramProvider,
+      validationKind: telegramBotTokenValidationKind,
+      actorEmployeeId: input.context.employeeId
+    }
+  };
 }
 
 async function enqueueTelegramProviderOperation(
@@ -3030,4 +3207,8 @@ function platformErrorCodeFromTelegramError(error: unknown): PlatformErrorCode {
   }
 
   return "provider.temporary_failure";
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

@@ -8,6 +8,7 @@ import {
   createSqlPublicApiAuditSink,
   createSqlChannelAuthChallengeRepository,
   createSqlChannelConnectorRepository,
+  createSqlChannelProviderValidationJobRepository,
   createSqlDeploymentChannelCatalogOverrideRepository,
   createSqlDeploymentEgressStatusRepository,
   createSqlEmployeeDirectoryRepository,
@@ -186,6 +187,8 @@ export function createInternalApiDataPlaneHandler(
       authChallengeRepository: createSqlChannelAuthChallengeRepository(
         options.database
       ),
+      providerValidationJobRepository:
+        createSqlChannelProviderValidationJobRepository(options.database),
       providerOperationEvents: createSqlDomainEventRepository(options.database),
       secretResolver: createTenantSecretResolver({
         env: options.env,

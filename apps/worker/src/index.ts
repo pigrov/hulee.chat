@@ -13,6 +13,7 @@ import {
   createAesGcmTenantSecretCipher,
   createSqlAttachmentTransferRepository,
   createSqlChannelConnectorRepository,
+  createSqlChannelProviderValidationJobRepository,
   createSqlDeploymentEgressProviderPolicyRepository,
   createDrizzlePersistenceExecutor,
   createExternalMessageRepository,
@@ -40,6 +41,10 @@ import {
   createTelegramProviderOperationDispatcher,
   type TelegramProviderOperationBotApiClientFactory
 } from "./telegram-provider-operation-dispatcher";
+import {
+  createTelegramProviderValidationDispatcher,
+  type TelegramProviderValidationBotApiClientFactory
+} from "./telegram-provider-validation-dispatcher";
 import {
   runTelegramPollingSweep,
   type TelegramPollingBotApiClientFactory,
@@ -87,6 +92,7 @@ export type WorkerOutboxHandlerOptions = {
   secretResolver?: SecretResolver;
   telegramBotApiClientFactory?: TelegramBotApiClientFactory;
   telegramProviderBotApiClientFactory?: TelegramProviderOperationBotApiClientFactory;
+  telegramProviderValidationBotApiClientFactory?: TelegramProviderValidationBotApiClientFactory;
   egressRuntime?: EgressRuntime;
   egressProfile?: WorkerConfig["egressProfile"];
   telegramApiBaseUrl?: string;
@@ -129,6 +135,17 @@ export function createWorkerOutboxHandler(
       publicWebhookBaseUrl: options.publicWebhookBaseUrl
     }
   );
+  const providerValidationDispatcher =
+    createTelegramProviderValidationDispatcher({
+      validationJobRepository: createSqlChannelProviderValidationJobRepository(
+        options.database
+      ),
+      secretResolver,
+      botApiClientFactory:
+        options.telegramProviderValidationBotApiClientFactory,
+      egressRuntime,
+      telegramApiBaseUrl: options.telegramApiBaseUrl
+    });
   const outboundDispatcher = createTelegramOutboundDispatcher({
     outboundRepository: createSqlOutboundDispatchRepository(options.database),
     connectorRepository,
@@ -140,6 +157,7 @@ export function createWorkerOutboxHandler(
 
   return {
     async handle(record) {
+      await providerValidationDispatcher.handle(record);
       await providerOperationDispatcher.handle(record);
       await outboundDispatcher.handle(record);
     }
@@ -279,6 +297,7 @@ export {
 export { runTelegramPollingSweep } from "./telegram-polling-sweeper";
 export { createTelegramAttachmentTransferSweeper } from "./telegram-attachment-transfer";
 export { createTelegramProviderOperationDispatcher } from "./telegram-provider-operation-dispatcher";
+export { createTelegramProviderValidationDispatcher } from "./telegram-provider-validation-dispatcher";
 export {
   createWorkerEgressMonitor,
   defaultEgressProbes,
@@ -317,6 +336,11 @@ export type {
   TelegramProviderOperationBotApiClientFactory,
   TelegramProviderOperationDispatcherOptions
 } from "./telegram-provider-operation-dispatcher";
+export type {
+  TelegramProviderValidationBotApiClient,
+  TelegramProviderValidationBotApiClientFactory,
+  TelegramProviderValidationDispatcherOptions
+} from "./telegram-provider-validation-dispatcher";
 export type {
   EgressMonitorOptions,
   EgressProbeDefinition,

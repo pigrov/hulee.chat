@@ -7,6 +7,7 @@ import type {
   EmployeeId,
   InternalChannelAuthChallengeStatus,
   InternalChannelAuthChallengeType,
+  PlatformErrorCode,
   PlatformEvent,
   TenantId
 } from "@hulee/contracts";
@@ -15,6 +16,8 @@ import type {
   ChannelAuthChallengeRepository,
   ChannelConnectorRecord,
   ChannelConnectorRepository,
+  ChannelProviderValidationJobRecord,
+  ChannelProviderValidationJobRepository,
   DeploymentChannelCatalogOverrideRecord,
   DeploymentChannelCatalogOverrideRepository,
   DomainEventRepository,
@@ -22,12 +25,14 @@ import type {
   FindActiveChannelConnectorByExternalIdInput,
   FindChannelAuthChallengeInput,
   FindChannelConnectorInput,
+  FindChannelProviderValidationJobInput,
   FindFirstChannelConnectorByTypeInput,
   FindLatestActiveChannelAuthChallengeInput,
   ListActiveChannelConnectorsByTypeInput,
   ListTenantChannelConnectorsInput,
   UpsertChannelAuthChallengeInput,
-  UpsertChannelConnectorInput
+  UpsertChannelConnectorInput,
+  UpsertChannelProviderValidationJobInput
 } from "@hulee/db";
 import { describe, expect, it, vi } from "vitest";
 
@@ -545,6 +550,86 @@ describe("internal integrations service", () => {
       })
     );
     expect(repository.records.size).toBe(0);
+  });
+
+  it("validates Telegram bot tokens through provider validation outbox jobs", async () => {
+    const repository = new InMemoryChannelConnectorRepository();
+    const validationJobs = new InMemoryChannelProviderValidationJobRepository();
+    const secretWriter = new InMemorySecretWriter();
+    const events = new InMemoryDomainEventRepository(async (appended) => {
+      const event = appended.events[0];
+
+      expect(event).toEqual(
+        expect.objectContaining({
+          type: "channel.provider_validation.requested",
+          tenantId,
+          payload: expect.objectContaining({
+            channelType: "telegram_bot",
+            provider: "telegram",
+            validationKind: "telegram_bot_token",
+            actorEmployeeId: context.employeeId
+          })
+        })
+      );
+
+      if (event?.type !== "channel.provider_validation.requested") {
+        throw new Error("Unexpected provider validation event.");
+      }
+
+      const job = validationJobs.records.get(event.payload.jobId);
+
+      expect(job).toMatchObject({
+        tenantId,
+        status: "pending",
+        botTokenSecretRef: expect.stringContaining(
+          "channel-provider-validation-"
+        )
+      });
+
+      validationJobs.records.set(event.payload.jobId, {
+        ...job!,
+        status: "succeeded",
+        resultPayload: {
+          bot: {
+            id: "100",
+            username: "hulee_test_bot"
+          }
+        },
+        completedAt: now,
+        updatedAt: now
+      });
+    });
+    const botApiClientFactory = vi.fn();
+    const service = createInternalIntegrationService({
+      connectorRepository: repository,
+      providerValidationJobRepository: validationJobs,
+      providerOperationEvents: events,
+      secretWriter,
+      botApiClientFactory,
+      providerValidationTimeoutMs: 50,
+      providerValidationPollIntervalMs: 1,
+      now: () => now
+    });
+
+    await expect(
+      service.validateTelegramBotToken(context, {
+        botToken: "123456789:AAExampleTokenValue_000000000000000000"
+      })
+    ).resolves.toEqual({
+      bot: {
+        id: "100",
+        username: "hulee_test_bot"
+      }
+    });
+    expect(botApiClientFactory).not.toHaveBeenCalled();
+    expect(secretWriter.upserts).toEqual([
+      expect.objectContaining({
+        tenantId,
+        purpose: "telegram.bot_token_validation",
+        plainText: "123456789:AAExampleTokenValue_000000000000000000"
+      })
+    ]);
+    expect(events.events).toHaveLength(1);
   });
 
   it("advances draft Telegram setup steps before activation", async () => {
@@ -1387,6 +1472,43 @@ class InMemoryChannelAuthChallengeRepository implements ChannelAuthChallengeRepo
   }
 }
 
+class InMemoryChannelProviderValidationJobRepository implements ChannelProviderValidationJobRepository {
+  readonly records = new Map<string, ChannelProviderValidationJobRecord>();
+
+  async findJob(
+    input: FindChannelProviderValidationJobInput
+  ): Promise<ChannelProviderValidationJobRecord | null> {
+    const record = this.records.get(input.jobId) ?? null;
+
+    return record?.tenantId === input.tenantId ? record : null;
+  }
+
+  async upsertJob(
+    input: UpsertChannelProviderValidationJobInput
+  ): Promise<void> {
+    const existing = this.records.get(input.id);
+    const updatedAt = input.updatedAt;
+
+    this.records.set(input.id, {
+      id: input.id,
+      tenantId: input.tenantId,
+      channelType: input.channelType as ChannelType,
+      provider: input.provider,
+      validationKind: input.validationKind,
+      status: input.status,
+      botTokenSecretRef: input.botTokenSecretRef,
+      resultPayload: input.resultPayload ?? {},
+      errorCode: (input.errorCode as PlatformErrorCode | undefined) ?? null,
+      errorMessage: input.errorMessage ?? null,
+      expiresAt: input.expiresAt,
+      completedAt: input.completedAt ?? null,
+      createdByEmployeeId: input.createdByEmployeeId ?? null,
+      createdAt: existing?.createdAt ?? updatedAt,
+      updatedAt
+    });
+  }
+}
+
 function fakeChannelCatalogOverrideRepository(
   overrides: readonly DeploymentChannelCatalogOverrideRecord[]
 ): DeploymentChannelCatalogOverrideRepository {
@@ -1409,6 +1531,13 @@ function fakeChannelCatalogOverrideRepository(
 class InMemoryDomainEventRepository implements DomainEventRepository {
   readonly events: PlatformEvent[] = [];
 
+  constructor(
+    private readonly onAppend?: (input: {
+      tenantId: TenantId;
+      events: readonly PlatformEvent[];
+    }) => Promise<void> | void
+  ) {}
+
   async append(input: {
     tenantId: TenantId;
     events: readonly PlatformEvent[];
@@ -1417,14 +1546,20 @@ class InMemoryDomainEventRepository implements DomainEventRepository {
       input.events.every((event) => event.tenantId === input.tenantId)
     ).toBe(true);
     this.events.push(...input.events);
+    await this.onAppend?.(input);
   }
 }
+
+type InMemorySecretPurpose =
+  | "telegram.bot_token"
+  | "telegram.bot_token_validation"
+  | "telegram.webhook_secret_token";
 
 class InMemorySecretWriter {
   readonly upserts: {
     tenantId: TenantId;
     secretRef: string;
-    purpose: "telegram.bot_token" | "telegram.webhook_secret_token";
+    purpose: InMemorySecretPurpose;
     plainText: string;
     updatedAt: Date;
   }[] = [];
@@ -1432,7 +1567,7 @@ class InMemorySecretWriter {
   async upsertSecret(input: {
     tenantId: TenantId;
     secretRef: string;
-    purpose: "telegram.bot_token" | "telegram.webhook_secret_token";
+    purpose: InMemorySecretPurpose;
     plainText: string;
     updatedAt: Date;
   }): Promise<void> {

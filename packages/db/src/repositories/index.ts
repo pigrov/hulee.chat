@@ -36,6 +36,11 @@ export {
   createSqlChannelAuthChallengeRepository
 } from "./sql-channel-auth-challenge-repository";
 export {
+  buildFindChannelProviderValidationJobSql,
+  buildUpsertChannelProviderValidationJobSql,
+  createSqlChannelProviderValidationJobRepository
+} from "./sql-channel-provider-validation-job-repository";
+export {
   buildFindEnabledTenantModuleConfigByConfigStringSql,
   buildFindEnabledTenantModuleConfigSql,
   buildFindTenantModuleConfigSql,
@@ -264,6 +269,13 @@ export type {
   FindLatestActiveChannelAuthChallengeInput,
   UpsertChannelAuthChallengeInput
 } from "./sql-channel-auth-challenge-repository";
+export type {
+  ChannelProviderValidationJobRecord,
+  ChannelProviderValidationJobRepository,
+  ChannelProviderValidationJobStatus,
+  FindChannelProviderValidationJobInput,
+  UpsertChannelProviderValidationJobInput
+} from "./sql-channel-provider-validation-job-repository";
 export type {
   FindEnabledTenantModuleConfigByConfigStringInput,
   FindEnabledTenantModuleConfigInput,

@@ -113,6 +113,16 @@ export type PlatformEvent =
       }
     >
   | EventEnvelope<
+      "channel.provider_validation.requested",
+      {
+        jobId: string;
+        channelType: ChannelType;
+        provider: string;
+        validationKind: "telegram_bot_token";
+        actorEmployeeId: EmployeeId;
+      }
+    >
+  | EventEnvelope<
       "message.delivery_failed",
       { messageId: MessageId; errorCode: PlatformErrorCode }
     >
