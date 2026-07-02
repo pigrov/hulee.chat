@@ -1560,14 +1560,56 @@ a.secondaryButton {
 .integrationCatalog {
   position: sticky;
   top: 12px;
+  min-height: calc(100vh - 104px);
+  max-height: calc(100vh - 104px);
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .adminIntegrationGrid {
   display: grid;
+  min-height: calc(100vh - 104px);
   min-width: 0;
   grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
   gap: 12px;
-  align-items: start;
+  align-items: stretch;
+}
+
+.adminRolesGrid {
+  display: grid;
+  min-height: calc(100vh - 104px);
+  min-width: 0;
+  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.adminRolesNav {
+  position: sticky;
+  top: 12px;
+  min-height: calc(100vh - 104px);
+  max-height: calc(100vh - 104px);
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.adminRolesNav .integrationList,
+.integrationCatalog .integrationList {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.roleSectionNavLink .integrationListText {
+  min-width: 0;
+}
+
+.roleSectionNavLink .integrationListType {
+  display: -webkit-box;
+  overflow: hidden;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .platformChannelGrid {
@@ -2890,6 +2932,7 @@ button.managementRow:not(.adminNavLink):not(.integrationNavLink):focus-visible {
   .adminGrid,
   .platformAdminGrid,
   .adminIntegrationGrid,
+  .adminRolesGrid,
   .platformChannelGrid,
   .adminOverviewGrid,
   .employeeAccessTabs,
@@ -2934,14 +2977,23 @@ button.managementRow:not(.adminNavLink):not(.integrationNavLink):focus-visible {
 
   .adminNavPanel,
   .integrationCatalog,
+  .adminRolesNav,
   .platformNavPanel {
     position: static;
+    max-height: none;
     min-height: auto;
+    overflow: visible;
   }
 
   .settingsPanel.adminNavPanel,
+  .settingsPanel.adminRolesNav,
   .settingsPanel.platformNavPanel {
     min-height: auto;
+  }
+
+  .adminRolesNav .integrationList,
+  .integrationCatalog .integrationList {
+    overflow: visible;
   }
 
   .setupStepList {

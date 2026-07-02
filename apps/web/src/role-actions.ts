@@ -359,6 +359,11 @@ function roleActionDestination(formData: FormData, status: string): string {
   const path = isSafeRoleActionReturnTo(returnTo) ? returnTo : "/admin/roles";
   const params = new URLSearchParams({ roleActionStatus: status });
   const employeeAccessSection = readEmployeeAccessSection(formData);
+  const roleAdminSection = readRoleAdminSection(formData);
+
+  if (path === "/admin/roles" && roleAdminSection !== undefined) {
+    params.set("section", roleAdminSection);
+  }
 
   if (isEmployeeAccessReturnTo(path) && employeeAccessSection !== undefined) {
     params.set("section", employeeAccessSection);
@@ -389,6 +394,28 @@ function readEmployeeAccessSection(
   }
 
   return value;
+}
+
+function readRoleAdminSection(formData: FormData): string | undefined {
+  const value = readOptionalFormString(formData, "roleAdminSection");
+
+  if (
+    value === "definitions" ||
+    value === "create" ||
+    value === "templates" ||
+    value === "assign" ||
+    value === "preview" ||
+    value === "activeAssignments" ||
+    value === "expiredAssignments" ||
+    value === "directGrantCreate" ||
+    value === "activeDirectGrants" ||
+    value === "expiredDirectGrants" ||
+    value === "permissionCatalog"
+  ) {
+    return value;
+  }
+
+  return undefined;
 }
 
 function readRoleBindingSubject(

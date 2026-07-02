@@ -157,6 +157,21 @@ describe("role management actions", () => {
     expectRoleAdminRevalidation();
   });
 
+  it("preserves selected roles admin section after role actions", async () => {
+    const { createCustomTenantRoleAction } = await import("./role-actions");
+
+    await expectRedirect(
+      createCustomTenantRoleAction(
+        formData({
+          name: "Sales custom",
+          permissions: ["client.view"],
+          roleAdminSection: "create"
+        })
+      ),
+      "/admin/roles?roleActionStatus=created&section=create"
+    );
+  });
+
   it("creates a role from a system template through the internal RBAC API", async () => {
     const { createRoleFromTemplateAction } = await import("./role-actions");
 
