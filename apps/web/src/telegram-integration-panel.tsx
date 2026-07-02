@@ -92,6 +92,8 @@ export function TelegramIntegrationPanel({
           <TelegramLifecycleActions integration={integration} t={t} />
         </div>
 
+        <TelegramConnectorProblemMessage integration={integration} t={t} />
+
         <TelegramConnectorCompactStatus
           integration={integration}
           locale={locale}
@@ -158,6 +160,9 @@ function TelegramCredentialsStep({
     <TelegramConnectionForm
       botTokenSecretRef={config.botTokenSecretRef}
       channelExternalId={config.channelExternalId}
+      connectionProblem={
+        <TelegramConnectorProblemMessage integration={integration} t={t} />
+      }
       connectorId={connectorId}
       defaultDisplayName={telegramDisplayName(integration, t)}
       diagnostics={{
@@ -208,7 +213,6 @@ export function TelegramConnectorCompactStatus({
 }): ReactNode {
   const inbound = integration.diagnostics.runtime?.inbound;
   const outbound = integration.diagnostics.runtime?.outbound;
-  const problemMessage = telegramProblemMessage(integration, t);
 
   return (
     <div className="telegramStatusCard">
@@ -229,11 +233,24 @@ export function TelegramConnectorCompactStatus({
         value={outbound?.lastSentAt}
         fallback={formatOptionalDateTime(outbound?.lastSentAt, locale, t)}
       />
-      {problemMessage ? (
-        <p className="telegramStatusProblem">{problemMessage}</p>
-      ) : null}
     </div>
   );
+}
+
+function TelegramConnectorProblemMessage({
+  integration,
+  t
+}: {
+  integration: TelegramIntegrationViewModel;
+  t: Translator;
+}): ReactNode {
+  const problemMessage = telegramProblemMessage(integration, t);
+
+  return problemMessage ? (
+    <p className="telegramStatusProblem" role="status">
+      {problemMessage}
+    </p>
+  ) : null;
 }
 
 function TelegramStatusMetric({
@@ -273,15 +290,22 @@ function telegramProblemMessage(
   const diagnostics = integration.diagnostics;
   const inbound = diagnostics.runtime?.inbound;
   const outbound = diagnostics.runtime?.outbound;
-  const errorCode =
-    diagnostics.lastErrorCode ??
-    inbound?.lastErrorCode ??
-    outbound?.lastErrorCode;
 
   if (
     diagnostics.status === "configured" &&
-    !inbound?.lastErrorCode &&
-    !outbound?.lastErrorCode
+    !diagnostics.lastErrorCode &&
+    !hasCurrentRuntimeFailure({
+      checkedAt: diagnostics.checkedAt,
+      errorCode: inbound?.lastErrorCode,
+      failedAt: inbound?.lastFailedAt,
+      resolvedAt: [inbound?.lastReceivedAt, inbound?.lastAcceptedAt]
+    }) &&
+    !hasCurrentRuntimeFailure({
+      checkedAt: diagnostics.checkedAt,
+      errorCode: outbound?.lastErrorCode,
+      failedAt: outbound?.lastFailedAt,
+      resolvedAt: [outbound?.lastSentAt]
+    })
   ) {
     return undefined;
   }
@@ -309,19 +333,33 @@ function telegramProblemMessage(
     return t("integrations.telegram.problem.invalidConfig");
   }
 
-  if (errorCode === "provider.permanent_failure") {
+  if (diagnostics.lastErrorCode === "provider.permanent_failure") {
     return t("integrations.telegram.problem.providerRejected");
   }
 
-  if (errorCode === "provider.temporary_failure") {
+  if (diagnostics.lastErrorCode === "provider.temporary_failure") {
     return t("integrations.telegram.problem.providerTemporary");
   }
 
-  if (inbound?.lastErrorCode) {
+  if (
+    hasCurrentRuntimeFailure({
+      checkedAt: diagnostics.checkedAt,
+      errorCode: inbound?.lastErrorCode,
+      failedAt: inbound?.lastFailedAt,
+      resolvedAt: [inbound?.lastReceivedAt, inbound?.lastAcceptedAt]
+    })
+  ) {
     return t("integrations.telegram.problem.inboundFailed");
   }
 
-  if (outbound?.lastErrorCode) {
+  if (
+    hasCurrentRuntimeFailure({
+      checkedAt: diagnostics.checkedAt,
+      errorCode: outbound?.lastErrorCode,
+      failedAt: outbound?.lastFailedAt,
+      resolvedAt: [outbound?.lastSentAt]
+    })
+  ) {
     return t("integrations.telegram.problem.outboundFailed");
   }
 
@@ -330,6 +368,29 @@ function telegramProblemMessage(
   }
 
   return undefined;
+}
+
+function hasCurrentRuntimeFailure(input: {
+  checkedAt: string;
+  errorCode?: string;
+  failedAt?: string;
+  resolvedAt: Array<string | undefined>;
+}): boolean {
+  if (!input.errorCode || !input.failedAt) {
+    return false;
+  }
+
+  const failedAt = Date.parse(input.failedAt);
+  const resolvedAt = [
+    Date.parse(input.checkedAt),
+    ...input.resolvedAt.map((value) => (value ? Date.parse(value) : NaN))
+  ].filter(Number.isFinite);
+
+  if (!Number.isFinite(failedAt)) {
+    return false;
+  }
+
+  return failedAt > Math.max(...resolvedAt);
 }
 
 export function TelegramDiagnosticsGrid({

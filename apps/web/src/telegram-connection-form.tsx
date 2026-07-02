@@ -47,6 +47,7 @@ const initialConnectionState: TelegramConnectionActionState = {
 export function TelegramConnectionForm({
   botTokenSecretRef,
   channelExternalId,
+  connectionProblem,
   connectorId,
   defaultDisplayName,
   diagnostics,
@@ -58,6 +59,7 @@ export function TelegramConnectionForm({
 }: {
   botTokenSecretRef?: string;
   channelExternalId: string;
+  connectionProblem?: ReactNode;
   connectorId: string;
   defaultDisplayName: string;
   diagnostics: TelegramConnectionDiagnosticsState;
@@ -271,6 +273,8 @@ export function TelegramConnectionForm({
           {lifecycleActions}
         </span>
       </div>
+
+      {connectionProblem}
 
       {statusText ? (
         <p className="metaText telegramConnectionStatus" role="status">
