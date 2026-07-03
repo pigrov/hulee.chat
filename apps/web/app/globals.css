@@ -14,13 +14,34 @@
   --hulee-color-accent: #0f766e;
   --hulee-color-success: #059669;
   --hulee-color-danger: #dc2626;
+  --hulee-color-page-background: linear-gradient(
+    135deg,
+    color-mix(
+        in srgb,
+        var(--hulee-color-surface-muted) 62%,
+        var(--hulee-color-page)
+      )
+      0%,
+    color-mix(
+        in srgb,
+        var(--hulee-color-surface-muted) 28%,
+        var(--hulee-color-page)
+      )
+      46%,
+    color-mix(
+        in srgb,
+        var(--hulee-color-surface-raised) 52%,
+        var(--hulee-color-page)
+      )
+      100%
+  );
   --hulee-shadow-focus: 0 0 0 3px
     color-mix(in srgb, var(--hulee-color-brand-primary) 20%, transparent);
   --hulee-radius-control: 8px;
   --hulee-space-block: 8px;
   --hulee-font-sans:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-    "Segoe UI", sans-serif;
+    var(--font-sansation), "Segoe UI", "Trebuchet MS", "Helvetica Neue", Arial,
+    sans-serif;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -42,8 +63,58 @@
   }
 }
 
+:root[data-theme="light"] {
+  --hulee-color-scheme: light;
+  --hulee-color-page: #f7f9fa;
+  --hulee-color-surface-default: #ffffff;
+  --hulee-color-surface-raised: #fbfdfc;
+  --hulee-color-surface-muted: #eef7f2;
+  --hulee-color-border: #dbe3e7;
+  --hulee-color-border-strong: #b5c2ca;
+  --hulee-color-text-default: #111827;
+  --hulee-color-text-muted: #64748b;
+  --hulee-color-brand-primary: #047857;
+  --hulee-color-brand-foreground: #ffffff;
+  --hulee-color-accent: #0f766e;
+  --hulee-color-success: #059669;
+  --hulee-color-danger: #dc2626;
+}
+
+:root[data-theme="dark"] {
+  --hulee-color-scheme: dark;
+  --hulee-color-page: #081015;
+  --hulee-color-surface-default: #111a20;
+  --hulee-color-surface-raised: #151f26;
+  --hulee-color-surface-muted: #1c2a31;
+  --hulee-color-border: #26343d;
+  --hulee-color-border-strong: #40515c;
+  --hulee-color-text-default: #f4f7f8;
+  --hulee-color-text-muted: #a8b6bf;
+  --hulee-color-brand-primary: #34d399;
+  --hulee-color-brand-foreground: #06251a;
+  --hulee-color-accent: #38bdf8;
+  --hulee-color-success: #34d399;
+  --hulee-color-danger: #fb7185;
+}
+
 * {
   box-sizing: border-box;
+}
+
+*::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: rgba(67, 82, 109, 0.26);
+  background-clip: padding-box;
 }
 
 html,
@@ -64,6 +135,28 @@ input,
 select,
 textarea {
   font: inherit;
+  font-family: var(--hulee-font-sans);
+}
+
+.scroll-native-hidden {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scroll-native-hidden::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.app-scrollbar-hidden {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.app-scrollbar-hidden::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .appFrame {
@@ -74,7 +167,7 @@ textarea {
       250px,
       320px
     );
-  background: var(--hulee-color-page);
+  background: var(--hulee-color-page-background);
   color: var(--hulee-color-text-default);
 }
 
@@ -86,6 +179,13 @@ textarea {
   padding: 16px 12px;
   border-right: 1px solid var(--hulee-color-border);
   background: var(--hulee-color-surface-default);
+}
+
+.navigationRailFooter {
+  display: grid;
+  gap: 8px;
+  margin-top: auto;
+  justify-items: center;
 }
 
 .brandMark {
@@ -100,6 +200,43 @@ textarea {
   font-weight: 700;
   overflow: hidden;
   text-transform: uppercase;
+}
+
+.brandRailLogo {
+  display: grid;
+  width: 100%;
+  height: 56px;
+  place-items: center;
+  overflow: hidden;
+  user-select: none;
+}
+
+.brandRailLogo.brandMark {
+  width: 48px;
+  height: 48px;
+  justify-self: center;
+}
+
+.brandRailLogoImage {
+  display: block;
+  width: 72px;
+  height: 48px;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.brandRailLogoImageDark {
+  display: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  .brandRailLogoImageLightWithDark {
+    display: none;
+  }
+
+  .brandRailLogoImageDark {
+    display: block;
+  }
 }
 
 .appBrandIdentity {
@@ -1203,6 +1340,35 @@ a.secondaryButton {
   color: var(--hulee-color-text-muted);
 }
 
+.employeeAvatar {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: 999px;
+  background: var(--hulee-color-surface-muted);
+  color: var(--hulee-color-text-muted);
+  object-fit: cover;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.employeeAvatarLarge {
+  width: 72px;
+  height: 72px;
+  font-size: 18px;
+}
+
+.employeeProfileSummary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+}
+
 .detailGrid {
   display: grid;
   gap: 12px;
@@ -1240,93 +1406,92 @@ a.secondaryButton {
 .adminFrame {
   display: block;
   min-height: 100vh;
-  background: var(--hulee-color-page);
+  background: var(--hulee-color-page-background);
 }
 
 .adminWorkspace {
-  --admin-nav-width: 260px;
-  --admin-nav-collapsed-width: 72px;
+  --admin-nav-width: 88px;
   min-width: 0;
   min-height: 100vh;
-  background: var(--hulee-color-page);
+  background: var(--hulee-color-page-background);
 }
 
-.adminWorkspace:has(.adminNavToggleInput:checked) {
-  --admin-nav-width: var(--admin-nav-collapsed-width);
+.adminShellLayout {
+  display: grid;
+  min-height: 100vh;
+  grid-template-columns: var(--admin-nav-width) minmax(0, 1fr);
+  gap: var(--hulee-space-block);
+  padding: var(--hulee-space-block);
 }
 
-.adminNavToggleInput {
-  position: fixed;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: none;
+.adminShellMain {
+  display: flex;
+  min-width: 0;
+  min-height: calc(100vh - (var(--hulee-space-block) * 2));
+  flex-direction: column;
+  gap: var(--hulee-space-block);
 }
 
 .adminTopBar {
   display: grid;
-  min-height: 80px;
-  grid-template-columns: var(--admin-nav-width) minmax(0, 1fr) auto;
+  min-height: 56px;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 20px;
-  padding: 12px;
-  border-bottom: 1px solid var(--hulee-color-border);
+  gap: var(--hulee-space-block);
+  margin: 0;
+  padding: var(--hulee-space-block);
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
   background: color-mix(
     in srgb,
-    var(--hulee-color-surface-default) 90%,
+    var(--hulee-color-surface-default) 92%,
     transparent
   );
+  box-shadow: 0 12px 28px
+    color-mix(in srgb, var(--hulee-color-text-default) 7%, transparent);
+  backdrop-filter: blur(18px);
 }
 
-.adminTopBrand {
-  display: grid;
+.adminServiceTitle {
+  display: flex;
   min-width: 0;
   align-items: center;
+  gap: var(--hulee-space-block);
 }
 
-.adminWorkspace:has(.adminNavToggleInput:checked) .adminTopBrand,
-.adminWorkspace:has(.adminNavToggleInput:checked) .appBrandIdentity {
-  justify-content: center;
+.adminServiceIconFrame {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-raised);
+  color: var(--hulee-color-brand-primary);
 }
 
-.adminWorkspace:has(.adminNavToggleInput:checked) .brandWordmark,
-.adminWorkspace:has(.adminNavToggleInput:checked) .adminNavLink .listItemTitle,
-.adminWorkspace:has(.adminNavToggleInput:checked)
-  .platformNavGroup
-  > .detailLabel,
-.adminWorkspace:has(.adminNavToggleInput:checked) .inlineNoticeForm,
-.adminWorkspace:has(.adminNavToggleInput:checked) .adminNavPanel > .detailGrid,
-.adminWorkspace:has(.adminNavToggleInput:checked) .adminNavPanel > .slotHost,
-.adminWorkspace:has(.adminNavToggleInput:checked) .adminNavCollapseExpandedIcon,
-.adminWorkspace:has(.adminNavToggleInput:checked) .adminNavCollapseExpandedText,
-.adminWorkspace:not(:has(.adminNavToggleInput:checked))
-  .adminNavCollapseCollapsedIcon {
-  display: none;
-}
-
-.adminWorkspace:has(.adminNavToggleInput:checked) .adminNavLink,
-.adminWorkspace:has(.adminNavToggleInput:checked) .adminNavCollapseButton {
-  justify-content: center;
-}
-
-.adminWorkspace:has(.adminNavToggleInput:checked) .adminNavLink {
-  padding-right: 0;
-  padding-left: 0;
-}
-
-.adminWorkspace:has(.adminNavToggleInput:checked)
-  .platformNavGroup
-  + .platformNavGroup {
-  padding-top: 0;
-  border-top: 0;
-}
-
-.adminTitleBlock {
+.adminServiceText {
   display: grid;
   min-width: 0;
-  gap: 4px;
-  padding-left: 20px;
-  border-left: 1px solid var(--hulee-color-border);
+  gap: 2px;
+}
+
+.adminServiceLabel {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adminServiceDescription {
+  display: block;
+  overflow: hidden;
+  color: var(--hulee-color-text-muted);
+  font-size: 12px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .adminTopActions {
@@ -1334,7 +1499,7 @@ a.secondaryButton {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 14px;
+  gap: var(--hulee-space-block);
 }
 
 .topHelpLink {
@@ -1464,62 +1629,30 @@ a.secondaryButton {
 
 .adminTitle {
   margin: 0;
-  font-size: 22px;
+  font-size: 18px;
   line-height: 1.2;
 }
 
 .adminContent {
   display: grid;
-  gap: 12px;
-  padding: 12px;
-}
-
-.adminGrid {
-  display: grid;
-  grid-template-columns: var(--admin-nav-width) minmax(0, 1fr);
-  gap: 20px;
-  align-items: start;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: var(--hulee-space-block);
+  padding: 0;
 }
 
 .adminNavPanel {
   position: sticky;
-  top: 12px;
-  min-height: calc(100vh - 104px);
-  align-content: start;
-  gap: 12px;
-  padding: 12px;
-  border: 0;
-  background: color-mix(
-    in srgb,
-    var(--hulee-color-surface-default) 70%,
-    transparent
-  );
-}
-
-.adminGrid > :not(.adminNavPanel),
-.platformAdminGrid > .adminStack {
-  min-width: 0;
-  padding-left: 20px;
-  border-left: 1px solid var(--hulee-color-border);
-}
-
-.adminNavCollapseButton {
+  top: var(--hulee-space-block);
   display: flex;
-  min-height: 40px;
+  width: var(--admin-nav-width);
+  height: calc(100vh - (var(--hulee-space-block) * 2));
+  flex-direction: column;
   align-items: center;
   gap: 8px;
-  margin-top: auto;
-  padding: 10px 12px;
-  border-top: 1px solid var(--hulee-color-border);
-  color: var(--hulee-color-text-muted);
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.adminNavCollapseButton:hover,
-.adminNavCollapseButton:focus-visible {
-  color: var(--hulee-color-text-default);
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .adminStack {
@@ -1542,74 +1675,255 @@ a.secondaryButton {
   );
 }
 
+.helpPanel {
+  position: relative;
+}
+
+.helpPanel > .sectionHeader {
+  padding-right: 52px;
+}
+
+.helpDisclosure {
+  display: contents;
+}
+
+.helpToggleButton {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: 999px;
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-surface-raised) 88%,
+    transparent
+  );
+  color: var(--hulee-color-text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.helpToggleButton:hover,
+.helpToggleButton:focus-visible,
+.helpToggleButton[aria-expanded="true"] {
+  border-color: var(--hulee-color-brand-primary);
+  color: var(--hulee-color-brand-primary);
+  outline: none;
+}
+
+.helpToggleButton:focus-visible {
+  box-shadow: var(--hulee-shadow-focus);
+}
+
+.helpDisclosurePanel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid
+    color-mix(in srgb, var(--hulee-color-brand-primary) 36%, transparent);
+  border-radius: var(--hulee-radius-control);
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 7%,
+    var(--hulee-color-surface-raised)
+  );
+}
+
+.helpDisclosureBody {
+  display: grid;
+  gap: 8px;
+}
+
+.helpDisclosureTitle {
+  margin: 0;
+  color: var(--hulee-color-text-default);
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.helpDisclosureExamples {
+  display: grid;
+  gap: 6px;
+}
+
+.helpDisclosureList {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--hulee-color-text-default);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.helpDisclosureClose {
+  justify-self: start;
+}
+
 .settingsPanel[hidden] {
   display: none !important;
 }
 
-.settingsPanel.adminNavPanel,
-.settingsPanel.platformNavPanel {
+.adminRailLogoLink {
+  display: grid;
+  width: var(--admin-nav-width);
+  height: 56px;
+  flex: 0 0 56px;
+  place-items: center;
+  color: inherit;
+  text-decoration: none;
+}
+
+.adminRailLogoLink:hover,
+.adminRailLogoLink:focus-visible {
+  background: transparent;
+  outline: none;
+}
+
+.adminRailMenu {
+  display: grid;
+  width: 100%;
+  min-height: 0;
+  align-content: start;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 8px 0;
+  scrollbar-width: none;
+}
+
+.adminRailMenu::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.adminRailMenuList {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  gap: 4px;
+}
+
+.adminNavFooter {
+  display: grid;
+  width: 100%;
+  margin-top: auto;
+  justify-items: center;
+  padding: 8px 0 12px;
+}
+
+.railThemeToggle {
+  position: relative;
   display: flex;
-  min-height: calc(100vh - 88px);
-  flex-direction: column;
-  gap: 12px;
-  padding: 12px;
-  border: 0;
+  width: 58px;
+  height: 32px;
+  align-items: center;
+  padding: 3px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: 999px;
   background: color-mix(
     in srgb,
-    var(--hulee-color-surface-default) 70%,
+    var(--hulee-color-surface-raised) 88%,
     transparent
   );
+  color: var(--hulee-color-brand-primary);
+  cursor: pointer;
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease;
+}
+
+.railThemeToggle:hover,
+.railThemeToggle:focus-visible {
+  border-color: var(--hulee-color-brand-primary);
+  outline: none;
+}
+
+.railThemeToggleThumb {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: 999px;
+  background: var(--hulee-color-surface-default);
+  color: inherit;
+  transform: translateX(0);
+  transition: transform 180ms ease;
+}
+
+:root[data-theme="dark"] .railThemeToggleThumb {
+  transform: translateX(26px);
 }
 
 .integrationCatalog {
   position: sticky;
-  top: 12px;
-  min-height: calc(100vh - 104px);
-  max-height: calc(100vh - 104px);
+  top: var(--hulee-space-block);
+  align-content: start;
+  grid-auto-rows: max-content;
+  min-height: calc(100vh - 80px);
+  max-height: calc(100vh - 80px);
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
 }
 
 .adminIntegrationGrid {
   display: grid;
-  min-height: calc(100vh - 104px);
+  min-height: calc(100vh - 80px);
   min-width: 0;
   grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
-  gap: 12px;
+  gap: var(--hulee-space-block);
   align-items: stretch;
 }
 
-.adminRolesGrid {
+.adminSectionGrid {
   display: grid;
-  min-height: calc(100vh - 104px);
+  min-height: calc(100vh - 80px);
   min-width: 0;
   grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
-  gap: 12px;
+  gap: var(--hulee-space-block);
   align-items: stretch;
 }
 
-.adminRolesNav {
+.adminSectionNav {
   position: sticky;
-  top: 12px;
-  min-height: calc(100vh - 104px);
-  max-height: calc(100vh - 104px);
+  top: var(--hulee-space-block);
+  align-content: start;
+  grid-auto-rows: max-content;
+  min-height: calc(100vh - 80px);
+  max-height: calc(100vh - 80px);
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
 }
 
-.adminRolesNav .integrationList,
+.adminSectionNav .integrationList,
 .integrationCatalog .integrationList {
   min-height: 0;
+  align-content: start;
+  grid-auto-rows: max-content;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 
-.adminRolesContent {
-  min-height: calc(100vh - 104px);
-  max-height: calc(100vh - 104px);
+.adminSectionContent {
+  align-content: start;
+  grid-auto-rows: max-content;
+  min-height: calc(100vh - 80px);
+  max-height: calc(100vh - 80px);
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-right: 2px;
+}
+
+.adminSectionContent > .settingsPanel {
+  align-self: start;
 }
 
 .platformChannelGrid {
@@ -1624,6 +1938,140 @@ a.secondaryButton {
 .managementList {
   display: grid;
   gap: 8px;
+}
+
+.minWidthZero {
+  min-width: 0;
+}
+
+.orgStructureTreeList {
+  align-content: start;
+  grid-auto-rows: max-content;
+}
+
+.orgStructureTreeRoot {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px dashed var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-surface-raised) 70%,
+    transparent
+  );
+}
+
+.orgStructureTreeRoot[data-drop-target="true"],
+.orgStructureTreeRow[data-drop-target="true"] {
+  border-color: var(--hulee-color-brand-primary);
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 12%,
+    var(--hulee-color-surface-raised)
+  );
+}
+
+.orgStructureTreeRoot[data-drop-invalid="true"],
+.orgStructureTreeRow[data-drop-invalid="true"] {
+  border-color: var(--hulee-color-danger);
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-danger) 10%,
+    var(--hulee-color-surface-raised)
+  );
+}
+
+.orgStructureTreeRoot .sectionTitle {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.orgStructureTreeRow {
+  position: relative;
+  min-height: 72px;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    opacity 160ms ease;
+}
+
+.orgStructureTreeRow[data-depth="0"] {
+  margin-left: 0;
+}
+
+.orgStructureTreeRow[data-dragging="true"] {
+  opacity: 0.58;
+}
+
+.orgStructureTreeControls {
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+}
+
+.orgStructureDragHandle,
+.orgStructureTreeToggle {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--hulee-radius-control);
+  background: transparent;
+  color: var(--hulee-color-text-muted);
+  cursor: pointer;
+}
+
+.orgStructureDragHandle {
+  cursor: grab;
+}
+
+.orgStructureDragHandle:active {
+  cursor: grabbing;
+}
+
+.orgStructureTreeToggle:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.orgStructureDragHandle:hover,
+.orgStructureDragHandle:focus-visible,
+.orgStructureTreeToggle:not(:disabled):hover,
+.orgStructureTreeToggle:not(:disabled):focus-visible {
+  background: var(--hulee-color-surface-muted);
+  color: var(--hulee-color-brand-primary);
+  outline: none;
+}
+
+.orgStructureTreeRowBody {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+}
+
+.orgStructureTreeRowHeader {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.orgStructureTreeTitle {
+  margin: 0;
+  overflow: hidden;
+  color: var(--hulee-color-text-default);
+  font-size: 15px;
+  font-weight: 750;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .integrationListGroup {
@@ -1688,6 +2136,37 @@ a.secondaryButton {
   justify-self: start;
 }
 
+.employeeProfileForm {
+  grid-template-columns: minmax(220px, 0.8fr) minmax(220px, 1fr) minmax(
+      220px,
+      1fr
+    );
+  align-items: end;
+}
+
+.employeeProfileForm .primaryButton {
+  justify-self: start;
+}
+
+.employeeAvatarUploadGrid {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: var(--hulee-space-block);
+  align-items: center;
+}
+
+.employeeAvatarPreviewSurface {
+  display: grid;
+  width: 88px;
+  height: 88px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-raised);
+}
+
 .accessPreviewForm {
   grid-template-columns: minmax(220px, 1fr) auto;
   align-items: end;
@@ -1699,6 +2178,23 @@ a.secondaryButton {
     minmax(200px, 1fr) minmax(140px, 0.8fr) minmax(140px, 0.8fr)
     auto;
   align-items: end;
+}
+
+.auditFilterPanel {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.auditFilterPanel .auditFilterForm {
+  min-height: 0;
+  grid-template-columns: 1fr;
+  align-items: stretch;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+}
+
+.auditFilterPanel .primaryButton {
+  justify-self: stretch;
 }
 
 .scopePickerGrid {
@@ -1728,77 +2224,6 @@ a.secondaryButton {
   align-items: end;
 }
 
-.orgStructureSectionPanel {
-  gap: 8px;
-}
-
-.orgStructureTabs {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.orgStructureTab {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 8px 10px;
-  align-items: flex-start;
-  padding: var(--hulee-space-block);
-  border: 1px solid var(--hulee-color-border);
-  border-radius: var(--hulee-radius-control);
-  background: var(--hulee-color-surface-raised);
-  color: inherit;
-  text-decoration: none;
-}
-
-.orgStructureTab .metricIcon {
-  grid-row: 1 / span 2;
-}
-
-.orgStructureTabBody {
-  display: grid;
-  min-width: 0;
-  gap: 4px;
-}
-
-.orgStructureTabTitle {
-  overflow-wrap: anywhere;
-  font-weight: 650;
-  line-height: 1.25;
-}
-
-.orgStructureTabDescription {
-  color: var(--hulee-color-text-muted);
-  font-size: 13px;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.orgStructureTabMeta {
-  display: flex;
-  flex-wrap: wrap;
-  grid-column: 2;
-  gap: 6px;
-}
-
-.orgStructureTab:hover,
-.orgStructureTab:focus-visible {
-  border-color: var(--hulee-color-brand-primary);
-  outline: none;
-  box-shadow: var(--hulee-shadow-focus);
-}
-
-.orgStructureTabActive {
-  border-color: var(--hulee-color-brand-primary);
-  background: var(--hulee-color-surface-muted);
-}
-
-.orgStructureTabActive .metricIcon {
-  background: var(--hulee-color-brand-primary);
-  color: var(--hulee-color-brand-foreground);
-}
-
 .roleDescriptionInput {
   min-height: 82px;
   resize: vertical;
@@ -1823,77 +2248,6 @@ a.secondaryButton {
 
 .employeeMembershipForm {
   align-content: start;
-}
-
-.employeeAccessSectionPanel {
-  gap: 8px;
-}
-
-.employeeAccessTabs {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.employeeAccessTab {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 8px 10px;
-  align-items: flex-start;
-  padding: var(--hulee-space-block);
-  border: 1px solid var(--hulee-color-border);
-  border-radius: var(--hulee-radius-control);
-  background: var(--hulee-color-surface-raised);
-  color: inherit;
-  text-decoration: none;
-}
-
-.employeeAccessTab .metricIcon {
-  grid-row: 1 / span 2;
-}
-
-.employeeAccessTabBody {
-  display: grid;
-  min-width: 0;
-  gap: 4px;
-}
-
-.employeeAccessTabTitle {
-  overflow-wrap: anywhere;
-  font-weight: 650;
-  line-height: 1.25;
-}
-
-.employeeAccessTabDescription {
-  color: var(--hulee-color-text-muted);
-  font-size: 13px;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.employeeAccessTabMeta {
-  display: flex;
-  flex-wrap: wrap;
-  grid-column: 2;
-  gap: 6px;
-}
-
-.employeeAccessTab:hover,
-.employeeAccessTab:focus-visible {
-  border-color: var(--hulee-color-brand-primary);
-  outline: none;
-  box-shadow: var(--hulee-shadow-focus);
-}
-
-.employeeAccessTabActive {
-  border-color: var(--hulee-color-brand-primary);
-  background: var(--hulee-color-surface-muted);
-}
-
-.employeeAccessTabActive .metricIcon {
-  background: var(--hulee-color-brand-primary);
-  color: var(--hulee-color-brand-foreground);
 }
 
 .membershipFieldset {
@@ -1983,6 +2337,59 @@ a.secondaryButton {
   gap: var(--hulee-space-block);
 }
 
+.brandThemeModeForm {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--hulee-space-block);
+}
+
+.brandModeSwitch {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: 999px;
+  background: var(--hulee-color-surface-raised);
+}
+
+.brandModeButton {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--hulee-color-text-muted);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.brandModeButton:hover,
+.brandModeButton:focus-visible {
+  color: var(--hulee-color-text-default);
+  outline: none;
+}
+
+.brandModeButton[aria-current="page"] {
+  border-color: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 34%,
+    var(--hulee-color-border)
+  );
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 12%,
+    var(--hulee-color-surface-default)
+  );
+  color: var(--hulee-color-brand-primary);
+}
+
 .brandPresetButton {
   color-scheme: var(--hulee-color-scheme);
   display: grid;
@@ -2037,6 +2444,53 @@ a.secondaryButton {
   gap: var(--hulee-space-block);
 }
 
+.brandLogoUploadGrid {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: var(--hulee-space-block);
+  align-items: center;
+}
+
+.brandLogoPreviewSurface {
+  display: grid;
+  width: 88px;
+  height: 56px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-raised);
+}
+
+.brandLogoPreviewImage {
+  display: block;
+  max-width: 72px;
+  max-height: 48px;
+  object-fit: contain;
+}
+
+.fileInput {
+  width: 100%;
+  min-height: 40px;
+  min-width: 0;
+  color: var(--hulee-color-text-muted);
+  font-size: 13px;
+}
+
+.fileInput::file-selector-button {
+  min-height: 36px;
+  margin-right: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-raised);
+  color: var(--hulee-color-text-default);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 650;
+}
+
 .colorInput {
   min-height: 42px;
   width: 100%;
@@ -2054,6 +2508,10 @@ a.secondaryButton {
 }
 
 .brandPreviewPanel {
+  display: grid;
+  gap: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--hulee-color-border);
   background: var(--hulee-color-surface-default);
   color: var(--hulee-color-text-default);
   color-scheme: var(--hulee-color-scheme);
@@ -2459,29 +2917,49 @@ button.managementRow:not(.adminNavLink):not(.integrationNavLink):focus-visible {
 
 .adminNavLink {
   position: relative;
-  padding: 10px 12px 10px 14px;
-  border: 0;
+  width: 100%;
+  max-width: 100%;
+  min-height: 56px;
+  flex: 0 0 56px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 5px 6px;
+  border: 1px solid transparent;
   background: transparent;
+  text-align: center;
 }
 
 .adminNavLink .metricIcon {
+  width: 28px;
+  height: 28px;
   background: transparent;
   color: var(--hulee-color-text-muted);
 }
 
 .adminNavLink::before {
   position: absolute;
-  top: 50%;
-  left: 0;
-  width: 4px;
-  height: 68%;
-  border-radius: 999px;
-  background: var(--hulee-color-brand-primary);
-  box-shadow: 10px 0 18px
-    color-mix(in srgb, var(--hulee-color-brand-primary) 26%, transparent);
+  inset: 0;
+  z-index: 0;
+  padding: 1px;
+  border-radius: inherit;
+  background: linear-gradient(
+    to bottom left,
+    color-mix(in srgb, var(--hulee-color-brand-primary) 42%, transparent) 0%,
+    color-mix(in srgb, var(--hulee-color-brand-primary) 18%, transparent) 42%,
+    transparent 100%
+  );
   content: "";
   opacity: 0;
-  transform: translateY(-50%);
+  pointer-events: none;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
 }
 
 .adminNavLink:hover,
@@ -2501,10 +2979,12 @@ button.managementRow:not(.adminNavLink):not(.integrationNavLink):focus-visible {
 }
 
 .adminNavLink[aria-current="page"] {
-  background: color-mix(
-    in srgb,
-    var(--hulee-color-brand-primary) 12%,
-    var(--hulee-color-surface-raised)
+  isolation: isolate;
+  background: linear-gradient(
+    to bottom left,
+    color-mix(in srgb, var(--hulee-color-brand-primary) 22%, transparent) 0%,
+    color-mix(in srgb, var(--hulee-color-brand-primary) 10%, transparent) 44%,
+    transparent 100%
   );
 }
 
@@ -2514,6 +2994,11 @@ button.managementRow:not(.adminNavLink):not(.integrationNavLink):focus-visible {
 
 .adminNavLink[aria-current="page"] .metricIcon {
   color: var(--hulee-color-brand-primary);
+}
+
+.adminNavLink > * {
+  position: relative;
+  z-index: 1;
 }
 
 .integrationListItem[aria-current="page"] {
@@ -2535,23 +3020,51 @@ button.managementRow:not(.adminNavLink):not(.integrationNavLink):focus-visible {
   line-height: 1.2;
 }
 
-.platformAdminGrid {
-  display: grid;
-  grid-template-columns: var(--admin-nav-width) minmax(0, 1fr);
-  gap: 20px;
-  align-items: start;
+.adminNavLink .listItemTitle {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  color: var(--hulee-color-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adminNavLink:hover .listItemTitle,
+.adminNavLink:focus-visible .listItemTitle,
+.adminNavLink[aria-current="page"] .listItemTitle {
+  color: var(--hulee-color-text-default);
 }
 
 .platformNavPanel {
   position: sticky;
-  top: 12px;
-  min-height: calc(100vh - 104px);
+  top: var(--hulee-space-block);
 }
 
 .platformNavGroups,
 .platformNavGroup {
   display: grid;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   gap: 8px;
+}
+
+.platformNavGroup .managementList {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.platformNavGroup > .detailLabel {
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 4px;
+  font-size: 9px;
 }
 
 .platformNavGroup + .platformNavGroup {
@@ -2902,12 +3415,7 @@ button.managementRow:not(.adminNavLink):not(.integrationNavLink):focus-visible {
   .adminTopBar {
     grid-template-columns: 1fr;
     align-items: flex-start;
-    padding: 16px;
-  }
-
-  .adminTopBrand {
-    width: 100%;
-    align-items: flex-start;
+    padding: 8px;
   }
 
   .adminTopActions {
@@ -2915,28 +3423,80 @@ button.managementRow:not(.adminNavLink):not(.integrationNavLink):focus-visible {
     justify-content: space-between;
   }
 
-  .adminTitleBlock {
-    padding-left: 0;
-    border-left: 0;
-  }
-
   .topNavMenuPanel {
     left: auto;
     right: 0;
   }
 
-  .adminContent {
-    padding: 8px;
+  .adminShellLayout {
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  .adminGrid,
-  .platformAdminGrid,
+  .adminShellMain {
+    min-height: auto;
+  }
+
+  .adminNavPanel {
+    position: static;
+    width: 100%;
+    height: auto;
+    min-height: 56px;
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 0;
+    padding: 0;
+  }
+
+  .adminRailLogoLink {
+    width: 64px;
+    flex-basis: 56px;
+  }
+
+  .adminRailMenu {
+    display: flex;
+    flex: 1 1 auto;
+    overflow: visible;
+    padding: 0;
+  }
+
+  .adminRailMenuList,
+  .platformNavGroups,
+  .platformNavGroup,
+  .platformNavGroup .managementList {
+    display: flex;
+    min-width: 0;
+    gap: 4px;
+  }
+
+  .platformNavGroup > .detailLabel {
+    display: none;
+  }
+
+  .platformNavGroup + .platformNavGroup {
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .adminNavLink {
+    width: 64px;
+    flex-basis: 56px;
+  }
+
+  .adminNavFooter {
+    width: auto;
+    margin-top: 0;
+    padding: 0;
+  }
+
+  .adminContent {
+    padding: 0;
+  }
+
   .adminIntegrationGrid,
-  .adminRolesGrid,
+  .adminSectionGrid,
   .platformChannelGrid,
   .adminOverviewGrid,
-  .employeeAccessTabs,
-  .orgStructureTabs,
   .managementRow.roleDefinitionRow,
   .managementRow.directGrantRow,
   .managementRow.accessAuditRow,
@@ -2950,6 +3510,8 @@ button.managementRow:not(.adminNavLink):not(.integrationNavLink):focus-visible {
   .directGrantForm,
   .employeeAccessAssignForm,
   .employeeAccessGrantForm,
+  .employeeProfileForm,
+  .employeeAvatarUploadGrid,
   .orgStructureCreateForm,
   .orgStructureInlineForm,
   .managementRow.orgStructureRow,
@@ -2969,15 +3531,9 @@ button.managementRow:not(.adminNavLink):not(.integrationNavLink):focus-visible {
     grid-template-columns: 1fr;
   }
 
-  .adminGrid > :not(.adminNavPanel),
-  .platformAdminGrid > .adminStack {
-    padding-left: 0;
-    border-left: 0;
-  }
-
   .adminNavPanel,
   .integrationCatalog,
-  .adminRolesNav,
+  .adminSectionNav,
   .platformNavPanel {
     position: static;
     max-height: none;
@@ -2986,17 +3542,17 @@ button.managementRow:not(.adminNavLink):not(.integrationNavLink):focus-visible {
   }
 
   .settingsPanel.adminNavPanel,
-  .settingsPanel.adminRolesNav,
+  .settingsPanel.adminSectionNav,
   .settingsPanel.platformNavPanel {
     min-height: auto;
   }
 
-  .adminRolesNav .integrationList,
+  .adminSectionNav .integrationList,
   .integrationCatalog .integrationList {
     overflow: visible;
   }
 
-  .adminRolesContent {
+  .adminSectionContent {
     min-height: auto;
     max-height: none;
     overflow: visible;

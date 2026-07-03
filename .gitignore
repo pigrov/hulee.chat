@@ -9,6 +9,7 @@ env.local
 !.env.example
 *.log
 *.tsbuildinfo
+.hulee/
 
 # Local internal planning documents.
 docs/internal/

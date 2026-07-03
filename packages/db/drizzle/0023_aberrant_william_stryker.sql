@@ -1,0 +1,1 @@
+ALTER TABLE "employees" ADD COLUMN "profile" jsonb DEFAULT '{}'::jsonb NOT NULL;

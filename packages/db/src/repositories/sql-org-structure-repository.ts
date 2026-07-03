@@ -297,7 +297,7 @@ export function buildUpsertOrgUnitSql(input: UpsertOrgUnitInput): SQL {
              ${input.name} as name,
              ${input.kind} as kind,
              ${status} as status,
-             ${input.updatedAt} as updated_at
+             ${input.updatedAt}::timestamptz as updated_at
       where ${parentOrgUnitId}::text is null
          or exists (select 1 from parent_row)
     )
@@ -393,7 +393,7 @@ export function buildUpsertWorkQueueSql(input: UpsertWorkQueueInput): SQL {
              ${owningOrgUnitId} as owning_org_unit_id,
              ${status} as status,
              ${JSON.stringify(routingConfig)}::jsonb as routing_config,
-             ${input.updatedAt} as updated_at
+             ${input.updatedAt}::timestamptz as updated_at
       where ${owningOrgUnitId}::text is null
          or exists (select 1 from owning_org_unit)
     )

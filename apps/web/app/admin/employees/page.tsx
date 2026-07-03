@@ -1,5 +1,13 @@
 import { createTranslator, type I18nMessageKey } from "@hulee/i18n";
-import { Ban, KeyRound, Mail, RotateCw, UserPlus, XCircle } from "lucide-react";
+import {
+  Ban,
+  KeyRound,
+  Mail,
+  RotateCw,
+  UserPlus,
+  UsersRound,
+  XCircle
+} from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
@@ -9,6 +17,10 @@ import {
 } from "@hulee/db";
 
 import { AccessDeniedPage } from "../../../src/access-denied";
+import {
+  AdminSectionFrame,
+  type AdminSectionFrameItem
+} from "../../../src/admin-section-frame";
 import {
   deactivateEmployeeAction,
   inviteEmployeeAction,
@@ -33,6 +45,10 @@ import { buildActionStatusToast } from "../../../src/toast-messages";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+const employeeAdminSectionIds = ["directory", "invite", "invitations"] as const;
+
+type EmployeeAdminSectionId = (typeof employeeAdminSectionIds)[number];
+
 export default async function EmployeesAdminPage({
   searchParams
 }: {
@@ -40,6 +56,7 @@ export default async function EmployeesAdminPage({
     actionStatus?: string;
     inviteStatus?: string;
     inviteToken?: string;
+    section?: string;
   }>;
 }): Promise<ReactNode> {
   const access = await resolveCurrentWebAccessSession();
@@ -81,6 +98,9 @@ export default async function EmployeesAdminPage({
     ]);
   const { t, locale } = createTranslator(model.tenant.locale);
   const canManageRoles = hasEffectivePermission(accessSnapshot, "roles.manage");
+  const selectedSection = resolveEmployeeAdminSection(
+    resolvedSearchParams?.section
+  );
   const inviteToken = resolvedSearchParams?.inviteToken;
   const manualInviteUrl = inviteToken
     ? new URL(`/invite/${inviteToken}`, resolvePublicBaseUrl()).href
@@ -106,6 +126,27 @@ export default async function EmployeesAdminPage({
   const toasts = [inviteStatusToast, actionStatusToast].filter(
     (toast) => toast !== undefined
   );
+  const employeeAdminSections: readonly AdminSectionFrameItem<EmployeeAdminSectionId>[] =
+    [
+      {
+        id: "directory",
+        title: t("admin.employees.activeEmployees"),
+        href: employeeAdminSectionHref("directory"),
+        icon: <UsersRound size={18} aria-hidden="true" />
+      },
+      {
+        id: "invite",
+        title: t("admin.employees.inviteEmployee"),
+        href: employeeAdminSectionHref("invite"),
+        icon: <UserPlus size={18} aria-hidden="true" />
+      },
+      {
+        id: "invitations",
+        title: t("admin.employees.recentInvites"),
+        href: employeeAdminSectionHref("invitations"),
+        icon: <Mail size={18} aria-hidden="true" />
+      }
+    ];
 
   return (
     <TenantAdminShell
@@ -138,10 +179,16 @@ export default async function EmployeesAdminPage({
       titleId="employees-title"
       toasts={toasts}
     >
-      <div className="adminStack">
+      <AdminSectionFrame
+        ariaLabel={t("admin.employees")}
+        navTitle={t("admin.employees")}
+        sections={employeeAdminSections}
+        selectedSection={selectedSection}
+      >
         <section
           className="settingsPanel"
           aria-labelledby="employee-invite-title"
+          hidden={selectedSection !== "invite"}
         >
           <div className="sectionHeader">
             <div>
@@ -157,6 +204,7 @@ export default async function EmployeesAdminPage({
           </div>
 
           <form className="settingsForm" action={inviteEmployeeAction}>
+            <input name="section" type="hidden" value="invite" />
             <label className="fieldStack">
               <span className="detailLabel">{t("auth.email")}</span>
               <input
@@ -188,6 +236,7 @@ export default async function EmployeesAdminPage({
         <section
           className="settingsPanel"
           aria-labelledby="employees-list-title"
+          hidden={selectedSection !== "directory"}
         >
           <div className="sectionHeader">
             <div>
@@ -232,6 +281,7 @@ export default async function EmployeesAdminPage({
                         className="inlineForm"
                         action={deactivateEmployeeAction}
                       >
+                        <input name="section" type="hidden" value="directory" />
                         <input
                           name="employeeId"
                           type="hidden"
@@ -253,6 +303,7 @@ export default async function EmployeesAdminPage({
         <section
           className="settingsPanel"
           aria-labelledby="employee-invitations-title"
+          hidden={selectedSection !== "invitations"}
         >
           <div className="sectionHeader">
             <div>
@@ -288,6 +339,11 @@ export default async function EmployeesAdminPage({
                         action={resendEmployeeInviteAction}
                       >
                         <input
+                          name="section"
+                          type="hidden"
+                          value="invitations"
+                        />
+                        <input
                           name="invitationId"
                           type="hidden"
                           value={invitation.id}
@@ -303,6 +359,11 @@ export default async function EmployeesAdminPage({
                         className="inlineForm"
                         action={revokeEmployeeInviteAction}
                       >
+                        <input
+                          name="section"
+                          type="hidden"
+                          value="invitations"
+                        />
                         <input
                           name="invitationId"
                           type="hidden"
@@ -320,9 +381,25 @@ export default async function EmployeesAdminPage({
             )}
           </div>
         </section>
-      </div>
+      </AdminSectionFrame>
     </TenantAdminShell>
   );
+}
+
+function employeeAdminSectionHref(section: EmployeeAdminSectionId): string {
+  return `/admin/employees?section=${encodeURIComponent(section)}`;
+}
+
+function resolveEmployeeAdminSection(
+  value: string | undefined
+): EmployeeAdminSectionId {
+  return isEmployeeAdminSectionId(value) ? value : "directory";
+}
+
+function isEmployeeAdminSectionId(
+  value: string | undefined
+): value is EmployeeAdminSectionId {
+  return employeeAdminSectionIds.some((section) => section === value);
 }
 
 function actionStatusKey(status: string): I18nMessageKey {

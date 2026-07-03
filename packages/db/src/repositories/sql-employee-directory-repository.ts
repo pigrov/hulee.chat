@@ -26,12 +26,27 @@ export type TenantEmployeeRecord = {
   accountId: string | null;
   email: string;
   displayName: string;
+  phoneNumber: string | null;
+  avatarUrl: string | null;
+  avatar: TenantEmployeeAvatarAsset | null;
   systemRoleTemplateIds: readonly SystemRoleTemplateId[];
   teamIds: readonly string[];
   orgUnitIds: readonly string[];
   queueIds: readonly string[];
   createdAt: Date;
   deactivatedAt: Date | null;
+};
+
+export type TenantEmployeeAvatarAsset = {
+  storageKey: string;
+  mediaType: string;
+  sizeBytes: number;
+  version: string;
+};
+
+export type TenantEmployeeProfile = {
+  phoneNumber: string | null;
+  avatar: TenantEmployeeAvatarAsset | null;
 };
 
 export type EmployeeInvitationPreview = {
@@ -81,6 +96,15 @@ export type DeactivateEmployeePersistenceInput = {
   events: readonly PlatformEvent[];
 };
 
+export type UpdateEmployeeProfilePersistenceInput = {
+  tenantId: TenantId;
+  employeeId: EmployeeId;
+  displayName: string;
+  profile: TenantEmployeeProfile;
+  updatedAt: Date;
+  events: readonly PlatformEvent[];
+};
+
 export type RevokeEmployeeInvitationPersistenceInput = {
   tenantId: TenantId;
   invitationId: string;
@@ -116,6 +140,9 @@ export type EmployeeDirectoryRepository = {
   acceptInvitation(
     input: AcceptEmployeeInvitationPersistenceInput
   ): Promise<TenantAuthAccount>;
+  updateEmployeeProfile(
+    input: UpdateEmployeeProfilePersistenceInput
+  ): Promise<void>;
   deactivateEmployee(input: DeactivateEmployeePersistenceInput): Promise<void>;
   revokeInvitation(
     input: RevokeEmployeeInvitationPersistenceInput
@@ -131,6 +158,7 @@ type EmployeeRow = {
   account_id: string | null;
   email: string;
   display_name: string;
+  profile: unknown;
   system_role_template_ids: unknown;
   team_ids: unknown;
   org_unit_ids: unknown;
@@ -249,6 +277,16 @@ export function createSqlEmployeeDirectoryRepository(
       }
     },
 
+    async updateEmployeeProfile(input) {
+      const result = await rawExecutor.execute<{ employee_id: string }>(
+        buildUpdateEmployeeProfileSql(input)
+      );
+
+      if (result.rows[0] === undefined) {
+        throw new CoreError("validation.failed");
+      }
+    },
+
     async revokeInvitation(input) {
       const result = await rawExecutor.execute<{ invitation_id: string }>(
         buildRevokeEmployeeInvitationSql(input)
@@ -280,6 +318,7 @@ export function buildListTenantEmployeesSql(
            employees.account_id,
            employees.email,
            employees.display_name,
+           employees.profile,
            employees.created_at,
            employees.deactivated_at,
            '[]'::json as system_role_template_ids,
@@ -349,6 +388,7 @@ export function buildFindTenantEmployeeSql(
            employees.account_id,
            employees.email,
            employees.display_name,
+           employees.profile,
            employees.created_at,
            employees.deactivated_at,
            '[]'::json as system_role_template_ids,
@@ -840,6 +880,90 @@ export function buildDeactivateEmployeeSql(
   `;
 }
 
+export function buildUpdateEmployeeProfileSql(
+  input: UpdateEmployeeProfilePersistenceInput
+): SQL {
+  return sql`
+    with updated_employee as (
+      update employees
+      set display_name = ${input.displayName},
+          profile = ${serializeEmployeeProfile(input.profile)}::jsonb,
+          updated_at = ${input.updatedAt}
+      where tenant_id = ${input.tenantId}
+        and id = ${input.employeeId}
+        and deactivated_at is null
+      returning tenant_id,
+                id
+    ),
+    event_rows as (
+      select *
+      from jsonb_to_recordset(${serializeEventRows(input.events)}::jsonb)
+        as event_row(
+          id text,
+          tenant_id text,
+          type text,
+          version text,
+          occurred_at timestamptz,
+          idempotency_key text,
+          payload jsonb
+        )
+    ),
+    inserted_events as (
+      insert into event_store (
+        id,
+        tenant_id,
+        type,
+        version,
+        occurred_at,
+        idempotency_key,
+        payload,
+        created_at,
+        updated_at
+      )
+      select event_rows.id,
+             event_rows.tenant_id,
+             event_rows.type,
+             event_rows.version,
+             event_rows.occurred_at,
+             event_rows.idempotency_key,
+             event_rows.payload,
+             event_rows.occurred_at,
+             event_rows.occurred_at
+      from event_rows
+      where exists (select 1 from updated_employee)
+      returning id,
+                tenant_id,
+                payload,
+                occurred_at
+    ),
+    inserted_outbox as (
+      insert into outbox (
+        id,
+        tenant_id,
+        event_id,
+        status,
+        attempts,
+        payload,
+        created_at,
+        updated_at
+      )
+      select concat('outbox:', id),
+             tenant_id,
+             id,
+             'pending',
+             0,
+             payload,
+             occurred_at,
+             occurred_at
+      from inserted_events
+      returning id
+    )
+    select id as employee_id
+    from updated_employee
+    limit 1
+  `;
+}
+
 export function buildRevokeEmployeeInvitationSql(
   input: RevokeEmployeeInvitationPersistenceInput
 ): SQL {
@@ -1030,12 +1154,20 @@ function serializeEventRows(events: readonly PlatformEvent[]): string {
 }
 
 function mapEmployeeRow(row: EmployeeRow): TenantEmployeeRecord {
+  const profile = parseEmployeeProfile(row.profile);
+
   return {
     tenantId: row.tenant_id as TenantId,
     employeeId: row.employee_id as EmployeeId,
     accountId: row.account_id,
     email: row.email,
     displayName: row.display_name,
+    phoneNumber: profile.phoneNumber,
+    avatarUrl:
+      profile.avatar === null
+        ? null
+        : employeeAvatarUrl(row.employee_id as EmployeeId, profile.avatar),
+    avatar: profile.avatar,
     systemRoleTemplateIds: parseSystemRoleTemplateIds(
       row.system_role_template_ids
     ),
@@ -1046,6 +1178,72 @@ function mapEmployeeRow(row: EmployeeRow): TenantEmployeeRecord {
     deactivatedAt:
       row.deactivated_at === null ? null : new Date(row.deactivated_at)
   };
+}
+
+function parseEmployeeProfile(value: unknown): TenantEmployeeProfile {
+  const profile = recordFromUnknown(value);
+  const phoneNumber =
+    typeof profile.phoneNumber === "string" &&
+    profile.phoneNumber.trim().length > 0
+      ? profile.phoneNumber.trim()
+      : null;
+  const avatar = parseEmployeeAvatarAsset(profile.avatar);
+
+  return {
+    phoneNumber,
+    avatar
+  };
+}
+
+function parseEmployeeAvatarAsset(
+  value: unknown
+): TenantEmployeeAvatarAsset | null {
+  const avatar = recordFromUnknown(value);
+  const storageKey =
+    typeof avatar.storageKey === "string" ? avatar.storageKey.trim() : "";
+  const mediaType =
+    typeof avatar.mediaType === "string" ? avatar.mediaType.trim() : "";
+  const version =
+    typeof avatar.version === "string" ? avatar.version.trim() : "";
+  const sizeBytes =
+    typeof avatar.sizeBytes === "number" && Number.isFinite(avatar.sizeBytes)
+      ? avatar.sizeBytes
+      : undefined;
+
+  if (
+    storageKey.length === 0 ||
+    version.length === 0 ||
+    sizeBytes === undefined ||
+    sizeBytes <= 0 ||
+    (mediaType !== "image/png" &&
+      mediaType !== "image/jpeg" &&
+      mediaType !== "image/webp")
+  ) {
+    return null;
+  }
+
+  return {
+    storageKey,
+    mediaType,
+    sizeBytes,
+    version
+  };
+}
+
+function employeeAvatarUrl(
+  employeeId: EmployeeId,
+  avatar: TenantEmployeeAvatarAsset
+): string {
+  return `/employee-assets/${encodeURIComponent(
+    employeeId
+  )}/avatar?v=${encodeURIComponent(avatar.version)}`;
+}
+
+function serializeEmployeeProfile(profile: TenantEmployeeProfile): string {
+  return JSON.stringify({
+    phoneNumber: profile.phoneNumber,
+    ...(profile.avatar === null ? {} : { avatar: profile.avatar })
+  });
 }
 
 function mapInvitationPreviewRow(
@@ -1126,4 +1324,10 @@ function parseStringIds(value: unknown): readonly string[] {
   return ids.filter((id): id is string => {
     return typeof id === "string" && id.trim().length > 0;
   });
+}
+
+function recordFromUnknown(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }

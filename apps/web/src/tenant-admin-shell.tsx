@@ -1,7 +1,5 @@
 import type { createTranslator } from "@hulee/i18n";
 import {
-  ChevronsLeft,
-  ChevronsRight,
   Inbox,
   KeyRound,
   LayoutDashboard,
@@ -24,7 +22,8 @@ import {
   type AdminTopBarMenuGroup,
   type AdminTopBarMenuItem
 } from "./admin-top-bar";
-import { AppFrame, SlotMount } from "./app-chrome";
+import { AppFrame, BrandRailLogo, SlotMount } from "./app-chrome";
+import { brandProfileToThemeModeCssProperties } from "./brand-style";
 import { resendEmailVerificationAction } from "./auth-actions";
 import {
   getVisibleTenantAdminSections,
@@ -33,6 +32,7 @@ import {
   type TenantAdminSectionId
 } from "./tenant-admin-nav";
 import type { WebEffectiveAccessSnapshot } from "./rbac-effective-access";
+import { AppThemeToggle } from "./theme-toggle";
 import type { ToastMessage } from "./toast";
 
 type Translator = ReturnType<typeof createTranslator>["t"];
@@ -40,6 +40,11 @@ type Translator = ReturnType<typeof createTranslator>["t"];
 type BrandProfileView = {
   productName: string;
   shortProductName?: string;
+  assets?: {
+    logoLight?: string;
+    logoDark?: string;
+    mark?: string;
+  };
   themeTokens: Record<string, string>;
   links?: Record<string, string>;
 };
@@ -87,6 +92,10 @@ export function TenantAdminShell({
     navigationAccess,
     t
   });
+  const productName = t("app.name", {
+    productName: brand.productName
+  });
+  const themeStyles = brandProfileToThemeModeCssProperties(brand);
 
   return (
     <AppFrame
@@ -99,30 +108,19 @@ export function TenantAdminShell({
       toasts={toasts}
     >
       <section className="adminWorkspace" aria-labelledby={titleId}>
-        <input
-          aria-label={t("navigation.collapseMenu")}
-          className="adminNavToggleInput"
-          id="tenant-admin-nav-toggle"
-          type="checkbox"
-        />
-        <AdminTopBar
-          brand={brand}
-          eyebrow={tenantDisplayName}
-          menuGroups={menuGroups}
-          roleLabel={t("admin.scope.tenant")}
-          t={t}
-          title={title}
-          titleId={titleId}
-        />
-
-        <div className="adminContent">
-          <div className="adminGrid">
-            <aside
-              className="settingsPanel adminNavPanel"
-              aria-label={t("admin.navigation")}
+        <div className="adminShellLayout">
+          <aside className="adminNavPanel" aria-label={t("admin.navigation")}>
+            <Link
+              className="adminRailLogoLink"
+              href="/admin"
+              aria-label={productName}
+              title={productName}
             >
+              <BrandRailLogo brand={brand} productName={productName} />
+            </Link>
+            <div className="adminRailMenu">
               <nav
-                className="managementList"
+                className="managementList adminRailMenuList"
                 aria-label={t("admin.navigation")}
               >
                 {visibleSections.map((section) => (
@@ -134,7 +132,31 @@ export function TenantAdminShell({
                   />
                 ))}
               </nav>
+            </div>
 
+            <div className="adminNavFooter">
+              <AppThemeToggle
+                darkLabel={t("theme.dark")}
+                lightLabel={t("theme.light")}
+                themeStyles={themeStyles}
+                toggleLabel={t("theme.toggle")}
+              />
+            </div>
+          </aside>
+
+          <div className="adminShellMain">
+            <AdminTopBar
+              brand={brand}
+              eyebrow={tenantDisplayName}
+              icon={<TenantAdminSectionIcon sectionId={current} />}
+              menuGroups={menuGroups}
+              roleLabel={t("admin.scope.tenant")}
+              t={t}
+              title={title}
+              titleId={titleId}
+            />
+
+            <div className="adminContent">
               {shouldRequireEmailVerification ? (
                 <form
                   className="inlineNoticeForm"
@@ -152,28 +174,8 @@ export function TenantAdminShell({
 
               {sidebarContent}
               <SlotMount slot="admin.section" />
-
-              <label
-                className="adminNavCollapseButton"
-                htmlFor="tenant-admin-nav-toggle"
-              >
-                <ChevronsLeft
-                  className="adminNavCollapseExpandedIcon"
-                  size={16}
-                  aria-hidden="true"
-                />
-                <ChevronsRight
-                  className="adminNavCollapseCollapsedIcon"
-                  size={16}
-                  aria-hidden="true"
-                />
-                <span className="adminNavCollapseExpandedText">
-                  {t("navigation.collapseMenu")}
-                </span>
-              </label>
-            </aside>
-
-            {children}
+              {children}
+            </div>
           </div>
         </div>
       </section>
@@ -236,7 +238,9 @@ function TenantAdminNavLink({
       <span className="metricIcon">
         <TenantAdminSectionIcon sectionId={section.id} />
       </span>
-      <span className="listItemTitle">{t(section.titleKey)}</span>
+      <span className="listItemTitle">
+        {t(section.navTitleKey ?? section.titleKey)}
+      </span>
     </Link>
   );
 }
@@ -248,18 +252,18 @@ function TenantAdminSectionIcon({
 }): ReactNode {
   switch (sectionId) {
     case "employees":
-      return <Users size={18} aria-hidden="true" />;
+      return <Users size={24} strokeWidth={1.2} aria-hidden="true" />;
     case "orgStructure":
-      return <Network size={18} aria-hidden="true" />;
+      return <Network size={24} strokeWidth={1.2} aria-hidden="true" />;
     case "roles":
-      return <KeyRound size={18} aria-hidden="true" />;
+      return <KeyRound size={24} strokeWidth={1.2} aria-hidden="true" />;
     case "audit":
-      return <ScrollText size={18} aria-hidden="true" />;
+      return <ScrollText size={24} strokeWidth={1.2} aria-hidden="true" />;
     case "integrations":
-      return <Plug size={18} aria-hidden="true" />;
+      return <Plug size={24} strokeWidth={1.2} aria-hidden="true" />;
     case "branding":
-      return <Palette size={18} aria-hidden="true" />;
+      return <Palette size={24} strokeWidth={1.2} aria-hidden="true" />;
     default:
-      return <LayoutDashboard size={18} aria-hidden="true" />;
+      return <LayoutDashboard size={24} strokeWidth={1.2} aria-hidden="true" />;
   }
 }

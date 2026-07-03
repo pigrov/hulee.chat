@@ -82,6 +82,7 @@ describe("SQL org structure repository", () => {
     const queueQuery = renderQuery(executor.queries[2]);
 
     expect(orgUnitQuery.sql).toContain("insert into org_units");
+    expect(orgUnitQuery.sql).toContain("::timestamptz as updated_at");
     expect(orgUnitQuery.sql).toContain("where org_units.tenant_id");
     expect(orgUnitQuery.params).toContain(tenantId);
     expect(teamQuery.sql).toContain("insert into teams");
@@ -91,6 +92,7 @@ describe("SQL org structure repository", () => {
     );
     expect(queueQuery.sql).toContain("insert into work_queues");
     expect(queueQuery.sql).toContain("owning_org_unit");
+    expect(queueQuery.sql).toContain("::timestamptz as updated_at");
     expect(queueQuery.sql).toContain("where work_queues.tenant_id");
     expect(queueQuery.params).toEqual(
       expect.arrayContaining([tenantId, "queue-sales", "org-sales"])

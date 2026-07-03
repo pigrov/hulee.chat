@@ -22,6 +22,10 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AccessDeniedPage } from "../../../src/access-denied";
+import {
+  AdminSectionFrame,
+  type AdminSectionFrameItem
+} from "../../../src/admin-section-frame";
 import { loadTenantAdminViewModel } from "../../../src/admin-view-model";
 import {
   isOrgStructureSectionId,
@@ -31,7 +35,6 @@ import {
   workQueueKindKey
 } from "../../../src/org-structure-labels";
 import {
-  setOrgUnitStatusAction,
   setWorkQueueStatusAction,
   upsertOrgUnitAction,
   upsertTeamAction,
@@ -48,19 +51,22 @@ import {
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
 import { navigationAccessFromTenantAdminAccess } from "../../../src/tenant-admin-nav";
 import { buildActionStatusToast } from "../../../src/toast-messages";
+import { OrgUnitTree } from "../../../src/org-structure-tree";
+import {
+  PersistentHelpDisclosure,
+  type PersistentHelpDisclosureContent,
+  type PersistentHelpDisclosureLabels
+} from "../../../src/persistent-help-disclosure";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 type Translator = ReturnType<typeof createTranslator>["t"];
 
-type OrgStructureSection = {
-  readonly id: OrgStructureSectionId;
-  readonly titleKey: I18nMessageKey;
-  readonly descriptionKey: I18nMessageKey;
-  readonly count: number;
-  readonly activeCount: number;
-  readonly icon: ReactNode;
+type OrgUnitTreeRow = {
+  readonly orgUnit: OrgUnitRecord;
+  readonly depth: number;
+  readonly childCount: number;
 };
 
 export default async function OrgStructureAdminPage({
@@ -111,12 +117,7 @@ export default async function OrgStructureAdminPage({
       searchParams
     ]);
   const { t } = createTranslator(model.tenant.locale);
-  const activeOrgUnits = orgUnits.filter(
-    (orgUnit) => orgUnit.status === "active"
-  );
-  const activeWorkQueues = workQueues.filter(
-    (workQueue) => workQueue.status === "active"
-  );
+  const orgStructureHelp = createOrgStructureHelp(t);
   const selectedSection = resolveOrgStructureSection(
     resolvedSearchParams?.section
   );
@@ -131,29 +132,23 @@ export default async function OrgStructureAdminPage({
         t
       })
     : undefined;
-  const sections: readonly OrgStructureSection[] = [
+  const sections: readonly AdminSectionFrameItem<OrgStructureSectionId>[] = [
     {
       id: "org_units",
-      titleKey: "admin.orgStructure.orgUnits",
-      descriptionKey: "admin.orgStructure.orgUnits.description",
-      count: orgUnits.length,
-      activeCount: activeOrgUnits.length,
+      title: t("admin.orgStructure.orgUnits"),
+      href: orgStructureSectionHref("org_units"),
       icon: <Building2 size={18} aria-hidden="true" />
     },
     {
       id: "teams",
-      titleKey: "admin.orgStructure.teams",
-      descriptionKey: "admin.orgStructure.teams.description",
-      count: teams.length,
-      activeCount: teams.length,
+      title: t("admin.orgStructure.teams"),
+      href: orgStructureSectionHref("teams"),
       icon: <UsersRound size={18} aria-hidden="true" />
     },
     {
       id: "work_queues",
-      titleKey: "admin.orgStructure.workQueues",
-      descriptionKey: "admin.orgStructure.workQueues.description",
-      count: workQueues.length,
-      activeCount: activeWorkQueues.length,
+      title: t("admin.orgStructure.workQueues"),
+      href: orgStructureSectionHref("work_queues"),
       icon: <ListChecks size={18} aria-hidden="true" />
     }
   ];
@@ -170,17 +165,16 @@ export default async function OrgStructureAdminPage({
       titleId="org-structure-title"
       toasts={orgStructureStatusToast ? [orgStructureStatusToast] : []}
     >
-      <div className="adminStack">
-        <OrgStructureSectionNavigation
-          sections={sections}
-          selectedSection={selectedSection}
-          t={t}
-        />
-
+      <AdminSectionFrame
+        ariaLabel={t("admin.orgStructure.sections")}
+        navTitle={t("admin.orgStructure")}
+        sections={sections}
+        selectedSection={selectedSection}
+      >
         {selectedSection === "org_units" ? (
           <>
             <section
-              className="settingsPanel"
+              className="settingsPanel helpPanel"
               aria-labelledby="org-unit-create-title"
             >
               <div className="sectionHeader">
@@ -193,8 +187,13 @@ export default async function OrgStructureAdminPage({
                     {t("admin.orgStructure.createOrgUnit.description")}
                   </p>
                 </div>
-                <span className="badge">{activeOrgUnits.length}</span>
               </div>
+              <PersistentHelpDisclosure
+                content={orgStructureHelp.createOrgUnit}
+                id="org-unit-create-help"
+                labels={orgStructureHelp.labels}
+                storageKey="hulee:admin:org-structure:create-org-unit:help"
+              />
 
               <form
                 className="settingsForm orgStructureCreateForm"
@@ -212,7 +211,7 @@ export default async function OrgStructureAdminPage({
             </section>
 
             <section
-              className="settingsPanel"
+              className="settingsPanel helpPanel"
               aria-labelledby="org-units-title"
             >
               <div className="sectionHeader">
@@ -225,25 +224,45 @@ export default async function OrgStructureAdminPage({
                     {t("admin.orgStructure.orgUnits.description")}
                   </p>
                 </div>
-                <span className="badge">{orgUnits.length}</span>
               </div>
+              <PersistentHelpDisclosure
+                content={orgStructureHelp.orgUnitsList}
+                id="org-units-help"
+                labels={orgStructureHelp.labels}
+                storageKey="hulee:admin:org-structure:org-units-list:help"
+              />
 
-              <div className="managementList">
-                {orgUnits.length === 0 ? (
-                  <p className="metaText">
-                    {t("admin.orgStructure.noOrgUnits")}
-                  </p>
-                ) : (
-                  orgUnits.map((orgUnit) => (
-                    <OrgUnitRow
-                      key={orgUnit.id}
-                      orgUnit={orgUnit}
-                      orgUnits={orgUnits}
-                      t={t}
-                    />
-                  ))
-                )}
-              </div>
+              <OrgUnitTree
+                kindOptions={orgUnitKinds.map((kind) => ({
+                  id: kind,
+                  label: t(orgUnitKindKey(kind))
+                }))}
+                labels={{
+                  activeStatus: t("admin.orgStructure.status.active"),
+                  archive: t("admin.orgStructure.archive"),
+                  archivedStatus: t("admin.orgStructure.status.archived"),
+                  childCountTemplate: t("admin.orgStructure.childCount", {
+                    count: "{count}"
+                  }),
+                  collapse: t("admin.orgStructure.collapse"),
+                  dragHandle: t("admin.orgStructure.dragHandle"),
+                  dropOnRoot: t("admin.orgStructure.dropOnRoot"),
+                  expand: t("admin.orgStructure.expand"),
+                  kind: t("admin.orgStructure.kind"),
+                  moveFailed: t("admin.orgStructure.moveFailed"),
+                  moving: t("admin.orgStructure.moving"),
+                  name: t("admin.orgStructure.name"),
+                  noOrgUnits: t("admin.orgStructure.noOrgUnits"),
+                  noParent: t("admin.orgStructure.noParent"),
+                  parentOrgUnit: t("admin.orgStructure.parentOrgUnit"),
+                  restore: t("admin.orgStructure.restore"),
+                  root: t("admin.orgStructure.root"),
+                  rootDescription: t("admin.orgStructure.root.description"),
+                  save: t("common.save")
+                }}
+                locale={model.tenant.locale}
+                orgUnits={orgUnits}
+              />
             </section>
           </>
         ) : null}
@@ -251,7 +270,7 @@ export default async function OrgStructureAdminPage({
         {selectedSection === "teams" ? (
           <>
             <section
-              className="settingsPanel"
+              className="settingsPanel helpPanel"
               aria-labelledby="team-create-title"
             >
               <div className="sectionHeader">
@@ -264,8 +283,13 @@ export default async function OrgStructureAdminPage({
                     {t("admin.orgStructure.createTeam.description")}
                   </p>
                 </div>
-                <span className="badge">{teams.length}</span>
               </div>
+              <PersistentHelpDisclosure
+                content={orgStructureHelp.createTeam}
+                id="team-create-help"
+                labels={orgStructureHelp.labels}
+                storageKey="hulee:admin:org-structure:create-team:help"
+              />
 
               <form
                 className="settingsForm orgStructureCreateForm"
@@ -280,7 +304,10 @@ export default async function OrgStructureAdminPage({
               </form>
             </section>
 
-            <section className="settingsPanel" aria-labelledby="teams-title">
+            <section
+              className="settingsPanel helpPanel"
+              aria-labelledby="teams-title"
+            >
               <div className="sectionHeader">
                 <div>
                   <p className="eyebrow">{t("admin.directory")}</p>
@@ -291,8 +318,13 @@ export default async function OrgStructureAdminPage({
                     {t("admin.orgStructure.teams.description")}
                   </p>
                 </div>
-                <span className="badge">{teams.length}</span>
               </div>
+              <PersistentHelpDisclosure
+                content={orgStructureHelp.teamsList}
+                id="teams-help"
+                labels={orgStructureHelp.labels}
+                storageKey="hulee:admin:org-structure:teams-list:help"
+              />
 
               <div className="managementList">
                 {teams.length === 0 ? (
@@ -310,7 +342,7 @@ export default async function OrgStructureAdminPage({
         {selectedSection === "work_queues" ? (
           <>
             <section
-              className="settingsPanel"
+              className="settingsPanel helpPanel"
               aria-labelledby="work-queue-create-title"
             >
               <div className="sectionHeader">
@@ -325,8 +357,13 @@ export default async function OrgStructureAdminPage({
                     {t("admin.orgStructure.createWorkQueue.description")}
                   </p>
                 </div>
-                <span className="badge">{activeWorkQueues.length}</span>
               </div>
+              <PersistentHelpDisclosure
+                content={orgStructureHelp.createWorkQueue}
+                id="work-queue-create-help"
+                labels={orgStructureHelp.labels}
+                storageKey="hulee:admin:org-structure:create-work-queue:help"
+              />
 
               <form
                 className="settingsForm orgStructureCreateForm"
@@ -344,7 +381,7 @@ export default async function OrgStructureAdminPage({
             </section>
 
             <section
-              className="settingsPanel"
+              className="settingsPanel helpPanel"
               aria-labelledby="work-queues-title"
             >
               <div className="sectionHeader">
@@ -357,8 +394,13 @@ export default async function OrgStructureAdminPage({
                     {t("admin.orgStructure.workQueues.description")}
                   </p>
                 </div>
-                <span className="badge">{workQueues.length}</span>
               </div>
+              <PersistentHelpDisclosure
+                content={orgStructureHelp.workQueuesList}
+                id="work-queues-help"
+                labels={orgStructureHelp.labels}
+                storageKey="hulee:admin:org-structure:work-queues-list:help"
+              />
 
               <div className="managementList">
                 {workQueues.length === 0 ? (
@@ -379,77 +421,8 @@ export default async function OrgStructureAdminPage({
             </section>
           </>
         ) : null}
-      </div>
+      </AdminSectionFrame>
     </TenantAdminShell>
-  );
-}
-
-function OrgStructureSectionNavigation({
-  sections,
-  selectedSection,
-  t
-}: {
-  readonly sections: readonly OrgStructureSection[];
-  readonly selectedSection: OrgStructureSectionId;
-  readonly t: Translator;
-}): ReactNode {
-  return (
-    <section
-      className="settingsPanel orgStructureSectionPanel"
-      aria-labelledby="org-structure-sections-title"
-    >
-      <div className="sectionHeader">
-        <div>
-          <p className="eyebrow">{t("admin.orgStructure")}</p>
-          <h2 className="sectionTitle" id="org-structure-sections-title">
-            {t("admin.orgStructure.workspace")}
-          </h2>
-          <p className="metaText">
-            {t("admin.orgStructure.workspace.description")}
-          </p>
-        </div>
-      </div>
-
-      <nav
-        className="orgStructureTabs"
-        aria-label={t("admin.orgStructure.sections")}
-      >
-        {sections.map((section) => (
-          <a
-            key={section.id}
-            className={
-              section.id === selectedSection
-                ? "orgStructureTab orgStructureTabActive"
-                : "orgStructureTab"
-            }
-            href={orgStructureSectionHref(section.id)}
-            aria-current={section.id === selectedSection ? "page" : undefined}
-          >
-            <span className="metricIcon">{section.icon}</span>
-            <span className="orgStructureTabBody">
-              <span className="orgStructureTabTitle">
-                {t(section.titleKey)}
-              </span>
-              <span className="orgStructureTabDescription">
-                {t(section.descriptionKey)}
-              </span>
-            </span>
-            <span className="orgStructureTabMeta">
-              <span className="badge">
-                {t("admin.orgStructure.totalCount", {
-                  count: section.count
-                })}
-              </span>
-              <span className="badge">
-                {t("admin.orgStructure.activeCount", {
-                  count: section.activeCount
-                })}
-              </span>
-            </span>
-          </a>
-        ))}
-      </nav>
-    </section>
   );
 }
 
@@ -469,70 +442,106 @@ function orgStructureSectionHref(section: OrgStructureSectionId): string {
   return `/admin/org-structure?${params.toString()}`;
 }
 
-function OrgUnitRow({
-  orgUnit,
-  orgUnits,
-  t
-}: {
-  readonly orgUnit: OrgUnitRecord;
-  readonly orgUnits: readonly OrgUnitRecord[];
-  readonly t: Translator;
-}): ReactNode {
-  const nextStatus = orgUnit.status === "active" ? "archived" : "active";
+function createOrgStructureHelp(t: Translator): {
+  readonly createOrgUnit: PersistentHelpDisclosureContent;
+  readonly createTeam: PersistentHelpDisclosureContent;
+  readonly createWorkQueue: PersistentHelpDisclosureContent;
+  readonly labels: PersistentHelpDisclosureLabels;
+  readonly orgUnitsList: PersistentHelpDisclosureContent;
+  readonly teamsList: PersistentHelpDisclosureContent;
+  readonly workQueuesList: PersistentHelpDisclosureContent;
+} {
+  return {
+    createOrgUnit: createHelpContent(t, {
+      examples: [
+        "admin.orgStructure.help.createOrgUnit.example.sales",
+        "admin.orgStructure.help.createOrgUnit.example.branch",
+        "admin.orgStructure.help.createOrgUnit.example.service"
+      ],
+      paragraphs: [
+        "admin.orgStructure.help.createOrgUnit.paragraph.structure",
+        "admin.orgStructure.help.createOrgUnit.paragraph.scope"
+      ],
+      title: "admin.orgStructure.help.createOrgUnit.title"
+    }),
+    createTeam: createHelpContent(t, {
+      examples: [
+        "admin.orgStructure.help.createTeam.example.shift",
+        "admin.orgStructure.help.createTeam.example.vip",
+        "admin.orgStructure.help.createTeam.example.project"
+      ],
+      paragraphs: [
+        "admin.orgStructure.help.createTeam.paragraph.group",
+        "admin.orgStructure.help.createTeam.paragraph.access"
+      ],
+      title: "admin.orgStructure.help.createTeam.title"
+    }),
+    createWorkQueue: createHelpContent(t, {
+      examples: [
+        "admin.orgStructure.help.createWorkQueue.example.leads",
+        "admin.orgStructure.help.createWorkQueue.example.claims",
+        "admin.orgStructure.help.createWorkQueue.example.measurements"
+      ],
+      paragraphs: [
+        "admin.orgStructure.help.createWorkQueue.paragraph.intake",
+        "admin.orgStructure.help.createWorkQueue.paragraph.routing"
+      ],
+      title: "admin.orgStructure.help.createWorkQueue.title"
+    }),
+    labels: {
+      examples: t("admin.help.examples"),
+      hide: t("admin.help.hide"),
+      show: t("admin.help.show")
+    },
+    orgUnitsList: createHelpContent(t, {
+      examples: [
+        "admin.orgStructure.help.orgUnitsList.example.drag",
+        "admin.orgStructure.help.orgUnitsList.example.archive"
+      ],
+      paragraphs: [
+        "admin.orgStructure.help.orgUnitsList.paragraph.tree",
+        "admin.orgStructure.help.orgUnitsList.paragraph.drag"
+      ],
+      title: "admin.orgStructure.help.orgUnitsList.title"
+    }),
+    teamsList: createHelpContent(t, {
+      examples: [
+        "admin.orgStructure.help.teamsList.example.assign",
+        "admin.orgStructure.help.teamsList.example.access"
+      ],
+      paragraphs: [
+        "admin.orgStructure.help.teamsList.paragraph.membership",
+        "admin.orgStructure.help.teamsList.paragraph.roles"
+      ],
+      title: "admin.orgStructure.help.teamsList.title"
+    }),
+    workQueuesList: createHelpContent(t, {
+      examples: [
+        "admin.orgStructure.help.workQueuesList.example.sales",
+        "admin.orgStructure.help.workQueuesList.example.support"
+      ],
+      paragraphs: [
+        "admin.orgStructure.help.workQueuesList.paragraph.status",
+        "admin.orgStructure.help.workQueuesList.paragraph.rbac"
+      ],
+      title: "admin.orgStructure.help.workQueuesList.title"
+    })
+  };
+}
 
-  return (
-    <article className="managementRow orgStructureRow">
-      <span className="metricIcon">
-        <Building2 size={18} aria-hidden="true" />
-      </span>
-      <form
-        className="settingsForm orgStructureInlineForm"
-        action={upsertOrgUnitAction}
-      >
-        <input name="section" type="hidden" value="org_units" />
-        <input name="id" type="hidden" value={orgUnit.id} />
-        <OrgUnitNameField defaultValue={orgUnit.name} t={t} />
-        <OrgUnitKindField defaultValue={orgUnit.kind} t={t} />
-        <OrgUnitParentField
-          defaultValue={orgUnit.parentOrgUnitId ?? ""}
-          excludeOrgUnitId={orgUnit.id}
-          orgUnits={orgUnits}
-          t={t}
-        />
-        <button className="secondaryButton" type="submit">
-          <Save size={14} aria-hidden="true" />
-          {t("common.save")}
-        </button>
-      </form>
-      <div className="rowActions">
-        <span className="badge">
-          {t(orgStructureStatusKey(orgUnit.status))}
-        </span>
-        <form className="inlineForm" action={setOrgUnitStatusAction}>
-          <input name="section" type="hidden" value="org_units" />
-          <input name="id" type="hidden" value={orgUnit.id} />
-          <input name="status" type="hidden" value={nextStatus} />
-          <button
-            className={
-              orgUnit.status === "active" ? "dangerButton" : "secondaryButton"
-            }
-            type="submit"
-          >
-            {orgUnit.status === "active" ? (
-              <Archive size={14} aria-hidden="true" />
-            ) : (
-              <ArchiveRestore size={14} aria-hidden="true" />
-            )}
-            {t(
-              orgUnit.status === "active"
-                ? "admin.orgStructure.archive"
-                : "admin.orgStructure.restore"
-            )}
-          </button>
-        </form>
-      </div>
-    </article>
-  );
+function createHelpContent(
+  t: Translator,
+  keys: {
+    readonly examples: readonly I18nMessageKey[];
+    readonly paragraphs: readonly I18nMessageKey[];
+    readonly title: I18nMessageKey;
+  }
+): PersistentHelpDisclosureContent {
+  return {
+    examples: keys.examples.map((key) => t(key)),
+    paragraphs: keys.paragraphs.map((key) => t(key)),
+    title: t(keys.title)
+  };
 }
 
 function TeamRow({
@@ -709,6 +718,17 @@ function OrgUnitParentField({
   readonly orgUnits: readonly OrgUnitRecord[];
   readonly t: Translator;
 }): ReactNode {
+  const excludedOrgUnitIds =
+    excludeOrgUnitId === undefined
+      ? new Set<string>()
+      : new Set([
+          excludeOrgUnitId,
+          ...collectOrgUnitDescendantIds(orgUnits, excludeOrgUnitId)
+        ]);
+  const parentOptions = buildOrgUnitTreeRows(orgUnits).filter(
+    (row) => !excludedOrgUnitIds.has(row.orgUnit.id)
+  );
+
   return (
     <label className="fieldStack">
       <span className="detailLabel">
@@ -720,13 +740,11 @@ function OrgUnitParentField({
         name="parentOrgUnitId"
       >
         <option value="">{t("admin.orgStructure.noParent")}</option>
-        {orgUnits
-          .filter((orgUnit) => orgUnit.id !== excludeOrgUnitId)
-          .map((orgUnit) => (
-            <option key={orgUnit.id} value={orgUnit.id}>
-              {orgUnitOptionLabel(orgUnit, t)}
-            </option>
-          ))}
+        {parentOptions.map((row) => (
+          <option key={row.orgUnit.id} value={row.orgUnit.id}>
+            {`${"  ".repeat(row.depth)}${orgUnitOptionLabel(row.orgUnit, t)}`}
+          </option>
+        ))}
       </select>
     </label>
   );
@@ -816,6 +834,112 @@ function orgUnitOptionLabel(orgUnit: OrgUnitRecord, t: Translator): string {
   }
 
   return `${orgUnit.name} (${t(orgStructureStatusKey(orgUnit.status))})`;
+}
+
+function buildOrgUnitTreeRows(
+  orgUnits: readonly OrgUnitRecord[]
+): readonly OrgUnitTreeRow[] {
+  const unitsById = new Map(orgUnits.map((orgUnit) => [orgUnit.id, orgUnit]));
+  const childrenByParent = new Map<string, OrgUnitRecord[]>();
+
+  for (const orgUnit of orgUnits) {
+    const parentKey =
+      orgUnit.parentOrgUnitId !== null && unitsById.has(orgUnit.parentOrgUnitId)
+        ? orgUnit.parentOrgUnitId
+        : "__root__";
+    childrenByParent.set(parentKey, [
+      ...(childrenByParent.get(parentKey) ?? []),
+      orgUnit
+    ]);
+  }
+
+  for (const [parentId, childOrgUnits] of childrenByParent) {
+    childrenByParent.set(parentId, sortOrgUnits(childOrgUnits));
+  }
+
+  const rows: OrgUnitTreeRow[] = [];
+  const visited = new Set<string>();
+  const visit = (parentId: string, depth: number): void => {
+    for (const orgUnit of childrenByParent.get(parentId) ?? []) {
+      if (visited.has(orgUnit.id)) {
+        continue;
+      }
+
+      visited.add(orgUnit.id);
+      rows.push({
+        orgUnit,
+        depth,
+        childCount: childrenByParent.get(orgUnit.id)?.length ?? 0
+      });
+      visit(orgUnit.id, depth + 1);
+    }
+  };
+
+  visit("__root__", 0);
+
+  for (const orgUnit of sortOrgUnits(orgUnits)) {
+    if (!visited.has(orgUnit.id)) {
+      rows.push({
+        orgUnit,
+        depth: 0,
+        childCount: childrenByParent.get(orgUnit.id)?.length ?? 0
+      });
+      visited.add(orgUnit.id);
+      visit(orgUnit.id, 1);
+    }
+  }
+
+  return rows;
+}
+
+function collectOrgUnitDescendantIds(
+  orgUnits: readonly OrgUnitRecord[],
+  orgUnitId: string
+): readonly string[] {
+  const childrenByParent = new Map<string, OrgUnitRecord[]>();
+
+  for (const orgUnit of orgUnits) {
+    if (orgUnit.parentOrgUnitId === null) {
+      continue;
+    }
+
+    childrenByParent.set(orgUnit.parentOrgUnitId, [
+      ...(childrenByParent.get(orgUnit.parentOrgUnitId) ?? []),
+      orgUnit
+    ]);
+  }
+
+  const descendantIds: string[] = [];
+  const visited = new Set<string>();
+  const visit = (parentId: string): void => {
+    for (const child of childrenByParent.get(parentId) ?? []) {
+      if (visited.has(child.id)) {
+        continue;
+      }
+
+      visited.add(child.id);
+      descendantIds.push(child.id);
+      visit(child.id);
+    }
+  };
+
+  visit(orgUnitId);
+
+  return descendantIds;
+}
+
+function sortOrgUnits(orgUnits: readonly OrgUnitRecord[]): OrgUnitRecord[] {
+  return [...orgUnits].sort((left, right) => {
+    if (left.status !== right.status) {
+      return left.status === "active" ? -1 : 1;
+    }
+
+    const nameComparison = left.name.localeCompare(right.name, "ru");
+
+    return nameComparison === 0
+      ? left.id.localeCompare(right.id)
+      : nameComparison;
+  });
 }
 
 function orgStructureActionStatusKey(status: string): I18nMessageKey {

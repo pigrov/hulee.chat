@@ -1,4 +1,5 @@
 import {
+  isAllowedBrandAssetPath,
   normalizeBrandThemeTokens,
   resolveBrandProfile,
   type BrandProfile
@@ -62,6 +63,7 @@ export function createInternalTenantSettingsService(input: {
     async updateTenantBrand(context, request) {
       const updatedAt = now();
       const brandId = `brand:${context.tenantId}:${idFactory()}`;
+      const assets = normalizeRequestAssets(request.assets);
       const themeTokens = normalizeRequestThemeTokens(request.themeTokens);
       const event: PlatformEvent = {
         id: `event:${brandId}` as EventId,
@@ -81,6 +83,7 @@ export function createInternalTenantSettingsService(input: {
           brandId,
           productName: request.productName,
           shortProductName: request.shortProductName,
+          assets,
           themeTokens,
           event,
           updatedAt
@@ -133,10 +136,16 @@ export function buildUpdateTenantBrandSql(input: {
   brandId: string;
   productName: string;
   shortProductName?: string;
+  assets?: Record<string, string>;
   themeTokens: Record<string, string>;
   event: PlatformEvent;
   updatedAt: Date;
 }): SQL {
+  const assetsSql =
+    input.assets === undefined
+      ? sql`coalesce(latest_brand.assets, '{}'::jsonb)`
+      : sql`coalesce(latest_brand.assets, '{}'::jsonb) || ${JSON.stringify(input.assets)}::jsonb`;
+
   return sql`
     with tenant_row as (
       select id,
@@ -169,7 +178,7 @@ export function buildUpdateTenantBrandSql(input: {
              tenant_row.id,
              ${input.productName},
              ${input.shortProductName ?? null},
-             coalesce(latest_brand.assets, '{}'::jsonb),
+             ${assetsSql},
              ${JSON.stringify(input.themeTokens)}::jsonb,
              coalesce(latest_brand.links, '{}'::jsonb),
              ${input.updatedAt},
@@ -304,6 +313,48 @@ function normalizeRequestThemeTokens(
   } catch {
     throw new CoreError("validation.failed");
   }
+}
+
+function normalizeRequestAssets(
+  assets: Record<string, string> | undefined
+): Record<string, string> | undefined {
+  if (assets === undefined) {
+    return undefined;
+  }
+
+  const normalized = Object.fromEntries(
+    Object.entries(assets).flatMap(([key, value]) => {
+      const normalizedKey = key.trim();
+      const normalizedValue = value.trim();
+
+      return normalizedValue.length > 0
+        ? [[normalizedKey, normalizedValue]]
+        : [];
+    })
+  );
+
+  const allowedKeys = new Set([
+    "logoLight",
+    "logoDark",
+    "mark",
+    "favicon",
+    "pwaIcon",
+    "appIcon",
+    "splashScreen"
+  ]);
+
+  for (const [key, value] of Object.entries(normalized)) {
+    if (
+      !allowedKeys.has(key) ||
+      !value.startsWith("/") ||
+      value.startsWith("//") ||
+      !isAllowedBrandAssetPath(value)
+    ) {
+      throw new CoreError("validation.failed");
+    }
+  }
+
+  return normalized;
 }
 
 function themeTokensFromUnknown(

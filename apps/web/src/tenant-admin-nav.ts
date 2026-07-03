@@ -20,6 +20,7 @@ export type TenantAdminSection = {
   id: TenantAdminSectionId;
   href: string;
   titleKey: I18nMessageKey;
+  navTitleKey?: I18nMessageKey;
   descriptionKey: I18nMessageKey;
   requiredPermissions: readonly Permission[];
   permissionMode: "any" | "all";
@@ -65,6 +66,7 @@ export const tenantAdminSections: readonly TenantAdminSection[] = [
     id: "roles",
     href: "/admin/roles",
     titleKey: "admin.roles",
+    navTitleKey: "admin.roles.navTitle",
     descriptionKey: "admin.roles.description",
     requiredPermissions: ["roles.manage"],
     permissionMode: "all"

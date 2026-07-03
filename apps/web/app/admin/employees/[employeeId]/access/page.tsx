@@ -26,11 +26,13 @@ import { createTranslator, type I18nMessageKey } from "@hulee/i18n";
 import {
   ArrowLeft,
   Building2,
+  Camera,
   Inbox,
   KeyRound,
   ListChecks,
   Plus,
   Save,
+  UserRound,
   UsersRound,
   XCircle
 } from "lucide-react";
@@ -39,6 +41,10 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AccessDeniedPage } from "../../../../../src/access-denied";
+import {
+  AdminSectionFrame,
+  type AdminSectionFrameItem
+} from "../../../../../src/admin-section-frame";
 import { DetailItem } from "../../../../../src/app-chrome";
 import {
   isEmployeeAccessSectionId,
@@ -49,6 +55,7 @@ import {
   setEmployeeTeamMembershipsAction,
   setEmployeeWorkQueueMembershipsAction
 } from "../../../../../src/employee-membership-actions";
+import { updateEmployeeProfileAction } from "../../../../../src/employee-actions";
 import { loadTenantAdminViewModel } from "../../../../../src/admin-view-model";
 import { allowedRoleBindingScopeTypesForPermissions } from "../../../../../src/rbac-scope";
 import { buildScopeReferenceOptions } from "../../../../../src/rbac-scope-options";
@@ -79,17 +86,6 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 type Translator = ReturnType<typeof createTranslator>["t"];
-
-type EmployeeAccessSection = {
-  readonly id: EmployeeAccessSectionId;
-  readonly titleKey: I18nMessageKey;
-  readonly descriptionKey: I18nMessageKey;
-  readonly count: number;
-  readonly countKey: I18nMessageKey;
-  readonly secondaryCount?: number;
-  readonly secondaryCountKey?: I18nMessageKey;
-  readonly icon: ReactNode;
-};
 
 const domainOrder = [
   "tenant",
@@ -280,45 +276,35 @@ export default async function EmployeeAccessAdminPage({
     employee.orgUnitIds.length +
     employee.teamIds.length +
     employee.queueIds.length;
-  const availableMembershipCount =
-    orgUnits.length + teams.length + workQueues.length;
-  const sections: readonly EmployeeAccessSection[] = [
+  const sections: readonly AdminSectionFrameItem<EmployeeAccessSectionId>[] = [
+    {
+      id: "profile",
+      title: t("admin.employeeAccess.profile"),
+      href: employeeAccessSectionHref(returnPath, "profile"),
+      icon: <UserRound size={18} aria-hidden="true" />
+    },
     {
       id: "memberships",
-      titleKey: "admin.employeeAccess.memberships",
-      descriptionKey: "admin.employeeAccess.memberships.description",
-      count: membershipCount,
-      countKey: "admin.employeeAccess.selectedCount",
-      secondaryCount: availableMembershipCount,
-      secondaryCountKey: "admin.employeeAccess.availableCount",
+      title: t("admin.employeeAccess.memberships"),
+      href: employeeAccessSectionHref(returnPath, "memberships"),
       icon: <Building2 size={18} aria-hidden="true" />
     },
     {
       id: "roles",
-      titleKey: "admin.employeeAccess.roles",
-      descriptionKey: "admin.employeeAccess.roles.description",
-      count: employeeRoleBindings.length,
-      countKey: "admin.employeeAccess.activeCount",
-      secondaryCount: expiredEmployeeRoleBindings.length,
-      secondaryCountKey: "admin.employeeAccess.expiredCount",
+      title: t("admin.employeeAccess.roles"),
+      href: employeeAccessSectionHref(returnPath, "roles"),
       icon: <UsersRound size={18} aria-hidden="true" />
     },
     {
       id: "direct_grants",
-      titleKey: "admin.employeeAccess.directGrants",
-      descriptionKey: "admin.employeeAccess.directGrants.description",
-      count: employeeDirectGrants.length,
-      countKey: "admin.employeeAccess.activeCount",
-      secondaryCount: expiredEmployeeDirectGrants.length,
-      secondaryCountKey: "admin.employeeAccess.expiredCount",
+      title: t("admin.employeeAccess.directGrants"),
+      href: employeeAccessSectionHref(returnPath, "direct_grants"),
       icon: <KeyRound size={18} aria-hidden="true" />
     },
     {
       id: "effective_access",
-      titleKey: "admin.employeeAccess.effectiveAccess",
-      descriptionKey: "admin.employeeAccess.effectiveAccess.description",
-      count: effectiveAccess.length,
-      countKey: "admin.employeeAccess.permissionCount",
+      title: t("admin.employeeAccess.effectiveAccess"),
+      href: employeeAccessSectionHref(returnPath, "effective_access"),
       icon: <ListChecks size={18} aria-hidden="true" />
     }
   ];
@@ -335,7 +321,12 @@ export default async function EmployeeAccessAdminPage({
       titleId="employee-access-title"
       toasts={roleStatusToast ? [roleStatusToast] : []}
     >
-      <div className="adminStack">
+      <AdminSectionFrame
+        ariaLabel={t("admin.employeeAccess.sections")}
+        navTitle={t("admin.employeeAccess")}
+        sections={sections}
+        selectedSection={selectedSection}
+      >
         <section
           className="settingsPanel"
           aria-labelledby="employee-access-summary-title"
@@ -357,11 +348,23 @@ export default async function EmployeeAccessAdminPage({
           </div>
 
           <div className="detailGrid">
+            <div className="employeeProfileSummary">
+              <EmployeeAvatar employee={employee} />
+              <div>
+                <p className="eyebrow">{t("admin.employeeAccess.profile")}</p>
+                <h3 className="listItemTitle">{employee.displayName}</h3>
+                <p className="metaText">{employee.email}</p>
+              </div>
+            </div>
             <DetailItem
               label={t("admin.employees.displayName")}
               value={employee.displayName}
             />
             <DetailItem label={t("auth.email")} value={employee.email} />
+            <DetailItem
+              label={t("admin.employees.phoneNumber")}
+              value={employee.phoneNumber ?? t("common.unknown")}
+            />
             <DetailItem
               label={t("admin.employeeAccess.status")}
               value={t(
@@ -373,12 +376,106 @@ export default async function EmployeeAccessAdminPage({
           </div>
         </section>
 
-        <EmployeeAccessSectionNavigation
-          returnPath={returnPath}
-          sections={sections}
-          selectedSection={selectedSection}
-          t={t}
-        />
+        {selectedSection === "profile" ? (
+          <section
+            className="settingsPanel"
+            aria-labelledby="employee-profile-title"
+          >
+            <div className="sectionHeader">
+              <div>
+                <p className="eyebrow">{t("admin.employeeAccess.profile")}</p>
+                <h2 className="sectionTitle" id="employee-profile-title">
+                  {t("admin.employeeAccess.profile")}
+                </h2>
+                <p className="metaText">
+                  {t("admin.employeeAccess.profile.description")}
+                </p>
+              </div>
+              <span className="badge">
+                <UserRound size={14} aria-hidden="true" />
+                {t(
+                  isDeactivated
+                    ? "admin.employees.status.deactivated"
+                    : "admin.employees.status.active"
+                )}
+              </span>
+            </div>
+
+            <form
+              action={updateEmployeeProfileAction}
+              className="settingsForm employeeProfileForm"
+            >
+              <input name="returnTo" type="hidden" value={returnPath} />
+              <input
+                name="employeeAccessSection"
+                type="hidden"
+                value="profile"
+              />
+              <input
+                name="employeeId"
+                type="hidden"
+                value={employee.employeeId}
+              />
+              <div className="employeeAvatarUploadGrid">
+                <div
+                  className="employeeAvatarPreviewSurface"
+                  aria-label={t("admin.employees.avatarCurrent")}
+                >
+                  <EmployeeAvatar employee={employee} size="large" />
+                </div>
+                <label className="fieldStack">
+                  <span className="detailLabel">
+                    {t("admin.employees.avatar")}
+                  </span>
+                  <input
+                    accept="image/png,image/jpeg,image/webp"
+                    className="fileInput"
+                    disabled={isDeactivated}
+                    name="avatarFile"
+                    type="file"
+                  />
+                  <span className="metaText">
+                    {t("admin.employees.avatarRecommendation")}
+                  </span>
+                </label>
+              </div>
+              <label className="fieldStack">
+                <span className="detailLabel">
+                  {t("admin.employees.displayName")}
+                </span>
+                <input
+                  className="textInput"
+                  defaultValue={employee.displayName}
+                  disabled={isDeactivated}
+                  name="displayName"
+                  required
+                  type="text"
+                />
+              </label>
+              <label className="fieldStack">
+                <span className="detailLabel">
+                  {t("admin.employees.phoneNumber")}
+                </span>
+                <input
+                  className="textInput"
+                  defaultValue={employee.phoneNumber ?? ""}
+                  disabled={isDeactivated}
+                  name="phoneNumber"
+                  placeholder={t("admin.employees.phoneNumber.placeholder")}
+                  type="tel"
+                />
+              </label>
+              <button
+                className="primaryButton"
+                disabled={isDeactivated}
+                type="submit"
+              >
+                <Save size={18} aria-hidden="true" />
+                {t("admin.employeeAccess.saveProfile")}
+              </button>
+            </form>
+          </section>
+        ) : null}
 
         {selectedSection === "memberships" ? (
           <section
@@ -397,11 +494,7 @@ export default async function EmployeeAccessAdminPage({
                   {t("admin.employeeAccess.memberships.description")}
                 </p>
               </div>
-              <span className="badge">
-                {employee.orgUnitIds.length +
-                  employee.teamIds.length +
-                  employee.queueIds.length}
-              </span>
+              <span className="badge">{membershipCount}</span>
             </div>
 
             <div className="employeeMembershipGrid">
@@ -846,80 +939,8 @@ export default async function EmployeeAccessAdminPage({
             </div>
           </section>
         ) : null}
-      </div>
+      </AdminSectionFrame>
     </TenantAdminShell>
-  );
-}
-
-function EmployeeAccessSectionNavigation({
-  returnPath,
-  sections,
-  selectedSection,
-  t
-}: {
-  readonly returnPath: string;
-  readonly sections: readonly EmployeeAccessSection[];
-  readonly selectedSection: EmployeeAccessSectionId;
-  readonly t: Translator;
-}): ReactNode {
-  return (
-    <section
-      className="settingsPanel employeeAccessSectionPanel"
-      aria-labelledby="employee-access-sections-title"
-    >
-      <div className="sectionHeader">
-        <div>
-          <p className="eyebrow">{t("admin.employeeAccess")}</p>
-          <h2 className="sectionTitle" id="employee-access-sections-title">
-            {t("admin.employeeAccess.workspace")}
-          </h2>
-          <p className="metaText">
-            {t("admin.employeeAccess.workspace.description")}
-          </p>
-        </div>
-      </div>
-
-      <nav
-        className="employeeAccessTabs"
-        aria-label={t("admin.employeeAccess.sections")}
-      >
-        {sections.map((section) => (
-          <a
-            key={section.id}
-            className={
-              section.id === selectedSection
-                ? "employeeAccessTab employeeAccessTabActive"
-                : "employeeAccessTab"
-            }
-            href={employeeAccessSectionHref(returnPath, section.id)}
-            aria-current={section.id === selectedSection ? "page" : undefined}
-          >
-            <span className="metricIcon">{section.icon}</span>
-            <span className="employeeAccessTabBody">
-              <span className="employeeAccessTabTitle">
-                {t(section.titleKey)}
-              </span>
-              <span className="employeeAccessTabDescription">
-                {t(section.descriptionKey)}
-              </span>
-            </span>
-            <span className="employeeAccessTabMeta">
-              <span className="badge">
-                {t(section.countKey, { count: section.count })}
-              </span>
-              {section.secondaryCount !== undefined &&
-              section.secondaryCountKey !== undefined ? (
-                <span className="badge">
-                  {t(section.secondaryCountKey, {
-                    count: section.secondaryCount
-                  })}
-                </span>
-              ) : null}
-            </span>
-          </a>
-        ))}
-      </nav>
-    </section>
   );
 }
 
@@ -930,7 +951,39 @@ function resolveEmployeeAccessSection(
     return section;
   }
 
-  return "memberships";
+  return "profile";
+}
+
+function EmployeeAvatar({
+  employee,
+  size = "default"
+}: {
+  readonly employee: TenantEmployeeRecord;
+  readonly size?: "default" | "large";
+}): ReactNode {
+  const className =
+    size === "large" ? "employeeAvatar employeeAvatarLarge" : "employeeAvatar";
+
+  if (employee.avatarUrl) {
+    return <img alt="" className={className} src={employee.avatarUrl} />;
+  }
+
+  const initials = employeeInitials(employee.displayName);
+
+  return (
+    <span className={className} aria-hidden="true">
+      {initials.length > 0 ? initials : <Camera size={18} aria-hidden="true" />}
+    </span>
+  );
+}
+
+function employeeInitials(displayName: string): string {
+  return displayName
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("");
 }
 
 function employeeAccessSectionHref(
@@ -1427,6 +1480,8 @@ function roleActionStatusKey(status: string): I18nMessageKey {
       return "admin.roles.actionStatus.reauthRequired";
     case "memberships_updated":
       return "admin.employeeAccess.actionStatus.membershipsUpdated";
+    case "profile_updated":
+      return "admin.employeeAccess.actionStatus.profileUpdated";
     case "email_verification_required":
       return "auth.emailVerification.status.required";
     default:

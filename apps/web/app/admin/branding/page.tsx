@@ -1,9 +1,10 @@
 import {
-  brandThemePresets,
-  resolveBrandThemeBasePresetId,
+  brandThemeColorPresets,
+  resolveBrandThemeColorPresetId,
+  resolveBrandThemeMode,
   resolveBrandThemePreset,
-  resolveBrandThemePresetId,
-  type BrandThemePreset,
+  resolveBrandThemePresetForMode,
+  type BrandThemeColorPresetId,
   type BrandThemeTokenName,
   type BrandThemeTokens
 } from "@hulee/branding";
@@ -17,6 +18,10 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AccessDeniedPage } from "../../../src/access-denied";
+import {
+  AdminSectionFrame,
+  type AdminSectionFrameItem
+} from "../../../src/admin-section-frame";
 import { SlotMount } from "../../../src/app-chrome";
 import {
   applyBrandPresetAction,
@@ -27,6 +32,7 @@ import {
   buildBrandMarkLabel,
   brandProfileToCssProperties
 } from "../../../src/brand-style";
+import { BrandThemeModeSelector } from "../../../src/brand-theme-mode-selector";
 import {
   getWebDatabase,
   resolveCurrentWebAccessSession
@@ -48,12 +54,16 @@ type BrandProfileView = {
   themeTokens: Record<string, string>;
 };
 
+const brandingAdminSectionIds = ["presets", "settings"] as const;
+
+type BrandingAdminSectionId = (typeof brandingAdminSectionIds)[number];
+
 const fallbackPreset = resolveBrandThemePreset("hulee");
 
 export default async function BrandingAdminPage({
   searchParams
 }: {
-  searchParams?: Promise<{ brandStatus?: string }>;
+  searchParams?: Promise<{ brandStatus?: string; section?: string }>;
 }): Promise<ReactNode> {
   const access = await resolveCurrentWebAccessSession();
 
@@ -92,16 +102,20 @@ export default async function BrandingAdminPage({
   const { t } = createTranslator(model.tenant.locale);
   const brand = model.tenant.brand;
   const currentTokens = resolveCurrentTokens(brand.themeTokens);
-  const currentPresetId =
-    resolveBrandThemePresetId(currentTokens) ??
-    resolveBrandThemeBasePresetId(currentTokens) ??
-    "hulee";
+  const currentColorPresetId =
+    resolveBrandThemeColorPresetId(currentTokens) ?? "hulee";
+  const currentThemeMode = resolveBrandThemeMode(currentTokens);
+  const currentLogoUrl =
+    brand.assets?.mark ?? brand.assets?.logoLight ?? brand.assets?.logoDark;
   const previewBrand: BrandProfileView = {
     productName: brand.productName,
     shortProductName: brand.shortProductName,
     themeTokens: currentTokens
   };
   const statusKey = brandStatusKey(resolvedSearchParams?.brandStatus);
+  const selectedSection = resolveBrandingAdminSection(
+    resolvedSearchParams?.section
+  );
   const brandStatusToast =
     resolvedSearchParams?.brandStatus && statusKey
       ? buildActionStatusToast({
@@ -112,6 +126,21 @@ export default async function BrandingAdminPage({
           t
         })
       : undefined;
+  const brandingAdminSections: readonly AdminSectionFrameItem<BrandingAdminSectionId>[] =
+    [
+      {
+        id: "presets",
+        title: t("admin.branding.themePreset"),
+        href: brandingAdminSectionHref("presets"),
+        icon: <Paintbrush size={18} aria-hidden="true" />
+      },
+      {
+        id: "settings",
+        title: t("admin.branding.productAndColors"),
+        href: brandingAdminSectionHref("settings"),
+        icon: <SlidersHorizontal size={18} aria-hidden="true" />
+      }
+    ];
 
   return (
     <TenantAdminShell
@@ -126,8 +155,17 @@ export default async function BrandingAdminPage({
       titleId="branding-title"
       toasts={brandStatusToast ? [brandStatusToast] : []}
     >
-      <div className="adminStack">
-        <section className="settingsPanel" aria-labelledby="brand-preset-title">
+      <AdminSectionFrame
+        ariaLabel={t("admin.branding")}
+        navTitle={t("admin.branding")}
+        sections={brandingAdminSections}
+        selectedSection={selectedSection}
+      >
+        <section
+          className="settingsPanel"
+          aria-labelledby="brand-preset-title"
+          hidden={selectedSection !== "presets"}
+        >
           <div className="sectionHeader">
             <div>
               <p className="eyebrow">{t("admin.branding.presets")}</p>
@@ -137,13 +175,36 @@ export default async function BrandingAdminPage({
             </div>
             <span className="badge">
               <Paintbrush size={14} aria-hidden="true" />
-              {brandThemePresets.length}
+              {brandThemeColorPresets.length}
             </span>
           </div>
 
+          <form action={applyBrandPresetAction} className="brandThemeModeForm">
+            <input name="section" type="hidden" value="presets" />
+            <input name="productName" type="hidden" value={brand.productName} />
+            <input
+              name="shortProductName"
+              type="hidden"
+              value={brand.shortProductName ?? ""}
+            />
+            <input name="presetId" type="hidden" value={currentColorPresetId} />
+            <BrandThemeModeSelector
+              currentThemeMode={currentThemeMode}
+              darkLabel={t("admin.branding.mode.dark")}
+              label={t("admin.branding.mode")}
+              lightLabel={t("admin.branding.mode.light")}
+            />
+          </form>
+
           <div className="brandPresetGrid">
-            {brandThemePresets.map((preset) => (
+            {brandThemeColorPresets.map((preset) => (
               <form action={applyBrandPresetAction} key={preset.id}>
+                <input name="section" type="hidden" value="presets" />
+                <input
+                  name="themeMode"
+                  type="hidden"
+                  value={currentThemeMode}
+                />
                 <input
                   name="productName"
                   type="hidden"
@@ -160,11 +221,14 @@ export default async function BrandingAdminPage({
                   type="submit"
                   value={preset.id}
                   aria-current={
-                    currentPresetId === preset.id ? "page" : undefined
+                    currentColorPresetId === preset.id ? "page" : undefined
                   }
                   style={brandProfileToCssProperties({
                     productName: preset.id,
-                    themeTokens: preset.tokens
+                    themeTokens: resolveBrandThemePresetForMode(
+                      preset.id,
+                      currentThemeMode
+                    ).tokens
                   })}
                 >
                   <span className="brandPresetSwatches" aria-hidden="true">
@@ -184,6 +248,7 @@ export default async function BrandingAdminPage({
         <section
           className="settingsPanel"
           aria-labelledby="brand-settings-title"
+          hidden={selectedSection !== "settings"}
         >
           <div className="sectionHeader">
             <div>
@@ -198,8 +263,10 @@ export default async function BrandingAdminPage({
             </span>
           </div>
 
-          <form className="settingsForm" action={updateTenantBrandAction}>
-            <input name="presetId" type="hidden" value={currentPresetId} />
+          <form action={updateTenantBrandAction} className="settingsForm">
+            <input name="section" type="hidden" value="settings" />
+            <input name="themeMode" type="hidden" value={currentThemeMode} />
+            <input name="presetId" type="hidden" value={currentColorPresetId} />
             <label className="fieldStack">
               <span className="detailLabel">
                 {t("admin.branding.productName")}
@@ -223,6 +290,36 @@ export default async function BrandingAdminPage({
                 defaultValue={brand.shortProductName ?? ""}
               />
             </label>
+            <div className="brandLogoUploadGrid">
+              <div
+                className="brandLogoPreviewSurface"
+                aria-label={t("admin.branding.logoCurrent")}
+              >
+                {currentLogoUrl ? (
+                  <img
+                    className="brandLogoPreviewImage"
+                    src={currentLogoUrl}
+                    alt=""
+                  />
+                ) : (
+                  <div className="brandMark" aria-hidden="true">
+                    {buildBrandMarkLabel(previewBrand)}
+                  </div>
+                )}
+              </div>
+              <label className="fieldStack">
+                <span className="detailLabel">{t("admin.branding.logo")}</span>
+                <input
+                  className="fileInput"
+                  name="brandLogoFile"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                />
+                <span className="metaText">
+                  {t("admin.branding.logoRecommendation")}
+                </span>
+              </label>
+            </div>
             <div className="brandColorGrid">
               <label className="fieldStack">
                 <span className="detailLabel">
@@ -255,39 +352,55 @@ export default async function BrandingAdminPage({
               {t("common.save")}
             </button>
           </form>
-        </section>
 
-        <section
-          className="settingsPanel brandPreviewPanel"
-          aria-labelledby="brand-preview-title"
-          style={brandProfileToCssProperties(previewBrand)}
-        >
-          <div className="sectionHeader">
-            <div>
-              <p className="eyebrow">{t("admin.branding.preview")}</p>
-              <h2 className="sectionTitle" id="brand-preview-title">
-                {brand.productName}
-              </h2>
+          <div
+            className="brandPreviewPanel"
+            aria-labelledby="brand-preview-title"
+            style={brandProfileToCssProperties(previewBrand)}
+          >
+            <div className="sectionHeader">
+              <div>
+                <p className="eyebrow">{t("admin.branding.preview")}</p>
+                <h2 className="sectionTitle" id="brand-preview-title">
+                  {brand.productName}
+                </h2>
+              </div>
+              <div className="brandMark" aria-label={brand.productName}>
+                {buildBrandMarkLabel(previewBrand)}
+              </div>
             </div>
-            <div className="brandMark" aria-label={brand.productName}>
-              {buildBrandMarkLabel(previewBrand)}
+
+            <div className="brandPreviewSurface">
+              <div>
+                <p className="eyebrow">{t("inbox.queue")}</p>
+                <h3 className="listItemTitle">{t("inbox.conversation")}</h3>
+                <p className="metaText">{t("message.status.queued")}</p>
+              </div>
+              <button className="primaryButton" type="button">
+                {t("inbox.replySubmit")}
+              </button>
             </div>
           </div>
-
-          <div className="brandPreviewSurface">
-            <div>
-              <p className="eyebrow">{t("inbox.queue")}</p>
-              <h3 className="listItemTitle">{t("inbox.conversation")}</h3>
-              <p className="metaText">{t("message.status.queued")}</p>
-            </div>
-            <button className="primaryButton" type="button">
-              {t("inbox.replySubmit")}
-            </button>
-          </div>
         </section>
-      </div>
+      </AdminSectionFrame>
     </TenantAdminShell>
   );
+}
+
+function brandingAdminSectionHref(section: BrandingAdminSectionId): string {
+  return `/admin/branding?section=${encodeURIComponent(section)}`;
+}
+
+function resolveBrandingAdminSection(
+  value: string | undefined
+): BrandingAdminSectionId {
+  return isBrandingAdminSectionId(value) ? value : "presets";
+}
+
+function isBrandingAdminSectionId(
+  value: string | undefined
+): value is BrandingAdminSectionId {
+  return brandingAdminSectionIds.some((section) => section === value);
 }
 
 function resolveCurrentTokens(
@@ -321,7 +434,7 @@ function brandStatusKey(
   }
 }
 
-function presetLabelKey(presetId: BrandThemePreset["id"]): I18nMessageKey {
+function presetLabelKey(presetId: BrandThemeColorPresetId): I18nMessageKey {
   switch (presetId) {
     case "neutral":
       return "admin.branding.preset.neutral";
@@ -329,14 +442,22 @@ function presetLabelKey(presetId: BrandThemePreset["id"]): I18nMessageKey {
       return "admin.branding.preset.blue";
     case "green":
       return "admin.branding.preset.green";
+    case "red":
+      return "admin.branding.preset.red";
+    case "orange":
+      return "admin.branding.preset.orange";
+    case "amber":
+      return "admin.branding.preset.amber";
+    case "violet":
+      return "admin.branding.preset.violet";
+    case "rose":
+      return "admin.branding.preset.rose";
+    case "cyan":
+      return "admin.branding.preset.cyan";
     case "graphite":
       return "admin.branding.preset.graphite";
     case "high-contrast":
       return "admin.branding.preset.highContrast";
-    case "hulee-dark":
-      return "admin.branding.preset.huleeDark";
-    case "blue-dark":
-      return "admin.branding.preset.blueDark";
     default:
       return "admin.branding.preset.hulee";
   }

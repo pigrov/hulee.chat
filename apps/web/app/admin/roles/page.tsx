@@ -36,11 +36,14 @@ import {
   UserPlus,
   XCircle
 } from "lucide-react";
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AccessDeniedPage } from "../../../src/access-denied";
+import {
+  AdminSectionFrame,
+  type AdminSectionFrameItem
+} from "../../../src/admin-section-frame";
 import { loadTenantAdminViewModel } from "../../../src/admin-view-model";
 import {
   archiveCustomTenantRoleAction,
@@ -119,12 +122,6 @@ const roleAdminSectionIds = [
 ] as const;
 
 type RoleAdminSectionId = (typeof roleAdminSectionIds)[number];
-
-type RoleAdminSectionNavItem = {
-  id: RoleAdminSectionId;
-  titleKey: I18nMessageKey;
-  icon: ReactNode;
-};
 
 export default async function RolesAdminPage({
   searchParams
@@ -282,63 +279,75 @@ export default async function RolesAdminPage({
           roles,
           tenantId: access.tenantId
         });
-  const roleAdminSections: readonly RoleAdminSectionNavItem[] = [
-    {
-      id: "definitions",
-      titleKey: "admin.roles.roleDefinitions",
-      icon: <KeyRound size={18} aria-hidden="true" />
-    },
-    {
-      id: "create",
-      titleKey: "admin.roles.createRole",
-      icon: <Plus size={18} aria-hidden="true" />
-    },
-    {
-      id: "templates",
-      titleKey: "admin.roles.createFromTemplate",
-      icon: <ShieldCheck size={18} aria-hidden="true" />
-    },
-    {
-      id: "assign",
-      titleKey: "admin.roles.assignRole",
-      icon: <UserPlus size={18} aria-hidden="true" />
-    },
-    {
-      id: "preview",
-      titleKey: "admin.roles.effectiveAccessPreview",
-      icon: <Search size={18} aria-hidden="true" />
-    },
-    {
-      id: "activeAssignments",
-      titleKey: "admin.roles.activeAssignments",
-      icon: <ListChecks size={18} aria-hidden="true" />
-    },
-    {
-      id: "expiredAssignments",
-      titleKey: "admin.roles.expiredAssignments",
-      icon: <Archive size={18} aria-hidden="true" />
-    },
-    {
-      id: "directGrantCreate",
-      titleKey: "admin.roles.addDirectGrant",
-      icon: <Plus size={18} aria-hidden="true" />
-    },
-    {
-      id: "activeDirectGrants",
-      titleKey: "admin.roles.activeDirectGrants",
-      icon: <KeyRound size={18} aria-hidden="true" />
-    },
-    {
-      id: "expiredDirectGrants",
-      titleKey: "admin.roles.expiredDirectGrants",
-      icon: <ArchiveRestore size={18} aria-hidden="true" />
-    },
-    {
-      id: "permissionCatalog",
-      titleKey: "admin.roles.permissionCatalog",
-      icon: <ShieldCheck size={18} aria-hidden="true" />
-    }
-  ];
+  const roleAdminSections: readonly AdminSectionFrameItem<RoleAdminSectionId>[] =
+    [
+      {
+        id: "definitions",
+        title: t("admin.roles.roleDefinitions"),
+        href: roleAdminSectionHref("definitions"),
+        icon: <KeyRound size={18} aria-hidden="true" />
+      },
+      {
+        id: "create",
+        title: t("admin.roles.createRole"),
+        href: roleAdminSectionHref("create"),
+        icon: <Plus size={18} aria-hidden="true" />
+      },
+      {
+        id: "templates",
+        title: t("admin.roles.createFromTemplate"),
+        href: roleAdminSectionHref("templates"),
+        icon: <ShieldCheck size={18} aria-hidden="true" />
+      },
+      {
+        id: "assign",
+        title: t("admin.roles.assignRole"),
+        href: roleAdminSectionHref("assign"),
+        icon: <UserPlus size={18} aria-hidden="true" />
+      },
+      {
+        id: "preview",
+        title: t("admin.roles.effectiveAccessPreview"),
+        href: roleAdminSectionHref("preview"),
+        icon: <Search size={18} aria-hidden="true" />
+      },
+      {
+        id: "activeAssignments",
+        title: t("admin.roles.activeAssignments"),
+        href: roleAdminSectionHref("activeAssignments"),
+        icon: <ListChecks size={18} aria-hidden="true" />
+      },
+      {
+        id: "expiredAssignments",
+        title: t("admin.roles.expiredAssignments"),
+        href: roleAdminSectionHref("expiredAssignments"),
+        icon: <Archive size={18} aria-hidden="true" />
+      },
+      {
+        id: "directGrantCreate",
+        title: t("admin.roles.addDirectGrant"),
+        href: roleAdminSectionHref("directGrantCreate"),
+        icon: <Plus size={18} aria-hidden="true" />
+      },
+      {
+        id: "activeDirectGrants",
+        title: t("admin.roles.activeDirectGrants"),
+        href: roleAdminSectionHref("activeDirectGrants"),
+        icon: <KeyRound size={18} aria-hidden="true" />
+      },
+      {
+        id: "expiredDirectGrants",
+        title: t("admin.roles.expiredDirectGrants"),
+        href: roleAdminSectionHref("expiredDirectGrants"),
+        icon: <ArchiveRestore size={18} aria-hidden="true" />
+      },
+      {
+        id: "permissionCatalog",
+        title: t("admin.roles.permissionCatalog"),
+        href: roleAdminSectionHref("permissionCatalog"),
+        icon: <ShieldCheck size={18} aria-hidden="true" />
+      }
+    ];
 
   return (
     <TenantAdminShell
@@ -352,548 +361,499 @@ export default async function RolesAdminPage({
       titleId="roles-title"
       toasts={roleStatusToast ? [roleStatusToast] : []}
     >
-      <div className="adminRolesGrid">
-        <aside
-          className="settingsPanel adminRolesNav"
-          aria-labelledby="roles-section-list-title"
+      <AdminSectionFrame
+        ariaLabel={t("admin.roles")}
+        navTitle={t("admin.roles")}
+        sections={roleAdminSections}
+        selectedSection={selectedSection}
+      >
+        <section
+          className="settingsPanel"
+          aria-labelledby="role-create-title"
+          hidden={selectedSection !== "create"}
         >
           <div className="sectionHeader">
             <div>
-              <h2 className="sectionTitle" id="roles-section-list-title">
-                {t("admin.roles")}
+              <p className="eyebrow">{t("admin.roles.editor")}</p>
+              <h2 className="sectionTitle" id="role-create-title">
+                {t("admin.roles.createRole")}
               </h2>
+              <p className="metaText">
+                {t("admin.roles.createRole.description")}
+              </p>
             </div>
+            <span className="badge">{permissionCatalog.length}</span>
           </div>
 
-          <nav className="integrationList" aria-label={t("admin.roles")}>
-            {roleAdminSections.map((section) => (
-              <RoleAdminSectionLink
-                current={section.id === selectedSection}
-                key={section.id}
-                section={section}
+          <form className="settingsForm" action={createCustomTenantRoleAction}>
+            <input name="roleAdminSection" type="hidden" value="create" />
+            <div className="roleEditorGrid">
+              <label className="fieldStack">
+                <span className="detailLabel">{t("admin.roles.roleName")}</span>
+                <input
+                  className="textInput"
+                  name="name"
+                  type="text"
+                  maxLength={80}
+                  required
+                />
+              </label>
+              <label className="fieldStack">
+                <span className="detailLabel">
+                  {t("admin.roles.roleDescription")}
+                </span>
+                <textarea
+                  className="textInput roleDescriptionInput"
+                  name="description"
+                  maxLength={500}
+                />
+              </label>
+            </div>
+
+            <PermissionCheckboxGroups selectedPermissions={[]} t={t} />
+
+            <button className="primaryButton" type="submit">
+              <Plus size={18} aria-hidden="true" />
+              {t("admin.roles.create")}
+            </button>
+          </form>
+        </section>
+
+        <section
+          className="settingsPanel"
+          aria-labelledby="role-templates-title"
+          hidden={selectedSection !== "templates"}
+        >
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.roles.templates")}</p>
+              <h2 className="sectionTitle" id="role-templates-title">
+                {t("admin.roles.createFromTemplate")}
+              </h2>
+              <p className="metaText">
+                {t("admin.roles.createFromTemplate.description")}
+              </p>
+            </div>
+            <span className="badge">{roleTemplateCatalog.length}</span>
+          </div>
+
+          <div className="managementList">
+            {roleTemplateCatalog.map((template) => (
+              <RoleTemplateRow
+                key={template.id}
+                locale={locale}
+                roleAdminSection="templates"
                 t={t}
+                template={template}
               />
             ))}
-          </nav>
-        </aside>
+          </div>
+        </section>
 
-        <div className="adminStack adminRolesContent">
-          <section
-            className="settingsPanel"
-            aria-labelledby="role-create-title"
-            hidden={selectedSection !== "create"}
-          >
-            <div className="sectionHeader">
-              <div>
-                <p className="eyebrow">{t("admin.roles.editor")}</p>
-                <h2 className="sectionTitle" id="role-create-title">
-                  {t("admin.roles.createRole")}
-                </h2>
-                <p className="metaText">
-                  {t("admin.roles.createRole.description")}
-                </p>
-              </div>
-              <span className="badge">{permissionCatalog.length}</span>
+        <section
+          className="settingsPanel"
+          aria-labelledby="role-assign-title"
+          hidden={selectedSection !== "assign"}
+        >
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.roles.assignments")}</p>
+              <h2 className="sectionTitle" id="role-assign-title">
+                {t("admin.roles.assignRole")}
+              </h2>
+              <p className="metaText">
+                {t("admin.roles.assignRole.description")}
+              </p>
             </div>
+            <span className="badge">{roleAssignmentSubjectCount}</span>
+          </div>
 
-            <form
-              className="settingsForm"
-              action={createCustomTenantRoleAction}
+          <form
+            className="settingsForm roleAssignForm"
+            action={assignTenantRoleAction}
+          >
+            <input name="roleAdminSection" type="hidden" value="assign" />
+            <RoleAssignmentFields
+              employees={employeeOptions}
+              messages={scopePickerMessages(t)}
+              roles={roleAssignmentOptions}
+              scopeReferenceOptions={scopeReferenceOptions}
+              subjectOptions={roleAssignmentSubjectOptions}
+            />
+            <button
+              className="primaryButton"
+              type="submit"
+              disabled={
+                roleAssignmentSubjectCount === 0 ||
+                roleAssignmentOptions.length === 0
+              }
             >
-              <input name="roleAdminSection" type="hidden" value="create" />
-              <div className="roleEditorGrid">
-                <label className="fieldStack">
-                  <span className="detailLabel">
-                    {t("admin.roles.roleName")}
-                  </span>
-                  <input
-                    className="textInput"
-                    name="name"
-                    type="text"
-                    maxLength={80}
-                    required
-                  />
-                </label>
-                <label className="fieldStack">
-                  <span className="detailLabel">
-                    {t("admin.roles.roleDescription")}
-                  </span>
-                  <textarea
-                    className="textInput roleDescriptionInput"
-                    name="description"
-                    maxLength={500}
-                  />
-                </label>
-              </div>
+              <Plus size={18} aria-hidden="true" />
+              {t("admin.roles.assign")}
+            </button>
+          </form>
+        </section>
 
-              <PermissionCheckboxGroups selectedPermissions={[]} t={t} />
-
-              <button className="primaryButton" type="submit">
-                <Plus size={18} aria-hidden="true" />
-                {t("admin.roles.create")}
-              </button>
-            </form>
-          </section>
-
-          <section
-            className="settingsPanel"
-            aria-labelledby="role-templates-title"
-            hidden={selectedSection !== "templates"}
-          >
-            <div className="sectionHeader">
-              <div>
-                <p className="eyebrow">{t("admin.roles.templates")}</p>
-                <h2 className="sectionTitle" id="role-templates-title">
-                  {t("admin.roles.createFromTemplate")}
-                </h2>
-                <p className="metaText">
-                  {t("admin.roles.createFromTemplate.description")}
-                </p>
-              </div>
-              <span className="badge">{roleTemplateCatalog.length}</span>
+        <section
+          className="settingsPanel"
+          aria-labelledby="access-preview-title"
+          hidden={selectedSection !== "preview"}
+        >
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.roles.accessPreview")}</p>
+              <h2 className="sectionTitle" id="access-preview-title">
+                {t("admin.roles.effectiveAccessPreview")}
+              </h2>
+              <p className="metaText">
+                {t("admin.roles.effectiveAccessPreview.description")}
+              </p>
             </div>
+            <span className="badge">
+              {effectiveAccessPreview?.length ?? activeEmployees.length}
+            </span>
+          </div>
 
+          <form className="settingsForm accessPreviewForm" method="get">
+            <input name="section" type="hidden" value="preview" />
+            <label className="fieldStack">
+              <span className="detailLabel">
+                {t("admin.roles.previewEmployee")}
+              </span>
+              <select
+                className="selectInput"
+                defaultValue={accessPreviewEmployee?.employeeId ?? ""}
+                name="accessPreviewEmployeeId"
+                required
+              >
+                <option value="">{t("admin.roles.selectEmployee")}</option>
+                {employeeOptions.map((employee) => (
+                  <option key={employee.value} value={employee.value}>
+                    {employee.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              className="primaryButton"
+              disabled={employeeOptions.length === 0}
+              type="submit"
+            >
+              <Search size={18} aria-hidden="true" />
+              {t("admin.roles.previewAccess")}
+            </button>
+          </form>
+
+          {effectiveAccessPreview === undefined ? (
+            <p className="metaText">{t("admin.roles.noAccessPreview")}</p>
+          ) : effectiveAccessPreview.length === 0 ? (
+            <p className="metaText">{t("admin.roles.noEffectiveAccess")}</p>
+          ) : (
             <div className="managementList">
-              {roleTemplateCatalog.map((template) => (
-                <RoleTemplateRow
-                  key={template.id}
-                  locale={locale}
-                  roleAdminSection="templates"
+              {effectiveAccessPreview.map((grant) => (
+                <EffectiveGrantRow
+                  employees={employees}
+                  grant={grant}
+                  key={effectiveGrantKey(grant)}
+                  orgUnits={orgUnits}
+                  roleBindings={roleBindings}
+                  roles={roles}
                   t={t}
-                  template={template}
+                  teams={teams}
+                  workQueues={workQueues}
                 />
               ))}
             </div>
-          </section>
+          )}
+        </section>
 
-          <section
-            className="settingsPanel"
-            aria-labelledby="role-assign-title"
-            hidden={selectedSection !== "assign"}
-          >
-            <div className="sectionHeader">
-              <div>
-                <p className="eyebrow">{t("admin.roles.assignments")}</p>
-                <h2 className="sectionTitle" id="role-assign-title">
-                  {t("admin.roles.assignRole")}
-                </h2>
-                <p className="metaText">
-                  {t("admin.roles.assignRole.description")}
-                </p>
-              </div>
-              <span className="badge">{roleAssignmentSubjectCount}</span>
+        <section
+          className="settingsPanel"
+          aria-labelledby="role-bindings-title"
+          hidden={selectedSection !== "activeAssignments"}
+        >
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.roles.assignments")}</p>
+              <h2 className="sectionTitle" id="role-bindings-title">
+                {t("admin.roles.activeAssignments")}
+              </h2>
+              <p className="metaText">
+                {t("admin.roles.activeAssignments.description")}
+              </p>
             </div>
+            <span className="badge">{roleBindings.length}</span>
+          </div>
 
-            <form
-              className="settingsForm roleAssignForm"
-              action={assignTenantRoleAction}
-            >
-              <input name="roleAdminSection" type="hidden" value="assign" />
-              <RoleAssignmentFields
-                employees={employeeOptions}
-                messages={scopePickerMessages(t)}
-                roles={roleAssignmentOptions}
-                scopeReferenceOptions={scopeReferenceOptions}
-                subjectOptions={roleAssignmentSubjectOptions}
-              />
-              <button
-                className="primaryButton"
-                type="submit"
-                disabled={
-                  roleAssignmentSubjectCount === 0 ||
-                  roleAssignmentOptions.length === 0
-                }
-              >
-                <Plus size={18} aria-hidden="true" />
-                {t("admin.roles.assign")}
-              </button>
-            </form>
-          </section>
-
-          <section
-            className="settingsPanel"
-            aria-labelledby="access-preview-title"
-            hidden={selectedSection !== "preview"}
-          >
-            <div className="sectionHeader">
-              <div>
-                <p className="eyebrow">{t("admin.roles.accessPreview")}</p>
-                <h2 className="sectionTitle" id="access-preview-title">
-                  {t("admin.roles.effectiveAccessPreview")}
-                </h2>
-                <p className="metaText">
-                  {t("admin.roles.effectiveAccessPreview.description")}
-                </p>
-              </div>
-              <span className="badge">
-                {effectiveAccessPreview?.length ?? activeEmployees.length}
-              </span>
-            </div>
-
-            <form className="settingsForm accessPreviewForm" method="get">
-              <input name="section" type="hidden" value="preview" />
-              <label className="fieldStack">
-                <span className="detailLabel">
-                  {t("admin.roles.previewEmployee")}
-                </span>
-                <select
-                  className="selectInput"
-                  defaultValue={accessPreviewEmployee?.employeeId ?? ""}
-                  name="accessPreviewEmployeeId"
-                  required
-                >
-                  <option value="">{t("admin.roles.selectEmployee")}</option>
-                  {employeeOptions.map((employee) => (
-                    <option key={employee.value} value={employee.value}>
-                      {employee.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button
-                className="primaryButton"
-                disabled={employeeOptions.length === 0}
-                type="submit"
-              >
-                <Search size={18} aria-hidden="true" />
-                {t("admin.roles.previewAccess")}
-              </button>
-            </form>
-
-            {effectiveAccessPreview === undefined ? (
-              <p className="metaText">{t("admin.roles.noAccessPreview")}</p>
-            ) : effectiveAccessPreview.length === 0 ? (
-              <p className="metaText">{t("admin.roles.noEffectiveAccess")}</p>
+          <div className="managementList">
+            {roleBindings.length === 0 ? (
+              <p className="metaText">{t("admin.roles.noAssignments")}</p>
             ) : (
-              <div className="managementList">
-                {effectiveAccessPreview.map((grant) => (
-                  <EffectiveGrantRow
-                    employees={employees}
-                    grant={grant}
-                    key={effectiveGrantKey(grant)}
-                    orgUnits={orgUnits}
-                    roleBindings={roleBindings}
-                    roles={roles}
-                    t={t}
-                    teams={teams}
-                    workQueues={workQueues}
-                  />
-                ))}
-              </div>
+              roleBindings.map((binding) => (
+                <RoleBindingRow
+                  binding={binding}
+                  currentEmployeeId={access.employeeId}
+                  employees={employees}
+                  key={binding.id}
+                  orgUnits={orgUnits}
+                  roleAdminSection="activeAssignments"
+                  roles={roles}
+                  t={t}
+                  teams={teams}
+                  workQueues={workQueues}
+                />
+              ))
             )}
-          </section>
+          </div>
+        </section>
 
-          <section
-            className="settingsPanel"
-            aria-labelledby="role-bindings-title"
-            hidden={selectedSection !== "activeAssignments"}
+        <section
+          className="settingsPanel"
+          aria-labelledby="expired-role-bindings-title"
+          hidden={selectedSection !== "expiredAssignments"}
+        >
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.roles.assignments")}</p>
+              <h2 className="sectionTitle" id="expired-role-bindings-title">
+                {t("admin.roles.expiredAssignments")}
+              </h2>
+              <p className="metaText">
+                {t("admin.roles.expiredAssignments.description")}
+              </p>
+            </div>
+            <span className="badge">{expiredRoleBindings.length}</span>
+          </div>
+
+          <div className="managementList">
+            {expiredRoleBindings.length === 0 ? (
+              <p className="metaText">
+                {t("admin.roles.noExpiredAssignments")}
+              </p>
+            ) : (
+              expiredRoleBindings.map((binding) => (
+                <RoleBindingRow
+                  binding={binding}
+                  currentEmployeeId={access.employeeId}
+                  employees={employees}
+                  expired
+                  key={binding.id}
+                  orgUnits={orgUnits}
+                  roleAdminSection="expiredAssignments"
+                  roles={roles}
+                  t={t}
+                  teams={teams}
+                  workQueues={workQueues}
+                />
+              ))
+            )}
+          </div>
+        </section>
+
+        <section
+          className="settingsPanel"
+          aria-labelledby="direct-grant-create-title"
+          hidden={selectedSection !== "directGrantCreate"}
+        >
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.roles.directGrants")}</p>
+              <h2 className="sectionTitle" id="direct-grant-create-title">
+                {t("admin.roles.addDirectGrant")}
+              </h2>
+              <p className="metaText">
+                {t("admin.roles.addDirectGrant.description")}
+              </p>
+            </div>
+            <span className="badge">{permissionCatalog.length}</span>
+          </div>
+
+          <form
+            className="settingsForm directGrantForm"
+            action={createDirectPermissionGrantAction}
           >
-            <div className="sectionHeader">
-              <div>
-                <p className="eyebrow">{t("admin.roles.assignments")}</p>
-                <h2 className="sectionTitle" id="role-bindings-title">
-                  {t("admin.roles.activeAssignments")}
-                </h2>
-                <p className="metaText">
-                  {t("admin.roles.activeAssignments.description")}
-                </p>
-              </div>
-              <span className="badge">{roleBindings.length}</span>
-            </div>
-
-            <div className="managementList">
-              {roleBindings.length === 0 ? (
-                <p className="metaText">{t("admin.roles.noAssignments")}</p>
-              ) : (
-                roleBindings.map((binding) => (
-                  <RoleBindingRow
-                    binding={binding}
-                    currentEmployeeId={access.employeeId}
-                    employees={employees}
-                    key={binding.id}
-                    orgUnits={orgUnits}
-                    roleAdminSection="activeAssignments"
-                    roles={roles}
-                    t={t}
-                    teams={teams}
-                    workQueues={workQueues}
-                  />
-                ))
-              )}
-            </div>
-          </section>
-
-          <section
-            className="settingsPanel"
-            aria-labelledby="expired-role-bindings-title"
-            hidden={selectedSection !== "expiredAssignments"}
-          >
-            <div className="sectionHeader">
-              <div>
-                <p className="eyebrow">{t("admin.roles.assignments")}</p>
-                <h2 className="sectionTitle" id="expired-role-bindings-title">
-                  {t("admin.roles.expiredAssignments")}
-                </h2>
-                <p className="metaText">
-                  {t("admin.roles.expiredAssignments.description")}
-                </p>
-              </div>
-              <span className="badge">{expiredRoleBindings.length}</span>
-            </div>
-
-            <div className="managementList">
-              {expiredRoleBindings.length === 0 ? (
-                <p className="metaText">
-                  {t("admin.roles.noExpiredAssignments")}
-                </p>
-              ) : (
-                expiredRoleBindings.map((binding) => (
-                  <RoleBindingRow
-                    binding={binding}
-                    currentEmployeeId={access.employeeId}
-                    employees={employees}
-                    expired
-                    key={binding.id}
-                    orgUnits={orgUnits}
-                    roleAdminSection="expiredAssignments"
-                    roles={roles}
-                    t={t}
-                    teams={teams}
-                    workQueues={workQueues}
-                  />
-                ))
-              )}
-            </div>
-          </section>
-
-          <section
-            className="settingsPanel"
-            aria-labelledby="direct-grant-create-title"
-            hidden={selectedSection !== "directGrantCreate"}
-          >
-            <div className="sectionHeader">
-              <div>
-                <p className="eyebrow">{t("admin.roles.directGrants")}</p>
-                <h2 className="sectionTitle" id="direct-grant-create-title">
-                  {t("admin.roles.addDirectGrant")}
-                </h2>
-                <p className="metaText">
-                  {t("admin.roles.addDirectGrant.description")}
-                </p>
-              </div>
-              <span className="badge">{permissionCatalog.length}</span>
-            </div>
-
-            <form
-              className="settingsForm directGrantForm"
-              action={createDirectPermissionGrantAction}
+            <input
+              name="roleAdminSection"
+              type="hidden"
+              value="directGrantCreate"
+            />
+            <DirectGrantFields
+              employees={employeeOptions}
+              messages={scopePickerMessages(t)}
+              permissions={directGrantPermissionOptions}
+              scopeReferenceOptions={scopeReferenceOptions}
+            />
+            <button
+              className="primaryButton"
+              type="submit"
+              disabled={
+                employeeOptions.length === 0 ||
+                directGrantPermissionOptions.length === 0
+              }
             >
-              <input
-                name="roleAdminSection"
-                type="hidden"
-                value="directGrantCreate"
-              />
-              <DirectGrantFields
-                employees={employeeOptions}
-                messages={scopePickerMessages(t)}
-                permissions={directGrantPermissionOptions}
-                scopeReferenceOptions={scopeReferenceOptions}
-              />
-              <button
-                className="primaryButton"
-                type="submit"
-                disabled={
-                  employeeOptions.length === 0 ||
-                  directGrantPermissionOptions.length === 0
-                }
+              <Plus size={18} aria-hidden="true" />
+              {t("admin.roles.grantDirectPermission")}
+            </button>
+          </form>
+        </section>
+
+        <section
+          className="settingsPanel"
+          aria-labelledby="direct-grants-title"
+          hidden={selectedSection !== "activeDirectGrants"}
+        >
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.roles.directGrants")}</p>
+              <h2 className="sectionTitle" id="direct-grants-title">
+                {t("admin.roles.activeDirectGrants")}
+              </h2>
+              <p className="metaText">
+                {t("admin.roles.activeDirectGrants.description")}
+              </p>
+            </div>
+            <span className="badge">{directGrants.length}</span>
+          </div>
+
+          <div className="managementList">
+            {directGrants.length === 0 ? (
+              <p className="metaText">{t("admin.roles.noDirectGrants")}</p>
+            ) : (
+              directGrants.map((grant) => (
+                <DirectGrantRow
+                  currentEmployeeId={access.employeeId}
+                  employees={employees}
+                  grant={grant}
+                  key={grant.id}
+                  roleAdminSection="activeDirectGrants"
+                  t={t}
+                />
+              ))
+            )}
+          </div>
+        </section>
+
+        <section
+          className="settingsPanel"
+          aria-labelledby="expired-direct-grants-title"
+          hidden={selectedSection !== "expiredDirectGrants"}
+        >
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.roles.directGrants")}</p>
+              <h2 className="sectionTitle" id="expired-direct-grants-title">
+                {t("admin.roles.expiredDirectGrants")}
+              </h2>
+              <p className="metaText">
+                {t("admin.roles.expiredDirectGrants.description")}
+              </p>
+            </div>
+            <span className="badge">{expiredDirectGrants.length}</span>
+          </div>
+
+          <div className="managementList">
+            {expiredDirectGrants.length === 0 ? (
+              <p className="metaText">
+                {t("admin.roles.noExpiredDirectGrants")}
+              </p>
+            ) : (
+              expiredDirectGrants.map((grant) => (
+                <DirectGrantRow
+                  currentEmployeeId={access.employeeId}
+                  employees={employees}
+                  expired
+                  grant={grant}
+                  key={grant.id}
+                  roleAdminSection="expiredDirectGrants"
+                  t={t}
+                />
+              ))
+            )}
+          </div>
+        </section>
+
+        <section
+          className="settingsPanel"
+          aria-labelledby="roles-list-title"
+          hidden={selectedSection !== "definitions"}
+        >
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.roles")}</p>
+              <h2 className="sectionTitle" id="roles-list-title">
+                {t("admin.roles.roleDefinitions")}
+              </h2>
+              <p className="metaText">
+                {t("admin.roles.roleDefinitions.description")}
+              </p>
+            </div>
+            <span className="badge">{roles.length}</span>
+          </div>
+
+          <div className="managementList">
+            {roles.length === 0 ? (
+              <p className="metaText">{t("admin.roles.empty")}</p>
+            ) : (
+              roles.map((role) => (
+                <RoleDefinitionRow
+                  bindingCount={roleBindingsByRoleId.get(role.id) ?? 0}
+                  key={role.id}
+                  roleAdminSection="definitions"
+                  role={role}
+                  t={t}
+                />
+              ))
+            )}
+          </div>
+        </section>
+
+        <section
+          className="settingsPanel"
+          aria-labelledby="permission-catalog-title"
+          hidden={selectedSection !== "permissionCatalog"}
+        >
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.roles.permissions")}</p>
+              <h2 className="sectionTitle" id="permission-catalog-title">
+                {t("admin.roles.permissionCatalog")}
+              </h2>
+              <p className="metaText">
+                {t("admin.roles.permissionCatalog.description")}
+              </p>
+            </div>
+            <span className="badge">{permissionCatalog.length}</span>
+          </div>
+
+          <div className="managementList">
+            {summarizeCatalogDomains().map((summary) => (
+              <article
+                className="managementRow roleCatalogRow"
+                key={summary.domain}
               >
-                <Plus size={18} aria-hidden="true" />
-                {t("admin.roles.grantDirectPermission")}
-              </button>
-            </form>
-          </section>
-
-          <section
-            className="settingsPanel"
-            aria-labelledby="direct-grants-title"
-            hidden={selectedSection !== "activeDirectGrants"}
-          >
-            <div className="sectionHeader">
-              <div>
-                <p className="eyebrow">{t("admin.roles.directGrants")}</p>
-                <h2 className="sectionTitle" id="direct-grants-title">
-                  {t("admin.roles.activeDirectGrants")}
-                </h2>
-                <p className="metaText">
-                  {t("admin.roles.activeDirectGrants.description")}
-                </p>
-              </div>
-              <span className="badge">{directGrants.length}</span>
-            </div>
-
-            <div className="managementList">
-              {directGrants.length === 0 ? (
-                <p className="metaText">{t("admin.roles.noDirectGrants")}</p>
-              ) : (
-                directGrants.map((grant) => (
-                  <DirectGrantRow
-                    currentEmployeeId={access.employeeId}
-                    employees={employees}
-                    grant={grant}
-                    key={grant.id}
-                    roleAdminSection="activeDirectGrants"
-                    t={t}
-                  />
-                ))
-              )}
-            </div>
-          </section>
-
-          <section
-            className="settingsPanel"
-            aria-labelledby="expired-direct-grants-title"
-            hidden={selectedSection !== "expiredDirectGrants"}
-          >
-            <div className="sectionHeader">
-              <div>
-                <p className="eyebrow">{t("admin.roles.directGrants")}</p>
-                <h2 className="sectionTitle" id="expired-direct-grants-title">
-                  {t("admin.roles.expiredDirectGrants")}
-                </h2>
-                <p className="metaText">
-                  {t("admin.roles.expiredDirectGrants.description")}
-                </p>
-              </div>
-              <span className="badge">{expiredDirectGrants.length}</span>
-            </div>
-
-            <div className="managementList">
-              {expiredDirectGrants.length === 0 ? (
-                <p className="metaText">
-                  {t("admin.roles.noExpiredDirectGrants")}
-                </p>
-              ) : (
-                expiredDirectGrants.map((grant) => (
-                  <DirectGrantRow
-                    currentEmployeeId={access.employeeId}
-                    employees={employees}
-                    expired
-                    grant={grant}
-                    key={grant.id}
-                    roleAdminSection="expiredDirectGrants"
-                    t={t}
-                  />
-                ))
-              )}
-            </div>
-          </section>
-
-          <section
-            className="settingsPanel"
-            aria-labelledby="roles-list-title"
-            hidden={selectedSection !== "definitions"}
-          >
-            <div className="sectionHeader">
-              <div>
-                <p className="eyebrow">{t("admin.roles")}</p>
-                <h2 className="sectionTitle" id="roles-list-title">
-                  {t("admin.roles.roleDefinitions")}
-                </h2>
-                <p className="metaText">
-                  {t("admin.roles.roleDefinitions.description")}
-                </p>
-              </div>
-              <span className="badge">{roles.length}</span>
-            </div>
-
-            <div className="managementList">
-              {roles.length === 0 ? (
-                <p className="metaText">{t("admin.roles.empty")}</p>
-              ) : (
-                roles.map((role) => (
-                  <RoleDefinitionRow
-                    bindingCount={roleBindingsByRoleId.get(role.id) ?? 0}
-                    key={role.id}
-                    roleAdminSection="definitions"
-                    role={role}
-                    t={t}
-                  />
-                ))
-              )}
-            </div>
-          </section>
-
-          <section
-            className="settingsPanel"
-            aria-labelledby="permission-catalog-title"
-            hidden={selectedSection !== "permissionCatalog"}
-          >
-            <div className="sectionHeader">
-              <div>
-                <p className="eyebrow">{t("admin.roles.permissions")}</p>
-                <h2 className="sectionTitle" id="permission-catalog-title">
-                  {t("admin.roles.permissionCatalog")}
-                </h2>
-                <p className="metaText">
-                  {t("admin.roles.permissionCatalog.description")}
-                </p>
-              </div>
-              <span className="badge">{permissionCatalog.length}</span>
-            </div>
-
-            <div className="managementList">
-              {summarizeCatalogDomains().map((summary) => (
-                <article
-                  className="managementRow roleCatalogRow"
-                  key={summary.domain}
-                >
-                  <div>
-                    <h3 className="listItemTitle">
-                      {t(permissionDomainKey(summary.domain))}
-                    </h3>
-                    <p className="metaText">
-                      {t("admin.roles.permissionCount", {
-                        count: summary.permissions.length
-                      })}
-                    </p>
-                  </div>
-                  <div className="permissionCodeList">
-                    {summary.permissions.map((permission) => (
-                      <code className="permissionCode" key={permission}>
-                        {permission}
-                      </code>
-                    ))}
-                  </div>
-                </article>
-              ))}
-            </div>
-          </section>
-        </div>
-      </div>
+                <div>
+                  <h3 className="listItemTitle">
+                    {t(permissionDomainKey(summary.domain))}
+                  </h3>
+                  <p className="metaText">
+                    {t("admin.roles.permissionCount", {
+                      count: summary.permissions.length
+                    })}
+                  </p>
+                </div>
+                <div className="permissionCodeList">
+                  {summary.permissions.map((permission) => (
+                    <code className="permissionCode" key={permission}>
+                      {permission}
+                    </code>
+                  ))}
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      </AdminSectionFrame>
     </TenantAdminShell>
-  );
-}
-
-function RoleAdminSectionLink({
-  current,
-  section,
-  t
-}: {
-  current: boolean;
-  section: RoleAdminSectionNavItem;
-  t: Translator;
-}): ReactNode {
-  return (
-    <Link
-      className="integrationListItem integrationNavLink roleSectionNavLink"
-      href={roleAdminSectionHref(section.id)}
-      aria-current={current ? "page" : undefined}
-    >
-      <span className="metricIcon">{section.icon}</span>
-      <div className="integrationListText">
-        <h3 className="listItemTitle">{t(section.titleKey)}</h3>
-      </div>
-    </Link>
   );
 }
 

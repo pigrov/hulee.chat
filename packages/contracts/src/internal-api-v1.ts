@@ -148,6 +148,9 @@ export const internalTenantBrandUpdateRequestSchema = z
   .object({
     productName: z.string().trim().min(1).max(120),
     shortProductName: z.string().trim().min(1).max(40).optional(),
+    assets: z
+      .record(z.string(), z.string().trim().min(1).max(1_000))
+      .optional(),
     themeTokens: z.record(z.string(), z.string()).default({})
   })
   .strict();

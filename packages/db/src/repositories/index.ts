@@ -189,6 +189,7 @@ export {
   buildFindTenantEmployeeSql,
   buildRefreshEmployeeInvitationSql,
   buildRevokeEmployeeInvitationSql,
+  buildUpdateEmployeeProfileSql,
   buildListTenantEmployeesSql,
   buildListTenantInvitationsSql,
   createSqlEmployeeDirectoryRepository,
@@ -433,7 +434,10 @@ export type {
   ListTenantInvitationsInput,
   RefreshEmployeeInvitationPersistenceInput,
   RevokeEmployeeInvitationPersistenceInput,
-  TenantEmployeeRecord
+  TenantEmployeeAvatarAsset,
+  TenantEmployeeProfile,
+  TenantEmployeeRecord,
+  UpdateEmployeeProfilePersistenceInput
 } from "./sql-employee-directory-repository";
 export type { TenantScopedRow } from "./tenant-scope";
 export {

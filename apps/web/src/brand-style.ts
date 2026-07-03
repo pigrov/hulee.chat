@@ -1,3 +1,10 @@
+import {
+  buildBrandThemeTokens,
+  resolveBrandThemeColorPresetId,
+  resolveBrandThemeMode,
+  resolveBrandThemePresetForMode,
+  type BrandThemeMode
+} from "@hulee/branding";
 import type { CSSProperties } from "react";
 
 const cssTokenMap = {
@@ -18,6 +25,8 @@ const cssTokenMap = {
 } as const;
 
 type CssCustomProperty = `--${string}`;
+const pageBackgroundCssVariable = "--hulee-color-page-background";
+export type BrandThemeModeCssProperties = Record<CssCustomProperty, string>;
 
 type BrandProfileView = {
   productName: string;
@@ -28,9 +37,56 @@ type BrandProfileView = {
 export function brandProfileToCssProperties(
   brand: BrandProfileView
 ): CSSProperties {
+  return brandThemeTokensToCssProperties(brand.themeTokens) as CSSProperties;
+}
+
+export function brandProfileToThemeModeCssProperties(
+  brand: BrandProfileView
+): Record<BrandThemeMode, BrandThemeModeCssProperties> {
+  const currentTokens = brand.themeTokens;
+  const currentThemeMode = resolveBrandThemeMode(currentTokens);
+  const colorPresetId =
+    resolveBrandThemeColorPresetId(currentTokens) ?? "hulee";
+  const currentPresetTokens = resolveBrandThemePresetForMode(
+    colorPresetId,
+    currentThemeMode
+  ).tokens;
+  const customPrimaryColor =
+    currentTokens["color.brand.primary"] !==
+    currentPresetTokens["color.brand.primary"]
+      ? currentTokens["color.brand.primary"]
+      : undefined;
+  const customAccentColor =
+    currentTokens["color.accent"] !== currentPresetTokens["color.accent"]
+      ? currentTokens["color.accent"]
+      : undefined;
+
+  return {
+    light: brandThemeTokensToCssProperties(
+      buildBrandThemeTokens({
+        presetId: colorPresetId,
+        mode: "light",
+        primaryColor: customPrimaryColor,
+        accentColor: customAccentColor
+      })
+    ),
+    dark: brandThemeTokensToCssProperties(
+      buildBrandThemeTokens({
+        presetId: colorPresetId,
+        mode: "dark",
+        primaryColor: customPrimaryColor,
+        accentColor: customAccentColor
+      })
+    )
+  };
+}
+
+function brandThemeTokensToCssProperties(
+  themeTokens: Record<string, string>
+): BrandThemeModeCssProperties {
   const style: Record<CssCustomProperty, string> = {};
 
-  for (const [token, value] of Object.entries(brand.themeTokens)) {
+  for (const [token, value] of Object.entries(themeTokens)) {
     const cssVariable = cssTokenMap[token as keyof typeof cssTokenMap];
 
     if (cssVariable) {
@@ -38,7 +94,9 @@ export function brandProfileToCssProperties(
     }
   }
 
-  return style as CSSProperties;
+  style[pageBackgroundCssVariable] = buildBrandPageBackground(themeTokens);
+
+  return style;
 }
 
 export function buildBrandMarkLabel(brand: BrandProfileView): string {
@@ -50,4 +108,19 @@ export function buildBrandMarkLabel(brand: BrandProfileView): string {
   }
 
   return normalized.slice(0, 2);
+}
+
+function buildBrandPageBackground(themeTokens: Record<string, string>): string {
+  const page = themeTokens["color.page"] ?? "var(--hulee-color-page)";
+  const surfaceMuted =
+    themeTokens["color.surface.muted"] ?? "var(--hulee-color-surface-muted)";
+  const surfaceRaised =
+    themeTokens["color.surface.raised"] ?? "var(--hulee-color-surface-raised)";
+
+  return [
+    "linear-gradient(135deg,",
+    `color-mix(in srgb, ${surfaceMuted} 62%, ${page}) 0%,`,
+    `color-mix(in srgb, ${surfaceMuted} 28%, ${page}) 46%,`,
+    `color-mix(in srgb, ${surfaceRaised} 52%, ${page}) 100%)`
+  ].join(" ");
 }

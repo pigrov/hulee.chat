@@ -42,20 +42,37 @@ export async function upsertOrgUnitAction(formData: FormData): Promise<void> {
 
   try {
     const requestedId = readOptionalFormString(formData, "id");
+    const existingOrgUnits =
+      requestedId === undefined
+        ? undefined
+        : await repository.listOrgUnits({ tenantId: session.tenantId });
     const existing =
       requestedId === undefined
         ? undefined
-        : await findOrgUnit(repository, session.tenantId, requestedId);
+        : existingOrgUnits?.find((orgUnit) => orgUnit.id === requestedId);
 
     if (requestedId !== undefined && existing === undefined) {
       throw new Error("Org unit not found.");
+    }
+
+    const parentOrgUnitId = readOptionalFormString(formData, "parentOrgUnitId");
+
+    if (
+      existing !== undefined &&
+      parentOrgUnitId !== undefined &&
+      existingOrgUnits !== undefined &&
+      collectOrgUnitDescendantIds(existingOrgUnits, existing.id).has(
+        parentOrgUnitId
+      )
+    ) {
+      throw new Error("Org unit cannot be moved under its descendant.");
     }
 
     const id = existing?.id ?? `org_unit:${session.tenantId}:${randomUUID()}`;
     const orgUnit = await repository.upsertOrgUnit({
       id,
       tenantId: session.tenantId,
-      parentOrgUnitId: readOptionalFormString(formData, "parentOrgUnitId"),
+      parentOrgUnitId,
       name: readRequiredLimitedFormString(formData, "name", 120),
       kind: readOrgUnitKind(formData, "kind"),
       status: existing?.status ?? "active",
@@ -86,6 +103,78 @@ export async function upsertOrgUnitAction(formData: FormData): Promise<void> {
 
   revalidateOrgStructurePaths();
   redirect(destination);
+}
+
+export async function moveOrgUnitParentAction(formData: FormData): Promise<{
+  readonly status: "saved" | "invalid";
+}> {
+  await assertWebActionRequest();
+
+  const session = await assertVerifiedOrgStructurePermission(formData);
+  const repository = createSqlOrgStructureRepository(getWebDatabase());
+  const now = new Date();
+
+  try {
+    const id = readRequiredFormString(formData, "id");
+    const parentOrgUnitId = readOptionalFormString(formData, "parentOrgUnitId");
+    const orgUnits = await repository.listOrgUnits({
+      tenantId: session.tenantId
+    });
+    const existing = orgUnits.find((orgUnit) => orgUnit.id === id);
+
+    if (existing === undefined) {
+      throw new Error("Org unit not found.");
+    }
+
+    if (parentOrgUnitId !== undefined) {
+      const parent = orgUnits.find((orgUnit) => orgUnit.id === parentOrgUnitId);
+
+      if (parent === undefined) {
+        throw new Error("Parent org unit not found.");
+      }
+
+      if (parentOrgUnitId === existing.id) {
+        throw new Error("Org unit cannot be moved under itself.");
+      }
+
+      if (
+        collectOrgUnitDescendantIds(orgUnits, existing.id).has(parentOrgUnitId)
+      ) {
+        throw new Error("Org unit cannot be moved under its descendant.");
+      }
+    }
+
+    const orgUnit = await repository.upsertOrgUnit({
+      id: existing.id,
+      tenantId: session.tenantId,
+      parentOrgUnitId,
+      name: existing.name,
+      kind: existing.kind,
+      status: existing.status,
+      updatedAt: now
+    });
+
+    await recordOrgStructureAudit({
+      tenantId: session.tenantId,
+      actorEmployeeId: session.employeeId,
+      action: "org_unit.updated",
+      entityType: "org_unit",
+      entityId: orgUnit.id,
+      metadata: {
+        name: orgUnit.name,
+        previousParentOrgUnitId: existing.parentOrgUnitId,
+        nextParentOrgUnitId: orgUnit.parentOrgUnitId,
+        status: orgUnit.status
+      },
+      occurredAt: now
+    });
+
+    revalidateOrgStructurePaths();
+
+    return { status: "saved" };
+  } catch {
+    return { status: "invalid" };
+  }
 }
 
 export async function setOrgUnitStatusAction(
@@ -367,6 +456,40 @@ async function findOrgUnit(
   const orgUnits = await repository.listOrgUnits({ tenantId });
 
   return orgUnits.find((orgUnit) => orgUnit.id === id);
+}
+
+function collectOrgUnitDescendantIds(
+  orgUnits: readonly OrgUnitRecord[],
+  orgUnitId: string
+): ReadonlySet<string> {
+  const childrenByParent = new Map<string, OrgUnitRecord[]>();
+
+  for (const orgUnit of orgUnits) {
+    if (orgUnit.parentOrgUnitId === null) {
+      continue;
+    }
+
+    childrenByParent.set(orgUnit.parentOrgUnitId, [
+      ...(childrenByParent.get(orgUnit.parentOrgUnitId) ?? []),
+      orgUnit
+    ]);
+  }
+
+  const descendantIds = new Set<string>();
+  const visit = (parentId: string): void => {
+    for (const child of childrenByParent.get(parentId) ?? []) {
+      if (descendantIds.has(child.id)) {
+        continue;
+      }
+
+      descendantIds.add(child.id);
+      visit(child.id);
+    }
+  };
+
+  visit(orgUnitId);
+
+  return descendantIds;
 }
 
 async function findWorkQueue(

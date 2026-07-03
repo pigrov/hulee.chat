@@ -6,9 +6,11 @@ import type { ReactNode } from "react";
 
 import {
   buildBrandMarkLabel,
-  brandProfileToCssProperties
+  brandProfileToCssProperties,
+  brandProfileToThemeModeCssProperties
 } from "./brand-style";
 import { logoutAction } from "./auth-actions";
+import { AppThemeToggle } from "./theme-toggle";
 import { ToastViewport, type ToastMessage } from "./toast";
 
 const emptySlotRegistry = createSlotRegistry([]);
@@ -25,6 +27,11 @@ type Translator = ReturnType<typeof createTranslator>["t"];
 type BrandProfileView = {
   productName: string;
   shortProductName?: string;
+  assets?: {
+    logoLight?: string;
+    logoDark?: string;
+    mark?: string;
+  };
   themeTokens: Record<string, string>;
 };
 
@@ -51,14 +58,13 @@ export function AppFrame({
     productName: brand.productName
   });
   const className = frameClassName ? `appFrame ${frameClassName}` : "appFrame";
+  const themeStyles = brandProfileToThemeModeCssProperties(brand);
 
   return (
     <main className={className} style={brandProfileToCssProperties(brand)}>
       {navigationMode === "rail" ? (
         <nav className="navigationRail" aria-label={t("navigation.primary")}>
-          <div className="brandMark" title={productName}>
-            {buildBrandMarkLabel(brand)}
-          </div>
+          <BrandRailLogo brand={brand} productName={productName} />
           <Link
             className="railButton"
             href="/"
@@ -87,15 +93,23 @@ export function AppFrame({
               <ShieldCheck size={20} aria-hidden="true" />
             </Link>
           ) : null}
-          <form className="railForm" action={logoutAction}>
-            <button
-              className="railButton"
-              type="submit"
-              aria-label={t("auth.logout")}
-            >
-              <LogOut size={20} aria-hidden="true" />
-            </button>
-          </form>
+          <div className="navigationRailFooter">
+            <AppThemeToggle
+              darkLabel={t("theme.dark")}
+              lightLabel={t("theme.light")}
+              themeStyles={themeStyles}
+              toggleLabel={t("theme.toggle")}
+            />
+            <form className="railForm" action={logoutAction}>
+              <button
+                className="railButton"
+                type="submit"
+                aria-label={t("auth.logout")}
+              >
+                <LogOut size={20} aria-hidden="true" />
+              </button>
+            </form>
+          </div>
         </nav>
       ) : null}
       <ToastViewport
@@ -121,6 +135,50 @@ export function BrandIdentity({
         {buildBrandMarkLabel(brand)}
       </div>
       <span className="brandWordmark">{productName}</span>
+    </div>
+  );
+}
+
+export function BrandRailLogo({
+  brand,
+  productName
+}: {
+  brand: BrandProfileView;
+  productName: string;
+}): ReactNode {
+  const logoLight =
+    brand.assets?.mark ?? brand.assets?.logoLight ?? brand.assets?.logoDark;
+  const logoDark =
+    brand.assets?.mark ?? brand.assets?.logoDark ?? brand.assets?.logoLight;
+
+  if (!logoLight) {
+    return (
+      <div className="brandRailLogo brandMark" title={productName}>
+        {buildBrandMarkLabel(brand)}
+      </div>
+    );
+  }
+
+  return (
+    <div className="brandRailLogo" title={productName} aria-label={productName}>
+      <img
+        className={
+          logoDark && logoDark !== logoLight
+            ? "brandRailLogoImage brandRailLogoImageLight brandRailLogoImageLightWithDark"
+            : "brandRailLogoImage brandRailLogoImageLight"
+        }
+        src={logoLight}
+        alt=""
+        draggable={false}
+      />
+      {logoDark && logoDark !== logoLight ? (
+        <img
+          className="brandRailLogoImage brandRailLogoImageDark"
+          src={logoDark}
+          alt=""
+          draggable={false}
+        />
+      ) : null}
     </div>
   );
 }

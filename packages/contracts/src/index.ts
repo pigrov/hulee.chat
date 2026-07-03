@@ -74,6 +74,10 @@ export type PlatformEvent =
   | EventEnvelope<"account.password_reset_completed", { accountId: string }>
   | EventEnvelope<"employee.created", { employeeId: EmployeeId }>
   | EventEnvelope<
+      "employee.profile_updated",
+      { employeeId: EmployeeId; fields: readonly string[] }
+    >
+  | EventEnvelope<
       "employee.invited",
       { invitationId: string; email: string; role?: string }
     >

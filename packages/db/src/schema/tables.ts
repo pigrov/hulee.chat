@@ -605,6 +605,7 @@ export const employees = pgTable(
     accountId: text("account_id").references(() => accounts.id),
     email: text("email").notNull(),
     displayName: text("display_name").notNull(),
+    profile: jsonb("profile").notNull().default({}),
     deactivatedAt: timestamp("deactivated_at", { withTimezone: true }),
     ...timestamps
   },

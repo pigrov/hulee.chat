@@ -54,7 +54,11 @@ describe("internal tenant settings service", () => {
         brand_id: "brand:tenant-brand:fixed-id",
         product_name: "Acme Desk",
         short_product_name: "Acme",
-        assets: {},
+        assets: {
+          logoLight: "/brand-assets/brand-asset%3Afixed/logo.png?v=hash",
+          logoDark: "/brand-assets/brand-asset%3Afixed/logo.png?v=hash",
+          mark: "/brand-assets/brand-asset%3Afixed/logo.png?v=hash"
+        },
         theme_tokens: {
           "color.brand.primary": "#177f75",
           "color.brand.foreground": "#ffffff"
@@ -72,6 +76,11 @@ describe("internal tenant settings service", () => {
       service.updateTenantBrand(context, {
         productName: "Acme Desk",
         shortProductName: "Acme",
+        assets: {
+          logoLight: "/brand-assets/brand-asset%3Afixed/logo.png?v=hash",
+          logoDark: "/brand-assets/brand-asset%3Afixed/logo.png?v=hash",
+          mark: "/brand-assets/brand-asset%3Afixed/logo.png?v=hash"
+        },
         themeTokens: {
           "color.brand.primary": "#177f75",
           "color.brand.foreground": "#ffffff"
@@ -80,12 +89,38 @@ describe("internal tenant settings service", () => {
     ).resolves.toMatchObject({
       brand: {
         productName: "Acme Desk",
+        assets: {
+          logoLight: "/brand-assets/brand-asset%3Afixed/logo.png?v=hash"
+        },
         themeTokens: {
           "color.brand.primary": "#177f75"
         }
       }
     });
     expect(executor.queries).toHaveLength(1);
+  });
+
+  it("rejects unsupported brand asset paths before writing", async () => {
+    const executor = new RecordingSqlExecutor([]);
+    const service = createInternalTenantSettingsService({
+      database: executor
+    });
+
+    await expect(
+      service.updateTenantBrand(context, {
+        productName: "Acme Desk",
+        assets: {
+          logoLight: "https://example.test/logo.svg"
+        },
+        themeTokens: {
+          "color.brand.primary": "#177f75",
+          "color.brand.foreground": "#ffffff"
+        }
+      })
+    ).rejects.toMatchObject({
+      code: "validation.failed"
+    });
+    expect(executor.queries).toHaveLength(0);
   });
 
   it("rejects unsupported token names before writing", async () => {

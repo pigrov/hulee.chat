@@ -1,4 +1,5 @@
 export const employeeAccessSectionIds = [
+  "profile",
   "memberships",
   "roles",
   "direct_grants",

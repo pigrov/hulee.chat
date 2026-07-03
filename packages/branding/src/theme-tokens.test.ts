@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  brandThemeColorPresets,
   brandThemePresets,
   buildBrandThemeTokens,
   normalizeBrandThemeTokens,
   resolveBrandThemeBasePresetId,
+  resolveBrandThemeColorPresetId,
+  resolveBrandThemeMode,
+  resolveBrandThemePresetForMode,
   resolveBrandThemePresetId
 } from "./index";
 
@@ -68,6 +72,46 @@ describe("brand theme tokens", () => {
     }
   });
 
+  it("exposes color presets with paired light and dark variants", () => {
+    expect(brandThemeColorPresets.map((preset) => preset.id)).toEqual([
+      "hulee",
+      "neutral",
+      "blue",
+      "green",
+      "red",
+      "orange",
+      "amber",
+      "violet",
+      "rose",
+      "cyan",
+      "graphite",
+      "high-contrast"
+    ]);
+
+    expect(resolveBrandThemePresetForMode("neutral", "dark").id).toBe(
+      "neutral-dark"
+    );
+    expect(resolveBrandThemePresetForMode("blue-dark", "light").id).toBe(
+      "blue"
+    );
+    expect(resolveBrandThemePresetForMode("orange", "dark").id).toBe(
+      "orange-dark"
+    );
+    expect(resolveBrandThemePresetForMode("violet-dark", "light").id).toBe(
+      "violet"
+    );
+    expect(
+      resolveBrandThemeColorPresetId(
+        resolveBrandThemePresetForMode("green", "dark").tokens
+      )
+    ).toBe("green");
+    expect(
+      resolveBrandThemeMode(
+        resolveBrandThemePresetForMode("graphite", "dark").tokens
+      )
+    ).toBe("dark");
+  });
+
   it("keeps the base preset when action colors are customized", () => {
     expect(
       resolveBrandThemeBasePresetId({
@@ -78,5 +122,15 @@ describe("brand theme tokens", () => {
         })
       })
     ).toBe("hulee-dark");
+    expect(
+      resolveBrandThemeColorPresetId({
+        ...buildBrandThemeTokens({
+          presetId: "hulee",
+          mode: "dark",
+          primaryColor: "#0f766e",
+          accentColor: "#f59e0b"
+        })
+      })
+    ).toBe("hulee");
   });
 });

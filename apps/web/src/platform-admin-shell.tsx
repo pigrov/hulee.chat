@@ -2,8 +2,6 @@ import { defaultBrandProfile } from "@hulee/branding";
 import type { createTranslator, I18nMessageKey } from "@hulee/i18n";
 import {
   Building2,
-  ChevronsLeft,
-  ChevronsRight,
   Inbox,
   KeyRound,
   MessageCircle,
@@ -22,7 +20,9 @@ import {
   type AdminTopBarMenuGroup,
   type AdminTopBarMenuItem
 } from "./admin-top-bar";
-import { AppFrame } from "./app-chrome";
+import { AppFrame, BrandRailLogo } from "./app-chrome";
+import { brandProfileToThemeModeCssProperties } from "./brand-style";
+import { AppThemeToggle } from "./theme-toggle";
 import type { ToastMessage } from "./toast";
 
 type Translator = ReturnType<typeof createTranslator>["t"];
@@ -74,6 +74,10 @@ export function PlatformAdminShell({
     navigationAccess,
     t
   });
+  const productName = t("app.name", {
+    productName: defaultBrandProfile.productName
+  });
+  const themeStyles = brandProfileToThemeModeCssProperties(defaultBrandProfile);
 
   return (
     <AppFrame
@@ -86,50 +90,50 @@ export function PlatformAdminShell({
       toasts={toasts}
     >
       <section className="adminWorkspace" aria-labelledby={titleId}>
-        <input
-          aria-label={t("navigation.collapseMenu")}
-          className="adminNavToggleInput"
-          id="platform-admin-nav-toggle"
-          type="checkbox"
-        />
-        <AdminTopBar
-          brand={defaultBrandProfile}
-          eyebrow={t("platform.controlPlane")}
-          menuGroups={menuGroups}
-          roleLabel={t("navigation.platformAdmin")}
-          t={t}
-          title={title}
-          titleId={titleId}
-        />
-
-        <div className="adminContent">
-          <div className="platformAdminGrid">
-            <aside
-              className="settingsPanel platformNavPanel"
-              aria-label={t("platform.navigation")}
+        <div className="adminShellLayout">
+          <aside
+            className="adminNavPanel platformNavPanel"
+            aria-label={t("platform.navigation")}
+          >
+            <Link
+              className="adminRailLogoLink"
+              href="/platform"
+              aria-label={productName}
+              title={productName}
             >
+              <BrandRailLogo
+                brand={defaultBrandProfile}
+                productName={productName}
+              />
+            </Link>
+            <div className="adminRailMenu">
               <PlatformNavigation current={current} t={t} />
-              <label
-                className="adminNavCollapseButton"
-                htmlFor="platform-admin-nav-toggle"
-              >
-                <ChevronsLeft
-                  className="adminNavCollapseExpandedIcon"
-                  size={16}
-                  aria-hidden="true"
-                />
-                <ChevronsRight
-                  className="adminNavCollapseCollapsedIcon"
-                  size={16}
-                  aria-hidden="true"
-                />
-                <span className="adminNavCollapseExpandedText">
-                  {t("navigation.collapseMenu")}
-                </span>
-              </label>
-            </aside>
+            </div>
+            <div className="adminNavFooter">
+              <AppThemeToggle
+                darkLabel={t("theme.dark")}
+                lightLabel={t("theme.light")}
+                themeStyles={themeStyles}
+                toggleLabel={t("theme.toggle")}
+              />
+            </div>
+          </aside>
 
-            <div className="adminStack">{children}</div>
+          <div className="adminShellMain">
+            <AdminTopBar
+              brand={defaultBrandProfile}
+              eyebrow={t("platform.controlPlane")}
+              icon={<PlatformSectionIcon sectionId={current} />}
+              menuGroups={menuGroups}
+              roleLabel={t("navigation.platformAdmin")}
+              t={t}
+              title={title}
+              titleId={titleId}
+            />
+
+            <div className="adminContent">
+              <div className="adminStack">{children}</div>
+            </div>
           </div>
         </div>
       </section>
@@ -231,18 +235,18 @@ function PlatformSectionIcon({
 }): ReactNode {
   switch (sectionId) {
     case "companies":
-      return <Building2 size={18} aria-hidden="true" />;
+      return <Building2 size={24} strokeWidth={1.2} aria-hidden="true" />;
     case "deployments":
-      return <Server size={18} aria-hidden="true" />;
+      return <Server size={24} strokeWidth={1.2} aria-hidden="true" />;
     case "commercial":
-      return <KeyRound size={18} aria-hidden="true" />;
+      return <KeyRound size={24} strokeWidth={1.2} aria-hidden="true" />;
     case "support":
-      return <ShieldCheck size={18} aria-hidden="true" />;
+      return <ShieldCheck size={24} strokeWidth={1.2} aria-hidden="true" />;
     case "egress":
     case "providers":
-      return <Network size={18} aria-hidden="true" />;
+      return <Network size={24} strokeWidth={1.2} aria-hidden="true" />;
     case "channels":
-      return <MessageCircle size={18} aria-hidden="true" />;
+      return <MessageCircle size={24} strokeWidth={1.2} aria-hidden="true" />;
   }
 }
 

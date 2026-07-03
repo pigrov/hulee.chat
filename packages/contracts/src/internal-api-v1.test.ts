@@ -185,6 +185,9 @@ describe("internal API v1 schemas", () => {
       internalTenantBrandUpdateRequestSchema.parse({
         productName: " Acme Desk ",
         shortProductName: " Acme ",
+        assets: {
+          logoLight: " /brand-assets/brand-asset%3A1/logo.png?v=hash "
+        },
         themeTokens: {
           "color.brand.primary": "#177f75"
         }
@@ -192,6 +195,9 @@ describe("internal API v1 schemas", () => {
     ).toEqual({
       productName: "Acme Desk",
       shortProductName: "Acme",
+      assets: {
+        logoLight: "/brand-assets/brand-asset%3A1/logo.png?v=hash"
+      },
       themeTokens: {
         "color.brand.primary": "#177f75"
       }

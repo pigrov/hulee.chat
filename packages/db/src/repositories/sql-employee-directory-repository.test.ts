@@ -32,6 +32,16 @@ describe("SQL employee directory repository", () => {
         account_id: "account-1",
         email: "agent@example.test",
         display_name: "Agent",
+        profile: {
+          phoneNumber: "+7 999 111-22-33",
+          avatar: {
+            storageKey:
+              "tenants/tenant_directory/employee-assets/employee_directory/avatar/hash.png",
+            mediaType: "image/png",
+            sizeBytes: 128,
+            version: "hash"
+          }
+        },
         system_role_template_ids: [],
         team_ids: ["team-sales"],
         org_unit_ids: ["org-sales"],
@@ -53,6 +63,15 @@ describe("SQL employee directory repository", () => {
         accountId: "account-1",
         email: "agent@example.test",
         displayName: "Agent",
+        phoneNumber: "+7 999 111-22-33",
+        avatarUrl: "/employee-assets/employee_directory/avatar?v=hash",
+        avatar: {
+          storageKey:
+            "tenants/tenant_directory/employee-assets/employee_directory/avatar/hash.png",
+          mediaType: "image/png",
+          sizeBytes: 128,
+          version: "hash"
+        },
         systemRoleTemplateIds: [],
         teamIds: ["team-sales"],
         orgUnitIds: ["org-sales"],
@@ -286,6 +305,63 @@ describe("SQL employee directory repository", () => {
     });
 
     expect(executor.queries).toHaveLength(3);
+  });
+
+  it("writes employee profile updates with tenant boundary and events", async () => {
+    const executor = new RecordingSqlExecutor([
+      {
+        employee_id: employeeId
+      }
+    ]);
+    const repository = createSqlEmployeeDirectoryRepository(executor);
+    const now = new Date("2026-06-23T10:00:00.000Z");
+
+    await repository.updateEmployeeProfile({
+      tenantId,
+      employeeId,
+      displayName: "Agent Updated",
+      updatedAt: now,
+      profile: {
+        phoneNumber: "+7 999 222-33-44",
+        avatar: {
+          storageKey:
+            "tenants/tenant_directory/employee-assets/employee_directory/avatar/hash.webp",
+          mediaType: "image/webp",
+          sizeBytes: 256,
+          version: "hash"
+        }
+      },
+      events: [
+        {
+          id: "event-profile" as EventId,
+          type: "employee.profile_updated",
+          version: "v1",
+          tenantId,
+          occurredAt: now.toISOString(),
+          payload: {
+            employeeId,
+            fields: ["displayName", "phoneNumber", "avatar"]
+          }
+        }
+      ]
+    });
+
+    const query = renderQuery(executor.queries[0]);
+
+    expect(query.sql).toContain("where tenant_id =");
+    expect(query.sql).toContain("and id =");
+    expect(query.sql).toContain("insert into event_store");
+    expect(query.sql).toContain("insert into outbox");
+    expect(query.params).toContain("Agent Updated");
+    expect(query.params).toContainEqual(now);
+    expect(
+      query.params.some((param) => {
+        return (
+          typeof param === "string" &&
+          param.includes("employee.profile_updated")
+        );
+      })
+    ).toBe(true);
   });
 });
 

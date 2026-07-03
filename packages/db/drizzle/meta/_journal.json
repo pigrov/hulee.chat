@@ -162,6 +162,13 @@
       "when": 1783002540305,
       "tag": "0022_fair_mephistopheles",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1783109243574,
+      "tag": "0023_aberrant_william_stryker",
+      "breakpoints": true
     }
   ]
 }

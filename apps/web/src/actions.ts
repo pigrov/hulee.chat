@@ -3,11 +3,13 @@
 import {
   buildBrandThemeTokens,
   isBrandThemePresetId,
+  type BrandThemeMode,
   type BrandThemePresetId
 } from "@hulee/branding";
+import type { TenantId } from "@hulee/contracts";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   internalChannelAuthChallengeTypeSchema,
   internalChannelTypeSchema,
@@ -15,6 +17,8 @@ import {
 } from "@hulee/contracts";
 import type { Permission } from "@hulee/core";
 import { createSqlDeploymentChannelProviderPolicyRepository } from "@hulee/db";
+import { createS3ObjectStorage } from "@hulee/storage";
+import { sql } from "drizzle-orm";
 
 import {
   cancelChannelAuthChallenge,
@@ -56,6 +60,11 @@ import {
   type PlatformChannelProviderPolicyView
 } from "./platform-channel-policies";
 import {
+  canUseLocalBrandAssetStorage,
+  putLocalBrandAsset,
+  toLocalBrandAssetStorageKey
+} from "./local-brand-asset-storage";
+import {
   selectDuplicateTelegramBotConnector,
   telegramDisplayNameFromValidatedBot,
   telegramTokenValidationFailureStatus
@@ -69,6 +78,12 @@ type TelegramConnectionActionState = {
 
 const telegramBotChannelType = "telegram_bot" as const;
 const telegramBotTokenPattern = /^\d{6,14}:[A-Za-z0-9_-]{30,}$/;
+const maxBrandLogoBytes = 2 * 1024 * 1024;
+const brandLogoMediaTypes = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/webp": "webp"
+} as const;
 
 export async function sendReplyAction(formData: FormData): Promise<void> {
   await assertWebActionRequest();
@@ -186,19 +201,20 @@ export async function applyBrandPresetAction(
   const presetId = resolvePresetId(
     readRequiredFormString(formData, "presetId")
   );
-  let destination = "/admin/branding?brandStatus=saved";
+  const themeMode = readBrandThemeMode(formData);
+  let destination = brandDestination("saved", formData);
 
   try {
     await updateTenantBrand(
       {
         productName,
         shortProductName,
-        themeTokens: buildBrandThemeTokens({ presetId })
+        themeTokens: buildBrandThemeTokens({ mode: themeMode, presetId })
       },
       internalApiAccess
     );
   } catch {
-    destination = "/admin/branding?brandStatus=invalid";
+    destination = brandDestination("invalid", formData);
   }
 
   revalidateBrandPaths();
@@ -221,16 +237,36 @@ export async function updateTenantBrandAction(
   const presetId = resolvePresetId(
     readOptionalFormString(formData, "presetId") ?? "hulee"
   );
+  const themeMode = readBrandThemeMode(formData);
   const primaryColor = readRequiredFormString(formData, "primaryColor").trim();
   const accentColor = readRequiredFormString(formData, "accentColor").trim();
-  let destination = "/admin/branding?brandStatus=saved";
+  const logoFile = readOptionalFormFile(formData, "brandLogoFile");
+  let destination = brandDestination("saved", formData);
 
   try {
+    const uploadedLogo =
+      logoFile === undefined
+        ? undefined
+        : await uploadTenantBrandLogo({
+            tenantId: (await requireCurrentWebAccessSession()).tenantId,
+            file: logoFile
+          });
+    const assets =
+      uploadedLogo === undefined
+        ? undefined
+        : {
+            logoLight: uploadedLogo.url,
+            logoDark: uploadedLogo.url,
+            mark: uploadedLogo.url
+          };
+
     await updateTenantBrand(
       {
         productName,
         shortProductName,
+        ...(assets === undefined ? {} : { assets }),
         themeTokens: buildBrandThemeTokens({
+          mode: themeMode,
           presetId,
           primaryColor,
           accentColor
@@ -239,11 +275,105 @@ export async function updateTenantBrandAction(
       internalApiAccess
     );
   } catch {
-    destination = "/admin/branding?brandStatus=invalid";
+    destination = brandDestination("invalid", formData);
   }
 
   revalidateBrandPaths();
   redirect(destination);
+}
+
+function brandDestination(status: string, formData: FormData): string {
+  const params = new URLSearchParams({ brandStatus: status });
+  const section = readBrandingSection(formData);
+
+  if (section !== undefined) {
+    params.set("section", section);
+  }
+
+  return `/admin/branding?${params.toString()}`;
+}
+
+function readBrandingSection(formData: FormData): string | undefined {
+  const value = readOptionalFormString(formData, "section");
+
+  if (value === "presets" || value === "settings") {
+    return value;
+  }
+
+  return undefined;
+}
+
+function readBrandThemeMode(formData: FormData): BrandThemeMode {
+  const value = readOptionalFormString(formData, "themeMode");
+
+  return value === "dark" ? "dark" : "light";
+}
+
+async function uploadTenantBrandLogo(input: {
+  tenantId: TenantId;
+  file: File;
+}): Promise<{ url: string }> {
+  const mediaType = input.file.type;
+  const extension =
+    brandLogoMediaTypes[mediaType as keyof typeof brandLogoMediaTypes];
+
+  if (extension === undefined) {
+    throw new Error(`Unsupported brand logo media type: ${mediaType}`);
+  }
+
+  if (input.file.size <= 0 || input.file.size > maxBrandLogoBytes) {
+    throw new Error("Invalid brand logo size.");
+  }
+
+  const body = new Uint8Array(await input.file.arrayBuffer());
+  const hash = createHash("sha256").update(body).digest("hex").slice(0, 32);
+  const assetId = `brand-asset:${randomUUID()}`;
+  const objectStorageKey = `tenants/${input.tenantId}/brand-assets/logo/${hash}.${extension}`;
+  const config = resolveWebConfig();
+  const storageKey = config.objectStorage
+    ? objectStorageKey
+    : toLocalBrandAssetStorageKey(objectStorageKey);
+  const now = new Date();
+
+  if (config.objectStorage) {
+    await createS3ObjectStorage(config.objectStorage).putObject({
+      storageKey,
+      body,
+      mediaType,
+      fileName: input.file.name
+    });
+  } else if (canUseLocalBrandAssetStorage()) {
+    await putLocalBrandAsset({ storageKey, body });
+  } else {
+    throw new Error("Object storage is not configured.");
+  }
+
+  await getWebDatabase().execute(sql`
+    insert into tenant_brand_assets (
+      id,
+      tenant_id,
+      kind,
+      storage_key,
+      media_type,
+      size_bytes,
+      created_at,
+      updated_at
+    )
+    values (
+      ${assetId},
+      ${input.tenantId},
+      'logo',
+      ${storageKey},
+      ${mediaType},
+      ${input.file.size},
+      ${now},
+      ${now}
+    )
+  `);
+
+  return {
+    url: `/brand-assets/${encodeURIComponent(assetId)}/logo.${extension}?v=${encodeURIComponent(hash)}`
+  };
 }
 
 export async function updateTelegramIntegrationAction(
@@ -744,6 +874,15 @@ function readRequiredFormString(formData: FormData, name: string): string {
   }
 
   return value;
+}
+
+function readOptionalFormFile(
+  formData: FormData,
+  name: string
+): File | undefined {
+  const value = formData.get(name);
+
+  return value instanceof File && value.size > 0 ? value : undefined;
 }
 
 function requiredConnectorIdFromForm(formData: FormData): string {

@@ -4,13 +4,17 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { logoutAction } from "./auth-actions";
-import { BrandIdentity } from "./app-chrome";
 
 type Translator = ReturnType<typeof createTranslator>["t"];
 
 type BrandProfileView = {
   productName: string;
   shortProductName?: string;
+  assets?: {
+    logoLight?: string;
+    logoDark?: string;
+    mark?: string;
+  };
   themeTokens: Record<string, string>;
   links?: Record<string, string>;
 };
@@ -30,6 +34,7 @@ export type AdminTopBarMenuGroup = {
 export function AdminTopBar({
   brand,
   eyebrow,
+  icon,
   menuGroups,
   roleLabel,
   t,
@@ -38,27 +43,25 @@ export function AdminTopBar({
 }: {
   brand: BrandProfileView;
   eyebrow: string;
+  icon: ReactNode;
   menuGroups: readonly AdminTopBarMenuGroup[];
   roleLabel: string;
   t: Translator;
   title: string;
   titleId: string;
 }): ReactNode {
-  const productName = t("app.name", {
-    productName: brand.productName
-  });
   const helpHref = brand.links?.help ?? brand.links?.support;
 
   return (
     <header className="adminTopBar">
-      <div className="adminTopBrand">
-        <BrandIdentity brand={brand} productName={productName} />
-      </div>
-      <div className="adminTitleBlock">
-        <p className="eyebrow">{eyebrow}</p>
-        <h1 className="adminTitle" id={titleId}>
-          {title}
-        </h1>
+      <div className="adminServiceTitle">
+        <span className="adminServiceIconFrame">{icon}</span>
+        <span className="adminServiceText">
+          <h1 className="adminServiceLabel adminTitle" id={titleId}>
+            {title}
+          </h1>
+          <span className="adminServiceDescription">{eyebrow}</span>
+        </span>
       </div>
 
       <div className="adminTopActions">

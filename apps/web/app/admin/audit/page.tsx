@@ -160,8 +160,11 @@ export default async function AuditAdminPage({
       title={t("admin.audit")}
       titleId="admin-audit-title"
     >
-      <div className="adminStack">
-        <section className="settingsPanel" aria-labelledby="audit-filter-title">
+      <div className="adminSectionGrid">
+        <aside
+          className="settingsPanel adminSectionNav auditFilterPanel"
+          aria-labelledby="audit-filter-title"
+        >
           <div className="sectionHeader">
             <div>
               <p className="eyebrow">{t("admin.audit.eyebrow")}</p>
@@ -173,7 +176,10 @@ export default async function AuditAdminPage({
             <span className="badge">{records.length}</span>
           </div>
 
-          <form className="settingsForm accessAuditFilterForm" method="get">
+          <form
+            className="settingsForm accessAuditFilterForm auditFilterForm"
+            method="get"
+          >
             <label className="fieldStack">
               <span className="detailLabel">{t("admin.audit.eventType")}</span>
               <select
@@ -301,48 +307,50 @@ export default async function AuditAdminPage({
               {t("admin.audit.filter")}
             </button>
           </form>
-        </section>
+        </aside>
 
-        <section className="settingsPanel" aria-labelledby="audit-list-title">
-          <div className="sectionHeader">
-            <div>
-              <p className="eyebrow">{t("admin.audit.eyebrow")}</p>
-              <h2 className="sectionTitle" id="audit-list-title">
-                {t("admin.audit.events")}
-              </h2>
+        <div className="adminStack adminSectionContent">
+          <section className="settingsPanel" aria-labelledby="audit-list-title">
+            <div className="sectionHeader">
+              <div>
+                <p className="eyebrow">{t("admin.audit.eyebrow")}</p>
+                <h2 className="sectionTitle" id="audit-list-title">
+                  {t("admin.audit.events")}
+                </h2>
+              </div>
+              <span className="badge">{records.length}</span>
             </div>
-            <span className="badge">{records.length}</span>
-          </div>
 
-          <div className="managementList">
-            {records.length === 0 ? (
-              <p className="metaText">{t("admin.audit.empty")}</p>
-            ) : (
-              records.map((record) =>
-                record.type === "access" ? (
-                  <AccessAuditRow
-                    employees={employees}
-                    key={record.id}
-                    locale={locale}
-                    record={record.record}
-                    roles={roles}
-                    t={t}
-                  />
-                ) : (
-                  <RoutingAuditRow
-                    employees={employees}
-                    key={record.id}
-                    locale={locale}
-                    record={record.record}
-                    teams={teams}
-                    t={t}
-                    workQueues={workQueues}
-                  />
+            <div className="managementList">
+              {records.length === 0 ? (
+                <p className="metaText">{t("admin.audit.empty")}</p>
+              ) : (
+                records.map((record) =>
+                  record.type === "access" ? (
+                    <AccessAuditRow
+                      employees={employees}
+                      key={record.id}
+                      locale={locale}
+                      record={record.record}
+                      roles={roles}
+                      t={t}
+                    />
+                  ) : (
+                    <RoutingAuditRow
+                      employees={employees}
+                      key={record.id}
+                      locale={locale}
+                      record={record.record}
+                      teams={teams}
+                      t={t}
+                      workQueues={workQueues}
+                    />
+                  )
                 )
-              )
-            )}
-          </div>
-        </section>
+              )}
+            </div>
+          </section>
+        </div>
       </div>
     </TenantAdminShell>
   );
