@@ -2,7 +2,12 @@
 
 import type { EmployeeId, PlatformEvent } from "@hulee/contracts";
 import {
+  normalizeEmailAddress,
+  type EmailValidationPolicy
+} from "@hulee/contact-identity";
+import {
   acceptEmployeeInvitation,
+  CoreError,
   createAccountEmailVerifiedEvent,
   createEmployeeInvitation,
   createSequentialIdFactory,
@@ -12,6 +17,7 @@ import {
   type Employee
 } from "@hulee/core";
 import {
+  createSqlAuthEmailTokenRepository,
   createSqlEmployeeDirectoryRepository,
   hashEmployeeInvitationToken,
   type EmployeeInvitationPreview,
@@ -26,7 +32,9 @@ import { redirect } from "next/navigation";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 import { resolvePublicBaseUrl, sendEmployeeInvitationEmail } from "./email";
+import { requestEmailChangeVerificationForAccount } from "./auth-email";
 import { assertWebActionRequest } from "./action-security";
+import { authActionError, type AuthActionState } from "./auth-action-state";
 import { assertWebAuthRateLimit } from "./auth-rate-limit";
 import { requireValidPassword } from "./password-policy";
 import {
@@ -35,17 +43,30 @@ import {
   isEmailNotVerifiedError,
   resolveWebConfig
 } from "./session";
-import { isEmployeeAccessSectionId } from "./employee-access-sections";
 import {
   canUseLocalBrandAssetStorage,
   putLocalBrandAsset,
   toLocalBrandAssetStorageKey
 } from "./local-brand-asset-storage";
+import { normalizePhoneNumberForStorage } from "./phone-number";
 import type { WebAccessSession } from "./access";
 import {
   assertWebDbBackedAdminCommandBoundary,
   webDbBackedAdminCommandBoundaries
 } from "./web-admin-command-boundary";
+import type {
+  EmployeeAdminActionCode,
+  EmployeeAdminActionState
+} from "./employee-admin-action-state";
+import type {
+  EmployeeProfileActionCode,
+  EmployeeProfileActionState,
+  EmployeeProfileActionStatus
+} from "./employee-profile-action-state";
+import type {
+  EmployeeEmailChangeActionCode,
+  EmployeeEmailChangeActionState
+} from "./employee-email-change-action-state";
 
 const invitationTtlMs = 1000 * 60 * 60 * 24 * 14;
 const maxEmployeeAvatarBytes = 2 * 1024 * 1024;
@@ -54,24 +75,37 @@ const employeeAvatarMediaTypes = {
   "image/jpeg": "jpg",
   "image/webp": "webp"
 } as const;
-const phoneNumberPattern = /^[+0-9 ()-]{3,32}$/;
 
-export async function inviteEmployeeAction(formData: FormData): Promise<void> {
+class EmployeeProfileActionError extends Error {
+  constructor(readonly status: EmployeeProfileActionStatus) {
+    super(status);
+  }
+}
+
+class EmployeeEmailChangeActionError extends Error {
+  constructor(readonly status: EmployeeEmailChangeActionCode) {
+    super(status);
+  }
+}
+
+export async function inviteEmployeeAction(
+  _previousState: EmployeeAdminActionState,
+  formData: FormData
+): Promise<EmployeeAdminActionState> {
   await assertWebActionRequest();
-
-  const session = await assertVerifiedEmployeeManagementPermission();
-  const email = readRequiredFormString(formData, "email");
-  const displayName = readOptionalFormString(formData, "displayName");
-  const now = new Date();
-  const token = randomBytes(32).toString("base64url");
-  const tokenHash = hashEmployeeInvitationToken(token);
-  const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
-  let destination = employeeAdminDestination(formData, {
-    kind: "inviteStatus",
-    status: "invalid"
-  });
+  const submittedAt = new Date().toISOString();
 
   try {
+    const session = await assertVerifiedEmployeeManagementPermission({
+      redirectOnEmailNotVerified: false
+    });
+    const rawEmail = readRequiredFormString(formData, "email");
+    const displayName = readOptionalFormString(formData, "displayName");
+    const now = new Date();
+    const token = randomBytes(32).toString("base64url");
+    const tokenHash = hashEmployeeInvitationToken(token);
+    const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
+    const email = normalizeEmployeeEmail(rawEmail);
     const created = createEmployeeInvitation({
       now: now.toISOString(),
       tenantId: session.tenantId,
@@ -86,7 +120,7 @@ export async function inviteEmployeeAction(formData: FormData): Promise<void> {
     await repository.createInvitation(created);
 
     const preview = await repository.findInvitationByTokenHash(tokenHash);
-    const inviteUrl = new URL(`/invite/${token}`, resolvePublicBaseUrl()).href;
+    const manualInviteUrl = inviteUrlFromToken(token);
     const emailResult =
       preview === null
         ? { sent: false, reason: "provider_failed" as const }
@@ -94,43 +128,37 @@ export async function inviteEmployeeAction(formData: FormData): Promise<void> {
             to: created.invitation.email,
             productName: preview.productName,
             tenantDisplayName: preview.tenantDisplayName,
-            inviteUrl
+            inviteUrl: manualInviteUrl
           });
-    const status = emailResult.sent ? "sent" : emailResult.reason;
 
-    destination = employeeAdminDestination(formData, {
-      kind: "inviteStatus",
-      status,
-      inviteToken: token
+    revalidatePath("/admin/employees");
+
+    return employeeAdminInviteResult({
+      code: emailResult.sent ? "sent" : emailResult.reason,
+      manualInviteUrl,
+      submittedAt
     });
-  } catch {
-    destination = employeeAdminDestination(formData, {
-      kind: "inviteStatus",
-      status: "invalid"
-    });
+  } catch (error) {
+    return employeeAdminActionError(error, submittedAt);
   }
-
-  revalidatePath("/admin/employees");
-  redirect(destination);
 }
 
 export async function deactivateEmployeeAction(
+  _previousState: EmployeeAdminActionState,
   formData: FormData
-): Promise<void> {
+): Promise<EmployeeAdminActionState> {
   await assertWebActionRequest();
-
-  const session = await assertVerifiedEmployeeManagementPermission();
-  const employeeId = readRequiredFormString(
-    formData,
-    "employeeId"
-  ) as EmployeeId;
-  const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
-  let destination = employeeAdminDestination(formData, {
-    kind: "actionStatus",
-    status: "invalid"
-  });
+  const submittedAt = new Date().toISOString();
 
   try {
+    const session = await assertVerifiedEmployeeManagementPermission({
+      redirectOnEmailNotVerified: false
+    });
+    const employeeId = readRequiredFormString(
+      formData,
+      "employeeId"
+    ) as EmployeeId;
+    const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
     const target = await repository.findEmployee({
       tenantId: session.tenantId,
       employeeId
@@ -156,43 +184,34 @@ export async function deactivateEmployeeAction(
       events: deactivated.events
     });
 
-    destination = employeeAdminDestination(formData, {
-      kind: "actionStatus",
-      status: "deactivated"
-    });
-  } catch {
-    destination = employeeAdminDestination(formData, {
-      kind: "actionStatus",
-      status: "invalid"
-    });
-  }
+    revalidatePath("/admin/employees");
 
-  revalidatePath("/admin/employees");
-  redirect(destination);
+    return employeeAdminActionSuccess("deactivated", submittedAt);
+  } catch (error) {
+    return employeeAdminActionError(error, submittedAt);
+  }
 }
 
 export async function updateEmployeeProfileAction(
+  _previousState: EmployeeProfileActionState,
   formData: FormData
-): Promise<void> {
+): Promise<EmployeeProfileActionState> {
   await assertWebActionRequest();
 
-  const session = await assertVerifiedEmployeeManagementPermission();
-  const employeeId = readRequiredFormString(
-    formData,
-    "employeeId"
-  ) as EmployeeId;
-  const displayName = readRequiredFormString(formData, "displayName");
-  const phoneNumber = normalizeEmployeePhoneNumber(
-    readOptionalFormString(formData, "phoneNumber")
-  );
-  const avatarFile = readOptionalFormFile(formData, "avatarFile");
-  const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
-  let destination = employeeAccessDestination(formData, {
-    employeeId,
-    status: "invalid"
-  });
-
   try {
+    const session = await assertVerifiedEmployeeManagementPermission({
+      redirectOnEmailNotVerified: false
+    });
+    const employeeId = readRequiredFormString(
+      formData,
+      "employeeId"
+    ) as EmployeeId;
+    const displayName = readRequiredFormString(formData, "displayName");
+    const avatarFile = readOptionalFormFile(formData, "avatarFile");
+    const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
+    const phoneNumber = normalizeEmployeePhoneNumber(
+      readOptionalFormString(formData, "phoneNumber")
+    );
     const target = await repository.findEmployee({
       tenantId: session.tenantId,
       employeeId
@@ -243,36 +262,110 @@ export async function updateEmployeeProfileAction(
       events
     });
 
-    destination = employeeAccessDestination(formData, {
-      employeeId,
-      status: "profile_updated"
-    });
-  } catch {
-    destination = employeeAccessDestination(formData, {
-      employeeId,
-      status: "invalid"
-    });
-  }
+    revalidatePath("/admin/employees");
+    revalidatePath(`/admin/employees/${encodeURIComponent(employeeId)}/access`);
 
-  revalidatePath("/admin/employees");
-  revalidatePath("/admin/employees/[employeeId]/access", "page");
-  redirect(destination);
+    return {
+      code: "profile_updated",
+      status: "success",
+      submittedAt: now.toISOString()
+    };
+  } catch (error) {
+    return {
+      code: employeeProfileActionFailureCode(error),
+      status: "error",
+      submittedAt: new Date().toISOString()
+    };
+  }
+}
+
+export async function requestEmployeeEmailChangeAction(
+  _previousState: EmployeeEmailChangeActionState,
+  formData: FormData
+): Promise<EmployeeEmailChangeActionState> {
+  await assertWebActionRequest();
+  const submittedAt = new Date().toISOString();
+
+  try {
+    const session = await assertVerifiedEmployeeManagementPermission({
+      redirectOnEmailNotVerified: false
+    });
+    const employeeId = readRequiredFormString(
+      formData,
+      "employeeId"
+    ) as EmployeeId;
+    const newEmail = normalizeEmployeeEmail(
+      readRequiredFormString(formData, "email")
+    );
+    const database = getWebDatabase();
+    const employeeRepository = createSqlEmployeeDirectoryRepository(database);
+    const target = await employeeRepository.findEmployee({
+      tenantId: session.tenantId,
+      employeeId
+    });
+
+    if (target === null || target.deactivatedAt !== null) {
+      throw new EmployeeEmailChangeActionError("email_change_unavailable");
+    }
+
+    if (target.accountId === null) {
+      throw new EmployeeEmailChangeActionError("email_change_unavailable");
+    }
+
+    if (target.email.toLowerCase() === newEmail.toLowerCase()) {
+      return employeeEmailChangeActionSuccess("email_unchanged", submittedAt);
+    }
+
+    const existingAccount = await createSqlAuthEmailTokenRepository(
+      database
+    ).findAccountEmailOwner({
+      tenantId: session.tenantId,
+      email: newEmail
+    });
+
+    if (
+      existingAccount !== null &&
+      existingAccount.accountId !== target.accountId
+    ) {
+      throw new EmployeeEmailChangeActionError("email_change_duplicate");
+    }
+
+    const emailResult = await requestEmailChangeVerificationForAccount({
+      tenantId: session.tenantId,
+      accountId: target.accountId,
+      newEmail
+    });
+
+    if (!emailResult.sent) {
+      throw new EmployeeEmailChangeActionError(emailResult.reason);
+    }
+
+    revalidatePath("/admin/employees");
+    revalidatePath(`/admin/employees/${encodeURIComponent(employeeId)}/access`);
+
+    return employeeEmailChangeActionSuccess("email_change_sent", submittedAt);
+  } catch (error) {
+    return {
+      code: employeeEmailChangeActionFailureCode(error),
+      status: "error",
+      submittedAt
+    };
+  }
 }
 
 export async function revokeEmployeeInviteAction(
+  _previousState: EmployeeAdminActionState,
   formData: FormData
-): Promise<void> {
+): Promise<EmployeeAdminActionState> {
   await assertWebActionRequest();
-
-  const session = await assertVerifiedEmployeeManagementPermission();
-  const invitationId = readRequiredFormString(formData, "invitationId");
-  const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
-  let destination = employeeAdminDestination(formData, {
-    kind: "actionStatus",
-    status: "invalid"
-  });
+  const submittedAt = new Date().toISOString();
 
   try {
+    const session = await assertVerifiedEmployeeManagementPermission({
+      redirectOnEmailNotVerified: false
+    });
+    const invitationId = readRequiredFormString(formData, "invitationId");
+    const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
     const preview = await repository.findInvitation({
       tenantId: session.tenantId,
       invitationId
@@ -298,38 +391,30 @@ export async function revokeEmployeeInviteAction(
       events: revoked.events
     });
 
-    destination = employeeAdminDestination(formData, {
-      kind: "actionStatus",
-      status: "invite_revoked"
-    });
-  } catch {
-    destination = employeeAdminDestination(formData, {
-      kind: "actionStatus",
-      status: "invalid"
-    });
-  }
+    revalidatePath("/admin/employees");
 
-  revalidatePath("/admin/employees");
-  redirect(destination);
+    return employeeAdminActionSuccess("invite_revoked", submittedAt);
+  } catch (error) {
+    return employeeAdminActionError(error, submittedAt);
+  }
 }
 
 export async function resendEmployeeInviteAction(
+  _previousState: EmployeeAdminActionState,
   formData: FormData
-): Promise<void> {
+): Promise<EmployeeAdminActionState> {
   await assertWebActionRequest();
-
-  const session = await assertVerifiedEmployeeManagementPermission();
-  const invitationId = readRequiredFormString(formData, "invitationId");
-  const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
-  const now = new Date();
-  const token = randomBytes(32).toString("base64url");
-  const tokenHash = hashEmployeeInvitationToken(token);
-  let destination = employeeAdminDestination(formData, {
-    kind: "actionStatus",
-    status: "invalid"
-  });
+  const submittedAt = new Date().toISOString();
 
   try {
+    const session = await assertVerifiedEmployeeManagementPermission({
+      redirectOnEmailNotVerified: false
+    });
+    const invitationId = readRequiredFormString(formData, "invitationId");
+    const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
+    const now = new Date();
+    const token = randomBytes(32).toString("base64url");
+    const tokenHash = hashEmployeeInvitationToken(token);
     const preview = await repository.findInvitation({
       tenantId: session.tenantId,
       invitationId
@@ -356,37 +441,34 @@ export async function resendEmployeeInviteAction(
     });
 
     const emailResult = await sendInvitationEmail(preview, token);
-    const status = emailResult.sent ? "sent" : emailResult.reason;
 
-    destination = employeeAdminDestination(formData, {
-      kind: "inviteStatus",
-      status,
-      inviteToken: token
+    revalidatePath("/admin/employees");
+
+    return employeeAdminInviteResult({
+      code: emailResult.sent ? "sent" : emailResult.reason,
+      manualInviteUrl: inviteUrlFromToken(token),
+      submittedAt
     });
-  } catch {
-    destination = employeeAdminDestination(formData, {
-      kind: "actionStatus",
-      status: "invalid"
-    });
+  } catch (error) {
+    return employeeAdminActionError(error, submittedAt);
   }
-
-  revalidatePath("/admin/employees");
-  redirect(destination);
 }
 
 export async function acceptEmployeeInviteAction(
+  _previousState: AuthActionState,
   formData: FormData
-): Promise<void> {
-  await assertWebActionRequest();
-
-  const token = readRequiredFormString(formData, "token");
-  const displayName = readRequiredFormString(formData, "displayName");
-  const password = readRequiredFormString(formData, "password");
-  const tokenHash = hashEmployeeInvitationToken(token);
-  const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
-  let destination = "/invite/invalid";
+): Promise<AuthActionState> {
+  let destination: string | undefined;
 
   try {
+    await assertWebActionRequest();
+
+    const token = readRequiredFormString(formData, "token");
+    const displayName = readRequiredFormString(formData, "displayName");
+    const password = readRequiredFormString(formData, "password");
+    const tokenHash = hashEmployeeInvitationToken(token);
+    const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
+
     await assertWebAuthRateLimit("accept_employee_invite", token);
 
     const preview = await repository.findInvitationByTokenHash(tokenHash);
@@ -431,7 +513,11 @@ export async function acceptEmployeeInviteAction(
 
     destination = session.redirectPath;
   } catch {
-    destination = `/invite/${encodeURIComponent(token)}?error=invalid`;
+    return authActionError("invite_invalid");
+  }
+
+  if (destination === undefined) {
+    return authActionError("invite_invalid");
   }
 
   revalidatePath("/");
@@ -487,11 +573,11 @@ async function uploadEmployeeAvatar(input: {
     ];
 
   if (extension === undefined) {
-    throw new Error(`Unsupported employee avatar media type: ${mediaType}`);
+    throw new EmployeeProfileActionError("avatar_invalid_type");
   }
 
   if (input.file.size <= 0 || input.file.size > maxEmployeeAvatarBytes) {
-    throw new Error("Invalid employee avatar size.");
+    throw new EmployeeProfileActionError("avatar_too_large");
   }
 
   const body = new Uint8Array(await input.file.arrayBuffer());
@@ -502,17 +588,25 @@ async function uploadEmployeeAvatar(input: {
     ? objectStorageKey
     : toLocalBrandAssetStorageKey(objectStorageKey);
 
-  if (config.objectStorage) {
-    await createS3ObjectStorage(config.objectStorage).putObject({
-      storageKey,
-      body,
-      mediaType,
-      fileName: input.file.name
-    });
-  } else if (canUseLocalBrandAssetStorage()) {
-    await putLocalBrandAsset({ storageKey, body });
-  } else {
-    throw new Error("Object storage is not configured.");
+  try {
+    if (config.objectStorage) {
+      await createS3ObjectStorage(config.objectStorage).putObject({
+        storageKey,
+        body,
+        mediaType,
+        fileName: input.file.name
+      });
+    } else if (canUseLocalBrandAssetStorage()) {
+      await putLocalBrandAsset({ storageKey, body });
+    } else {
+      throw new EmployeeProfileActionError("avatar_storage_unavailable");
+    }
+  } catch (error) {
+    if (error instanceof EmployeeProfileActionError) {
+      throw error;
+    }
+
+    throw new EmployeeProfileActionError("avatar_storage_unavailable");
   }
 
   return {
@@ -526,17 +620,28 @@ async function uploadEmployeeAvatar(input: {
 function normalizeEmployeePhoneNumber(
   value: string | undefined
 ): string | null {
-  if (value === undefined) {
-    return null;
+  try {
+    return normalizePhoneNumberForStorage(value);
+  } catch {
+    throw new EmployeeProfileActionError("phone_invalid");
   }
+}
 
-  const normalized = value.replace(/\s+/g, " ").trim();
-
-  if (!phoneNumberPattern.test(normalized)) {
-    throw new Error("Invalid employee phone number.");
+function normalizeEmployeeEmail(value: string): string {
+  try {
+    return normalizeEmailAddress(value, userSuppliedEmailPolicy());
+  } catch {
+    throw new Error("Invalid employee email.");
   }
+}
 
-  return normalized;
+function userSuppliedEmailPolicy(): EmailValidationPolicy {
+  const config = resolveWebConfig();
+
+  return {
+    blockDisposableDomains: true,
+    blockReservedDomains: config.nodeEnv === "production"
+  };
 }
 
 function changedEmployeeProfileFields(input: {
@@ -571,18 +676,131 @@ function readRequiredFormString(formData: FormData, name: string): string {
   return value.trim();
 }
 
-async function assertVerifiedEmployeeManagementPermission(): Promise<WebAccessSession> {
+async function assertVerifiedEmployeeManagementPermission(
+  options: { readonly redirectOnEmailNotVerified?: boolean } = {}
+): Promise<WebAccessSession> {
   try {
     return await assertWebDbBackedAdminCommandBoundary(
       webDbBackedAdminCommandBoundaries.employeeLifecycle
     );
   } catch (error) {
     if (isEmailNotVerifiedError(error)) {
-      redirect("/admin/employees?emailVerification=required");
+      if (options.redirectOnEmailNotVerified ?? true) {
+        redirect("/admin/employees?emailVerification=required");
+      }
     }
 
     throw error;
   }
+}
+
+function employeeProfileActionFailureCode(
+  error: unknown
+): EmployeeProfileActionCode {
+  if (error instanceof EmployeeProfileActionError) {
+    return error.status;
+  }
+
+  if (isEmailNotVerifiedError(error)) {
+    return "email_verification_required";
+  }
+
+  if (error instanceof CoreError && error.code === "permission.denied") {
+    return "permission_denied";
+  }
+
+  return "profile_invalid";
+}
+
+function employeeEmailChangeActionSuccess(
+  code: Extract<
+    EmployeeEmailChangeActionCode,
+    "email_change_sent" | "email_unchanged"
+  >,
+  submittedAt: string
+): EmployeeEmailChangeActionState {
+  return {
+    code,
+    status: "success",
+    submittedAt
+  };
+}
+
+function employeeEmailChangeActionFailureCode(
+  error: unknown
+): EmployeeEmailChangeActionCode {
+  if (error instanceof EmployeeEmailChangeActionError) {
+    return error.status;
+  }
+
+  if (isEmailNotVerifiedError(error)) {
+    return "email_verification_required";
+  }
+
+  if (error instanceof CoreError && error.code === "permission.denied") {
+    return "permission_denied";
+  }
+
+  return "email_change_invalid";
+}
+
+function employeeAdminActionSuccess(
+  code: "deactivated" | "invite_revoked",
+  submittedAt: string
+): EmployeeAdminActionState {
+  return {
+    code,
+    status: "success",
+    submittedAt
+  };
+}
+
+function employeeAdminInviteResult(input: {
+  code: "not_configured" | "provider_failed" | "sent";
+  manualInviteUrl: string;
+  submittedAt: string;
+}): EmployeeAdminActionState {
+  if (input.code === "sent") {
+    return {
+      code: input.code,
+      manualInviteUrl: input.manualInviteUrl,
+      status: "success",
+      submittedAt: input.submittedAt
+    };
+  }
+
+  return {
+    code: input.code,
+    manualInviteUrl: input.manualInviteUrl,
+    status: "info",
+    submittedAt: input.submittedAt
+  };
+}
+
+function employeeAdminActionError(
+  error: unknown,
+  submittedAt: string
+): EmployeeAdminActionState {
+  let code: Extract<
+    EmployeeAdminActionCode,
+    "email_verification_required" | "invalid" | "permission_denied"
+  > = "invalid";
+
+  if (isEmailNotVerifiedError(error)) {
+    code = "email_verification_required";
+  } else if (error instanceof CoreError && error.code === "permission.denied") {
+    code = "permission_denied";
+  }
+
+  return {
+    code,
+    status: "error",
+    submittedAt
+  };
+}
+
+function inviteUrlFromToken(token: string): string {
+  return new URL(`/invite/${token}`, resolvePublicBaseUrl()).href;
 }
 
 function readOptionalFormString(
@@ -605,74 +823,4 @@ function readOptionalFormFile(
   const value = formData.get(name);
 
   return value instanceof File && value.size > 0 ? value : undefined;
-}
-
-function employeeAccessDestination(
-  formData: FormData,
-  input: {
-    employeeId: EmployeeId;
-    status: string;
-  }
-): string {
-  const returnTo = readOptionalFormString(formData, "returnTo");
-  const path =
-    returnTo !== undefined && isEmployeeAccessReturnTo(returnTo)
-      ? returnTo
-      : `/admin/employees/${encodeURIComponent(input.employeeId)}/access`;
-  const params = new URLSearchParams({
-    roleActionStatus: input.status
-  });
-  const section = readEmployeeAccessSection(formData);
-
-  if (section !== undefined) {
-    params.set("section", section);
-  }
-
-  return `${path}?${params.toString()}`;
-}
-
-function isEmployeeAccessReturnTo(path: string): boolean {
-  return /^\/admin\/employees\/[^/?#]+\/access$/.test(path);
-}
-
-function readEmployeeAccessSection(formData: FormData): string | undefined {
-  const value = readOptionalFormString(formData, "employeeAccessSection");
-
-  return value !== undefined && isEmployeeAccessSectionId(value)
-    ? value
-    : undefined;
-}
-
-function employeeAdminDestination(
-  formData: FormData,
-  input: {
-    kind: "actionStatus" | "inviteStatus";
-    status: string;
-    inviteToken?: string;
-  }
-): string {
-  const params = new URLSearchParams({
-    [input.kind]: input.status
-  });
-  const section = readEmployeeAdminSection(formData);
-
-  if (input.inviteToken) {
-    params.set("inviteToken", input.inviteToken);
-  }
-
-  if (section !== undefined) {
-    params.set("section", section);
-  }
-
-  return `/admin/employees?${params.toString()}`;
-}
-
-function readEmployeeAdminSection(formData: FormData): string | undefined {
-  const value = readOptionalFormString(formData, "section");
-
-  if (value === "directory" || value === "invite" || value === "invitations") {
-    return value;
-  }
-
-  return undefined;
 }

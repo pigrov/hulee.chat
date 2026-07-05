@@ -660,7 +660,7 @@ export function buildBrandThemeTokens(
   if (primaryColor) {
     tokens["color.brand.primary"] = primaryColor;
     tokens["color.brand.foreground"] =
-      contrastRatio(primaryColor, "#ffffff") >= 4.5 ? "#ffffff" : "#111827";
+      resolveReadableBrandForegroundColor(primaryColor);
   }
 
   if (accentColor) {
@@ -786,6 +786,18 @@ function assertBrandContrast(tokens: BrandThemeTokens): void {
   }
 
   assertReadableTextContrast(tokens);
+}
+
+function resolveReadableBrandForegroundColor(primaryColor: string): string {
+  if (contrastRatio(primaryColor, "#ffffff") >= 4.5) {
+    return "#ffffff";
+  }
+
+  if (contrastRatio(primaryColor, "#111827") >= 4.5) {
+    return "#111827";
+  }
+
+  return "#000000";
 }
 
 function assertReadableTextContrast(tokens: BrandThemeTokens): void {

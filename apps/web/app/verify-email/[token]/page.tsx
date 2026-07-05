@@ -32,7 +32,7 @@ export default async function VerifyEmailPage({
         : defaultBrandProfile.shortProductName
   };
   const { t } = createTranslator("ru");
-  const verified = result.status === "verified";
+  const completed = result.status !== "invalid";
 
   return (
     <main className="loginPage" style={brandProfileToCssProperties(brand)}>
@@ -43,27 +43,17 @@ export default async function VerifyEmailPage({
         <div>
           <p className="eyebrow">{t("auth.emailVerification.eyebrow")}</p>
           <h1 className="adminTitle" id="verify-email-title">
-            {verified
-              ? t("auth.emailVerification.title")
-              : t("auth.emailVerification.invalidTitle")}
+            {verificationTitle(result.status, t)}
           </h1>
-          <p className="metaText">
-            {verified
-              ? t("auth.emailVerification.description", {
-                  company: result.tenantDisplayName
-                })
-              : t("auth.emailVerification.invalid")}
-          </p>
+          <p className="metaText">{verificationDescription(result, t)}</p>
         </div>
-        <p className={verified ? "formNotice" : "formError"}>
-          {verified ? (
+        <p className={completed ? "formNotice" : "formError"}>
+          {completed ? (
             <CheckCircle2 size={18} aria-hidden="true" />
           ) : (
             <XCircle size={18} aria-hidden="true" />
           )}
-          {verified
-            ? t("auth.emailVerification.complete")
-            : t("auth.emailVerification.unavailable")}
+          {verificationCompletion(result.status, t)}
         </p>
         <p className="authSwitch">
           <Link href="/login">{t("auth.login.link")}</Link>
@@ -71,4 +61,50 @@ export default async function VerifyEmailPage({
       </section>
     </main>
   );
+}
+
+function verificationTitle(
+  status: Awaited<ReturnType<typeof completeEmailVerificationToken>>["status"],
+  t: ReturnType<typeof createTranslator>["t"]
+): string {
+  switch (status) {
+    case "verified":
+      return t("auth.emailVerification.title");
+    case "email_changed":
+      return t("auth.emailVerification.emailChangedTitle");
+    case "invalid":
+      return t("auth.emailVerification.invalidTitle");
+  }
+}
+
+function verificationDescription(
+  result: Awaited<ReturnType<typeof completeEmailVerificationToken>>,
+  t: ReturnType<typeof createTranslator>["t"]
+): string {
+  switch (result.status) {
+    case "verified":
+      return t("auth.emailVerification.description", {
+        company: result.tenantDisplayName
+      });
+    case "email_changed":
+      return t("auth.emailVerification.emailChangedDescription", {
+        company: result.tenantDisplayName
+      });
+    case "invalid":
+      return t("auth.emailVerification.invalid");
+  }
+}
+
+function verificationCompletion(
+  status: Awaited<ReturnType<typeof completeEmailVerificationToken>>["status"],
+  t: ReturnType<typeof createTranslator>["t"]
+): string {
+  switch (status) {
+    case "verified":
+      return t("auth.emailVerification.complete");
+    case "email_changed":
+      return t("auth.emailVerification.emailChangedComplete");
+    case "invalid":
+      return t("auth.emailVerification.unavailable");
+  }
 }

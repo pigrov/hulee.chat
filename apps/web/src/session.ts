@@ -1,5 +1,9 @@
 import type { EmployeeId, TenantId } from "@hulee/contracts";
 import {
+  normalizeEmailAddress,
+  type EmailValidationPolicy
+} from "@hulee/contact-identity";
+import {
   createDrizzlePersistenceExecutor,
   createSqlEmployeeDirectoryRepository,
   createSqlPlatformAuditRepository,
@@ -104,6 +108,7 @@ export type TenantLoginChoice = {
 export type TenantLoginChoices = {
   email: string;
   expiresAt: string;
+  returnTo?: string;
   choices: readonly TenantLoginChoice[];
 };
 
@@ -313,7 +318,7 @@ export async function registerLocalTenant(
   input: RegisterLocalTenantInput
 ): Promise<LoginLocalWebSessionResult> {
   const tenantSlug = normalizeTenantSlug(input.tenantSlug);
-  const email = normalizeEmail(input.email);
+  const email = normalizeEmail(input.email, userSuppliedEmailPolicy());
   const password = requireRegistrationPassword(input.password, email);
   const now = new Date();
   const registration = registerTenant({
@@ -370,6 +375,7 @@ export async function createTenantWebSession(
 export async function writeTenantLoginChoices(input: {
   email: string;
   choices: readonly TenantLoginChoice[];
+  returnTo?: string;
 }): Promise<void> {
   const now = new Date();
   const expiresAt = new Date(now.getTime() + tenantLoginChoicesTtlMs);
@@ -382,6 +388,7 @@ export async function writeTenantLoginChoices(input: {
     encodeSignedPayload({
       email: normalizeEmail(input.email),
       choices: input.choices,
+      returnTo: input.returnTo,
       expiresAt: expiresAt.toISOString()
     }),
     buildWebCookieOptions({
@@ -438,7 +445,10 @@ export async function completeTenantLoginChoice(
 
   return createTenantWebSession(tenantAccount, {
     auditAction: "auth.login.tenant_selected"
-  });
+  }).then((result) => ({
+    ...result,
+    redirectPath: choices.returnTo ?? result.redirectPath
+  }));
 }
 
 async function createStoredWebSession(input: {
@@ -852,12 +862,28 @@ function resolveTenantLoginChoiceSecret(): string {
     : "development-auth-choice-secret";
 }
 
-function normalizeEmail(email: string): string {
-  return email.trim().toLowerCase();
+function normalizeEmail(
+  email: string,
+  policy: EmailValidationPolicy = {}
+): string {
+  try {
+    return normalizeEmailAddress(email, policy);
+  } catch {
+    throw new CoreError("validation.failed");
+  }
 }
 
 function normalizeTenantSlug(slug: string): string {
   return slug.trim().toLowerCase();
+}
+
+function userSuppliedEmailPolicy(): EmailValidationPolicy {
+  const config = resolveWebConfig();
+
+  return {
+    blockDisposableDomains: true,
+    blockReservedDomains: config.nodeEnv === "production"
+  };
 }
 
 function requireRegistrationPassword(password: string, email: string): string {

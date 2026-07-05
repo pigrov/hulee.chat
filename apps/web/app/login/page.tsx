@@ -5,14 +5,17 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
-import { loginAction } from "../../src/auth-actions";
+import { authActionMessages } from "../../src/auth-action-messages";
+import { AuthActionForm, AuthSubmitButton } from "../../src/auth-action-form";
 import {
   brandProfileToCssProperties,
   buildBrandMarkLabel
 } from "../../src/brand-style";
+import { EmailInput } from "../../src/contact-fields";
 import { resolveCurrentWebAccessSession } from "../../src/session";
 import { ToastViewport } from "../../src/toast";
 import { buildToast } from "../../src/toast-messages";
+import { UrlStatusParamCleaner } from "../../src/url-status-param-cleaner";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -20,13 +23,20 @@ export const runtime = "nodejs";
 export default async function LoginPage({
   searchParams
 }: {
-  searchParams?: Promise<{ error?: string; reset?: string }>;
+  searchParams?: Promise<{
+    reauth?: string;
+    reset?: string;
+    returnTo?: string;
+  }>;
 }): Promise<ReactNode> {
+  const resolvedSearchParams = await searchParams;
+  const returnTo = resolveLoginReturnTo(resolvedSearchParams?.returnTo);
+  const isReauth = resolvedSearchParams?.reauth === "1";
   const existingSession = await resolveCurrentWebAccessSession({
     allowDevelopmentFallback: false
   });
 
-  if (existingSession !== null) {
+  if (existingSession !== null && !isReauth) {
     redirect(
       existingSession.platformRoles.includes("platform_admin")
         ? "/platform"
@@ -34,8 +44,6 @@ export default async function LoginPage({
     );
   }
 
-  const resolvedSearchParams = await searchParams;
-  const hasInvalidCredentialsError = resolvedSearchParams?.error === "invalid";
   const hasPasswordResetNotice = resolvedSearchParams?.reset === "complete";
   const { t } = createTranslator("ru");
   const toasts = hasPasswordResetNotice
@@ -59,6 +67,9 @@ export default async function LoginPage({
         regionLabel={t("notifications.region")}
         toasts={toasts}
       />
+      {hasPasswordResetNotice ? (
+        <UrlStatusParamCleaner params={["reset"]} />
+      ) : null}
       <section className="loginPanel" aria-labelledby="login-title">
         <div className="brandMark" aria-label={defaultBrandProfile.productName}>
           {buildBrandMarkLabel(defaultBrandProfile)}
@@ -70,16 +81,24 @@ export default async function LoginPage({
           </h1>
           <p className="metaText">{t("auth.login.description")}</p>
         </div>
-        <form className="settingsForm" action={loginAction}>
+        <AuthActionForm
+          actionKind="login"
+          className="settingsForm"
+          messages={authActionMessages(t)}
+        >
+          {existingSession?.tenantSlug ? (
+            <input
+              name="tenantSlug"
+              type="hidden"
+              value={existingSession.tenantSlug}
+            />
+          ) : null}
+          {returnTo ? (
+            <input name="returnTo" type="hidden" value={returnTo} />
+          ) : null}
           <label className="fieldStack">
             <span className="detailLabel">{t("auth.email")}</span>
-            <input
-              className="textInput"
-              name="email"
-              type="email"
-              autoComplete="email"
-              required
-            />
+            <EmailInput className="textInput" name="email" required />
           </label>
           <label className="fieldStack">
             <span className="detailLabel">{t("auth.password")}</span>
@@ -91,13 +110,12 @@ export default async function LoginPage({
               required
             />
           </label>
-          {hasInvalidCredentialsError ? (
-            <p className="formError">{t("auth.login.invalidCredentials")}</p>
-          ) : null}
-          <button className="primaryButton" type="submit">
+          <AuthSubmitButton
+            className="primaryButton"
+            label={t("auth.login.submit")}
+          >
             <LogIn size={18} aria-hidden="true" />
-            {t("auth.login.submit")}
-          </button>
+          </AuthSubmitButton>
           <p className="authSwitch">
             <Link href="/forgot-password">{t("auth.forgotPassword.link")}</Link>
           </p>
@@ -105,8 +123,20 @@ export default async function LoginPage({
             {t("auth.login.noAccount")}{" "}
             <Link href="/register">{t("auth.register.link")}</Link>
           </p>
-        </form>
+        </AuthActionForm>
       </section>
     </main>
   );
+}
+
+function resolveLoginReturnTo(value: string | undefined): string | undefined {
+  if (value === undefined || !value.startsWith("/") || value.startsWith("//")) {
+    return undefined;
+  }
+
+  if (value === "/login" || value.startsWith("/login?")) {
+    return undefined;
+  }
+
+  return value;
 }

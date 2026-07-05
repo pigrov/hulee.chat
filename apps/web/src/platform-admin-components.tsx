@@ -9,11 +9,14 @@ import { AlertTriangle, Building2 } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 
-import { updatePlatformChannelProviderPolicyAction } from "./platform-channel-actions";
 import { resolveChannelTitle } from "./channel-display";
 import type { PlatformChannelCatalogView } from "./platform-channel-catalog";
 import type { PlatformChannelProviderPolicyView } from "./platform-channel-policies";
-import { updatePlatformEgressProviderPolicyAction } from "./platform-egress-actions";
+import {
+  PlatformActionForm,
+  PlatformActionSubmitButton,
+  type PlatformActionMessages
+} from "./platform-action-form";
 import {
   platformEgressProviderRoutingModes,
   type PlatformEgressProviderPolicyView
@@ -128,9 +131,10 @@ export function PlatformChannelProviderPolicy({
   });
 
   return (
-    <form
-      action={updatePlatformChannelProviderPolicyAction}
+    <PlatformActionForm
+      actionKind="updateChannelProviderPolicy"
       className="managementRow channelProviderPolicyRow"
+      messages={platformActionMessages(t)}
     >
       <input name="provider" type="hidden" value={policy.provider} />
       <input name="channelType" type="hidden" value={policy.channelType} />
@@ -185,10 +189,13 @@ export function PlatformChannelProviderPolicy({
         )}
       </div>
 
-      <button className="primaryButton" type="submit">
-        {t("common.save")}
-      </button>
-    </form>
+      <PlatformActionSubmitButton
+        className="primaryButton"
+        label={t("common.save")}
+      >
+        {null}
+      </PlatformActionSubmitButton>
+    </PlatformActionForm>
   );
 }
 
@@ -295,9 +302,10 @@ export function PlatformEgressProviderPolicy({
   t: Translator;
 }): ReactNode {
   return (
-    <form
-      action={updatePlatformEgressProviderPolicyAction}
+    <PlatformActionForm
+      actionKind="updateEgressProviderPolicy"
       className="managementRow egressProviderPolicyRow"
+      messages={platformActionMessages(t)}
     >
       <input name="provider" type="hidden" value={policy.provider} />
       <div>
@@ -375,10 +383,13 @@ export function PlatformEgressProviderPolicy({
         ) : null}
       </div>
 
-      <button className="primaryButton" type="submit">
-        {t("common.save")}
-      </button>
-    </form>
+      <PlatformActionSubmitButton
+        className="primaryButton"
+        label={t("common.save")}
+      >
+        {null}
+      </PlatformActionSubmitButton>
+    </PlatformActionForm>
   );
 }
 
@@ -473,6 +484,17 @@ function channelTypeKey(
   } satisfies Record<InternalChannelType, I18nMessageKey>;
 
   return keys[channelType];
+}
+
+export function platformActionMessages(t: Translator): PlatformActionMessages {
+  return {
+    channel_catalog_invalid: t("platform.channels.status.invalid"),
+    channel_catalog_updated: t("platform.channels.status.updated"),
+    channel_policy_invalid: t("platform.channelPolicyStatus.invalid"),
+    channel_policy_updated: t("platform.channelPolicyStatus.updated"),
+    egress_policy_invalid: t("platform.egressPolicyStatus.invalid"),
+    egress_policy_updated: t("platform.egressPolicyStatus.updated")
+  };
 }
 
 function formatChannelType(input: {

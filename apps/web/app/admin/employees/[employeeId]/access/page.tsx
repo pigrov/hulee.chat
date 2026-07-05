@@ -45,18 +45,19 @@ import {
   AdminSectionFrame,
   type AdminSectionFrameItem
 } from "../../../../../src/admin-section-frame";
-import { DetailItem } from "../../../../../src/app-chrome";
 import {
   isEmployeeAccessSectionId,
   type EmployeeAccessSectionId
 } from "../../../../../src/employee-access-sections";
 import {
-  setEmployeeOrgUnitMembershipsAction,
-  setEmployeeTeamMembershipsAction,
-  setEmployeeWorkQueueMembershipsAction
-} from "../../../../../src/employee-membership-actions";
-import { updateEmployeeProfileAction } from "../../../../../src/employee-actions";
+  EmployeeMembershipActionForm,
+  EmployeeMembershipSubmitButton,
+  type EmployeeMembershipActionMessages
+} from "../../../../../src/employee-membership-action-form";
+import { EmployeeEmailChangeForm } from "../../../../../src/employee-email-change-form";
+import { EmployeeProfileForm } from "../../../../../src/employee-profile-form";
 import { loadTenantAdminViewModel } from "../../../../../src/admin-view-model";
+import { EmailText, PhoneNumberText } from "../../../../../src/contact-fields";
 import { allowedRoleBindingScopeTypesForPermissions } from "../../../../../src/rbac-scope";
 import { buildScopeReferenceOptions } from "../../../../../src/rbac-scope-options";
 import {
@@ -65,11 +66,10 @@ import {
   type ScopePickerMessages
 } from "../../../../../src/rbac-scope-picker";
 import {
-  assignTenantRoleAction,
-  createDirectPermissionGrantAction,
-  revokeDirectPermissionGrantAction,
-  revokeTenantRoleBindingAction
-} from "../../../../../src/role-actions";
+  RoleActionForm,
+  RoleActionSubmitButton,
+  type RoleActionMessages
+} from "../../../../../src/role-action-form";
 import {
   getWebDatabase,
   resolveCurrentWebAccessSession
@@ -80,7 +80,6 @@ import {
 } from "../../../../../src/rbac-effective-access";
 import { TenantAdminShell } from "../../../../../src/tenant-admin-shell";
 import { navigationAccessFromTenantAdminAccess } from "../../../../../src/tenant-admin-nav";
-import { buildActionStatusToast } from "../../../../../src/toast-messages";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -112,7 +111,6 @@ export default async function EmployeeAccessAdminPage({
     employeeId: string;
   }>;
   searchParams?: Promise<{
-    roleActionStatus?: string;
     section?: string;
   }>;
 }): Promise<ReactNode> {
@@ -263,15 +261,8 @@ export default async function EmployeeAccessAdminPage({
   });
   const isDeactivated = employee.deactivatedAt !== null;
   const selectedSection = resolveEmployeeAccessSection(resolvedSearch?.section);
-  const roleStatusToast = resolvedSearch?.roleActionStatus
-    ? buildActionStatusToast({
-        id: `employee-access-status:${resolvedSearch.roleActionStatus}`,
-        status: resolvedSearch.roleActionStatus,
-        titleKey: "admin.roles.actionStatus",
-        descriptionKey: roleActionStatusKey(resolvedSearch.roleActionStatus),
-        t
-      })
-    : undefined;
+  const membershipActionMessages = employeeMembershipActionMessages(t);
+  const roleActionMessages = employeeAccessRoleActionMessages(t);
   const membershipCount =
     employee.orgUnitIds.length +
     employee.teamIds.length +
@@ -319,7 +310,6 @@ export default async function EmployeeAccessAdminPage({
       tenantDisplayName={model.tenant.displayName}
       title={t("admin.employeeAccess")}
       titleId="employee-access-title"
-      toasts={roleStatusToast ? [roleStatusToast] : []}
     >
       <AdminSectionFrame
         ariaLabel={t("admin.employeeAccess.sections")}
@@ -328,18 +318,21 @@ export default async function EmployeeAccessAdminPage({
         selectedSection={selectedSection}
       >
         <section
-          className="settingsPanel"
+          className="settingsPanel employeeAccessSummaryPanel"
           aria-labelledby="employee-access-summary-title"
         >
-          <div className="sectionHeader">
-            <div>
-              <p className="eyebrow">{t("admin.employeeAccess")}</p>
-              <h2 className="sectionTitle" id="employee-access-summary-title">
-                {employee.displayName}
-              </h2>
-              <p className="metaText">
-                {t("admin.employeeAccess.description")}
-              </p>
+          <div className="employeeAccessSummaryHeader">
+            <div className="employeeAccessSummaryIdentity">
+              <EmployeeAvatar employee={employee} size="large" />
+              <div className="employeeAccessSummaryTitleBlock">
+                <p className="eyebrow">{t("admin.employeeAccess")}</p>
+                <h2 className="sectionTitle" id="employee-access-summary-title">
+                  {employee.displayName}
+                </h2>
+                <p className="metaText">
+                  {t("admin.employeeAccess.description")}
+                </p>
+              </div>
             </div>
             <Link className="secondaryButton" href="/admin/employees">
               <ArrowLeft size={14} aria-hidden="true" />
@@ -347,33 +340,35 @@ export default async function EmployeeAccessAdminPage({
             </Link>
           </div>
 
-          <div className="detailGrid">
-            <div className="employeeProfileSummary">
-              <EmployeeAvatar employee={employee} />
-              <div>
-                <p className="eyebrow">{t("admin.employeeAccess.profile")}</p>
-                <h3 className="listItemTitle">{employee.displayName}</h3>
-                <p className="metaText">{employee.email}</p>
-              </div>
+          <dl className="employeeAccessSummaryMeta">
+            <div className="employeeAccessSummaryMetaItem">
+              <dt>{t("auth.email")}</dt>
+              <dd>
+                <EmailText value={employee.email} />
+              </dd>
             </div>
-            <DetailItem
-              label={t("admin.employees.displayName")}
-              value={employee.displayName}
-            />
-            <DetailItem label={t("auth.email")} value={employee.email} />
-            <DetailItem
-              label={t("admin.employees.phoneNumber")}
-              value={employee.phoneNumber ?? t("common.unknown")}
-            />
-            <DetailItem
-              label={t("admin.employeeAccess.status")}
-              value={t(
-                isDeactivated
-                  ? "admin.employees.status.deactivated"
-                  : "admin.employees.status.active"
-              )}
-            />
-          </div>
+            <div className="employeeAccessSummaryMetaItem">
+              <dt>{t("admin.employees.phoneNumber")}</dt>
+              <dd>
+                <PhoneNumberText
+                  fallback={t("common.unknown")}
+                  value={employee.phoneNumber}
+                />
+              </dd>
+            </div>
+            <div className="employeeAccessSummaryMetaItem">
+              <dt>{t("admin.employeeAccess.status")}</dt>
+              <dd>
+                <span className="statusBadge">
+                  {t(
+                    isDeactivated
+                      ? "admin.employees.status.deactivated"
+                      : "admin.employees.status.active"
+                  )}
+                </span>
+              </dd>
+            </div>
+          </dl>
         </section>
 
         {selectedSection === "profile" ? (
@@ -383,7 +378,6 @@ export default async function EmployeeAccessAdminPage({
           >
             <div className="sectionHeader">
               <div>
-                <p className="eyebrow">{t("admin.employeeAccess.profile")}</p>
                 <h2 className="sectionTitle" id="employee-profile-title">
                   {t("admin.employeeAccess.profile")}
                 </h2>
@@ -401,79 +395,110 @@ export default async function EmployeeAccessAdminPage({
               </span>
             </div>
 
-            <form
-              action={updateEmployeeProfileAction}
-              className="settingsForm employeeProfileForm"
-            >
-              <input name="returnTo" type="hidden" value={returnPath} />
-              <input
-                name="employeeAccessSection"
-                type="hidden"
-                value="profile"
-              />
-              <input
-                name="employeeId"
-                type="hidden"
-                value={employee.employeeId}
-              />
-              <div className="employeeAvatarUploadGrid">
-                <div
-                  className="employeeAvatarPreviewSurface"
-                  aria-label={t("admin.employees.avatarCurrent")}
-                >
-                  <EmployeeAvatar employee={employee} size="large" />
+            <EmployeeProfileForm
+              avatarUrl={employee.avatarUrl}
+              defaultDisplayName={employee.displayName}
+              defaultPhoneNumber={employee.phoneNumber}
+              disabled={isDeactivated}
+              employeeId={employee.employeeId}
+              labels={{
+                avatar: t("admin.employees.avatar"),
+                avatarCurrent: t("admin.employees.avatarCurrent"),
+                avatarRecommendation: t("admin.employees.avatarRecommendation"),
+                displayName: t("admin.employees.displayName"),
+                phoneNumber: t("admin.employees.phoneNumber"),
+                phonePlaceholder: t("admin.employees.phoneNumber.placeholder"),
+                saveProfile: t("admin.employeeAccess.saveProfile"),
+                savingProfile: t("admin.employeeAccess.savingProfile")
+              }}
+              messages={{
+                avatar_invalid_type: t(
+                  "admin.employeeAccess.actionStatus.avatarInvalidType"
+                ),
+                avatar_storage_unavailable: t(
+                  "admin.employeeAccess.actionStatus.avatarStorageUnavailable"
+                ),
+                avatar_too_large: t(
+                  "admin.employeeAccess.actionStatus.avatarTooLarge"
+                ),
+                email_verification_required: t(
+                  "auth.emailVerification.status.required"
+                ),
+                permission_denied: t(
+                  "admin.roles.actionStatus.permissionDenied"
+                ),
+                phone_invalid: t(
+                  "admin.employeeAccess.actionStatus.phoneInvalid"
+                ),
+                profile_invalid: t(
+                  "admin.employeeAccess.actionStatus.profileInvalid"
+                ),
+                profile_updated: t(
+                  "admin.employeeAccess.actionStatus.profileUpdated"
+                )
+              }}
+            />
+
+            <div className="settingsSubPanel">
+              <div className="sectionHeader">
+                <div>
+                  <p className="eyebrow">{t("auth.email")}</p>
+                  <h3 className="sectionTitle">
+                    {t("admin.employeeAccess.emailChange")}
+                  </h3>
+                  <p className="metaText">
+                    {t("admin.employeeAccess.emailChange.description")}
+                  </p>
                 </div>
-                <label className="fieldStack">
-                  <span className="detailLabel">
-                    {t("admin.employees.avatar")}
-                  </span>
-                  <input
-                    accept="image/png,image/jpeg,image/webp"
-                    className="fileInput"
-                    disabled={isDeactivated}
-                    name="avatarFile"
-                    type="file"
-                  />
-                  <span className="metaText">
-                    {t("admin.employees.avatarRecommendation")}
-                  </span>
-                </label>
               </div>
-              <label className="fieldStack">
-                <span className="detailLabel">
-                  {t("admin.employees.displayName")}
-                </span>
-                <input
-                  className="textInput"
-                  defaultValue={employee.displayName}
-                  disabled={isDeactivated}
-                  name="displayName"
-                  required
-                  type="text"
-                />
-              </label>
-              <label className="fieldStack">
-                <span className="detailLabel">
-                  {t("admin.employees.phoneNumber")}
-                </span>
-                <input
-                  className="textInput"
-                  defaultValue={employee.phoneNumber ?? ""}
-                  disabled={isDeactivated}
-                  name="phoneNumber"
-                  placeholder={t("admin.employees.phoneNumber.placeholder")}
-                  type="tel"
-                />
-              </label>
-              <button
-                className="primaryButton"
+              <EmployeeEmailChangeForm
+                currentEmail={employee.email}
                 disabled={isDeactivated}
-                type="submit"
-              >
-                <Save size={18} aria-hidden="true" />
-                {t("admin.employeeAccess.saveProfile")}
-              </button>
-            </form>
+                employeeId={employee.employeeId}
+                labels={{
+                  cancel: t("common.cancel"),
+                  changeEmail: t("admin.employeeAccess.changeEmail"),
+                  currentEmail: t("admin.employeeAccess.currentEmail"),
+                  emailPlaceholder: t(
+                    "admin.employeeAccess.newEmail.placeholder"
+                  ),
+                  newEmail: t("admin.employeeAccess.newEmail"),
+                  requestChange: t("admin.employeeAccess.requestEmailChange"),
+                  requestingChange: t(
+                    "admin.employeeAccess.requestingEmailChange"
+                  )
+                }}
+                messages={{
+                  email_change_duplicate: t(
+                    "admin.employeeAccess.actionStatus.emailChangeDuplicate"
+                  ),
+                  email_change_invalid: t(
+                    "admin.employeeAccess.actionStatus.emailChangeInvalid"
+                  ),
+                  email_change_sent: t(
+                    "admin.employeeAccess.actionStatus.emailChangeSent"
+                  ),
+                  email_change_unavailable: t(
+                    "admin.employeeAccess.actionStatus.emailChangeUnavailable"
+                  ),
+                  email_unchanged: t(
+                    "admin.employeeAccess.actionStatus.emailUnchanged"
+                  ),
+                  email_verification_required: t(
+                    "auth.emailVerification.status.required"
+                  ),
+                  not_configured: t(
+                    "auth.emailVerification.status.not_configured"
+                  ),
+                  permission_denied: t(
+                    "admin.roles.actionStatus.permissionDenied"
+                  ),
+                  provider_failed: t(
+                    "auth.emailVerification.status.provider_failed"
+                  )
+                }}
+              />
+            </div>
           </section>
         ) : null}
 
@@ -484,9 +509,6 @@ export default async function EmployeeAccessAdminPage({
           >
             <div className="sectionHeader">
               <div>
-                <p className="eyebrow">
-                  {t("admin.employeeAccess.memberships")}
-                </p>
                 <h2 className="sectionTitle" id="employee-memberships-title">
                   {t("admin.employeeAccess.memberships")}
                 </h2>
@@ -498,16 +520,12 @@ export default async function EmployeeAccessAdminPage({
             </div>
 
             <div className="employeeMembershipGrid">
-              <form
-                action={setEmployeeOrgUnitMembershipsAction}
-                className="settingsForm employeeMembershipForm"
+              <EmployeeMembershipActionForm
+                actionKind="setOrgUnitMemberships"
+                className="settingsForm settingsSubPanel employeeMembershipForm"
+                messages={membershipActionMessages}
+                reauthLabel={t("auth.login.link")}
               >
-                <input name="returnTo" type="hidden" value={returnPath} />
-                <input
-                  name="employeeAccessSection"
-                  type="hidden"
-                  value="memberships"
-                />
                 <input
                   name="employeeId"
                   type="hidden"
@@ -524,26 +542,21 @@ export default async function EmployeeAccessAdminPage({
                   selectedIds={employee.orgUnitIds}
                   title={t("admin.employeeAccess.orgUnitMemberships")}
                 />
-                <button
+                <EmployeeMembershipSubmitButton
                   className="primaryButton"
                   disabled={isDeactivated}
-                  type="submit"
+                  label={t("admin.employeeAccess.saveMemberships")}
                 >
                   <Save size={18} aria-hidden="true" />
-                  {t("admin.employeeAccess.saveMemberships")}
-                </button>
-              </form>
+                </EmployeeMembershipSubmitButton>
+              </EmployeeMembershipActionForm>
 
-              <form
-                action={setEmployeeTeamMembershipsAction}
-                className="settingsForm employeeMembershipForm"
+              <EmployeeMembershipActionForm
+                actionKind="setTeamMemberships"
+                className="settingsForm settingsSubPanel employeeMembershipForm"
+                messages={membershipActionMessages}
+                reauthLabel={t("auth.login.link")}
               >
-                <input name="returnTo" type="hidden" value={returnPath} />
-                <input
-                  name="employeeAccessSection"
-                  type="hidden"
-                  value="memberships"
-                />
                 <input
                   name="employeeId"
                   type="hidden"
@@ -560,26 +573,21 @@ export default async function EmployeeAccessAdminPage({
                   selectedIds={employee.teamIds}
                   title={t("admin.employeeAccess.teamMemberships")}
                 />
-                <button
+                <EmployeeMembershipSubmitButton
                   className="primaryButton"
                   disabled={isDeactivated}
-                  type="submit"
+                  label={t("admin.employeeAccess.saveMemberships")}
                 >
                   <Save size={18} aria-hidden="true" />
-                  {t("admin.employeeAccess.saveMemberships")}
-                </button>
-              </form>
+                </EmployeeMembershipSubmitButton>
+              </EmployeeMembershipActionForm>
 
-              <form
-                action={setEmployeeWorkQueueMembershipsAction}
-                className="settingsForm employeeMembershipForm"
+              <EmployeeMembershipActionForm
+                actionKind="setWorkQueueMemberships"
+                className="settingsForm settingsSubPanel employeeMembershipForm"
+                messages={membershipActionMessages}
+                reauthLabel={t("auth.login.link")}
               >
-                <input name="returnTo" type="hidden" value={returnPath} />
-                <input
-                  name="employeeAccessSection"
-                  type="hidden"
-                  value="memberships"
-                />
                 <input
                   name="employeeId"
                   type="hidden"
@@ -596,15 +604,14 @@ export default async function EmployeeAccessAdminPage({
                   selectedIds={employee.queueIds}
                   title={t("admin.employeeAccess.workQueueMemberships")}
                 />
-                <button
+                <EmployeeMembershipSubmitButton
                   className="primaryButton"
                   disabled={isDeactivated}
-                  type="submit"
+                  label={t("admin.employeeAccess.saveMemberships")}
                 >
                   <Save size={18} aria-hidden="true" />
-                  {t("admin.employeeAccess.saveMemberships")}
-                </button>
-              </form>
+                </EmployeeMembershipSubmitButton>
+              </EmployeeMembershipActionForm>
             </div>
           </section>
         ) : null}
@@ -628,16 +635,13 @@ export default async function EmployeeAccessAdminPage({
                 <span className="badge">{roleAssignmentOptions.length}</span>
               </div>
 
-              <form
-                action={assignTenantRoleAction}
+              <RoleActionForm
+                actionKind="assignRole"
                 className="settingsForm employeeAccessAssignForm"
+                messages={roleActionMessages}
+                reauthLabel={t("auth.login.link")}
+                resetOnSuccess
               >
-                <input name="returnTo" type="hidden" value={returnPath} />
-                <input
-                  name="employeeAccessSection"
-                  type="hidden"
-                  value="roles"
-                />
                 <RoleAssignmentFields
                   employees={employeeOptions}
                   messages={scopePickerMessages(t)}
@@ -645,15 +649,14 @@ export default async function EmployeeAccessAdminPage({
                   scopeReferenceOptions={scopeReferenceOptions}
                   selectedEmployeeId={employee.employeeId}
                 />
-                <button
+                <RoleActionSubmitButton
                   className="primaryButton"
                   disabled={isDeactivated || roleAssignmentOptions.length === 0}
-                  type="submit"
+                  label={t("admin.roles.assign")}
                 >
                   <Plus size={18} aria-hidden="true" />
-                  {t("admin.roles.assign")}
-                </button>
-              </form>
+                </RoleActionSubmitButton>
+              </RoleActionForm>
             </section>
           </>
         ) : null}
@@ -679,16 +682,13 @@ export default async function EmployeeAccessAdminPage({
                 </span>
               </div>
 
-              <form
-                action={createDirectPermissionGrantAction}
+              <RoleActionForm
+                actionKind="createDirectGrant"
                 className="settingsForm employeeAccessGrantForm"
+                messages={roleActionMessages}
+                reauthLabel={t("auth.login.link")}
+                resetOnSuccess
               >
-                <input name="returnTo" type="hidden" value={returnPath} />
-                <input
-                  name="employeeAccessSection"
-                  type="hidden"
-                  value="direct_grants"
-                />
                 <DirectGrantFields
                   employees={employeeOptions}
                   messages={scopePickerMessages(t)}
@@ -696,17 +696,16 @@ export default async function EmployeeAccessAdminPage({
                   scopeReferenceOptions={scopeReferenceOptions}
                   selectedEmployeeId={employee.employeeId}
                 />
-                <button
+                <RoleActionSubmitButton
                   className="primaryButton"
                   disabled={
                     isDeactivated || directGrantPermissionOptions.length === 0
                   }
-                  type="submit"
+                  label={t("admin.roles.grantDirectPermission")}
                 >
                   <Plus size={18} aria-hidden="true" />
-                  {t("admin.roles.grantDirectPermission")}
-                </button>
-              </form>
+                </RoleActionSubmitButton>
+              </RoleActionForm>
             </section>
           </>
         ) : null}
@@ -741,13 +740,14 @@ export default async function EmployeeAccessAdminPage({
                 ) : (
                   employeeRoleBindings.map((binding) => (
                     <EmployeeRoleBindingRow
+                      actionMessages={roleActionMessages}
                       binding={binding}
                       currentEmployeeId={access.employeeId}
                       key={
                         binding.id ??
                         `${binding.roleId}:${permissionScopeKey(binding.scope)}`
                       }
-                      returnPath={returnPath}
+                      reauthLabel={t("auth.login.link")}
                       roles={roles}
                       t={t}
                     />
@@ -786,6 +786,7 @@ export default async function EmployeeAccessAdminPage({
                 ) : (
                   expiredEmployeeRoleBindings.map((binding) => (
                     <EmployeeRoleBindingRow
+                      actionMessages={roleActionMessages}
                       binding={binding}
                       currentEmployeeId={access.employeeId}
                       expired
@@ -793,7 +794,7 @@ export default async function EmployeeAccessAdminPage({
                         binding.id ??
                         `${binding.roleId}:${permissionScopeKey(binding.scope)}`
                       }
-                      returnPath={returnPath}
+                      reauthLabel={t("auth.login.link")}
                       roles={roles}
                       t={t}
                     />
@@ -834,13 +835,14 @@ export default async function EmployeeAccessAdminPage({
                 ) : (
                   employeeDirectGrants.map((grant) => (
                     <EmployeeDirectGrantRow
+                      actionMessages={roleActionMessages}
                       currentEmployeeId={access.employeeId}
                       grant={grant}
                       key={
                         grant.id ??
                         `${grant.permission}:${permissionScopeKey(grant.scope)}`
                       }
-                      returnPath={returnPath}
+                      reauthLabel={t("auth.login.link")}
                       t={t}
                     />
                   ))
@@ -878,6 +880,7 @@ export default async function EmployeeAccessAdminPage({
                 ) : (
                   expiredEmployeeDirectGrants.map((grant) => (
                     <EmployeeDirectGrantRow
+                      actionMessages={roleActionMessages}
                       currentEmployeeId={access.employeeId}
                       expired
                       grant={grant}
@@ -885,7 +888,7 @@ export default async function EmployeeAccessAdminPage({
                         grant.id ??
                         `${grant.permission}:${permissionScopeKey(grant.scope)}`
                       }
-                      returnPath={returnPath}
+                      reauthLabel={t("auth.login.link")}
                       t={t}
                     />
                   ))
@@ -916,27 +919,39 @@ export default async function EmployeeAccessAdminPage({
               <span className="badge">{effectiveAccess.length}</span>
             </div>
 
-            <div className="managementList">
-              {effectiveAccess.length === 0 ? (
-                <p className="metaText">
-                  {t("admin.employeeAccess.noEffectiveAccess")}
-                </p>
-              ) : (
-                effectiveAccess.map((grant) => (
-                  <EffectiveGrantRow
-                    employee={employee}
-                    grant={grant}
-                    key={effectiveGrantKey(grant)}
-                    orgUnits={orgUnits}
-                    roleBindings={roleBindings}
-                    roles={roles}
-                    t={t}
-                    teams={teams}
-                    workQueues={workQueues}
-                  />
-                ))
-              )}
-            </div>
+            {effectiveAccess.length === 0 ? (
+              <p className="metaText">
+                {t("admin.employeeAccess.noEffectiveAccess")}
+              </p>
+            ) : (
+              <div className="effectiveAccessTableWrap">
+                <table className="effectiveAccessTable">
+                  <thead>
+                    <tr>
+                      <th scope="col">{t("admin.roles.permission")}</th>
+                      <th scope="col">{t("admin.roles.domain")}</th>
+                      <th scope="col">{t("admin.roles.scopeType")}</th>
+                      <th scope="col">{t("admin.roles.source")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {effectiveAccess.map((grant) => (
+                      <EffectiveGrantTableRow
+                        employee={employee}
+                        grant={grant}
+                        key={effectiveGrantKey(grant)}
+                        orgUnits={orgUnits}
+                        roleBindings={roleBindings}
+                        roles={roles}
+                        t={t}
+                        teams={teams}
+                        workQueues={workQueues}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </section>
         ) : null}
       </AdminSectionFrame>
@@ -996,17 +1011,19 @@ function employeeAccessSectionHref(
 }
 
 function EmployeeRoleBindingRow({
+  actionMessages,
   binding,
   currentEmployeeId,
   expired = false,
-  returnPath,
+  reauthLabel,
   roles,
   t
 }: {
+  readonly actionMessages: RoleActionMessages;
   readonly binding: PermissionRoleBinding;
   readonly currentEmployeeId: EmployeeId;
   readonly expired?: boolean;
-  readonly returnPath: string;
+  readonly reauthLabel: string;
   readonly roles: readonly TenantRoleRecord[];
   readonly t: Translator;
 }): ReactNode {
@@ -1036,15 +1053,20 @@ function EmployeeRoleBindingRow({
         ) : isCurrentEmployee || binding.id === undefined ? (
           <span className="badge">{t("admin.roles.currentUser")}</span>
         ) : (
-          <form className="inlineForm" action={revokeTenantRoleBindingAction}>
-            <input name="returnTo" type="hidden" value={returnPath} />
-            <input name="employeeAccessSection" type="hidden" value="roles" />
+          <RoleActionForm
+            actionKind="revokeRoleBinding"
+            className="inlineForm"
+            messages={actionMessages}
+            reauthLabel={reauthLabel}
+          >
             <input name="bindingId" type="hidden" value={binding.id} />
-            <button className="dangerButton" type="submit">
+            <RoleActionSubmitButton
+              className="dangerButton"
+              label={t("admin.roles.revoke")}
+            >
               <XCircle size={14} aria-hidden="true" />
-              {t("admin.roles.revoke")}
-            </button>
-          </form>
+            </RoleActionSubmitButton>
+          </RoleActionForm>
         )}
       </div>
     </article>
@@ -1099,16 +1121,18 @@ function MembershipCheckboxGroup({
 }
 
 function EmployeeDirectGrantRow({
+  actionMessages,
   currentEmployeeId,
   expired = false,
   grant,
-  returnPath,
+  reauthLabel,
   t
 }: {
+  readonly actionMessages: RoleActionMessages;
   readonly currentEmployeeId: EmployeeId;
   readonly expired?: boolean;
   readonly grant: DirectPermissionGrant;
-  readonly returnPath: string;
+  readonly reauthLabel: string;
   readonly t: Translator;
 }): ReactNode {
   const isCurrentEmployee = grant.employeeId === currentEmployeeId;
@@ -1144,29 +1168,27 @@ function EmployeeDirectGrantRow({
         ) : isCurrentEmployee || grant.id === undefined ? (
           <span className="badge">{t("admin.roles.currentUser")}</span>
         ) : (
-          <form
+          <RoleActionForm
+            actionKind="revokeDirectGrant"
             className="inlineForm"
-            action={revokeDirectPermissionGrantAction}
+            messages={actionMessages}
+            reauthLabel={reauthLabel}
           >
-            <input name="returnTo" type="hidden" value={returnPath} />
-            <input
-              name="employeeAccessSection"
-              type="hidden"
-              value="direct_grants"
-            />
             <input name="grantId" type="hidden" value={grant.id} />
-            <button className="dangerButton" type="submit">
+            <RoleActionSubmitButton
+              className="dangerButton"
+              label={t("admin.roles.revoke")}
+            >
               <XCircle size={14} aria-hidden="true" />
-              {t("admin.roles.revoke")}
-            </button>
-          </form>
+            </RoleActionSubmitButton>
+          </RoleActionForm>
         )}
       </div>
     </article>
   );
 }
 
-function EffectiveGrantRow({
+function EffectiveGrantTableRow({
   employee,
   grant,
   orgUnits,
@@ -1188,41 +1210,33 @@ function EffectiveGrantRow({
   const definition = getPermissionDefinition(grant.permission);
 
   return (
-    <article className="managementRow effectiveAccessRow">
-      <span className="metricIcon">
-        <ListChecks size={18} aria-hidden="true" />
-      </span>
-      <div>
-        <h3 className="listItemTitle">
-          <code className="permissionCode">{grant.permission}</code>
-        </h3>
-        <p className="metaText">
-          {t("admin.roles.effectiveGrantDomain", {
-            value: t(permissionDomainKey(definition.domain))
-          })}
-        </p>
-        <p className="metaText">
-          {t("admin.roles.assignmentScope", {
-            value: scopeValue(grant.scope, t)
-          })}
-        </p>
-      </div>
-      <div className="sourceList">
-        {grant.sources.map((source, index) => (
-          <span className="badge" key={effectiveGrantSourceKey(source, index)}>
-            {sourceLabel(source, {
-              employees: [employee],
-              orgUnits,
-              roleBindings,
-              roles,
-              t,
-              teams,
-              workQueues
-            })}
-          </span>
-        ))}
-      </div>
-    </article>
+    <tr>
+      <td>
+        <code className="permissionCode">{grant.permission}</code>
+      </td>
+      <td>{t(permissionDomainKey(definition.domain))}</td>
+      <td>{scopeValue(grant.scope, t)}</td>
+      <td>
+        <div className="sourceList effectiveAccessTableSourceList">
+          {grant.sources.map((source, index) => (
+            <span
+              className="badge"
+              key={effectiveGrantSourceKey(source, index)}
+            >
+              {sourceLabel(source, {
+                employees: [employee],
+                orgUnits,
+                roleBindings,
+                roles,
+                t,
+                teams,
+                workQueues
+              })}
+            </span>
+          ))}
+        </div>
+      </td>
+    </tr>
   );
 }
 
@@ -1464,29 +1478,36 @@ function scopePickerMessages(t: Translator): ScopePickerMessages {
   };
 }
 
-function roleActionStatusKey(status: string): I18nMessageKey {
-  switch (status) {
-    case "assigned":
-      return "admin.roles.actionStatus.assigned";
-    case "revoked":
-      return "admin.roles.actionStatus.revoked";
-    case "direct_grant_created":
-      return "admin.roles.actionStatus.directGrantCreated";
-    case "direct_grant_revoked":
-      return "admin.roles.actionStatus.directGrantRevoked";
-    case "permission_denied":
-      return "admin.roles.actionStatus.permissionDenied";
-    case "reauth_required":
-      return "admin.roles.actionStatus.reauthRequired";
-    case "memberships_updated":
-      return "admin.employeeAccess.actionStatus.membershipsUpdated";
-    case "profile_updated":
-      return "admin.employeeAccess.actionStatus.profileUpdated";
-    case "email_verification_required":
-      return "auth.emailVerification.status.required";
-    default:
-      return "admin.roles.actionStatus.invalid";
-  }
+function employeeMembershipActionMessages(
+  t: Translator
+): EmployeeMembershipActionMessages {
+  return {
+    email_verification_required: t("auth.emailVerification.status.required"),
+    invalid: t("admin.employeeAccess.actionStatus.invalid"),
+    memberships_updated: t(
+      "admin.employeeAccess.actionStatus.membershipsUpdated"
+    ),
+    permission_denied: t("admin.roles.actionStatus.permissionDenied"),
+    reauth_required: t("admin.roles.actionStatus.reauthRequired")
+  };
+}
+
+function employeeAccessRoleActionMessages(t: Translator): RoleActionMessages {
+  return {
+    assigned: t("admin.roles.actionStatus.assigned"),
+    archived: t("admin.roles.actionStatus.archived"),
+    created: t("admin.roles.actionStatus.created"),
+    direct_grant_created: t("admin.roles.actionStatus.directGrantCreated"),
+    direct_grant_revoked: t("admin.roles.actionStatus.directGrantRevoked"),
+    email_verification_required: t("auth.emailVerification.status.required"),
+    invalid: t("admin.roles.actionStatus.invalid"),
+    permission_denied: t("admin.roles.actionStatus.permissionDenied"),
+    reauth_required: t("admin.roles.actionStatus.reauthRequired"),
+    restored: t("admin.roles.actionStatus.restored"),
+    revoked: t("admin.roles.actionStatus.revoked"),
+    template_created: t("admin.roles.actionStatus.templateCreated"),
+    updated: t("admin.roles.actionStatus.updated")
+  };
 }
 
 function permissionScopeTypeKey(

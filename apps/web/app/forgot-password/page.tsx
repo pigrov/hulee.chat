@@ -5,23 +5,19 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
-import { forgotPasswordAction } from "../../src/auth-actions";
+import { authActionMessages } from "../../src/auth-action-messages";
+import { AuthActionForm, AuthSubmitButton } from "../../src/auth-action-form";
 import {
   brandProfileToCssProperties,
   buildBrandMarkLabel
 } from "../../src/brand-style";
+import { EmailInput } from "../../src/contact-fields";
 import { resolveCurrentWebAccessSession } from "../../src/session";
-import { ToastViewport } from "../../src/toast";
-import { buildToast } from "../../src/toast-messages";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export default async function ForgotPasswordPage({
-  searchParams
-}: {
-  searchParams?: Promise<{ status?: string }>;
-}): Promise<ReactNode> {
+export default async function ForgotPasswordPage(): Promise<ReactNode> {
   const existingSession = await resolveCurrentWebAccessSession({
     allowDevelopmentFallback: false
   });
@@ -34,30 +30,13 @@ export default async function ForgotPasswordPage({
     );
   }
 
-  const resolvedSearchParams = await searchParams;
-  const hasSentNotice = resolvedSearchParams?.status === "sent";
   const { t } = createTranslator("ru");
-  const toasts = hasSentNotice
-    ? [
-        buildToast({
-          id: "forgot-password-sent",
-          variant: "success",
-          title: t("auth.forgotPassword.title"),
-          description: t("auth.forgotPassword.sent")
-        })
-      ]
-    : [];
 
   return (
     <main
       className="loginPage"
       style={brandProfileToCssProperties(defaultBrandProfile)}
     >
-      <ToastViewport
-        closeLabel={t("notifications.close")}
-        regionLabel={t("notifications.region")}
-        toasts={toasts}
-      />
       <section className="loginPanel" aria-labelledby="forgot-password-title">
         <div className="brandMark" aria-label={defaultBrandProfile.productName}>
           {buildBrandMarkLabel(defaultBrandProfile)}
@@ -69,25 +48,26 @@ export default async function ForgotPasswordPage({
           </h1>
           <p className="metaText">{t("auth.forgotPassword.description")}</p>
         </div>
-        <form className="settingsForm" action={forgotPasswordAction}>
+        <AuthActionForm
+          actionKind="forgotPassword"
+          className="settingsForm"
+          messages={authActionMessages(t)}
+          resetOnSuccess
+        >
           <label className="fieldStack">
             <span className="detailLabel">{t("auth.email")}</span>
-            <input
-              className="textInput"
-              name="email"
-              type="email"
-              autoComplete="email"
-              required
-            />
+            <EmailInput className="textInput" name="email" required />
           </label>
-          <button className="primaryButton" type="submit">
+          <AuthSubmitButton
+            className="primaryButton"
+            label={t("auth.forgotPassword.submit")}
+          >
             <Mail size={18} aria-hidden="true" />
-            {t("auth.forgotPassword.submit")}
-          </button>
+          </AuthSubmitButton>
           <p className="authSwitch">
             <Link href="/login">{t("auth.login.link")}</Link>
           </p>
-        </form>
+        </AuthActionForm>
       </section>
     </main>
   );

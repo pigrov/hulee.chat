@@ -5,7 +5,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
-import { selectTenantLoginAction } from "../../../src/auth-actions";
+import { authActionMessages } from "../../../src/auth-action-messages";
+import { AuthActionForm } from "../../../src/auth-action-form";
 import {
   brandProfileToCssProperties,
   buildBrandMarkLabel
@@ -19,11 +20,12 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export default async function SelectLoginCompanyPage(): Promise<ReactNode> {
+  const choices = await readTenantLoginChoices();
   const existingSession = await resolveCurrentWebAccessSession({
     allowDevelopmentFallback: false
   });
 
-  if (existingSession !== null) {
+  if (existingSession !== null && choices === null) {
     redirect(
       existingSession.platformRoles.includes("platform_admin")
         ? "/platform"
@@ -31,10 +33,8 @@ export default async function SelectLoginCompanyPage(): Promise<ReactNode> {
     );
   }
 
-  const choices = await readTenantLoginChoices();
-
   if (choices === null) {
-    redirect("/login?error=invalid");
+    redirect("/login");
   }
 
   const { t } = createTranslator("ru");
@@ -61,10 +61,11 @@ export default async function SelectLoginCompanyPage(): Promise<ReactNode> {
         </div>
         <div className="managementList">
           {choices.choices.map((choice) => (
-            <form
+            <AuthActionForm
+              actionKind="selectTenant"
               key={choice.tenantSlug}
               className="settingsForm"
-              action={selectTenantLoginAction}
+              messages={authActionMessages(t)}
             >
               <input
                 name="tenantSlug"
@@ -84,7 +85,7 @@ export default async function SelectLoginCompanyPage(): Promise<ReactNode> {
                   </span>
                 </span>
               </button>
-            </form>
+            </AuthActionForm>
           ))}
         </div>
         <p className="authSwitch">

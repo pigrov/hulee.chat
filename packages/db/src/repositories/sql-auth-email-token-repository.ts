@@ -1,4 +1,4 @@
-import type { PlatformEvent, TenantId } from "@hulee/contracts";
+﻿import type { PlatformEvent, TenantId } from "@hulee/contracts";
 import {
   CoreError,
   type AuthEmailToken,
@@ -25,6 +25,12 @@ export type AuthEmailTokenTarget = {
   displayName: string;
 };
 
+export type AuthEmailAccountOwner = {
+  tenantId: TenantId;
+  accountId: string;
+  email: string;
+};
+
 export type AuthEmailTokenPreview = {
   token: AuthEmailToken;
   tenantSlug: string;
@@ -45,6 +51,11 @@ export type ListAuthEmailTokenTargetsByEmailInput = {
 export type FindAuthEmailTokenTargetByAccountInput = {
   tenantId: TenantId;
   accountId: string;
+};
+
+export type FindAuthEmailAccountOwnerInput = {
+  tenantId: TenantId;
+  email: string;
 };
 
 export type FindValidAuthEmailTokenInput = {
@@ -71,6 +82,12 @@ export type CompletePasswordResetPersistenceInput = {
   events: readonly PlatformEvent[];
 };
 
+export type CompleteEmailChangePersistenceInput = {
+  token: AuthEmailToken;
+  changedAt: Date;
+  events: readonly PlatformEvent[];
+};
+
 export type AuthEmailTokenRepository = {
   findTargetByEmail(
     input: FindAuthEmailTokenTargetByEmailInput
@@ -81,12 +98,18 @@ export type AuthEmailTokenRepository = {
   findTargetByAccount(
     input: FindAuthEmailTokenTargetByAccountInput
   ): Promise<AuthEmailTokenTarget | null>;
+  findAccountEmailOwner(
+    input: FindAuthEmailAccountOwnerInput
+  ): Promise<AuthEmailAccountOwner | null>;
   findValidToken(
     input: FindValidAuthEmailTokenInput
   ): Promise<AuthEmailTokenPreview | null>;
   createToken(input: CreateAuthEmailTokenPersistenceInput): Promise<void>;
   completeEmailVerification(
     input: CompleteEmailVerificationPersistenceInput
+  ): Promise<void>;
+  completeEmailChange(
+    input: CompleteEmailChangePersistenceInput
   ): Promise<void>;
   completePasswordReset(
     input: CompletePasswordResetPersistenceInput
@@ -110,6 +133,12 @@ type AuthEmailTokenPreviewRow = AuthEmailTokenTargetRow & {
   expires_at: SqlTimestamp;
   consumed_at: SqlTimestamp | null;
   created_at: SqlTimestamp;
+};
+
+type AuthEmailAccountOwnerRow = {
+  tenant_id: string;
+  account_id: string;
+  email: string;
 };
 
 export function createSqlAuthEmailTokenRepository(
@@ -144,6 +173,15 @@ export function createSqlAuthEmailTokenRepository(
       return row === undefined ? null : mapTargetRow(row);
     },
 
+    async findAccountEmailOwner(input) {
+      const result = await rawExecutor.execute<AuthEmailAccountOwnerRow>(
+        buildFindAuthEmailAccountOwnerSql(input)
+      );
+      const row = result.rows[0];
+
+      return row === undefined ? null : mapAccountOwnerRow(row);
+    },
+
     async findValidToken(input) {
       const result = await rawExecutor.execute<AuthEmailTokenPreviewRow>(
         buildFindValidAuthEmailTokenSql(input)
@@ -160,6 +198,16 @@ export function createSqlAuthEmailTokenRepository(
     async completeEmailVerification(input) {
       const result = await rawExecutor.execute<{ token_id: string }>(
         buildCompleteEmailVerificationSql(input)
+      );
+
+      if (result.rows[0] === undefined) {
+        throw new CoreError("validation.failed");
+      }
+    },
+
+    async completeEmailChange(input) {
+      const result = await rawExecutor.execute<{ token_id: string }>(
+        buildCompleteEmailChangeSql(input)
       );
 
       if (result.rows[0] === undefined) {
@@ -266,6 +314,20 @@ export function buildFindAuthEmailTokenTargetByAccountSql(
   `;
 }
 
+export function buildFindAuthEmailAccountOwnerSql(
+  input: FindAuthEmailAccountOwnerInput
+): SQL {
+  return sql`
+    select tenant_id,
+           id as account_id,
+           email
+    from accounts
+    where tenant_id = ${input.tenantId}
+      and lower(email) = lower(${input.email})
+    limit 1
+  `;
+}
+
 export function buildFindValidAuthEmailTokenSql(
   input: FindValidAuthEmailTokenInput
 ): SQL {
@@ -281,7 +343,8 @@ export function buildFindValidAuthEmailTokenSql(
            tenants.slug as tenant_slug,
            tenants.display_name as tenant_display_name,
            brand.product_name,
-           accounts.email,
+           coalesce(auth_email_verification_tokens.email, accounts.email)
+             as email,
            employees.display_name
     from auth_email_verification_tokens
     inner join accounts on accounts.tenant_id = auth_email_verification_tokens.tenant_id
@@ -314,6 +377,7 @@ export function buildCreateAuthEmailTokenSql(
         id,
         tenant_id,
         account_id,
+        email,
         token_hash,
         purpose,
         expires_at,
@@ -324,6 +388,7 @@ export function buildCreateAuthEmailTokenSql(
         ${input.token.id},
         ${input.token.tenantId},
         ${input.token.accountId},
+        ${input.token.email},
         ${input.token.tokenHash},
         ${input.token.purpose},
         ${new Date(input.token.expiresAt)},
@@ -427,6 +492,133 @@ export function buildCompleteEmailVerificationSql(
           updated_at = ${input.verifiedAt}
       from pending_token
       where auth_email_verification_tokens.id = pending_token.id
+      returning auth_email_verification_tokens.id,
+                auth_email_verification_tokens.tenant_id
+    ),
+    event_rows as (
+      select *
+      from jsonb_to_recordset(${serializeEventRows(input.events)}::jsonb)
+        as event_row(
+          id text,
+          tenant_id text,
+          type text,
+          version text,
+          occurred_at timestamptz,
+          idempotency_key text,
+          payload jsonb
+        )
+    ),
+    inserted_events as (
+      insert into event_store (
+        id,
+        tenant_id,
+        type,
+        version,
+        occurred_at,
+        idempotency_key,
+        payload,
+        created_at,
+        updated_at
+      )
+      select event_rows.id,
+             event_rows.tenant_id,
+             event_rows.type,
+             event_rows.version,
+             event_rows.occurred_at,
+             event_rows.idempotency_key,
+             event_rows.payload,
+             event_rows.occurred_at,
+             event_rows.occurred_at
+      from event_rows
+      where exists (select 1 from updated_token)
+      returning id,
+                tenant_id,
+                payload,
+                occurred_at
+    ),
+    inserted_outbox as (
+      insert into outbox (
+        id,
+        tenant_id,
+        event_id,
+        status,
+        attempts,
+        payload,
+        created_at,
+        updated_at
+      )
+      select concat('outbox:', id),
+             tenant_id,
+             id,
+             'pending',
+             0,
+             payload,
+             occurred_at,
+             occurred_at
+      from inserted_events
+      returning id
+    )
+    select id as token_id
+    from updated_token
+    limit 1
+  `;
+}
+
+export function buildCompleteEmailChangeSql(
+  input: CompleteEmailChangePersistenceInput
+): SQL {
+  return sql`
+    with pending_token as (
+      select id,
+             tenant_id,
+             account_id,
+             email
+      from auth_email_verification_tokens
+      where tenant_id = ${input.token.tenantId}
+        and account_id = ${input.token.accountId}
+        and token_hash = ${input.token.tokenHash}
+        and purpose = 'email_change_verification'
+        and consumed_at is null
+        and expires_at > ${input.changedAt}
+        and email is not null
+      limit 1
+    ),
+    updated_account as (
+      update accounts
+      set email = pending_token.email,
+          email_verified_at = ${input.changedAt},
+          updated_at = ${input.changedAt}
+      from pending_token
+      where accounts.tenant_id = pending_token.tenant_id
+        and accounts.id = pending_token.account_id
+        and not exists (
+          select 1
+          from accounts duplicate_account
+          where duplicate_account.tenant_id = pending_token.tenant_id
+            and duplicate_account.id <> pending_token.account_id
+            and lower(duplicate_account.email) = lower(pending_token.email)
+        )
+      returning accounts.id,
+                accounts.tenant_id,
+                accounts.email
+    ),
+    updated_employee as (
+      update employees
+      set email = updated_account.email,
+          updated_at = ${input.changedAt}
+      from updated_account
+      where employees.tenant_id = updated_account.tenant_id
+        and employees.account_id = updated_account.id
+        and employees.deactivated_at is null
+      returning employees.id
+    ),
+    updated_token as (
+      update auth_email_verification_tokens
+      set consumed_at = ${input.changedAt},
+          updated_at = ${input.changedAt}
+      from pending_token
+      where auth_email_verification_tokens.id = pending_token.id
+        and exists (select 1 from updated_employee)
       returning auth_email_verification_tokens.id,
                 auth_email_verification_tokens.tenant_id
     ),
@@ -648,6 +840,16 @@ function mapTargetRow(row: AuthEmailTokenTargetRow): AuthEmailTokenTarget {
   };
 }
 
+function mapAccountOwnerRow(
+  row: AuthEmailAccountOwnerRow
+): AuthEmailAccountOwner {
+  return {
+    tenantId: row.tenant_id as TenantId,
+    accountId: row.account_id,
+    email: row.email
+  };
+}
+
 function mapPreviewRow(row: AuthEmailTokenPreviewRow): AuthEmailTokenPreview {
   const purpose = parsePurpose(row.purpose);
 
@@ -671,7 +873,11 @@ function mapPreviewRow(row: AuthEmailTokenPreviewRow): AuthEmailTokenPreview {
 }
 
 function parsePurpose(value: string): AuthEmailTokenPurpose {
-  if (value !== "email_verification" && value !== "password_reset") {
+  if (
+    value !== "email_verification" &&
+    value !== "email_change_verification" &&
+    value !== "password_reset"
+  ) {
     throw new CoreError("validation.failed");
   }
 

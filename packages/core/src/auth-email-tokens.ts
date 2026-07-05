@@ -1,10 +1,14 @@
 import type { PlatformEvent, TenantId } from "@hulee/contracts";
+import { normalizeEmailAddress } from "@hulee/contact-identity";
 
 import { createDomainEvent } from "./domain-events";
 import { CoreError } from "./errors";
 import { createSequentialIdFactory, type IdFactory } from "./ids";
 
-export type AuthEmailTokenPurpose = "email_verification" | "password_reset";
+export type AuthEmailTokenPurpose =
+  | "email_verification"
+  | "email_change_verification"
+  | "password_reset";
 
 export type AuthEmailToken = {
   id: string;
@@ -104,25 +108,45 @@ export function completeAuthEmailToken(
 
   return {
     token,
-    events: [
-      token.purpose === "email_verification"
-        ? createAccountEmailVerifiedEvent({
-            now: input.now,
-            tenantId: input.tenantId,
-            accountId: token.accountId,
-            idFactory: ids
-          })
-        : createDomainEvent({
-            id: ids.eventId(authEmailTokenCompletedEventType(token.purpose)),
-            type: authEmailTokenCompletedEventType(token.purpose),
-            tenantId: input.tenantId,
-            occurredAt: input.now,
-            payload: {
-              accountId: token.accountId
-            }
-          })
-    ]
+    events: [createAuthEmailTokenCompletedEvent({ token, now: input.now, ids })]
   };
+}
+
+function createAuthEmailTokenCompletedEvent(input: {
+  token: AuthEmailToken;
+  now: string;
+  ids: IdFactory;
+}): PlatformEvent {
+  switch (input.token.purpose) {
+    case "email_verification":
+      return createAccountEmailVerifiedEvent({
+        now: input.now,
+        tenantId: input.token.tenantId,
+        accountId: input.token.accountId,
+        idFactory: input.ids
+      });
+    case "email_change_verification":
+      return createDomainEvent({
+        id: input.ids.eventId("account.email_changed"),
+        type: "account.email_changed",
+        tenantId: input.token.tenantId,
+        occurredAt: input.now,
+        payload: {
+          accountId: input.token.accountId,
+          email: input.token.email
+        }
+      });
+    case "password_reset":
+      return createDomainEvent({
+        id: input.ids.eventId("account.password_reset_completed"),
+        type: "account.password_reset_completed",
+        tenantId: input.token.tenantId,
+        occurredAt: input.now,
+        payload: {
+          accountId: input.token.accountId
+        }
+      });
+  }
 }
 
 export function createAccountEmailVerifiedEvent(
@@ -144,18 +168,18 @@ export function createAccountEmailVerifiedEvent(
 
 function authEmailTokenRequestedEventType(
   purpose: AuthEmailTokenPurpose
-): "account.email_verification_requested" | "account.password_reset_requested" {
-  return purpose === "email_verification"
-    ? "account.email_verification_requested"
-    : "account.password_reset_requested";
-}
-
-function authEmailTokenCompletedEventType(
-  purpose: AuthEmailTokenPurpose
-): "account.email_verified" | "account.password_reset_completed" {
-  return purpose === "email_verification"
-    ? "account.email_verified"
-    : "account.password_reset_completed";
+):
+  | "account.email_verification_requested"
+  | "account.email_change_requested"
+  | "account.password_reset_requested" {
+  switch (purpose) {
+    case "email_verification":
+      return "account.email_verification_requested";
+    case "email_change_verification":
+      return "account.email_change_requested";
+    case "password_reset":
+      return "account.password_reset_requested";
+  }
 }
 
 function assertTokenTenant(token: AuthEmailToken, tenantId: TenantId): void {
@@ -173,17 +197,19 @@ function assertTokenPending(token: AuthEmailToken, now: string): void {
 }
 
 function normalizeEmail(value: string): string {
-  const email = value.trim().toLowerCase();
-
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  try {
+    return normalizeEmailAddress(value);
+  } catch {
     throw new CoreError("validation.failed");
   }
-
-  return email;
 }
 
 function requirePurpose(value: AuthEmailTokenPurpose): AuthEmailTokenPurpose {
-  if (value !== "email_verification" && value !== "password_reset") {
+  if (
+    value !== "email_verification" &&
+    value !== "email_change_verification" &&
+    value !== "password_reset"
+  ) {
     throw new CoreError("validation.failed");
   }
 

@@ -13,11 +13,15 @@ import {
 } from "@hulee/db";
 import { createS3ObjectStorage } from "@hulee/storage";
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import { createHash, randomUUID } from "node:crypto";
 
 import { assertWebPlatformAdmin } from "./access";
 import { assertWebActionRequest } from "./action-security";
+import {
+  platformActionError,
+  platformActionSuccess,
+  type PlatformActionState
+} from "./platform-action-state";
 import {
   buildChannelCatalogOverridePersistenceInput,
   findPlatformChannelCatalogDefinition
@@ -36,11 +40,9 @@ const channelIconMediaTypes = {
 } as const;
 
 export async function updatePlatformChannelCatalogOverrideAction(
+  _previousState: PlatformActionState,
   formData: FormData
-): Promise<void> {
-  let selectedChannelType: string | undefined;
-  let destination = "/platform/channels?channelCatalog=invalid";
-
+): Promise<PlatformActionState> {
   try {
     await assertWebActionRequest();
     const session = assertWebPlatformAdmin(
@@ -49,7 +51,6 @@ export async function updatePlatformChannelCatalogOverrideAction(
     const channelType = internalChannelTypeSchema.parse(
       readRequiredFormString(formData, "channelType")
     );
-    selectedChannelType = channelType;
     const definition = findPlatformChannelCatalogDefinition(channelType);
     const visibility = internalChannelVisibilitySchema.parse(
       readRequiredFormString(formData, "visibility")
@@ -93,29 +94,18 @@ export async function updatePlatformChannelCatalogOverrideAction(
       occurredAt: updatedAt
     });
 
-    destination = platformChannelsDestination({
-      channelType,
-      statusName: "channelCatalog",
-      status: "updated"
-    });
-  } catch {
-    destination = platformChannelsDestination({
-      channelType: selectedChannelType,
-      statusName: "channelCatalog",
-      status: "invalid"
-    });
-  }
+    revalidateChannelCatalogPaths();
 
-  revalidateChannelCatalogPaths();
-  redirect(destination);
+    return platformActionSuccess("channel_catalog_updated");
+  } catch {
+    return platformActionError("channel_catalog_invalid");
+  }
 }
 
 export async function uploadPlatformChannelIconAction(
+  _previousState: PlatformActionState,
   formData: FormData
-): Promise<void> {
-  let selectedChannelType: string | undefined;
-  let destination = "/platform/channels?channelCatalog=invalid";
-
+): Promise<PlatformActionState> {
   try {
     await assertWebActionRequest();
     const session = assertWebPlatformAdmin(
@@ -124,7 +114,6 @@ export async function uploadPlatformChannelIconAction(
     const channelType = internalChannelTypeSchema.parse(
       readRequiredFormString(formData, "channelType")
     );
-    selectedChannelType = channelType;
     const definition = findPlatformChannelCatalogDefinition(channelType);
     const iconFile = readRequiredFormFile(formData, "iconFile");
     const mediaType = iconFile.type;
@@ -195,21 +184,12 @@ export async function uploadPlatformChannelIconAction(
       occurredAt: updatedAt
     });
 
-    destination = platformChannelsDestination({
-      channelType,
-      statusName: "channelCatalog",
-      status: "updated"
-    });
-  } catch {
-    destination = platformChannelsDestination({
-      channelType: selectedChannelType,
-      statusName: "channelCatalog",
-      status: "invalid"
-    });
-  }
+    revalidateChannelCatalogPaths();
 
-  revalidateChannelCatalogPaths();
-  redirect(destination);
+    return platformActionSuccess("channel_catalog_updated");
+  } catch {
+    return platformActionError("channel_catalog_invalid");
+  }
 }
 
 function localizedOverridesFromForm(
@@ -253,22 +233,6 @@ function serializeOverrideForAudit(
     updatedAt: override.updatedAt.toISOString(),
     updatedByPlatformAdminAccountId: override.updatedByPlatformAdminAccountId
   };
-}
-
-function platformChannelsDestination(input: {
-  channelType?: string;
-  statusName: "channelCatalog";
-  status: "updated" | "invalid";
-}): string {
-  const params = new URLSearchParams({
-    [input.statusName]: input.status
-  });
-
-  if (input.channelType) {
-    params.set("channelType", input.channelType);
-  }
-
-  return `/platform/channels?${params.toString()}`;
 }
 
 function readRequiredFormString(formData: FormData, name: string): string {

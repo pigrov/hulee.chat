@@ -10,6 +10,11 @@ import {
   requestPasswordResetEmail,
   resetPasswordWithToken
 } from "./auth-email";
+import {
+  authActionError,
+  authActionSuccess,
+  type AuthActionState
+} from "./auth-action-state";
 import { assertWebActionRequest } from "./action-security";
 import { assertWebAuthRateLimit } from "./auth-rate-limit";
 import {
@@ -22,14 +27,20 @@ import {
   writeTenantLoginChoices
 } from "./session";
 
-export async function loginAction(formData: FormData): Promise<void> {
-  let destination = "/login?error=invalid";
+export async function loginAction(
+  _previousState: AuthActionState,
+  formData: FormData
+): Promise<AuthActionState> {
+  let destination: string | undefined;
 
   try {
     await assertWebActionRequest();
     const tenantSlug = readOptionalFormString(formData, "tenantSlug");
     const email = readRequiredFormString(formData, "email");
     const password = readRequiredFormString(formData, "password");
+    const returnTo = resolveOptionalSafeReturnTo(
+      readOptionalFormString(formData, "returnTo")
+    );
 
     await assertWebAuthRateLimit("login", `${tenantSlug ?? "*"}:${email}`);
     const result = await loginLocalWebSession({
@@ -37,26 +48,35 @@ export async function loginAction(formData: FormData): Promise<void> {
       email,
       password
     });
-    destination = result.redirectPath;
+    destination = returnTo ?? result.redirectPath;
   } catch (error) {
     if (error instanceof TenantLoginChoiceRequiredError) {
       await writeTenantLoginChoices({
         email: error.email,
-        choices: error.choices
+        choices: error.choices,
+        returnTo: resolveOptionalSafeReturnTo(
+          readOptionalFormString(formData, "returnTo")
+        )
       });
+
       destination = "/login/select-company";
     } else {
-      destination = "/login?error=invalid";
+      return authActionError("invalid_credentials");
     }
+  }
+
+  if (destination === undefined) {
+    return authActionError("invalid_credentials");
   }
 
   redirect(destination);
 }
 
 export async function selectTenantLoginAction(
+  _previousState: AuthActionState,
   formData: FormData
-): Promise<void> {
-  let destination = "/login?error=invalid";
+): Promise<AuthActionState> {
+  let destination: string | undefined;
 
   try {
     await assertWebActionRequest();
@@ -65,16 +85,23 @@ export async function selectTenantLoginAction(
     await assertWebAuthRateLimit("select_company", tenantSlug);
     const result = await completeTenantLoginChoice(tenantSlug);
 
-    destination = result?.redirectPath ?? "/login?error=invalid";
+    destination = result?.redirectPath;
   } catch {
-    destination = "/login?error=invalid";
+    return authActionError("invalid_credentials");
+  }
+
+  if (destination === undefined) {
+    return authActionError("invalid_credentials");
   }
 
   redirect(destination);
 }
 
-export async function registerAction(formData: FormData): Promise<void> {
-  let destination = "/register?error=invalid";
+export async function registerAction(
+  _previousState: AuthActionState,
+  formData: FormData
+): Promise<AuthActionState> {
+  let destination: string | undefined;
 
   try {
     await assertWebActionRequest();
@@ -112,13 +139,20 @@ export async function registerAction(formData: FormData): Promise<void> {
       status
     );
   } catch {
-    destination = "/register?error=invalid";
+    return authActionError("registration_invalid");
+  }
+
+  if (destination === undefined) {
+    return authActionError("registration_invalid");
   }
 
   redirect(destination);
 }
 
-export async function forgotPasswordAction(formData: FormData): Promise<void> {
+export async function forgotPasswordAction(
+  _previousState: AuthActionState,
+  formData: FormData
+): Promise<AuthActionState> {
   try {
     await assertWebActionRequest();
     const email = readRequiredFormString(formData, "email");
@@ -131,19 +165,21 @@ export async function forgotPasswordAction(formData: FormData): Promise<void> {
     // Keep password reset responses non-enumerating for tenant accounts.
   }
 
-  redirect("/forgot-password?status=sent");
+  return authActionSuccess("forgot_password_sent");
 }
 
-export async function resetPasswordAction(formData: FormData): Promise<void> {
+export async function resetPasswordAction(
+  _previousState: AuthActionState,
+  formData: FormData
+): Promise<AuthActionState> {
   let token: string | undefined;
-  let destination = "/forgot-password?status=sent";
+  let destination: string | undefined;
 
   try {
     await assertWebActionRequest();
     token = readRequiredFormString(formData, "token");
     const password = readRequiredFormString(formData, "password");
 
-    destination = `/reset-password/${encodeURIComponent(token)}?error=invalid`;
     await assertWebAuthRateLimit("reset_password", token);
     const status = await resetPasswordWithToken({
       token,
@@ -153,18 +189,17 @@ export async function resetPasswordAction(formData: FormData): Promise<void> {
     if (status === "complete") {
       destination = "/login?reset=complete";
     } else if (status === "weak_password") {
-      destination = `/reset-password/${encodeURIComponent(
-        token
-      )}?error=password_policy`;
+      return authActionError("reset_password_policy");
     }
   } catch {
-    destination =
-      token === undefined
-        ? "/forgot-password?status=sent"
-        : `/reset-password/${encodeURIComponent(token)}?error=invalid`;
+    return authActionError("reset_invalid");
   }
 
-  redirect(destination);
+  if (destination) {
+    redirect(destination);
+  }
+
+  return authActionError("reset_invalid");
 }
 
 export async function resendEmailVerificationAction(
@@ -238,12 +273,22 @@ function addSearchParam(path: string, name: string, value: string): string {
 }
 
 function resolveSafeReturnTo(value: string | undefined): string {
+  return resolveOptionalSafeReturnTo(value) ?? "/";
+}
+
+function resolveOptionalSafeReturnTo(
+  value: string | undefined
+): string | undefined {
   if (value === undefined || !value.startsWith("/")) {
-    return "/";
+    return undefined;
   }
 
   if (value.startsWith("//")) {
-    return "/";
+    return undefined;
+  }
+
+  if (value === "/login" || value.startsWith("/login?")) {
+    return undefined;
   }
 
   return value;

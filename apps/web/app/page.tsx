@@ -32,10 +32,6 @@ import {
   type PermissionActor
 } from "@hulee/core";
 
-import {
-  sendReplyAction,
-  updateConversationRoutingAction
-} from "../src/actions";
 import { resendEmailVerificationAction } from "../src/auth-actions";
 import { AccessDeniedPage } from "../src/access-denied";
 import {
@@ -50,10 +46,15 @@ import {
 } from "../src/conversation-routing-options";
 import { canReplyToConversation } from "../src/conversation-reply-options";
 import { formatDateTime } from "../src/formatting";
+import {
+  InboxActionSubmitButton,
+  InboxReplyActionForm,
+  InboxRoutingActionForm
+} from "../src/inbox-action-form";
 import type {
-  InboxReplyActionStatus,
-  InboxRoutingActionStatus
-} from "../src/inbox-action-status";
+  InboxReplyActionMessages,
+  InboxRoutingActionMessages
+} from "../src/inbox-action-state";
 import {
   buildReadableInboxQueueOptions,
   resolveReadableInboxQueueFilter
@@ -80,8 +81,6 @@ export default async function InboxPage({
     emailVerification?: string;
     queueId?: string;
     assigned?: string;
-    replyStatus?: string;
-    routingStatus?: string;
   }>;
 }): Promise<ReactNode> {
   const access = await resolveCurrentWebAccessSession();
@@ -180,12 +179,6 @@ export default async function InboxPage({
   const emailVerificationNotice = resolveEmailVerificationNotice(
     resolvedSearchParams?.emailVerification
   );
-  const routingActionStatus = resolveRoutingActionStatus(
-    resolvedSearchParams?.routingStatus
-  );
-  const replyActionStatus = resolveReplyActionStatus(
-    resolvedSearchParams?.replyStatus
-  );
   const toasts: ToastMessage[] = [];
 
   if (emailVerificationNotice) {
@@ -202,28 +195,6 @@ export default async function InboxPage({
         description: t(
           `auth.emailVerification.status.${emailVerificationNotice}` as I18nMessageKey
         )
-      })
-    );
-  }
-
-  if (routingActionStatus) {
-    toasts.push(
-      buildToast({
-        id: `routing-status:${routingActionStatus}`,
-        variant: routingActionStatus === "saved" ? "success" : "error",
-        title: t("inbox.routing.title"),
-        description: t(routingActionStatusKey(routingActionStatus))
-      })
-    );
-  }
-
-  if (replyActionStatus) {
-    toasts.push(
-      buildToast({
-        id: `reply-status:${replyActionStatus}`,
-        variant: replyActionStatus === "sent" ? "success" : "error",
-        title: t("inbox.reply.title"),
-        description: t(replyActionStatusKey(replyActionStatus))
       })
     );
   }
@@ -274,6 +245,7 @@ export default async function InboxPage({
         effectiveAccess: accessSnapshot
       })}
       t={t}
+      toastSearchParams={["emailVerification"]}
       toasts={toasts}
     >
       <section className="queuePane" aria-labelledby="inbox-title">
@@ -382,7 +354,10 @@ export default async function InboxPage({
         </div>
 
         {selectedConversation && canReplyToSelectedConversation ? (
-          <form className="composer" action={sendReplyAction}>
+          <InboxReplyActionForm
+            className="composer"
+            messages={inboxReplyActionMessages(t)}
+          >
             <input
               type="hidden"
               name="conversationId"
@@ -405,16 +380,17 @@ export default async function InboxPage({
               disabled={isTenantWriteBlocked}
               required
             />
-            <button
+            <InboxActionSubmitButton
+              ariaLabel={t("inbox.replySubmit")}
               className="sendButton"
-              type="submit"
               disabled={isTenantWriteBlocked}
-              aria-label={t("inbox.replySubmit")}
+              label={t("inbox.replySubmit")}
+              labelVisible={false}
             >
               <Send size={18} aria-hidden="true" />
-            </button>
+            </InboxActionSubmitButton>
             <SlotMount slot="conversation.composer.tool" />
-          </form>
+          </InboxReplyActionForm>
         ) : selectedConversation ? (
           <div className="composer" aria-live="polite">
             <p className="formError composerNotice">
@@ -776,7 +752,10 @@ function ConversationRoutingPanel({
       </div>
 
       <div className="buttonRow routingQuickActions">
-        <form className="inlineForm" action={updateConversationRoutingAction}>
+        <InboxRoutingActionForm
+          className="inlineForm"
+          messages={inboxRoutingActionMessages(t)}
+        >
           <input
             name="conversationId"
             type="hidden"
@@ -789,20 +768,22 @@ function ConversationRoutingPanel({
             value={currentEmployeeId}
           />
           <input name="assignedTeamId" type="hidden" value="" />
-          <button
+          <InboxActionSubmitButton
             className="secondaryButton"
             disabled={
               !currentEmployeeIsAssignable ||
               !routingOptions.canAssignToCurrentEmployee ||
               isAssignedToCurrentEmployee
             }
-            type="submit"
+            label={t("inbox.routing.assignToMe")}
           >
             <CheckCircle2 size={14} aria-hidden="true" />
-            {t("inbox.routing.assignToMe")}
-          </button>
-        </form>
-        <form className="inlineForm" action={updateConversationRoutingAction}>
+          </InboxActionSubmitButton>
+        </InboxRoutingActionForm>
+        <InboxRoutingActionForm
+          className="inlineForm"
+          messages={inboxRoutingActionMessages(t)}
+        >
           <input
             name="conversationId"
             type="hidden"
@@ -811,19 +792,19 @@ function ConversationRoutingPanel({
           <input name="returnTo" type="hidden" value={returnTo} />
           <input name="assignedEmployeeId" type="hidden" value="" />
           <input name="assignedTeamId" type="hidden" value="" />
-          <button
+          <InboxActionSubmitButton
             className="secondaryButton"
             disabled={!hasAssignee || !routingOptions.canClearAssignment}
-            type="submit"
+            label={t("inbox.routing.clearAssignee")}
           >
-            {t("inbox.routing.clearAssignee")}
-          </button>
-        </form>
+            {null}
+          </InboxActionSubmitButton>
+        </InboxRoutingActionForm>
       </div>
 
-      <form
+      <InboxRoutingActionForm
         className="settingsForm routingForm"
-        action={updateConversationRoutingAction}
+        messages={inboxRoutingActionMessages(t)}
       >
         <input
           name="conversationId"
@@ -893,11 +874,13 @@ function ConversationRoutingPanel({
             ))}
           </select>
         </label>
-        <button className="secondaryButton" type="submit">
+        <InboxActionSubmitButton
+          className="secondaryButton"
+          label={t("inbox.routing.save")}
+        >
           <Save size={14} aria-hidden="true" />
-          {t("inbox.routing.save")}
-        </button>
-      </form>
+        </InboxActionSubmitButton>
+      </InboxRoutingActionForm>
     </section>
   );
 }
@@ -974,56 +957,26 @@ function resolveEmailVerificationNotice(
   return undefined;
 }
 
-function resolveRoutingActionStatus(
-  value: string | undefined
-): InboxRoutingActionStatus | undefined {
-  if (
-    value === "saved" ||
-    value === "invalid" ||
-    value === "permission_denied"
-  ) {
-    return value;
-  }
-
-  return undefined;
+function inboxReplyActionMessages(
+  t: ReturnType<typeof createTranslator>["t"]
+): InboxReplyActionMessages {
+  return {
+    email_verification_required: t("auth.emailVerification.status.required"),
+    invalid: t("inbox.reply.status.invalid"),
+    permission_denied: t("inbox.reply.status.permissionDenied"),
+    sent: t("inbox.reply.status.sent")
+  };
 }
 
-function resolveReplyActionStatus(
-  value: string | undefined
-): InboxReplyActionStatus | undefined {
-  if (
-    value === "sent" ||
-    value === "invalid" ||
-    value === "permission_denied"
-  ) {
-    return value;
-  }
-
-  return undefined;
-}
-
-function routingActionStatusKey(
-  status: InboxRoutingActionStatus
-): I18nMessageKey {
-  switch (status) {
-    case "saved":
-      return "inbox.routing.status.saved";
-    case "permission_denied":
-      return "inbox.routing.status.permissionDenied";
-    default:
-      return "inbox.routing.status.invalid";
-  }
-}
-
-function replyActionStatusKey(status: InboxReplyActionStatus): I18nMessageKey {
-  switch (status) {
-    case "sent":
-      return "inbox.reply.status.sent";
-    case "permission_denied":
-      return "inbox.reply.status.permissionDenied";
-    default:
-      return "inbox.reply.status.invalid";
-  }
+function inboxRoutingActionMessages(
+  t: ReturnType<typeof createTranslator>["t"]
+): InboxRoutingActionMessages {
+  return {
+    email_verification_required: t("auth.emailVerification.status.required"),
+    invalid: t("inbox.routing.status.invalid"),
+    permission_denied: t("inbox.routing.status.permissionDenied"),
+    saved: t("inbox.routing.status.saved")
+  };
 }
 
 function normalizeInboxQueueFilter(

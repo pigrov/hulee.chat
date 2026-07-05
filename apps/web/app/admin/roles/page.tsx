@@ -46,16 +46,10 @@ import {
 } from "../../../src/admin-section-frame";
 import { loadTenantAdminViewModel } from "../../../src/admin-view-model";
 import {
-  archiveCustomTenantRoleAction,
-  assignTenantRoleAction,
-  createDirectPermissionGrantAction,
-  createCustomTenantRoleAction,
-  createRoleFromTemplateAction,
-  restoreCustomTenantRoleAction,
-  revokeDirectPermissionGrantAction,
-  updateCustomTenantRoleAction,
-  revokeTenantRoleBindingAction
-} from "../../../src/role-actions";
+  RoleActionForm,
+  RoleActionSubmitButton,
+  type RoleActionMessages
+} from "../../../src/role-action-form";
 import {
   getWebDatabase,
   resolveCurrentWebAccessSession
@@ -78,7 +72,6 @@ import {
 } from "../../../src/rbac-effective-access";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
 import { navigationAccessFromTenantAdminAccess } from "../../../src/tenant-admin-nav";
-import { buildActionStatusToast } from "../../../src/toast-messages";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -128,7 +121,6 @@ export default async function RolesAdminPage({
 }: {
   searchParams?: Promise<{
     accessPreviewEmployeeId?: string;
-    roleActionStatus?: string;
     section?: string;
   }>;
 }): Promise<ReactNode> {
@@ -206,17 +198,7 @@ export default async function RolesAdminPage({
     searchParams
   ]);
   const { t, locale } = createTranslator(model.tenant.locale);
-  const roleStatusToast = resolvedSearchParams?.roleActionStatus
-    ? buildActionStatusToast({
-        id: `role-status:${resolvedSearchParams.roleActionStatus}`,
-        status: resolvedSearchParams.roleActionStatus,
-        titleKey: "admin.roles.actionStatus",
-        descriptionKey: roleActionStatusKey(
-          resolvedSearchParams.roleActionStatus
-        ),
-        t
-      })
-    : undefined;
+  const actionMessages = roleActionMessages(t);
   const selectedSection = resolveRoleAdminSection(
     resolvedSearchParams?.section
   );
@@ -359,7 +341,6 @@ export default async function RolesAdminPage({
       tenantDisplayName={model.tenant.displayName}
       title={t("admin.roles")}
       titleId="roles-title"
-      toasts={roleStatusToast ? [roleStatusToast] : []}
     >
       <AdminSectionFrame
         ariaLabel={t("admin.roles")}
@@ -385,7 +366,13 @@ export default async function RolesAdminPage({
             <span className="badge">{permissionCatalog.length}</span>
           </div>
 
-          <form className="settingsForm" action={createCustomTenantRoleAction}>
+          <RoleActionForm
+            actionKind="createRole"
+            className="settingsForm"
+            messages={actionMessages}
+            reauthLabel={t("auth.login.link")}
+            resetOnSuccess
+          >
             <input name="roleAdminSection" type="hidden" value="create" />
             <div className="roleEditorGrid">
               <label className="fieldStack">
@@ -412,11 +399,13 @@ export default async function RolesAdminPage({
 
             <PermissionCheckboxGroups selectedPermissions={[]} t={t} />
 
-            <button className="primaryButton" type="submit">
+            <RoleActionSubmitButton
+              className="primaryButton"
+              label={t("admin.roles.create")}
+            >
               <Plus size={18} aria-hidden="true" />
-              {t("admin.roles.create")}
-            </button>
-          </form>
+            </RoleActionSubmitButton>
+          </RoleActionForm>
         </section>
 
         <section
@@ -440,6 +429,7 @@ export default async function RolesAdminPage({
           <div className="managementList">
             {roleTemplateCatalog.map((template) => (
               <RoleTemplateRow
+                actionMessages={actionMessages}
                 key={template.id}
                 locale={locale}
                 roleAdminSection="templates"
@@ -468,9 +458,12 @@ export default async function RolesAdminPage({
             <span className="badge">{roleAssignmentSubjectCount}</span>
           </div>
 
-          <form
+          <RoleActionForm
+            actionKind="assignRole"
             className="settingsForm roleAssignForm"
-            action={assignTenantRoleAction}
+            messages={actionMessages}
+            reauthLabel={t("auth.login.link")}
+            resetOnSuccess
           >
             <input name="roleAdminSection" type="hidden" value="assign" />
             <RoleAssignmentFields
@@ -480,18 +473,17 @@ export default async function RolesAdminPage({
               scopeReferenceOptions={scopeReferenceOptions}
               subjectOptions={roleAssignmentSubjectOptions}
             />
-            <button
+            <RoleActionSubmitButton
               className="primaryButton"
-              type="submit"
               disabled={
                 roleAssignmentSubjectCount === 0 ||
                 roleAssignmentOptions.length === 0
               }
+              label={t("admin.roles.assign")}
             >
               <Plus size={18} aria-hidden="true" />
-              {t("admin.roles.assign")}
-            </button>
-          </form>
+            </RoleActionSubmitButton>
+          </RoleActionForm>
         </section>
 
         <section
@@ -591,6 +583,7 @@ export default async function RolesAdminPage({
             ) : (
               roleBindings.map((binding) => (
                 <RoleBindingRow
+                  actionMessages={actionMessages}
                   binding={binding}
                   currentEmployeeId={access.employeeId}
                   employees={employees}
@@ -633,6 +626,7 @@ export default async function RolesAdminPage({
             ) : (
               expiredRoleBindings.map((binding) => (
                 <RoleBindingRow
+                  actionMessages={actionMessages}
                   binding={binding}
                   currentEmployeeId={access.employeeId}
                   employees={employees}
@@ -668,9 +662,12 @@ export default async function RolesAdminPage({
             <span className="badge">{permissionCatalog.length}</span>
           </div>
 
-          <form
+          <RoleActionForm
+            actionKind="createDirectGrant"
             className="settingsForm directGrantForm"
-            action={createDirectPermissionGrantAction}
+            messages={actionMessages}
+            reauthLabel={t("auth.login.link")}
+            resetOnSuccess
           >
             <input
               name="roleAdminSection"
@@ -683,18 +680,17 @@ export default async function RolesAdminPage({
               permissions={directGrantPermissionOptions}
               scopeReferenceOptions={scopeReferenceOptions}
             />
-            <button
+            <RoleActionSubmitButton
               className="primaryButton"
-              type="submit"
               disabled={
                 employeeOptions.length === 0 ||
                 directGrantPermissionOptions.length === 0
               }
+              label={t("admin.roles.grantDirectPermission")}
             >
               <Plus size={18} aria-hidden="true" />
-              {t("admin.roles.grantDirectPermission")}
-            </button>
-          </form>
+            </RoleActionSubmitButton>
+          </RoleActionForm>
         </section>
 
         <section
@@ -721,6 +717,7 @@ export default async function RolesAdminPage({
             ) : (
               directGrants.map((grant) => (
                 <DirectGrantRow
+                  actionMessages={actionMessages}
                   currentEmployeeId={access.employeeId}
                   employees={employees}
                   grant={grant}
@@ -759,6 +756,7 @@ export default async function RolesAdminPage({
             ) : (
               expiredDirectGrants.map((grant) => (
                 <DirectGrantRow
+                  actionMessages={actionMessages}
                   currentEmployeeId={access.employeeId}
                   employees={employees}
                   expired
@@ -796,6 +794,7 @@ export default async function RolesAdminPage({
             ) : (
               roles.map((role) => (
                 <RoleDefinitionRow
+                  actionMessages={actionMessages}
                   bindingCount={roleBindingsByRoleId.get(role.id) ?? 0}
                   key={role.id}
                   roleAdminSection="definitions"
@@ -874,21 +873,19 @@ function isRoleAdminSectionId(
 }
 
 function RoleDefinitionRow({
+  actionMessages,
   bindingCount,
   roleAdminSection,
   role,
   t
 }: {
+  actionMessages: RoleActionMessages;
   bindingCount: number;
   roleAdminSection: RoleAdminSectionId;
   role: TenantRoleRecord;
   t: Translator;
 }): ReactNode {
   const summaries = summarizeRoleDomains(role.permissions);
-  const statusAction =
-    role.status === "archived"
-      ? restoreCustomTenantRoleAction
-      : archiveCustomTenantRoleAction;
   const statusActionIcon =
     role.status === "archived" ? (
       <ArchiveRestore size={14} aria-hidden="true" />
@@ -937,23 +934,29 @@ function RoleDefinitionRow({
         {role.isSystem ? (
           <span className="badge">{t("admin.roles.readOnly")}</span>
         ) : (
-          <form className="inlineForm" action={statusAction}>
+          <RoleActionForm
+            actionKind={
+              role.status === "archived" ? "restoreRole" : "archiveRole"
+            }
+            className="inlineForm"
+            messages={actionMessages}
+            reauthLabel={t("auth.login.link")}
+          >
             <input name="roleId" type="hidden" value={role.id} />
             <input
               name="roleAdminSection"
               type="hidden"
               value={roleAdminSection}
             />
-            <button
+            <RoleActionSubmitButton
               className={
                 role.status === "archived" ? "secondaryButton" : "dangerButton"
               }
-              type="submit"
+              label={t(statusActionLabel)}
             >
               {statusActionIcon}
-              {t(statusActionLabel)}
-            </button>
-          </form>
+            </RoleActionSubmitButton>
+          </RoleActionForm>
         )}
       </div>
       <div className="badgeRow rolePermissionDomains">
@@ -971,9 +974,11 @@ function RoleDefinitionRow({
           {t("admin.roles.systemRoleReadOnly")}
         </p>
       ) : (
-        <form
+        <RoleActionForm
+          actionKind="updateRole"
           className="settingsForm roleDefinitionEditor"
-          action={updateCustomTenantRoleAction}
+          messages={actionMessages}
+          reauthLabel={t("auth.login.link")}
         >
           <input name="roleId" type="hidden" value={role.id} />
           <input
@@ -1011,22 +1016,26 @@ function RoleDefinitionRow({
             t={t}
           />
 
-          <button className="primaryButton" type="submit">
+          <RoleActionSubmitButton
+            className="primaryButton"
+            label={t("admin.roles.saveChanges")}
+          >
             <Save size={18} aria-hidden="true" />
-            {t("admin.roles.saveChanges")}
-          </button>
-        </form>
+          </RoleActionSubmitButton>
+        </RoleActionForm>
       )}
     </article>
   );
 }
 
 function RoleTemplateRow({
+  actionMessages,
   locale,
   roleAdminSection,
   t,
   template
 }: {
+  actionMessages: RoleActionMessages;
   locale: string;
   roleAdminSection: RoleAdminSectionId;
   t: Translator;
@@ -1051,15 +1060,22 @@ function RoleTemplateRow({
           })}
         </p>
       </div>
-      <form className="inlineForm" action={createRoleFromTemplateAction}>
+      <RoleActionForm
+        actionKind="createRoleFromTemplate"
+        className="inlineForm"
+        messages={actionMessages}
+        reauthLabel={t("auth.login.link")}
+      >
         <input name="templateId" type="hidden" value={template.id} />
         <input name="locale" type="hidden" value={locale} />
         <input name="roleAdminSection" type="hidden" value={roleAdminSection} />
-        <button className="primaryButton" type="submit">
+        <RoleActionSubmitButton
+          className="primaryButton"
+          label={t("admin.roles.createFromTemplate.action")}
+        >
           <Plus size={14} aria-hidden="true" />
-          {t("admin.roles.createFromTemplate.action")}
-        </button>
-      </form>
+        </RoleActionSubmitButton>
+      </RoleActionForm>
     </article>
   );
 }
@@ -1112,6 +1128,7 @@ function PermissionCheckboxGroups({
 }
 
 function RoleBindingRow({
+  actionMessages,
   binding,
   currentEmployeeId,
   employees,
@@ -1123,6 +1140,7 @@ function RoleBindingRow({
   orgUnits,
   workQueues
 }: {
+  actionMessages: RoleActionMessages;
   binding: PermissionRoleBinding;
   currentEmployeeId: string;
   employees: readonly TenantEmployeeRecord[];
@@ -1177,18 +1195,25 @@ function RoleBindingRow({
         ) : isCurrentEmployee ? (
           <span className="badge">{t("admin.roles.currentUser")}</span>
         ) : (
-          <form className="inlineForm" action={revokeTenantRoleBindingAction}>
+          <RoleActionForm
+            actionKind="revokeRoleBinding"
+            className="inlineForm"
+            messages={actionMessages}
+            reauthLabel={t("auth.login.link")}
+          >
             <input name="bindingId" type="hidden" value={binding.id} />
             <input
               name="roleAdminSection"
               type="hidden"
               value={roleAdminSection}
             />
-            <button className="dangerButton" type="submit">
+            <RoleActionSubmitButton
+              className="dangerButton"
+              label={t("admin.roles.revoke")}
+            >
               <XCircle size={14} aria-hidden="true" />
-              {t("admin.roles.revoke")}
-            </button>
-          </form>
+            </RoleActionSubmitButton>
+          </RoleActionForm>
         )}
       </div>
     </article>
@@ -1196,6 +1221,7 @@ function RoleBindingRow({
 }
 
 function DirectGrantRow({
+  actionMessages,
   currentEmployeeId,
   employees,
   expired = false,
@@ -1203,6 +1229,7 @@ function DirectGrantRow({
   roleAdminSection,
   t
 }: {
+  actionMessages: RoleActionMessages;
   currentEmployeeId: string;
   employees: readonly TenantEmployeeRecord[];
   expired?: boolean;
@@ -1251,9 +1278,11 @@ function DirectGrantRow({
         ) : isCurrentEmployee || grant.id === undefined ? (
           <span className="badge">{t("admin.roles.currentUser")}</span>
         ) : (
-          <form
+          <RoleActionForm
+            actionKind="revokeDirectGrant"
             className="inlineForm"
-            action={revokeDirectPermissionGrantAction}
+            messages={actionMessages}
+            reauthLabel={t("auth.login.link")}
           >
             <input name="grantId" type="hidden" value={grant.id} />
             <input
@@ -1261,11 +1290,13 @@ function DirectGrantRow({
               type="hidden"
               value={roleAdminSection}
             />
-            <button className="dangerButton" type="submit">
+            <RoleActionSubmitButton
+              className="dangerButton"
+              label={t("admin.roles.revoke")}
+            >
               <XCircle size={14} aria-hidden="true" />
-              {t("admin.roles.revoke")}
-            </button>
-          </form>
+            </RoleActionSubmitButton>
+          </RoleActionForm>
         )}
       </div>
     </article>
@@ -1633,35 +1664,22 @@ function roleStatusKey(status: TenantRoleRecord["status"]): I18nMessageKey {
   }
 }
 
-function roleActionStatusKey(status: string): I18nMessageKey {
-  switch (status) {
-    case "created":
-      return "admin.roles.actionStatus.created";
-    case "template_created":
-      return "admin.roles.actionStatus.templateCreated";
-    case "updated":
-      return "admin.roles.actionStatus.updated";
-    case "archived":
-      return "admin.roles.actionStatus.archived";
-    case "restored":
-      return "admin.roles.actionStatus.restored";
-    case "assigned":
-      return "admin.roles.actionStatus.assigned";
-    case "revoked":
-      return "admin.roles.actionStatus.revoked";
-    case "direct_grant_created":
-      return "admin.roles.actionStatus.directGrantCreated";
-    case "direct_grant_revoked":
-      return "admin.roles.actionStatus.directGrantRevoked";
-    case "permission_denied":
-      return "admin.roles.actionStatus.permissionDenied";
-    case "reauth_required":
-      return "admin.roles.actionStatus.reauthRequired";
-    case "email_verification_required":
-      return "auth.emailVerification.status.required";
-    default:
-      return "admin.roles.actionStatus.invalid";
-  }
+function roleActionMessages(t: Translator): RoleActionMessages {
+  return {
+    assigned: t("admin.roles.actionStatus.assigned"),
+    archived: t("admin.roles.actionStatus.archived"),
+    created: t("admin.roles.actionStatus.created"),
+    direct_grant_created: t("admin.roles.actionStatus.directGrantCreated"),
+    direct_grant_revoked: t("admin.roles.actionStatus.directGrantRevoked"),
+    email_verification_required: t("auth.emailVerification.status.required"),
+    invalid: t("admin.roles.actionStatus.invalid"),
+    permission_denied: t("admin.roles.actionStatus.permissionDenied"),
+    reauth_required: t("admin.roles.actionStatus.reauthRequired"),
+    restored: t("admin.roles.actionStatus.restored"),
+    revoked: t("admin.roles.actionStatus.revoked"),
+    template_created: t("admin.roles.actionStatus.templateCreated"),
+    updated: t("admin.roles.actionStatus.updated")
+  };
 }
 
 function permissionScopeTypeKey(

@@ -5,21 +5,19 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
-import { registerAction } from "../../src/auth-actions";
+import { authActionMessages } from "../../src/auth-action-messages";
+import { AuthActionForm, AuthSubmitButton } from "../../src/auth-action-form";
 import {
   brandProfileToCssProperties,
   buildBrandMarkLabel
 } from "../../src/brand-style";
+import { EmailInput } from "../../src/contact-fields";
 import { resolveCurrentWebAccessSession } from "../../src/session";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export default async function RegisterPage({
-  searchParams
-}: {
-  searchParams?: Promise<{ error?: string }>;
-}): Promise<ReactNode> {
+export default async function RegisterPage(): Promise<ReactNode> {
   const existingSession = await resolveCurrentWebAccessSession({
     allowDevelopmentFallback: false
   });
@@ -32,8 +30,6 @@ export default async function RegisterPage({
     );
   }
 
-  const resolvedSearchParams = await searchParams;
-  const hasRegistrationError = resolvedSearchParams?.error === "invalid";
   const { t } = createTranslator("ru");
 
   return (
@@ -52,7 +48,11 @@ export default async function RegisterPage({
           </h1>
           <p className="metaText">{t("auth.register.description")}</p>
         </div>
-        <form className="settingsForm" action={registerAction}>
+        <AuthActionForm
+          actionKind="register"
+          className="settingsForm"
+          messages={authActionMessages(t)}
+        >
           <label className="fieldStack">
             <span className="detailLabel">{t("auth.companyName")}</span>
             <input
@@ -74,13 +74,7 @@ export default async function RegisterPage({
           </label>
           <label className="fieldStack">
             <span className="detailLabel">{t("auth.email")}</span>
-            <input
-              className="textInput"
-              name="email"
-              type="email"
-              autoComplete="email"
-              required
-            />
+            <EmailInput className="textInput" name="email" required />
           </label>
           <label className="fieldStack">
             <span className="detailLabel">{t("auth.password")}</span>
@@ -93,18 +87,17 @@ export default async function RegisterPage({
               required
             />
           </label>
-          {hasRegistrationError ? (
-            <p className="formError">{t("auth.register.invalid")}</p>
-          ) : null}
-          <button className="primaryButton" type="submit">
+          <AuthSubmitButton
+            className="primaryButton"
+            label={t("auth.register.submit")}
+          >
             <UserPlus size={18} aria-hidden="true" />
-            {t("auth.register.submit")}
-          </button>
+          </AuthSubmitButton>
           <p className="authSwitch">
             {t("auth.register.haveAccount")}{" "}
             <Link href="/login">{t("auth.login.link")}</Link>
           </p>
-        </form>
+        </AuthActionForm>
       </section>
     </main>
   );

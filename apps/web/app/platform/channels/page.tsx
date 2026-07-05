@@ -24,12 +24,15 @@ import {
   resolveChannelShortDescription,
   resolveChannelTitle
 } from "../../../src/channel-display";
-import { PlatformChannelProviderPolicy } from "../../../src/platform-admin-components";
+import {
+  PlatformChannelProviderPolicy,
+  platformActionMessages
+} from "../../../src/platform-admin-components";
 import { PlatformAdminShell } from "../../../src/platform-admin-shell";
 import {
-  updatePlatformChannelCatalogOverrideAction,
-  uploadPlatformChannelIconAction
-} from "../../../src/platform-channel-catalog-actions";
+  PlatformActionForm,
+  PlatformActionSubmitButton
+} from "../../../src/platform-action-form";
 import {
   loadPlatformChannelCatalog,
   type PlatformChannelCatalogView
@@ -43,7 +46,6 @@ import {
   resolveCurrentWebAccessSession,
   resolveWebConfig
 } from "../../../src/session";
-import { buildActionStatusToast } from "../../../src/toast-messages";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -64,8 +66,6 @@ export default async function PlatformChannelsPage({
   searchParams
 }: {
   searchParams?: Promise<{
-    channelPolicy?: string;
-    channelCatalog?: string;
     channelType?: string;
   }>;
 }): Promise<ReactNode> {
@@ -107,33 +107,6 @@ export default async function PlatformChannelsPage({
         (policy) => policy.channelType === selectedChannel.channelType
       )
     : [];
-  const channelPolicyToast = resolvedSearchParams?.channelPolicy
-    ? buildActionStatusToast({
-        id: `channel-policy:${resolvedSearchParams.channelPolicy}`,
-        status: resolvedSearchParams.channelPolicy,
-        titleKey: "platform.channelProviderBehavior",
-        descriptionKey:
-          resolvedSearchParams.channelPolicy === "updated"
-            ? "platform.channelPolicyStatus.updated"
-            : "platform.channelPolicyStatus.invalid",
-        t
-      })
-    : undefined;
-  const channelCatalogToast = resolvedSearchParams?.channelCatalog
-    ? buildActionStatusToast({
-        id: `channel-catalog:${resolvedSearchParams.channelCatalog}`,
-        status: resolvedSearchParams.channelCatalog,
-        titleKey: "platform.channels.title",
-        descriptionKey:
-          resolvedSearchParams.channelCatalog === "updated"
-            ? "platform.channels.status.updated"
-            : "platform.channels.status.invalid",
-        t
-      })
-    : undefined;
-  const toasts = [channelPolicyToast, channelCatalogToast].filter(
-    (toast) => toast !== undefined
-  );
 
   return (
     <PlatformAdminShell
@@ -142,7 +115,6 @@ export default async function PlatformChannelsPage({
       t={t}
       title={t("platform.channels.navTitle")}
       titleId="platform-channels-title"
-      toasts={toasts}
     >
       <div className="platformChannelGrid">
         <aside
@@ -300,9 +272,10 @@ function PlatformChannelSettings({
           </span>
         </div>
 
-        <form
-          action={updatePlatformChannelCatalogOverrideAction}
+        <PlatformActionForm
+          actionKind="updateChannelCatalog"
           className="channelCatalogSettingsForm"
+          messages={platformActionMessages(t)}
         >
           <input name="channelType" type="hidden" value={channel.channelType} />
           <label className="fieldStack channelCatalogDescriptionField">
@@ -432,16 +405,19 @@ function PlatformChannelSettings({
               ))}
             </select>
           </label>
-          <button className="primaryButton" type="submit">
+          <PlatformActionSubmitButton
+            className="primaryButton"
+            label={t("common.save")}
+          >
             <Save size={16} aria-hidden="true" />
-            {t("common.save")}
-          </button>
-        </form>
+          </PlatformActionSubmitButton>
+        </PlatformActionForm>
 
-        <form
-          action={uploadPlatformChannelIconAction}
+        <PlatformActionForm
+          actionKind="uploadChannelIcon"
           className="channelCatalogIconForm"
-          encType="multipart/form-data"
+          messages={platformActionMessages(t)}
+          resetOnSuccess
         >
           <input name="channelType" type="hidden" value={channel.channelType} />
           <DetailItem
@@ -461,11 +437,13 @@ function PlatformChannelSettings({
             />
             <span className="metaText">{t("platform.channels.iconHelp")}</span>
           </label>
-          <button className="secondaryButton" type="submit">
+          <PlatformActionSubmitButton
+            className="secondaryButton"
+            label={t("platform.channels.uploadIcon")}
+          >
             <ImageUp size={16} aria-hidden="true" />
-            {t("platform.channels.uploadIcon")}
-          </button>
-        </form>
+          </PlatformActionSubmitButton>
+        </PlatformActionForm>
       </section>
 
       {channelPolicies.length > 0 ? (

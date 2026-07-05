@@ -36,9 +36,19 @@ export function buildToast(input: {
 function toastVariantFromStatus(status: string): ToastVariant {
   switch (status) {
     case "invalid":
+    case "avatar_invalid_type":
+    case "avatar_storage_unavailable":
+    case "avatar_too_large":
+    case "internal_api_failed":
+    case "logo_invalid_type":
+    case "logo_metadata_unavailable":
+    case "logo_storage_unavailable":
+    case "logo_too_large":
     case "provider_failed":
     case "permission_denied":
     case "password_policy":
+    case "phone_invalid":
+    case "profile_invalid":
       return "error";
     case "not_configured":
     case "reauth_required":

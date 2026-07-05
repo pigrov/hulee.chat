@@ -65,6 +65,15 @@ describe("brand theme tokens", () => {
       "color.brand.foreground": "#111827",
       "color.accent": "#a16207"
     });
+    expect(
+      buildBrandThemeTokens({
+        presetId: "neutral",
+        primaryColor: "#777777"
+      })
+    ).toMatchObject({
+      "color.brand.primary": "#777777",
+      "color.brand.foreground": "#000000"
+    });
 
     for (const preset of brandThemePresets) {
       expect(resolveBrandThemePresetId(preset.tokens)).toBe(preset.id);

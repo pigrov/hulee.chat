@@ -407,9 +407,10 @@ export async function updateTenantBrand(
   });
 
   if (!response.ok) {
-    throw new Error(
-      `Internal tenant brand update API returned HTTP ${response.status}.`
-    );
+    await throwInternalApiErrorResponse({
+      response,
+      message: "Internal tenant brand update API returned"
+    });
   }
 
   return internalTenantBrandResponseSchema.parse(await response.json());

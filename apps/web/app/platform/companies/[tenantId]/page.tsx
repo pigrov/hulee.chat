@@ -15,6 +15,7 @@ import {
   ChannelIcon,
   resolveChannelTitle
 } from "../../../../src/channel-display";
+import { EmailText } from "../../../../src/contact-fields";
 import { formatOptionalDateTime } from "../../../../src/formatting";
 import { PlatformAdminShell } from "../../../../src/platform-admin-shell";
 import {
@@ -233,7 +234,7 @@ function CompanyEmployeeRow({
       </span>
       <span>
         <span className="detailValue">{employee.displayName}</span>
-        <span className="metaText">{employee.email}</span>
+        <EmailText asLink={false} className="metaText" value={employee.email} />
       </span>
       <span className="badge">
         {employee.deactivatedAt

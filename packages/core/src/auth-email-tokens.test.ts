@@ -60,6 +60,40 @@ describe("auth email tokens", () => {
     expect(result.events[0]?.type).toBe("account.password_reset_requested");
   });
 
+  it("creates and completes an email change verification token", () => {
+    const created = createAuthEmailToken({
+      now,
+      tenantId,
+      accountId: "account-1",
+      email: "new-admin@example.test",
+      purpose: "email_change_verification",
+      tokenHash,
+      expiresAt: "2026-06-24T10:00:00.000Z",
+      idFactory: createSequentialIdFactory("auth-email-change")
+    });
+    const completed = completeAuthEmailToken({
+      now: "2026-06-23T10:05:00.000Z",
+      tenantId,
+      token: created.token,
+      idFactory: createSequentialIdFactory("auth-email-change-complete")
+    });
+
+    expect(created.events[0]).toMatchObject({
+      type: "account.email_change_requested",
+      payload: {
+        accountId: "account-1",
+        email: "new-admin@example.test"
+      }
+    });
+    expect(completed.events[0]).toMatchObject({
+      type: "account.email_changed",
+      payload: {
+        accountId: "account-1",
+        email: "new-admin@example.test"
+      }
+    });
+  });
+
   it("completes a pending token with the matching completion event", () => {
     const created = createAuthEmailToken({
       now,

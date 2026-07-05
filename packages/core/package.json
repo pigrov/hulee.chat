@@ -6,6 +6,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@hulee/contact-identity": "workspace:*",
     "@hulee/contracts": "workspace:*",
     "@hulee/entitlements": "workspace:*"
   }

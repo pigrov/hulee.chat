@@ -7,11 +7,12 @@ import { CheckCircle2, KeyRound, Phone, QrCode, XCircle } from "lucide-react";
 import type { ReactNode } from "react";
 
 import {
-  cancelChannelAuthChallengeAction,
-  startChannelAuthChallengeAction,
-  submitChannelAuthChallengeAction
-} from "./actions";
+  ChannelAuthChallengeActionForm,
+  ChannelAuthChallengeSubmitButton
+} from "./channel-auth-challenge-action-form";
+import type { ChannelAuthChallengeActionMessages } from "./channel-auth-challenge-action-state";
 import { DetailItem } from "./app-chrome";
+import { PhoneNumberInput } from "./contact-fields";
 import { formatOptionalDateTime } from "./formatting";
 
 type Translator = ReturnType<typeof createTranslator>["t"];
@@ -119,6 +120,7 @@ function QrChallengeStep({
         connectorId={connectorId}
         icon={<QrCode size={16} aria-hidden="true" />}
         label={t("integrations.channel.auth.start")}
+        t={t}
       />
     </>
   );
@@ -134,22 +136,28 @@ function PhoneChallengeStep({
   t: Translator;
 }): ReactNode {
   return (
-    <form className="settingsForm" action={startChannelAuthChallengeAction}>
+    <ChannelAuthChallengeActionForm
+      actionKind="start"
+      className="settingsForm"
+      messages={channelAuthChallengeActionMessages(t)}
+    >
       <input type="hidden" name="connectorId" value={connectorId} />
       <input type="hidden" name="challengeType" value={challengeType} />
       <label className="fieldStack">
         <span className="detailLabel">
           {t("integrations.channel.auth.phoneNumber")}
         </span>
-        <input className="textInput" name="phoneNumber" type="tel" required />
+        <PhoneNumberInput className="textInput" name="phoneNumber" required />
       </label>
       <div className="buttonRow">
-        <button className="primaryButton" type="submit">
+        <ChannelAuthChallengeSubmitButton
+          className="primaryButton"
+          label={t("integrations.channel.auth.start")}
+        >
           <Phone size={16} aria-hidden="true" />
-          {t("integrations.channel.auth.start")}
-        </button>
+        </ChannelAuthChallengeSubmitButton>
       </div>
-    </form>
+    </ChannelAuthChallengeActionForm>
   );
 }
 
@@ -163,7 +171,11 @@ function CodeChallengeStep({
   t: Translator;
 }): ReactNode {
   return (
-    <form className="settingsForm" action={submitChannelAuthChallengeAction}>
+    <ChannelAuthChallengeActionForm
+      actionKind="submit"
+      className="settingsForm"
+      messages={channelAuthChallengeActionMessages(t)}
+    >
       <ChallengeIdentityFields
         challenge={challenge}
         connectorId={connectorId}
@@ -181,16 +193,15 @@ function CodeChallengeStep({
         />
       </label>
       <div className="buttonRow">
-        <button
+        <ChannelAuthChallengeSubmitButton
           className="primaryButton"
-          type="submit"
           disabled={!challenge?.challengeId}
+          label={t("integrations.channel.auth.submitCode")}
         >
           <KeyRound size={16} aria-hidden="true" />
-          {t("integrations.channel.auth.submitCode")}
-        </button>
+        </ChannelAuthChallengeSubmitButton>
       </div>
-    </form>
+    </ChannelAuthChallengeActionForm>
   );
 }
 
@@ -204,7 +215,11 @@ function PasswordChallengeStep({
   t: Translator;
 }): ReactNode {
   return (
-    <form className="settingsForm" action={submitChannelAuthChallengeAction}>
+    <ChannelAuthChallengeActionForm
+      actionKind="submit"
+      className="settingsForm"
+      messages={channelAuthChallengeActionMessages(t)}
+    >
       <ChallengeIdentityFields
         challenge={challenge}
         connectorId={connectorId}
@@ -222,16 +237,15 @@ function PasswordChallengeStep({
         />
       </label>
       <div className="buttonRow">
-        <button
+        <ChannelAuthChallengeSubmitButton
           className="primaryButton"
-          type="submit"
           disabled={!challenge?.challengeId}
+          label={t("integrations.channel.auth.submitPassword")}
         >
           <KeyRound size={16} aria-hidden="true" />
-          {t("integrations.channel.auth.submitPassword")}
-        </button>
+        </ChannelAuthChallengeSubmitButton>
       </div>
-    </form>
+    </ChannelAuthChallengeActionForm>
   );
 }
 
@@ -246,20 +260,22 @@ function WaitingChallengeStep({
 }): ReactNode {
   return (
     <div className="buttonRow">
-      <form action={cancelChannelAuthChallengeAction}>
+      <ChannelAuthChallengeActionForm
+        actionKind="cancel"
+        messages={channelAuthChallengeActionMessages(t)}
+      >
         <ChallengeIdentityFields
           challenge={challenge}
           connectorId={connectorId}
         />
-        <button
+        <ChannelAuthChallengeSubmitButton
           className="secondaryButton"
-          type="submit"
           disabled={!challenge?.challengeId}
+          label={t("integrations.channel.auth.cancel")}
         >
           <XCircle size={16} aria-hidden="true" />
-          {t("integrations.channel.auth.cancel")}
-        </button>
-      </form>
+        </ChannelAuthChallengeSubmitButton>
+      </ChannelAuthChallengeActionForm>
     </div>
   );
 }
@@ -300,22 +316,26 @@ function StartChallengeForm({
   challengeType,
   connectorId,
   icon,
-  label
+  label,
+  t
 }: {
   challengeType: InternalChannelAuthChallengeType;
   connectorId: string;
   icon: ReactNode;
   label: string;
+  t: Translator;
 }): ReactNode {
   return (
-    <form action={startChannelAuthChallengeAction}>
+    <ChannelAuthChallengeActionForm
+      actionKind="start"
+      messages={channelAuthChallengeActionMessages(t)}
+    >
       <input type="hidden" name="connectorId" value={connectorId} />
       <input type="hidden" name="challengeType" value={challengeType} />
-      <button className="primaryButton" type="submit">
+      <ChannelAuthChallengeSubmitButton className="primaryButton" label={label}>
         {icon}
-        {label}
-      </button>
-    </form>
+      </ChannelAuthChallengeSubmitButton>
+    </ChannelAuthChallengeActionForm>
   );
 }
 
@@ -342,4 +362,17 @@ function channelAuthChallengeStatusKey(
   status: InternalChannelAuthChallenge["status"]
 ): I18nMessageKey {
   return `integrations.channel.auth.status.${status}` as I18nMessageKey;
+}
+
+function channelAuthChallengeActionMessages(
+  t: Translator
+): ChannelAuthChallengeActionMessages {
+  return {
+    cancelled: t("integrations.channel.auth.action.cancelled"),
+    email_verification_required: t("auth.emailVerification.status.required"),
+    invalid: t("integrations.channel.auth.action.invalid"),
+    permission_denied: t("admin.roles.actionStatus.permissionDenied"),
+    started: t("integrations.channel.auth.action.started"),
+    submitted: t("integrations.channel.auth.action.submitted")
+  };
 }

@@ -19,17 +19,13 @@ import {
   type WorkQueueRecord
 } from "@hulee/db";
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 
 import { assertWebActionRequest } from "./action-security";
 import type { WebAccessSession } from "./access";
-import {
-  isEmployeeAccessSectionId,
-  type EmployeeAccessSectionId
-} from "./employee-access-sections";
+import { type EmployeeMembershipActionState } from "./employee-membership-action-state";
 import { assertCanUpdateEmployeeMemberships } from "./employee-membership-access";
-import { isPrivilegedActionReauthRequiredError } from "./privileged-action-policy";
+import { roleActionFailureStatus } from "./role-action-status";
 import { getWebDatabase, isEmailNotVerifiedError } from "./session";
 import {
   assertWebDbBackedAdminCommandBoundary,
@@ -37,19 +33,19 @@ import {
 } from "./web-admin-command-boundary";
 
 export async function setEmployeeOrgUnitMembershipsAction(
+  _previousState: EmployeeMembershipActionState,
   formData: FormData
-): Promise<void> {
+): Promise<EmployeeMembershipActionState> {
   await assertWebActionRequest();
-
-  const employeeId = readRequiredFormString(
-    formData,
-    "employeeId"
-  ) as EmployeeId;
-  const session = await assertVerifiedRolesPermission(employeeId, formData);
-  const now = new Date();
-  let destination = employeeAccessDestination(formData, employeeId, "invalid");
+  const submittedAt = new Date().toISOString();
 
   try {
+    const employeeId = readRequiredFormString(
+      formData,
+      "employeeId"
+    ) as EmployeeId;
+    const session = await assertVerifiedMembershipPermission();
+    const now = new Date();
     const repository = createSqlOrgStructureRepository(getWebDatabase());
     const employeeRepository =
       createSqlEmployeeDirectoryRepository(getWebDatabase());
@@ -101,33 +97,28 @@ export async function setEmployeeOrgUnitMembershipsAction(
       occurredAt: now
     });
 
-    destination = employeeAccessDestination(
-      formData,
-      employeeId,
-      "memberships_updated"
-    );
-  } catch {
-    destination = employeeAccessDestination(formData, employeeId, "invalid");
-  }
+    revalidateEmployeeAccessPaths();
 
-  revalidateEmployeeAccessPaths();
-  redirect(destination);
+    return employeeMembershipActionSuccess(submittedAt);
+  } catch (error) {
+    return employeeMembershipActionError(error, submittedAt);
+  }
 }
 
 export async function setEmployeeWorkQueueMembershipsAction(
+  _previousState: EmployeeMembershipActionState,
   formData: FormData
-): Promise<void> {
+): Promise<EmployeeMembershipActionState> {
   await assertWebActionRequest();
-
-  const employeeId = readRequiredFormString(
-    formData,
-    "employeeId"
-  ) as EmployeeId;
-  const session = await assertVerifiedRolesPermission(employeeId, formData);
-  const now = new Date();
-  let destination = employeeAccessDestination(formData, employeeId, "invalid");
+  const submittedAt = new Date().toISOString();
 
   try {
+    const employeeId = readRequiredFormString(
+      formData,
+      "employeeId"
+    ) as EmployeeId;
+    const session = await assertVerifiedMembershipPermission();
+    const now = new Date();
     const repository = createSqlOrgStructureRepository(getWebDatabase());
     const employeeRepository =
       createSqlEmployeeDirectoryRepository(getWebDatabase());
@@ -179,33 +170,28 @@ export async function setEmployeeWorkQueueMembershipsAction(
       occurredAt: now
     });
 
-    destination = employeeAccessDestination(
-      formData,
-      employeeId,
-      "memberships_updated"
-    );
-  } catch {
-    destination = employeeAccessDestination(formData, employeeId, "invalid");
-  }
+    revalidateEmployeeAccessPaths();
 
-  revalidateEmployeeAccessPaths();
-  redirect(destination);
+    return employeeMembershipActionSuccess(submittedAt);
+  } catch (error) {
+    return employeeMembershipActionError(error, submittedAt);
+  }
 }
 
 export async function setEmployeeTeamMembershipsAction(
+  _previousState: EmployeeMembershipActionState,
   formData: FormData
-): Promise<void> {
+): Promise<EmployeeMembershipActionState> {
   await assertWebActionRequest();
-
-  const employeeId = readRequiredFormString(
-    formData,
-    "employeeId"
-  ) as EmployeeId;
-  const session = await assertVerifiedRolesPermission(employeeId, formData);
-  const now = new Date();
-  let destination = employeeAccessDestination(formData, employeeId, "invalid");
+  const submittedAt = new Date().toISOString();
 
   try {
+    const employeeId = readRequiredFormString(
+      formData,
+      "employeeId"
+    ) as EmployeeId;
+    const session = await assertVerifiedMembershipPermission();
+    const now = new Date();
     const repository = createSqlOrgStructureRepository(getWebDatabase());
     const employeeRepository =
       createSqlEmployeeDirectoryRepository(getWebDatabase());
@@ -255,46 +241,18 @@ export async function setEmployeeTeamMembershipsAction(
       occurredAt: now
     });
 
-    destination = employeeAccessDestination(
-      formData,
-      employeeId,
-      "memberships_updated"
-    );
-  } catch {
-    destination = employeeAccessDestination(formData, employeeId, "invalid");
-  }
+    revalidateEmployeeAccessPaths();
 
-  revalidateEmployeeAccessPaths();
-  redirect(destination);
+    return employeeMembershipActionSuccess(submittedAt);
+  } catch (error) {
+    return employeeMembershipActionError(error, submittedAt);
+  }
 }
 
-async function assertVerifiedRolesPermission(
-  employeeId: EmployeeId,
-  formData?: FormData
-): Promise<WebAccessSession> {
-  try {
-    return await assertWebDbBackedAdminCommandBoundary(
-      webDbBackedAdminCommandBoundaries.employeeMembership
-    );
-  } catch (error) {
-    if (isEmailNotVerifiedError(error)) {
-      redirect(
-        employeeAccessDestination(
-          formData,
-          employeeId,
-          "email_verification_required"
-        )
-      );
-    }
-
-    if (isPrivilegedActionReauthRequiredError(error)) {
-      redirect(
-        employeeAccessDestination(formData, employeeId, "reauth_required")
-      );
-    }
-
-    throw error;
-  }
+async function assertVerifiedMembershipPermission(): Promise<WebAccessSession> {
+  return assertWebDbBackedAdminCommandBoundary(
+    webDbBackedAdminCommandBoundaries.employeeMembership
+  );
 }
 
 async function resolveMembershipActorPrivilege(input: {
@@ -440,32 +398,29 @@ function revalidateEmployeeAccessPaths(): void {
   revalidatePath("/admin/roles");
 }
 
-function employeeAccessDestination(
-  formData: FormData | undefined,
-  employeeId: EmployeeId,
-  status: string
-): string {
-  const returnTo =
-    formData === undefined
-      ? undefined
-      : readOptionalFormString(formData, "returnTo");
-  const path =
-    returnTo === employeeAccessPath(employeeId)
-      ? returnTo
-      : employeeAccessPath(employeeId);
-  const params = new URLSearchParams({ roleActionStatus: status });
-  const section =
-    formData === undefined ? undefined : readEmployeeAccessSection(formData);
-
-  if (section !== undefined) {
-    params.set("section", section);
-  }
-
-  return `${path}?${params.toString()}`;
+function employeeMembershipActionSuccess(
+  submittedAt: string
+): EmployeeMembershipActionState {
+  return {
+    code: "memberships_updated",
+    status: "success",
+    submittedAt
+  };
 }
 
-function employeeAccessPath(employeeId: EmployeeId): string {
-  return `/admin/employees/${encodeURIComponent(employeeId)}/access`;
+function employeeMembershipActionError(
+  error: unknown,
+  submittedAt: string
+): EmployeeMembershipActionState {
+  const code = isEmailNotVerifiedError(error)
+    ? "email_verification_required"
+    : roleActionFailureStatus(error);
+
+  return {
+    code,
+    status: "error",
+    submittedAt
+  };
 }
 
 function readRequiredFormString(formData: FormData, name: string): string {
@@ -476,31 +431,6 @@ function readRequiredFormString(formData: FormData, name: string): string {
   }
 
   return value.trim();
-}
-
-function readOptionalFormString(
-  formData: FormData,
-  name: string
-): string | undefined {
-  const value = formData.get(name);
-
-  if (typeof value !== "string" || value.trim().length === 0) {
-    return undefined;
-  }
-
-  return value.trim();
-}
-
-function readEmployeeAccessSection(
-  formData: FormData
-): EmployeeAccessSectionId | undefined {
-  const value = readOptionalFormString(formData, "employeeAccessSection");
-
-  if (value === undefined || !isEmployeeAccessSectionId(value)) {
-    return undefined;
-  }
-
-  return value;
 }
 
 function uniqueFormStringList(formData: FormData, name: string): string[] {

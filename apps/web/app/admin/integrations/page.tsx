@@ -9,14 +9,7 @@ import type {
   InternalChannelCatalogItem,
   InternalChannelConnectorSummary
 } from "@hulee/contracts";
-import {
-  CheckCircle2,
-  Circle,
-  Plus,
-  Power,
-  PowerOff,
-  Trash2
-} from "lucide-react";
+import { CheckCircle2, Circle } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
@@ -24,12 +17,8 @@ import type { ReactNode } from "react";
 import { AccessDeniedPage } from "../../../src/access-denied";
 import { DetailItem, SlotMount } from "../../../src/app-chrome";
 import { loadTenantAdminViewModel } from "../../../src/admin-view-model";
-import {
-  createChannelConnectorAction,
-  deleteChannelConnectorAction,
-  disableChannelConnectorAction,
-  enableChannelConnectorAction
-} from "../../../src/actions";
+import { ChannelConnectorCreateForm } from "../../../src/channel-connector-create-form";
+import { ChannelConnectorLifecycleActions } from "../../../src/channel-connector-lifecycle-actions";
 import { ChannelAuthChallengePanel } from "../../../src/channel-auth-challenge-panel";
 import {
   ChannelIcon,
@@ -53,14 +42,10 @@ import {
   hasEffectivePermission,
   resolveEmployeeEffectiveAccess
 } from "../../../src/rbac-effective-access";
-import {
-  TelegramBotCatalogConnectForm,
-  type TelegramBotCatalogConnectFormNotice
-} from "../../../src/telegram-bot-catalog-connect-form";
+import { TelegramBotCatalogConnectForm } from "../../../src/telegram-bot-catalog-connect-form";
 import { TelegramIntegrationPanel } from "../../../src/telegram-integration-panel";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
 import { navigationAccessFromTenantAdminAccess } from "../../../src/tenant-admin-nav";
-import { buildActionStatusToast } from "../../../src/toast-messages";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -69,12 +54,10 @@ export default async function IntegrationsAdminPage({
   searchParams
 }: {
   searchParams?: Promise<{
-    channelStatus?: string;
     challengeId?: string;
     connectorId?: string;
     channelType?: string;
     connectionPendingAt?: string;
-    duplicateConnectorId?: string;
   }>;
 }): Promise<ReactNode> {
   const access = await resolveCurrentWebAccessSession();
@@ -120,12 +103,6 @@ export default async function IntegrationsAdminPage({
   const connectionPendingAt = normalizeOptionalSearchParam(
     resolvedSearchParams?.connectionPendingAt
   );
-  const channelStatus = normalizeOptionalSearchParam(
-    resolvedSearchParams?.channelStatus
-  );
-  const duplicateConnectorId = normalizeOptionalSearchParam(
-    resolvedSearchParams?.duplicateConnectorId
-  );
   const requestedChallengeId = normalizeOptionalSearchParam(
     resolvedSearchParams?.challengeId
   );
@@ -135,16 +112,6 @@ export default async function IntegrationsAdminPage({
     loadChannelConnectors(internalApiAccess)
   ]);
   const { t, locale } = createTranslator(model.tenant.locale);
-  const channelStatusToast =
-    channelStatus && !isInlineChannelStatus(channelStatus)
-      ? buildActionStatusToast({
-          id: `channel-status:${channelStatus}`,
-          status: channelStatus,
-          titleKey: "admin.integrations.actionStatus",
-          descriptionKey: channelActionStatusKey(channelStatus),
-          t
-        })
-      : undefined;
   const selectedConnector = selectChannelConnector({
     connectors: channelConnectors.connectors,
     requestedConnectorId
@@ -200,9 +167,7 @@ export default async function IntegrationsAdminPage({
     ) : selectedCatalogChannel ? (
       <ChannelCatalogDetailPanel
         channel={selectedCatalogChannel}
-        duplicateConnectorId={duplicateConnectorId}
         locale={locale}
-        status={channelStatus}
         t={t}
       />
     ) : (
@@ -219,7 +184,6 @@ export default async function IntegrationsAdminPage({
       tenantDisplayName={model.tenant.displayName}
       title={t("admin.integrations")}
       titleId="admin-title"
-      toasts={channelStatusToast ? [channelStatusToast] : []}
     >
       <div className="adminIntegrationGrid">
         <aside
@@ -289,15 +253,11 @@ type Translator = ReturnType<typeof createTranslator>["t"];
 
 function ChannelCatalogDetailPanel({
   channel,
-  duplicateConnectorId,
   locale,
-  status,
   t
 }: {
   channel: InternalChannelCatalogItem;
-  duplicateConnectorId?: string;
   locale: string;
-  status?: string;
   t: Translator;
 }): ReactNode {
   const title = resolveChannelTitle({
@@ -322,20 +282,31 @@ function ChannelCatalogDetailPanel({
             connecting: t("integrations.telegram.connectionConnecting"),
             invalidToken: t("integrations.telegram.invalidTokenFormat")
           }}
-          notice={telegramBotCatalogNotice({
-            duplicateConnectorId,
-            status,
-            t
-          })}
+          messages={{
+            duplicateLink: t("admin.integrations.telegramTokenDuplicateLink"),
+            invalid: t("admin.integrations.actionStatus.invalid"),
+            telegramTokenCheckUnavailable: t(
+              "admin.integrations.telegramTokenCheckUnavailable"
+            ),
+            telegramTokenDuplicate: t(
+              "admin.integrations.telegramTokenDuplicate"
+            ),
+            telegramTokenInvalid: t("admin.integrations.telegramTokenInvalid")
+          }}
         />
       ) : (
-        <form className="buttonRow" action={createChannelConnectorAction}>
-          <input type="hidden" name="channelType" value={channel.channelType} />
-          <button className="primaryButton" type="submit">
-            <Plus size={16} aria-hidden="true" />
-            {t("admin.integrations.createChannel")}
-          </button>
-        </form>
+        <ChannelConnectorCreateForm
+          channelType={channel.channelType}
+          label={t("admin.integrations.createChannel")}
+          messages={{
+            created: t("admin.integrations.actionStatus.created"),
+            email_verification_required: t(
+              "auth.emailVerification.status.required"
+            ),
+            invalid: t("admin.integrations.actionStatus.invalid"),
+            permission_denied: t("admin.roles.actionStatus.permissionDenied")
+          }}
+        />
       )}
     </section>
   );
@@ -460,40 +431,21 @@ function GenericChannelLifecycleActions({
   t: Translator;
 }): ReactNode {
   return (
-    <div className="buttonRow">
-      {connector.status === "disabled" ? (
-        <form action={enableChannelConnectorAction}>
-          <input
-            type="hidden"
-            name="connectorId"
-            value={connector.connectorId}
-          />
-          <button className="secondaryButton" type="submit">
-            <Power size={16} aria-hidden="true" />
-            {t("integrations.channel.enableConnector")}
-          </button>
-        </form>
-      ) : (
-        <form action={disableChannelConnectorAction}>
-          <input
-            type="hidden"
-            name="connectorId"
-            value={connector.connectorId}
-          />
-          <button className="secondaryButton" type="submit">
-            <PowerOff size={16} aria-hidden="true" />
-            {t("integrations.channel.disableConnector")}
-          </button>
-        </form>
-      )}
-      <form action={deleteChannelConnectorAction}>
-        <input type="hidden" name="connectorId" value={connector.connectorId} />
-        <button className="dangerButton" type="submit">
-          <Trash2 size={16} aria-hidden="true" />
-          {t("integrations.channel.deleteConnector")}
-        </button>
-      </form>
-    </div>
+    <ChannelConnectorLifecycleActions
+      connectorId={connector.connectorId}
+      labels={{
+        deleteConnector: t("integrations.channel.deleteConnector"),
+        disableConnector: t("integrations.channel.disableConnector"),
+        enableConnector: t("integrations.channel.enableConnector")
+      }}
+      messages={{
+        deleted: t("admin.integrations.actionStatus.deleted"),
+        disabled: t("admin.integrations.actionStatus.disabled"),
+        enabled: t("admin.integrations.actionStatus.enabled"),
+        invalid: t("admin.integrations.actionStatus.invalid")
+      }}
+      status={connector.status}
+    />
   );
 }
 
@@ -652,53 +604,6 @@ function channelHealthStatusKey(
   return `integrations.channel.health.${status}` as I18nMessageKey;
 }
 
-function telegramBotCatalogNotice(input: {
-  duplicateConnectorId?: string;
-  status?: string;
-  t: Translator;
-}): TelegramBotCatalogConnectFormNotice | undefined {
-  if (input.status === "telegramTokenInvalid") {
-    return {
-      message: input.t("admin.integrations.telegramTokenInvalid"),
-      variant: "error"
-    };
-  }
-
-  if (input.status === "telegramTokenCheckUnavailable") {
-    return {
-      message: input.t("admin.integrations.telegramTokenCheckUnavailable"),
-      variant: "error"
-    };
-  }
-
-  if (input.status === "telegramTokenDuplicate") {
-    return {
-      message: input.t("admin.integrations.telegramTokenDuplicate"),
-      variant: "error",
-      ...(input.duplicateConnectorId
-        ? {
-            actionHref: `/admin/integrations?connectorId=${encodeURIComponent(
-              input.duplicateConnectorId
-            )}`,
-            actionLabel: input.t(
-              "admin.integrations.telegramTokenDuplicateLink"
-            )
-          }
-        : {})
-    };
-  }
-
-  return undefined;
-}
-
-function isInlineChannelStatus(status: string): boolean {
-  return (
-    status === "telegramTokenInvalid" ||
-    status === "telegramTokenCheckUnavailable" ||
-    status === "telegramTokenDuplicate"
-  );
-}
-
 type ConnectorListBadgeState = "ok" | "error" | "disabled" | "new";
 
 function connectorListBadgeState(
@@ -727,25 +632,6 @@ function connectorListBadgeState(
 
 function connectorListBadgeKey(state: ConnectorListBadgeState): I18nMessageKey {
   return `admin.integrations.connectorBadge.${state}` as I18nMessageKey;
-}
-
-function channelActionStatusKey(status: string): I18nMessageKey {
-  switch (status) {
-    case "created":
-      return "admin.integrations.actionStatus.created";
-    case "enabled":
-      return "admin.integrations.actionStatus.enabled";
-    case "disabled":
-      return "admin.integrations.actionStatus.disabled";
-    case "deleted":
-      return "admin.integrations.actionStatus.deleted";
-    case "setupQueued":
-      return "admin.integrations.actionStatus.setupQueued";
-    case "diagnosticsQueued":
-      return "admin.integrations.actionStatus.diagnosticsQueued";
-    default:
-      return "admin.integrations.actionStatus.invalid";
-  }
 }
 
 function selectChannelConnector(input: {

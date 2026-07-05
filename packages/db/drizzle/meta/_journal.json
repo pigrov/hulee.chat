@@ -169,6 +169,13 @@
       "when": 1783109243574,
       "tag": "0023_aberrant_william_stryker",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1783190127157,
+      "tag": "0024_daffy_electro",
+      "breakpoints": true
     }
   ]
 }

@@ -2,42 +2,52 @@ import type { EmployeeId, TenantId } from "@hulee/contracts";
 import { CoreError } from "@hulee/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => {
-  const redirect = vi.fn((destination: string) => {
-    throw Object.assign(new Error("NEXT_REDIRECT"), { destination });
-  });
+import {
+  initialEmployeeMembershipActionState,
+  type EmployeeMembershipActionState
+} from "./employee-membership-action-state";
 
-  return {
-    assertCurrentWebEffectiveTenantPermission: vi.fn(),
-    assertWebActionRequest: vi.fn(),
-    createSqlEmployeeDirectoryRepository: vi.fn(),
-    createSqlOrgStructureRepository: vi.fn(),
-    createSqlSecurityAuditRepository: vi.fn(),
-    createSqlTenantRbacRepository: vi.fn(),
-    getWebDatabase: vi.fn(),
-    isEmailNotVerifiedError: vi.fn(),
-    redirect,
-    revalidatePath: vi.fn()
-  };
-});
+const mocks = vi.hoisted(() => ({
+  assertWebActionRequest: vi.fn(),
+  assertWebDbBackedAdminCommandBoundary: vi.fn(),
+  createSqlEmployeeDirectoryRepository: vi.fn(),
+  createSqlOrgStructureRepository: vi.fn(),
+  createSqlSecurityAuditRepository: vi.fn(),
+  createSqlTenantRbacRepository: vi.fn(),
+  getWebDatabase: vi.fn(),
+  isEmailNotVerifiedError: vi.fn(),
+  isPrivilegedActionReauthRequiredError: vi.fn(),
+  revalidatePath: vi.fn()
+}));
 
 vi.mock("next/cache", () => ({
   revalidatePath: mocks.revalidatePath
-}));
-
-vi.mock("next/navigation", () => ({
-  redirect: mocks.redirect
 }));
 
 vi.mock("./action-security", () => ({
   assertWebActionRequest: mocks.assertWebActionRequest
 }));
 
+vi.mock("./privileged-action-policy", () => ({
+  isPrivilegedActionReauthRequiredError:
+    mocks.isPrivilegedActionReauthRequiredError
+}));
+
 vi.mock("./session", () => ({
-  assertCurrentWebEffectiveTenantPermission:
-    mocks.assertCurrentWebEffectiveTenantPermission,
   getWebDatabase: mocks.getWebDatabase,
   isEmailNotVerifiedError: mocks.isEmailNotVerifiedError
+}));
+
+vi.mock("./web-admin-command-boundary", () => ({
+  assertWebDbBackedAdminCommandBoundary:
+    mocks.assertWebDbBackedAdminCommandBoundary,
+  webDbBackedAdminCommandBoundaries: {
+    employeeMembership: {
+      permission: "roles.manage",
+      requireVerifiedEmail: true,
+      requireRecentSession: true
+    }
+  }
 }));
 
 vi.mock("@hulee/db", () => ({
@@ -56,121 +66,95 @@ describe("employee membership actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    mocks.redirect.mockImplementation((destination: string) => {
-      throw Object.assign(new Error("NEXT_REDIRECT"), { destination });
-    });
     mocks.assertWebActionRequest.mockResolvedValue(undefined);
+    mocks.assertWebDbBackedAdminCommandBoundary.mockResolvedValue({
+      tenantId,
+      tenantSlug: "local",
+      employeeId: adminEmployeeId,
+      sessionCreatedAt: new Date().toISOString(),
+      systemRoleTemplateIds: ["tenant_admin"],
+      permissions: ["roles.manage"],
+      platformRoles: []
+    });
     mocks.getWebDatabase.mockReturnValue({ kind: "database" });
     mocks.isEmailNotVerifiedError.mockReturnValue(false);
+    mocks.isPrivilegedActionReauthRequiredError.mockReturnValue(false);
   });
 
-  it("requires effective roles.manage before touching membership repositories", async () => {
+  it("returns permission_denied before touching membership repositories", async () => {
     const permissionError = new CoreError("permission.denied");
 
-    mocks.assertCurrentWebEffectiveTenantPermission.mockRejectedValueOnce(
+    mocks.assertWebDbBackedAdminCommandBoundary.mockRejectedValueOnce(
       permissionError
     );
     const { setEmployeeTeamMembershipsAction } =
       await import("./employee-membership-actions");
 
-    await expect(
+    await expectEmployeeMembershipActionState(
       setEmployeeTeamMembershipsAction(
+        initialEmployeeMembershipActionState,
         formData({
-          employeeId: targetEmployeeId,
-          returnTo: employeeAccessPath(targetEmployeeId)
+          employeeId: targetEmployeeId
         })
-      )
-    ).rejects.toBe(permissionError);
-    expect(
-      mocks.assertCurrentWebEffectiveTenantPermission
-    ).toHaveBeenCalledWith("roles.manage", {
-      requireVerifiedEmail: true
+      ),
+      { code: "permission_denied", status: "error" }
+    );
+    expect(mocks.assertWebDbBackedAdminCommandBoundary).toHaveBeenCalledWith({
+      permission: "roles.manage",
+      requireVerifiedEmail: true,
+      requireRecentSession: true
     });
     expect(mocks.createSqlOrgStructureRepository).not.toHaveBeenCalled();
     expect(mocks.createSqlEmployeeDirectoryRepository).not.toHaveBeenCalled();
     expect(mocks.createSqlSecurityAuditRepository).not.toHaveBeenCalled();
   });
 
-  it("redirects stale privileged sessions before membership repository access", async () => {
-    mocks.assertCurrentWebEffectiveTenantPermission.mockResolvedValueOnce({
-      tenantId,
-      employeeId: adminEmployeeId,
-      sessionCreatedAt: "2020-01-01T00:00:00.000Z",
-      systemRoleTemplateIds: [],
-      permissions: ["roles.manage"],
-      platformRoles: []
-    });
+  it("returns reauth_required for stale privileged sessions", async () => {
+    const reauthError = new Error("Recent session required.");
+
+    mocks.assertWebDbBackedAdminCommandBoundary.mockRejectedValueOnce(
+      reauthError
+    );
+    mocks.isPrivilegedActionReauthRequiredError.mockReturnValueOnce(true);
     const { setEmployeeOrgUnitMembershipsAction } =
       await import("./employee-membership-actions");
 
-    await expectRedirect(
+    await expectEmployeeMembershipActionState(
       setEmployeeOrgUnitMembershipsAction(
+        initialEmployeeMembershipActionState,
         formData({
-          employeeId: targetEmployeeId,
-          returnTo: employeeAccessPath(targetEmployeeId)
+          employeeId: targetEmployeeId
         })
       ),
-      `${employeeAccessPath(targetEmployeeId)}?roleActionStatus=reauth_required`
+      { code: "reauth_required", status: "error" }
     );
     expect(mocks.createSqlOrgStructureRepository).not.toHaveBeenCalled();
     expect(mocks.createSqlEmployeeDirectoryRepository).not.toHaveBeenCalled();
   });
 
-  it("preserves selected employee access section on privileged reauth redirect", async () => {
-    mocks.assertCurrentWebEffectiveTenantPermission.mockResolvedValueOnce({
-      tenantId,
-      employeeId: adminEmployeeId,
-      sessionCreatedAt: "2020-01-01T00:00:00.000Z",
-      systemRoleTemplateIds: [],
-      permissions: ["roles.manage"],
-      platformRoles: []
-    });
-    const { setEmployeeOrgUnitMembershipsAction } =
-      await import("./employee-membership-actions");
-
-    await expectRedirect(
-      setEmployeeOrgUnitMembershipsAction(
-        formData({
-          employeeAccessSection: "memberships",
-          employeeId: targetEmployeeId,
-          returnTo: employeeAccessPath(targetEmployeeId)
-        })
-      ),
-      `${employeeAccessPath(
-        targetEmployeeId
-      )}?roleActionStatus=reauth_required&section=memberships`
-    );
-  });
-
-  it("redirects unverified tenant accounts before membership repository access", async () => {
+  it("returns email_verification_required before membership repository access", async () => {
     const emailError = new CoreError("auth.email_not_verified");
 
-    mocks.assertCurrentWebEffectiveTenantPermission.mockRejectedValueOnce(
+    mocks.assertWebDbBackedAdminCommandBoundary.mockRejectedValueOnce(
       emailError
     );
     mocks.isEmailNotVerifiedError.mockReturnValueOnce(true);
     const { setEmployeeWorkQueueMembershipsAction } =
       await import("./employee-membership-actions");
 
-    await expectRedirect(
+    await expectEmployeeMembershipActionState(
       setEmployeeWorkQueueMembershipsAction(
+        initialEmployeeMembershipActionState,
         formData({
-          employeeId: targetEmployeeId,
-          returnTo: employeeAccessPath(targetEmployeeId)
+          employeeId: targetEmployeeId
         })
       ),
-      `${employeeAccessPath(
-        targetEmployeeId
-      )}?roleActionStatus=email_verification_required`
+      { code: "email_verification_required", status: "error" }
     );
     expect(mocks.createSqlOrgStructureRepository).not.toHaveBeenCalled();
     expect(mocks.createSqlEmployeeDirectoryRepository).not.toHaveBeenCalled();
   });
 });
-
-function employeeAccessPath(employeeId: EmployeeId): string {
-  return `/admin/employees/${encodeURIComponent(employeeId)}/access`;
-}
 
 function formData(
   fields: Record<string, string | readonly string[]>
@@ -191,12 +175,20 @@ function formData(
   return data;
 }
 
-async function expectRedirect(
-  promise: Promise<void>,
-  destination: string
+async function expectEmployeeMembershipActionState(
+  promise: Promise<EmployeeMembershipActionState>,
+  expected: Pick<EmployeeMembershipActionState, "status"> & {
+    readonly code: Exclude<
+      EmployeeMembershipActionState,
+      { readonly status: "idle" }
+    >["code"];
+  }
 ): Promise<void> {
-  await expect(promise).rejects.toMatchObject({
-    message: "NEXT_REDIRECT",
-    destination
-  });
+  await expect(promise).resolves.toEqual(
+    expect.objectContaining({
+      code: expected.code,
+      status: expected.status,
+      submittedAt: expect.any(String)
+    })
+  );
 }

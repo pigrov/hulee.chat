@@ -5,7 +5,11 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
-import { resetPasswordAction } from "../../../src/auth-actions";
+import { authActionMessages } from "../../../src/auth-action-messages";
+import {
+  AuthActionForm,
+  AuthSubmitButton
+} from "../../../src/auth-action-form";
 import { loadPasswordResetPreview } from "../../../src/auth-email";
 import {
   brandProfileToCssProperties,
@@ -18,11 +22,9 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export default async function ResetPasswordPage({
-  params,
-  searchParams
+  params
 }: {
   params: Promise<{ token: string }>;
-  searchParams?: Promise<{ error?: string }>;
 }): Promise<ReactNode> {
   const existingSession = await resolveCurrentWebAccessSession({
     allowDevelopmentFallback: false
@@ -36,10 +38,7 @@ export default async function ResetPasswordPage({
     );
   }
 
-  const [{ token }, resolvedSearchParams] = await Promise.all([
-    params,
-    searchParams
-  ]);
+  const { token } = await params;
   const resetPreview = await loadPasswordResetPreview(token);
   const activePreview =
     resetPreview.status === "available" ? resetPreview.preview : null;
@@ -81,7 +80,11 @@ export default async function ResetPasswordPage({
             </p>
           </>
         ) : (
-          <form className="settingsForm" action={resetPasswordAction}>
+          <AuthActionForm
+            actionKind="resetPassword"
+            className="settingsForm"
+            messages={authActionMessages(t)}
+          >
             <input name="token" type="hidden" value={token} />
             <label className="fieldStack">
               <span className="detailLabel">{t("auth.email")}</span>
@@ -119,18 +122,13 @@ export default async function ResetPasswordPage({
                 title: t("auth.password.guidanceTitle")
               }}
             />
-            {resolvedSearchParams?.error === "invalid" ? (
-              <p className="formError">{t("auth.resetPassword.invalid")}</p>
-            ) : resolvedSearchParams?.error === "password_policy" ? (
-              <p className="formError">
-                {t("auth.resetPassword.passwordPolicy")}
-              </p>
-            ) : null}
-            <button className="primaryButton" type="submit">
+            <AuthSubmitButton
+              className="primaryButton"
+              label={t("auth.resetPassword.submit")}
+            >
               <KeyRound size={18} aria-hidden="true" />
-              {t("auth.resetPassword.submit")}
-            </button>
-          </form>
+            </AuthSubmitButton>
+          </AuthActionForm>
         )}
       </section>
     </main>

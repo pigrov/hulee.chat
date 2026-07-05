@@ -1,0 +1,1 @@
+ALTER TABLE "auth_email_verification_tokens" ADD COLUMN "email" text;

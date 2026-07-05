@@ -1,4 +1,5 @@
 import type { EmployeeId, PlatformEvent, TenantId } from "@hulee/contracts";
+import { normalizeEmailAddress } from "@hulee/contact-identity";
 
 import { createDomainEvent } from "./domain-events";
 import { CoreError } from "./errors";
@@ -324,13 +325,11 @@ function assertInvitationPending(
 }
 
 function normalizeEmail(value: string): string {
-  const email = value.trim().toLowerCase();
-
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  try {
+    return normalizeEmailAddress(value);
+  } catch {
     throw new CoreError("validation.failed");
   }
-
-  return email;
 }
 
 function normalizeOptionalText(value: string | undefined): string | undefined {

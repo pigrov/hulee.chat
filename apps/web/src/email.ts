@@ -16,6 +16,13 @@ export type SendEmailVerificationEmailInput = {
   verifyUrl: string;
 };
 
+export type SendEmailChangeVerificationEmailInput = {
+  to: string;
+  productName: string;
+  tenantDisplayName: string;
+  verifyUrl: string;
+};
+
 export type SendPasswordResetEmailInput = {
   to: string;
   productName: string;
@@ -69,6 +76,28 @@ export async function sendEmailVerificationEmail(
       `<p>Verify your email for ${escapeHtml(input.tenantDisplayName)}.</p>`,
       `<p><a href="${escapeHtml(input.verifyUrl)}">Verify email</a></p>`,
       "<p>If you did not create this account, ignore this email.</p>"
+    ].join("")
+  });
+}
+
+export async function sendEmailChangeVerificationEmail(
+  input: SendEmailChangeVerificationEmailInput
+): Promise<SendEmailResult> {
+  return sendTransactionalEmail({
+    productName: input.productName,
+    to: input.to,
+    subject: `Confirm your new ${input.productName} email`,
+    text: [
+      `Confirm this email address for ${input.tenantDisplayName}.`,
+      "",
+      `Confirm email change: ${input.verifyUrl}`,
+      "",
+      "If you did not request this change, ignore this email."
+    ].join("\n"),
+    html: [
+      `<p>Confirm this email address for ${escapeHtml(input.tenantDisplayName)}.</p>`,
+      `<p><a href="${escapeHtml(input.verifyUrl)}">Confirm email change</a></p>`,
+      "<p>If you did not request this change, ignore this email.</p>"
     ].join("")
   });
 }

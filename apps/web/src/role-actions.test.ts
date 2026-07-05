@@ -2,36 +2,30 @@ import type { EmployeeId, TenantId } from "@hulee/contracts";
 import { CoreError } from "@hulee/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => {
-  const redirect = vi.fn((destination: string) => {
-    throw Object.assign(new Error("NEXT_REDIRECT"), { destination });
-  });
+import {
+  initialRoleActionState,
+  type RoleActionState
+} from "./role-action-state";
 
-  return {
-    archiveRbacRole: vi.fn(),
-    assertWebActionRequest: vi.fn(),
-    assertWebDbBackedAdminCommandBoundary: vi.fn(),
-    createRbacDirectGrant: vi.fn(),
-    createRbacRole: vi.fn(),
-    createRbacRoleBinding: vi.fn(),
-    isEmailNotVerifiedError: vi.fn(),
-    isPrivilegedActionReauthRequiredError: vi.fn(),
-    loadRbacRoles: vi.fn(),
-    redirect,
-    restoreRbacRole: vi.fn(),
-    revalidatePath: vi.fn(),
-    revokeRbacDirectGrant: vi.fn(),
-    revokeRbacRoleBinding: vi.fn(),
-    updateRbacRole: vi.fn()
-  };
-});
+const mocks = vi.hoisted(() => ({
+  archiveRbacRole: vi.fn(),
+  assertWebActionRequest: vi.fn(),
+  assertWebDbBackedAdminCommandBoundary: vi.fn(),
+  createRbacDirectGrant: vi.fn(),
+  createRbacRole: vi.fn(),
+  createRbacRoleBinding: vi.fn(),
+  isEmailNotVerifiedError: vi.fn(),
+  isPrivilegedActionReauthRequiredError: vi.fn(),
+  loadRbacRoles: vi.fn(),
+  restoreRbacRole: vi.fn(),
+  revalidatePath: vi.fn(),
+  revokeRbacDirectGrant: vi.fn(),
+  revokeRbacRoleBinding: vi.fn(),
+  updateRbacRole: vi.fn()
+}));
 
 vi.mock("next/cache", () => ({
   revalidatePath: mocks.revalidatePath
-}));
-
-vi.mock("next/navigation", () => ({
-  redirect: mocks.redirect
 }));
 
 vi.mock("./action-security", () => ({
@@ -77,15 +71,11 @@ const targetEmployeeId = "employee-agent" as EmployeeId;
 const rolesManageOptions = {
   effectivePermissionOverride: "roles.manage"
 };
-const targetEmployeeAccessPath = `/admin/employees/${encodeURIComponent(targetEmployeeId)}/access`;
 
 describe("role management actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    mocks.redirect.mockImplementation((destination: string) => {
-      throw Object.assign(new Error("NEXT_REDIRECT"), { destination });
-    });
     mocks.assertWebActionRequest.mockResolvedValue(undefined);
     mocks.assertWebDbBackedAdminCommandBoundary.mockResolvedValue({
       tenantId,
@@ -130,15 +120,16 @@ describe("role management actions", () => {
   it("creates a custom role through the internal RBAC API", async () => {
     const { createCustomTenantRoleAction } = await import("./role-actions");
 
-    await expectRedirect(
+    await expectRoleActionState(
       createCustomTenantRoleAction(
+        initialRoleActionState,
         formData({
           name: "Sales custom",
           description: "Sales scoped permissions",
           permissions: ["client.view", "message.reply"]
         })
       ),
-      "/admin/roles?roleActionStatus=created"
+      { code: "created", status: "success" }
     );
 
     expect(mocks.assertWebDbBackedAdminCommandBoundary).toHaveBeenCalledWith({
@@ -157,32 +148,18 @@ describe("role management actions", () => {
     expectRoleAdminRevalidation();
   });
 
-  it("preserves selected roles admin section after role actions", async () => {
-    const { createCustomTenantRoleAction } = await import("./role-actions");
-
-    await expectRedirect(
-      createCustomTenantRoleAction(
-        formData({
-          name: "Sales custom",
-          permissions: ["client.view"],
-          roleAdminSection: "create"
-        })
-      ),
-      "/admin/roles?roleActionStatus=created&section=create"
-    );
-  });
-
   it("creates a role from a system template through the internal RBAC API", async () => {
     const { createRoleFromTemplateAction } = await import("./role-actions");
 
-    await expectRedirect(
+    await expectRoleActionState(
       createRoleFromTemplateAction(
+        initialRoleActionState,
         formData({
           templateId: "sales_representative",
           locale: "en"
         })
       ),
-      "/admin/roles?roleActionStatus=template_created"
+      { code: "template_created", status: "success" }
     );
 
     expect(mocks.loadRbacRoles).toHaveBeenCalledWith(rolesManageOptions);
@@ -198,19 +175,23 @@ describe("role management actions", () => {
     const { archiveCustomTenantRoleAction, updateCustomTenantRoleAction } =
       await import("./role-actions");
 
-    await expectRedirect(
+    await expectRoleActionState(
       updateCustomTenantRoleAction(
+        initialRoleActionState,
         formData({
           roleId: "role-sales",
           name: "Sales custom",
           permissions: ["client.view"]
         })
       ),
-      "/admin/roles?roleActionStatus=updated"
+      { code: "updated", status: "success" }
     );
-    await expectRedirect(
-      archiveCustomTenantRoleAction(formData({ roleId: "role-sales" })),
-      "/admin/roles?roleActionStatus=archived"
+    await expectRoleActionState(
+      archiveCustomTenantRoleAction(
+        initialRoleActionState,
+        formData({ roleId: "role-sales" })
+      ),
+      { code: "archived", status: "success" }
     );
 
     expect(mocks.updateRbacRole).toHaveBeenCalledWith(
@@ -231,9 +212,12 @@ describe("role management actions", () => {
   it("restores custom roles through the internal RBAC API", async () => {
     const { restoreCustomTenantRoleAction } = await import("./role-actions");
 
-    await expectRedirect(
-      restoreCustomTenantRoleAction(formData({ roleId: "role-sales" })),
-      "/admin/roles?roleActionStatus=restored"
+    await expectRoleActionState(
+      restoreCustomTenantRoleAction(
+        initialRoleActionState,
+        formData({ roleId: "role-sales" })
+      ),
+      { code: "restored", status: "success" }
     );
 
     expect(mocks.restoreRbacRole).toHaveBeenCalledWith(
@@ -245,15 +229,16 @@ describe("role management actions", () => {
   it("assigns active roles through the internal RBAC API", async () => {
     const { assignTenantRoleAction } = await import("./role-actions");
 
-    await expectRedirect(
+    await expectRoleActionState(
       assignTenantRoleAction(
+        initialRoleActionState,
         formData({
           employeeId: targetEmployeeId,
           roleId: "role-sales",
           scopeType: "tenant"
         })
       ),
-      "/admin/roles?roleActionStatus=assigned"
+      { code: "assigned", status: "success" }
     );
 
     expect(mocks.createRbacRoleBinding).toHaveBeenCalledWith(
@@ -271,29 +256,15 @@ describe("role management actions", () => {
     );
   });
 
-  it("preserves selected employee access section after employee role assignment", async () => {
-    const { assignTenantRoleAction } = await import("./role-actions");
-
-    await expectRedirect(
-      assignTenantRoleAction(
-        formData({
-          employeeId: targetEmployeeId,
-          employeeAccessSection: "roles",
-          returnTo: targetEmployeeAccessPath,
-          roleId: "role-sales",
-          scopeType: "tenant"
-        })
-      ),
-      `${targetEmployeeAccessPath}?roleActionStatus=assigned&section=roles`
-    );
-  });
-
   it("revokes role bindings through the internal RBAC API", async () => {
     const { revokeTenantRoleBindingAction } = await import("./role-actions");
 
-    await expectRedirect(
-      revokeTenantRoleBindingAction(formData({ bindingId: "binding-sales" })),
-      "/admin/roles?roleActionStatus=revoked"
+    await expectRoleActionState(
+      revokeTenantRoleBindingAction(
+        initialRoleActionState,
+        formData({ bindingId: "binding-sales" })
+      ),
+      { code: "revoked", status: "success" }
     );
 
     expect(mocks.revokeRbacRoleBinding).toHaveBeenCalledWith(
@@ -306,8 +277,9 @@ describe("role management actions", () => {
     const { createDirectPermissionGrantAction } =
       await import("./role-actions");
 
-    await expectRedirect(
+    await expectRoleActionState(
       createDirectPermissionGrantAction(
+        initialRoleActionState,
         formData({
           employeeId: targetEmployeeId,
           permission: "client.view",
@@ -316,7 +288,7 @@ describe("role management actions", () => {
           expiresAt: "2999-01-01T00:00"
         })
       ),
-      "/admin/roles?roleActionStatus=direct_grant_created"
+      { code: "direct_grant_created", status: "success" }
     );
 
     expect(mocks.createRbacDirectGrant).toHaveBeenCalledWith(
@@ -337,9 +309,12 @@ describe("role management actions", () => {
     const { revokeDirectPermissionGrantAction } =
       await import("./role-actions");
 
-    await expectRedirect(
-      revokeDirectPermissionGrantAction(formData({ grantId: "grant-client" })),
-      "/admin/roles?roleActionStatus=direct_grant_revoked"
+    await expectRoleActionState(
+      revokeDirectPermissionGrantAction(
+        initialRoleActionState,
+        formData({ grantId: "grant-client" })
+      ),
+      { code: "direct_grant_revoked", status: "success" }
     );
 
     expect(mocks.revokeRbacDirectGrant).toHaveBeenCalledWith(
@@ -348,39 +323,42 @@ describe("role management actions", () => {
     );
   });
 
-  it("maps internal RBAC permission denials to role action status", async () => {
+  it("maps internal RBAC permission denials to role action state", async () => {
     const { createCustomTenantRoleAction } = await import("./role-actions");
+
     mocks.createRbacRole.mockRejectedValueOnce(
       new CoreError("permission.denied")
     );
 
-    await expectRedirect(
+    await expectRoleActionState(
       createCustomTenantRoleAction(
+        initialRoleActionState,
         formData({
           name: "Sales custom",
           permissions: ["client.view"]
         })
       ),
-      "/admin/roles?roleActionStatus=permission_denied"
+      { code: "permission_denied", status: "error" }
     );
   });
 
-  it("redirects to email verification when the action boundary requires it", async () => {
+  it("maps email verification errors to role action state", async () => {
     const { assignTenantRoleAction } = await import("./role-actions");
     const error = new Error("Email verification required.");
 
     mocks.assertWebDbBackedAdminCommandBoundary.mockRejectedValueOnce(error);
     mocks.isEmailNotVerifiedError.mockReturnValueOnce(true);
 
-    await expectRedirect(
+    await expectRoleActionState(
       assignTenantRoleAction(
+        initialRoleActionState,
         formData({
           employeeId: targetEmployeeId,
           roleId: "role-sales",
           scopeType: "tenant"
         })
       ),
-      "/admin/roles?roleActionStatus=email_verification_required"
+      { code: "email_verification_required", status: "error" }
     );
     expect(mocks.createRbacRoleBinding).not.toHaveBeenCalled();
   });
@@ -428,6 +406,24 @@ function directGrantResponse(): unknown {
   };
 }
 
+async function expectRoleActionState(
+  promise: Promise<RoleActionState>,
+  expected: Pick<RoleActionState, "status"> & {
+    readonly code: Exclude<
+      RoleActionState,
+      { readonly status: "idle" }
+    >["code"];
+  }
+): Promise<void> {
+  await expect(promise).resolves.toEqual(
+    expect.objectContaining({
+      code: expected.code,
+      status: expected.status,
+      submittedAt: expect.any(String)
+    })
+  );
+}
+
 function expectRoleAdminRevalidation(): void {
   expect(mocks.revalidatePath).toHaveBeenCalledWith("/admin/roles");
   expect(mocks.revalidatePath).toHaveBeenCalledWith("/admin/employees");
@@ -454,14 +450,4 @@ function formData(
   }
 
   return data;
-}
-
-async function expectRedirect(
-  promise: Promise<void>,
-  destination: string
-): Promise<void> {
-  await expect(promise).rejects.toMatchObject({
-    message: "NEXT_REDIRECT",
-    destination
-  });
 }

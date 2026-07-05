@@ -402,7 +402,7 @@ export function DirectGrantFields({
         scopeReferenceOptions={scopeReferenceOptions}
         unavailableMessage={messages.selectPermission}
       />
-      <label className="fieldStack">
+      <label className="fieldStack directGrantReasonField">
         <span className="detailLabel">{messages.reason}</span>
         <textarea
           className="textInput directGrantReasonInput"
@@ -412,7 +412,7 @@ export function DirectGrantFields({
           required
         />
       </label>
-      <label className="fieldStack">
+      <label className="fieldStack directGrantExpiresField">
         <span className="detailLabel">{messages.expiresAt}</span>
         <input className="textInput" name="expiresAt" type="datetime-local" />
       </label>

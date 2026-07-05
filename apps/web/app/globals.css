@@ -774,6 +774,15 @@ button.iconButton:disabled {
   gap: 14px;
 }
 
+.settingsSubPanel {
+  display: grid;
+  gap: var(--hulee-space-block);
+  padding: var(--hulee-space-block);
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-panel);
+  background: var(--hulee-color-surface-raised);
+}
+
 .fieldStack {
   display: grid;
   gap: 6px;
@@ -800,6 +809,87 @@ button.iconButton:disabled {
 
 .textInput[readonly] {
   color: var(--hulee-color-text-muted);
+}
+
+.phoneNumberInputShell {
+  display: grid;
+  min-width: 0;
+  min-height: 40px;
+  width: 100%;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-raised);
+  color: var(--hulee-color-text-default);
+  padding: 4px 8px 4px 4px;
+}
+
+.phoneNumberInputShell:focus-within {
+  border-color: var(--hulee-color-brand-primary);
+  outline: none;
+  box-shadow: var(--hulee-shadow-focus);
+}
+
+.phoneNumberInputShell.textInput {
+  padding: 4px 8px 4px 4px;
+}
+
+.phoneNumberCallingCode {
+  display: inline-flex;
+  min-width: 44px;
+  min-height: 30px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: calc(var(--hulee-radius-control) - 2px);
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 10%,
+    var(--hulee-color-surface-default)
+  );
+  color: var(--hulee-color-brand-primary);
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.phoneNumberInputControl {
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--hulee-color-text-default);
+  padding: 0;
+}
+
+.phoneNumberInputControl:focus {
+  outline: none;
+}
+
+.phoneNumberInputControl::placeholder {
+  color: var(--hulee-color-text-muted);
+}
+
+.phoneNumberCountryCode {
+  min-width: 30px;
+  color: var(--hulee-color-text-muted);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0;
+  text-align: right;
+}
+
+.phoneNumberInputControl:disabled {
+  color: var(--hulee-color-text-muted);
+  cursor: not-allowed;
+}
+
+.phoneNumberInputShell:has(.phoneNumberInputControl:disabled) {
+  opacity: 0.68;
 }
 
 .passwordGuidance {
@@ -1159,6 +1249,11 @@ a.secondaryButton {
   gap: 12px;
 }
 
+.channelLifecycleActionStack {
+  display: grid;
+  gap: 8px;
+}
+
 .telegramConnectionActions {
   gap: 12px;
 }
@@ -1263,7 +1358,8 @@ a.secondaryButton {
   font-weight: 750;
 }
 
-.telegramConnectionNotice {
+.telegramConnectionNotice,
+.actionStateNotice {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1278,7 +1374,8 @@ a.secondaryButton {
   line-height: 1.35;
 }
 
-.telegramConnectionNotice[data-variant="error"] {
+.telegramConnectionNotice[data-variant="error"],
+.actionStateNotice[data-variant="error"] {
   border-color: color-mix(in srgb, var(--hulee-color-danger) 38%, transparent);
   background: color-mix(
     in srgb,
@@ -1288,7 +1385,8 @@ a.secondaryButton {
   color: var(--hulee-color-danger);
 }
 
-.telegramConnectionNotice[data-variant="success"] {
+.telegramConnectionNotice[data-variant="success"],
+.actionStateNotice[data-variant="success"] {
   border-color: color-mix(
     in srgb,
     var(--hulee-color-brand-primary) 36%,
@@ -1302,7 +1400,8 @@ a.secondaryButton {
   color: var(--hulee-color-brand-primary);
 }
 
-.telegramConnectionNotice[data-variant="info"] {
+.telegramConnectionNotice[data-variant="info"],
+.actionStateNotice[data-variant="info"] {
   border-color: color-mix(
     in srgb,
     var(--hulee-color-text-muted) 30%,
@@ -1312,6 +1411,14 @@ a.secondaryButton {
 }
 
 .telegramConnectionNoticeLink {
+  flex: 0 0 auto;
+  color: inherit;
+  font-weight: 750;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.actionStateNoticeLink {
   flex: 0 0 auto;
   color: inherit;
   font-weight: 750;
@@ -1367,6 +1474,97 @@ a.secondaryButton {
   min-width: 0;
   align-items: center;
   gap: 12px;
+}
+
+.employeeAccessSummaryPanel {
+  gap: 12px;
+}
+
+.employeeAccessSummaryHeader {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.employeeAccessSummaryIdentity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 14px;
+}
+
+.employeeAccessSummaryTitleBlock {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.employeeAccessSummaryMeta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+}
+
+.employeeAccessSummaryMetaItem {
+  display: flex;
+  min-width: min(100%, 220px);
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-surface-raised) 72%,
+    transparent
+  );
+}
+
+.employeeAccessSummaryMetaItem dt {
+  flex: 0 0 auto;
+  color: var(--hulee-color-text-muted);
+  font-size: 12px;
+}
+
+.employeeAccessSummaryMetaItem dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--hulee-color-text-default);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.employeeAccessSummaryMetaItem dd > a,
+.employeeAccessSummaryMetaItem dd > span {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid
+    color-mix(in srgb, var(--hulee-color-brand-primary) 34%, transparent);
+  border-radius: 999px;
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 10%,
+    transparent
+  );
+  color: var(--hulee-color-brand-primary);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.4;
 }
 
 .detailGrid {
@@ -2120,20 +2318,38 @@ a.secondaryButton {
   justify-self: start;
 }
 
-.employeeAccessAssignForm {
-  grid-template-columns: minmax(180px, 1fr) minmax(260px, 2fr) auto;
-  align-items: end;
+.employeeAccessAssignForm,
+.employeeAccessGrantForm {
+  gap: 10px;
 }
 
-.employeeAccessGrantForm {
+.employeeAccessAssignForm .settingsFormFieldset,
+.employeeAccessGrantForm .settingsFormFieldset {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
   grid-template-columns:
-    minmax(220px, 1.2fr) minmax(300px, 2fr) minmax(220px, 1.3fr)
-    minmax(160px, 1fr) auto;
+    minmax(155px, 1fr) minmax(155px, 1fr) minmax(180px, 1.15fr)
+    minmax(190px, 200px);
   align-items: start;
 }
 
+.employeeAccessAssignForm .scopePickerGrid,
+.employeeAccessGrantForm .scopePickerGrid {
+  display: contents;
+}
+
+.employeeAccessGrantForm .directGrantReasonField {
+  grid-column: 1 / span 2;
+}
+
+.employeeAccessAssignForm .primaryButton,
 .employeeAccessGrantForm .primaryButton {
-  justify-self: start;
+  width: 100%;
+  align-self: start;
+  justify-self: stretch;
+  margin-top: 22px;
+  white-space: nowrap;
 }
 
 .employeeProfileForm {
@@ -2146,6 +2362,23 @@ a.secondaryButton {
 
 .employeeProfileForm .primaryButton {
   justify-self: start;
+}
+
+.employeeEmailChangeBlock {
+  display: grid;
+  gap: 12px;
+}
+
+.employeeEmailReadOnlyRow {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  gap: var(--hulee-space-block);
+  align-items: end;
+}
+
+.employeeEmailChangeForm {
+  grid-template-columns: minmax(220px, 1fr) auto;
+  align-items: end;
 }
 
 .employeeAvatarUploadGrid {
@@ -2163,8 +2396,14 @@ a.secondaryButton {
   place-items: center;
   overflow: hidden;
   border: 1px solid var(--hulee-color-border);
-  border-radius: var(--hulee-radius-control);
+  border-radius: 999px;
   background: var(--hulee-color-surface-raised);
+}
+
+.employeeAvatarPreviewSurface .employeeAvatarLarge {
+  width: 100%;
+  height: 100%;
+  border: 0;
 }
 
 .accessPreviewForm {
@@ -2242,18 +2481,24 @@ a.secondaryButton {
 
 .employeeMembershipGrid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: var(--hulee-space-block);
 }
 
 .employeeMembershipForm {
   align-content: start;
+  gap: 12px;
+}
+
+.employeeMembershipForm .primaryButton {
+  justify-self: start;
+  min-width: min(100%, 190px);
 }
 
 .membershipFieldset {
   display: grid;
   min-width: 0;
-  gap: var(--hulee-space-block);
+  gap: 10px;
   margin: 0;
   padding: 0;
   border: 0;
@@ -2263,10 +2508,38 @@ a.secondaryButton {
   display: flex;
   gap: var(--hulee-space-inline);
   align-items: center;
-  margin-bottom: var(--hulee-space-inline);
+  width: 100%;
+  margin-bottom: 0;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--hulee-color-border);
   color: var(--hulee-color-text-default);
   font-size: 14px;
   font-weight: 700;
+}
+
+.membershipFieldset .permissionCheckboxList {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 8px;
+}
+
+.membershipFieldset .permissionCheckboxRow {
+  min-width: 0;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-surface-default) 62%,
+    transparent
+  );
+}
+
+.membershipFieldset .permissionCheckboxRow span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .permissionDomainGroup {
@@ -2444,6 +2717,55 @@ a.secondaryButton {
   gap: var(--hulee-space-block);
 }
 
+.brandColorActions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.brandColorField {
+  min-width: 0;
+}
+
+.brandColorControl {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.brandColorSample {
+  display: block;
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--brand-color-sample);
+}
+
+.brandColorSample[data-kind="primary"] {
+  box-shadow: inset 0 0 0 8px
+    color-mix(in srgb, var(--brand-color-sample) 18%, transparent);
+}
+
+.brandColorSample[data-kind="accent"] {
+  background:
+    linear-gradient(
+      135deg,
+      var(--brand-color-sample) 0 48%,
+      color-mix(in srgb, var(--brand-color-sample) 20%, transparent) 48% 100%
+    ),
+    var(--hulee-color-surface-raised);
+}
+
+.brandColorValue {
+  min-width: 78px;
+  color: var(--hulee-color-text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  text-align: right;
+}
+
 .brandLogoUploadGrid {
   display: grid;
   min-width: 0;
@@ -2509,24 +2831,80 @@ a.secondaryButton {
 
 .brandPreviewPanel {
   display: grid;
-  gap: 16px;
-  padding-top: 16px;
-  border-top: 1px solid var(--hulee-color-border);
+  gap: var(--hulee-space-block);
+  padding: var(--hulee-space-block);
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
   background: var(--hulee-color-surface-default);
   color: var(--hulee-color-text-default);
   color-scheme: var(--hulee-color-scheme);
 }
 
 .brandPreviewSurface {
-  display: flex;
+  display: grid;
   min-width: 0;
-  align-items: center;
-  justify-content: space-between;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
   gap: var(--hulee-space-block);
+}
+
+.brandPreviewExample {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  align-content: flex-start;
   padding: var(--hulee-space-block);
   border: 1px solid var(--hulee-color-border);
   border-radius: var(--hulee-radius-control);
   background: var(--hulee-color-surface-raised);
+}
+
+.brandPreviewExample[data-kind="primary"] {
+  border-left: 3px solid var(--hulee-color-brand-primary);
+}
+
+.brandPreviewExample[data-kind="accent"] {
+  border-left: 3px solid var(--hulee-color-accent);
+}
+
+.brandPreviewExampleLabel {
+  color: var(--hulee-color-text-default);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.brandPreviewAccentBadge {
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 4px 8px;
+  border: 1px solid
+    color-mix(in srgb, var(--hulee-color-accent) 42%, var(--hulee-color-border));
+  border-radius: 999px;
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-accent) 14%,
+    var(--hulee-color-surface-default)
+  );
+  color: var(--hulee-color-accent);
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.brandPreviewAccentButton {
+  border-color: color-mix(
+    in srgb,
+    var(--hulee-color-accent) 42%,
+    var(--hulee-color-border)
+  );
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-accent) 10%,
+    var(--hulee-color-surface-raised)
+  );
+  color: var(--hulee-color-accent);
 }
 
 .integrationListItem,
@@ -2564,6 +2942,93 @@ a.secondaryButton {
   display: grid;
   grid-template-columns: auto minmax(220px, 1fr) minmax(240px, 1fr);
   align-items: flex-start;
+}
+
+.effectiveAccessTableWrap {
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-raised);
+}
+
+.effectiveAccessTable {
+  min-width: 0;
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.effectiveAccessTable th,
+.effectiveAccessTable td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--hulee-color-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.effectiveAccessTable th {
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-surface-muted) 68%,
+    transparent
+  );
+  color: var(--hulee-color-text-muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.effectiveAccessTable td {
+  color: var(--hulee-color-text-default);
+  font-size: 13px;
+}
+
+.effectiveAccessTable th:nth-child(1),
+.effectiveAccessTable td:nth-child(1) {
+  width: 22%;
+}
+
+.effectiveAccessTable th:nth-child(2),
+.effectiveAccessTable td:nth-child(2),
+.effectiveAccessTable th:nth-child(3),
+.effectiveAccessTable td:nth-child(3) {
+  width: 18%;
+}
+
+.effectiveAccessTable th:nth-child(4),
+.effectiveAccessTable td:nth-child(4) {
+  width: 42%;
+}
+
+.effectiveAccessTable .permissionCode {
+  display: inline-block;
+  overflow: hidden;
+  max-width: 100%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+.effectiveAccessTable tbody tr:hover {
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 6%,
+    transparent
+  );
+}
+
+.effectiveAccessTable tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.effectiveAccessTableSourceList {
+  gap: 6px;
+}
+
+.effectiveAccessTableSourceList .badge {
+  max-width: 100%;
+  white-space: normal;
+  line-height: 1.25;
 }
 
 .managementRow.accessAuditRow {
@@ -3509,8 +3974,11 @@ button.managementRow:not(.adminNavLink):not(.integrationNavLink):focus-visible {
   .roleAssignForm,
   .directGrantForm,
   .employeeAccessAssignForm,
+  .employeeAccessAssignForm .settingsFormFieldset,
   .employeeAccessGrantForm,
   .employeeProfileForm,
+  .employeeEmailReadOnlyRow,
+  .employeeEmailChangeForm,
   .employeeAvatarUploadGrid,
   .orgStructureCreateForm,
   .orgStructureInlineForm,
@@ -3527,7 +3995,8 @@ button.managementRow:not(.adminNavLink):not(.integrationNavLink):focus-visible {
   .employeeMembershipGrid,
   .permissionEditorGrid,
   .brandPresetGrid,
-  .brandColorGrid {
+  .brandColorGrid,
+  .brandPreviewSurface {
     grid-template-columns: 1fr;
   }
 

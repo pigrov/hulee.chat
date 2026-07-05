@@ -48,4 +48,25 @@ describe("local brand asset storage", () => {
       resolveLocalBrandAssetFilePath("local:../outside.png", tmpdir())
     ).toThrow(/Invalid local brand asset path/);
   });
+
+  it("encodes storage key path segments for the local filesystem", () => {
+    const rootDir = path.join(tmpdir(), "hulee-brand-assets-encoded");
+    const storageKey = toLocalBrandAssetStorageKey(
+      "tenants/tenant:1/employee-assets/employee_tenant:1/avatar/hash*.png"
+    );
+
+    expect(resolveLocalBrandAssetFilePath(storageKey, rootDir)).toBe(
+      path.join(
+        rootDir,
+        ".hulee",
+        "brand-assets",
+        "tenants",
+        "tenant%3A1",
+        "employee-assets",
+        "employee_tenant%3A1",
+        "avatar",
+        "hash%2A.png"
+      )
+    );
+  });
 });

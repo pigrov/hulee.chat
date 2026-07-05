@@ -9,13 +9,8 @@ import {
 } from "@hulee/core";
 import { createTranslator, resolveLocale } from "@hulee/i18n";
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 
 import { assertWebActionRequest } from "./action-security";
-import {
-  isEmployeeAccessSectionId,
-  type EmployeeAccessSectionId
-} from "./employee-access-sections";
 import {
   archiveRbacRole,
   createRbacDirectGrant,
@@ -27,8 +22,8 @@ import {
   revokeRbacRoleBinding,
   updateRbacRole
 } from "./inbox-api-client";
-import { isPrivilegedActionReauthRequiredError } from "./privileged-action-policy";
 import { roleActionFailureStatus } from "./role-action-status";
+import type { RoleActionCode, RoleActionState } from "./role-action-state";
 import { findRoleTemplate, uniqueRoleTemplateName } from "./role-templates";
 import { isEmailNotVerifiedError } from "./session";
 import {
@@ -37,14 +32,14 @@ import {
 } from "./web-admin-command-boundary";
 
 export async function createCustomTenantRoleAction(
+  _previousState: RoleActionState,
   formData: FormData
-): Promise<void> {
+): Promise<RoleActionState> {
   await assertWebActionRequest();
-  await assertVerifiedRolesPermission(formData);
-
-  let destination = roleActionDestination(formData, "invalid");
+  const submittedAt = new Date().toISOString();
 
   try {
+    await assertVerifiedRolesPermission();
     await createRbacRole(
       {
         name: readRequiredFormString(formData, "name"),
@@ -54,27 +49,23 @@ export async function createCustomTenantRoleAction(
       rolesManageAccessOptions()
     );
 
-    destination = roleActionDestination(formData, "created");
-  } catch (error) {
-    destination = roleActionDestination(
-      formData,
-      roleActionFailureStatus(error)
-    );
-  }
+    revalidateRoleAdminPaths();
 
-  revalidateRoleAdminPaths();
-  redirect(destination);
+    return roleActionSuccess("created", submittedAt);
+  } catch (error) {
+    return roleActionError(error, submittedAt);
+  }
 }
 
 export async function createRoleFromTemplateAction(
+  _previousState: RoleActionState,
   formData: FormData
-): Promise<void> {
+): Promise<RoleActionState> {
   await assertWebActionRequest();
-  await assertVerifiedRolesPermission(formData);
-
-  let destination = roleActionDestination(formData, "invalid");
+  const submittedAt = new Date().toISOString();
 
   try {
+    await assertVerifiedRolesPermission();
     const templateId = readRequiredFormString(formData, "templateId");
     const template = findRoleTemplate(templateId);
 
@@ -100,27 +91,23 @@ export async function createRoleFromTemplateAction(
       rolesManageAccessOptions()
     );
 
-    destination = roleActionDestination(formData, "template_created");
-  } catch (error) {
-    destination = roleActionDestination(
-      formData,
-      roleActionFailureStatus(error)
-    );
-  }
+    revalidateRoleAdminPaths();
 
-  revalidateRoleAdminPaths();
-  redirect(destination);
+    return roleActionSuccess("template_created", submittedAt);
+  } catch (error) {
+    return roleActionError(error, submittedAt);
+  }
 }
 
 export async function updateCustomTenantRoleAction(
+  _previousState: RoleActionState,
   formData: FormData
-): Promise<void> {
+): Promise<RoleActionState> {
   await assertWebActionRequest();
-  await assertVerifiedRolesPermission(formData);
-
-  let destination = roleActionDestination(formData, "invalid");
+  const submittedAt = new Date().toISOString();
 
   try {
+    await assertVerifiedRolesPermission();
     await updateRbacRole(
       readRequiredFormString(formData, "roleId"),
       {
@@ -131,79 +118,67 @@ export async function updateCustomTenantRoleAction(
       rolesManageAccessOptions()
     );
 
-    destination = roleActionDestination(formData, "updated");
-  } catch (error) {
-    destination = roleActionDestination(
-      formData,
-      roleActionFailureStatus(error)
-    );
-  }
+    revalidateRoleAdminPaths();
 
-  revalidateRoleAdminPaths();
-  redirect(destination);
+    return roleActionSuccess("updated", submittedAt);
+  } catch (error) {
+    return roleActionError(error, submittedAt);
+  }
 }
 
 export async function archiveCustomTenantRoleAction(
+  _previousState: RoleActionState,
   formData: FormData
-): Promise<void> {
+): Promise<RoleActionState> {
   await assertWebActionRequest();
-  await assertVerifiedRolesPermission(formData);
-
-  let destination = roleActionDestination(formData, "invalid");
+  const submittedAt = new Date().toISOString();
 
   try {
+    await assertVerifiedRolesPermission();
     await archiveRbacRole(
       readRequiredFormString(formData, "roleId"),
       rolesManageAccessOptions()
     );
 
-    destination = roleActionDestination(formData, "archived");
-  } catch (error) {
-    destination = roleActionDestination(
-      formData,
-      roleActionFailureStatus(error)
-    );
-  }
+    revalidateRoleAdminPaths();
 
-  revalidateRoleAdminPaths();
-  redirect(destination);
+    return roleActionSuccess("archived", submittedAt);
+  } catch (error) {
+    return roleActionError(error, submittedAt);
+  }
 }
 
 export async function restoreCustomTenantRoleAction(
+  _previousState: RoleActionState,
   formData: FormData
-): Promise<void> {
+): Promise<RoleActionState> {
   await assertWebActionRequest();
-  await assertVerifiedRolesPermission(formData);
-
-  let destination = roleActionDestination(formData, "invalid");
+  const submittedAt = new Date().toISOString();
 
   try {
+    await assertVerifiedRolesPermission();
     await restoreRbacRole(
       readRequiredFormString(formData, "roleId"),
       rolesManageAccessOptions()
     );
 
-    destination = roleActionDestination(formData, "restored");
-  } catch (error) {
-    destination = roleActionDestination(
-      formData,
-      roleActionFailureStatus(error)
-    );
-  }
+    revalidateRoleAdminPaths();
 
-  revalidateRoleAdminPaths();
-  redirect(destination);
+    return roleActionSuccess("restored", submittedAt);
+  } catch (error) {
+    return roleActionError(error, submittedAt);
+  }
 }
 
 export async function assignTenantRoleAction(
+  _previousState: RoleActionState,
   formData: FormData
-): Promise<void> {
+): Promise<RoleActionState> {
   await assertWebActionRequest();
-  await assertVerifiedRolesPermission(formData);
-
-  let destination = roleActionDestination(formData, "invalid");
+  const submittedAt = new Date().toISOString();
 
   try {
+    await assertVerifiedRolesPermission();
     await createRbacRoleBinding(
       {
         roleId: readRequiredFormString(formData, "roleId"),
@@ -216,53 +191,45 @@ export async function assignTenantRoleAction(
       rolesManageAccessOptions()
     );
 
-    destination = roleActionDestination(formData, "assigned");
-  } catch (error) {
-    destination = roleActionDestination(
-      formData,
-      roleActionFailureStatus(error)
-    );
-  }
+    revalidateRoleAdminPaths();
 
-  revalidateRoleAdminPaths();
-  redirect(destination);
+    return roleActionSuccess("assigned", submittedAt);
+  } catch (error) {
+    return roleActionError(error, submittedAt);
+  }
 }
 
 export async function revokeTenantRoleBindingAction(
+  _previousState: RoleActionState,
   formData: FormData
-): Promise<void> {
+): Promise<RoleActionState> {
   await assertWebActionRequest();
-  await assertVerifiedRolesPermission(formData);
-
-  let destination = roleActionDestination(formData, "invalid");
+  const submittedAt = new Date().toISOString();
 
   try {
+    await assertVerifiedRolesPermission();
     await revokeRbacRoleBinding(
       readRequiredFormString(formData, "bindingId"),
       rolesManageAccessOptions()
     );
 
-    destination = roleActionDestination(formData, "revoked");
-  } catch (error) {
-    destination = roleActionDestination(
-      formData,
-      roleActionFailureStatus(error)
-    );
-  }
+    revalidateRoleAdminPaths();
 
-  revalidateRoleAdminPaths();
-  redirect(destination);
+    return roleActionSuccess("revoked", submittedAt);
+  } catch (error) {
+    return roleActionError(error, submittedAt);
+  }
 }
 
 export async function createDirectPermissionGrantAction(
+  _previousState: RoleActionState,
   formData: FormData
-): Promise<void> {
+): Promise<RoleActionState> {
   await assertWebActionRequest();
-  await assertVerifiedRolesPermission(formData);
-
-  let destination = roleActionDestination(formData, "invalid");
+  const submittedAt = new Date().toISOString();
 
   try {
+    await assertVerifiedRolesPermission();
     const expiresAt = readOptionalFormDate(formData, "expiresAt");
 
     await createRbacDirectGrant(
@@ -282,62 +249,40 @@ export async function createDirectPermissionGrantAction(
       rolesManageAccessOptions()
     );
 
-    destination = roleActionDestination(formData, "direct_grant_created");
-  } catch (error) {
-    destination = roleActionDestination(
-      formData,
-      roleActionFailureStatus(error)
-    );
-  }
+    revalidateRoleAdminPaths();
 
-  revalidateRoleAdminPaths();
-  redirect(destination);
+    return roleActionSuccess("direct_grant_created", submittedAt);
+  } catch (error) {
+    return roleActionError(error, submittedAt);
+  }
 }
 
 export async function revokeDirectPermissionGrantAction(
+  _previousState: RoleActionState,
   formData: FormData
-): Promise<void> {
+): Promise<RoleActionState> {
   await assertWebActionRequest();
-  await assertVerifiedRolesPermission(formData);
-
-  let destination = roleActionDestination(formData, "invalid");
+  const submittedAt = new Date().toISOString();
 
   try {
+    await assertVerifiedRolesPermission();
     await revokeRbacDirectGrant(
       readRequiredFormString(formData, "grantId"),
       rolesManageAccessOptions()
     );
 
-    destination = roleActionDestination(formData, "direct_grant_revoked");
-  } catch (error) {
-    destination = roleActionDestination(
-      formData,
-      roleActionFailureStatus(error)
-    );
-  }
+    revalidateRoleAdminPaths();
 
-  revalidateRoleAdminPaths();
-  redirect(destination);
+    return roleActionSuccess("direct_grant_revoked", submittedAt);
+  } catch (error) {
+    return roleActionError(error, submittedAt);
+  }
 }
 
-async function assertVerifiedRolesPermission(
-  formData: FormData
-): Promise<void> {
-  try {
-    await assertWebDbBackedAdminCommandBoundary(
-      webDbBackedAdminCommandBoundaries.roleAccess
-    );
-  } catch (error) {
-    if (isEmailNotVerifiedError(error)) {
-      redirect(roleActionDestination(formData, "email_verification_required"));
-    }
-
-    if (isPrivilegedActionReauthRequiredError(error)) {
-      redirect(roleActionDestination(formData, "reauth_required"));
-    }
-
-    throw error;
-  }
+async function assertVerifiedRolesPermission(): Promise<void> {
+  await assertWebDbBackedAdminCommandBoundary(
+    webDbBackedAdminCommandBoundaries.roleAccess
+  );
 }
 
 function rolesManageAccessOptions(): {
@@ -354,68 +299,33 @@ function revalidateRoleAdminPaths(): void {
   revalidatePath("/admin/employees/[employeeId]/access", "page");
 }
 
-function roleActionDestination(formData: FormData, status: string): string {
-  const returnTo = readOptionalFormString(formData, "returnTo");
-  const path = isSafeRoleActionReturnTo(returnTo) ? returnTo : "/admin/roles";
-  const params = new URLSearchParams({ roleActionStatus: status });
-  const employeeAccessSection = readEmployeeAccessSection(formData);
-  const roleAdminSection = readRoleAdminSection(formData);
-
-  if (path === "/admin/roles" && roleAdminSection !== undefined) {
-    params.set("section", roleAdminSection);
-  }
-
-  if (isEmployeeAccessReturnTo(path) && employeeAccessSection !== undefined) {
-    params.set("section", employeeAccessSection);
-  }
-
-  return `${path}?${params.toString()}`;
+function roleActionSuccess(
+  code: Exclude<
+    RoleActionCode,
+    | "email_verification_required"
+    | "invalid"
+    | "permission_denied"
+    | "reauth_required"
+  >,
+  submittedAt: string
+): RoleActionState {
+  return {
+    code,
+    status: "success",
+    submittedAt
+  };
 }
 
-function isSafeRoleActionReturnTo(path: string | undefined): path is string {
-  if (path === "/admin/roles") {
-    return true;
-  }
+function roleActionError(error: unknown, submittedAt: string): RoleActionState {
+  const code = isEmailNotVerifiedError(error)
+    ? "email_verification_required"
+    : roleActionFailureStatus(error);
 
-  return path !== undefined && isEmployeeAccessReturnTo(path);
-}
-
-function isEmployeeAccessReturnTo(path: string): boolean {
-  return /^\/admin\/employees\/[^/?#]+\/access$/.test(path);
-}
-
-function readEmployeeAccessSection(
-  formData: FormData
-): EmployeeAccessSectionId | undefined {
-  const value = readOptionalFormString(formData, "employeeAccessSection");
-
-  if (value === undefined || !isEmployeeAccessSectionId(value)) {
-    return undefined;
-  }
-
-  return value;
-}
-
-function readRoleAdminSection(formData: FormData): string | undefined {
-  const value = readOptionalFormString(formData, "roleAdminSection");
-
-  if (
-    value === "definitions" ||
-    value === "create" ||
-    value === "templates" ||
-    value === "assign" ||
-    value === "preview" ||
-    value === "activeAssignments" ||
-    value === "expiredAssignments" ||
-    value === "directGrantCreate" ||
-    value === "activeDirectGrants" ||
-    value === "expiredDirectGrants" ||
-    value === "permissionCatalog"
-  ) {
-    return value;
-  }
-
-  return undefined;
+  return {
+    code,
+    status: "error",
+    submittedAt
+  };
 }
 
 function readRoleBindingSubject(

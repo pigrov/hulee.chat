@@ -17,7 +17,6 @@ import {
   type WorkQueueRecord
 } from "@hulee/db";
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 
 import { assertWebActionRequest } from "./action-security";
@@ -27,20 +26,23 @@ import {
   assertWebDbBackedAdminCommandBoundary,
   webDbBackedAdminCommandBoundaries
 } from "./web-admin-command-boundary";
-import {
-  isOrgStructureSectionId,
-  type OrgStructureSectionId
-} from "./org-structure-labels";
+import type {
+  OrgStructureActionCode,
+  OrgStructureActionState
+} from "./org-structure-action-state";
 
-export async function upsertOrgUnitAction(formData: FormData): Promise<void> {
+export async function upsertOrgUnitAction(
+  _previousState: OrgStructureActionState,
+  formData: FormData
+): Promise<OrgStructureActionState> {
   await assertWebActionRequest();
 
-  const session = await assertVerifiedOrgStructurePermission(formData);
-  const repository = createSqlOrgStructureRepository(getWebDatabase());
-  const now = new Date();
-  let destination = orgStructureDestination("invalid", formData);
+  const submittedAt = new Date().toISOString();
 
   try {
+    const session = await assertVerifiedOrgStructurePermission();
+    const repository = createSqlOrgStructureRepository(getWebDatabase());
+    const now = new Date();
     const requestedId = readOptionalFormString(formData, "id");
     const existingOrgUnits =
       requestedId === undefined
@@ -96,13 +98,12 @@ export async function upsertOrgUnitAction(formData: FormData): Promise<void> {
       occurredAt: now
     });
 
-    destination = orgStructureDestination("org_unit_saved", formData);
-  } catch {
-    destination = orgStructureDestination("invalid", formData);
-  }
+    revalidateOrgStructurePaths();
 
-  revalidateOrgStructurePaths();
-  redirect(destination);
+    return orgStructureActionSuccess("org_unit_saved", submittedAt);
+  } catch (error) {
+    return orgStructureActionError(error, submittedAt);
+  }
 }
 
 export async function moveOrgUnitParentAction(formData: FormData): Promise<{
@@ -110,11 +111,10 @@ export async function moveOrgUnitParentAction(formData: FormData): Promise<{
 }> {
   await assertWebActionRequest();
 
-  const session = await assertVerifiedOrgStructurePermission(formData);
-  const repository = createSqlOrgStructureRepository(getWebDatabase());
-  const now = new Date();
-
   try {
+    const session = await assertVerifiedOrgStructurePermission();
+    const repository = createSqlOrgStructureRepository(getWebDatabase());
+    const now = new Date();
     const id = readRequiredFormString(formData, "id");
     const parentOrgUnitId = readOptionalFormString(formData, "parentOrgUnitId");
     const orgUnits = await repository.listOrgUnits({
@@ -178,16 +178,17 @@ export async function moveOrgUnitParentAction(formData: FormData): Promise<{
 }
 
 export async function setOrgUnitStatusAction(
+  _previousState: OrgStructureActionState,
   formData: FormData
-): Promise<void> {
+): Promise<OrgStructureActionState> {
   await assertWebActionRequest();
 
-  const session = await assertVerifiedOrgStructurePermission(formData);
-  const repository = createSqlOrgStructureRepository(getWebDatabase());
-  const now = new Date();
-  let destination = orgStructureDestination("invalid", formData);
+  const submittedAt = new Date().toISOString();
 
   try {
+    const session = await assertVerifiedOrgStructurePermission();
+    const repository = createSqlOrgStructureRepository(getWebDatabase());
+    const now = new Date();
     const id = readRequiredFormString(formData, "id");
     const status = readOrgStructureStatus(formData, "status");
     const existing = await findOrgUnit(repository, session.tenantId, id);
@@ -222,27 +223,29 @@ export async function setOrgUnitStatusAction(
       occurredAt: now
     });
 
-    destination = orgStructureDestination(
-      status === "active" ? "org_unit_restored" : "org_unit_archived",
-      formData
-    );
-  } catch {
-    destination = orgStructureDestination("invalid", formData);
-  }
+    revalidateOrgStructurePaths();
 
-  revalidateOrgStructurePaths();
-  redirect(destination);
+    return orgStructureActionSuccess(
+      status === "active" ? "org_unit_restored" : "org_unit_archived",
+      submittedAt
+    );
+  } catch (error) {
+    return orgStructureActionError(error, submittedAt);
+  }
 }
 
-export async function upsertTeamAction(formData: FormData): Promise<void> {
+export async function upsertTeamAction(
+  _previousState: OrgStructureActionState,
+  formData: FormData
+): Promise<OrgStructureActionState> {
   await assertWebActionRequest();
 
-  const session = await assertVerifiedOrgStructurePermission(formData);
-  const repository = createSqlOrgStructureRepository(getWebDatabase());
-  const now = new Date();
-  let destination = orgStructureDestination("invalid", formData);
+  const submittedAt = new Date().toISOString();
 
   try {
+    const session = await assertVerifiedOrgStructurePermission();
+    const repository = createSqlOrgStructureRepository(getWebDatabase());
+    const now = new Date();
     const requestedId = readOptionalFormString(formData, "id");
     const existing =
       requestedId === undefined
@@ -275,24 +278,26 @@ export async function upsertTeamAction(formData: FormData): Promise<void> {
       occurredAt: now
     });
 
-    destination = orgStructureDestination("team_saved", formData);
-  } catch {
-    destination = orgStructureDestination("invalid", formData);
-  }
+    revalidateOrgStructurePaths();
 
-  revalidateOrgStructurePaths();
-  redirect(destination);
+    return orgStructureActionSuccess("team_saved", submittedAt);
+  } catch (error) {
+    return orgStructureActionError(error, submittedAt);
+  }
 }
 
-export async function upsertWorkQueueAction(formData: FormData): Promise<void> {
+export async function upsertWorkQueueAction(
+  _previousState: OrgStructureActionState,
+  formData: FormData
+): Promise<OrgStructureActionState> {
   await assertWebActionRequest();
 
-  const session = await assertVerifiedOrgStructurePermission(formData);
-  const repository = createSqlOrgStructureRepository(getWebDatabase());
-  const now = new Date();
-  let destination = orgStructureDestination("invalid", formData);
+  const submittedAt = new Date().toISOString();
 
   try {
+    const session = await assertVerifiedOrgStructurePermission();
+    const repository = createSqlOrgStructureRepository(getWebDatabase());
+    const now = new Date();
     const requestedId = readOptionalFormString(formData, "id");
     const existing =
       requestedId === undefined
@@ -332,26 +337,26 @@ export async function upsertWorkQueueAction(formData: FormData): Promise<void> {
       occurredAt: now
     });
 
-    destination = orgStructureDestination("work_queue_saved", formData);
-  } catch {
-    destination = orgStructureDestination("invalid", formData);
-  }
+    revalidateOrgStructurePaths();
 
-  revalidateOrgStructurePaths();
-  redirect(destination);
+    return orgStructureActionSuccess("work_queue_saved", submittedAt);
+  } catch (error) {
+    return orgStructureActionError(error, submittedAt);
+  }
 }
 
 export async function setWorkQueueStatusAction(
+  _previousState: OrgStructureActionState,
   formData: FormData
-): Promise<void> {
+): Promise<OrgStructureActionState> {
   await assertWebActionRequest();
 
-  const session = await assertVerifiedOrgStructurePermission(formData);
-  const repository = createSqlOrgStructureRepository(getWebDatabase());
-  const now = new Date();
-  let destination = orgStructureDestination("invalid", formData);
+  const submittedAt = new Date().toISOString();
 
   try {
+    const session = await assertVerifiedOrgStructurePermission();
+    const repository = createSqlOrgStructureRepository(getWebDatabase());
+    const now = new Date();
     const id = readRequiredFormString(formData, "id");
     const status = readOrgStructureStatus(formData, "status");
     const existing = await findWorkQueue(repository, session.tenantId, id);
@@ -387,28 +392,42 @@ export async function setWorkQueueStatusAction(
       occurredAt: now
     });
 
-    destination = orgStructureDestination(
-      status === "active" ? "work_queue_restored" : "work_queue_archived",
-      formData
-    );
-  } catch {
-    destination = orgStructureDestination("invalid", formData);
-  }
+    revalidateOrgStructurePaths();
 
-  revalidateOrgStructurePaths();
-  redirect(destination);
+    return orgStructureActionSuccess(
+      status === "active" ? "work_queue_restored" : "work_queue_archived",
+      submittedAt
+    );
+  } catch (error) {
+    return orgStructureActionError(error, submittedAt);
+  }
 }
 
-function orgStructureDestination(status: string, formData?: FormData): string {
-  const params = new URLSearchParams({ orgStructureStatus: status });
-  const section =
-    formData === undefined ? undefined : readOrgStructureSection(formData);
+function orgStructureActionSuccess(
+  code: Exclude<
+    OrgStructureActionCode,
+    "email_verification_required" | "invalid"
+  >,
+  submittedAt: string
+): OrgStructureActionState {
+  return {
+    code,
+    status: "success",
+    submittedAt
+  };
+}
 
-  if (section !== undefined) {
-    params.set("section", section);
-  }
-
-  return `/admin/org-structure?${params.toString()}`;
+function orgStructureActionError(
+  error: unknown,
+  submittedAt: string
+): OrgStructureActionState {
+  return {
+    code: isEmailNotVerifiedError(error)
+      ? "email_verification_required"
+      : "invalid",
+    status: "error",
+    submittedAt
+  };
 }
 
 function revalidateOrgStructurePaths(): void {
@@ -418,34 +437,10 @@ function revalidateOrgStructurePaths(): void {
   revalidatePath("/admin/employees/[employeeId]/access", "page");
 }
 
-async function assertVerifiedOrgStructurePermission(
-  formData?: FormData
-): Promise<WebAccessSession> {
-  try {
-    return await assertWebDbBackedAdminCommandBoundary(
-      webDbBackedAdminCommandBoundaries.orgStructure
-    );
-  } catch (error) {
-    if (isEmailNotVerifiedError(error)) {
-      redirect(
-        orgStructureDestination("email_verification_required", formData)
-      );
-    }
-
-    throw error;
-  }
-}
-
-function readOrgStructureSection(
-  formData: FormData
-): OrgStructureSectionId | undefined {
-  const value = readOptionalFormString(formData, "section");
-
-  if (value === undefined || !isOrgStructureSectionId(value)) {
-    return undefined;
-  }
-
-  return value;
+async function assertVerifiedOrgStructurePermission(): Promise<WebAccessSession> {
+  return await assertWebDbBackedAdminCommandBoundary(
+    webDbBackedAdminCommandBoundaries.orgStructure
+  );
 }
 
 async function findOrgUnit(

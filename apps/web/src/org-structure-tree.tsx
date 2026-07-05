@@ -20,13 +20,13 @@ import {
   type DragEvent,
   type ReactNode
 } from "react";
-import { useFormStatus } from "react-dom";
 
+import { moveOrgUnitParentAction } from "./org-structure-actions";
 import {
-  moveOrgUnitParentAction,
-  setOrgUnitStatusAction,
-  upsertOrgUnitAction
-} from "./org-structure-actions";
+  OrgStructureActionForm,
+  OrgStructureSubmitButton,
+  type OrgStructureActionMessages
+} from "./org-structure-action-form";
 import {
   buildOrgUnitTreeState,
   canMoveOrgUnit,
@@ -42,6 +42,7 @@ export type OrgUnitKindOption = {
 };
 
 export type OrgUnitTreeLabels = {
+  readonly actionMessages: OrgStructureActionMessages;
   readonly archive: string;
   readonly archivedStatus: string;
   readonly activeStatus: string;
@@ -398,9 +399,10 @@ function OrgUnitTreeItem({
             </span>
           ) : null}
         </div>
-        <form
+        <OrgStructureActionForm
+          actionKind="upsertOrgUnit"
           className="settingsForm orgStructureInlineForm"
-          action={upsertOrgUnitAction}
+          messages={labels.actionMessages}
         >
           <input name="section" type="hidden" value="org_units" />
           <input name="id" type="hidden" value={orgUnit.id} />
@@ -415,10 +417,13 @@ function OrgUnitTreeItem({
             labels={labels}
             parentOptions={parentOptions}
           />
-          <SubmitButton className="secondaryButton" label={labels.save}>
+          <OrgStructureSubmitButton
+            className="secondaryButton"
+            label={labels.save}
+          >
             <Save size={14} aria-hidden="true" />
-          </SubmitButton>
-        </form>
+          </OrgStructureSubmitButton>
+        </OrgStructureActionForm>
       </div>
 
       <div className="rowActions">
@@ -427,11 +432,15 @@ function OrgUnitTreeItem({
             ? labels.activeStatus
             : labels.archivedStatus}
         </span>
-        <form className="inlineForm" action={setOrgUnitStatusAction}>
+        <OrgStructureActionForm
+          actionKind="setOrgUnitStatus"
+          className="inlineForm"
+          messages={labels.actionMessages}
+        >
           <input name="section" type="hidden" value="org_units" />
           <input name="id" type="hidden" value={orgUnit.id} />
           <input name="status" type="hidden" value={nextStatus} />
-          <SubmitButton
+          <OrgStructureSubmitButton
             className={
               orgUnit.status === "active" ? "dangerButton" : "secondaryButton"
             }
@@ -444,8 +453,8 @@ function OrgUnitTreeItem({
             ) : (
               <ArchiveRestore size={14} aria-hidden="true" />
             )}
-          </SubmitButton>
-        </form>
+          </OrgStructureSubmitButton>
+        </OrgStructureActionForm>
       </div>
     </article>
   );
@@ -527,29 +536,6 @@ function OrgUnitParentSelect({
         ))}
       </select>
     </label>
-  );
-}
-
-function SubmitButton({
-  children,
-  className,
-  label
-}: {
-  readonly children: ReactNode;
-  readonly className: string;
-  readonly label: string;
-}): ReactNode {
-  const { pending } = useFormStatus();
-
-  return (
-    <button className={className} disabled={pending} type="submit">
-      {pending ? (
-        <LoaderCircle className="buttonSpinner" size={14} aria-hidden="true" />
-      ) : (
-        children
-      )}
-      {label}
-    </button>
   );
 }
 

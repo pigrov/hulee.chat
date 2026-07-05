@@ -63,6 +63,17 @@ describe("SQL auth email token repository", () => {
     });
 
     await expect(
+      repository.findAccountEmailOwner({
+        tenantId,
+        email: "admin@example.test"
+      })
+    ).resolves.toMatchObject({
+      tenantId,
+      accountId: "account-1",
+      email: "admin@example.test"
+    });
+
+    await expect(
       repository.listTargetsByEmail({
         email: "admin@example.test"
       })
@@ -121,7 +132,7 @@ describe("SQL auth email token repository", () => {
     });
   });
 
-  it("writes create, verify and reset commands", async () => {
+  it("writes create, verify, email change and reset commands", async () => {
     const executor = new RecordingSqlExecutor([{ token_id: "token-1" }]);
     const repository = createSqlAuthEmailTokenRepository(executor);
     const token: AuthEmailToken = {
@@ -167,6 +178,28 @@ describe("SQL auth email token repository", () => {
         }
       ]
     });
+    await repository.completeEmailChange({
+      token: {
+        ...token,
+        email: "new-admin@example.test",
+        purpose: "email_change_verification",
+        tokenHash: hashAuthEmailToken("change-token")
+      },
+      changedAt: now,
+      events: [
+        {
+          id: "event-3" as EventId,
+          type: "account.email_changed",
+          version: "v1",
+          tenantId,
+          occurredAt: now.toISOString(),
+          payload: {
+            accountId: "account-1",
+            email: "new-admin@example.test"
+          }
+        }
+      ]
+    });
     await repository.completePasswordReset({
       token: {
         ...token,
@@ -177,7 +210,7 @@ describe("SQL auth email token repository", () => {
       resetAt: now,
       events: [
         {
-          id: "event-3" as EventId,
+          id: "event-4" as EventId,
           type: "account.password_reset_completed",
           version: "v1",
           tenantId,
@@ -190,13 +223,18 @@ describe("SQL auth email token repository", () => {
     });
 
     const verificationQuery = renderQuery(executor.queries[1]);
-    const resetQuery = renderQuery(executor.queries[2]);
+    const emailChangeQuery = renderQuery(executor.queries[2]);
+    const resetQuery = renderQuery(executor.queries[3]);
 
+    expect(renderQuery(executor.queries[0]).sql).toContain("email,");
     expect(verificationQuery.sql).toMatch(/email_verified_at\s*=\s*coalesce/);
+    expect(emailChangeQuery.sql).toContain("email_change_verification");
+    expect(emailChangeQuery.sql).toContain("duplicate_account");
+    expect(emailChangeQuery.sql).toContain("update employees");
     expect(resetQuery.sql).toContain("update sessions");
     expect(resetQuery.sql).toContain("revoked_at");
     expect(resetQuery.sql).toContain("password_hash");
-    expect(executor.queries).toHaveLength(3);
+    expect(executor.queries).toHaveLength(4);
   });
 });
 

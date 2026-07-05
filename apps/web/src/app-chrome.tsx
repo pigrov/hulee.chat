@@ -12,6 +12,7 @@ import {
 import { logoutAction } from "./auth-actions";
 import { AppThemeToggle } from "./theme-toggle";
 import { ToastViewport, type ToastMessage } from "./toast";
+import { UrlStatusParamCleaner } from "./url-status-param-cleaner";
 
 const emptySlotRegistry = createSlotRegistry([]);
 
@@ -43,6 +44,7 @@ export function AppFrame({
   navigationMode = "rail",
   navigationAccess,
   t,
+  toastSearchParams,
   toasts
 }: {
   brand: BrandProfileView;
@@ -52,6 +54,7 @@ export function AppFrame({
   navigationMode?: "rail" | "none";
   navigationAccess?: NavigationAccess;
   t: Translator;
+  toastSearchParams?: readonly string[];
   toasts?: readonly ToastMessage[];
 }): ReactNode {
   const productName = t("app.name", {
@@ -117,6 +120,9 @@ export function AppFrame({
         regionLabel={t("notifications.region")}
         toasts={toasts}
       />
+      {(toasts?.length ?? 0) > 0 && toastSearchParams ? (
+        <UrlStatusParamCleaner params={toastSearchParams} />
+      ) : null}
       {children}
     </main>
   );
@@ -188,7 +194,7 @@ export function DetailItem({
   value
 }: {
   label: string;
-  value: string;
+  value: ReactNode;
 }): ReactNode {
   return (
     <div className="detailItem">

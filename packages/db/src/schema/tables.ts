@@ -550,6 +550,7 @@ export const authEmailVerificationTokens = pgTable(
     accountId: text("account_id")
       .notNull()
       .references(() => accounts.id),
+    email: text("email"),
     tokenHash: text("token_hash").notNull(),
     purpose: text("purpose").notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),

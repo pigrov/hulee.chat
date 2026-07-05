@@ -11,20 +11,22 @@ import {
   type DeploymentChannelProviderPolicyRecord
 } from "@hulee/db";
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 
 import { assertWebPlatformAdmin } from "./access";
 import { assertWebActionRequest } from "./action-security";
+import {
+  platformActionError,
+  platformActionSuccess,
+  type PlatformActionState
+} from "./platform-action-state";
 import { buildChannelProviderPolicyPersistenceInput } from "./platform-channel-policies";
 import { getWebDatabase, requireCurrentWebAccessSession } from "./session";
 
 export async function updatePlatformChannelProviderPolicyAction(
+  _previousState: PlatformActionState,
   formData: FormData
-): Promise<void> {
-  let selectedChannelType: string | undefined;
-  let destination = "/platform/channels?channelPolicy=invalid";
-
+): Promise<PlatformActionState> {
   try {
     await assertWebActionRequest();
     const session = assertWebPlatformAdmin(
@@ -36,7 +38,6 @@ export async function updatePlatformChannelProviderPolicyAction(
     const channelType = internalChannelTypeSchema.parse(
       readRequiredFormString(formData, "channelType")
     );
-    selectedChannelType = channelType;
     const inboundMode = internalTelegramIntegrationModeSchema.parse(
       readRequiredFormString(formData, "inboundMode")
     );
@@ -73,34 +74,12 @@ export async function updatePlatformChannelProviderPolicyAction(
       occurredAt: updatedAt
     });
 
-    destination = platformChannelsDestination({
-      channelType,
-      status: "updated"
-    });
+    revalidatePath("/platform/channels");
+
+    return platformActionSuccess("channel_policy_updated");
   } catch {
-    destination = platformChannelsDestination({
-      channelType: selectedChannelType,
-      status: "invalid"
-    });
+    return platformActionError("channel_policy_invalid");
   }
-
-  revalidatePath("/platform/channels");
-  redirect(destination);
-}
-
-function platformChannelsDestination(input: {
-  channelType?: string;
-  status: "updated" | "invalid";
-}): string {
-  const params = new URLSearchParams({
-    channelPolicy: input.status
-  });
-
-  if (input.channelType) {
-    params.set("channelType", input.channelType);
-  }
-
-  return `/platform/channels?${params.toString()}`;
 }
 
 function serializePolicyForAudit(

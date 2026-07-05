@@ -10,11 +10,15 @@ import {
   type DeploymentEgressProviderPolicyRecord
 } from "@hulee/db";
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 
 import { assertWebPlatformAdmin } from "./access";
 import { assertWebActionRequest } from "./action-security";
+import {
+  platformActionError,
+  platformActionSuccess,
+  type PlatformActionState
+} from "./platform-action-state";
 import { buildProviderPolicyPersistenceInput } from "./platform-egress-policies";
 import {
   getWebDatabase,
@@ -23,10 +27,9 @@ import {
 } from "./session";
 
 export async function updatePlatformEgressProviderPolicyAction(
+  _previousState: PlatformActionState,
   formData: FormData
-): Promise<void> {
-  let destination = "/platform/providers?egressPolicy=invalid";
-
+): Promise<PlatformActionState> {
   try {
     await assertWebActionRequest();
     const session = assertWebPlatformAdmin(
@@ -67,13 +70,12 @@ export async function updatePlatformEgressProviderPolicyAction(
       occurredAt: updatedAt
     });
 
-    destination = "/platform/providers?egressPolicy=updated";
-  } catch {
-    destination = "/platform/providers?egressPolicy=invalid";
-  }
+    revalidatePath("/platform/providers");
 
-  revalidatePath("/platform/providers");
-  redirect(destination);
+    return platformActionSuccess("egress_policy_updated");
+  } catch {
+    return platformActionError("egress_policy_invalid");
+  }
 }
 
 function serializePolicyForAudit(

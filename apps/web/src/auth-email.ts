@@ -15,6 +15,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 
 import {
   resolvePublicBaseUrl,
+  sendEmailChangeVerificationEmail,
   sendEmailVerificationEmail,
   sendPasswordResetEmail,
   type SendEmailResult
@@ -23,11 +24,17 @@ import { validatePasswordPolicy } from "./password-policy";
 import { getWebDatabase } from "./session";
 
 const emailVerificationTtlMs = 1000 * 60 * 60 * 24 * 7;
+const emailChangeVerificationTtlMs = 1000 * 60 * 60 * 24;
 const passwordResetTtlMs = 1000 * 60 * 60;
 
 export type CompleteEmailVerificationResult =
   | {
       status: "verified";
+      tenantDisplayName: string;
+      productName: string;
+    }
+  | {
+      status: "email_changed";
       tenantDisplayName: string;
       productName: string;
     }
@@ -82,6 +89,35 @@ export async function requestEmailVerificationForAccount(input: {
   });
 }
 
+export async function requestEmailChangeVerificationForAccount(input: {
+  tenantId: TenantAuthAccount["tenantId"];
+  accountId: string;
+  newEmail: string;
+}): Promise<SendEmailResult> {
+  const repository = createSqlAuthEmailTokenRepository(getWebDatabase());
+  const target = await repository.findTargetByAccount({
+    tenantId: input.tenantId,
+    accountId: input.accountId
+  });
+
+  if (target === null) {
+    return {
+      sent: false,
+      reason: "provider_failed"
+    };
+  }
+
+  return requestAuthEmail({
+    purpose: "email_change_verification",
+    ttlMs: emailChangeVerificationTtlMs,
+    to: input.newEmail,
+    tenantId: target.tenantId,
+    accountId: target.accountId,
+    tenantDisplayName: target.tenantDisplayName,
+    productName: target.productName
+  });
+}
+
 export async function requestPasswordResetEmail(input: {
   email: string;
   tenantSlug?: string;
@@ -123,7 +159,40 @@ export async function completeEmailVerificationToken(
   const repository = createSqlAuthEmailTokenRepository(getWebDatabase());
   const preview = await findValidAuthEmailToken(token, "email_verification");
 
-  if (preview === null) {
+  if (preview !== null) {
+    const now = new Date();
+    const completed = completeAuthEmailToken({
+      now: now.toISOString(),
+      tenantId: preview.token.tenantId,
+      token: preview.token,
+      idFactory: createSequentialIdFactory(`verify-email:${randomUUID()}`)
+    });
+
+    try {
+      await repository.completeEmailVerification({
+        token: completed.token,
+        verifiedAt: now,
+        events: completed.events
+      });
+    } catch {
+      return {
+        status: "invalid"
+      };
+    }
+
+    return {
+      status: "verified",
+      tenantDisplayName: preview.tenantDisplayName,
+      productName: preview.productName
+    };
+  }
+
+  const emailChangePreview = await findValidAuthEmailToken(
+    token,
+    "email_change_verification"
+  );
+
+  if (emailChangePreview === null) {
     return {
       status: "invalid"
     };
@@ -132,15 +201,15 @@ export async function completeEmailVerificationToken(
   const now = new Date();
   const completed = completeAuthEmailToken({
     now: now.toISOString(),
-    tenantId: preview.token.tenantId,
-    token: preview.token,
-    idFactory: createSequentialIdFactory(`verify-email:${randomUUID()}`)
+    tenantId: emailChangePreview.token.tenantId,
+    token: emailChangePreview.token,
+    idFactory: createSequentialIdFactory(`change-email:${randomUUID()}`)
   });
 
   try {
-    await repository.completeEmailVerification({
+    await repository.completeEmailChange({
       token: completed.token,
-      verifiedAt: now,
+      changedAt: now,
       events: completed.events
     });
   } catch {
@@ -150,9 +219,9 @@ export async function completeEmailVerificationToken(
   }
 
   return {
-    status: "verified",
-    tenantDisplayName: preview.tenantDisplayName,
-    productName: preview.productName
+    status: "email_changed",
+    tenantDisplayName: emailChangePreview.tenantDisplayName,
+    productName: emailChangePreview.productName
   };
 }
 
@@ -219,7 +288,10 @@ async function resolvePasswordResetTargets(input: {
 }
 
 async function requestAuthEmail(input: {
-  purpose: "email_verification" | "password_reset";
+  purpose:
+    | "email_verification"
+    | "email_change_verification"
+    | "password_reset";
   ttlMs: number;
   to: string;
   tenantId: TenantAuthAccount["tenantId"];
@@ -252,6 +324,15 @@ async function requestAuthEmail(input: {
     });
   }
 
+  if (input.purpose === "email_change_verification") {
+    return sendEmailChangeVerificationEmail({
+      to: input.to,
+      productName: input.productName,
+      tenantDisplayName: input.tenantDisplayName,
+      verifyUrl: new URL(`/verify-email/${token}`, resolvePublicBaseUrl()).href
+    });
+  }
+
   return sendPasswordResetEmail({
     to: input.to,
     productName: input.productName,
@@ -262,7 +343,7 @@ async function requestAuthEmail(input: {
 
 async function findValidAuthEmailToken(
   token: string,
-  purpose: "email_verification" | "password_reset"
+  purpose: "email_verification" | "email_change_verification" | "password_reset"
 ): Promise<AuthEmailTokenPreview | null> {
   return createSqlAuthEmailTokenRepository(getWebDatabase()).findValidToken({
     tokenHash: hashAuthEmailToken(token),

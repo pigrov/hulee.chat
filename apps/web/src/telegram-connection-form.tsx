@@ -276,9 +276,9 @@ export function TelegramConnectionForm({
                 ? labels.saveAndCheck
                 : labels.connectBot}
         </button>
-        <span className="telegramLifecycleActions" aria-disabled={isBusy}>
+        <div className="telegramLifecycleActions" aria-disabled={isBusy}>
           {lifecycleActions}
-        </span>
+        </div>
       </div>
 
       {notice ? (

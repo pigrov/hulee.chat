@@ -43,6 +43,20 @@ export function resolveLocalBrandAssetFilePath(
   storageKey: string,
   rootDir = process.cwd()
 ): string {
+  const root = path.resolve(rootDir, ...localBrandAssetRootPath);
+  const filePath = path.resolve(
+    root,
+    ...localBrandAssetPathSegments(storageKey)
+  );
+
+  if (filePath !== root && !filePath.startsWith(`${root}${path.sep}`)) {
+    throw new Error("Invalid local brand asset path.");
+  }
+
+  return filePath;
+}
+
+function localBrandAssetPathSegments(storageKey: string): readonly string[] {
   if (!isLocalBrandAssetStorageKey(storageKey)) {
     throw new Error("Invalid local brand asset storage key.");
   }
@@ -52,19 +66,26 @@ export function resolveLocalBrandAssetFilePath(
 
   if (
     relativeKey.length === 0 ||
+    path.isAbsolute(relativeKey) ||
     path.isAbsolute(normalizedRelativeKey) ||
-    normalizedRelativeKey === ".." ||
-    normalizedRelativeKey.startsWith(`..${path.sep}`)
+    relativeKey.includes("\0")
   ) {
     throw new Error("Invalid local brand asset path.");
   }
 
-  const root = path.resolve(rootDir, ...localBrandAssetRootPath);
-  const filePath = path.resolve(root, normalizedRelativeKey);
+  const segments = relativeKey.split(/[\\/]+/);
 
-  if (filePath !== root && !filePath.startsWith(`${root}${path.sep}`)) {
+  if (
+    segments.some(
+      (segment) => segment.length === 0 || segment === "." || segment === ".."
+    )
+  ) {
     throw new Error("Invalid local brand asset path.");
   }
 
-  return filePath;
+  return segments.map(encodeLocalBrandAssetPathSegment);
+}
+
+function encodeLocalBrandAssetPathSegment(segment: string): string {
+  return encodeURIComponent(segment).replace(/\*/g, "%2A");
 }

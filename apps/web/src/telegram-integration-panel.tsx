@@ -1,13 +1,9 @@
 import type { createTranslator, I18nMessageKey } from "@hulee/i18n";
-import { ArrowDown, ArrowUp, Power, PowerOff, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp } from "lucide-react";
 import type { ReactNode } from "react";
 
-import {
-  deleteChannelConnectorAction,
-  disableChannelConnectorAction,
-  enableChannelConnectorAction
-} from "./actions";
 import { DetailItem } from "./app-chrome";
+import { ChannelConnectorLifecycleActions } from "./channel-connector-lifecycle-actions";
 import {
   formatBoolean,
   formatOptionalBoolean,
@@ -649,44 +645,27 @@ function TelegramLifecycleActions({
   integration: TelegramIntegrationViewModel;
   t: Translator;
 }): ReactNode {
-  return (
-    <>
-      {integration.status === "disabled" ? (
-        <form action={enableChannelConnectorAction}>
-          <ConnectorIdField integration={integration} />
-          <button className="secondaryButton" type="submit">
-            <Power size={16} aria-hidden="true" />
-            {t("integrations.telegram.enableConnector")}
-          </button>
-        </form>
-      ) : (
-        <form action={disableChannelConnectorAction}>
-          <ConnectorIdField integration={integration} />
-          <button className="secondaryButton" type="submit">
-            <PowerOff size={16} aria-hidden="true" />
-            {t("integrations.telegram.disableConnector")}
-          </button>
-        </form>
-      )}
-      <form action={deleteChannelConnectorAction}>
-        <ConnectorIdField integration={integration} />
-        <button className="dangerButton" type="submit">
-          <Trash2 size={16} aria-hidden="true" />
-          {t("integrations.telegram.deleteConnector")}
-        </button>
-      </form>
-    </>
-  );
-}
+  if (!integration.connectorId) {
+    return null;
+  }
 
-function ConnectorIdField({
-  integration
-}: {
-  integration: TelegramIntegrationViewModel;
-}): ReactNode {
-  return integration.connectorId ? (
-    <input type="hidden" name="connectorId" value={integration.connectorId} />
-  ) : null;
+  return (
+    <ChannelConnectorLifecycleActions
+      connectorId={integration.connectorId}
+      labels={{
+        deleteConnector: t("integrations.telegram.deleteConnector"),
+        disableConnector: t("integrations.telegram.disableConnector"),
+        enableConnector: t("integrations.telegram.enableConnector")
+      }}
+      messages={{
+        deleted: t("admin.integrations.actionStatus.deleted"),
+        disabled: t("admin.integrations.actionStatus.disabled"),
+        enabled: t("admin.integrations.actionStatus.enabled"),
+        invalid: t("admin.integrations.actionStatus.invalid")
+      }}
+      status={integration.status}
+    />
+  );
 }
 
 function telegramDisplayName(

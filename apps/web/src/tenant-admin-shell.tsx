@@ -37,6 +37,8 @@ import type { ToastMessage } from "./toast";
 
 type Translator = ReturnType<typeof createTranslator>["t"];
 
+const tenantAdminToastSearchParams = ["emailVerification"] as const;
+
 type BrandProfileView = {
   productName: string;
   shortProductName?: string;
@@ -105,6 +107,7 @@ export function TenantAdminShell({
       navigationAccess={navigationAccess}
       navigationMode="none"
       t={t}
+      toastSearchParams={tenantAdminToastSearchParams}
       toasts={toasts}
     >
       <section className="adminWorkspace" aria-labelledby={titleId}>

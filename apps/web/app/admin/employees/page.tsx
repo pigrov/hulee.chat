@@ -21,13 +21,12 @@ import {
   AdminSectionFrame,
   type AdminSectionFrameItem
 } from "../../../src/admin-section-frame";
+import { EmailInput, EmailText } from "../../../src/contact-fields";
 import {
-  deactivateEmployeeAction,
-  inviteEmployeeAction,
-  resendEmployeeInviteAction,
-  revokeEmployeeInviteAction
-} from "../../../src/employee-actions";
-import { resolvePublicBaseUrl } from "../../../src/email";
+  EmployeeAdminActionForm,
+  EmployeeAdminSubmitButton,
+  type EmployeeAdminActionMessages
+} from "../../../src/employee-admin-action-form";
 import { formatDateTime } from "../../../src/formatting";
 import { loadTenantAdminViewModel } from "../../../src/admin-view-model";
 import {
@@ -40,7 +39,6 @@ import {
 } from "../../../src/rbac-effective-access";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
 import { navigationAccessFromTenantAdminAccess } from "../../../src/tenant-admin-nav";
-import { buildActionStatusToast } from "../../../src/toast-messages";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -53,9 +51,6 @@ export default async function EmployeesAdminPage({
   searchParams
 }: {
   searchParams?: Promise<{
-    actionStatus?: string;
-    inviteStatus?: string;
-    inviteToken?: string;
     section?: string;
   }>;
 }): Promise<ReactNode> {
@@ -101,31 +96,7 @@ export default async function EmployeesAdminPage({
   const selectedSection = resolveEmployeeAdminSection(
     resolvedSearchParams?.section
   );
-  const inviteToken = resolvedSearchParams?.inviteToken;
-  const manualInviteUrl = inviteToken
-    ? new URL(`/invite/${inviteToken}`, resolvePublicBaseUrl()).href
-    : undefined;
-  const inviteStatusToast = resolvedSearchParams?.inviteStatus
-    ? buildActionStatusToast({
-        id: `employee-invite-status:${resolvedSearchParams.inviteStatus}`,
-        status: resolvedSearchParams.inviteStatus,
-        titleKey: "admin.employees.inviteStatus",
-        descriptionKey: inviteStatusKey(resolvedSearchParams.inviteStatus),
-        t
-      })
-    : undefined;
-  const actionStatusToast = resolvedSearchParams?.actionStatus
-    ? buildActionStatusToast({
-        id: `employee-action-status:${resolvedSearchParams.actionStatus}`,
-        status: resolvedSearchParams.actionStatus,
-        titleKey: "admin.employees.actionStatus",
-        descriptionKey: actionStatusKey(resolvedSearchParams.actionStatus),
-        t
-      })
-    : undefined;
-  const toasts = [inviteStatusToast, actionStatusToast].filter(
-    (toast) => toast !== undefined
-  );
+  const employeeActionMessages = employeeAdminActionMessages(t);
   const employeeAdminSections: readonly AdminSectionFrameItem<EmployeeAdminSectionId>[] =
     [
       {
@@ -154,30 +125,10 @@ export default async function EmployeesAdminPage({
       brand={model.tenant.brand}
       current="employees"
       effectiveAccess={accessSnapshot}
-      sidebarContent={
-        <>
-          {manualInviteUrl ? (
-            <div className="detailGrid">
-              <label className="fieldStack">
-                <span className="detailLabel">
-                  {t("admin.employees.manualInviteLink")}
-                </span>
-                <input
-                  className="textInput"
-                  type="url"
-                  readOnly
-                  value={manualInviteUrl}
-                />
-              </label>
-            </div>
-          ) : null}
-        </>
-      }
       t={t}
       tenantDisplayName={model.tenant.displayName}
       title={t("admin.employees")}
       titleId="employees-title"
-      toasts={toasts}
     >
       <AdminSectionFrame
         ariaLabel={t("admin.employees")}
@@ -203,17 +154,16 @@ export default async function EmployeesAdminPage({
             </span>
           </div>
 
-          <form className="settingsForm" action={inviteEmployeeAction}>
-            <input name="section" type="hidden" value="invite" />
+          <EmployeeAdminActionForm
+            actionKind="inviteEmployee"
+            className="settingsForm"
+            manualInviteLinkLabel={t("admin.employees.manualInviteLink")}
+            messages={employeeActionMessages}
+            resetOnSuccess
+          >
             <label className="fieldStack">
               <span className="detailLabel">{t("auth.email")}</span>
-              <input
-                className="textInput"
-                name="email"
-                type="email"
-                autoComplete="email"
-                required
-              />
+              <EmailInput className="textInput" name="email" required />
             </label>
             <label className="fieldStack">
               <span className="detailLabel">
@@ -226,11 +176,13 @@ export default async function EmployeesAdminPage({
                 autoComplete="name"
               />
             </label>
-            <button className="primaryButton" type="submit">
+            <EmployeeAdminSubmitButton
+              className="primaryButton"
+              label={t("admin.employees.sendInvite")}
+            >
               <UserPlus size={18} aria-hidden="true" />
-              {t("admin.employees.sendInvite")}
-            </button>
-          </form>
+            </EmployeeAdminSubmitButton>
+          </EmployeeAdminActionForm>
         </section>
 
         <section
@@ -256,7 +208,11 @@ export default async function EmployeesAdminPage({
                 <article className="managementRow" key={employee.employeeId}>
                   <div>
                     <h3 className="listItemTitle">{employee.displayName}</h3>
-                    <p className="metaText">{employee.email}</p>
+                    <EmailText
+                      asLink={false}
+                      className="metaText"
+                      value={employee.email}
+                    />
                     <span className="badge">
                       {t(
                         employee.deactivatedAt
@@ -277,21 +233,26 @@ export default async function EmployeesAdminPage({
                     ) : null}
                     {!employee.deactivatedAt &&
                     employee.employeeId !== access.employeeId ? (
-                      <form
+                      <EmployeeAdminActionForm
+                        actionKind="deactivateEmployee"
                         className="inlineForm"
-                        action={deactivateEmployeeAction}
+                        manualInviteLinkLabel={t(
+                          "admin.employees.manualInviteLink"
+                        )}
+                        messages={employeeActionMessages}
                       >
-                        <input name="section" type="hidden" value="directory" />
                         <input
                           name="employeeId"
                           type="hidden"
                           value={employee.employeeId}
                         />
-                        <button className="dangerButton" type="submit">
+                        <EmployeeAdminSubmitButton
+                          className="dangerButton"
+                          label={t("admin.employees.deactivate")}
+                        >
                           <Ban size={14} aria-hidden="true" />
-                          {t("admin.employees.deactivate")}
-                        </button>
-                      </form>
+                        </EmployeeAdminSubmitButton>
+                      </EmployeeAdminActionForm>
                     ) : null}
                   </div>
                 </article>
@@ -322,7 +283,9 @@ export default async function EmployeesAdminPage({
               invitations.map((invitation) => (
                 <article className="managementRow" key={invitation.id}>
                   <div>
-                    <h3 className="listItemTitle">{invitation.email}</h3>
+                    <h3 className="listItemTitle">
+                      <EmailText asLink={false} value={invitation.email} />
+                    </h3>
                     <p className="metaText">
                       {t("admin.employees.expiresAt", {
                         value: formatDateTime(invitation.expiresAt, locale)
@@ -334,46 +297,48 @@ export default async function EmployeesAdminPage({
                       {t(invitationStatusKey(invitation, new Date()))}
                     </span>
                     {!invitation.acceptedAt ? (
-                      <form
+                      <EmployeeAdminActionForm
+                        actionKind="resendInvite"
                         className="inlineForm"
-                        action={resendEmployeeInviteAction}
+                        manualInviteLinkLabel={t(
+                          "admin.employees.manualInviteLink"
+                        )}
+                        messages={employeeActionMessages}
                       >
-                        <input
-                          name="section"
-                          type="hidden"
-                          value="invitations"
-                        />
                         <input
                           name="invitationId"
                           type="hidden"
                           value={invitation.id}
                         />
-                        <button className="secondaryButton" type="submit">
+                        <EmployeeAdminSubmitButton
+                          className="secondaryButton"
+                          label={t("admin.employees.resendInvite")}
+                        >
                           <RotateCw size={14} aria-hidden="true" />
-                          {t("admin.employees.resendInvite")}
-                        </button>
-                      </form>
+                        </EmployeeAdminSubmitButton>
+                      </EmployeeAdminActionForm>
                     ) : null}
                     {!invitation.acceptedAt && !invitation.revokedAt ? (
-                      <form
+                      <EmployeeAdminActionForm
+                        actionKind="revokeInvite"
                         className="inlineForm"
-                        action={revokeEmployeeInviteAction}
+                        manualInviteLinkLabel={t(
+                          "admin.employees.manualInviteLink"
+                        )}
+                        messages={employeeActionMessages}
                       >
-                        <input
-                          name="section"
-                          type="hidden"
-                          value="invitations"
-                        />
                         <input
                           name="invitationId"
                           type="hidden"
                           value={invitation.id}
                         />
-                        <button className="dangerButton" type="submit">
+                        <EmployeeAdminSubmitButton
+                          className="dangerButton"
+                          label={t("admin.employees.revokeInvite")}
+                        >
                           <XCircle size={14} aria-hidden="true" />
-                          {t("admin.employees.revokeInvite")}
-                        </button>
-                      </form>
+                        </EmployeeAdminSubmitButton>
+                      </EmployeeAdminActionForm>
                     ) : null}
                   </div>
                 </article>
@@ -402,30 +367,19 @@ function isEmployeeAdminSectionId(
   return employeeAdminSectionIds.some((section) => section === value);
 }
 
-function actionStatusKey(status: string): I18nMessageKey {
-  switch (status) {
-    case "deactivated":
-      return "admin.employees.actionStatus.deactivated";
-    case "invite_revoked":
-      return "admin.employees.actionStatus.inviteRevoked";
-    default:
-      return "admin.employees.actionStatus.invalid";
-  }
-}
-
-function inviteStatusKey(status: string | undefined): I18nMessageKey {
-  switch (status) {
-    case "sent":
-      return "admin.employees.inviteSent";
-    case "not_configured":
-      return "admin.employees.inviteEmailNotConfigured";
-    case "provider_failed":
-      return "admin.employees.inviteEmailFailed";
-    case "invalid":
-      return "admin.employees.inviteInvalid";
-    default:
-      return "admin.employees.inviteCreated";
-  }
+function employeeAdminActionMessages(
+  t: ReturnType<typeof createTranslator>["t"]
+): EmployeeAdminActionMessages {
+  return {
+    deactivated: t("admin.employees.actionStatus.deactivated"),
+    email_verification_required: t("auth.emailVerification.status.required"),
+    invalid: t("admin.employees.actionStatus.invalid"),
+    invite_revoked: t("admin.employees.actionStatus.inviteRevoked"),
+    not_configured: t("admin.employees.inviteEmailNotConfigured"),
+    permission_denied: t("admin.roles.actionStatus.permissionDenied"),
+    provider_failed: t("admin.employees.inviteEmailFailed"),
+    sent: t("admin.employees.inviteSent")
+  };
 }
 
 function invitationStatusKey(

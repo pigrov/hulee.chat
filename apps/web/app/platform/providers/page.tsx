@@ -23,16 +23,11 @@ import {
   resolveCurrentWebAccessSession,
   resolveWebConfig
 } from "../../../src/session";
-import { buildActionStatusToast } from "../../../src/toast-messages";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export default async function PlatformProvidersPage({
-  searchParams
-}: {
-  searchParams?: Promise<{ egressPolicy?: string }>;
-}): Promise<ReactNode> {
+export default async function PlatformProvidersPage(): Promise<ReactNode> {
   const access = await resolveCurrentWebAccessSession();
 
   if (access === null) {
@@ -63,19 +58,6 @@ export default async function PlatformProvidersPage({
     egressStatus,
     repository: createSqlDeploymentEgressProviderPolicyRepository(database)
   });
-  const resolvedSearchParams = await searchParams;
-  const egressPolicyToast = resolvedSearchParams?.egressPolicy
-    ? buildActionStatusToast({
-        id: `egress-policy:${resolvedSearchParams.egressPolicy}`,
-        status: resolvedSearchParams.egressPolicy,
-        titleKey: "platform.egressProviderRouting",
-        descriptionKey:
-          resolvedSearchParams.egressPolicy === "updated"
-            ? "platform.egressPolicyStatus.updated"
-            : "platform.egressPolicyStatus.invalid",
-        t
-      })
-    : undefined;
 
   return (
     <PlatformAdminShell
@@ -84,7 +66,6 @@ export default async function PlatformProvidersPage({
       t={t}
       title={t("platform.providers")}
       titleId="platform-providers-title"
-      toasts={egressPolicyToast ? [egressPolicyToast] : []}
     >
       <section className="settingsPanel" aria-labelledby="providers-title">
         <div className="sectionHeader">

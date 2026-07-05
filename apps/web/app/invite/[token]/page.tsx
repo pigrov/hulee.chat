@@ -9,11 +9,16 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
-import { acceptEmployeeInviteAction } from "../../../src/employee-actions";
+import { authActionMessages } from "../../../src/auth-action-messages";
+import {
+  AuthActionForm,
+  AuthSubmitButton
+} from "../../../src/auth-action-form";
 import {
   brandProfileToCssProperties,
   buildBrandMarkLabel
 } from "../../../src/brand-style";
+import { EmailInput } from "../../../src/contact-fields";
 import {
   getWebDatabase,
   resolveCurrentWebAccessSession
@@ -23,11 +28,9 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export default async function AcceptInvitePage({
-  params,
-  searchParams
+  params
 }: {
   params: Promise<{ token: string }>;
-  searchParams?: Promise<{ error?: string }>;
 }): Promise<ReactNode> {
   const existingSession = await resolveCurrentWebAccessSession({
     allowDevelopmentFallback: false
@@ -41,10 +44,7 @@ export default async function AcceptInvitePage({
     );
   }
 
-  const [{ token }, resolvedSearchParams] = await Promise.all([
-    params,
-    searchParams
-  ]);
+  const { token } = await params;
   const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
   const preview = await repository.findInvitationByTokenHash(
     hashEmployeeInvitationToken(token)
@@ -91,14 +91,17 @@ export default async function AcceptInvitePage({
             </p>
           </>
         ) : (
-          <form className="settingsForm" action={acceptEmployeeInviteAction}>
+          <AuthActionForm
+            actionKind="acceptInvite"
+            className="settingsForm"
+            messages={authActionMessages(t)}
+          >
             <input name="token" type="hidden" value={token} />
             <label className="fieldStack">
               <span className="detailLabel">{t("auth.email")}</span>
-              <input
+              <EmailInput
                 className="textInput"
-                type="email"
-                value={activePreview.invitation.email}
+                defaultValue={activePreview.invitation.email}
                 readOnly
               />
             </label>
@@ -124,14 +127,13 @@ export default async function AcceptInvitePage({
                 required
               />
             </label>
-            {resolvedSearchParams?.error === "invalid" ? (
-              <p className="formError">{t("invite.invalid")}</p>
-            ) : null}
-            <button className="primaryButton" type="submit">
+            <AuthSubmitButton
+              className="primaryButton"
+              label={t("invite.submit")}
+            >
               <KeyRound size={18} aria-hidden="true" />
-              {t("invite.submit")}
-            </button>
-          </form>
+            </AuthSubmitButton>
+          </AuthActionForm>
         )}
       </section>
     </main>

@@ -15,7 +15,8 @@ import {
   internalChannelTypeSchema,
   type InternalTelegramIntegrationConfig
 } from "@hulee/contracts";
-import type { Permission } from "@hulee/core";
+import { normalizeOptionalPhoneNumber } from "@hulee/contact-identity";
+import { CoreError, type Permission } from "@hulee/core";
 import { createSqlDeploymentChannelProviderPolicyRepository } from "@hulee/db";
 import { createS3ObjectStorage } from "@hulee/storage";
 import { sql } from "drizzle-orm";
@@ -29,7 +30,6 @@ import {
   enableChannelConnector,
   loadChannelConnectors,
   loadTelegramIntegration,
-  refreshTelegramDiagnostics,
   sendInboxReply,
   setTelegramWebhook,
   startChannelAuthChallenge,
@@ -51,10 +51,16 @@ import {
 } from "./session";
 import {
   inboxReplyActionFailureStatus,
-  type InboxReplyActionStatus,
-  inboxRoutingActionFailureStatus,
-  type InboxRoutingActionStatus
+  inboxRoutingActionFailureStatus
 } from "./inbox-action-status";
+import {
+  inboxReplyActionError,
+  inboxReplyActionSuccess,
+  inboxRoutingActionError,
+  inboxRoutingActionSuccess,
+  type InboxReplyActionState,
+  type InboxRoutingActionState
+} from "./inbox-action-state";
 import {
   loadTelegramBotChannelProviderPolicy,
   type PlatformChannelProviderPolicyView
@@ -69,6 +75,28 @@ import {
   telegramDisplayNameFromValidatedBot,
   telegramTokenValidationFailureStatus
 } from "./telegram-bot-connector-rules";
+import type {
+  TelegramBotCatalogConnectActionErrorCode,
+  TelegramBotCatalogConnectActionState
+} from "./telegram-bot-catalog-connect-action-state";
+import type {
+  ChannelConnectorLifecycleActionCode,
+  ChannelConnectorLifecycleActionState
+} from "./channel-connector-lifecycle-action-state";
+import type {
+  ChannelConnectorCreateActionCode,
+  ChannelConnectorCreateActionState
+} from "./channel-connector-create-action-state";
+import type {
+  BrandingActionCode,
+  BrandingActionState
+} from "./branding-action-state";
+import {
+  channelAuthChallengeActionError,
+  channelAuthChallengeActionSuccess,
+  type ChannelAuthChallengeActionCode,
+  type ChannelAuthChallengeActionState
+} from "./channel-auth-challenge-action-state";
 
 type TelegramConnectionActionState = {
   status: "idle" | "queued" | "saved" | "error";
@@ -85,78 +113,55 @@ const brandLogoMediaTypes = {
   "image/webp": "webp"
 } as const;
 
-export async function sendReplyAction(formData: FormData): Promise<void> {
+class BrandingActionError extends Error {
+  constructor(readonly code: Exclude<BrandingActionCode, "saved">) {
+    super(code);
+  }
+}
+
+export async function sendReplyAction(
+  _previousState: InboxReplyActionState,
+  formData: FormData
+): Promise<InboxReplyActionState> {
   await assertWebActionRequest();
 
-  const conversationId = readRequiredFormString(formData, "conversationId");
-  const redirectPath = inboxActionReturnTo(formData, conversationId);
-
   try {
+    const conversationId = readRequiredFormString(formData, "conversationId");
     assertWebTenantEmailVerified(await requireCurrentWebAccessSession());
-  } catch (error) {
-    if (isEmailNotVerifiedError(error)) {
-      redirect(addSearchParam(redirectPath, "emailVerification", "required"));
+    const text = readRequiredFormString(formData, "text").trim();
+
+    if (text.length === 0) {
+      return inboxReplyActionError("invalid");
     }
 
-    redirect(
-      inboxReplyActionDestination(
-        redirectPath,
-        inboxReplyActionFailureStatus(error)
-      )
-    );
-  }
-
-  const text = readRequiredFormString(formData, "text").trim();
-
-  if (text.length === 0) {
-    redirect(inboxReplyActionDestination(redirectPath, "invalid"));
-  }
-
-  let replyStatus: InboxReplyActionStatus = "sent";
-
-  try {
     await sendInboxReply({
       conversationId,
       text,
       idempotencyKey: `web-reply:${conversationId}:${randomUUID()}`
     });
-  } catch (error) {
-    replyStatus = inboxReplyActionFailureStatus(error);
-  }
 
-  if (replyStatus === "sent") {
     revalidatePath("/");
-  }
 
-  redirect(inboxReplyActionDestination(redirectPath, replyStatus));
+    return inboxReplyActionSuccess("sent");
+  } catch (error) {
+    if (isEmailNotVerifiedError(error)) {
+      return inboxReplyActionError("email_verification_required");
+    }
+
+    return inboxReplyActionError(inboxReplyActionFailureStatus(error));
+  }
 }
 
 export async function updateConversationRoutingAction(
+  _previousState: InboxRoutingActionState,
   formData: FormData
-): Promise<void> {
+): Promise<InboxRoutingActionState> {
   await assertWebActionRequest();
 
-  const conversationId = readRequiredFormString(formData, "conversationId");
-  const redirectPath = inboxActionReturnTo(formData, conversationId);
-
   try {
+    const conversationId = readRequiredFormString(formData, "conversationId");
     assertWebTenantEmailVerified(await requireCurrentWebAccessSession());
-  } catch (error) {
-    if (isEmailNotVerifiedError(error)) {
-      redirect(addSearchParam(redirectPath, "emailVerification", "required"));
-    }
 
-    redirect(
-      inboxRoutingActionDestination(
-        redirectPath,
-        inboxRoutingActionFailureStatus(error)
-      )
-    );
-  }
-
-  let routingStatus: InboxRoutingActionStatus = "saved";
-
-  try {
     await updateInboxConversationRouting({
       conversationId,
       request: {
@@ -174,25 +179,29 @@ export async function updateConversationRoutingAction(
         )
       }
     });
-  } catch (error) {
-    routingStatus = inboxRoutingActionFailureStatus(error);
-  }
 
-  if (routingStatus === "saved") {
     revalidatePath("/");
-  }
 
-  redirect(inboxRoutingActionDestination(redirectPath, routingStatus));
+    return inboxRoutingActionSuccess("saved");
+  } catch (error) {
+    if (isEmailNotVerifiedError(error)) {
+      return inboxRoutingActionError("email_verification_required");
+    }
+
+    return inboxRoutingActionError(inboxRoutingActionFailureStatus(error));
+  }
 }
 
 export async function applyBrandPresetAction(
+  _previousState: BrandingActionState,
   formData: FormData
-): Promise<void> {
+): Promise<BrandingActionState> {
   await assertWebActionRequest();
   const internalApiAccess = await assertVerifiedTenantPermission(
     "tenant.manage",
     "/admin/branding"
   );
+  const submittedAt = new Date().toISOString();
 
   const productName = readRequiredFormString(formData, "productName").trim();
   const shortProductName = normalizeOptionalFormValue(
@@ -202,7 +211,6 @@ export async function applyBrandPresetAction(
     readRequiredFormString(formData, "presetId")
   );
   const themeMode = readBrandThemeMode(formData);
-  let destination = brandDestination("saved", formData);
 
   try {
     await updateTenantBrand(
@@ -213,22 +221,25 @@ export async function applyBrandPresetAction(
       },
       internalApiAccess
     );
-  } catch {
-    destination = brandDestination("invalid", formData);
+  } catch (error) {
+    return brandingActionError(brandingActionFailureCode(error), submittedAt);
   }
 
   revalidateBrandPaths();
-  redirect(destination);
+
+  return brandingActionSuccess(submittedAt);
 }
 
 export async function updateTenantBrandAction(
+  _previousState: BrandingActionState,
   formData: FormData
-): Promise<void> {
+): Promise<BrandingActionState> {
   await assertWebActionRequest();
   const internalApiAccess = await assertVerifiedTenantPermission(
     "tenant.manage",
     "/admin/branding"
   );
+  const submittedAt = new Date().toISOString();
 
   const productName = readRequiredFormString(formData, "productName").trim();
   const shortProductName = normalizeOptionalFormValue(
@@ -241,7 +252,6 @@ export async function updateTenantBrandAction(
   const primaryColor = readRequiredFormString(formData, "primaryColor").trim();
   const accentColor = readRequiredFormString(formData, "accentColor").trim();
   const logoFile = readOptionalFormFile(formData, "brandLogoFile");
-  let destination = brandDestination("saved", formData);
 
   try {
     const uploadedLogo =
@@ -274,33 +284,56 @@ export async function updateTenantBrandAction(
       },
       internalApiAccess
     );
-  } catch {
-    destination = brandDestination("invalid", formData);
+  } catch (error) {
+    return brandingActionError(brandingActionFailureCode(error), submittedAt);
   }
 
   revalidateBrandPaths();
-  redirect(destination);
+
+  return brandingActionSuccess(submittedAt);
 }
 
-function brandDestination(status: string, formData: FormData): string {
-  const params = new URLSearchParams({ brandStatus: status });
-  const section = readBrandingSection(formData);
-
-  if (section !== undefined) {
-    params.set("section", section);
-  }
-
-  return `/admin/branding?${params.toString()}`;
+function brandingActionSuccess(submittedAt: string): BrandingActionState {
+  return {
+    code: "saved",
+    status: "success",
+    submittedAt
+  };
 }
 
-function readBrandingSection(formData: FormData): string | undefined {
-  const value = readOptionalFormString(formData, "section");
+function brandingActionError(
+  code: Exclude<BrandingActionCode, "saved">,
+  submittedAt: string
+): BrandingActionState {
+  return {
+    code,
+    status: "error",
+    submittedAt
+  };
+}
 
-  if (value === "presets" || value === "settings") {
-    return value;
+function brandingActionFailureCode(
+  error: unknown
+): Exclude<BrandingActionCode, "saved"> {
+  if (error instanceof BrandingActionError) {
+    return error.code;
   }
 
-  return undefined;
+  if (error instanceof CoreError) {
+    if (error.code === "permission.denied") {
+      return "permission_denied";
+    }
+
+    if (error.code === "validation.failed") {
+      return "invalid";
+    }
+
+    return "internal_api_failed";
+  }
+
+  logUnexpectedBrandingActionError(error);
+
+  return "internal_api_failed";
 }
 
 function readBrandThemeMode(formData: FormData): BrandThemeMode {
@@ -318,11 +351,11 @@ async function uploadTenantBrandLogo(input: {
     brandLogoMediaTypes[mediaType as keyof typeof brandLogoMediaTypes];
 
   if (extension === undefined) {
-    throw new Error(`Unsupported brand logo media type: ${mediaType}`);
+    throw new BrandingActionError("logo_invalid_type");
   }
 
   if (input.file.size <= 0 || input.file.size > maxBrandLogoBytes) {
-    throw new Error("Invalid brand logo size.");
+    throw new BrandingActionError("logo_too_large");
   }
 
   const body = new Uint8Array(await input.file.arrayBuffer());
@@ -335,66 +368,66 @@ async function uploadTenantBrandLogo(input: {
     : toLocalBrandAssetStorageKey(objectStorageKey);
   const now = new Date();
 
-  if (config.objectStorage) {
-    await createS3ObjectStorage(config.objectStorage).putObject({
-      storageKey,
-      body,
-      mediaType,
-      fileName: input.file.name
-    });
-  } else if (canUseLocalBrandAssetStorage()) {
-    await putLocalBrandAsset({ storageKey, body });
-  } else {
-    throw new Error("Object storage is not configured.");
+  try {
+    if (config.objectStorage) {
+      await createS3ObjectStorage(config.objectStorage).putObject({
+        storageKey,
+        body,
+        mediaType,
+        fileName: input.file.name
+      });
+    } else if (canUseLocalBrandAssetStorage()) {
+      await putLocalBrandAsset({ storageKey, body });
+    } else {
+      throw new BrandingActionError("logo_storage_unavailable");
+    }
+  } catch (error) {
+    if (error instanceof BrandingActionError) {
+      throw error;
+    }
+
+    throw new BrandingActionError("logo_storage_unavailable");
   }
 
-  await getWebDatabase().execute(sql`
-    insert into tenant_brand_assets (
-      id,
-      tenant_id,
-      kind,
-      storage_key,
-      media_type,
-      size_bytes,
-      created_at,
-      updated_at
-    )
-    values (
-      ${assetId},
-      ${input.tenantId},
-      'logo',
-      ${storageKey},
-      ${mediaType},
-      ${input.file.size},
-      ${now},
-      ${now}
-    )
-  `);
+  try {
+    await getWebDatabase().execute(sql`
+      insert into tenant_brand_assets (
+        id,
+        tenant_id,
+        kind,
+        storage_key,
+        media_type,
+        size_bytes,
+        created_at,
+        updated_at
+      )
+      values (
+        ${assetId},
+        ${input.tenantId},
+        'logo',
+        ${storageKey},
+        ${mediaType},
+        ${input.file.size},
+        ${now},
+        ${now}
+      )
+    `);
+  } catch (error) {
+    logUnexpectedBrandingActionError(error);
+    throw new BrandingActionError("logo_metadata_unavailable");
+  }
 
   return {
     url: `/brand-assets/${encodeURIComponent(assetId)}/logo.${extension}?v=${encodeURIComponent(hash)}`
   };
 }
 
-export async function updateTelegramIntegrationAction(
-  formData: FormData
-): Promise<void> {
-  await assertWebActionRequest();
-  const internalApiAccess = await assertVerifiedTenantPermission(
-    "modules.manage",
-    "/admin/integrations"
-  );
-  const result = await applyTelegramIntegrationUpdate(
-    formData,
-    internalApiAccess
-  );
+function logUnexpectedBrandingActionError(error: unknown): void {
+  if (process.env.NODE_ENV === "production") {
+    return;
+  }
 
-  revalidateTelegramIntegrationPaths();
-  redirect(
-    `/admin/integrations?connectorId=${encodeURIComponent(
-      result.connectorId
-    )}&channelStatus=setupQueued`
-  );
+  console.error("[branding] action failed", error);
 }
 
 export async function connectTelegramIntegrationAction(
@@ -503,55 +536,67 @@ async function applyTelegramIntegrationUpdate(
 }
 
 export async function createChannelConnectorAction(
+  _previousState: ChannelConnectorCreateActionState,
   formData: FormData
-): Promise<void> {
+): Promise<ChannelConnectorCreateActionState> {
   await assertWebActionRequest();
-  const internalApiAccess = await assertVerifiedTenantPermission(
-    "modules.manage",
-    "/admin/integrations"
-  );
-  const channelType = internalChannelTypeSchema.parse(
-    readRequiredFormString(formData, "channelType")
-  );
-  const displayName = readOptionalFormString(formData, "displayName")?.trim();
-  const connector = await createChannelConnector(
-    {
-      channelType,
-      displayName:
-        displayName === undefined || displayName.length === 0
-          ? undefined
-          : displayName
-    },
-    internalApiAccess
-  );
+  const submittedAt = new Date().toISOString();
 
-  revalidateTelegramIntegrationPaths();
-  redirect(
-    `/admin/integrations?connectorId=${encodeURIComponent(
-      connector.connectorId
-    )}&channelStatus=created`
-  );
+  try {
+    const internalApiAccess = await assertVerifiedTenantPermission(
+      "modules.manage",
+      "/admin/integrations",
+      { redirectOnEmailNotVerified: false }
+    );
+    const channelType = internalChannelTypeSchema.parse(
+      readRequiredFormString(formData, "channelType")
+    );
+    const displayName = readOptionalFormString(formData, "displayName")?.trim();
+    const connector = await createChannelConnector(
+      {
+        channelType,
+        displayName:
+          displayName === undefined || displayName.length === 0
+            ? undefined
+            : displayName
+      },
+      internalApiAccess
+    );
+
+    revalidateTelegramIntegrationPaths();
+
+    return {
+      code: "created",
+      connectorId: connector.connectorId,
+      status: "success",
+      submittedAt
+    };
+  } catch (error) {
+    return {
+      code: channelConnectorCreateFailureCode(error),
+      status: "error",
+      submittedAt
+    };
+  }
 }
 
 export async function connectTelegramBotChannelAction(
+  _previousState: TelegramBotCatalogConnectActionState,
   formData: FormData
-): Promise<void> {
+): Promise<TelegramBotCatalogConnectActionState> {
   await assertWebActionRequest();
   const internalApiAccess = await assertVerifiedTenantPermission(
     "modules.manage",
     "/admin/integrations"
   );
+  const submittedAt = new Date().toISOString();
   const channelType = internalChannelTypeSchema.parse(
     readRequiredFormString(formData, "channelType")
   );
   const botToken = readRequiredFormString(formData, "botToken").trim();
 
   if (channelType !== telegramBotChannelType || !isTelegramBotToken(botToken)) {
-    redirect(
-      `/admin/integrations?channelType=${encodeURIComponent(
-        telegramBotChannelType
-      )}&channelStatus=telegramTokenInvalid`
-    );
+    return telegramBotCatalogConnectError("telegramTokenInvalid", submittedAt);
   }
 
   let validation: Awaited<ReturnType<typeof validateTelegramBotToken>>;
@@ -562,10 +607,9 @@ export async function connectTelegramBotChannelAction(
       internalApiAccess
     );
   } catch (error) {
-    redirect(
-      `/admin/integrations?channelType=${encodeURIComponent(
-        telegramBotChannelType
-      )}&channelStatus=${telegramTokenValidationFailureStatus(error)}`
+    return telegramBotCatalogConnectError(
+      telegramTokenValidationFailureStatus(error),
+      submittedAt
     );
   }
 
@@ -575,23 +619,18 @@ export async function connectTelegramBotChannelAction(
   });
 
   if (duplicate) {
-    redirect(
-      `/admin/integrations?channelType=${encodeURIComponent(
-        telegramBotChannelType
-      )}&channelStatus=telegramTokenDuplicate&duplicateConnectorId=${encodeURIComponent(
-        duplicate.connectorId
-      )}`
-    );
+    return {
+      code: "telegramTokenDuplicate",
+      duplicateConnectorId: duplicate.connectorId,
+      status: "error",
+      submittedAt
+    };
   }
 
   let connectorId: string | undefined;
-  let destination = `/admin/integrations?channelType=${encodeURIComponent(
-    telegramBotChannelType
-  )}&channelStatus=invalid`;
 
   try {
     const displayName = telegramDisplayNameFromValidatedBot(validation.bot);
-    const submittedAt = new Date().toISOString();
     const connector = await createChannelConnector(
       {
         channelType,
@@ -614,11 +653,13 @@ export async function connectTelegramBotChannelAction(
 
     await applyTelegramIntegrationUpdate(setupFormData, internalApiAccess);
     revalidateTelegramIntegrationPaths();
-    destination = `/admin/integrations?connectorId=${encodeURIComponent(
-      connector.connectorId
-    )}&channelStatus=setupQueued&connectionPendingAt=${encodeURIComponent(
+
+    return {
+      code: "setupQueued",
+      connectorId: connector.connectorId,
+      status: "success",
       submittedAt
-    )}`;
+    };
   } catch {
     if (connectorId) {
       await deleteChannelConnector(
@@ -632,7 +673,18 @@ export async function connectTelegramBotChannelAction(
     revalidateTelegramIntegrationPaths();
   }
 
-  redirect(destination);
+  return telegramBotCatalogConnectError("invalid", submittedAt);
+}
+
+function telegramBotCatalogConnectError(
+  code: TelegramBotCatalogConnectActionErrorCode,
+  submittedAt: string
+): TelegramBotCatalogConnectActionState {
+  return {
+    code,
+    status: "error",
+    submittedAt
+  };
 }
 
 async function findDuplicateTelegramBotConnector(input: {
@@ -660,210 +712,191 @@ async function findDuplicateTelegramBotConnector(input: {
   });
 }
 
-export async function refreshTelegramDiagnosticsAction(
+export async function updateChannelConnectorLifecycleAction(
+  _previousState: ChannelConnectorLifecycleActionState,
   formData: FormData
-): Promise<void> {
+): Promise<ChannelConnectorLifecycleActionState> {
   await assertWebActionRequest();
+  const submittedAt = new Date().toISOString();
   const internalApiAccess = await assertVerifiedTenantPermission(
     "modules.manage",
     "/admin/integrations"
   );
-  const connectorId = requiredConnectorIdFromForm(formData);
 
-  await refreshTelegramDiagnostics(internalApiAccess, {
-    connectorId
-  });
-  revalidateTelegramIntegrationPaths();
-  redirect(
-    `/admin/integrations?connectorId=${encodeURIComponent(
-      connectorId
-    )}&channelStatus=diagnosticsQueued`
-  );
+  try {
+    const connectorId = readRequiredFormString(formData, "connectorId").trim();
+    const intent = readChannelConnectorLifecycleIntent(formData);
+
+    switch (intent) {
+      case "enable":
+        await enableChannelConnector({ connectorId }, internalApiAccess);
+        revalidateTelegramIntegrationPaths();
+
+        return channelConnectorLifecycleSuccess({
+          code: "enabled",
+          connectorId,
+          submittedAt
+        });
+      case "disable":
+        await disableChannelConnector({ connectorId }, internalApiAccess);
+        revalidateTelegramIntegrationPaths();
+
+        return channelConnectorLifecycleSuccess({
+          code: "disabled",
+          connectorId,
+          submittedAt
+        });
+      case "delete":
+        await deleteChannelConnector({ connectorId }, internalApiAccess);
+        revalidateTelegramIntegrationPaths();
+
+        return channelConnectorLifecycleSuccess({
+          code: "deleted",
+          connectorId,
+          submittedAt
+        });
+    }
+  } catch {
+    return {
+      code: "invalid",
+      status: "error",
+      submittedAt
+    };
+  }
 }
 
-export async function setTelegramWebhookAction(
-  formData: FormData
-): Promise<void> {
-  await assertWebActionRequest();
-  const internalApiAccess = await assertVerifiedTenantPermission(
-    "modules.manage",
-    "/admin/integrations"
-  );
-  const connectorId = requiredConnectorIdFromForm(formData);
-
-  await setTelegramWebhook(internalApiAccess, {
-    connectorId
-  });
-  revalidateTelegramIntegrationPaths();
-}
-
-export async function deleteTelegramWebhookAction(
-  formData: FormData
-): Promise<void> {
-  await assertWebActionRequest();
-  const internalApiAccess = await assertVerifiedTenantPermission(
-    "modules.manage",
-    "/admin/integrations"
-  );
-  const connectorId = requiredConnectorIdFromForm(formData);
-
-  await deleteTelegramWebhook(internalApiAccess, {
-    connectorId
-  });
-  revalidateTelegramIntegrationPaths();
-}
-
-export async function disableChannelConnectorAction(
-  formData: FormData
-): Promise<void> {
-  await assertWebActionRequest();
-  const internalApiAccess = await assertVerifiedTenantPermission(
-    "modules.manage",
-    "/admin/integrations"
-  );
-  const connectorId = readRequiredFormString(formData, "connectorId").trim();
-
-  await disableChannelConnector({ connectorId }, internalApiAccess);
-  revalidateTelegramIntegrationPaths();
-  redirect(
-    `/admin/integrations?connectorId=${encodeURIComponent(
-      connectorId
-    )}&channelStatus=disabled`
-  );
-}
-
-export async function enableChannelConnectorAction(
-  formData: FormData
-): Promise<void> {
-  await assertWebActionRequest();
-  const internalApiAccess = await assertVerifiedTenantPermission(
-    "modules.manage",
-    "/admin/integrations"
-  );
-  const connectorId = readRequiredFormString(formData, "connectorId").trim();
-
-  await enableChannelConnector({ connectorId }, internalApiAccess);
-  revalidateTelegramIntegrationPaths();
-  redirect(
-    `/admin/integrations?connectorId=${encodeURIComponent(
-      connectorId
-    )}&channelStatus=enabled`
-  );
-}
-
-export async function deleteChannelConnectorAction(
-  formData: FormData
-): Promise<void> {
-  await assertWebActionRequest();
-  const internalApiAccess = await assertVerifiedTenantPermission(
-    "modules.manage",
-    "/admin/integrations"
-  );
-  const connectorId = readRequiredFormString(formData, "connectorId").trim();
-
-  await deleteChannelConnector({ connectorId }, internalApiAccess);
-  revalidateTelegramIntegrationPaths();
-  redirect("/admin/integrations?channelStatus=deleted");
+function channelConnectorLifecycleSuccess(input: {
+  code: Exclude<ChannelConnectorLifecycleActionCode, "invalid">;
+  connectorId: string;
+  submittedAt: string;
+}): ChannelConnectorLifecycleActionState {
+  return {
+    code: input.code,
+    connectorId: input.connectorId,
+    status: "success",
+    submittedAt: input.submittedAt
+  };
 }
 
 export async function startChannelAuthChallengeAction(
+  _previousState: ChannelAuthChallengeActionState,
   formData: FormData
-): Promise<void> {
-  await assertWebActionRequest();
-  const internalApiAccess = await assertVerifiedTenantPermission(
-    "modules.manage",
-    "/admin/integrations"
-  );
-  const connectorId = readRequiredFormString(formData, "connectorId").trim();
-  const challengeType = internalChannelAuthChallengeTypeSchema.parse(
-    readRequiredFormString(formData, "challengeType")
-  );
-  const phoneNumber = normalizeOptionalFormValue(
-    readOptionalFormString(formData, "phoneNumber")
-  );
-  const response = await startChannelAuthChallenge(
-    {
-      connectorId,
-      request: {
-        challengeType,
-        phoneNumber
-      }
-    },
-    internalApiAccess
-  );
+): Promise<ChannelAuthChallengeActionState> {
+  try {
+    await assertWebActionRequest();
+    const internalApiAccess = await assertVerifiedTenantPermission(
+      "modules.manage",
+      "/admin/integrations",
+      { redirectOnEmailNotVerified: false }
+    );
+    const connectorId = readRequiredFormString(formData, "connectorId").trim();
+    const challengeType = internalChannelAuthChallengeTypeSchema.parse(
+      readRequiredFormString(formData, "challengeType")
+    );
+    const phoneNumber = normalizeActionPhoneNumber(
+      readOptionalFormString(formData, "phoneNumber")
+    );
+    const response = await startChannelAuthChallenge(
+      {
+        connectorId,
+        request: {
+          challengeType,
+          phoneNumber
+        }
+      },
+      internalApiAccess
+    );
 
-  revalidateTelegramIntegrationPaths();
-  redirect(
-    channelAuthChallengeDestination({
+    revalidateTelegramIntegrationPaths();
+
+    return channelAuthChallengeActionSuccess({
+      code: "started",
       connectorId,
-      challengeId: response.challenge.challengeId,
-      status: "started"
-    })
-  );
+      challengeId: response.challenge.challengeId
+    });
+  } catch (error) {
+    return channelAuthChallengeActionError(
+      channelAuthChallengeFailureCode(error)
+    );
+  }
 }
 
 export async function submitChannelAuthChallengeAction(
+  _previousState: ChannelAuthChallengeActionState,
   formData: FormData
-): Promise<void> {
-  await assertWebActionRequest();
-  const internalApiAccess = await assertVerifiedTenantPermission(
-    "modules.manage",
-    "/admin/integrations"
-  );
-  const connectorId = readRequiredFormString(formData, "connectorId").trim();
-  const challengeId = readRequiredFormString(formData, "challengeId").trim();
-  const code = normalizeOptionalFormValue(
-    readOptionalFormString(formData, "code")
-  );
-  const password = normalizeOptionalFormValue(
-    readOptionalFormString(formData, "password")
-  );
+): Promise<ChannelAuthChallengeActionState> {
+  try {
+    await assertWebActionRequest();
+    const internalApiAccess = await assertVerifiedTenantPermission(
+      "modules.manage",
+      "/admin/integrations",
+      { redirectOnEmailNotVerified: false }
+    );
+    const connectorId = readRequiredFormString(formData, "connectorId").trim();
+    const challengeId = readRequiredFormString(formData, "challengeId").trim();
+    const code = normalizeOptionalFormValue(
+      readOptionalFormString(formData, "code")
+    );
+    const password = normalizeOptionalFormValue(
+      readOptionalFormString(formData, "password")
+    );
 
-  await submitChannelAuthChallenge(
-    {
-      connectorId,
-      challengeId,
-      request: {
-        code,
-        password
-      }
-    },
-    internalApiAccess
-  );
+    await submitChannelAuthChallenge(
+      {
+        connectorId,
+        challengeId,
+        request: {
+          code,
+          password
+        }
+      },
+      internalApiAccess
+    );
 
-  revalidateTelegramIntegrationPaths();
-  redirect(
-    channelAuthChallengeDestination({
+    revalidateTelegramIntegrationPaths();
+
+    return channelAuthChallengeActionSuccess({
+      code: "submitted",
       connectorId,
-      challengeId,
-      status: "submitted"
-    })
-  );
+      challengeId
+    });
+  } catch (error) {
+    return channelAuthChallengeActionError(
+      channelAuthChallengeFailureCode(error)
+    );
+  }
 }
 
 export async function cancelChannelAuthChallengeAction(
+  _previousState: ChannelAuthChallengeActionState,
   formData: FormData
-): Promise<void> {
-  await assertWebActionRequest();
-  const internalApiAccess = await assertVerifiedTenantPermission(
-    "modules.manage",
-    "/admin/integrations"
-  );
-  const connectorId = readRequiredFormString(formData, "connectorId").trim();
-  const challengeId = readRequiredFormString(formData, "challengeId").trim();
+): Promise<ChannelAuthChallengeActionState> {
+  try {
+    await assertWebActionRequest();
+    const internalApiAccess = await assertVerifiedTenantPermission(
+      "modules.manage",
+      "/admin/integrations",
+      { redirectOnEmailNotVerified: false }
+    );
+    const connectorId = readRequiredFormString(formData, "connectorId").trim();
+    const challengeId = readRequiredFormString(formData, "challengeId").trim();
 
-  await cancelChannelAuthChallenge(
-    { connectorId, challengeId },
-    internalApiAccess
-  );
-  revalidateTelegramIntegrationPaths();
-  redirect(
-    channelAuthChallengeDestination({
+    await cancelChannelAuthChallenge(
+      { connectorId, challengeId },
+      internalApiAccess
+    );
+    revalidateTelegramIntegrationPaths();
+
+    return channelAuthChallengeActionSuccess({
+      code: "cancelled",
       connectorId,
-      challengeId,
-      status: "cancelled"
-    })
-  );
+      challengeId
+    });
+  } catch (error) {
+    return channelAuthChallengeActionError(
+      channelAuthChallengeFailureCode(error)
+    );
+  }
 }
 
 function readRequiredFormString(formData: FormData, name: string): string {
@@ -891,7 +924,8 @@ function requiredConnectorIdFromForm(formData: FormData): string {
 
 async function assertVerifiedTenantPermission<TPermission extends Permission>(
   permission: TPermission,
-  redirectPath: string
+  redirectPath: string,
+  options: { readonly redirectOnEmailNotVerified?: boolean } = {}
 ): Promise<InternalApiAccessOptions<TPermission>> {
   try {
     await assertCurrentWebEffectiveTenantPermission(permission, {
@@ -902,12 +936,46 @@ async function assertVerifiedTenantPermission<TPermission extends Permission>(
       effectivePermissionOverride: permission
     };
   } catch (error) {
-    if (isEmailNotVerifiedError(error)) {
+    if (
+      isEmailNotVerifiedError(error) &&
+      (options.redirectOnEmailNotVerified ?? true)
+    ) {
       redirect(addSearchParam(redirectPath, "emailVerification", "required"));
     }
 
     throw error;
   }
+}
+
+function channelConnectorCreateFailureCode(
+  error: unknown
+): Exclude<ChannelConnectorCreateActionCode, "created"> {
+  if (isEmailNotVerifiedError(error)) {
+    return "email_verification_required";
+  }
+
+  if (error instanceof CoreError && error.code === "permission.denied") {
+    return "permission_denied";
+  }
+
+  return "invalid";
+}
+
+function channelAuthChallengeFailureCode(
+  error: unknown
+): Exclude<
+  ChannelAuthChallengeActionCode,
+  "cancelled" | "started" | "submitted"
+> {
+  if (isEmailNotVerifiedError(error)) {
+    return "email_verification_required";
+  }
+
+  if (error instanceof CoreError && error.code === "permission.denied") {
+    return "permission_denied";
+  }
+
+  return "invalid";
 }
 
 function addSearchParam(path: string, name: string, value: string): string {
@@ -917,51 +985,6 @@ function addSearchParam(path: string, name: string, value: string): string {
   params.set(name, value);
 
   return `${pathname}?${params.toString()}`;
-}
-
-function inboxRoutingActionDestination(
-  path: string,
-  status: InboxRoutingActionStatus
-): string {
-  return addSearchParam(path, "routingStatus", status);
-}
-
-function inboxReplyActionDestination(
-  path: string,
-  status: InboxReplyActionStatus
-): string {
-  return addSearchParam(path, "replyStatus", status);
-}
-
-function channelAuthChallengeDestination(input: {
-  connectorId: string;
-  challengeId: string;
-  status: "started" | "submitted" | "cancelled";
-}): string {
-  const params = new URLSearchParams({
-    connectorId: input.connectorId,
-    challengeId: input.challengeId,
-    challengeStatus: input.status
-  });
-
-  return `/admin/integrations?${params.toString()}`;
-}
-
-function inboxActionReturnTo(
-  formData: FormData,
-  conversationId: string
-): string {
-  const returnTo = readOptionalFormString(formData, "returnTo");
-
-  if (isSafeInboxActionReturnTo(returnTo)) {
-    return returnTo;
-  }
-
-  return `/?conversationId=${encodeURIComponent(conversationId)}`;
-}
-
-function isSafeInboxActionReturnTo(path: string | undefined): path is string {
-  return path === "/" || path?.startsWith("/?") === true;
 }
 
 function readOptionalFormString(
@@ -979,6 +1002,12 @@ function normalizeOptionalFormValue(
   const normalized = value?.trim();
 
   return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeActionPhoneNumber(
+  value: string | undefined
+): string | undefined {
+  return normalizeOptionalPhoneNumber(value) ?? undefined;
 }
 
 function readNullableOptionalFormString(
@@ -1011,6 +1040,18 @@ function readTelegramSetupStepCompleted(
   return value === "name" || value === "token" || value === "mode"
     ? value
     : undefined;
+}
+
+function readChannelConnectorLifecycleIntent(
+  formData: FormData
+): "delete" | "disable" | "enable" {
+  const value = readRequiredFormString(formData, "intent");
+
+  if (value === "delete" || value === "disable" || value === "enable") {
+    return value;
+  }
+
+  throw new Error(`Unsupported channel connector lifecycle intent: ${value}`);
 }
 
 function isTelegramBotToken(value: string): boolean {

@@ -1,4 +1,5 @@
 import type { BrandProfile } from "@hulee/branding";
+import { normalizeEmailAddress } from "@hulee/contact-identity";
 import type { PlatformEvent } from "@hulee/contracts";
 import { evaluateEntitlement, type LicenseSnapshot } from "@hulee/entitlements";
 
@@ -179,13 +180,11 @@ function normalizeTenantSlug(value: string): string {
 }
 
 function normalizeEmail(value: string): string {
-  const email = value.trim().toLowerCase();
-
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  try {
+    return normalizeEmailAddress(value);
+  } catch {
     throw new CoreError("validation.failed", "Invalid admin email.");
   }
-
-  return email;
 }
 
 function requireNonEmpty(value: string, name: string): string {

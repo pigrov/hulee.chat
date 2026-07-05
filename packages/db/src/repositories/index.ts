@@ -153,9 +153,11 @@ export {
   createSqlSecurityAuditRepository
 } from "./sql-security-audit-repository";
 export {
+  buildCompleteEmailChangeSql,
   buildCompleteEmailVerificationSql,
   buildCompletePasswordResetSql,
   buildCreateAuthEmailTokenSql,
+  buildFindAuthEmailAccountOwnerSql,
   buildFindAuthEmailTokenTargetByAccountSql,
   buildFindAuthEmailTokenTargetByEmailSql,
   buildFindValidAuthEmailTokenSql,
@@ -398,9 +400,12 @@ export type {
   AuthEmailTokenPreview,
   AuthEmailTokenRepository,
   AuthEmailTokenTarget,
+  AuthEmailAccountOwner,
+  CompleteEmailChangePersistenceInput,
   CompleteEmailVerificationPersistenceInput,
   CompletePasswordResetPersistenceInput,
   CreateAuthEmailTokenPersistenceInput,
+  FindAuthEmailAccountOwnerInput,
   FindAuthEmailTokenTargetByAccountInput,
   FindAuthEmailTokenTargetByEmailInput,
   FindValidAuthEmailTokenInput,

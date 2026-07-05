@@ -28,18 +28,17 @@ import {
 } from "../../../src/admin-section-frame";
 import { loadTenantAdminViewModel } from "../../../src/admin-view-model";
 import {
+  OrgStructureActionForm,
+  OrgStructureSubmitButton,
+  type OrgStructureActionMessages
+} from "../../../src/org-structure-action-form";
+import {
   isOrgStructureSectionId,
   orgStructureStatusKey,
   type OrgStructureSectionId,
   orgUnitKindKey,
   workQueueKindKey
 } from "../../../src/org-structure-labels";
-import {
-  setWorkQueueStatusAction,
-  upsertOrgUnitAction,
-  upsertTeamAction,
-  upsertWorkQueueAction
-} from "../../../src/org-structure-actions";
 import {
   getWebDatabase,
   resolveCurrentWebAccessSession
@@ -50,7 +49,6 @@ import {
 } from "../../../src/rbac-effective-access";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
 import { navigationAccessFromTenantAdminAccess } from "../../../src/tenant-admin-nav";
-import { buildActionStatusToast } from "../../../src/toast-messages";
 import { OrgUnitTree } from "../../../src/org-structure-tree";
 import {
   PersistentHelpDisclosure,
@@ -73,7 +71,6 @@ export default async function OrgStructureAdminPage({
   searchParams
 }: {
   searchParams?: Promise<{
-    orgStructureStatus?: string;
     section?: string;
   }>;
 }): Promise<ReactNode> {
@@ -118,20 +115,10 @@ export default async function OrgStructureAdminPage({
     ]);
   const { t } = createTranslator(model.tenant.locale);
   const orgStructureHelp = createOrgStructureHelp(t);
+  const actionMessages = orgStructureActionMessages(t);
   const selectedSection = resolveOrgStructureSection(
     resolvedSearchParams?.section
   );
-  const orgStructureStatusToast = resolvedSearchParams?.orgStructureStatus
-    ? buildActionStatusToast({
-        id: `org-structure-status:${resolvedSearchParams.orgStructureStatus}`,
-        status: resolvedSearchParams.orgStructureStatus,
-        titleKey: "admin.orgStructure.actionStatus",
-        descriptionKey: orgStructureActionStatusKey(
-          resolvedSearchParams.orgStructureStatus
-        ),
-        t
-      })
-    : undefined;
   const sections: readonly AdminSectionFrameItem<OrgStructureSectionId>[] = [
     {
       id: "org_units",
@@ -163,7 +150,6 @@ export default async function OrgStructureAdminPage({
       tenantDisplayName={model.tenant.displayName}
       title={t("admin.orgStructure")}
       titleId="org-structure-title"
-      toasts={orgStructureStatusToast ? [orgStructureStatusToast] : []}
     >
       <AdminSectionFrame
         ariaLabel={t("admin.orgStructure.sections")}
@@ -195,19 +181,23 @@ export default async function OrgStructureAdminPage({
                 storageKey="hulee:admin:org-structure:create-org-unit:help"
               />
 
-              <form
+              <OrgStructureActionForm
+                actionKind="upsertOrgUnit"
                 className="settingsForm orgStructureCreateForm"
-                action={upsertOrgUnitAction}
+                messages={actionMessages}
+                resetOnSuccess
               >
                 <input name="section" type="hidden" value="org_units" />
                 <OrgUnitNameField t={t} />
                 <OrgUnitKindField t={t} />
                 <OrgUnitParentField orgUnits={orgUnits} t={t} />
-                <button className="primaryButton" type="submit">
+                <OrgStructureSubmitButton
+                  className="primaryButton"
+                  label={t("admin.orgStructure.create")}
+                >
                   <Plus size={18} aria-hidden="true" />
-                  {t("admin.orgStructure.create")}
-                </button>
-              </form>
+                </OrgStructureSubmitButton>
+              </OrgStructureActionForm>
             </section>
 
             <section
@@ -239,6 +229,7 @@ export default async function OrgStructureAdminPage({
                 }))}
                 labels={{
                   activeStatus: t("admin.orgStructure.status.active"),
+                  actionMessages,
                   archive: t("admin.orgStructure.archive"),
                   archivedStatus: t("admin.orgStructure.status.archived"),
                   childCountTemplate: t("admin.orgStructure.childCount", {
@@ -291,17 +282,21 @@ export default async function OrgStructureAdminPage({
                 storageKey="hulee:admin:org-structure:create-team:help"
               />
 
-              <form
+              <OrgStructureActionForm
+                actionKind="upsertTeam"
                 className="settingsForm orgStructureCreateForm"
-                action={upsertTeamAction}
+                messages={actionMessages}
+                resetOnSuccess
               >
                 <input name="section" type="hidden" value="teams" />
                 <TeamNameField t={t} />
-                <button className="primaryButton" type="submit">
+                <OrgStructureSubmitButton
+                  className="primaryButton"
+                  label={t("admin.orgStructure.create")}
+                >
                   <Plus size={18} aria-hidden="true" />
-                  {t("admin.orgStructure.create")}
-                </button>
-              </form>
+                </OrgStructureSubmitButton>
+              </OrgStructureActionForm>
             </section>
 
             <section
@@ -331,7 +326,12 @@ export default async function OrgStructureAdminPage({
                   <p className="metaText">{t("admin.orgStructure.noTeams")}</p>
                 ) : (
                   teams.map((team) => (
-                    <TeamRow key={team.id} t={t} team={team} />
+                    <TeamRow
+                      actionMessages={actionMessages}
+                      key={team.id}
+                      t={t}
+                      team={team}
+                    />
                   ))
                 )}
               </div>
@@ -365,19 +365,23 @@ export default async function OrgStructureAdminPage({
                 storageKey="hulee:admin:org-structure:create-work-queue:help"
               />
 
-              <form
+              <OrgStructureActionForm
+                actionKind="upsertWorkQueue"
                 className="settingsForm orgStructureCreateForm"
-                action={upsertWorkQueueAction}
+                messages={actionMessages}
+                resetOnSuccess
               >
                 <input name="section" type="hidden" value="work_queues" />
                 <WorkQueueNameField t={t} />
                 <WorkQueueKindField t={t} />
                 <WorkQueueOwnerField orgUnits={orgUnits} t={t} />
-                <button className="primaryButton" type="submit">
+                <OrgStructureSubmitButton
+                  className="primaryButton"
+                  label={t("admin.orgStructure.create")}
+                >
                   <Plus size={18} aria-hidden="true" />
-                  {t("admin.orgStructure.create")}
-                </button>
-              </form>
+                </OrgStructureSubmitButton>
+              </OrgStructureActionForm>
             </section>
 
             <section
@@ -410,6 +414,7 @@ export default async function OrgStructureAdminPage({
                 ) : (
                   workQueues.map((workQueue) => (
                     <WorkQueueRow
+                      actionMessages={actionMessages}
                       key={workQueue.id}
                       orgUnits={orgUnits}
                       t={t}
@@ -440,6 +445,20 @@ function orgStructureSectionHref(section: OrgStructureSectionId): string {
   const params = new URLSearchParams({ section });
 
   return `/admin/org-structure?${params.toString()}`;
+}
+
+function orgStructureActionMessages(t: Translator): OrgStructureActionMessages {
+  return {
+    email_verification_required: t("auth.emailVerification.status.required"),
+    invalid: t("admin.orgStructure.actionStatus.invalid"),
+    org_unit_archived: t("admin.orgStructure.actionStatus.orgUnitArchived"),
+    org_unit_restored: t("admin.orgStructure.actionStatus.orgUnitRestored"),
+    org_unit_saved: t("admin.orgStructure.actionStatus.orgUnitSaved"),
+    team_saved: t("admin.orgStructure.actionStatus.teamSaved"),
+    work_queue_archived: t("admin.orgStructure.actionStatus.workQueueArchived"),
+    work_queue_restored: t("admin.orgStructure.actionStatus.workQueueRestored"),
+    work_queue_saved: t("admin.orgStructure.actionStatus.workQueueSaved")
+  };
 }
 
 function createOrgStructureHelp(t: Translator): {
@@ -545,9 +564,11 @@ function createHelpContent(
 }
 
 function TeamRow({
+  actionMessages,
   t,
   team
 }: {
+  readonly actionMessages: OrgStructureActionMessages;
   readonly t: Translator;
   readonly team: TeamRecord;
 }): ReactNode {
@@ -556,27 +577,32 @@ function TeamRow({
       <span className="metricIcon">
         <UsersRound size={18} aria-hidden="true" />
       </span>
-      <form
+      <OrgStructureActionForm
+        actionKind="upsertTeam"
         className="settingsForm orgStructureInlineForm"
-        action={upsertTeamAction}
+        messages={actionMessages}
       >
         <input name="section" type="hidden" value="teams" />
         <input name="id" type="hidden" value={team.id} />
         <TeamNameField defaultValue={team.name} t={t} />
-        <button className="secondaryButton" type="submit">
+        <OrgStructureSubmitButton
+          className="secondaryButton"
+          label={t("common.save")}
+        >
           <Save size={14} aria-hidden="true" />
-          {t("common.save")}
-        </button>
-      </form>
+        </OrgStructureSubmitButton>
+      </OrgStructureActionForm>
     </article>
   );
 }
 
 function WorkQueueRow({
+  actionMessages,
   orgUnits,
   t,
   workQueue
 }: {
+  readonly actionMessages: OrgStructureActionMessages;
   readonly orgUnits: readonly OrgUnitRecord[];
   readonly t: Translator;
   readonly workQueue: WorkQueueRecord;
@@ -588,9 +614,10 @@ function WorkQueueRow({
       <span className="metricIcon">
         <ListChecks size={18} aria-hidden="true" />
       </span>
-      <form
+      <OrgStructureActionForm
+        actionKind="upsertWorkQueue"
         className="settingsForm orgStructureInlineForm"
-        action={upsertWorkQueueAction}
+        messages={actionMessages}
       >
         <input name="section" type="hidden" value="work_queues" />
         <input name="id" type="hidden" value={workQueue.id} />
@@ -601,37 +628,42 @@ function WorkQueueRow({
           orgUnits={orgUnits}
           t={t}
         />
-        <button className="secondaryButton" type="submit">
+        <OrgStructureSubmitButton
+          className="secondaryButton"
+          label={t("common.save")}
+        >
           <Save size={14} aria-hidden="true" />
-          {t("common.save")}
-        </button>
-      </form>
+        </OrgStructureSubmitButton>
+      </OrgStructureActionForm>
       <div className="rowActions">
         <span className="badge">
           {t(orgStructureStatusKey(workQueue.status))}
         </span>
-        <form className="inlineForm" action={setWorkQueueStatusAction}>
+        <OrgStructureActionForm
+          actionKind="setWorkQueueStatus"
+          className="inlineForm"
+          messages={actionMessages}
+        >
           <input name="section" type="hidden" value="work_queues" />
           <input name="id" type="hidden" value={workQueue.id} />
           <input name="status" type="hidden" value={nextStatus} />
-          <button
+          <OrgStructureSubmitButton
             className={
               workQueue.status === "active" ? "dangerButton" : "secondaryButton"
             }
-            type="submit"
+            label={t(
+              workQueue.status === "active"
+                ? "admin.orgStructure.archive"
+                : "admin.orgStructure.restore"
+            )}
           >
             {workQueue.status === "active" ? (
               <Archive size={14} aria-hidden="true" />
             ) : (
               <ArchiveRestore size={14} aria-hidden="true" />
             )}
-            {t(
-              workQueue.status === "active"
-                ? "admin.orgStructure.archive"
-                : "admin.orgStructure.restore"
-            )}
-          </button>
-        </form>
+          </OrgStructureSubmitButton>
+        </OrgStructureActionForm>
       </div>
     </article>
   );
@@ -940,27 +972,4 @@ function sortOrgUnits(orgUnits: readonly OrgUnitRecord[]): OrgUnitRecord[] {
       ? left.id.localeCompare(right.id)
       : nameComparison;
   });
-}
-
-function orgStructureActionStatusKey(status: string): I18nMessageKey {
-  switch (status) {
-    case "org_unit_saved":
-      return "admin.orgStructure.actionStatus.orgUnitSaved";
-    case "org_unit_archived":
-      return "admin.orgStructure.actionStatus.orgUnitArchived";
-    case "org_unit_restored":
-      return "admin.orgStructure.actionStatus.orgUnitRestored";
-    case "team_saved":
-      return "admin.orgStructure.actionStatus.teamSaved";
-    case "work_queue_saved":
-      return "admin.orgStructure.actionStatus.workQueueSaved";
-    case "work_queue_archived":
-      return "admin.orgStructure.actionStatus.workQueueArchived";
-    case "work_queue_restored":
-      return "admin.orgStructure.actionStatus.workQueueRestored";
-    case "email_verification_required":
-      return "auth.emailVerification.status.required";
-    default:
-      return "admin.orgStructure.actionStatus.invalid";
-  }
 }

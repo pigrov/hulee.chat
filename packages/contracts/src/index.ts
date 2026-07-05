@@ -68,6 +68,11 @@ export type PlatformEvent =
     >
   | EventEnvelope<"account.email_verified", { accountId: string }>
   | EventEnvelope<
+      "account.email_change_requested",
+      { accountId: string; email: string }
+    >
+  | EventEnvelope<"account.email_changed", { accountId: string; email: string }>
+  | EventEnvelope<
       "account.password_reset_requested",
       { accountId: string; email: string }
     >

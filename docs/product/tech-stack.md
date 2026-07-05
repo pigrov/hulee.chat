@@ -59,6 +59,15 @@ Recommended packages:
 - Use i18n keys and locale dictionaries.
 - Prefer accessible primitives for dialogs, popovers, tooltips, menus and tabs.
 - Icons should come from one icon system, for example `lucide-react`, unless a product-specific icon is needed.
+- Interactive mutations in admin and inbox surfaces should use React action
+  state (`useActionState`) with typed server action results, local pending
+  state and inline/toast feedback. Persistent query-string status values are a
+  compatibility fallback only. Redirect-after-post stays reserved for real
+  navigation flows such as login, logout, registration, invitation acceptance
+  and pages where the primary result is opening another route.
+- Action-state errors must return stable codes that map to i18n messages and
+  field-level feedback where possible. Components should not parse thrown
+  framework errors or hardcode user-facing status text.
 
 ## Native Client Standards
 
