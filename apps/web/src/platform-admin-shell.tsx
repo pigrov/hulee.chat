@@ -31,21 +31,12 @@ export type PlatformAdminSectionId =
   | "providers"
   | "channels";
 
-type PlatformNavigationGroup = {
-  readonly titleKey: I18nMessageKey;
-  readonly sections: readonly PlatformAdminSectionId[];
-};
-
-const platformNavigationGroups = [
-  {
-    titleKey: "platform.controlPlane",
-    sections: ["companies", "deployments"]
-  },
-  {
-    titleKey: "platform.dataPlane",
-    sections: ["providers", "channels"]
-  }
-] satisfies readonly PlatformNavigationGroup[];
+const platformNavigationSections = [
+  "companies",
+  "deployments",
+  "providers",
+  "channels"
+] satisfies readonly PlatformAdminSectionId[];
 
 export function PlatformAdminShell({
   access,
@@ -178,21 +169,17 @@ function PlatformNavigation({
   t: Translator;
 }): ReactNode {
   return (
-    <nav className="platformNavGroups" aria-label={t("platform.navigation")}>
-      {platformNavigationGroups.map((group) => (
-        <div className="platformNavGroup" key={group.titleKey}>
-          <p className="detailLabel">{t(group.titleKey)}</p>
-          <div className="managementList">
-            {group.sections.map((sectionId) => (
-              <PlatformNavLink
-                current={current === sectionId}
-                key={sectionId}
-                sectionId={sectionId}
-                t={t}
-              />
-            ))}
-          </div>
-        </div>
+    <nav
+      className="managementList platformNavList"
+      aria-label={t("platform.navigation")}
+    >
+      {platformNavigationSections.map((sectionId) => (
+        <PlatformNavLink
+          current={current === sectionId}
+          key={sectionId}
+          sectionId={sectionId}
+          t={t}
+        />
       ))}
     </nav>
   );

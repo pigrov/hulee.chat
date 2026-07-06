@@ -3624,33 +3624,12 @@ button.managementRow:not(.adminNavLink):not(.integrationNavLink):focus-visible {
   top: var(--hulee-space-block);
 }
 
-.platformNavGroups,
-.platformNavGroup {
+.platformNavList {
   display: grid;
   width: 100%;
   max-width: 100%;
   min-width: 0;
   gap: 8px;
-}
-
-.platformNavGroup .managementList {
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-}
-
-.platformNavGroup > .detailLabel {
-  overflow: hidden;
-  text-align: center;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  padding: 0 4px;
-  font-size: 9px;
-}
-
-.platformNavGroup + .platformNavGroup {
-  padding-top: 8px;
-  border-top: 1px solid var(--hulee-color-border);
 }
 
 .platformNavLink {
@@ -4046,21 +4025,10 @@ button.managementRow:not(.adminNavLink):not(.integrationNavLink):focus-visible {
   }
 
   .adminRailMenuList,
-  .platformNavGroups,
-  .platformNavGroup,
-  .platformNavGroup .managementList {
+  .platformNavList {
     display: flex;
     min-width: 0;
     gap: 4px;
-  }
-
-  .platformNavGroup > .detailLabel {
-    display: none;
-  }
-
-  .platformNavGroup + .platformNavGroup {
-    padding-top: 0;
-    border-top: 0;
   }
 
   .adminNavLink {
