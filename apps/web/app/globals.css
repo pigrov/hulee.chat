@@ -1122,10 +1122,41 @@ button.iconButton:disabled {
 
 .inlineNoticeForm {
   display: flex;
+  width: fit-content;
+  max-width: 100%;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 8px 12px;
   margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid
+    color-mix(
+      in srgb,
+      var(--hulee-color-brand-primary) 34%,
+      var(--hulee-color-border)
+    );
+  border-radius: var(--hulee-radius-control);
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 9%,
+    var(--hulee-color-surface-raised)
+  );
+}
+
+.inlineNoticeForm::before {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--hulee-color-brand-primary);
+  box-shadow: 0 0 0 4px
+    color-mix(in srgb, var(--hulee-color-brand-primary) 13%, transparent);
+  content: "";
+}
+
+.inlineNoticeForm .formNotice {
+  color: var(--hulee-color-text-default);
+  font-weight: 650;
 }
 
 .compactSelect {
