@@ -899,6 +899,7 @@
   "platform.egressProvider.max": "MAX",
   "platform.egressProvider.vk": "VK",
   "platform.providers": "Providers",
+  "platform.providersEmpty": "No providers are configured in this deployment.",
   "platform.egressPolicy.route": "Route",
   "platform.egressPolicy.updatedAt": "Updated",
   "platform.egressPolicy.directWarning": "Direct is not allowed for managed SaaS smoke without an explicit decision",

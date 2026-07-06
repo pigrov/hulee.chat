@@ -8,7 +8,7 @@ import {
 } from "@hulee/db";
 import { createTranslator } from "@hulee/i18n";
 import type { I18nMessageKey } from "@hulee/i18n";
-import { ImageUp, Save, Settings2 } from "lucide-react";
+import { ImageUp, Save } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
@@ -116,27 +116,18 @@ export default async function PlatformChannelsPage({
       title={t("platform.channels.navTitle")}
       titleId="platform-channels-title"
     >
-      <div className="platformChannelGrid">
+      <div className="adminIntegrationGrid">
         <aside
           className="settingsPanel integrationCatalog"
           aria-labelledby="platform-channel-list-title"
         >
           <div className="sectionHeader">
             <div>
-              <p className="eyebrow">{t("platform.channels.catalog")}</p>
               <h2 className="sectionTitle" id="platform-channel-list-title">
                 {t("platform.channels.catalogTitle")}
               </h2>
             </div>
-            <span className="badge">
-              <Settings2 size={14} aria-hidden="true" />
-              {channelCatalog.length}
-            </span>
           </div>
-
-          <p className="metaText">
-            {t("platform.channels.catalogDescription")}
-          </p>
 
           <nav
             className="integrationList"
@@ -154,7 +145,7 @@ export default async function PlatformChannelsPage({
           </nav>
         </aside>
 
-        <div className="adminStack">
+        <div className="adminStack adminSectionContent">
           {selectedChannel ? (
             <PlatformChannelSettings
               channel={selectedChannel}
@@ -202,14 +193,21 @@ function PlatformChannelListItem({
       aria-current={current ? "page" : undefined}
     >
       <span className="metricIcon">
-        <ChannelIcon channel={channel} />
+        <ChannelIcon channel={channel} size="large" />
       </span>
-      <div>
-        <h3 className="listItemTitle">{title}</h3>
-        <p className="metaText">{shortDescription}</p>
+      <div className="integrationListText">
+        <h3 className="listItemTitle" title={title}>
+          {title}
+        </h3>
+        <p className="metaText integrationListType" title={shortDescription}>
+          {shortDescription}
+        </p>
       </div>
       <span className="integrationListBadges">
-        <span className="badge">
+        <span
+          className="channelStatusBadge"
+          data-state={channelReadinessBadgeState(channel.readiness)}
+        >
           {t(channelReadinessKey(channel.readiness))}
         </span>
       </span>
@@ -516,4 +514,18 @@ function channelReadinessKey(
   readiness: InternalChannelReadiness
 ): I18nMessageKey {
   return `integrations.channel.readiness.${readiness}` as I18nMessageKey;
+}
+
+function channelReadinessBadgeState(
+  readiness: InternalChannelReadiness
+): "ok" | "disabled" | "new" {
+  if (readiness === "available") {
+    return "ok";
+  }
+
+  if (readiness === "disabled") {
+    return "disabled";
+  }
+
+  return "new";
 }

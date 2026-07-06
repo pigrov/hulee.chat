@@ -3,12 +3,10 @@ import type { createTranslator, I18nMessageKey } from "@hulee/i18n";
 import {
   Building2,
   Inbox,
-  KeyRound,
   MessageCircle,
   Network,
   Server,
-  Settings,
-  ShieldCheck
+  Settings
 } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -30,9 +28,6 @@ type Translator = ReturnType<typeof createTranslator>["t"];
 export type PlatformAdminSectionId =
   | "companies"
   | "deployments"
-  | "commercial"
-  | "support"
-  | "egress"
   | "providers"
   | "channels";
 
@@ -44,11 +39,11 @@ type PlatformNavigationGroup = {
 const platformNavigationGroups = [
   {
     titleKey: "platform.controlPlane",
-    sections: ["companies", "deployments", "commercial", "support"]
+    sections: ["companies", "deployments"]
   },
   {
     titleKey: "platform.dataPlane",
-    sections: ["egress", "providers", "channels"]
+    sections: ["providers", "channels"]
   }
 ] satisfies readonly PlatformNavigationGroup[];
 
@@ -122,7 +117,7 @@ export function PlatformAdminShell({
           <div className="adminShellMain">
             <AdminTopBar
               brand={defaultBrandProfile}
-              eyebrow={t("platform.controlPlane")}
+              eyebrow={t(platformSectionGroupTitleKey(current))}
               icon={<PlatformSectionIcon sectionId={current} />}
               menuGroups={menuGroups}
               roleLabel={t("navigation.platformAdmin")}
@@ -238,11 +233,6 @@ function PlatformSectionIcon({
       return <Building2 size={24} strokeWidth={1.2} aria-hidden="true" />;
     case "deployments":
       return <Server size={24} strokeWidth={1.2} aria-hidden="true" />;
-    case "commercial":
-      return <KeyRound size={24} strokeWidth={1.2} aria-hidden="true" />;
-    case "support":
-      return <ShieldCheck size={24} strokeWidth={1.2} aria-hidden="true" />;
-    case "egress":
     case "providers":
       return <Network size={24} strokeWidth={1.2} aria-hidden="true" />;
     case "channels":
@@ -256,12 +246,6 @@ function platformSectionHref(sectionId: PlatformAdminSectionId): string {
       return "/platform/companies";
     case "deployments":
       return "/platform/deployments";
-    case "commercial":
-      return "/platform/commercial";
-    case "support":
-      return "/platform/support";
-    case "egress":
-      return "/platform/egress";
     case "providers":
       return "/platform/providers";
     case "channels":
@@ -277,15 +261,22 @@ function platformSectionTitleKey(
       return "platform.tenants";
     case "deployments":
       return "platform.deployments";
-    case "commercial":
-      return "platform.commercial";
-    case "support":
-      return "platform.supportAccess";
-    case "egress":
-      return "platform.egress";
     case "providers":
       return "platform.providers";
     case "channels":
       return "platform.channels.navTitle";
+  }
+}
+
+function platformSectionGroupTitleKey(
+  sectionId: PlatformAdminSectionId
+): I18nMessageKey {
+  switch (sectionId) {
+    case "providers":
+    case "channels":
+      return "platform.dataPlane";
+    case "companies":
+    case "deployments":
+      return "platform.controlPlane";
   }
 }
