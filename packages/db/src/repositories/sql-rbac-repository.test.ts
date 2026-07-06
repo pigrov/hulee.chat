@@ -57,12 +57,15 @@ describe("SQL RBAC repository", () => {
     const grantQuery = renderQuery(executor.queries[3]);
 
     expect(createRoleQuery.sql).toContain("insert into tenant_roles");
+    expect(createRoleQuery.sql).toContain("cast($10 as text) is null");
     expect(createRoleQuery.params).toContain(tenantId);
     expect(bindingQuery.sql).toContain("insert into tenant_role_bindings");
+    expect(bindingQuery.sql).toContain("cast($14 as text) is null");
     expect(bindingQuery.sql).toContain("from work_queues subject_work_queue");
     expect(bindingQuery.sql).toContain("subject_work_queue.status = 'active'");
     expect(bindingQuery.params).toContain("queue-sales");
     expect(grantQuery.sql).toContain("insert into direct_permission_grants");
+    expect(grantQuery.sql).toContain("cast($14 as text) is null");
     expect(grantQuery.params).toContain("temporary coverage");
   });
 
@@ -86,6 +89,7 @@ describe("SQL RBAC repository", () => {
     expect(query.sql).toContain("insert into tenant_roles");
     expect(query.sql).toContain("insert into tenant_role_permissions");
     expect(query.sql).toContain("permission_rows(permission)");
+    expect(query.sql).toContain("cast($10 as text) is null");
     expect(query.params).toEqual(
       expect.arrayContaining([
         "role-custom-sales",

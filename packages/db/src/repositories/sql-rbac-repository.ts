@@ -391,7 +391,7 @@ export function buildCreateTenantRoleSql(input: CreateTenantRoleInput): SQL {
       ${createdByEmployeeId},
       ${input.createdAt},
       ${input.createdAt}
-    where ${createdByEmployeeId} is null
+    where cast(${createdByEmployeeId} as text) is null
        or exists (
         select 1
         from employees
@@ -435,7 +435,7 @@ export function buildCreateTenantRoleWithPermissionsSql(
         ${createdByEmployeeId},
         ${input.createdAt},
         ${input.createdAt}
-      where ${createdByEmployeeId} is null
+      where cast(${createdByEmployeeId} as text) is null
          or exists (
           select 1
           from employees
@@ -636,7 +636,7 @@ export function buildCreateTenantRoleBindingSql(
     where r.tenant_id = ${input.tenantId}
       and r.id = ${input.roleId}
       and (
-        ${createdByEmployeeId} is null
+        cast(${createdByEmployeeId} as text) is null
         or exists (
           select 1
           from employees created_by
@@ -734,7 +734,7 @@ export function buildCreateDirectPermissionGrantSql(
     where target_employee.tenant_id = ${input.tenantId}
       and target_employee.id = ${input.employeeId}
       and (
-        ${createdByEmployeeId} is null
+        cast(${createdByEmployeeId} as text) is null
         or exists (
           select 1
           from employees created_by
