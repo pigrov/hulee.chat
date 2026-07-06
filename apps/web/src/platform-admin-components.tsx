@@ -46,20 +46,39 @@ type PlatformTenantRowRecord = {
 };
 
 export async function loadPlatformTenantSnapshots(
-  database: HuleeDatabase
+  database: HuleeDatabase,
+  options?: { search?: string }
 ): Promise<PlatformTenantSnapshot[]> {
-  const result = await database.execute<PlatformTenantRowRecord>(sql`
-    select id as tenant_id,
-           slug,
-           display_name,
-           deployment_type,
-           created_at,
-           updated_at
-    from tenants
-    order by created_at desc,
-             display_name asc
-    limit 50
-  `);
+  const search = options?.search?.trim();
+  const result =
+    search && search.length > 0
+      ? await database.execute<PlatformTenantRowRecord>(sql`
+          select id as tenant_id,
+                 slug,
+                 display_name,
+                 deployment_type,
+                 created_at,
+                 updated_at
+          from tenants
+          where display_name ilike ${`%${search}%`}
+             or slug ilike ${`%${search}%`}
+             or id ilike ${`%${search}%`}
+          order by created_at desc,
+                   display_name asc
+          limit 50
+        `)
+      : await database.execute<PlatformTenantRowRecord>(sql`
+          select id as tenant_id,
+                 slug,
+                 display_name,
+                 deployment_type,
+                 created_at,
+                 updated_at
+          from tenants
+          order by created_at desc,
+                   display_name asc
+          limit 50
+        `);
 
   return result.rows.map((row) => ({
     tenantId: row.tenant_id,

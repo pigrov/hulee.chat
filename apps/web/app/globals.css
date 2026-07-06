@@ -2162,6 +2162,16 @@ a.secondaryButton {
   overflow: hidden;
 }
 
+.platformCompanyCatalog {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.platformCompanySearchForm {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
 .adminIntegrationGrid {
   display: grid;
   min-height: calc(100vh - 80px);
