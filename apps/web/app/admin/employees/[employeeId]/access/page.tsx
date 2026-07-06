@@ -1,28 +1,17 @@
-import type { EmployeeId, TenantId } from "@hulee/contracts";
+import type { EmployeeId } from "@hulee/contracts";
 import {
-  getPermissionDefinition,
   permissionCatalog,
-  resolveEffectivePermissionGrants,
   type DirectPermissionGrant,
-  type EffectivePermissionGrant,
-  type PermissionActor,
-  type PermissionDomain,
-  type PermissionGrantSource,
-  type PermissionRoleBinding,
-  type PermissionScope,
-  type PermissionScopeType
+  type PermissionRoleBinding
 } from "@hulee/core";
 import {
   createSqlEmployeeDirectoryRepository,
   createSqlOrgStructureRepository,
   createSqlTenantRbacRepository,
-  type OrgUnitRecord,
   type TenantEmployeeRecord,
-  type TenantRoleRecord,
-  type TeamRecord,
-  type WorkQueueRecord
+  type TenantRoleRecord
 } from "@hulee/db";
-import { createTranslator, type I18nMessageKey } from "@hulee/i18n";
+import { createTranslator } from "@hulee/i18n";
 import {
   ArrowLeft,
   Building2,
@@ -56,14 +45,23 @@ import {
 } from "../../../../../src/employee-membership-action-form";
 import { EmployeeEmailChangeForm } from "../../../../../src/employee-email-change-form";
 import { EmployeeProfileForm } from "../../../../../src/employee-profile-form";
+import { buildEmployeeEffectiveAccessPreview } from "../../../../../src/employee-effective-access-model";
+import { EffectiveAccessTable } from "../../../../../src/employee-effective-access-table";
 import { loadTenantAdminViewModel } from "../../../../../src/admin-view-model";
 import { EmailText, PhoneNumberText } from "../../../../../src/contact-fields";
+import { permissionDomainKey } from "../../../../../src/rbac-permission-display";
+import {
+  permissionScopeKey,
+  roleName,
+  roleNameById,
+  scopePickerMessages,
+  scopeValue
+} from "../../../../../src/rbac-role-display";
 import { allowedRoleBindingScopeTypesForPermissions } from "../../../../../src/rbac-scope";
 import { buildScopeReferenceOptions } from "../../../../../src/rbac-scope-options";
 import {
   DirectGrantFields,
-  RoleAssignmentFields,
-  type ScopePickerMessages
+  RoleAssignmentFields
 } from "../../../../../src/rbac-scope-picker";
 import {
   RoleActionForm,
@@ -85,23 +83,6 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 type Translator = ReturnType<typeof createTranslator>["t"];
-
-const domainOrder = [
-  "tenant",
-  "employees",
-  "roles",
-  "integrations",
-  "branding",
-  "inbox",
-  "messages",
-  "conversations",
-  "clients",
-  "leads",
-  "files",
-  "reports",
-  "audit",
-  "api"
-] as const satisfies readonly PermissionDomain[];
 
 export default async function EmployeeAccessAdminPage({
   params,
@@ -251,7 +232,7 @@ export default async function EmployeeAccessAdminPage({
   const expiredEmployeeDirectGrants = expiredDirectGrants
     .filter((grant) => grant.employeeId === employee.employeeId)
     .sort((left, right) => left.permission.localeCompare(right.permission));
-  const effectiveAccess = buildEffectiveAccessPreview({
+  const effectiveAccess = buildEmployeeEffectiveAccessPreview({
     at: now,
     directGrants,
     employee,
@@ -924,33 +905,16 @@ export default async function EmployeeAccessAdminPage({
                 {t("admin.employeeAccess.noEffectiveAccess")}
               </p>
             ) : (
-              <div className="effectiveAccessTableWrap">
-                <table className="effectiveAccessTable">
-                  <thead>
-                    <tr>
-                      <th scope="col">{t("admin.roles.permission")}</th>
-                      <th scope="col">{t("admin.roles.domain")}</th>
-                      <th scope="col">{t("admin.roles.scopeType")}</th>
-                      <th scope="col">{t("admin.roles.source")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {effectiveAccess.map((grant) => (
-                      <EffectiveGrantTableRow
-                        employee={employee}
-                        grant={grant}
-                        key={effectiveGrantKey(grant)}
-                        orgUnits={orgUnits}
-                        roleBindings={roleBindings}
-                        roles={roles}
-                        t={t}
-                        teams={teams}
-                        workQueues={workQueues}
-                      />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <EffectiveAccessTable
+                employee={employee}
+                grants={effectiveAccess}
+                orgUnits={orgUnits}
+                roleBindings={roleBindings}
+                roles={roles}
+                t={t}
+                teams={teams}
+                workQueues={workQueues}
+              />
             )}
           </section>
         ) : null}
@@ -1188,296 +1152,6 @@ function EmployeeDirectGrantRow({
   );
 }
 
-function EffectiveGrantTableRow({
-  employee,
-  grant,
-  orgUnits,
-  roleBindings,
-  roles,
-  t,
-  teams,
-  workQueues
-}: {
-  readonly employee: TenantEmployeeRecord;
-  readonly grant: EffectivePermissionGrant;
-  readonly orgUnits: readonly OrgUnitRecord[];
-  readonly roleBindings: readonly PermissionRoleBinding[];
-  readonly roles: readonly TenantRoleRecord[];
-  readonly t: Translator;
-  readonly teams: readonly TeamRecord[];
-  readonly workQueues: readonly WorkQueueRecord[];
-}): ReactNode {
-  const definition = getPermissionDefinition(grant.permission);
-
-  return (
-    <tr>
-      <td>
-        <code className="permissionCode">{grant.permission}</code>
-      </td>
-      <td>{t(permissionDomainKey(definition.domain))}</td>
-      <td>{scopeValue(grant.scope, t)}</td>
-      <td>
-        <div className="sourceList effectiveAccessTableSourceList">
-          {grant.sources.map((source, index) => (
-            <span
-              className="badge"
-              key={effectiveGrantSourceKey(source, index)}
-            >
-              {sourceLabel(source, {
-                employees: [employee],
-                orgUnits,
-                roleBindings,
-                roles,
-                t,
-                teams,
-                workQueues
-              })}
-            </span>
-          ))}
-        </div>
-      </td>
-    </tr>
-  );
-}
-
-function buildEffectiveAccessPreview(input: {
-  readonly at: Date;
-  readonly directGrants: readonly DirectPermissionGrant[];
-  readonly employee: TenantEmployeeRecord;
-  readonly roleBindings: readonly PermissionRoleBinding[];
-  readonly roles: readonly TenantRoleRecord[];
-  readonly tenantId: TenantId;
-}): readonly EffectivePermissionGrant[] {
-  const actor: PermissionActor = {
-    tenantId: input.tenantId,
-    employeeId: input.employee.employeeId,
-    teamIds: input.employee.teamIds,
-    orgUnitIds: input.employee.orgUnitIds,
-    queueIds: input.employee.queueIds
-  };
-
-  return [
-    ...resolveEffectivePermissionGrants({
-      actor,
-      roles: input.roles,
-      roleBindings: input.roleBindings,
-      directGrants: input.directGrants,
-      at: input.at
-    })
-  ].sort(compareEffectiveGrants);
-}
-
-function compareEffectiveGrants(
-  left: EffectivePermissionGrant,
-  right: EffectivePermissionGrant
-): number {
-  const leftDefinition = getPermissionDefinition(left.permission);
-  const rightDefinition = getPermissionDefinition(right.permission);
-  const domainComparison =
-    domainOrder.indexOf(leftDefinition.domain) -
-    domainOrder.indexOf(rightDefinition.domain);
-
-  if (domainComparison !== 0) {
-    return domainComparison;
-  }
-
-  const permissionComparison = left.permission.localeCompare(right.permission);
-
-  if (permissionComparison !== 0) {
-    return permissionComparison;
-  }
-
-  return permissionScopeKey(left.scope).localeCompare(
-    permissionScopeKey(right.scope)
-  );
-}
-
-function roleNameById(
-  roleId: string,
-  roles: readonly TenantRoleRecord[],
-  t: Translator
-): string {
-  const role = roles.find((candidate) => candidate.id === roleId);
-
-  return role === undefined ? roleId : roleName(role, t);
-}
-
-function roleName(role: TenantRoleRecord, t: Translator): string {
-  const roleLabelKey = role.isSystem ? fixedRoleLabelKey(role.id) : undefined;
-
-  return roleLabelKey ? t(roleLabelKey) : role.name;
-}
-
-function fixedRoleLabelKey(roleId: string): I18nMessageKey | undefined {
-  const segments = roleId.split(":");
-  const role = segments[segments.length - 1];
-
-  switch (role) {
-    case "tenant_admin":
-      return "admin.employees.role.tenantAdmin";
-    case "supervisor":
-      return "admin.employees.role.supervisor";
-    case "agent":
-      return "admin.employees.role.agent";
-    default:
-      return undefined;
-  }
-}
-
-function sourceLabel(
-  source: PermissionGrantSource,
-  references: {
-    readonly employees: readonly TenantEmployeeRecord[];
-    readonly orgUnits: readonly OrgUnitRecord[];
-    readonly roleBindings: readonly PermissionRoleBinding[];
-    readonly roles: readonly TenantRoleRecord[];
-    readonly t: Translator;
-    readonly teams: readonly TeamRecord[];
-    readonly workQueues: readonly WorkQueueRecord[];
-  }
-): string {
-  switch (source.type) {
-    case "role_binding": {
-      const role = references.roles.find(
-        (candidate) => candidate.id === source.roleId
-      );
-      const roleLabel =
-        role === undefined ? source.roleId : roleName(role, references.t);
-      const binding =
-        source.bindingId === undefined
-          ? undefined
-          : references.roleBindings.find(
-              (candidate) => candidate.id === source.bindingId
-            );
-
-      if (binding === undefined) {
-        return references.t("admin.roles.source.roleBinding", {
-          value: roleLabel
-        });
-      }
-
-      return references.t("admin.roles.source.roleBindingWithSubject", {
-        role: roleLabel,
-        subject: references.t(subjectTypeKey(binding.subject)),
-        value: roleBindingSubjectValue(binding.subject, references)
-      });
-    }
-    case "direct_grant":
-      return references.t("admin.roles.source.directGrant", {
-        value: source.reason
-      });
-  }
-}
-
-function roleBindingSubjectValue(
-  subject: PermissionRoleBinding["subject"],
-  references: {
-    readonly employees: readonly TenantEmployeeRecord[];
-    readonly orgUnits: readonly OrgUnitRecord[];
-    readonly teams: readonly TeamRecord[];
-    readonly workQueues: readonly WorkQueueRecord[];
-  }
-): string {
-  switch (subject.type) {
-    case "employee": {
-      const employee = references.employees.find(
-        (candidate) => candidate.employeeId === subject.id
-      );
-
-      return employee === undefined
-        ? subject.id
-        : `${employee.displayName} (${employee.email})`;
-    }
-    case "org_unit":
-      return (
-        references.orgUnits.find((orgUnit) => orgUnit.id === subject.id)
-          ?.name ?? subject.id
-      );
-    case "queue":
-      return (
-        references.workQueues.find((workQueue) => workQueue.id === subject.id)
-          ?.name ?? subject.id
-      );
-    case "team":
-      return (
-        references.teams.find((team) => team.id === subject.id)?.name ??
-        subject.id
-      );
-  }
-}
-
-function effectiveGrantKey(grant: EffectivePermissionGrant): string {
-  return [grant.permission, permissionScopeKey(grant.scope)].join(":");
-}
-
-function effectiveGrantSourceKey(
-  source: PermissionGrantSource,
-  index: number
-): string {
-  switch (source.type) {
-    case "role_binding":
-      return `${index}:role_binding:${source.bindingId ?? source.roleId}`;
-    case "direct_grant":
-      return `${index}:direct_grant:${source.grantId ?? source.reason}`;
-  }
-}
-
-function scopeValue(scope: PermissionScope, t: Translator): string {
-  if (scope.type === "tenant") {
-    return t("admin.roles.scope.tenant");
-  }
-
-  return "id" in scope
-    ? `${t(permissionScopeTypeKey(scope.type))}:${scope.id}`
-    : t(permissionScopeTypeKey(scope.type));
-}
-
-function permissionScopeKey(scope: PermissionScope): string {
-  return "id" in scope ? `${scope.type}:${scope.id}` : scope.type;
-}
-
-function scopePickerMessages(t: Translator): ScopePickerMessages {
-  return {
-    employee: t("admin.roles.employee"),
-    expiresAt: t("admin.roles.directGrantExpiresAtInput"),
-    permission: t("admin.roles.permission"),
-    reason: t("admin.roles.directGrantReasonInput"),
-    reasonPlaceholder: t("admin.roles.directGrantReason.placeholder"),
-    role: t("admin.roles.role"),
-    subjectReference: t("admin.roles.subjectReference"),
-    subjectType: t("admin.roles.subjectType"),
-    scopeType: t("admin.roles.scopeType"),
-    scopeReference: t("admin.roles.scopeReference"),
-    scopeReferenceDescription: t("admin.roles.scopeReference.description"),
-    scopeReferenceManualDescription: t(
-      "admin.roles.scopeReference.manualDescription"
-    ),
-    scopeReferenceNotRequired: t("admin.roles.scopeReference.notRequired"),
-    scopeReferencePlaceholder: t("admin.roles.scopeReference.placeholder"),
-    scopeUnavailable: t("admin.roles.scopeUnavailable"),
-    selectEmployee: t("admin.roles.selectEmployee"),
-    selectPermission: t("admin.roles.selectPermission"),
-    selectRole: t("admin.roles.selectRole"),
-    selectSubject: t("admin.roles.selectSubject"),
-    subjectLabels: {
-      employee: t("admin.roles.subject.employee"),
-      org_unit: t("admin.roles.subject.orgUnit"),
-      team: t("admin.roles.subject.team"),
-      queue: t("admin.roles.subject.queue")
-    },
-    scopeLabels: {
-      tenant: t("admin.roles.scope.tenant"),
-      org_unit: t("admin.roles.scope.orgUnit"),
-      team: t("admin.roles.scope.team"),
-      queue: t("admin.roles.scope.queue"),
-      assigned: t("admin.roles.scope.assigned"),
-      own: t("admin.roles.scope.own"),
-      client: t("admin.roles.scope.client"),
-      conversation: t("admin.roles.scope.conversation")
-    }
-  };
-}
-
 function employeeMembershipActionMessages(
   t: Translator
 ): EmployeeMembershipActionMessages {
@@ -1508,75 +1182,4 @@ function employeeAccessRoleActionMessages(t: Translator): RoleActionMessages {
     template_created: t("admin.roles.actionStatus.templateCreated"),
     updated: t("admin.roles.actionStatus.updated")
   };
-}
-
-function permissionScopeTypeKey(
-  scopeType: PermissionScopeType
-): I18nMessageKey {
-  switch (scopeType) {
-    case "tenant":
-      return "admin.roles.scope.tenant";
-    case "org_unit":
-      return "admin.roles.scope.orgUnit";
-    case "team":
-      return "admin.roles.scope.team";
-    case "queue":
-      return "admin.roles.scope.queue";
-    case "assigned":
-      return "admin.roles.scope.assigned";
-    case "own":
-      return "admin.roles.scope.own";
-    case "client":
-      return "admin.roles.scope.client";
-    case "conversation":
-      return "admin.roles.scope.conversation";
-  }
-}
-
-function subjectTypeKey(
-  subject: PermissionRoleBinding["subject"]
-): I18nMessageKey {
-  switch (subject.type) {
-    case "team":
-      return "admin.roles.subject.team";
-    case "org_unit":
-      return "admin.roles.subject.orgUnit";
-    case "queue":
-      return "admin.roles.subject.queue";
-    case "employee":
-      return "admin.roles.subject.employee";
-  }
-}
-
-function permissionDomainKey(domain: PermissionDomain): I18nMessageKey {
-  switch (domain) {
-    case "tenant":
-      return "permission.domain.tenant";
-    case "employees":
-      return "permission.domain.employees";
-    case "roles":
-      return "permission.domain.roles";
-    case "integrations":
-      return "permission.domain.integrations";
-    case "branding":
-      return "permission.domain.branding";
-    case "inbox":
-      return "permission.domain.inbox";
-    case "messages":
-      return "permission.domain.messages";
-    case "conversations":
-      return "permission.domain.conversations";
-    case "clients":
-      return "permission.domain.clients";
-    case "leads":
-      return "permission.domain.leads";
-    case "files":
-      return "permission.domain.files";
-    case "reports":
-      return "permission.domain.reports";
-    case "audit":
-      return "permission.domain.audit";
-    case "api":
-      return "permission.domain.api";
-  }
 }

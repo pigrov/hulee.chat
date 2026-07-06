@@ -2522,11 +2522,6 @@ a.secondaryButton {
   border: 0;
 }
 
-.accessPreviewForm {
-  grid-template-columns: minmax(220px, 1fr) auto;
-  align-items: end;
-}
-
 .accessAuditFilterForm {
   grid-template-columns:
     minmax(160px, 1fr) minmax(180px, 1fr) minmax(180px, 1fr)
@@ -2589,10 +2584,124 @@ a.secondaryButton {
   resize: vertical;
 }
 
-.permissionEditorGrid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--hulee-space-block);
+.permissionEditorTableWrap {
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-raised);
+}
+
+.permissionEditorTable {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.permissionEditorTable th,
+.permissionEditorTable td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--hulee-color-border);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.permissionEditorTable th {
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-surface-muted) 70%,
+    transparent
+  );
+  color: var(--hulee-color-text-muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.permissionEditorTable td {
+  color: var(--hulee-color-text-default);
+  font-size: 13px;
+}
+
+.permissionEditorTable th:nth-child(1),
+.permissionEditorTable td:nth-child(1) {
+  width: 48px;
+  text-align: center;
+}
+
+.permissionEditorTable th:nth-child(2),
+.permissionEditorTable td:nth-child(2) {
+  width: 28%;
+}
+
+.permissionEditorTable th:nth-child(3),
+.permissionEditorTable td:nth-child(3) {
+  width: 20%;
+}
+
+.permissionEditorTable th:nth-child(4),
+.permissionEditorTable td:nth-child(4) {
+  width: auto;
+}
+
+.permissionEditorTable tbody tr:hover {
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 5%,
+    transparent
+  );
+}
+
+.permissionEditorTable tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.permissionEditorCheckbox {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--hulee-color-brand-primary);
+}
+
+.permissionEditorLabel {
+  display: inline-block;
+  max-width: 100%;
+  cursor: pointer;
+}
+
+.permissionEditorTable .permissionCode {
+  display: inline-block;
+  overflow: hidden;
+  max-width: 100%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+.permissionCatalogTable th:nth-child(1),
+.permissionCatalogTable td:nth-child(1) {
+  width: 24%;
+  text-align: left;
+}
+
+.permissionCatalogTable th:nth-child(2),
+.permissionCatalogTable td:nth-child(2) {
+  width: 34%;
+}
+
+.permissionCatalogTable th:nth-child(3),
+.permissionCatalogTable td:nth-child(3) {
+  width: 16%;
+}
+
+.permissionCatalogTable th:nth-child(4),
+.permissionCatalogTable td:nth-child(4) {
+  width: 26%;
+}
+
+.permissionCatalogDescription {
+  color: var(--hulee-color-text-muted);
+  line-height: 1.45;
 }
 
 .employeeMembershipGrid {
@@ -2658,17 +2767,6 @@ a.secondaryButton {
   white-space: nowrap;
 }
 
-.permissionDomainGroup {
-  display: grid;
-  min-width: 0;
-  gap: var(--hulee-space-block);
-  margin: 0;
-  padding: var(--hulee-space-block);
-  border: 1px solid var(--hulee-color-border);
-  border-radius: var(--hulee-radius-control);
-  background: var(--hulee-color-surface-raised);
-}
-
 .permissionCheckboxList {
   display: grid;
   gap: 6px;
@@ -2690,21 +2788,10 @@ a.secondaryButton {
   accent-color: var(--hulee-color-brand-primary);
 }
 
-.roleCatalogRow {
-  align-items: flex-start;
-}
-
 .roleDefinitionMeta,
-.rolePermissionDomains,
-.permissionCodeList {
+.rolePermissionDomains {
   min-width: 0;
   justify-content: flex-end;
-}
-
-.permissionCodeList {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
 }
 
 .permissionCode {
@@ -3046,17 +3133,30 @@ a.secondaryButton {
   align-items: flex-start;
 }
 
+.roleAdminActionBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.roleAdminTabStrip {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.roleAdminTabStrip .secondaryButton {
+  min-height: 36px;
+}
+
 .managementRow.roleBindingRow,
 .managementRow.directGrantRow,
 .managementRow.roleTemplateRow {
   display: grid;
   grid-template-columns: auto minmax(220px, 1fr) auto;
-  align-items: flex-start;
-}
-
-.managementRow.effectiveAccessRow {
-  display: grid;
-  grid-template-columns: auto minmax(220px, 1fr) minmax(240px, 1fr);
   align-items: flex-start;
 }
 
@@ -4053,11 +4153,9 @@ button.managementRow:not(.adminNavLink):not(.integrationNavLink):focus-visible {
   .managementRow.roleDefinitionRow,
   .managementRow.directGrantRow,
   .managementRow.accessAuditRow,
-  .managementRow.effectiveAccessRow,
   .managementRow.roleBindingRow,
   .roleDefinitionRow,
   .roleBindingRow,
-  .accessPreviewForm,
   .accessAuditFilterForm,
   .roleAssignForm,
   .directGrantForm,
@@ -4081,7 +4179,6 @@ button.managementRow:not(.adminNavLink):not(.integrationNavLink):focus-visible {
   .roleEditorGrid,
   .roleSubjectGrid,
   .employeeMembershipGrid,
-  .permissionEditorGrid,
   .brandPresetGrid,
   .brandColorGrid,
   .brandPreviewSurface {

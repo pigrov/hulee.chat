@@ -1,17 +1,8 @@
 import {
-  getPermissionDefinition,
   permissionCatalog,
-  resolveEffectivePermissionGrants,
   type DirectPermissionGrant,
-  type EffectivePermissionGrant,
-  type Permission,
-  type PermissionDomain,
-  type PermissionGrantSource,
   type PermissionRoleBinding,
-  type PermissionRoleBindingSubject,
-  type PermissionScope,
-  type PermissionScopeType,
-  type PermissionActor
+  type PermissionRoleBindingSubject
 } from "@hulee/core";
 import {
   createSqlEmployeeDirectoryRepository,
@@ -28,12 +19,9 @@ import {
   Archive,
   ArchiveRestore,
   KeyRound,
-  ListChecks,
   Plus,
   Save,
-  Search,
   ShieldCheck,
-  UserPlus,
   XCircle
 } from "lucide-react";
 import { redirect } from "next/navigation";
@@ -54,14 +42,6 @@ import {
   getWebDatabase,
   resolveCurrentWebAccessSession
 } from "../../../src/session";
-import { allowedRoleBindingScopeTypesForPermissions } from "../../../src/rbac-scope";
-import { buildScopeReferenceOptions } from "../../../src/rbac-scope-options";
-import {
-  DirectGrantFields,
-  RoleAssignmentFields,
-  type RoleAssignmentSubjectOptions,
-  type ScopePickerMessages
-} from "../../../src/rbac-scope-picker";
 import {
   roleTemplateCatalog,
   type RoleTemplateDefinition
@@ -70,49 +50,25 @@ import {
   hasEffectivePermission,
   resolveEmployeeEffectiveAccess
 } from "../../../src/rbac-effective-access";
+import {
+  permissionDomainKey,
+  permissionScopeTypeKey,
+  summarizePermissionDomains
+} from "../../../src/rbac-permission-display";
+import {
+  PermissionCatalogTable,
+  PermissionCheckboxTable
+} from "../../../src/rbac-permission-tables";
+import { roleName, scopeValue } from "../../../src/rbac-role-display";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
 import { navigationAccessFromTenantAdminAccess } from "../../../src/tenant-admin-nav";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const domainOrder = [
-  "tenant",
-  "employees",
-  "roles",
-  "integrations",
-  "branding",
-  "inbox",
-  "messages",
-  "conversations",
-  "clients",
-  "leads",
-  "files",
-  "reports",
-  "audit",
-  "api"
-] as const satisfies readonly PermissionDomain[];
-
 type Translator = ReturnType<typeof createTranslator>["t"];
 
-type DomainSummary = {
-  domain: PermissionDomain;
-  permissions: readonly Permission[];
-};
-
-const roleAdminSectionIds = [
-  "definitions",
-  "create",
-  "templates",
-  "assign",
-  "preview",
-  "activeAssignments",
-  "expiredAssignments",
-  "directGrantCreate",
-  "activeDirectGrants",
-  "expiredDirectGrants",
-  "permissionCatalog"
-] as const;
+const roleAdminSectionIds = ["roles", "permissions"] as const;
 
 type RoleAdminSectionId = (typeof roleAdminSectionIds)[number];
 
@@ -120,7 +76,6 @@ export default async function RolesAdminPage({
   searchParams
 }: {
   searchParams?: Promise<{
-    accessPreviewEmployeeId?: string;
     section?: string;
   }>;
 }): Promise<ReactNode> {
@@ -202,131 +157,19 @@ export default async function RolesAdminPage({
   const selectedSection = resolveRoleAdminSection(
     resolvedSearchParams?.section
   );
-  const activeRoles = roles.filter((role) => role.status === "active");
-  const activeEmployees = employees.filter(
-    (employee) => employee.deactivatedAt === null
-  );
-  const roleAssignmentOptions = activeRoles.map((role) => ({
-    id: role.id,
-    label: roleName(role, t),
-    allowedScopeTypes: allowedRoleBindingScopeTypesForPermissions(
-      role.permissions
-    )
-  }));
-  const directGrantPermissionOptions = permissionCatalog.map((definition) => ({
-    id: definition.id,
-    label: `${definition.id} - ${t(permissionDomainKey(definition.domain))}`,
-    allowedScopeTypes: definition.allowedScopes
-  }));
-  const employeeOptions = activeEmployees.map((employee) => ({
-    value: employee.employeeId,
-    label: employee.displayName
-  }));
-  const roleAssignmentSubjectOptions = {
-    employee: employeeOptions,
-    org_unit: orgUnits.map((orgUnit) => ({
-      value: orgUnit.id,
-      label: orgUnit.name
-    })),
-    team: teams.map((team) => ({
-      value: team.id,
-      label: team.name
-    })),
-    queue: workQueues.map((workQueue) => ({
-      value: workQueue.id,
-      label: workQueue.name
-    }))
-  } satisfies RoleAssignmentSubjectOptions;
-  const roleAssignmentSubjectCount = Object.values(
-    roleAssignmentSubjectOptions
-  ).reduce((count, options) => count + options.length, 0);
-  const scopeReferenceOptions = buildScopeReferenceOptions({
-    orgUnits,
-    teams,
-    workQueues
-  });
   const roleBindingsByRoleId = countBindingsByRoleId(roleBindings);
-  const accessPreviewEmployee = activeEmployees.find(
-    (employee) =>
-      employee.employeeId === resolvedSearchParams?.accessPreviewEmployeeId
-  );
-  const effectiveAccessPreview =
-    accessPreviewEmployee === undefined
-      ? undefined
-      : buildEffectiveAccessPreview({
-          at: now,
-          directGrants,
-          employee: accessPreviewEmployee,
-          roleBindings,
-          roles,
-          tenantId: access.tenantId
-        });
   const roleAdminSections: readonly AdminSectionFrameItem<RoleAdminSectionId>[] =
     [
       {
-        id: "definitions",
+        id: "roles",
         title: t("admin.roles.roleDefinitions"),
-        href: roleAdminSectionHref("definitions"),
+        href: roleAdminSectionHref("roles"),
         icon: <KeyRound size={18} aria-hidden="true" />
       },
       {
-        id: "create",
-        title: t("admin.roles.createRole"),
-        href: roleAdminSectionHref("create"),
-        icon: <Plus size={18} aria-hidden="true" />
-      },
-      {
-        id: "templates",
-        title: t("admin.roles.createFromTemplate"),
-        href: roleAdminSectionHref("templates"),
-        icon: <ShieldCheck size={18} aria-hidden="true" />
-      },
-      {
-        id: "assign",
-        title: t("admin.roles.assignRole"),
-        href: roleAdminSectionHref("assign"),
-        icon: <UserPlus size={18} aria-hidden="true" />
-      },
-      {
-        id: "preview",
-        title: t("admin.roles.effectiveAccessPreview"),
-        href: roleAdminSectionHref("preview"),
-        icon: <Search size={18} aria-hidden="true" />
-      },
-      {
-        id: "activeAssignments",
-        title: t("admin.roles.activeAssignments"),
-        href: roleAdminSectionHref("activeAssignments"),
-        icon: <ListChecks size={18} aria-hidden="true" />
-      },
-      {
-        id: "expiredAssignments",
-        title: t("admin.roles.expiredAssignments"),
-        href: roleAdminSectionHref("expiredAssignments"),
-        icon: <Archive size={18} aria-hidden="true" />
-      },
-      {
-        id: "directGrantCreate",
-        title: t("admin.roles.addDirectGrant"),
-        href: roleAdminSectionHref("directGrantCreate"),
-        icon: <Plus size={18} aria-hidden="true" />
-      },
-      {
-        id: "activeDirectGrants",
-        title: t("admin.roles.activeDirectGrants"),
-        href: roleAdminSectionHref("activeDirectGrants"),
-        icon: <KeyRound size={18} aria-hidden="true" />
-      },
-      {
-        id: "expiredDirectGrants",
-        title: t("admin.roles.expiredDirectGrants"),
-        href: roleAdminSectionHref("expiredDirectGrants"),
-        icon: <ArchiveRestore size={18} aria-hidden="true" />
-      },
-      {
-        id: "permissionCatalog",
-        title: t("admin.roles.permissionCatalog"),
-        href: roleAdminSectionHref("permissionCatalog"),
+        id: "permissions",
+        title: t("admin.roles.permissions"),
+        href: roleAdminSectionHref("permissions"),
         icon: <ShieldCheck size={18} aria-hidden="true" />
       }
     ];
@@ -350,8 +193,56 @@ export default async function RolesAdminPage({
       >
         <section
           className="settingsPanel"
+          aria-labelledby="roles-list-title"
+          hidden={selectedSection !== "roles"}
+        >
+          <div className="sectionHeader">
+            <div>
+              <p className="eyebrow">{t("admin.roles")}</p>
+              <h2 className="sectionTitle" id="roles-list-title">
+                {t("admin.roles.roleDefinitions")}
+              </h2>
+              <p className="metaText">
+                {t("admin.roles.roleDefinitions.description")}
+              </p>
+            </div>
+            <span className="badge">{roles.length}</span>
+          </div>
+
+          <div className="roleAdminActionBar">
+            <a className="secondaryButton" href="#role-create-title">
+              <Plus size={16} aria-hidden="true" />
+              {t("admin.roles.createRole")}
+            </a>
+            <a className="secondaryButton" href="#role-templates-title">
+              <ShieldCheck size={16} aria-hidden="true" />
+              {t("admin.roles.createFromTemplate")}
+            </a>
+          </div>
+
+          <div className="managementList">
+            {roles.length === 0 ? (
+              <p className="metaText">{t("admin.roles.empty")}</p>
+            ) : (
+              roles.map((role) => (
+                <RoleDefinitionRow
+                  actionMessages={actionMessages}
+                  bindingCount={roleBindingsByRoleId.get(role.id) ?? 0}
+                  key={role.id}
+                  roleAdminSection="roles"
+                  role={role}
+                  t={t}
+                />
+              ))
+            )}
+          </div>
+        </section>
+
+        <section
+          className="settingsPanel"
           aria-labelledby="role-create-title"
-          hidden={selectedSection !== "create"}
+          hidden={selectedSection !== "roles"}
+          id="role-create-panel"
         >
           <div className="sectionHeader">
             <div>
@@ -373,7 +264,7 @@ export default async function RolesAdminPage({
             reauthLabel={t("auth.login.link")}
             resetOnSuccess
           >
-            <input name="roleAdminSection" type="hidden" value="create" />
+            <input name="roleAdminSection" type="hidden" value="roles" />
             <div className="roleEditorGrid">
               <label className="fieldStack">
                 <span className="detailLabel">{t("admin.roles.roleName")}</span>
@@ -397,7 +288,11 @@ export default async function RolesAdminPage({
               </label>
             </div>
 
-            <PermissionCheckboxGroups selectedPermissions={[]} t={t} />
+            <PermissionCheckboxTable
+              idPrefix="role-create-permission"
+              selectedPermissions={[]}
+              t={t}
+            />
 
             <RoleActionSubmitButton
               className="primaryButton"
@@ -411,7 +306,8 @@ export default async function RolesAdminPage({
         <section
           className="settingsPanel"
           aria-labelledby="role-templates-title"
-          hidden={selectedSection !== "templates"}
+          hidden={selectedSection !== "roles"}
+          id="role-templates-panel"
         >
           <div className="sectionHeader">
             <div>
@@ -432,7 +328,7 @@ export default async function RolesAdminPage({
                 actionMessages={actionMessages}
                 key={template.id}
                 locale={locale}
-                roleAdminSection="templates"
+                roleAdminSection="roles"
                 t={t}
                 template={template}
               />
@@ -442,127 +338,8 @@ export default async function RolesAdminPage({
 
         <section
           className="settingsPanel"
-          aria-labelledby="role-assign-title"
-          hidden={selectedSection !== "assign"}
-        >
-          <div className="sectionHeader">
-            <div>
-              <p className="eyebrow">{t("admin.roles.assignments")}</p>
-              <h2 className="sectionTitle" id="role-assign-title">
-                {t("admin.roles.assignRole")}
-              </h2>
-              <p className="metaText">
-                {t("admin.roles.assignRole.description")}
-              </p>
-            </div>
-            <span className="badge">{roleAssignmentSubjectCount}</span>
-          </div>
-
-          <RoleActionForm
-            actionKind="assignRole"
-            className="settingsForm roleAssignForm"
-            messages={actionMessages}
-            reauthLabel={t("auth.login.link")}
-            resetOnSuccess
-          >
-            <input name="roleAdminSection" type="hidden" value="assign" />
-            <RoleAssignmentFields
-              employees={employeeOptions}
-              messages={scopePickerMessages(t)}
-              roles={roleAssignmentOptions}
-              scopeReferenceOptions={scopeReferenceOptions}
-              subjectOptions={roleAssignmentSubjectOptions}
-            />
-            <RoleActionSubmitButton
-              className="primaryButton"
-              disabled={
-                roleAssignmentSubjectCount === 0 ||
-                roleAssignmentOptions.length === 0
-              }
-              label={t("admin.roles.assign")}
-            >
-              <Plus size={18} aria-hidden="true" />
-            </RoleActionSubmitButton>
-          </RoleActionForm>
-        </section>
-
-        <section
-          className="settingsPanel"
-          aria-labelledby="access-preview-title"
-          hidden={selectedSection !== "preview"}
-        >
-          <div className="sectionHeader">
-            <div>
-              <p className="eyebrow">{t("admin.roles.accessPreview")}</p>
-              <h2 className="sectionTitle" id="access-preview-title">
-                {t("admin.roles.effectiveAccessPreview")}
-              </h2>
-              <p className="metaText">
-                {t("admin.roles.effectiveAccessPreview.description")}
-              </p>
-            </div>
-            <span className="badge">
-              {effectiveAccessPreview?.length ?? activeEmployees.length}
-            </span>
-          </div>
-
-          <form className="settingsForm accessPreviewForm" method="get">
-            <input name="section" type="hidden" value="preview" />
-            <label className="fieldStack">
-              <span className="detailLabel">
-                {t("admin.roles.previewEmployee")}
-              </span>
-              <select
-                className="selectInput"
-                defaultValue={accessPreviewEmployee?.employeeId ?? ""}
-                name="accessPreviewEmployeeId"
-                required
-              >
-                <option value="">{t("admin.roles.selectEmployee")}</option>
-                {employeeOptions.map((employee) => (
-                  <option key={employee.value} value={employee.value}>
-                    {employee.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              className="primaryButton"
-              disabled={employeeOptions.length === 0}
-              type="submit"
-            >
-              <Search size={18} aria-hidden="true" />
-              {t("admin.roles.previewAccess")}
-            </button>
-          </form>
-
-          {effectiveAccessPreview === undefined ? (
-            <p className="metaText">{t("admin.roles.noAccessPreview")}</p>
-          ) : effectiveAccessPreview.length === 0 ? (
-            <p className="metaText">{t("admin.roles.noEffectiveAccess")}</p>
-          ) : (
-            <div className="managementList">
-              {effectiveAccessPreview.map((grant) => (
-                <EffectiveGrantRow
-                  employees={employees}
-                  grant={grant}
-                  key={effectiveGrantKey(grant)}
-                  orgUnits={orgUnits}
-                  roleBindings={roleBindings}
-                  roles={roles}
-                  t={t}
-                  teams={teams}
-                  workQueues={workQueues}
-                />
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section
-          className="settingsPanel"
           aria-labelledby="role-bindings-title"
-          hidden={selectedSection !== "activeAssignments"}
+          hidden={selectedSection !== "roles"}
         >
           <div className="sectionHeader">
             <div>
@@ -577,6 +354,20 @@ export default async function RolesAdminPage({
             <span className="badge">{roleBindings.length}</span>
           </div>
 
+          <nav
+            className="roleAdminTabStrip"
+            aria-label={t("admin.roles.assignments")}
+          >
+            <a className="secondaryButton" href="#role-bindings-title">
+              {t("admin.roles.activeAssignments")}
+              <span className="badge">{roleBindings.length}</span>
+            </a>
+            <a className="secondaryButton" href="#expired-role-bindings-title">
+              {t("admin.roles.expiredAssignments")}
+              <span className="badge">{expiredRoleBindings.length}</span>
+            </a>
+          </nav>
+
           <div className="managementList">
             {roleBindings.length === 0 ? (
               <p className="metaText">{t("admin.roles.noAssignments")}</p>
@@ -589,7 +380,7 @@ export default async function RolesAdminPage({
                   employees={employees}
                   key={binding.id}
                   orgUnits={orgUnits}
-                  roleAdminSection="activeAssignments"
+                  roleAdminSection="roles"
                   roles={roles}
                   t={t}
                   teams={teams}
@@ -603,7 +394,7 @@ export default async function RolesAdminPage({
         <section
           className="settingsPanel"
           aria-labelledby="expired-role-bindings-title"
-          hidden={selectedSection !== "expiredAssignments"}
+          hidden={selectedSection !== "roles"}
         >
           <div className="sectionHeader">
             <div>
@@ -633,7 +424,7 @@ export default async function RolesAdminPage({
                   expired
                   key={binding.id}
                   orgUnits={orgUnits}
-                  roleAdminSection="expiredAssignments"
+                  roleAdminSection="roles"
                   roles={roles}
                   t={t}
                   teams={teams}
@@ -646,57 +437,43 @@ export default async function RolesAdminPage({
 
         <section
           className="settingsPanel"
-          aria-labelledby="direct-grant-create-title"
-          hidden={selectedSection !== "directGrantCreate"}
+          aria-labelledby="permission-catalog-title"
+          hidden={selectedSection !== "permissions"}
         >
           <div className="sectionHeader">
             <div>
-              <p className="eyebrow">{t("admin.roles.directGrants")}</p>
-              <h2 className="sectionTitle" id="direct-grant-create-title">
-                {t("admin.roles.addDirectGrant")}
+              <p className="eyebrow">{t("admin.roles.permissions")}</p>
+              <h2 className="sectionTitle" id="permission-catalog-title">
+                {t("admin.roles.permissionCatalog")}
               </h2>
               <p className="metaText">
-                {t("admin.roles.addDirectGrant.description")}
+                {t("admin.roles.permissionCatalog.description")}
               </p>
             </div>
             <span className="badge">{permissionCatalog.length}</span>
           </div>
 
-          <RoleActionForm
-            actionKind="createDirectGrant"
-            className="settingsForm directGrantForm"
-            messages={actionMessages}
-            reauthLabel={t("auth.login.link")}
-            resetOnSuccess
+          <PermissionCatalogTable t={t} />
+
+          <nav
+            className="roleAdminTabStrip"
+            aria-label={t("admin.roles.directGrants")}
           >
-            <input
-              name="roleAdminSection"
-              type="hidden"
-              value="directGrantCreate"
-            />
-            <DirectGrantFields
-              employees={employeeOptions}
-              messages={scopePickerMessages(t)}
-              permissions={directGrantPermissionOptions}
-              scopeReferenceOptions={scopeReferenceOptions}
-            />
-            <RoleActionSubmitButton
-              className="primaryButton"
-              disabled={
-                employeeOptions.length === 0 ||
-                directGrantPermissionOptions.length === 0
-              }
-              label={t("admin.roles.grantDirectPermission")}
-            >
-              <Plus size={18} aria-hidden="true" />
-            </RoleActionSubmitButton>
-          </RoleActionForm>
+            <a className="secondaryButton" href="#direct-grants-title">
+              {t("admin.roles.activeDirectGrants")}
+              <span className="badge">{directGrants.length}</span>
+            </a>
+            <a className="secondaryButton" href="#expired-direct-grants-title">
+              {t("admin.roles.expiredDirectGrants")}
+              <span className="badge">{expiredDirectGrants.length}</span>
+            </a>
+          </nav>
         </section>
 
         <section
           className="settingsPanel"
           aria-labelledby="direct-grants-title"
-          hidden={selectedSection !== "activeDirectGrants"}
+          hidden={selectedSection !== "permissions"}
         >
           <div className="sectionHeader">
             <div>
@@ -722,7 +499,7 @@ export default async function RolesAdminPage({
                   employees={employees}
                   grant={grant}
                   key={grant.id}
-                  roleAdminSection="activeDirectGrants"
+                  roleAdminSection="permissions"
                   t={t}
                 />
               ))
@@ -733,7 +510,7 @@ export default async function RolesAdminPage({
         <section
           className="settingsPanel"
           aria-labelledby="expired-direct-grants-title"
-          hidden={selectedSection !== "expiredDirectGrants"}
+          hidden={selectedSection !== "permissions"}
         >
           <div className="sectionHeader">
             <div>
@@ -762,93 +539,11 @@ export default async function RolesAdminPage({
                   expired
                   grant={grant}
                   key={grant.id}
-                  roleAdminSection="expiredDirectGrants"
+                  roleAdminSection="permissions"
                   t={t}
                 />
               ))
             )}
-          </div>
-        </section>
-
-        <section
-          className="settingsPanel"
-          aria-labelledby="roles-list-title"
-          hidden={selectedSection !== "definitions"}
-        >
-          <div className="sectionHeader">
-            <div>
-              <p className="eyebrow">{t("admin.roles")}</p>
-              <h2 className="sectionTitle" id="roles-list-title">
-                {t("admin.roles.roleDefinitions")}
-              </h2>
-              <p className="metaText">
-                {t("admin.roles.roleDefinitions.description")}
-              </p>
-            </div>
-            <span className="badge">{roles.length}</span>
-          </div>
-
-          <div className="managementList">
-            {roles.length === 0 ? (
-              <p className="metaText">{t("admin.roles.empty")}</p>
-            ) : (
-              roles.map((role) => (
-                <RoleDefinitionRow
-                  actionMessages={actionMessages}
-                  bindingCount={roleBindingsByRoleId.get(role.id) ?? 0}
-                  key={role.id}
-                  roleAdminSection="definitions"
-                  role={role}
-                  t={t}
-                />
-              ))
-            )}
-          </div>
-        </section>
-
-        <section
-          className="settingsPanel"
-          aria-labelledby="permission-catalog-title"
-          hidden={selectedSection !== "permissionCatalog"}
-        >
-          <div className="sectionHeader">
-            <div>
-              <p className="eyebrow">{t("admin.roles.permissions")}</p>
-              <h2 className="sectionTitle" id="permission-catalog-title">
-                {t("admin.roles.permissionCatalog")}
-              </h2>
-              <p className="metaText">
-                {t("admin.roles.permissionCatalog.description")}
-              </p>
-            </div>
-            <span className="badge">{permissionCatalog.length}</span>
-          </div>
-
-          <div className="managementList">
-            {summarizeCatalogDomains().map((summary) => (
-              <article
-                className="managementRow roleCatalogRow"
-                key={summary.domain}
-              >
-                <div>
-                  <h3 className="listItemTitle">
-                    {t(permissionDomainKey(summary.domain))}
-                  </h3>
-                  <p className="metaText">
-                    {t("admin.roles.permissionCount", {
-                      count: summary.permissions.length
-                    })}
-                  </p>
-                </div>
-                <div className="permissionCodeList">
-                  {summary.permissions.map((permission) => (
-                    <code className="permissionCode" key={permission}>
-                      {permission}
-                    </code>
-                  ))}
-                </div>
-              </article>
-            ))}
           </div>
         </section>
       </AdminSectionFrame>
@@ -863,7 +558,20 @@ function roleAdminSectionHref(section: RoleAdminSectionId): string {
 function resolveRoleAdminSection(
   value: string | undefined
 ): RoleAdminSectionId {
-  return isRoleAdminSectionId(value) ? value : "definitions";
+  if (isRoleAdminSectionId(value)) {
+    return value;
+  }
+
+  switch (value) {
+    case "permissionCatalog":
+    case "directGrantCreate":
+    case "activeDirectGrants":
+    case "expiredDirectGrants":
+    case "preview":
+      return "permissions";
+    default:
+      return "roles";
+  }
 }
 
 function isRoleAdminSectionId(
@@ -885,7 +593,7 @@ function RoleDefinitionRow({
   role: TenantRoleRecord;
   t: Translator;
 }): ReactNode {
-  const summaries = summarizeRoleDomains(role.permissions);
+  const summaries = summarizePermissionDomains(role.permissions);
   const statusActionIcon =
     role.status === "archived" ? (
       <ArchiveRestore size={14} aria-hidden="true" />
@@ -1011,7 +719,8 @@ function RoleDefinitionRow({
             </label>
           </div>
 
-          <PermissionCheckboxGroups
+          <PermissionCheckboxTable
+            idPrefix={`role-edit-${role.id}`}
             selectedPermissions={role.permissions}
             t={t}
           />
@@ -1077,53 +786,6 @@ function RoleTemplateRow({
         </RoleActionSubmitButton>
       </RoleActionForm>
     </article>
-  );
-}
-
-function PermissionCheckboxGroups({
-  selectedPermissions,
-  t
-}: {
-  selectedPermissions: readonly Permission[];
-  t: Translator;
-}): ReactNode {
-  const selected = new Set(selectedPermissions);
-
-  return (
-    <div className="permissionEditorGrid">
-      {summarizeCatalogDomains().map((summary) => (
-        <fieldset className="permissionDomainGroup" key={summary.domain}>
-          <legend className="listItemTitle">
-            {t(permissionDomainKey(summary.domain))}
-          </legend>
-          <p className="metaText">
-            {t("admin.roles.permissionCount", {
-              count: summary.permissions.length
-            })}
-          </p>
-          <div className="permissionCheckboxList">
-            {summary.permissions.map((permission) => (
-              <label className="permissionCheckboxRow" key={permission}>
-                <input
-                  defaultChecked={selected.has(permission)}
-                  name="permissions"
-                  type="checkbox"
-                  value={permission}
-                />
-                <span>
-                  <code className="permissionCode">{permission}</code>
-                  <span className="metaText">
-                    {t("admin.roles.allowedScopes", {
-                      value: allowedScopesText(permission, t)
-                    })}
-                  </span>
-                </span>
-              </label>
-            ))}
-          </div>
-        </fieldset>
-      ))}
-    </div>
   );
 }
 
@@ -1303,196 +965,6 @@ function DirectGrantRow({
   );
 }
 
-function EffectiveGrantRow({
-  employees,
-  grant,
-  orgUnits,
-  roleBindings,
-  roles,
-  t,
-  teams,
-  workQueues
-}: {
-  employees: readonly TenantEmployeeRecord[];
-  grant: EffectivePermissionGrant;
-  orgUnits: readonly OrgUnitRecord[];
-  roleBindings: readonly PermissionRoleBinding[];
-  roles: readonly TenantRoleRecord[];
-  t: Translator;
-  teams: readonly TeamRecord[];
-  workQueues: readonly WorkQueueRecord[];
-}): ReactNode {
-  const definition = getPermissionDefinition(grant.permission);
-
-  return (
-    <article className="managementRow effectiveAccessRow">
-      <span className="metricIcon">
-        <ListChecks size={18} aria-hidden="true" />
-      </span>
-      <div>
-        <h3 className="listItemTitle">
-          <code className="permissionCode">{grant.permission}</code>
-        </h3>
-        <p className="metaText">
-          {t("admin.roles.effectiveGrantDomain", {
-            value: t(permissionDomainKey(definition.domain))
-          })}
-        </p>
-        <p className="metaText">
-          {t("admin.roles.assignmentScope", {
-            value: scopeValue(grant.scope, t)
-          })}
-        </p>
-      </div>
-      <div className="sourceList">
-        {grant.sources.map((source, index) => (
-          <span className="badge" key={effectiveGrantSourceKey(source, index)}>
-            {sourceLabel(source, {
-              employees,
-              orgUnits,
-              roleBindings,
-              roles,
-              t,
-              teams,
-              workQueues
-            })}
-          </span>
-        ))}
-      </div>
-    </article>
-  );
-}
-
-function buildEffectiveAccessPreview(input: {
-  readonly at: Date;
-  readonly directGrants: readonly DirectPermissionGrant[];
-  readonly employee: TenantEmployeeRecord;
-  readonly roleBindings: readonly PermissionRoleBinding[];
-  readonly roles: readonly TenantRoleRecord[];
-  readonly tenantId: PermissionActor["tenantId"];
-}): readonly EffectivePermissionGrant[] {
-  const actor: PermissionActor = {
-    tenantId: input.tenantId,
-    employeeId: input.employee.employeeId,
-    teamIds: input.employee.teamIds,
-    orgUnitIds: input.employee.orgUnitIds,
-    queueIds: input.employee.queueIds
-  };
-
-  return [
-    ...resolveEffectivePermissionGrants({
-      actor,
-      roles: input.roles,
-      roleBindings: input.roleBindings,
-      directGrants: input.directGrants,
-      at: input.at
-    })
-  ].sort(compareEffectiveGrants);
-}
-
-function compareEffectiveGrants(
-  left: EffectivePermissionGrant,
-  right: EffectivePermissionGrant
-): number {
-  const leftDefinition = getPermissionDefinition(left.permission);
-  const rightDefinition = getPermissionDefinition(right.permission);
-  const domainComparison =
-    domainOrder.indexOf(leftDefinition.domain) -
-    domainOrder.indexOf(rightDefinition.domain);
-
-  if (domainComparison !== 0) {
-    return domainComparison;
-  }
-
-  const permissionComparison = left.permission.localeCompare(right.permission);
-
-  if (permissionComparison !== 0) {
-    return permissionComparison;
-  }
-
-  return permissionScopeKey(left.scope).localeCompare(
-    permissionScopeKey(right.scope)
-  );
-}
-
-function effectiveGrantKey(grant: EffectivePermissionGrant): string {
-  return [grant.permission, permissionScopeKey(grant.scope)].join(":");
-}
-
-function effectiveGrantSourceKey(
-  source: PermissionGrantSource,
-  index: number
-): string {
-  switch (source.type) {
-    case "role_binding":
-      return `${index}:role_binding:${source.bindingId ?? source.roleId}`;
-    case "direct_grant":
-      return `${index}:direct_grant:${source.grantId ?? source.reason}`;
-  }
-}
-
-function sourceLabel(
-  source: PermissionGrantSource,
-  references: {
-    readonly employees: readonly TenantEmployeeRecord[];
-    readonly orgUnits: readonly OrgUnitRecord[];
-    readonly roleBindings: readonly PermissionRoleBinding[];
-    readonly roles: readonly TenantRoleRecord[];
-    readonly t: Translator;
-    readonly teams: readonly TeamRecord[];
-    readonly workQueues: readonly WorkQueueRecord[];
-  }
-): string {
-  switch (source.type) {
-    case "role_binding": {
-      const role = references.roles.find(
-        (candidate) => candidate.id === source.roleId
-      );
-      const roleLabel =
-        role === undefined ? source.roleId : roleName(role, references.t);
-      const binding =
-        source.bindingId === undefined
-          ? undefined
-          : references.roleBindings.find(
-              (candidate) => candidate.id === source.bindingId
-            );
-
-      if (binding === undefined) {
-        return references.t("admin.roles.source.roleBinding", {
-          value: roleLabel
-        });
-      }
-      const employee =
-        binding.subject.type === "employee"
-          ? references.employees.find(
-              (candidate) => candidate.employeeId === binding.subject.id
-            )
-          : undefined;
-
-      return references.t("admin.roles.source.roleBindingWithSubject", {
-        role: roleLabel,
-        subject: references.t(subjectTypeKey(binding.subject)),
-        value: subjectValue(binding.subject, {
-          employee,
-          orgUnits: references.orgUnits,
-          teams: references.teams,
-          workQueues: references.workQueues
-        })
-      });
-    }
-    case "direct_grant":
-      return references.t("admin.roles.source.directGrant", {
-        value: source.reason
-      });
-  }
-}
-
-function roleName(role: TenantRoleRecord, t: Translator): string {
-  const roleLabelKey = role.isSystem ? fixedRoleLabelKey(role.id) : undefined;
-
-  return roleLabelKey ? t(roleLabelKey) : role.name;
-}
-
 function countBindingsByRoleId(
   bindings: readonly PermissionRoleBinding[]
 ): Map<string, number> {
@@ -1544,117 +1016,6 @@ function employeeValue(
   return employee ? `${employee.displayName} (${employee.email})` : employeeId;
 }
 
-function scopeValue(scope: PermissionScope, t: Translator): string {
-  if (scope.type === "tenant") {
-    return t("admin.roles.scope.tenant");
-  }
-
-  return "id" in scope
-    ? `${t(permissionScopeTypeKey(scope.type))}:${scope.id}`
-    : t(permissionScopeTypeKey(scope.type));
-}
-
-function permissionScopeKey(scope: PermissionScope): string {
-  return "id" in scope ? `${scope.type}:${scope.id}` : scope.type;
-}
-
-function allowedScopesText(permission: Permission, t: Translator): string {
-  return getPermissionDefinition(permission)
-    .allowedScopes.map((scopeType) => t(permissionScopeTypeKey(scopeType)))
-    .join(", ");
-}
-
-function scopePickerMessages(t: Translator): ScopePickerMessages {
-  return {
-    employee: t("admin.roles.employee"),
-    expiresAt: t("admin.roles.directGrantExpiresAtInput"),
-    permission: t("admin.roles.permission"),
-    reason: t("admin.roles.directGrantReasonInput"),
-    reasonPlaceholder: t("admin.roles.directGrantReason.placeholder"),
-    role: t("admin.roles.role"),
-    subjectReference: t("admin.roles.subjectReference"),
-    subjectType: t("admin.roles.subjectType"),
-    scopeType: t("admin.roles.scopeType"),
-    scopeReference: t("admin.roles.scopeReference"),
-    scopeReferenceDescription: t("admin.roles.scopeReference.description"),
-    scopeReferenceManualDescription: t(
-      "admin.roles.scopeReference.manualDescription"
-    ),
-    scopeReferenceNotRequired: t("admin.roles.scopeReference.notRequired"),
-    scopeReferencePlaceholder: t("admin.roles.scopeReference.placeholder"),
-    scopeUnavailable: t("admin.roles.scopeUnavailable"),
-    selectEmployee: t("admin.roles.selectEmployee"),
-    selectPermission: t("admin.roles.selectPermission"),
-    selectRole: t("admin.roles.selectRole"),
-    selectSubject: t("admin.roles.selectSubject"),
-    subjectLabels: {
-      employee: t("admin.roles.subject.employee"),
-      org_unit: t("admin.roles.subject.orgUnit"),
-      team: t("admin.roles.subject.team"),
-      queue: t("admin.roles.subject.queue")
-    },
-    scopeLabels: {
-      tenant: t("admin.roles.scope.tenant"),
-      org_unit: t("admin.roles.scope.orgUnit"),
-      team: t("admin.roles.scope.team"),
-      queue: t("admin.roles.scope.queue"),
-      assigned: t("admin.roles.scope.assigned"),
-      own: t("admin.roles.scope.own"),
-      client: t("admin.roles.scope.client"),
-      conversation: t("admin.roles.scope.conversation")
-    }
-  };
-}
-
-function summarizeRoleDomains(
-  permissions: readonly Permission[]
-): readonly DomainSummary[] {
-  const permissionsByDomain = new Map<PermissionDomain, Permission[]>();
-
-  for (const permission of permissions) {
-    const definition = getPermissionDefinition(permission);
-    const domainPermissions = permissionsByDomain.get(definition.domain) ?? [];
-
-    permissionsByDomain.set(definition.domain, [
-      ...domainPermissions,
-      permission
-    ]);
-  }
-
-  return domainOrder.flatMap((domain) => {
-    const domainPermissions = permissionsByDomain.get(domain);
-
-    return domainPermissions
-      ? [
-          {
-            domain,
-            permissions: domainPermissions
-          }
-        ]
-      : [];
-  });
-}
-
-function summarizeCatalogDomains(): readonly DomainSummary[] {
-  return summarizeRoleDomains(permissionCatalog.map(({ id }) => id));
-}
-
-function fixedRoleLabelKey(roleId: string): I18nMessageKey | undefined {
-  const segments = roleId.split(":");
-  const role = segments[segments.length - 1];
-
-  switch (role) {
-    case "tenant_admin":
-      return "admin.employees.role.tenantAdmin";
-    case "supervisor":
-      return "admin.employees.role.supervisor";
-    case "agent":
-      return "admin.employees.role.agent";
-    default:
-      return undefined;
-  }
-}
-
 function roleStatusKey(status: TenantRoleRecord["status"]): I18nMessageKey {
   switch (status) {
     case "archived":
@@ -1682,29 +1043,6 @@ function roleActionMessages(t: Translator): RoleActionMessages {
   };
 }
 
-function permissionScopeTypeKey(
-  scopeType: PermissionScopeType
-): I18nMessageKey {
-  switch (scopeType) {
-    case "tenant":
-      return "admin.roles.scope.tenant";
-    case "org_unit":
-      return "admin.roles.scope.orgUnit";
-    case "team":
-      return "admin.roles.scope.team";
-    case "queue":
-      return "admin.roles.scope.queue";
-    case "assigned":
-      return "admin.roles.scope.assigned";
-    case "own":
-      return "admin.roles.scope.own";
-    case "client":
-      return "admin.roles.scope.client";
-    case "conversation":
-      return "admin.roles.scope.conversation";
-  }
-}
-
 function subjectTypeKey(subject: PermissionRoleBindingSubject): I18nMessageKey {
   switch (subject.type) {
     case "team":
@@ -1715,38 +1053,5 @@ function subjectTypeKey(subject: PermissionRoleBindingSubject): I18nMessageKey {
       return "admin.roles.subject.queue";
     default:
       return "admin.roles.subject.employee";
-  }
-}
-
-function permissionDomainKey(domain: PermissionDomain): I18nMessageKey {
-  switch (domain) {
-    case "tenant":
-      return "permission.domain.tenant";
-    case "employees":
-      return "permission.domain.employees";
-    case "roles":
-      return "permission.domain.roles";
-    case "integrations":
-      return "permission.domain.integrations";
-    case "branding":
-      return "permission.domain.branding";
-    case "inbox":
-      return "permission.domain.inbox";
-    case "messages":
-      return "permission.domain.messages";
-    case "conversations":
-      return "permission.domain.conversations";
-    case "clients":
-      return "permission.domain.clients";
-    case "leads":
-      return "permission.domain.leads";
-    case "files":
-      return "permission.domain.files";
-    case "reports":
-      return "permission.domain.reports";
-    case "audit":
-      return "permission.domain.audit";
-    case "api":
-      return "permission.domain.api";
   }
 }

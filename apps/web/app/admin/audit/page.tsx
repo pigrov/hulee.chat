@@ -2,8 +2,7 @@ import {
   isPermission,
   isPermissionScopeType,
   permissionCatalog,
-  type Permission,
-  type PermissionScopeType
+  type Permission
 } from "@hulee/core";
 import {
   accessAuditActions,
@@ -27,6 +26,8 @@ import type { ReactNode } from "react";
 import { AccessDeniedPage } from "../../../src/access-denied";
 import { formatDateTime } from "../../../src/formatting";
 import { loadTenantAdminViewModel } from "../../../src/admin-view-model";
+import { permissionScopeTypeKey } from "../../../src/rbac-permission-display";
+import { roleName } from "../../../src/rbac-role-display";
 import {
   getWebDatabase,
   resolveCurrentWebAccessSession
@@ -747,12 +748,6 @@ function employeeValue(
     : `${employee.displayName} (${employee.email})`;
 }
 
-function roleName(role: TenantRoleRecord, t: Translator): string {
-  const roleLabelKey = role.isSystem ? fixedRoleLabelKey(role.id) : undefined;
-
-  return roleLabelKey ? t(roleLabelKey) : role.name;
-}
-
 function queueLabel(
   queueId: string,
   workQueues: readonly WorkQueueRecord[]
@@ -764,45 +759,6 @@ function queueLabel(
 
 function teamLabel(teamId: string, teams: readonly TeamRecord[]): string {
   return teams.find((team) => team.id === teamId)?.name ?? teamId;
-}
-
-function fixedRoleLabelKey(roleId: string): I18nMessageKey | undefined {
-  if (roleId.endsWith(":tenant_admin")) {
-    return "admin.employees.role.tenantAdmin";
-  }
-
-  if (roleId.endsWith(":supervisor")) {
-    return "admin.employees.role.supervisor";
-  }
-
-  if (roleId.endsWith(":agent")) {
-    return "admin.employees.role.agent";
-  }
-
-  return undefined;
-}
-
-function permissionScopeTypeKey(
-  scopeType: PermissionScopeType
-): I18nMessageKey {
-  switch (scopeType) {
-    case "tenant":
-      return "admin.roles.scope.tenant";
-    case "org_unit":
-      return "admin.roles.scope.orgUnit";
-    case "team":
-      return "admin.roles.scope.team";
-    case "queue":
-      return "admin.roles.scope.queue";
-    case "assigned":
-      return "admin.roles.scope.assigned";
-    case "own":
-      return "admin.roles.scope.own";
-    case "client":
-      return "admin.roles.scope.client";
-    case "conversation":
-      return "admin.roles.scope.conversation";
-  }
 }
 
 function accessAuditActionKey(action: AccessAuditAction): I18nMessageKey {
