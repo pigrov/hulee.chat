@@ -36,6 +36,7 @@ export function AdminTopBar({
   eyebrow,
   icon,
   menuGroups,
+  notice,
   roleLabel,
   t,
   title,
@@ -45,6 +46,7 @@ export function AdminTopBar({
   eyebrow: string;
   icon: ReactNode;
   menuGroups: readonly AdminTopBarMenuGroup[];
+  notice?: ReactNode;
   roleLabel: string;
   t: Translator;
   title: string;
@@ -65,6 +67,8 @@ export function AdminTopBar({
       </div>
 
       <div className="adminTopActions">
+        {notice}
+
         {helpHref ? (
           <Link className="topHelpLink" href={helpHref}>
             <CircleHelp size={16} aria-hidden="true" />

@@ -1726,9 +1726,66 @@ a.secondaryButton {
 .adminTopActions {
   position: relative;
   display: inline-flex;
+  min-width: 0;
   flex: 0 0 auto;
   align-items: center;
   gap: var(--hulee-space-block);
+}
+
+.topNoticeForm {
+  display: inline-flex;
+  min-width: 0;
+  max-width: min(620px, 42vw);
+  min-height: 36px;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  padding: 0 8px;
+  border: 1px solid
+    color-mix(
+      in srgb,
+      var(--hulee-color-brand-primary) 32%,
+      var(--hulee-color-border)
+    );
+  border-radius: var(--hulee-radius-control);
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 8%,
+    var(--hulee-color-surface-raised)
+  );
+  white-space: nowrap;
+}
+
+.topNoticeForm::before {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--hulee-color-brand-primary);
+  box-shadow: 0 0 0 4px
+    color-mix(in srgb, var(--hulee-color-brand-primary) 13%, transparent);
+  content: "";
+}
+
+.topNoticeText {
+  min-width: 0;
+  overflow: hidden;
+  margin: 0;
+  color: var(--hulee-color-text-default);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topNoticeForm .secondaryButton {
+  min-height: 30px;
+  flex: 0 0 auto;
+  background: var(--hulee-color-surface-default);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .topHelpLink {
@@ -3935,6 +3992,10 @@ button.managementRow:not(.adminNavLink):not(.integrationNavLink):focus-visible {
   .adminTopActions {
     width: 100%;
     justify-content: space-between;
+  }
+
+  .topNoticeForm {
+    max-width: 100%;
   }
 
   .topNavMenuPanel {

@@ -153,6 +153,22 @@ export function TenantAdminShell({
               eyebrow={tenantDisplayName}
               icon={<TenantAdminSectionIcon sectionId={current} />}
               menuGroups={menuGroups}
+              notice={
+                shouldRequireEmailVerification ? (
+                  <form
+                    className="topNoticeForm"
+                    action={resendEmailVerificationAction}
+                  >
+                    <input name="returnTo" type="hidden" value={currentPath} />
+                    <p className="topNoticeText">
+                      {t("auth.emailVerification.status.required")}
+                    </p>
+                    <button className="secondaryButton" type="submit">
+                      {t("auth.emailVerification.resend")}
+                    </button>
+                  </form>
+                ) : undefined
+              }
               roleLabel={t("admin.scope.tenant")}
               t={t}
               title={title}
@@ -160,21 +176,6 @@ export function TenantAdminShell({
             />
 
             <div className="adminContent">
-              {shouldRequireEmailVerification ? (
-                <form
-                  className="inlineNoticeForm"
-                  action={resendEmailVerificationAction}
-                >
-                  <input name="returnTo" type="hidden" value={currentPath} />
-                  <p className="formNotice">
-                    {t("auth.emailVerification.status.required")}
-                  </p>
-                  <button className="secondaryButton" type="submit">
-                    {t("auth.emailVerification.resend")}
-                  </button>
-                </form>
-              ) : null}
-
               {sidebarContent}
               <SlotMount slot="admin.section" />
               {children}
