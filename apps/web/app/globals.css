@@ -1835,7 +1835,9 @@ a.secondaryButton {
   display: grid;
   min-width: 0;
   flex: 1 1 auto;
+  align-content: start;
   gap: var(--hulee-space-block);
+  grid-auto-rows: max-content;
   padding: 0;
 }
 
@@ -2284,7 +2286,21 @@ a.secondaryButton {
 }
 
 .adminOverviewCard {
+  display: grid;
   min-height: 104px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  justify-content: stretch;
+}
+
+.adminOverviewCard > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.adminOverviewCard .badge {
+  justify-self: end;
 }
 
 .roleDefinitionRow {
