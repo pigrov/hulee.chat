@@ -2316,21 +2316,23 @@ a.secondaryButton {
   gap: var(--hulee-space-block);
 }
 
-.adminOverviewCard {
+.managementRow.adminOverviewCard {
   display: grid;
   min-height: 104px;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   justify-content: stretch;
+  justify-items: start;
 }
 
-.adminOverviewCard > span:nth-child(2) {
+.managementRow.adminOverviewCard > span:nth-child(2) {
   display: grid;
   min-width: 0;
   gap: 4px;
+  justify-items: start;
 }
 
-.adminOverviewCard .badge {
+.managementRow.adminOverviewCard .badge {
   justify-self: end;
 }
 
