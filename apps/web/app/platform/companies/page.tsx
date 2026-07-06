@@ -12,10 +12,7 @@ import {
   navigationAccessFromSession
 } from "../../../src/access";
 import { DetailItem } from "../../../src/app-chrome";
-import {
-  ChannelIcon,
-  resolveChannelTitle
-} from "../../../src/channel-display";
+import { ChannelIcon, resolveChannelTitle } from "../../../src/channel-display";
 import { EmailText } from "../../../src/contact-fields";
 import { formatOptionalDateTime } from "../../../src/formatting";
 import {

@@ -74,7 +74,8 @@ export default async function PlatformProvidersPage({
         repository: createSqlDeploymentEgressStatusRepository(database)
       }),
       loadPlatformChannelCatalog({
-        repository: createSqlDeploymentChannelCatalogOverrideRepository(database)
+        repository:
+          createSqlDeploymentChannelCatalogOverrideRepository(database)
       })
     ]);
   const providerPolicies = await loadPlatformEgressProviderPolicies({
@@ -110,10 +111,7 @@ export default async function PlatformProvidersPage({
             </div>
           </div>
 
-          <nav
-            className="integrationList"
-            aria-label={t("platform.providers")}
-          >
+          <nav className="integrationList" aria-label={t("platform.providers")}>
             {providerPolicies.length > 0 ? (
               providerPolicies.map((policy) => (
                 <ProviderListItem
