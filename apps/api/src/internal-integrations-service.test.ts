@@ -355,6 +355,56 @@ describe("internal integrations service", () => {
     );
   });
 
+  it("includes direct-account session activity in connector summaries", async () => {
+    const connectorId =
+      "telegram_qr_bridge:tenant-integrations" as ChannelConnectorId;
+    const connectorRepository = new InMemoryChannelConnectorRepository([
+      {
+        ...createUserBridgeConnector({ connectorId }),
+        status: "connected",
+        healthStatus: "healthy"
+      }
+    ]);
+    const channelSessionRepository = new InMemoryChannelSessionRepository();
+    const service = createInternalIntegrationService({
+      connectorRepository,
+      channelSessionRepository,
+      now: () => now
+    });
+    const lastInboundAt = new Date("2026-06-22T10:01:00.000Z");
+    const lastOutboundAt = new Date("2026-06-22T10:02:00.000Z");
+
+    await channelSessionRepository.upsertSession({
+      id: "channel_session:primary",
+      tenantId,
+      connectorId,
+      sessionKey: "primary",
+      status: "connected",
+      displayAddress: "@sales_account",
+      lastInboundAt,
+      lastOutboundAt,
+      updatedAt: now
+    });
+
+    await expect(service.listChannelConnectors(context)).resolves.toMatchObject(
+      {
+        connectors: [
+          {
+            connectorId,
+            status: "connected",
+            healthStatus: "healthy",
+            session: {
+              status: "connected",
+              displayAddress: "@sales_account",
+              lastInboundAt: lastInboundAt.toISOString(),
+              lastOutboundAt: lastOutboundAt.toISOString()
+            }
+          }
+        ]
+      }
+    );
+  });
+
   it("rejects auth challenge flows that do not match a direct account channel", async () => {
     const service = createInternalIntegrationService({
       connectorRepository: new InMemoryChannelConnectorRepository([
@@ -374,6 +424,41 @@ describe("internal integrations service", () => {
       })
     ).rejects.toMatchObject({
       code: "validation.failed"
+    });
+  });
+
+  it("updates channel connector display name without changing lifecycle state", async () => {
+    const connectorId =
+      "telegram_qr_bridge:tenant-integrations" as ChannelConnectorId;
+    const repository = new InMemoryChannelConnectorRepository([
+      {
+        ...createUserBridgeConnector({ connectorId }),
+        status: "connected",
+        healthStatus: "healthy"
+      }
+    ]);
+    const service = createInternalIntegrationService({
+      connectorRepository: repository,
+      now: () => now
+    });
+
+    const response = await service.updateChannelConnector(context, {
+      connectorId,
+      request: {
+        displayName: "Sales Telegram"
+      }
+    });
+
+    expect(response).toMatchObject({
+      connectorId,
+      displayName: "Sales Telegram",
+      status: "connected",
+      healthStatus: "healthy"
+    });
+    expect(repository.records.get(connectorId)).toMatchObject({
+      displayName: "Sales Telegram",
+      status: "connected",
+      healthStatus: "healthy"
     });
   });
 

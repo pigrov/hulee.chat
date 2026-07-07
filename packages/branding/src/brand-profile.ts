@@ -35,8 +35,8 @@ export const defaultBrandProfile: BrandProfile = {
   productName: "Hulee",
   shortProductName: "Hulee",
   assets: {
-    logoLight: "/brand/hulee-logo-3-transparent.png",
-    logoDark: "/brand/hulee-logo-3-transparent.png",
+    logoLight: "/brand/hulee-logo-3-full-transparent.png",
+    logoDark: "/brand/hulee-logo-3-full-transparent.png",
     mark: "/brand/hulee-logo-3-transparent.png",
     favicon: "/favicon.ico",
     pwaIcon: "/icons/icon-512x512.png",

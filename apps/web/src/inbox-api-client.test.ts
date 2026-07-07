@@ -44,6 +44,7 @@ import {
   setTelegramWebhook,
   startChannelAuthChallenge,
   submitChannelAuthChallenge,
+  updateChannelConnector,
   updateRbacRole,
   updateInboxConversationRouting,
   updateTelegramIntegration,
@@ -346,6 +347,43 @@ describe("inbox API client", () => {
       path: "/internal/v1/channels/connectors",
       body: {
         channelType: "telegram_bot"
+      },
+      effectivePermissionOverride: "modules.manage"
+    });
+  });
+
+  it("passes explicit effective permission override when updating channel connector settings", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => {
+      return Response.json({
+        connectorId: "telegram_qr_bridge:second",
+        channelType: "telegram_qr_bridge",
+        channelClass: "user_bridge",
+        provider: "telegram",
+        displayName: "Sales Telegram",
+        status: "connected",
+        healthStatus: "healthy"
+      });
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await updateChannelConnector(
+      {
+        connectorId: "telegram_qr_bridge:second",
+        request: {
+          displayName: "Sales Telegram"
+        }
+      },
+      {
+        effectivePermissionOverride: "modules.manage"
+      }
+    );
+
+    expect(buildInternalApiHeaders).toHaveBeenCalledWith({
+      method: "PATCH",
+      path: "/internal/v1/channels/connectors/telegram_qr_bridge%3Asecond",
+      body: {
+        displayName: "Sales Telegram"
       },
       effectivePermissionOverride: "modules.manage"
     });

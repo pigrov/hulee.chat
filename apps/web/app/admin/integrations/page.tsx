@@ -9,7 +9,7 @@ import type {
   InternalChannelCatalogItem,
   InternalChannelConnectorSummary
 } from "@hulee/contracts";
-import { Activity, ShieldCheck } from "lucide-react";
+import { ArrowDown, ArrowUp } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
@@ -19,6 +19,7 @@ import { SlotMount } from "../../../src/app-chrome";
 import { loadTenantAdminViewModel } from "../../../src/admin-view-model";
 import { ChannelConnectorCreateForm } from "../../../src/channel-connector-create-form";
 import { ChannelConnectorLifecycleActions } from "../../../src/channel-connector-lifecycle-actions";
+import { ChannelConnectorSettingsForm } from "../../../src/channel-connector-settings-form";
 import { ChannelAuthChallengePanel } from "../../../src/channel-auth-challenge-panel";
 import {
   ChannelIcon,
@@ -38,10 +39,12 @@ import {
   resolveCurrentWebAccessSession
 } from "../../../src/session";
 import { MarkdownContent } from "../../../src/markdown";
+import { formatOptionalDateTime } from "../../../src/formatting";
 import {
   hasEffectivePermission,
   resolveEmployeeEffectiveAccess
 } from "../../../src/rbac-effective-access";
+import { LocalDateTime } from "../../../src/local-date-time";
 import { TelegramBotCatalogConnectForm } from "../../../src/telegram-bot-catalog-connect-form";
 import { TelegramIntegrationPanel } from "../../../src/telegram-integration-panel";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
@@ -450,9 +453,22 @@ function GenericChannelConnectorPanel({
       </div>
 
       {pendingDirectQrAuth ? null : (
-        <div className="telegramConnectionActions">
-          <GenericChannelLifecycleActions connector={connector} t={t} />
-        </div>
+        <ChannelConnectorSettingsForm
+          connectorId={connector.connectorId}
+          defaultDisplayName={connector.displayName}
+          labels={{
+            displayName: t("integrations.channel.displayName"),
+            save: t("integrations.channel.saveSettings"),
+            saving: t("integrations.channel.savingSettings")
+          }}
+          lifecycleActions={
+            <GenericChannelLifecycleActions connector={connector} t={t} />
+          }
+          messages={{
+            invalid: t("admin.integrations.actionStatus.invalid"),
+            saved: t("admin.integrations.actionStatus.saved")
+          }}
+        />
       )}
 
       {!pendingDirectQrAuth && problemMessage ? (
@@ -466,7 +482,11 @@ function GenericChannelConnectorPanel({
       ) : null}
 
       {pendingDirectQrAuth ? null : (
-        <GenericChannelCompactStatus connector={connector} t={t} />
+        <GenericChannelCompactStatus
+          connector={connector}
+          locale={locale}
+          t={t}
+        />
       )}
 
       {showAuthChallenge ? (
@@ -557,9 +577,11 @@ function genericChannelProblemMessage(
 
 function GenericChannelCompactStatus({
   connector,
+  locale,
   t
 }: {
   connector: InternalChannelConnectorSummary;
+  locale: string;
   t: Translator;
 }): ReactNode {
   return (
@@ -568,29 +590,45 @@ function GenericChannelCompactStatus({
         {t("integrations.channel.connectionStatusTitle")}
       </h3>
       <GenericChannelStatusMetric
-        icon="status"
-        label={t("integrations.channel.connectionMetric.status")}
-        value={t(channelConnectorStatusKey(connector.status))}
+        icon="inbound"
+        label={t("integrations.channel.connectionMetric.inboundReceivedAt")}
+        locale={locale}
+        value={connector.session?.lastInboundAt}
+        fallback={formatOptionalDateTime(
+          connector.session?.lastInboundAt,
+          locale,
+          t
+        )}
       />
       <GenericChannelStatusMetric
-        icon="health"
-        label={t("integrations.channel.connectionMetric.health")}
-        value={t(channelHealthStatusKey(connector.healthStatus))}
+        icon="outbound"
+        label={t("integrations.channel.connectionMetric.outboundSentAt")}
+        locale={locale}
+        value={connector.session?.lastOutboundAt}
+        fallback={formatOptionalDateTime(
+          connector.session?.lastOutboundAt,
+          locale,
+          t
+        )}
       />
     </div>
   );
 }
 
 function GenericChannelStatusMetric({
+  fallback,
   icon,
   label,
+  locale,
   value
 }: {
-  icon: "health" | "status";
+  fallback: string;
+  icon: "inbound" | "outbound";
   label: string;
-  value: string;
+  locale: string;
+  value?: string;
 }): ReactNode {
-  const Icon = icon === "status" ? Activity : ShieldCheck;
+  const Icon = icon === "inbound" ? ArrowDown : ArrowUp;
 
   return (
     <div className="telegramStatusMetric">
@@ -599,7 +637,9 @@ function GenericChannelStatusMetric({
       </span>
       <span className="telegramStatusBody">
         <span className="telegramStatusLabel">{label}</span>
-        <strong className="telegramStatusValue">{value}</strong>
+        <strong className="telegramStatusValue">
+          <LocalDateTime fallback={fallback} locale={locale} value={value} />
+        </strong>
       </span>
     </div>
   );
@@ -730,18 +770,6 @@ function CatalogListItem({
       </div>
     </Link>
   );
-}
-
-function channelConnectorStatusKey(
-  status: InternalChannelConnectorSummary["status"]
-): I18nMessageKey {
-  return `integrations.channel.status.${status}` as I18nMessageKey;
-}
-
-function channelHealthStatusKey(
-  status: InternalChannelConnectorSummary["healthStatus"]
-): I18nMessageKey {
-  return `integrations.channel.health.${status}` as I18nMessageKey;
 }
 
 type ConnectorListBadgeState = "ok" | "error" | "disabled" | "new";

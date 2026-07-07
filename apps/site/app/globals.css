@@ -20,6 +20,9 @@
   --site-radius: 8px;
   --site-header-radius: 22px;
   --site-max: 1180px;
+  --site-font-sans:
+    var(--font-sansation), "Segoe UI", "Trebuchet MS", "Helvetica Neue", Arial,
+    sans-serif;
 }
 
 :root[data-theme="dark"] {
@@ -57,14 +60,7 @@ body {
     linear-gradient(180deg, var(--site-bg) 0%, var(--site-surface-muted) 52%),
     var(--site-bg);
   color: var(--site-text);
-  font-family:
-    Inter,
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
+  font-family: var(--site-font-sans);
 }
 
 button,
@@ -72,6 +68,7 @@ input,
 select,
 textarea {
   font: inherit;
+  font-family: var(--site-font-sans);
 }
 
 a {
@@ -161,9 +158,10 @@ svg {
   letter-spacing: 0;
 }
 
-.brand-lockup__mark {
-  width: 42px;
-  height: 42px;
+.brand-lockup__logo {
+  width: 150px;
+  height: auto;
+  max-height: 50px;
   object-fit: contain;
 }
 
@@ -315,46 +313,17 @@ svg {
 
 .hero__media {
   position: absolute;
-  top: -20px;
-  right: -74px;
+  top: 86px;
+  right: -104px;
   z-index: 1;
-  width: min(860px, 76%);
-  aspect-ratio: 1;
+  width: min(920px, 78%);
+  aspect-ratio: 3 / 2;
   pointer-events: none;
-}
-
-.hero__media::after {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  background:
-    linear-gradient(
-      90deg,
-      var(--site-bg) 0%,
-      transparent 24%,
-      transparent 92%,
-      var(--site-bg) 100%
-    ),
-    linear-gradient(
-      180deg,
-      var(--site-bg) 0%,
-      transparent 13%,
-      transparent 84%,
-      var(--site-bg) 100%
-    );
-  content: "";
 }
 
 .hero__background {
   object-fit: contain;
   object-position: center;
-  filter: drop-shadow(0 32px 56px rgb(79 70 229 / 13%));
-}
-
-:root[data-theme="dark"] .hero__background {
-  opacity: 0.86;
-  filter: saturate(0.92) brightness(0.86)
-    drop-shadow(0 32px 62px rgb(0 0 0 / 42%));
 }
 
 .hero__actions,
@@ -884,8 +853,8 @@ svg {
   }
 
   .hero__media {
-    right: -150px;
-    width: min(820px, 82%);
+    right: -130px;
+    width: min(820px, 84%);
   }
 
   .audience-grid,
@@ -926,7 +895,7 @@ svg {
     position: relative;
     top: auto;
     right: auto;
-    width: min(100%, 650px);
+    width: min(100%, 680px);
     margin: -12px auto 0;
   }
 
@@ -1002,20 +971,9 @@ svg {
     padding: 8px;
   }
 
-  .brand-lockup {
-    font-size: 1rem;
-  }
-
-  .brand-lockup span {
-    max-width: 96px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .brand-lockup__mark {
-    width: 36px;
-    height: 36px;
+  .brand-lockup__logo {
+    width: 112px;
+    max-height: 38px;
   }
 
   .header-tools {
@@ -1067,8 +1025,8 @@ svg {
   }
 
   .hero__media {
-    width: min(118%, 520px);
-    margin-left: -9%;
+    width: min(112%, 520px);
+    margin-left: -6%;
   }
 
   .hero__metrics {

@@ -304,6 +304,20 @@ function createHandler(input?: {
     channelExternalId: "telegram-generated",
     diagnosticsStatus: "disabled"
   }));
+  const updateChannelConnector = vi.fn(
+    async (
+      _context: unknown,
+      input: { connectorId: string; request: { displayName?: string } }
+    ) => ({
+      connectorId: input.connectorId,
+      channelType: "telegram_qr_bridge" as const,
+      channelClass: "user_bridge" as const,
+      provider: "telegram",
+      displayName: input.request.displayName ?? "Telegram account",
+      status: "connected" as const,
+      healthStatus: "healthy" as const
+    })
+  );
   const disableChannelConnector = vi.fn(async () => ({
     connectorId: "telegram_bot:tenant-1",
     channelType: "telegram_bot" as const,
@@ -545,6 +559,7 @@ function createHandler(input?: {
       listChannelCatalog,
       listChannelConnectors,
       createChannelConnector,
+      updateChannelConnector,
       enableChannelConnector,
       disableChannelConnector,
       deleteChannelConnector,
@@ -598,6 +613,7 @@ function createHandler(input?: {
     listChannelCatalog,
     listChannelConnectors,
     createChannelConnector,
+    updateChannelConnector,
     enableChannelConnector,
     disableChannelConnector,
     deleteChannelConnector,
@@ -1705,6 +1721,33 @@ describe("internal API handler", () => {
     });
     expect(createChannelConnector).toHaveBeenCalledWith(modulesManageSession, {
       channelType: "telegram_bot"
+    });
+  });
+
+  it("updates channel connector settings through modules.manage permission", async () => {
+    const modulesManageSession = sessionWithPermissions(["modules.manage"]);
+    const { handler, updateChannelConnector } = createHandler({
+      session: modulesManageSession
+    });
+
+    const response = await handler.handle({
+      method: "PATCH",
+      path: "/internal/v1/channels/connectors/telegram_qr_bridge%3Atenant-1",
+      body: {
+        displayName: "Sales Telegram"
+      }
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      connectorId: "telegram_qr_bridge:tenant-1",
+      displayName: "Sales Telegram"
+    });
+    expect(updateChannelConnector).toHaveBeenCalledWith(modulesManageSession, {
+      connectorId: "telegram_qr_bridge:tenant-1",
+      request: {
+        displayName: "Sales Telegram"
+      }
     });
   });
 

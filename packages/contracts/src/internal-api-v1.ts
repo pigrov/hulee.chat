@@ -797,6 +797,22 @@ export const internalChannelConnectorSummarySchema = z
     channelExternalId: z.string().trim().min(1).max(200).optional(),
     diagnosticsStatus: z.string().trim().min(1).max(80).optional(),
     egress: internalEgressDiagnosticsSchema.optional(),
+    session: z
+      .object({
+        status: z.string().trim().min(1).max(80),
+        displayAddress: z.string().trim().min(1).max(200).optional(),
+        externalAccountId: z.string().trim().min(1).max(200).optional(),
+        lastConnectedAt: z.string().datetime({ offset: true }).optional(),
+        lastDisconnectedAt: z.string().datetime({ offset: true }).optional(),
+        lastHeartbeatAt: z.string().datetime({ offset: true }).optional(),
+        lastInboundAt: z.string().datetime({ offset: true }).optional(),
+        lastOutboundAt: z.string().datetime({ offset: true }).optional(),
+        lastErrorAt: z.string().datetime({ offset: true }).optional(),
+        lastErrorCode: z.string().trim().min(1).max(120).optional(),
+        lastErrorMessage: z.string().trim().min(1).max(500).optional()
+      })
+      .strict()
+      .optional(),
     activeAuthChallenge: z
       .object({
         challengeId: z.string().trim().min(1).max(200),
@@ -821,6 +837,15 @@ export const internalChannelConnectorCreateRequestSchema = z
     displayName: z.string().trim().min(1).max(120).optional()
   })
   .strict();
+
+export const internalChannelConnectorUpdateRequestSchema = z
+  .object({
+    displayName: z.string().trim().min(1).max(120).optional()
+  })
+  .strict()
+  .refine((request) => request.displayName !== undefined, {
+    message: "At least one channel connector setting is required."
+  });
 
 export const internalChannelAuthChallengePublicPayloadSchema = z
   .object({
@@ -1267,6 +1292,9 @@ export type InternalChannelConnectorsResponse = z.infer<
 >;
 export type InternalChannelConnectorCreateRequest = z.infer<
   typeof internalChannelConnectorCreateRequestSchema
+>;
+export type InternalChannelConnectorUpdateRequest = z.infer<
+  typeof internalChannelConnectorUpdateRequestSchema
 >;
 export type InternalChannelAuthChallengeType = z.infer<
   typeof internalChannelAuthChallengeTypeSchema

@@ -188,10 +188,13 @@ const localeEntries = {
 
 const supportedLocales = Object.keys(localeEntries) as Locale[];
 const productName = defaultBrandProfile.productName;
-const brandMark =
+const brandLockupAsset =
+  defaultBrandProfile.assets.logoLight ??
+  defaultBrandProfile.assets.logoDark ??
   defaultBrandProfile.assets.mark ??
   defaultBrandProfile.assets.pwaIcon ??
   "/icons/icon-512x512.png";
+const heroImage = "/marketing/hero-workspace-2-transparent.png";
 const chatBaseUrl = "https://chat.hulee.ru";
 
 const iconMap: Record<IconName, LucideIcon> = {
@@ -274,9 +277,9 @@ export async function generateMetadata({
       type: "website",
       images: [
         {
-          url: "/marketing/hero-workspace.png",
-          width: 1024,
-          height: 1024,
+          url: heroImage,
+          width: 1200,
+          height: 800,
           alt: copy(content.metadata.ogAlt)
         }
       ],
@@ -286,7 +289,7 @@ export async function generateMetadata({
       card: "summary_large_image",
       title: copy(content.metadata.title),
       description: copy(content.metadata.description),
-      images: ["/marketing/hero-workspace.png"]
+      images: [heroImage]
     }
   };
 }
@@ -310,14 +313,13 @@ export default async function LandingPage({
             aria-label={productName}
           >
             <Image
-              className="brand-lockup__mark"
-              src={brandMark}
+              className="brand-lockup__logo"
+              src={brandLockupAsset}
               alt=""
-              width={40}
-              height={40}
+              width={150}
+              height={50}
               priority
             />
-            <span>{productName}</span>
           </Link>
 
           <nav
@@ -373,7 +375,7 @@ export default async function LandingPage({
           <div className="hero__media" aria-hidden="true">
             <Image
               className="hero__background"
-              src="/marketing/hero-workspace.png"
+              src={heroImage}
               alt=""
               fill
               priority

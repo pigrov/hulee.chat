@@ -30,6 +30,7 @@ import {
   internalChannelAuthChallengeStartRequestSchema,
   internalChannelAuthChallengeSubmitRequestSchema,
   internalChannelConnectorCreateRequestSchema,
+  internalChannelConnectorUpdateRequestSchema,
   internalAccessDecisionRequestSchema,
   internalInboxConversationRoutingUpdateRequestSchema,
   internalApiV1Version,
@@ -188,6 +189,10 @@ type RouteMatch =
     }
   | {
       route: "channel_connector_create";
+    }
+  | {
+      route: "channel_connector_update";
+      connectorId: string;
     }
   | {
       route: "channel_connector_enable";
@@ -689,6 +694,19 @@ async function handleAuthenticatedRoute(input: {
       return jsonResponse(201, response);
     }
 
+    case "channel_connector_update": {
+      const request = internalChannelConnectorUpdateRequestSchema.parse(
+        input.request.body
+      );
+      const response: InternalChannelConnectorSummary =
+        await input.integrations.updateChannelConnector(input.session, {
+          connectorId: input.route.connectorId,
+          request
+        });
+
+      return jsonResponse(200, response);
+    }
+
     case "channel_connector_enable": {
       const response: InternalChannelConnectorSummary =
         await input.integrations.enableChannelConnector(input.session, {
@@ -899,6 +917,7 @@ function internalRouteAuthorizationPolicy(
     case "channel_catalog_view":
     case "channel_connectors_view":
     case "channel_connector_create":
+    case "channel_connector_update":
     case "channel_connector_enable":
     case "channel_connector_disable":
     case "channel_connector_delete":
@@ -1132,6 +1151,17 @@ function matchRoute(request: ApiHttpRequest): RouteMatch | undefined {
   const connectorDisableMatch = path.match(
     /^\/internal\/v1\/channels\/connectors\/([^/]+)\/disable$/
   );
+
+  const connectorUpdateMatch = path.match(
+    /^\/internal\/v1\/channels\/connectors\/([^/]+)$/
+  );
+
+  if (request.method === "PATCH" && connectorUpdateMatch?.[1]) {
+    return {
+      route: "channel_connector_update",
+      connectorId: decodeURIComponent(connectorUpdateMatch[1])
+    };
+  }
 
   const connectorEnableMatch = path.match(
     /^\/internal\/v1\/channels\/connectors\/([^/]+)\/enable$/

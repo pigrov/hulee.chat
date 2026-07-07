@@ -2,12 +2,32 @@ import "./globals.css";
 
 import { defaultBrandProfile, resolveBrandThemePreset } from "@hulee/branding";
 import type { Metadata, Viewport } from "next";
+import localFont from "next/font/local";
 import type { ReactNode } from "react";
 
 const appName = defaultBrandProfile.productName;
 const shortAppName = defaultBrandProfile.shortProductName ?? appName;
 const defaultTheme = resolveBrandThemePreset("hulee").tokens;
 const siteUrl = new URL(process.env.HULEE_SITE_BASE_URL ?? "https://hulee.ru");
+const heroImage = "/marketing/hero-workspace-2-transparent.png";
+const sansation = localFont({
+  src: [
+    {
+      path: "../public/fonts/sansation/sansation-light.ttf",
+      weight: "300"
+    },
+    {
+      path: "../public/fonts/sansation/sansation-regular.ttf",
+      weight: "400"
+    },
+    {
+      path: "../public/fonts/sansation/sansation-bold.ttf",
+      weight: "700"
+    }
+  ],
+  variable: "--font-sansation",
+  display: "swap"
+});
 
 export const metadata: Metadata = {
   metadataBase: siteUrl,
@@ -58,9 +78,9 @@ export const metadata: Metadata = {
     type: "website",
     images: [
       {
-        url: "/marketing/hero-workspace.png",
-        width: 1024,
-        height: 1024,
+        url: heroImage,
+        width: 1200,
+        height: 800,
         alt: `${appName} workspace preview`
       }
     ]
@@ -70,7 +90,7 @@ export const metadata: Metadata = {
     title: appName,
     description:
       "A modular communication workspace for customer channels and internal requests.",
-    images: ["/marketing/hero-workspace.png"]
+    images: [heroImage]
   },
   formatDetection: {
     telephone: false
@@ -106,8 +126,8 @@ export default function RootLayout({
   children: ReactNode;
 }): ReactNode {
   return (
-    <html lang="ru" suppressHydrationWarning>
-      <body>
+    <html className={sansation.variable} lang="ru" suppressHydrationWarning>
+      <body className={sansation.className}>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
         {children}
       </body>

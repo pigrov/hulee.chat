@@ -13,6 +13,7 @@ import type {
   InternalChannelConnectorHealthStatus,
   InternalChannelConnectorSummary,
   InternalChannelConnectorStatus,
+  InternalChannelConnectorUpdateRequest,
   InternalChannelConnectorsResponse,
   InternalChannelClass,
   InternalChannelOnboardingFlow,
@@ -41,6 +42,7 @@ import type {
   ChannelAuthChallengeRepository,
   ChannelConnectorRecord,
   ChannelConnectorRepository,
+  ChannelSessionRecord,
   ChannelSessionRepository,
   ChannelProviderValidationJobRepository,
   DeploymentChannelCatalogOverrideRecord,
@@ -87,6 +89,13 @@ export type InternalIntegrationService = {
   createChannelConnector(
     context: InternalIntegrationContext,
     request: InternalChannelConnectorCreateRequest
+  ): Promise<InternalChannelConnectorSummary>;
+  updateChannelConnector(
+    context: InternalIntegrationContext,
+    input: {
+      connectorId: string;
+      request: InternalChannelConnectorUpdateRequest;
+    }
   ): Promise<InternalChannelConnectorSummary>;
   enableChannelConnector(
     context: InternalIntegrationContext,
@@ -682,10 +691,11 @@ export function createInternalIntegrationService(
 
           return summary
             ? [
-                withActiveAuthChallenge({
+                withChannelConnectorListDetails({
                   authChallengeRepository,
                   checkedAt,
                   record,
+                  sessionRepository: options.channelSessionRepository,
                   summary
                 })
               ]
@@ -725,6 +735,50 @@ export function createInternalIntegrationService(
       }
 
       throw new CoreError("validation.failed");
+    },
+
+    async updateChannelConnector(context, input) {
+      const record = await loadChannelConnector({
+        repository: options.connectorRepository,
+        tenantId: context.tenantId,
+        connectorId: input.connectorId
+      });
+      const displayName = input.request.displayName?.trim();
+
+      if (!displayName) {
+        throw new CoreError("validation.failed");
+      }
+
+      const updatedRecord = {
+        ...record,
+        displayName,
+        updatedAt: now()
+      };
+
+      await options.connectorRepository.upsertConnector({
+        id: updatedRecord.id,
+        tenantId: updatedRecord.tenantId,
+        channelType: updatedRecord.channelType,
+        channelClass: updatedRecord.channelClass,
+        provider: updatedRecord.provider,
+        displayName: updatedRecord.displayName,
+        status: updatedRecord.status,
+        healthStatus: updatedRecord.healthStatus,
+        capabilities: updatedRecord.capabilities,
+        onboardingState: updatedRecord.onboardingState,
+        config: updatedRecord.config,
+        diagnostics: updatedRecord.diagnostics,
+        createdByEmployeeId: updatedRecord.createdByEmployeeId,
+        updatedAt: updatedRecord.updatedAt
+      });
+
+      const summary = channelConnectorSummaryFromRecord(updatedRecord);
+
+      if (!summary) {
+        throw new CoreError("validation.failed");
+      }
+
+      return summary;
     },
 
     async enableChannelConnector(context, input) {
@@ -1611,6 +1665,26 @@ async function loadUserBridgeConnector(input: {
     record.channelClass !== "user_bridge" ||
     record.status === "deleted"
   ) {
+    throw new CoreError("validation.failed");
+  }
+
+  return record;
+}
+
+async function loadChannelConnector(input: {
+  repository: ChannelConnectorRepository;
+  tenantId: TenantId;
+  connectorId: string;
+}): Promise<ChannelConnectorRecord> {
+  const connectorId = input.connectorId.trim();
+  const record = connectorId
+    ? await input.repository.findConnector({
+        tenantId: input.tenantId,
+        connectorId
+      })
+    : null;
+
+  if (!record || record.status === "deleted") {
     throw new CoreError("validation.failed");
   }
 
@@ -3051,6 +3125,91 @@ async function withActiveAuthChallenge(input: {
         : {})
     }
   };
+}
+
+async function withChannelConnectorListDetails(input: {
+  authChallengeRepository: ChannelAuthChallengeRepository | undefined;
+  checkedAt: Date;
+  record: ChannelConnectorRecord;
+  sessionRepository: ChannelSessionRepository | undefined;
+  summary: InternalChannelConnectorSummary;
+}): Promise<InternalChannelConnectorSummary> {
+  const withSession = await withChannelSessionSummary({
+    record: input.record,
+    sessionRepository: input.sessionRepository,
+    summary: input.summary
+  });
+
+  return withActiveAuthChallenge({
+    authChallengeRepository: input.authChallengeRepository,
+    checkedAt: input.checkedAt,
+    record: input.record,
+    summary: withSession
+  });
+}
+
+async function withChannelSessionSummary(input: {
+  record: ChannelConnectorRecord;
+  sessionRepository: ChannelSessionRepository | undefined;
+  summary: InternalChannelConnectorSummary;
+}): Promise<InternalChannelConnectorSummary> {
+  if (
+    input.sessionRepository === undefined ||
+    input.summary.channelClass !== userBridgeChannelClass
+  ) {
+    return input.summary;
+  }
+
+  const sessionKey =
+    readRecordString(input.record.config, "sessionKey") ??
+    userBridgePrimarySessionKey;
+  const session = await input.sessionRepository.findConnectorSession({
+    tenantId: input.record.tenantId,
+    connectorId: input.record.id,
+    sessionKey
+  });
+
+  if (!session) {
+    return input.summary;
+  }
+
+  return {
+    ...input.summary,
+    session: channelSessionSummaryFromRecord(session)
+  };
+}
+
+function channelSessionSummaryFromRecord(
+  session: ChannelSessionRecord
+): NonNullable<InternalChannelConnectorSummary["session"]> {
+  return {
+    status: session.status,
+    ...(session.displayAddress
+      ? { displayAddress: session.displayAddress }
+      : {}),
+    ...(session.externalAccountId
+      ? { externalAccountId: session.externalAccountId }
+      : {}),
+    ...optionalDateField("lastConnectedAt", session.lastConnectedAt),
+    ...optionalDateField("lastDisconnectedAt", session.lastDisconnectedAt),
+    ...optionalDateField("lastHeartbeatAt", session.lastHeartbeatAt),
+    ...optionalDateField("lastInboundAt", session.lastInboundAt),
+    ...optionalDateField("lastOutboundAt", session.lastOutboundAt),
+    ...optionalDateField("lastErrorAt", session.lastErrorAt),
+    ...(session.lastErrorCode ? { lastErrorCode: session.lastErrorCode } : {}),
+    ...(session.lastErrorMessage
+      ? { lastErrorMessage: session.lastErrorMessage }
+      : {})
+  };
+}
+
+function optionalDateField<TKey extends string>(
+  key: TKey,
+  value: Date | null
+): { [K in TKey]?: string } {
+  return value
+    ? ({ [key]: value.toISOString() } as { [K in TKey]: string })
+    : {};
 }
 
 function internalChannelType(

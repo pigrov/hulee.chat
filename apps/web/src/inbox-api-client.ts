@@ -3,6 +3,7 @@ import {
   internalChannelAuthChallengeStartRequestSchema,
   internalChannelAuthChallengeSubmitRequestSchema,
   internalChannelConnectorCreateRequestSchema,
+  internalChannelConnectorUpdateRequestSchema,
   internalChannelConnectorSummarySchema,
   internalChannelCatalogResponseSchema,
   internalChannelConnectorsResponseSchema,
@@ -32,6 +33,7 @@ import {
   type InternalChannelAuthChallengeStartRequest,
   type InternalChannelAuthChallengeSubmitRequest,
   type InternalChannelConnectorCreateRequest,
+  type InternalChannelConnectorUpdateRequest,
   type InternalChannelConnectorSummary,
   type InternalChannelConnectorsResponse,
   type InternalEgressStatusResponse,
@@ -519,6 +521,29 @@ export async function createChannelConnector(
   }
 
   return internalChannelConnectorSummarySchema.parse(await response.json());
+}
+
+export async function updateChannelConnector(
+  input: {
+    connectorId: string;
+    request: InternalChannelConnectorUpdateRequest;
+  },
+  options: InternalApiAccessOptions<"modules.manage">
+): Promise<ChannelConnectorViewModel> {
+  const connectorId = input.connectorId.trim();
+  const request = internalChannelConnectorUpdateRequestSchema.parse(
+    input.request
+  );
+
+  return requestInternalApiJson({
+    method: "PATCH",
+    path: `/internal/v1/channels/connectors/${encodeURIComponent(connectorId)}`,
+    body: request,
+    schema: internalChannelConnectorSummarySchema,
+    errorPrefix: "Internal channel connector update API returned",
+    options,
+    permission: "modules.manage"
+  });
 }
 
 export async function disableChannelConnector(

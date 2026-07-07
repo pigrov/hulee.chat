@@ -34,6 +34,7 @@ import {
   setTelegramWebhook,
   startChannelAuthChallenge,
   submitChannelAuthChallenge,
+  updateChannelConnector,
   updateInboxConversationRouting,
   updateTenantBrand,
   updateTelegramIntegration,
@@ -83,6 +84,7 @@ import type {
   ChannelConnectorLifecycleActionCode,
   ChannelConnectorLifecycleActionState
 } from "./channel-connector-lifecycle-action-state";
+import type { ChannelConnectorSettingsActionState } from "./channel-connector-settings-action-state";
 import type {
   ChannelConnectorCreateActionCode,
   ChannelConnectorCreateActionState
@@ -784,6 +786,48 @@ export async function updateChannelConnectorLifecycleAction(
           submittedAt
         });
     }
+  } catch {
+    return {
+      code: "invalid",
+      status: "error",
+      submittedAt
+    };
+  }
+}
+
+export async function updateChannelConnectorSettingsAction(
+  _previousState: ChannelConnectorSettingsActionState,
+  formData: FormData
+): Promise<ChannelConnectorSettingsActionState> {
+  await assertWebActionRequest();
+  const submittedAt = new Date().toISOString();
+  const internalApiAccess = await assertVerifiedTenantPermission(
+    "modules.manage",
+    "/admin/integrations"
+  );
+
+  try {
+    const connectorId = readRequiredFormString(formData, "connectorId").trim();
+    const displayName = readRequiredFormString(formData, "displayName").trim();
+
+    await updateChannelConnector(
+      {
+        connectorId,
+        request: {
+          displayName
+        }
+      },
+      internalApiAccess
+    );
+
+    revalidateTelegramIntegrationPaths();
+
+    return {
+      code: "saved",
+      connectorId,
+      status: "success",
+      submittedAt
+    };
   } catch {
     return {
       code: "invalid",
