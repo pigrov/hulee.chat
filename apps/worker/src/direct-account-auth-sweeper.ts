@@ -19,10 +19,17 @@ import { randomUUID } from "node:crypto";
 const primarySessionKey = "primary";
 const defaultLeaseMs = 5 * 60_000;
 const defaultBatchSize = 50;
+const defaultProcessingConcurrency = 4;
 const directAccountChannelTypes = new Set([
   "telegram_qr_bridge",
   "whatsapp_qr_bridge",
   "max_qr_bridge"
+]);
+const terminalChallengeStatuses = new Set([
+  "succeeded",
+  "failed",
+  "expired",
+  "cancelled"
 ]);
 
 export type DirectAccountAuthPublicPayload = {
@@ -106,6 +113,7 @@ export type DirectAccountAuthSweepOptions = {
   now?: Date;
   limit?: number;
   leaseMs?: number;
+  processingConcurrency?: number;
 };
 
 export type DirectAccountAuthSweepResult = {
@@ -163,14 +171,17 @@ export async function runDirectAccountAuthSweep(
 
   result.scanned = challenges.length;
 
-  for (const challenge of challenges) {
-    await processChallenge({
-      options,
-      result,
-      challenge,
-      now
-    });
-  }
+  await processChallengesWithConcurrency(
+    challenges,
+    normalizeProcessingConcurrency(options.processingConcurrency),
+    (challenge) =>
+      processChallenge({
+        options,
+        result,
+        challenge,
+        now
+      })
+  );
 
   return result;
 }
@@ -193,6 +204,12 @@ async function processChallenge(input: {
 
   if (!isRunnableDirectAccountConnector(connector)) {
     input.result.skippedInactive += 1;
+    await cancelChallengeForInactiveConnector({
+      options: input.options,
+      challenge: input.challenge,
+      connector,
+      now: input.now
+    });
     return;
   }
 
@@ -289,9 +306,25 @@ async function runClaimedChallenge(input: {
   const updateChallenge = async (
     patch: DirectAccountAuthChallengePatch
   ): Promise<void> => {
+    const latestChallenge =
+      await input.options.authChallengeRepository.findChallenge({
+        tenantId: input.challenge.tenantId,
+        challengeId: input.challenge.id
+      });
+
+    if (!latestChallenge) {
+      throw new Error("AUTH_CHALLENGE_MISSING");
+    }
+
+    currentChallenge = latestChallenge;
+
+    if (isTerminalChallengeStatus(latestChallenge.status)) {
+      throw new Error(`AUTH_CHALLENGE_${latestChallenge.status}`);
+    }
+
     currentChallenge = await persistChallengePatch({
       repository: input.options.authChallengeRepository,
-      challenge: currentChallenge,
+      challenge: latestChallenge,
       patch,
       cipher: input.options.authChallengeCipher,
       updatedAt: input.now
@@ -336,14 +369,37 @@ async function runClaimedChallenge(input: {
     });
 
     input.result.processed += 1;
+    const latestState = await loadLatestRunnableChallengeState({
+      options: input.options,
+      challenge: currentChallenge,
+      now: input.now
+    });
+
+    if (!latestState) {
+      return;
+    }
+
     await persistHandlerResult({
       ...input,
-      challenge: currentChallenge,
+      connector: latestState.connector,
+      challenge: latestState.challenge,
       handlerResult
     });
   } catch (error) {
+    const latestState = await loadLatestRunnableChallengeState({
+      options: input.options,
+      challenge: currentChallenge,
+      now: input.now
+    });
+
+    if (!latestState) {
+      return;
+    }
+
     await markChallengeFailed({
       ...input,
+      connector: latestState.connector,
+      challenge: latestState.challenge,
       errorCode: "provider.temporary_failure",
       errorMessage: errorMessage(error)
     });
@@ -713,6 +769,34 @@ function findHandler(input: {
   );
 }
 
+async function processChallengesWithConcurrency<T>(
+  items: readonly T[],
+  concurrency: number,
+  processItem: (item: T) => Promise<void>
+): Promise<void> {
+  let nextIndex = 0;
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    async () => {
+      while (nextIndex < items.length) {
+        const item = items[nextIndex];
+        nextIndex += 1;
+        await processItem(item);
+      }
+    }
+  );
+
+  await Promise.all(workers);
+}
+
+function normalizeProcessingConcurrency(value: number | undefined): number {
+  if (!value || !Number.isFinite(value)) {
+    return defaultProcessingConcurrency;
+  }
+
+  return Math.max(1, Math.floor(value));
+}
+
 function isRunnableDirectAccountConnector(
   connector: ChannelConnectorRecord | null
 ): connector is ChannelConnectorRecord {
@@ -723,6 +807,86 @@ function isRunnableDirectAccountConnector(
     connector.status !== "deleted" &&
     connector.status !== "disabled"
   );
+}
+
+async function loadLatestRunnableChallengeState(input: {
+  options: DirectAccountAuthSweepOptions;
+  challenge: ChannelAuthChallengeRecord;
+  now: Date;
+}): Promise<{
+  challenge: ChannelAuthChallengeRecord;
+  connector: ChannelConnectorRecord;
+} | null> {
+  const latestChallenge =
+    await input.options.authChallengeRepository.findChallenge({
+      tenantId: input.challenge.tenantId,
+      challengeId: input.challenge.id
+    });
+
+  if (!latestChallenge) {
+    return null;
+  }
+
+  if (isTerminalChallengeStatus(latestChallenge.status)) {
+    return null;
+  }
+
+  const latestConnector = await input.options.connectorRepository.findConnector(
+    {
+      tenantId: latestChallenge.tenantId,
+      connectorId: latestChallenge.connectorId
+    }
+  );
+
+  if (!isRunnableDirectAccountConnector(latestConnector)) {
+    await cancelChallengeForInactiveConnector({
+      options: input.options,
+      challenge: latestChallenge,
+      connector: latestConnector,
+      now: input.now
+    });
+    return null;
+  }
+
+  return {
+    challenge: latestChallenge,
+    connector: latestConnector
+  };
+}
+
+async function cancelChallengeForInactiveConnector(input: {
+  options: DirectAccountAuthSweepOptions;
+  challenge: ChannelAuthChallengeRecord;
+  connector: ChannelConnectorRecord | null;
+  now: Date;
+}): Promise<void> {
+  if (
+    isTerminalChallengeStatus(input.challenge.status) ||
+    (input.connector &&
+      input.connector.status !== "deleted" &&
+      input.connector.status !== "disabled")
+  ) {
+    return;
+  }
+
+  await persistChallengePatch({
+    repository: input.options.authChallengeRepository,
+    challenge: input.challenge,
+    patch: {
+      status: "cancelled",
+      completedAt: input.now,
+      publicPayload: {
+        operatorHint:
+          "Authorization challenge was cancelled because the connector is inactive."
+      }
+    },
+    cipher: input.options.authChallengeCipher,
+    updatedAt: input.now
+  });
+}
+
+function isTerminalChallengeStatus(status: string): boolean {
+  return terminalChallengeStatuses.has(status);
 }
 
 function isChallengeExpired(

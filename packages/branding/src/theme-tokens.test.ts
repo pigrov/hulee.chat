@@ -121,6 +121,27 @@ describe("brand theme tokens", () => {
     ).toBe("dark");
   });
 
+  it("uses a lavender indigo Hulee brand palette in light and dark modes", () => {
+    expect(
+      resolveBrandThemePresetForMode("hulee", "light").tokens
+    ).toMatchObject({
+      "color.page": "#f6f7ff",
+      "color.surface.muted": "#f0f1ff",
+      "color.brand.primary": "#4f46e5",
+      "color.accent": "#6d5dfc",
+      "theme.colorScheme": "light"
+    });
+    expect(
+      resolveBrandThemePresetForMode("hulee", "dark").tokens
+    ).toMatchObject({
+      "color.page": "#090d1f",
+      "color.surface.muted": "#202747",
+      "color.brand.primary": "#a5b4fc",
+      "color.accent": "#818cf8",
+      "theme.colorScheme": "dark"
+    });
+  });
+
   it("keeps the base preset when action colors are customized", () => {
     expect(
       resolveBrandThemeBasePresetId({

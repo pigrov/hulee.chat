@@ -1,19 +1,19 @@
 :root {
   color-scheme: var(--hulee-color-scheme);
   --hulee-color-scheme: light;
-  --hulee-color-page: #f7f9fa;
+  --hulee-color-page: #f6f7ff;
   --hulee-color-surface-default: #ffffff;
-  --hulee-color-surface-raised: #fbfdfc;
-  --hulee-color-surface-muted: #eef7f2;
-  --hulee-color-border: #dbe3e7;
-  --hulee-color-border-strong: #b5c2ca;
-  --hulee-color-text-default: #111827;
-  --hulee-color-text-muted: #64748b;
-  --hulee-color-brand-primary: #047857;
+  --hulee-color-surface-raised: #fdfdff;
+  --hulee-color-surface-muted: #f0f1ff;
+  --hulee-color-border: #dfe5fb;
+  --hulee-color-border-strong: #bfc8f2;
+  --hulee-color-text-default: #101a3d;
+  --hulee-color-text-muted: #65739f;
+  --hulee-color-brand-primary: #4f46e5;
   --hulee-color-brand-foreground: #ffffff;
-  --hulee-color-accent: #0f766e;
-  --hulee-color-success: #059669;
-  --hulee-color-danger: #dc2626;
+  --hulee-color-accent: #6d5dfc;
+  --hulee-color-success: #10b981;
+  --hulee-color-danger: #e11d48;
   --hulee-color-page-background: linear-gradient(
     135deg,
     color-mix(
@@ -47,17 +47,17 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --hulee-color-scheme: dark;
-    --hulee-color-page: #081015;
-    --hulee-color-surface-default: #111a20;
-    --hulee-color-surface-raised: #151f26;
-    --hulee-color-surface-muted: #1c2a31;
-    --hulee-color-border: #26343d;
-    --hulee-color-border-strong: #40515c;
-    --hulee-color-text-default: #f4f7f8;
-    --hulee-color-text-muted: #a8b6bf;
-    --hulee-color-brand-primary: #34d399;
-    --hulee-color-brand-foreground: #06251a;
-    --hulee-color-accent: #38bdf8;
+    --hulee-color-page: #090d1f;
+    --hulee-color-surface-default: #11162b;
+    --hulee-color-surface-raised: #171d35;
+    --hulee-color-surface-muted: #202747;
+    --hulee-color-border: #30395f;
+    --hulee-color-border-strong: #52609a;
+    --hulee-color-text-default: #f7f8ff;
+    --hulee-color-text-muted: #bac4ea;
+    --hulee-color-brand-primary: #a5b4fc;
+    --hulee-color-brand-foreground: #11162b;
+    --hulee-color-accent: #818cf8;
     --hulee-color-success: #34d399;
     --hulee-color-danger: #fb7185;
   }
@@ -65,34 +65,34 @@
 
 :root[data-theme="light"] {
   --hulee-color-scheme: light;
-  --hulee-color-page: #f7f9fa;
+  --hulee-color-page: #f6f7ff;
   --hulee-color-surface-default: #ffffff;
-  --hulee-color-surface-raised: #fbfdfc;
-  --hulee-color-surface-muted: #eef7f2;
-  --hulee-color-border: #dbe3e7;
-  --hulee-color-border-strong: #b5c2ca;
-  --hulee-color-text-default: #111827;
-  --hulee-color-text-muted: #64748b;
-  --hulee-color-brand-primary: #047857;
+  --hulee-color-surface-raised: #fdfdff;
+  --hulee-color-surface-muted: #f0f1ff;
+  --hulee-color-border: #dfe5fb;
+  --hulee-color-border-strong: #bfc8f2;
+  --hulee-color-text-default: #101a3d;
+  --hulee-color-text-muted: #65739f;
+  --hulee-color-brand-primary: #4f46e5;
   --hulee-color-brand-foreground: #ffffff;
-  --hulee-color-accent: #0f766e;
-  --hulee-color-success: #059669;
-  --hulee-color-danger: #dc2626;
+  --hulee-color-accent: #6d5dfc;
+  --hulee-color-success: #10b981;
+  --hulee-color-danger: #e11d48;
 }
 
 :root[data-theme="dark"] {
   --hulee-color-scheme: dark;
-  --hulee-color-page: #081015;
-  --hulee-color-surface-default: #111a20;
-  --hulee-color-surface-raised: #151f26;
-  --hulee-color-surface-muted: #1c2a31;
-  --hulee-color-border: #26343d;
-  --hulee-color-border-strong: #40515c;
-  --hulee-color-text-default: #f4f7f8;
-  --hulee-color-text-muted: #a8b6bf;
-  --hulee-color-brand-primary: #34d399;
-  --hulee-color-brand-foreground: #06251a;
-  --hulee-color-accent: #38bdf8;
+  --hulee-color-page: #090d1f;
+  --hulee-color-surface-default: #11162b;
+  --hulee-color-surface-raised: #171d35;
+  --hulee-color-surface-muted: #202747;
+  --hulee-color-border: #30395f;
+  --hulee-color-border-strong: #52609a;
+  --hulee-color-text-default: #f7f8ff;
+  --hulee-color-text-muted: #bac4ea;
+  --hulee-color-brand-primary: #a5b4fc;
+  --hulee-color-brand-foreground: #11162b;
+  --hulee-color-accent: #818cf8;
   --hulee-color-success: #34d399;
   --hulee-color-danger: #fb7185;
 }

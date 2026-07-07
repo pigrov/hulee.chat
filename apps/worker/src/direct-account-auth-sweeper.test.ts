@@ -265,6 +265,147 @@ describe("direct account auth sweeper", () => {
     });
     expect(repositories.sessionRepository.events).toHaveLength(1);
   });
+
+  it("processes multiple QR challenges concurrently", async () => {
+    const telegramConnector = createConnector({
+      channelType: "telegram_qr_bridge",
+      provider: "telegram"
+    });
+    const whatsappConnector = {
+      ...createConnector({
+        channelType: "whatsapp_qr_bridge",
+        provider: "whatsapp"
+      }),
+      id: "whatsapp_qr_bridge:connector-2" as ChannelConnectorId
+    };
+    const telegramSession = createSession(telegramConnector);
+    const whatsappSession = createSession(whatsappConnector);
+    const telegramChallenge = createChallenge(telegramConnector, {
+      challengeType: "qr",
+      status: "waiting"
+    });
+    const whatsappChallenge = createChallenge(whatsappConnector, {
+      challengeType: "qr",
+      status: "waiting"
+    });
+    const repositories = createRepositories({
+      connectors: [telegramConnector, whatsappConnector],
+      sessions: [telegramSession, whatsappSession],
+      challenges: [telegramChallenge, whatsappChallenge]
+    });
+    let whatsappStarted = false;
+    let telegramSawConcurrentWhatsapp = false;
+    const handler: DirectAccountAuthHandler = {
+      name: "qr-test",
+      channelTypes: ["telegram_qr_bridge", "whatsapp_qr_bridge"],
+      challengeTypes: ["qr"],
+      async run(input) {
+        if (input.connector.channelType === "telegram_qr_bridge") {
+          await wait(20);
+          telegramSawConcurrentWhatsapp = whatsappStarted;
+
+          return {
+            status: "pending",
+            publicPayload: {
+              qrPayloadRef: "tg://login?token=test"
+            }
+          };
+        }
+
+        whatsappStarted = true;
+
+        return {
+          status: "pending",
+          publicPayload: {
+            qrPayloadRef: "whatsapp-qr"
+          }
+        };
+      }
+    };
+
+    await expect(
+      runDirectAccountAuthSweep({
+        ...repositories,
+        handlers: [handler],
+        authChallengeCipher: fakeCipher,
+        processingConcurrency: 2,
+        workerId: "worker-1",
+        now
+      })
+    ).resolves.toMatchObject({
+      scanned: 2,
+      claimed: 2,
+      processed: 2,
+      pending: 2
+    });
+    expect(telegramSawConcurrentWhatsapp).toBe(true);
+  });
+
+  it("does not overwrite a deleted connector when an in-flight auth handler finishes", async () => {
+    const connector = createConnector({
+      channelType: "whatsapp_qr_bridge",
+      provider: "whatsapp"
+    });
+    const session = createSession(connector);
+    const challenge = createChallenge(connector, {
+      challengeType: "qr",
+      status: "waiting"
+    });
+    const repositories = createRepositories({
+      connectors: [connector],
+      sessions: [session],
+      challenges: [challenge]
+    });
+    const handler: DirectAccountAuthHandler = {
+      name: "whatsapp-test",
+      channelTypes: ["whatsapp_qr_bridge"],
+      challengeTypes: ["qr"],
+      async run(input) {
+        await input.updateChallenge({
+          status: "waiting",
+          publicPayload: {
+            qrPayloadRef: "whatsapp-qr"
+          }
+        });
+        repositories.connectorRepository.records.set(connector.id, {
+          ...connector,
+          status: "deleted",
+          updatedAt: now
+        });
+
+        return {
+          status: "failed",
+          errorCode: "provider.permanent_failure",
+          errorMessage: "QR refs attempts ended"
+        };
+      }
+    };
+
+    await expect(
+      runDirectAccountAuthSweep({
+        ...repositories,
+        handlers: [handler],
+        authChallengeCipher: fakeCipher,
+        workerId: "worker-1",
+        now
+      })
+    ).resolves.toMatchObject({
+      scanned: 1,
+      claimed: 1,
+      failed: 0
+    });
+    expect(
+      repositories.connectorRepository.records.get(connector.id)
+    ).toMatchObject({
+      status: "deleted"
+    });
+    expect(
+      repositories.authChallengeRepository.records.get(challenge.id)
+    ).toMatchObject({
+      status: "cancelled",
+      completedAt: now
+    });
+  });
 });
 
 function createRepositories(input: {
@@ -683,4 +824,8 @@ function isActiveChallengeStatus(status: string): boolean {
     status === "requires_code" ||
     status === "requires_password"
   );
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
