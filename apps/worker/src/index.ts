@@ -61,6 +61,7 @@ import {
   type DirectAccountAuthSweepResult
 } from "./direct-account-auth-sweeper";
 import { createTelegramDirectAuthHandler } from "./telegram-direct-auth-handler";
+import { createWhatsAppDirectAuthHandler } from "./whatsapp-direct-auth-handler";
 
 export type WorkerBoundary = {
   processesOutbox: true;
@@ -210,6 +211,7 @@ export type WorkerDirectAccountAuthSweeperOptions = {
   telegramUserAuthEnabled?: boolean;
   telegramUserApiId?: number;
   telegramUserApiHash?: string;
+  whatsappUserAuthEnabled?: boolean;
   logger?: Pick<Logger, "warn">;
   workerId?: string;
   limit?: number;
@@ -305,9 +307,8 @@ export function createWorkerDirectAccountAuthSweeper(
         key: options.secretEncryptionKey
       })
     : undefined;
-  const handlers =
-    options.handlers ??
-    (options.telegramUserAuthEnabled
+  const handlers = options.handlers ?? [
+    ...(options.telegramUserAuthEnabled
       ? [
           createTelegramDirectAuthHandler({
             apiId: options.telegramUserApiId,
@@ -316,7 +317,16 @@ export function createWorkerDirectAccountAuthSweeper(
             logger: options.logger
           })
         ]
-      : []);
+      : []),
+    ...(options.whatsappUserAuthEnabled
+      ? [
+          createWhatsAppDirectAuthHandler({
+            sessionCipher: authChallengeCipher,
+            logger: options.logger
+          })
+        ]
+      : [])
+  ];
 
   return createDirectAccountAuthSweeper({
     authChallengeRepository: createSqlChannelAuthChallengeRepository(
@@ -364,6 +374,7 @@ export {
   runDirectAccountAuthSweep
 } from "./direct-account-auth-sweeper";
 export { createTelegramDirectAuthHandler } from "./telegram-direct-auth-handler";
+export { createWhatsAppDirectAuthHandler } from "./whatsapp-direct-auth-handler";
 export {
   createWorkerEgressMonitor,
   defaultEgressProbes,
@@ -424,6 +435,14 @@ export type {
   TelegramDirectSessionPayload,
   TelegramSelfUser
 } from "./telegram-direct-auth-handler";
+export type {
+  ConnectWhatsAppSocketLoopInput,
+  WhatsAppDirectAuthHandlerOptions,
+  WhatsAppDirectSessionPayload,
+  WhatsAppDirectSessionState,
+  WhatsAppSelfUser,
+  WhatsAppSocketHandle
+} from "./whatsapp-direct-auth-handler";
 export type {
   EgressMonitorOptions,
   EgressProbeDefinition,

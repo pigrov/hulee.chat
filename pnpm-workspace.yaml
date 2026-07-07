@@ -3,8 +3,10 @@ packages:
   - "packages/*"
   - "company/*"
 allowBuilds:
+  baileys: true
   bufferutil: true
   es5-ext: true
   esbuild: true
+  protobufjs: true
   sharp: true
   utf-8-validate: true

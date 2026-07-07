@@ -45,19 +45,22 @@ const telegramBotServices = runtime.config.workerFeatures.includes(
         : undefined
     }
   : undefined;
-const directAccountAuthSweeper = runtime.config.workerFeatures.includes(
-  "telegram_user"
-)
-  ? createWorkerDirectAccountAuthSweeper({
-      database,
-      secretEncryptionKey: runtime.config.secretEncryptionKey,
-      telegramUserAuthEnabled: true,
-      telegramUserApiId: runtime.config.telegramUserApiId,
-      telegramUserApiHash: runtime.config.telegramUserApiHash,
-      logger: runtime.logger,
-      workerId: "worker:direct-account-auth"
-    })
-  : undefined;
+const directAccountAuthSweeper =
+  runtime.config.workerFeatures.includes("telegram_user") ||
+  runtime.config.workerFeatures.includes("whatsapp_user")
+    ? createWorkerDirectAccountAuthSweeper({
+        database,
+        secretEncryptionKey: runtime.config.secretEncryptionKey,
+        telegramUserAuthEnabled:
+          runtime.config.workerFeatures.includes("telegram_user"),
+        telegramUserApiId: runtime.config.telegramUserApiId,
+        telegramUserApiHash: runtime.config.telegramUserApiHash,
+        whatsappUserAuthEnabled:
+          runtime.config.workerFeatures.includes("whatsapp_user"),
+        logger: runtime.logger,
+        workerId: "worker:direct-account-auth"
+      })
+    : undefined;
 const egressMonitor = createWorkerEgressMonitor({
   config: runtime.config,
   repository: createSqlDeploymentEgressStatusRepository(database),
