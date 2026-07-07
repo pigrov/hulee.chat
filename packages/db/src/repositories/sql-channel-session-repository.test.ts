@@ -189,16 +189,16 @@ function createSessionRow(): Record<string, unknown> {
     challenge_expires_at: null,
     lease_owner: null,
     lease_expires_at: null,
-    last_connected_at: new Date("2026-07-06T08:00:00.000Z"),
+    last_connected_at: "2026-07-06T08:00:00.000Z",
     last_disconnected_at: null,
-    last_heartbeat_at: new Date("2026-07-06T08:01:00.000Z"),
+    last_heartbeat_at: "2026-07-06T08:01:00.000Z",
     last_inbound_at: null,
     last_outbound_at: null,
     last_error_at: null,
     last_error_code: null,
     last_error_message: null,
-    created_at: new Date("2026-07-06T07:59:00.000Z"),
-    updated_at: new Date("2026-07-06T08:01:00.000Z")
+    created_at: "2026-07-06T07:59:00.000Z",
+    updated_at: "2026-07-06T08:01:00.000Z"
   };
 }
 
@@ -215,8 +215,8 @@ function createSessionEventRow(): Record<string, unknown> {
     metadata: {
       challengeType: "qr"
     },
-    occurred_at: new Date("2026-07-06T08:00:00.000Z"),
-    created_at: new Date("2026-07-06T08:00:00.000Z"),
-    updated_at: new Date("2026-07-06T08:00:00.000Z")
+    occurred_at: "2026-07-06T08:00:00.000Z",
+    created_at: "2026-07-06T08:00:00.000Z",
+    updated_at: "2026-07-06T08:00:00.000Z"
   };
 }

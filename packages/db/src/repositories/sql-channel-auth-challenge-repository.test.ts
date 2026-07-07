@@ -126,10 +126,10 @@ function createChallengeRow(): Record<string, unknown> {
     secret_payload_encrypted: "encrypted-secret",
     error_code: null,
     error_message: null,
-    expires_at: new Date("2026-06-29T10:00:00.000Z"),
+    expires_at: "2026-06-29T10:00:00.000Z",
     completed_at: null,
     created_by_employee_id: null,
-    created_at: new Date("2026-06-29T09:55:00.000Z"),
-    updated_at: new Date("2026-06-29T09:55:00.000Z")
+    created_at: "2026-06-29T09:55:00.000Z",
+    updated_at: "2026-06-29T09:55:00.000Z"
   };
 }

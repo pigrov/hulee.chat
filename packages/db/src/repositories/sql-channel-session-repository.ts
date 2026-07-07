@@ -179,19 +179,19 @@ type ChannelSessionRow = {
   public_state: unknown;
   metadata: unknown;
   challenge_type: string | null;
-  challenge_expires_at: Date | null;
+  challenge_expires_at: Date | string | null;
   lease_owner: string | null;
-  lease_expires_at: Date | null;
-  last_connected_at: Date | null;
-  last_disconnected_at: Date | null;
-  last_heartbeat_at: Date | null;
-  last_inbound_at: Date | null;
-  last_outbound_at: Date | null;
-  last_error_at: Date | null;
+  lease_expires_at: Date | string | null;
+  last_connected_at: Date | string | null;
+  last_disconnected_at: Date | string | null;
+  last_heartbeat_at: Date | string | null;
+  last_inbound_at: Date | string | null;
+  last_outbound_at: Date | string | null;
+  last_error_at: Date | string | null;
   last_error_code: string | null;
   last_error_message: string | null;
-  created_at: Date;
-  updated_at: Date;
+  created_at: Date | string;
+  updated_at: Date | string;
 };
 
 type ChannelSessionEventRow = {
@@ -204,9 +204,9 @@ type ChannelSessionEventRow = {
   code: string | null;
   message: string | null;
   metadata: unknown;
-  occurred_at: Date;
-  created_at: Date;
-  updated_at: Date;
+  occurred_at: Date | string;
+  created_at: Date | string;
+  updated_at: Date | string;
 };
 
 export function createSqlChannelSessionRepository(
@@ -529,19 +529,19 @@ function mapChannelSessionRow(row: ChannelSessionRow): ChannelSessionRecord {
     publicState: row.public_state,
     metadata: row.metadata,
     challengeType: row.challenge_type,
-    challengeExpiresAt: row.challenge_expires_at,
+    challengeExpiresAt: toNullableDate(row.challenge_expires_at),
     leaseOwner: row.lease_owner,
-    leaseExpiresAt: row.lease_expires_at,
-    lastConnectedAt: row.last_connected_at,
-    lastDisconnectedAt: row.last_disconnected_at,
-    lastHeartbeatAt: row.last_heartbeat_at,
-    lastInboundAt: row.last_inbound_at,
-    lastOutboundAt: row.last_outbound_at,
-    lastErrorAt: row.last_error_at,
+    leaseExpiresAt: toNullableDate(row.lease_expires_at),
+    lastConnectedAt: toNullableDate(row.last_connected_at),
+    lastDisconnectedAt: toNullableDate(row.last_disconnected_at),
+    lastHeartbeatAt: toNullableDate(row.last_heartbeat_at),
+    lastInboundAt: toNullableDate(row.last_inbound_at),
+    lastOutboundAt: toNullableDate(row.last_outbound_at),
+    lastErrorAt: toNullableDate(row.last_error_at),
     lastErrorCode: row.last_error_code,
     lastErrorMessage: row.last_error_message,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
+    createdAt: toDate(row.created_at),
+    updatedAt: toDate(row.updated_at)
   };
 }
 
@@ -558,8 +558,16 @@ function mapChannelSessionEventRow(
     code: row.code,
     message: row.message,
     metadata: row.metadata,
-    occurredAt: row.occurred_at,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
+    occurredAt: toDate(row.occurred_at),
+    createdAt: toDate(row.created_at),
+    updatedAt: toDate(row.updated_at)
   };
+}
+
+function toNullableDate(value: Date | string | null): Date | null {
+  return value === null ? null : toDate(value);
+}
+
+function toDate(value: Date | string): Date {
+  return value instanceof Date ? value : new Date(value);
 }

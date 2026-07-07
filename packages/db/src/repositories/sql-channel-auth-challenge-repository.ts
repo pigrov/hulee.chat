@@ -84,11 +84,11 @@ type ChannelAuthChallengeRow = {
   secret_payload_encrypted: string | null;
   error_code: string | null;
   error_message: string | null;
-  expires_at: Date | null;
-  completed_at: Date | null;
+  expires_at: Date | string | null;
+  completed_at: Date | string | null;
   created_by_employee_id: string | null;
-  created_at: Date;
-  updated_at: Date;
+  created_at: Date | string;
+  updated_at: Date | string;
 };
 
 export function createSqlChannelAuthChallengeRepository(
@@ -267,10 +267,18 @@ function mapChannelAuthChallengeRow(
     secretPayloadEncrypted: row.secret_payload_encrypted,
     errorCode: row.error_code,
     errorMessage: row.error_message,
-    expiresAt: row.expires_at,
-    completedAt: row.completed_at,
+    expiresAt: toNullableDate(row.expires_at),
+    completedAt: toNullableDate(row.completed_at),
     createdByEmployeeId: row.created_by_employee_id as EmployeeId | null,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
+    createdAt: toDate(row.created_at),
+    updatedAt: toDate(row.updated_at)
   };
+}
+
+function toNullableDate(value: Date | string | null): Date | null {
+  return value === null ? null : toDate(value);
+}
+
+function toDate(value: Date | string): Date {
+  return value instanceof Date ? value : new Date(value);
 }
