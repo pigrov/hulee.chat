@@ -2051,13 +2051,17 @@ a.secondaryButton {
 .adminStack {
   display: grid;
   min-width: 0;
+  align-content: start;
   gap: var(--hulee-space-block);
+  grid-auto-rows: max-content;
 }
 
 .settingsPanel {
   display: grid;
   min-width: 0;
+  align-content: start;
   gap: 16px;
+  grid-auto-rows: max-content;
   padding: 20px;
   border: 1px solid var(--hulee-color-border);
   border-radius: var(--hulee-radius-control);
