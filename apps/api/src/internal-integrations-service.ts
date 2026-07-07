@@ -674,13 +674,27 @@ export function createInternalIntegrationService(
       const records = await options.connectorRepository.listTenantConnectors({
         tenantId: context.tenantId
       });
-
-      return {
-        connectors: records.flatMap((record) => {
+      const authChallengeRepository = options.authChallengeRepository;
+      const checkedAt = now();
+      const summaries = await Promise.all(
+        records.flatMap((record) => {
           const summary = channelConnectorSummaryFromRecord(record);
 
-          return summary ? [summary] : [];
+          return summary
+            ? [
+                withActiveAuthChallenge({
+                  authChallengeRepository,
+                  checkedAt,
+                  record,
+                  summary
+                })
+              ]
+            : [];
         })
+      );
+
+      return {
+        connectors: summaries
       };
     },
 
@@ -2989,6 +3003,53 @@ function channelConnectorSummaryFromRecord(
     ...(channelExternalId ? { channelExternalId } : {}),
     ...(diagnosticsStatus ? { diagnosticsStatus } : {}),
     ...(egress ? { egress } : {})
+  };
+}
+
+async function withActiveAuthChallenge(input: {
+  authChallengeRepository: ChannelAuthChallengeRepository | undefined;
+  checkedAt: Date;
+  record: ChannelConnectorRecord;
+  summary: InternalChannelConnectorSummary;
+}): Promise<InternalChannelConnectorSummary> {
+  if (
+    input.authChallengeRepository === undefined ||
+    input.summary.channelClass !== userBridgeChannelClass
+  ) {
+    return input.summary;
+  }
+
+  const activeChallenge =
+    await input.authChallengeRepository.findLatestActiveChallenge({
+      tenantId: input.record.tenantId,
+      connectorId: input.record.id
+    });
+
+  if (
+    activeChallenge === null ||
+    isChannelAuthChallengeExpired(activeChallenge, input.checkedAt)
+  ) {
+    return input.summary;
+  }
+
+  const status = internalChannelAuthChallengeStatus(activeChallenge.status);
+
+  if (status === null) {
+    return input.summary;
+  }
+
+  return {
+    ...input.summary,
+    activeAuthChallenge: {
+      challengeId: activeChallenge.id,
+      challengeType: internalChannelAuthChallengeType(
+        activeChallenge.challengeType
+      ),
+      status,
+      ...(activeChallenge.expiresAt
+        ? { expiresAt: activeChallenge.expiresAt.toISOString() }
+        : {})
+    }
   };
 }
 

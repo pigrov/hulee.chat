@@ -1003,6 +1003,39 @@ describe("internal API v1 schemas", () => {
     });
   });
 
+  it("parses active auth challenge metadata in channel connector summaries", () => {
+    expect(
+      internalChannelConnectorsResponseSchema.parse({
+        connectors: [
+          {
+            connectorId: "telegram_qr_bridge:tenant-1",
+            channelType: "telegram_qr_bridge",
+            channelClass: "user_bridge",
+            provider: "telegram",
+            displayName: "Telegram account",
+            status: "failed",
+            healthStatus: "unhealthy",
+            activeAuthChallenge: {
+              challengeId: "channel_auth_challenge:tenant-1",
+              challengeType: "qr",
+              status: "waiting",
+              expiresAt: "2026-06-29T10:00:00.000Z"
+            }
+          }
+        ]
+      })
+    ).toMatchObject({
+      connectors: [
+        {
+          activeAuthChallenge: {
+            challengeType: "qr",
+            status: "waiting"
+          }
+        }
+      ]
+    });
+  });
+
   it("parses channel auth challenge contracts without secret payloads", () => {
     expect(
       internalChannelAuthChallengeStartRequestSchema.parse({

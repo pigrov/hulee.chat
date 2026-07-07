@@ -508,6 +508,10 @@ function GenericChannelConnectionBadge({
 function genericChannelConnectionState(
   connector: InternalChannelConnectorSummary
 ): GenericChannelConnectionState {
+  if (connector.activeAuthChallenge) {
+    return "new";
+  }
+
   if (
     connector.status === "failed" ||
     connector.status === "degraded" ||
@@ -745,6 +749,10 @@ type ConnectorListBadgeState = "ok" | "error" | "disabled" | "new";
 function connectorListBadgeState(
   connector: InternalChannelConnectorSummary
 ): ConnectorListBadgeState {
+  if (connector.activeAuthChallenge) {
+    return "new";
+  }
+
   if (
     connector.status === "failed" ||
     connector.status === "degraded" ||

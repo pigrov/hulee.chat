@@ -59,8 +59,8 @@ export const metadata: Metadata = {
     images: [
       {
         url: "/marketing/hero-workspace.png",
-        width: 1680,
-        height: 900,
+        width: 1024,
+        height: 1024,
         alt: `${appName} workspace preview`
       }
     ]

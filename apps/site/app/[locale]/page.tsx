@@ -275,8 +275,8 @@ export async function generateMetadata({
       images: [
         {
           url: "/marketing/hero-workspace.png",
-          width: 1680,
-          height: 900,
+          width: 1024,
+          height: 1024,
           alt: copy(content.metadata.ogAlt)
         }
       ],
@@ -303,17 +303,6 @@ export default async function LandingPage({
   return (
     <main className="site">
       <section className="hero" aria-labelledby="hero-title">
-        <div className="hero__media" aria-hidden="true">
-          <Image
-            className="hero__background"
-            src="/marketing/hero-workspace.png"
-            alt=""
-            fill
-            priority
-            sizes="100vw"
-          />
-        </div>
-
         <header className="site-header">
           <Link
             className="brand-lockup"
@@ -358,25 +347,38 @@ export default async function LandingPage({
           </div>
         </header>
 
-        <div className="hero__content">
-          <p className="eyebrow">{content.hero.eyebrow}</p>
-          <h1 id="hero-title">{copy(content.hero.title)}</h1>
-          <p className="hero__lead">{copy(content.hero.lead)}</p>
-          <div className="hero__actions" aria-label={content.actions.primary}>
-            <a
-              className="button button--primary"
-              href={`${chatBaseUrl}/register`}
-            >
-              <span>{content.actions.primary}</span>
-              <ArrowRight aria-hidden="true" />
-            </a>
-            <Link
-              className="button button--secondary"
-              href={`/${typedLocale}#model`}
-            >
-              <span>{content.actions.secondary}</span>
-              <WalletCards aria-hidden="true" />
-            </Link>
+        <div className="hero__stage">
+          <div className="hero__content">
+            <p className="eyebrow">{content.hero.eyebrow}</p>
+            <h1 id="hero-title">{copy(content.hero.title)}</h1>
+            <p className="hero__lead">{copy(content.hero.lead)}</p>
+            <div className="hero__actions" aria-label={content.actions.primary}>
+              <a
+                className="button button--primary"
+                href={`${chatBaseUrl}/register`}
+              >
+                <span>{content.actions.primary}</span>
+                <ArrowRight aria-hidden="true" />
+              </a>
+              <Link
+                className="button button--secondary"
+                href={`/${typedLocale}#model`}
+              >
+                <span>{content.actions.secondary}</span>
+                <WalletCards aria-hidden="true" />
+              </Link>
+            </div>
+          </div>
+
+          <div className="hero__media" aria-hidden="true">
+            <Image
+              className="hero__background"
+              src="/marketing/hero-workspace.png"
+              alt=""
+              fill
+              priority
+              sizes="(max-width: 980px) 100vw, 70vw"
+            />
           </div>
         </div>
 

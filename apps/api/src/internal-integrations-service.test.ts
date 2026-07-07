@@ -306,6 +306,55 @@ describe("internal integrations service", () => {
     });
   });
 
+  it("exposes active user-bridge auth challenges in connector summaries", async () => {
+    const authChallengeRepository =
+      new InMemoryChannelAuthChallengeRepository();
+    const connectorId =
+      "telegram_qr_bridge:tenant-integrations" as ChannelConnectorId;
+    const connectorRepository = new InMemoryChannelConnectorRepository([
+      {
+        ...createUserBridgeConnector({ connectorId }),
+        status: "failed",
+        healthStatus: "unhealthy"
+      }
+    ]);
+    const service = createInternalIntegrationService({
+      connectorRepository,
+      authChallengeRepository,
+      now: () => now
+    });
+
+    await authChallengeRepository.upsertChallenge({
+      id: "channel_auth_challenge:active-summary",
+      tenantId,
+      connectorId,
+      challengeType: "qr",
+      status: "waiting",
+      publicPayload: {
+        qrPayloadRef: "challenge:qr-ref"
+      },
+      expiresAt: new Date(now.getTime() + 5 * 60 * 1000),
+      updatedAt: now
+    });
+
+    await expect(service.listChannelConnectors(context)).resolves.toMatchObject(
+      {
+        connectors: [
+          {
+            connectorId,
+            status: "failed",
+            healthStatus: "unhealthy",
+            activeAuthChallenge: {
+              challengeId: "channel_auth_challenge:active-summary",
+              challengeType: "qr",
+              status: "waiting"
+            }
+          }
+        ]
+      }
+    );
+  });
+
   it("rejects auth challenge flows that do not match a direct account channel", async () => {
     const service = createInternalIntegrationService({
       connectorRepository: new InMemoryChannelConnectorRepository([

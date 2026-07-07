@@ -767,34 +767,6 @@ export const internalChannelCatalogResponseSchema = z
   })
   .strict();
 
-export const internalChannelConnectorSummarySchema = z
-  .object({
-    connectorId: z.string().trim().min(1).max(200),
-    channelType: internalChannelTypeSchema,
-    channelClass: internalChannelClassSchema,
-    provider: z.string().trim().min(1).max(80),
-    displayName: z.string().trim().min(1).max(120),
-    status: internalChannelConnectorStatusSchema,
-    healthStatus: internalChannelConnectorHealthStatusSchema,
-    channelExternalId: z.string().trim().min(1).max(200).optional(),
-    diagnosticsStatus: z.string().trim().min(1).max(80).optional(),
-    egress: internalEgressDiagnosticsSchema.optional()
-  })
-  .strict();
-
-export const internalChannelConnectorsResponseSchema = z
-  .object({
-    connectors: z.array(internalChannelConnectorSummarySchema)
-  })
-  .strict();
-
-export const internalChannelConnectorCreateRequestSchema = z
-  .object({
-    channelType: internalChannelTypeSchema,
-    displayName: z.string().trim().min(1).max(120).optional()
-  })
-  .strict();
-
 export const internalChannelAuthChallengeTypeSchema = z.enum([
   "qr",
   "phone_code",
@@ -812,6 +784,43 @@ export const internalChannelAuthChallengeStatusSchema = z.enum([
   "expired",
   "cancelled"
 ]);
+
+export const internalChannelConnectorSummarySchema = z
+  .object({
+    connectorId: z.string().trim().min(1).max(200),
+    channelType: internalChannelTypeSchema,
+    channelClass: internalChannelClassSchema,
+    provider: z.string().trim().min(1).max(80),
+    displayName: z.string().trim().min(1).max(120),
+    status: internalChannelConnectorStatusSchema,
+    healthStatus: internalChannelConnectorHealthStatusSchema,
+    channelExternalId: z.string().trim().min(1).max(200).optional(),
+    diagnosticsStatus: z.string().trim().min(1).max(80).optional(),
+    egress: internalEgressDiagnosticsSchema.optional(),
+    activeAuthChallenge: z
+      .object({
+        challengeId: z.string().trim().min(1).max(200),
+        challengeType: internalChannelAuthChallengeTypeSchema,
+        status: internalChannelAuthChallengeStatusSchema,
+        expiresAt: z.string().datetime({ offset: true }).optional()
+      })
+      .strict()
+      .optional()
+  })
+  .strict();
+
+export const internalChannelConnectorsResponseSchema = z
+  .object({
+    connectors: z.array(internalChannelConnectorSummarySchema)
+  })
+  .strict();
+
+export const internalChannelConnectorCreateRequestSchema = z
+  .object({
+    channelType: internalChannelTypeSchema,
+    displayName: z.string().trim().min(1).max(120).optional()
+  })
+  .strict();
 
 export const internalChannelAuthChallengePublicPayloadSchema = z
   .object({
