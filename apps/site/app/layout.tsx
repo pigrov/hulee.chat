@@ -9,7 +9,7 @@ const appName = defaultBrandProfile.productName;
 const shortAppName = defaultBrandProfile.shortProductName ?? appName;
 const defaultTheme = resolveBrandThemePreset("hulee").tokens;
 const siteUrl = new URL(process.env.HULEE_SITE_BASE_URL ?? "https://hulee.ru");
-const heroImage = "/marketing/hero-workspace-2-transparent.png";
+const heroImage = "/marketing/hero-workspace-2-transparent-x2.png";
 const sansation = localFont({
   src: [
     {
@@ -79,8 +79,8 @@ export const metadata: Metadata = {
     images: [
       {
         url: heroImage,
-        width: 1200,
-        height: 800,
+        width: 2400,
+        height: 1600,
         alt: `${appName} workspace preview`
       }
     ]

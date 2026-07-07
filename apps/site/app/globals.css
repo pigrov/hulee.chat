@@ -281,7 +281,7 @@ svg {
   position: relative;
   z-index: 3;
   max-width: 535px;
-  padding: 104px 0 74px 14px;
+  padding: 64px 0 74px 14px;
 }
 
 .eyebrow,
@@ -313,8 +313,8 @@ svg {
 
 .hero__media {
   position: absolute;
-  top: 86px;
-  right: -104px;
+  top: 16px;
+  right: -148px;
   z-index: 1;
   width: min(920px, 78%);
   aspect-ratio: 3 / 2;
@@ -324,6 +324,18 @@ svg {
 .hero__background {
   object-fit: contain;
   object-position: center;
+}
+
+.hero__background--dark {
+  display: none;
+}
+
+:root[data-theme="dark"] .hero__background--light {
+  display: none;
+}
+
+:root[data-theme="dark"] .hero__background--dark {
+  display: block;
 }
 
 .hero__actions,

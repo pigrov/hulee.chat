@@ -194,7 +194,8 @@ const brandLockupAsset =
   defaultBrandProfile.assets.mark ??
   defaultBrandProfile.assets.pwaIcon ??
   "/icons/icon-512x512.png";
-const heroImage = "/marketing/hero-workspace-2-transparent.png";
+const heroImage = "/marketing/hero-workspace-2-transparent-x2.png";
+const heroDarkImage = "/marketing/hero-workspace-2-transparent-x2-dark.png";
 const chatBaseUrl = "https://chat.hulee.ru";
 
 const iconMap: Record<IconName, LucideIcon> = {
@@ -278,8 +279,8 @@ export async function generateMetadata({
       images: [
         {
           url: heroImage,
-          width: 1200,
-          height: 800,
+          width: 2400,
+          height: 1600,
           alt: copy(content.metadata.ogAlt)
         }
       ],
@@ -374,11 +375,18 @@ export default async function LandingPage({
 
           <div className="hero__media" aria-hidden="true">
             <Image
-              className="hero__background"
+              className="hero__background hero__background--light"
               src={heroImage}
               alt=""
               fill
               priority
+              sizes="(max-width: 980px) 100vw, 70vw"
+            />
+            <Image
+              className="hero__background hero__background--dark"
+              src={heroDarkImage}
+              alt=""
+              fill
               sizes="(max-width: 980px) 100vw, 70vw"
             />
           </div>
