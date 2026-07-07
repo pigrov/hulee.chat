@@ -14,6 +14,8 @@ export type ChannelAuthChallengeActionState =
       readonly challengeId?: string;
       readonly code: "cancelled" | "started" | "submitted";
       readonly connectorId: string;
+      readonly redirectChannelType?: string;
+      readonly redirectTab?: "accounts" | "channels";
       readonly status: "success";
       readonly submittedAt: string;
     }
@@ -40,6 +42,8 @@ export function channelAuthChallengeActionSuccess(input: {
   readonly challengeId?: string;
   readonly code: "cancelled" | "started" | "submitted";
   readonly connectorId: string;
+  readonly redirectChannelType?: string;
+  readonly redirectTab?: "accounts" | "channels";
 }): ChannelAuthChallengeActionState {
   return {
     ...input,

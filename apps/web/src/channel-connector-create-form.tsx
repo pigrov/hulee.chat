@@ -52,6 +52,10 @@ export function ChannelConnectorCreateForm({
       params.set("tab", redirectTab);
     }
 
+    if (state.challengeId) {
+      params.set("challengeId", state.challengeId);
+    }
+
     router.push(`/admin/integrations?${params.toString()}`);
   }, [redirectTab, router, state]);
 

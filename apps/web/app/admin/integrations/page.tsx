@@ -425,6 +425,12 @@ function GenericChannelConnectorPanel({
   const authStepKind = isAuthChallengeStep(step.kind) ? step.kind : undefined;
   const connectionState = genericChannelConnectionState(connector);
   const problemMessage = genericChannelProblemMessage(connector, t);
+  const pendingDirectQrAuth =
+    connector.channelClass === "user_bridge" &&
+    connector.status !== "connected" &&
+    connector.status !== "disabled" &&
+    connector.status !== "deleted" &&
+    authStepKind === "qr_code";
   const showAuthChallenge =
     connector.status !== "connected" &&
     connector.status !== "disabled" &&
@@ -443,11 +449,13 @@ function GenericChannelConnectorPanel({
         <GenericChannelConnectionBadge state={connectionState} t={t} />
       </div>
 
-      <div className="telegramConnectionActions">
-        <GenericChannelLifecycleActions connector={connector} t={t} />
-      </div>
+      {pendingDirectQrAuth ? null : (
+        <div className="telegramConnectionActions">
+          <GenericChannelLifecycleActions connector={connector} t={t} />
+        </div>
+      )}
 
-      {problemMessage ? (
+      {!pendingDirectQrAuth && problemMessage ? (
         <p
           className="telegramConnectionNotice"
           data-variant="error"
@@ -457,10 +465,15 @@ function GenericChannelConnectorPanel({
         </p>
       ) : null}
 
-      <GenericChannelCompactStatus connector={connector} t={t} />
+      {pendingDirectQrAuth ? null : (
+        <GenericChannelCompactStatus connector={connector} t={t} />
+      )}
 
       {showAuthChallenge ? (
         <ChannelAuthChallengePanel
+          autoStart={pendingDirectQrAuth && challenge === undefined}
+          cancelDeletesConnector={pendingDirectQrAuth}
+          channelType={connector.channelType}
           challenge={challenge}
           challengeType={resolveChallengeType({
             challenge,

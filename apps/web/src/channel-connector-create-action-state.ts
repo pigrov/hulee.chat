@@ -10,6 +10,7 @@ export type ChannelConnectorCreateActionState =
     }
   | {
       readonly code: "created";
+      readonly challengeId?: string;
       readonly connectorId: string;
       readonly status: "success";
       readonly submittedAt: string;

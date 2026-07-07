@@ -20,22 +20,35 @@ export type ChannelAuthChallengeActionKind = "cancel" | "start" | "submit";
 
 export function ChannelAuthChallengeActionForm({
   actionKind,
+  autoSubmit = false,
   children,
   className,
   messages
 }: {
   readonly actionKind: ChannelAuthChallengeActionKind;
+  readonly autoSubmit?: boolean;
   readonly children: ReactNode;
   readonly className?: string;
   readonly messages: ChannelAuthChallengeActionMessages;
 }): ReactNode {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const autoSubmitRef = useRef(false);
   const handledSuccessRef = useRef<string | undefined>(undefined);
   const [state, formAction, isPending] = useActionState(
     resolveChannelAuthChallengeAction(actionKind),
     initialChannelAuthChallengeActionState
   );
+
+  useEffect(() => {
+    if (!autoSubmit || autoSubmitRef.current) {
+      return;
+    }
+
+    autoSubmitRef.current = true;
+    formRef.current?.requestSubmit();
+  }, [autoSubmit]);
 
   useEffect(() => {
     if (
@@ -56,7 +69,7 @@ export function ChannelAuthChallengeActionForm({
   }, [router, searchParams, state]);
 
   return (
-    <form className={className} action={formAction}>
+    <form ref={formRef} className={className} action={formAction}>
       <fieldset className="settingsFormFieldset" disabled={isPending}>
         {children}
       </fieldset>
@@ -128,6 +141,15 @@ function channelAuthChallengePath(
   state: Extract<ChannelAuthChallengeActionState, { status: "success" }>,
   tab: string | null
 ): string {
+  if (state.redirectChannelType) {
+    const params = new URLSearchParams({
+      tab: state.redirectTab ?? "accounts",
+      channelType: state.redirectChannelType
+    });
+
+    return `/admin/integrations?${params.toString()}`;
+  }
+
   const params = new URLSearchParams({
     connectorId: state.connectorId
   });

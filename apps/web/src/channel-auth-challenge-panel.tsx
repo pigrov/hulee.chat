@@ -27,6 +27,9 @@ import { formatOptionalDateTime } from "./formatting";
 type Translator = ReturnType<typeof createTranslator>["t"];
 
 export function ChannelAuthChallengePanel({
+  autoStart = false,
+  cancelDeletesConnector = false,
+  channelType,
   challenge,
   challengeType,
   connectorId,
@@ -34,6 +37,9 @@ export function ChannelAuthChallengePanel({
   stepKind,
   t
 }: {
+  autoStart?: boolean;
+  cancelDeletesConnector?: boolean;
+  channelType?: string;
   challenge?: InternalChannelAuthChallenge;
   challengeType: InternalChannelAuthChallengeType;
   connectorId: string;
@@ -64,6 +70,9 @@ export function ChannelAuthChallengePanel({
         <ChallengeStatus challenge={challenge} locale={locale} t={t} />
       ) : null}
       {renderChallengeStep({
+        autoStart,
+        cancelDeletesConnector,
+        channelType,
         challenge,
         challengeType,
         connectorId,
@@ -75,6 +84,9 @@ export function ChannelAuthChallengePanel({
 }
 
 function renderChallengeStep(input: {
+  autoStart: boolean;
+  cancelDeletesConnector: boolean;
+  channelType?: string;
   challenge?: InternalChannelAuthChallenge;
   challengeType: InternalChannelAuthChallengeType;
   connectorId: string;
@@ -104,11 +116,17 @@ function renderChallengeStep(input: {
 }
 
 function QrChallengeStep({
+  autoStart,
+  cancelDeletesConnector,
+  channelType,
   challenge,
   challengeType,
   connectorId,
   t
 }: {
+  autoStart: boolean;
+  cancelDeletesConnector: boolean;
+  channelType?: string;
   challenge?: InternalChannelAuthChallenge;
   challengeType: InternalChannelAuthChallengeType;
   connectorId: string;
@@ -117,8 +135,14 @@ function QrChallengeStep({
   if (challenge && isActiveQrChallenge(challenge)) {
     return (
       <>
-        <QrChallengePreview challenge={challenge} t={t} />
+        <QrChallengePreview
+          channelType={channelType}
+          challenge={challenge}
+          t={t}
+        />
         <WaitingChallengeActions
+          cancelDeletesConnector={cancelDeletesConnector}
+          channelType={channelType}
           challenge={challenge}
           connectorId={connectorId}
           t={t}
@@ -137,13 +161,16 @@ function QrChallengeStep({
         />
       ) : null}
       <StartChallengeForm
+        autoStart={autoStart}
         challengeType={challengeType}
         connectorId={connectorId}
         icon={<QrCode size={16} aria-hidden="true" />}
         label={t(
-          challenge
-            ? "integrations.channel.auth.restart"
-            : "integrations.channel.auth.start"
+          autoStart
+            ? "integrations.channel.auth.autoStart"
+            : challenge
+              ? "integrations.channel.auth.restart"
+              : "integrations.channel.auth.start"
         )}
         t={t}
       />
@@ -152,9 +179,11 @@ function QrChallengeStep({
 }
 
 function QrChallengePreview({
+  channelType,
   challenge,
   t
 }: {
+  channelType?: string;
   challenge: InternalChannelAuthChallenge;
   t: Translator;
 }): ReactNode {
@@ -186,7 +215,7 @@ function QrChallengePreview({
         </p>
         <p className="metaText">
           {hasQr
-            ? t("integrations.channel.auth.qrReadyHint")
+            ? t(qrReadyHintKey(channelType))
             : t("integrations.channel.auth.qrWaitingHint")}
         </p>
       </div>
@@ -331,16 +360,22 @@ function PasswordChallengeStep({
 }
 
 function WaitingChallengeStep({
+  cancelDeletesConnector,
+  channelType,
   challenge,
   connectorId,
   t
 }: {
+  cancelDeletesConnector: boolean;
+  channelType?: string;
   challenge?: InternalChannelAuthChallenge;
   connectorId: string;
   t: Translator;
 }): ReactNode {
   return (
     <WaitingChallengeActions
+      cancelDeletesConnector={cancelDeletesConnector}
+      channelType={channelType}
       challenge={challenge}
       connectorId={connectorId}
       t={t}
@@ -349,10 +384,14 @@ function WaitingChallengeStep({
 }
 
 function WaitingChallengeActions({
+  cancelDeletesConnector,
+  channelType,
   challenge,
   connectorId,
   t
 }: {
+  cancelDeletesConnector: boolean;
+  channelType?: string;
   challenge?: InternalChannelAuthChallenge;
   connectorId: string;
   t: Translator;
@@ -367,6 +406,17 @@ function WaitingChallengeActions({
           challenge={challenge}
           connectorId={connectorId}
         />
+        {cancelDeletesConnector && channelType ? (
+          <>
+            <input type="hidden" name="deleteConnectorOnCancel" value="on" />
+            <input type="hidden" name="redirectTab" value="accounts" />
+            <input
+              type="hidden"
+              name="redirectChannelType"
+              value={channelType}
+            />
+          </>
+        ) : null}
         <ChannelAuthChallengeSubmitButton
           className="secondaryButton"
           disabled={!challenge?.challengeId}
@@ -446,12 +496,14 @@ function ChallengeNotice({
 }
 
 function StartChallengeForm({
+  autoStart,
   challengeType,
   connectorId,
   icon,
   label,
   t
 }: {
+  autoStart: boolean;
   challengeType: InternalChannelAuthChallengeType;
   connectorId: string;
   icon: ReactNode;
@@ -461,6 +513,7 @@ function StartChallengeForm({
   return (
     <ChannelAuthChallengeActionForm
       actionKind="start"
+      autoSubmit={autoStart}
       messages={channelAuthChallengeActionMessages(t)}
     >
       <input type="hidden" name="connectorId" value={connectorId} />
@@ -495,6 +548,18 @@ function channelAuthChallengeStatusKey(
   status: InternalChannelAuthChallenge["status"]
 ): I18nMessageKey {
   return `integrations.channel.auth.status.${status}` as I18nMessageKey;
+}
+
+function qrReadyHintKey(channelType: string | undefined): I18nMessageKey {
+  if (channelType === "telegram_qr_bridge") {
+    return "integrations.channel.auth.qrReadyHint.telegram";
+  }
+
+  if (channelType === "whatsapp_qr_bridge") {
+    return "integrations.channel.auth.qrReadyHint.whatsapp";
+  }
+
+  return "integrations.channel.auth.qrReadyHint";
 }
 
 function channelAuthChallengeActionMessages(

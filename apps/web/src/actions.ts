@@ -105,6 +105,10 @@ type TelegramConnectionActionState = {
 };
 
 const telegramBotChannelType = "telegram_bot" as const;
+const directQrChannelTypes = new Set([
+  "telegram_qr_bridge",
+  "whatsapp_qr_bridge"
+]);
 const telegramBotTokenPattern = /^\d{6,14}:[A-Za-z0-9_-]{30,}$/;
 const maxBrandLogoBytes = 2 * 1024 * 1024;
 const brandLogoMediaTypes = {
@@ -562,10 +566,34 @@ export async function createChannelConnectorAction(
       },
       internalApiAccess
     );
+    let authChallenge: Awaited<
+      ReturnType<typeof startChannelAuthChallenge>
+    > | null = null;
+
+    if (directQrChannelTypes.has(channelType)) {
+      try {
+        authChallenge = await startChannelAuthChallenge(
+          {
+            connectorId: connector.connectorId,
+            request: {
+              challengeType: "qr"
+            }
+          },
+          internalApiAccess
+        );
+      } catch (error) {
+        await deleteChannelConnector(
+          { connectorId: connector.connectorId },
+          internalApiAccess
+        ).catch(() => undefined);
+        throw error;
+      }
+    }
 
     revalidateTelegramIntegrationPaths();
 
     return {
+      challengeId: authChallenge?.challenge.challengeId,
       code: "created",
       connectorId: connector.connectorId,
       status: "success",
@@ -879,18 +907,44 @@ export async function cancelChannelAuthChallengeAction(
       { redirectOnEmailNotVerified: false }
     );
     const connectorId = readRequiredFormString(formData, "connectorId").trim();
-    const challengeId = readRequiredFormString(formData, "challengeId").trim();
-
-    await cancelChannelAuthChallenge(
-      { connectorId, challengeId },
-      internalApiAccess
+    const challengeId = readOptionalFormString(formData, "challengeId")?.trim();
+    const deleteConnectorOnCancel =
+      readOptionalFormString(formData, "deleteConnectorOnCancel") === "on";
+    const redirectChannelType = normalizeOptionalFormValue(
+      readOptionalFormString(formData, "redirectChannelType")
     );
+    const redirectTab = readOptionalFormString(formData, "redirectTab");
+
+    if (challengeId) {
+      await cancelChannelAuthChallenge(
+        { connectorId, challengeId },
+        internalApiAccess
+      ).catch((error) => {
+        if (!deleteConnectorOnCancel) {
+          throw error;
+        }
+      });
+    }
+
+    if (deleteConnectorOnCancel) {
+      await deleteChannelConnector({ connectorId }, internalApiAccess);
+    }
+
     revalidateTelegramIntegrationPaths();
 
     return channelAuthChallengeActionSuccess({
       code: "cancelled",
       connectorId,
-      challengeId
+      challengeId,
+      redirectChannelType:
+        deleteConnectorOnCancel && redirectChannelType
+          ? redirectChannelType
+          : undefined,
+      redirectTab:
+        deleteConnectorOnCancel &&
+        (redirectTab === "accounts" || redirectTab === "channels")
+          ? redirectTab
+          : undefined
     });
   } catch (error) {
     return channelAuthChallengeActionError(
