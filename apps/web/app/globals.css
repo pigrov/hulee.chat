@@ -3675,17 +3675,13 @@ button.integrationListItem {
 }
 
 .channelStatusBadge[data-state="ok"] {
-  border-color: color-mix(
-    in srgb,
-    var(--hulee-color-brand-primary) 30%,
-    transparent
-  );
+  border-color: color-mix(in srgb, var(--hulee-color-success) 30%, transparent);
   background: color-mix(
     in srgb,
-    var(--hulee-color-brand-primary) 17%,
+    var(--hulee-color-success) 17%,
     var(--hulee-color-surface-raised)
   );
-  color: var(--hulee-color-brand-primary);
+  color: var(--hulee-color-success);
 }
 
 .channelStatusBadge[data-state="error"] {
