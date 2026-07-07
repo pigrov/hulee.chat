@@ -9,13 +9,13 @@ import type {
   InternalChannelCatalogItem,
   InternalChannelConnectorSummary
 } from "@hulee/contracts";
-import { CheckCircle2, Circle } from "lucide-react";
+import { Activity, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AccessDeniedPage } from "../../../src/access-denied";
-import { DetailItem, SlotMount } from "../../../src/app-chrome";
+import { SlotMount } from "../../../src/app-chrome";
 import { loadTenantAdminViewModel } from "../../../src/admin-view-model";
 import { ChannelConnectorCreateForm } from "../../../src/channel-connector-create-form";
 import { ChannelConnectorLifecycleActions } from "../../../src/channel-connector-lifecycle-actions";
@@ -422,6 +422,14 @@ function GenericChannelConnectorPanel({
     (item) => item.channelType === connector.channelType
   );
   const step = resolveGenericChannelStep({ channel, challenge, connector });
+  const authStepKind = isAuthChallengeStep(step.kind) ? step.kind : undefined;
+  const connectionState = genericChannelConnectionState(connector);
+  const problemMessage = genericChannelProblemMessage(connector, t);
+  const showAuthChallenge =
+    connector.status !== "connected" &&
+    connector.status !== "disabled" &&
+    connector.status !== "deleted" &&
+    authStepKind !== undefined;
 
   return (
     <section className="settingsPanel" aria-labelledby="channel-detail-title">
@@ -432,69 +440,151 @@ function GenericChannelConnectorPanel({
             {connector.displayName}
           </h2>
         </div>
-        <span className="badge">
-          <ChannelIcon
-            channel={channel}
-            channelClass={connector.channelClass}
-          />
-          {t(channelConnectorStatusKey(connector.status))}
-        </span>
+        <GenericChannelConnectionBadge state={connectionState} t={t} />
       </div>
 
-      <GenericChannelLifecycleActions connector={connector} t={t} />
+      <div className="telegramConnectionActions">
+        <GenericChannelLifecycleActions connector={connector} t={t} />
+      </div>
 
-      {channel ? (
-        <GenericChannelStepper
-          channel={channel}
-          currentStepId={step.id}
-          t={t}
-        />
+      {problemMessage ? (
+        <p
+          className="telegramConnectionNotice"
+          data-variant="error"
+          role="status"
+        >
+          {problemMessage}
+        </p>
       ) : null}
 
-      <div className="diagnosticGrid">
-        <DetailItem
-          label={t("integrations.telegram.lifecycleStatus")}
-          value={t(channelConnectorStatusKey(connector.status))}
-        />
-        <DetailItem
-          label={t("integrations.channel.details.type")}
-          value={
-            channel
-              ? resolveChannelTitle({
-                  channel,
-                  locale,
-                  t,
-                  fallback: connector.channelType
-                })
-              : connector.channelType
-          }
-        />
-        <DetailItem
-          label={t("integrations.channel.details.health")}
-          value={t(channelHealthStatusKey(connector.healthStatus))}
-        />
-        {connector.diagnosticsStatus ? (
-          <DetailItem
-            label={t("integrations.channel.details.diagnosticsStatus")}
-            value={connector.diagnosticsStatus}
-          />
-        ) : null}
-      </div>
+      <GenericChannelCompactStatus connector={connector} t={t} />
 
-      {isAuthChallengeStep(step.kind) ? (
+      {showAuthChallenge ? (
         <ChannelAuthChallengePanel
           challenge={challenge}
           challengeType={resolveChallengeType({
             challenge,
-            stepKind: step.kind
+            stepKind: authStepKind
           })}
           connectorId={connector.connectorId}
           locale={locale}
-          stepKind={step.kind}
+          stepKind={authStepKind}
           t={t}
         />
       ) : null}
     </section>
+  );
+}
+
+type GenericChannelConnectionState = "ok" | "error" | "new";
+
+function GenericChannelConnectionBadge({
+  state,
+  t
+}: {
+  state: GenericChannelConnectionState;
+  t: Translator;
+}): ReactNode {
+  return (
+    <span className="telegramConnectionBadge" data-state={state}>
+      {t(`integrations.channel.connectionBadge.${state}` as I18nMessageKey)}
+    </span>
+  );
+}
+
+function genericChannelConnectionState(
+  connector: InternalChannelConnectorSummary
+): GenericChannelConnectionState {
+  if (
+    connector.status === "failed" ||
+    connector.status === "degraded" ||
+    connector.status === "reauth_required" ||
+    connector.healthStatus === "degraded" ||
+    connector.healthStatus === "unhealthy"
+  ) {
+    return "error";
+  }
+
+  if (connector.status === "connected") {
+    return "ok";
+  }
+
+  return "new";
+}
+
+function genericChannelProblemMessage(
+  connector: InternalChannelConnectorSummary,
+  t: Translator
+): string | undefined {
+  if (connector.status === "reauth_required") {
+    return t("integrations.channel.connectionProblem.reauthRequired");
+  }
+
+  if (connector.status === "failed") {
+    return t("integrations.channel.connectionProblem.failed");
+  }
+
+  if (
+    connector.status === "degraded" ||
+    connector.healthStatus === "degraded"
+  ) {
+    return t("integrations.channel.connectionProblem.degraded");
+  }
+
+  if (connector.healthStatus === "unhealthy") {
+    return t("integrations.channel.connectionProblem.unhealthy");
+  }
+
+  return undefined;
+}
+
+function GenericChannelCompactStatus({
+  connector,
+  t
+}: {
+  connector: InternalChannelConnectorSummary;
+  t: Translator;
+}): ReactNode {
+  return (
+    <div className="telegramStatusCard">
+      <h3 className="telegramStatusTitle">
+        {t("integrations.channel.connectionStatusTitle")}
+      </h3>
+      <GenericChannelStatusMetric
+        icon="status"
+        label={t("integrations.channel.connectionMetric.status")}
+        value={t(channelConnectorStatusKey(connector.status))}
+      />
+      <GenericChannelStatusMetric
+        icon="health"
+        label={t("integrations.channel.connectionMetric.health")}
+        value={t(channelHealthStatusKey(connector.healthStatus))}
+      />
+    </div>
+  );
+}
+
+function GenericChannelStatusMetric({
+  icon,
+  label,
+  value
+}: {
+  icon: "health" | "status";
+  label: string;
+  value: string;
+}): ReactNode {
+  const Icon = icon === "status" ? Activity : ShieldCheck;
+
+  return (
+    <div className="telegramStatusMetric">
+      <span className="telegramStatusIcon" aria-hidden="true">
+        <Icon size={22} />
+      </span>
+      <span className="telegramStatusBody">
+        <span className="telegramStatusLabel">{label}</span>
+        <strong className="telegramStatusValue">{value}</strong>
+      </span>
+    </div>
   );
 }
 
@@ -521,52 +611,6 @@ function GenericChannelLifecycleActions({
       }}
       status={connector.status}
     />
-  );
-}
-
-function GenericChannelStepper({
-  channel,
-  currentStepId,
-  t
-}: {
-  channel: InternalChannelCatalogItem;
-  currentStepId: string;
-  t: Translator;
-}): ReactNode {
-  const currentIndex = channel.onboarding.steps.findIndex(
-    (step) => step.id === currentStepId
-  );
-  const normalizedCurrentIndex = currentIndex >= 0 ? currentIndex : 0;
-
-  return (
-    <ol
-      className="setupStepList"
-      aria-label={t("integrations.channel.onboardingFlow")}
-    >
-      {channel.onboarding.steps.map((step, index) => {
-        const state =
-          index < normalizedCurrentIndex
-            ? "complete"
-            : step.id === currentStepId
-              ? "current"
-              : "pending";
-
-        return (
-          <li className="setupStep" data-state={state} key={step.id}>
-            <span className="setupStepMarker" aria-hidden="true">
-              {state === "complete" ? (
-                <CheckCircle2 size={16} />
-              ) : (
-                <Circle size={16} />
-              )}
-            </span>
-            <span className="setupStepLabel">
-              {t(step.titleKey as I18nMessageKey)}
-            </span>
-          </li>
-        );
-      })}
-    </ol>
   );
 }
 
