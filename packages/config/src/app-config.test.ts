@@ -99,6 +99,8 @@ describe("app config", () => {
         HULEE_WORKER_POLL_INTERVAL_MS: "2500",
         HULEE_OUTBOX_BATCH_SIZE: "25",
         HULEE_OUTBOX_RETRY_DELAY_MS: "45000",
+        HULEE_TELEGRAM_USER_API_ID: "123456",
+        HULEE_TELEGRAM_USER_API_HASH: "telegram-api-hash",
         HULEE_EGRESS_PROBES_ENABLED: "true",
         HULEE_EGRESS_PROBE_INTERVAL_MS: "60000",
         HULEE_EGRESS_PROBE_TIMEOUT_MS: "5000"
@@ -111,6 +113,8 @@ describe("app config", () => {
       workerFeatures: ["core", "telegram_bot"],
       publicBaseUrl: "https://chat.example.test",
       publicWebhookBaseUrl: "https://hooks.example.test",
+      telegramUserApiId: 123456,
+      telegramUserApiHash: "telegram-api-hash",
       pollIntervalMs: 2500,
       outboxBatchSize: 25,
       outboxRetryDelayMs: 45000,

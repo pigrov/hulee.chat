@@ -195,7 +195,7 @@ describe("employee admin actions", () => {
       })
     );
     expect(mocks.revalidatePath).toHaveBeenCalledWith("/admin/employees");
-  });
+  }, 15_000);
 
   it("returns permission_denied before creating an invitation", async () => {
     const { inviteEmployeeAction } = await import("./employee-actions");

@@ -13,6 +13,11 @@
     "@hulee/db": "workspace:*",
     "@hulee/modules": "workspace:*",
     "@hulee/observability": "workspace:*",
-    "@hulee/storage": "workspace:*"
+    "@hulee/storage": "workspace:*",
+    "qrcode": "1.5.4",
+    "telegram": "2.26.22"
+  },
+  "devDependencies": {
+    "@types/qrcode": "1.5.5"
   }
 }

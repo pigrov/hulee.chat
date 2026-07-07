@@ -16,6 +16,10 @@ import type {
   ChannelAuthChallengeRepository,
   ChannelConnectorRecord,
   ChannelConnectorRepository,
+  ChannelSessionRecord,
+  ChannelSessionRepository,
+  ChannelSessionEventRecord,
+  AppendChannelSessionEventInput,
   ChannelProviderValidationJobRecord,
   ChannelProviderValidationJobRepository,
   DeploymentChannelCatalogOverrideRecord,
@@ -25,12 +29,20 @@ import type {
   FindActiveChannelConnectorByExternalIdInput,
   FindChannelAuthChallengeInput,
   FindChannelConnectorInput,
+  FindChannelSessionInput,
+  FindConnectorChannelSessionInput,
   FindChannelProviderValidationJobInput,
   FindFirstChannelConnectorByTypeInput,
   FindLatestActiveChannelAuthChallengeInput,
+  ListActiveChannelAuthChallengesInput,
+  ListChannelSessionEventsInput,
+  ListRunnableChannelSessionsInput,
+  ClaimChannelSessionLeaseInput,
+  ReleaseChannelSessionLeaseInput,
   ListActiveChannelConnectorsByTypeInput,
   ListTenantChannelConnectorsInput,
   UpsertChannelAuthChallengeInput,
+  UpsertChannelSessionInput,
   UpsertChannelConnectorInput,
   UpsertChannelProviderValidationJobInput
 } from "@hulee/db";
@@ -48,10 +60,27 @@ const context: InternalIntegrationContext = {
   employeeId: "employee-1" as EmployeeId
 };
 const now = new Date("2026-06-22T10:00:00.000Z");
+const fakeAuthChallengeCipher = {
+  encrypt(plainText: string): string {
+    return `sealed:${Buffer.from(plainText, "utf8").toString("base64url")}`;
+  },
+  decrypt(sealedValue: string): string {
+    return Buffer.from(
+      sealedValue.replace(/^sealed:/, ""),
+      "base64url"
+    ).toString("utf8");
+  }
+};
 const telegramEgressDiagnostics = (checkedAt = now.toISOString()) => ({
   required: true as const,
   status: "unknown" as const,
   profileKind: "vpn_namespace" as const,
+  checkedAt
+});
+const directEgressDiagnostics = (checkedAt = now.toISOString()) => ({
+  required: false as const,
+  status: "unknown" as const,
+  profileKind: "direct" as const,
   checkedAt
 });
 
@@ -194,16 +223,23 @@ describe("internal integrations service", () => {
     const authChallengeRepository =
       new InMemoryChannelAuthChallengeRepository();
     const connectorRepository = new InMemoryChannelConnectorRepository([
-      createUserBridgeConnector()
+      createUserBridgeConnector({
+        channelType: "max_qr_bridge",
+        provider: "max",
+        connectorId: "max_qr_bridge:tenant-integrations" as ChannelConnectorId,
+        displayName: "MAX personal",
+        onboardingStep: "phone"
+      })
     ]);
     const service = createInternalIntegrationService({
       connectorRepository,
       authChallengeRepository,
+      authChallengeCipher: fakeAuthChallengeCipher,
       now: () => now
     });
 
     const startResponse = await service.startChannelAuthChallenge(context, {
-      connectorId: "telegram_qr_bridge:tenant-integrations",
+      connectorId: "max_qr_bridge:tenant-integrations",
       request: {
         challengeType: "phone_code",
         phoneNumber: "+79990000000"
@@ -212,7 +248,7 @@ describe("internal integrations service", () => {
     const secondStartResponse = await service.startChannelAuthChallenge(
       context,
       {
-        connectorId: "telegram_qr_bridge:tenant-integrations",
+        connectorId: "max_qr_bridge:tenant-integrations",
         request: {
           challengeType: "phone_code",
           phoneNumber: "+79990000000"
@@ -222,7 +258,7 @@ describe("internal integrations service", () => {
 
     expect(startResponse).toMatchObject({
       challenge: {
-        connectorId: "telegram_qr_bridge:tenant-integrations",
+        connectorId: "max_qr_bridge:tenant-integrations",
         challengeType: "phone_code",
         status: "requires_code",
         publicPayload: {
@@ -237,7 +273,7 @@ describe("internal integrations service", () => {
 
     await expect(
       service.submitChannelAuthChallenge(context, {
-        connectorId: "telegram_qr_bridge:tenant-integrations",
+        connectorId: "max_qr_bridge:tenant-integrations",
         challengeId: startResponse.challenge.challengeId,
         request: {
           code: "12345"
@@ -248,10 +284,18 @@ describe("internal integrations service", () => {
         status: "waiting"
       }
     });
+    expect(
+      authChallengeRepository.records.get(startResponse.challenge.challengeId)
+        ?.secretPayloadEncrypted
+    ).toContain("sealed:");
+    expect(
+      authChallengeRepository.records.get(startResponse.challenge.challengeId)
+        ?.secretPayloadEncrypted
+    ).not.toContain("12345");
 
     await expect(
       service.cancelChannelAuthChallenge(context, {
-        connectorId: "telegram_qr_bridge:tenant-integrations",
+        connectorId: "max_qr_bridge:tenant-integrations",
         challengeId: startResponse.challenge.challengeId
       })
     ).resolves.toMatchObject({
@@ -259,6 +303,28 @@ describe("internal integrations service", () => {
         status: "cancelled",
         completedAt: now.toISOString()
       }
+    });
+  });
+
+  it("rejects auth challenge flows that do not match a direct account channel", async () => {
+    const service = createInternalIntegrationService({
+      connectorRepository: new InMemoryChannelConnectorRepository([
+        createUserBridgeConnector()
+      ]),
+      authChallengeRepository: new InMemoryChannelAuthChallengeRepository(),
+      now: () => now
+    });
+
+    await expect(
+      service.startChannelAuthChallenge(context, {
+        connectorId: "telegram_qr_bridge:tenant-integrations",
+        request: {
+          challengeType: "phone_code",
+          phoneNumber: "+79990000000"
+        }
+      })
+    ).rejects.toMatchObject({
+      code: "validation.failed"
     });
   });
 
@@ -299,6 +365,108 @@ describe("internal integrations service", () => {
       })
     );
   });
+
+  it.each([
+    {
+      channelType: "telegram_qr_bridge" as const,
+      provider: "telegram",
+      displayName: "Telegram account",
+      authMode: "qr",
+      initialStep: "qr",
+      expectedEgress: telegramEgressDiagnostics()
+    },
+    {
+      channelType: "whatsapp_qr_bridge" as const,
+      provider: "whatsapp",
+      displayName: "WhatsApp account",
+      authMode: "qr",
+      initialStep: "qr",
+      expectedEgress: telegramEgressDiagnostics()
+    },
+    {
+      channelType: "max_qr_bridge" as const,
+      provider: "max",
+      displayName: "MAX account",
+      authMode: "phone_code",
+      initialStep: "phone",
+      expectedEgress: directEgressDiagnostics()
+    }
+  ])(
+    "creates $channelType connectors with a primary user session",
+    async (expected) => {
+      const connectorRepository = new InMemoryChannelConnectorRepository();
+      const channelSessionRepository = new InMemoryChannelSessionRepository();
+      const service = createInternalIntegrationService({
+        connectorRepository,
+        channelSessionRepository,
+        now: () => now
+      });
+
+      const response = await service.createChannelConnector(context, {
+        channelType: expected.channelType
+      });
+
+      expect(response).toMatchObject({
+        connectorId: expect.stringMatching(
+          new RegExp(`^${expected.channelType}:`)
+        ),
+        channelType: expected.channelType,
+        channelClass: "user_bridge",
+        provider: expected.provider,
+        displayName: expected.displayName,
+        status: "onboarding",
+        healthStatus: "unknown",
+        diagnosticsStatus: "not_started",
+        egress: expected.expectedEgress
+      });
+      expect(connectorRepository.records.get(response.connectorId)).toEqual(
+        expect.objectContaining({
+          id: response.connectorId,
+          tenantId,
+          channelType: expected.channelType,
+          channelClass: "user_bridge",
+          provider: expected.provider,
+          status: "onboarding",
+          onboardingState: {
+            step: expected.initialStep
+          },
+          config: {
+            sessionKey: "primary",
+            authMode: expected.authMode
+          },
+          createdByEmployeeId: context.employeeId
+        })
+      );
+      expect([...channelSessionRepository.records.values()]).toEqual([
+        expect.objectContaining({
+          tenantId,
+          connectorId: response.connectorId,
+          sessionKey: "primary",
+          status: "not_started",
+          publicState: {
+            stage: "not_started"
+          },
+          metadata: {
+            provider: expected.provider,
+            channelType: expected.channelType,
+            authMode: expected.authMode
+          }
+        })
+      ]);
+      expect(channelSessionRepository.events).toEqual([
+        expect.objectContaining({
+          tenantId,
+          connectorId: response.connectorId,
+          eventType: "session.created",
+          metadata: {
+            channelType: expected.channelType,
+            provider: expected.provider,
+            sessionKey: "primary"
+          }
+        })
+      ]);
+    }
+  );
 
   it("disables, enables and soft-deletes tenant channel connectors", async () => {
     const repository = new InMemoryChannelConnectorRepository([
@@ -1449,6 +1617,36 @@ class InMemoryChannelAuthChallengeRepository implements ChannelAuthChallengeRepo
     );
   }
 
+  async listActiveChallenges(
+    input: ListActiveChannelAuthChallengesInput = {}
+  ): Promise<ChannelAuthChallengeRecord[]> {
+    const statuses = new Set(
+      input.statuses ?? [
+        "pending",
+        "waiting",
+        "requires_code",
+        "requires_password"
+      ]
+    );
+    const now = input.now ?? new Date();
+
+    return [...this.records.values()]
+      .filter(
+        (record) =>
+          statuses.has(record.status) &&
+          (!record.expiresAt || record.expiresAt.getTime() > now.getTime())
+      )
+      .sort((left, right) => {
+        const byUpdatedAt =
+          left.updatedAt.getTime() - right.updatedAt.getTime();
+
+        return byUpdatedAt === 0
+          ? left.id.localeCompare(right.id)
+          : byUpdatedAt;
+      })
+      .slice(0, input.limit ?? 100);
+  }
+
   async upsertChallenge(input: UpsertChannelAuthChallengeInput): Promise<void> {
     const existing = this.records.get(input.id);
     const updatedAt = input.updatedAt;
@@ -1469,6 +1667,144 @@ class InMemoryChannelAuthChallengeRepository implements ChannelAuthChallengeRepo
       createdAt: existing?.createdAt ?? updatedAt,
       updatedAt
     });
+  }
+}
+
+class InMemoryChannelSessionRepository implements ChannelSessionRepository {
+  readonly records = new Map<string, ChannelSessionRecord>();
+  readonly events: ChannelSessionEventRecord[] = [];
+
+  async findSession(
+    input: FindChannelSessionInput
+  ): Promise<ChannelSessionRecord | null> {
+    const record = this.records.get(input.sessionId) ?? null;
+
+    return record?.tenantId === input.tenantId ? record : null;
+  }
+
+  async findConnectorSession(
+    input: FindConnectorChannelSessionInput
+  ): Promise<ChannelSessionRecord | null> {
+    return (
+      [...this.records.values()].find(
+        (record) =>
+          record.tenantId === input.tenantId &&
+          record.connectorId === input.connectorId &&
+          record.sessionKey === input.sessionKey
+      ) ?? null
+    );
+  }
+
+  async listRunnableSessions(
+    input: ListRunnableChannelSessionsInput
+  ): Promise<ChannelSessionRecord[]> {
+    return [...this.records.values()].filter(
+      (record) => record.status === input.status
+    );
+  }
+
+  async upsertSession(input: UpsertChannelSessionInput): Promise<void> {
+    const existing = this.records.get(input.id);
+    const updatedAt = input.updatedAt;
+
+    this.records.set(input.id, {
+      id: input.id,
+      tenantId: input.tenantId,
+      connectorId: String(input.connectorId) as ChannelConnectorId,
+      sessionKey: input.sessionKey,
+      status: input.status,
+      sessionEncrypted: input.sessionEncrypted ?? null,
+      sessionFingerprint: input.sessionFingerprint ?? null,
+      externalAccountId: input.externalAccountId ?? null,
+      displayAddress: input.displayAddress ?? null,
+      publicState: input.publicState ?? {},
+      metadata: input.metadata ?? {},
+      challengeType: input.challengeType ?? null,
+      challengeExpiresAt: input.challengeExpiresAt ?? null,
+      leaseOwner: input.leaseOwner ?? null,
+      leaseExpiresAt: input.leaseExpiresAt ?? null,
+      lastConnectedAt: input.lastConnectedAt ?? null,
+      lastDisconnectedAt: input.lastDisconnectedAt ?? null,
+      lastHeartbeatAt: input.lastHeartbeatAt ?? null,
+      lastInboundAt: input.lastInboundAt ?? null,
+      lastOutboundAt: input.lastOutboundAt ?? null,
+      lastErrorAt: input.lastErrorAt ?? null,
+      lastErrorCode: input.lastErrorCode ?? null,
+      lastErrorMessage: input.lastErrorMessage ?? null,
+      createdAt: existing?.createdAt ?? updatedAt,
+      updatedAt
+    });
+  }
+
+  async claimSessionLease(
+    input: ClaimChannelSessionLeaseInput
+  ): Promise<ChannelSessionRecord | null> {
+    const record = this.records.get(input.sessionId);
+
+    if (!record || record.tenantId !== input.tenantId) {
+      return null;
+    }
+
+    const updated = {
+      ...record,
+      leaseOwner: input.leaseOwner,
+      leaseExpiresAt: input.leaseExpiresAt,
+      lastHeartbeatAt: input.now,
+      updatedAt: input.now
+    };
+
+    this.records.set(input.sessionId, updated);
+
+    return updated;
+  }
+
+  async releaseSessionLease(
+    input: ReleaseChannelSessionLeaseInput
+  ): Promise<void> {
+    const record = this.records.get(input.sessionId);
+
+    if (
+      !record ||
+      record.tenantId !== input.tenantId ||
+      record.leaseOwner !== input.leaseOwner
+    ) {
+      return;
+    }
+
+    this.records.set(input.sessionId, {
+      ...record,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      updatedAt: input.updatedAt
+    });
+  }
+
+  async appendSessionEvent(
+    input: AppendChannelSessionEventInput
+  ): Promise<void> {
+    this.events.push({
+      id: input.id,
+      tenantId: input.tenantId,
+      connectorId: String(input.connectorId) as ChannelConnectorId,
+      sessionId: input.sessionId,
+      eventType: input.eventType,
+      severity: input.severity ?? "info",
+      code: input.code ?? null,
+      message: input.message ?? null,
+      metadata: input.metadata ?? {},
+      occurredAt: input.occurredAt,
+      createdAt: input.updatedAt,
+      updatedAt: input.updatedAt
+    });
+  }
+
+  async listSessionEvents(
+    input: ListChannelSessionEventsInput
+  ): Promise<ChannelSessionEventRecord[]> {
+    return this.events.filter(
+      (event) =>
+        event.tenantId === input.tenantId && event.sessionId === input.sessionId
+    );
   }
 }
 
@@ -1603,19 +1939,29 @@ function createTelegramConnector(input: {
   };
 }
 
-function createUserBridgeConnector(): ChannelConnectorRecord {
+function createUserBridgeConnector(
+  input: {
+    connectorId?: ChannelConnectorId;
+    channelType?: ChannelType;
+    provider?: string;
+    displayName?: string;
+    onboardingStep?: string;
+  } = {}
+): ChannelConnectorRecord {
   return {
-    id: "telegram_qr_bridge:tenant-integrations" as ChannelConnectorId,
+    id:
+      input.connectorId ??
+      ("telegram_qr_bridge:tenant-integrations" as ChannelConnectorId),
     tenantId,
-    channelType: "telegram_qr_bridge",
+    channelType: input.channelType ?? "telegram_qr_bridge",
     channelClass: "user_bridge",
-    provider: "telegram",
-    displayName: "Telegram personal",
+    provider: input.provider ?? "telegram",
+    displayName: input.displayName ?? "Telegram personal",
     status: "onboarding",
     healthStatus: "unknown",
     capabilities: {},
     onboardingState: {
-      step: "qr"
+      step: input.onboardingStep ?? "qr"
     },
     config: {},
     diagnostics: {},

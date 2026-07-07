@@ -58,6 +58,7 @@ export default async function IntegrationsAdminPage({
     connectorId?: string;
     channelType?: string;
     connectionPendingAt?: string;
+    tab?: string;
   }>;
 }): Promise<ReactNode> {
   const access = await resolveCurrentWebAccessSession();
@@ -100,6 +101,7 @@ export default async function IntegrationsAdminPage({
   const requestedChannelType = normalizeOptionalSearchParam(
     resolvedSearchParams?.channelType
   );
+  const requestedTab = normalizeIntegrationsTab(resolvedSearchParams?.tab);
   const connectionPendingAt = normalizeOptionalSearchParam(
     resolvedSearchParams?.connectionPendingAt
   );
@@ -116,9 +118,25 @@ export default async function IntegrationsAdminPage({
     connectors: channelConnectors.connectors,
     requestedConnectorId
   });
+  const currentTab =
+    selectedConnector?.channelClass === "user_bridge"
+      ? "accounts"
+      : selectedConnector
+        ? "channels"
+        : (requestedTab ?? "channels");
+  const displayedConnectors = channelConnectors.connectors.filter(
+    (connector) =>
+      currentTab === "accounts"
+        ? connector.channelClass === "user_bridge"
+        : connector.channelClass !== "user_bridge"
+  );
   const selectedConnectorId = selectedConnector?.connectorId;
   const availableChannels = channelCatalog.channels.filter(
-    (channel) => channel.readiness === "available"
+    (channel) =>
+      channel.readiness === "available" &&
+      (currentTab === "accounts"
+        ? channel.channelClass === "user_bridge"
+        : channel.channelClass !== "user_bridge")
   );
   const selectedCatalogChannel =
     selectedConnector === undefined && requestedChannelType
@@ -168,6 +186,7 @@ export default async function IntegrationsAdminPage({
       <ChannelCatalogDetailPanel
         channel={selectedCatalogChannel}
         locale={locale}
+        tab={currentTab}
         t={t}
       />
     ) : (
@@ -199,33 +218,54 @@ export default async function IntegrationsAdminPage({
           </div>
 
           <nav
+            className="integrationTabNav"
+            aria-label={t("admin.integrations.tabs")}
+          >
+            <Link
+              className="secondaryButton integrationTabLink"
+              href="/admin/integrations?tab=channels"
+              aria-current={currentTab === "channels" ? "page" : undefined}
+            >
+              {t("admin.integrations.tab.channels")}
+            </Link>
+            <Link
+              className="secondaryButton integrationTabLink"
+              href="/admin/integrations?tab=accounts"
+              aria-current={currentTab === "accounts" ? "page" : undefined}
+            >
+              {t("admin.integrations.tab.accounts")}
+            </Link>
+          </nav>
+
+          <nav
             className="integrationList"
             aria-label={t("admin.integrations.channelList")}
           >
             <div className="integrationListGroup">
               <h3 className="detailLabel">
-                {t("admin.integrations.connectedChannels")}
+                {t(connectedGroupTitleKey(currentTab))}
               </h3>
-              {channelConnectors.connectors.length > 0 ? (
-                channelConnectors.connectors.map((connector) => (
+              {displayedConnectors.length > 0 ? (
+                displayedConnectors.map((connector) => (
                   <ConnectorListItem
                     key={connector.connectorId}
                     connector={connector}
                     catalog={channelCatalog.channels}
                     current={connector.connectorId === selectedConnectorId}
                     locale={locale}
+                    tab={currentTab}
                     t={t}
                   />
                 ))
               ) : (
                 <p className="metaText">
-                  {t("admin.integrations.noConnectedChannels")}
+                  {t(emptyConnectedGroupKey(currentTab))}
                 </p>
               )}
             </div>
             <div className="integrationListGroup">
               <h3 className="detailLabel">
-                {t("admin.integrations.availableChannels")}
+                {t(availableGroupTitleKey(currentTab))}
               </h3>
               {availableChannels.map((channel) => (
                 <CatalogListItem
@@ -233,6 +273,7 @@ export default async function IntegrationsAdminPage({
                   channel={channel}
                   current={channel.channelType === requestedChannelType}
                   locale={locale}
+                  tab={currentTab}
                   t={t}
                 />
               ))}
@@ -250,14 +291,47 @@ export default async function IntegrationsAdminPage({
 }
 
 type Translator = ReturnType<typeof createTranslator>["t"];
+type IntegrationsTab = "channels" | "accounts";
+
+function normalizeIntegrationsTab(
+  value: string | undefined
+): IntegrationsTab | undefined {
+  return value === "accounts" || value === "channels" ? value : undefined;
+}
+
+function connectedGroupTitleKey(tab: IntegrationsTab): I18nMessageKey {
+  return (
+    tab === "accounts"
+      ? "admin.integrations.connectedAccounts"
+      : "admin.integrations.connectedChannels"
+  ) as I18nMessageKey;
+}
+
+function availableGroupTitleKey(tab: IntegrationsTab): I18nMessageKey {
+  return (
+    tab === "accounts"
+      ? "admin.integrations.availableAccounts"
+      : "admin.integrations.availableChannels"
+  ) as I18nMessageKey;
+}
+
+function emptyConnectedGroupKey(tab: IntegrationsTab): I18nMessageKey {
+  return (
+    tab === "accounts"
+      ? "admin.integrations.noConnectedAccounts"
+      : "admin.integrations.noConnectedChannels"
+  ) as I18nMessageKey;
+}
 
 function ChannelCatalogDetailPanel({
   channel,
   locale,
+  tab,
   t
 }: {
   channel: InternalChannelCatalogItem;
   locale: string;
+  tab: IntegrationsTab;
   t: Translator;
 }): ReactNode {
   const title = resolveChannelTitle({
@@ -306,6 +380,7 @@ function ChannelCatalogDetailPanel({
             invalid: t("admin.integrations.actionStatus.invalid"),
             permission_denied: t("admin.roles.actionStatus.permissionDenied")
           }}
+          redirectTab={tab}
         />
       )}
     </section>
@@ -500,12 +575,14 @@ function ConnectorListItem({
   catalog,
   current,
   locale,
+  tab,
   t
 }: {
   connector: InternalChannelConnectorSummary;
   catalog: readonly InternalChannelCatalogItem[];
   current: boolean;
   locale: string;
+  tab: IntegrationsTab;
   t: Translator;
 }): ReactNode {
   const channel = catalog.find(
@@ -524,7 +601,7 @@ function ConnectorListItem({
   return (
     <Link
       className="integrationListItem integrationNavLink"
-      href={`/admin/integrations?connectorId=${encodeURIComponent(
+      href={`/admin/integrations?tab=${tab}&connectorId=${encodeURIComponent(
         connector.connectorId
       )}`}
       aria-current={current ? "page" : undefined}
@@ -557,17 +634,19 @@ function CatalogListItem({
   channel,
   current,
   locale,
+  tab,
   t
 }: {
   channel: InternalChannelCatalogItem;
   current: boolean;
   locale: string;
+  tab: IntegrationsTab;
   t: Translator;
 }): ReactNode {
   return (
     <Link
       className="integrationListItem integrationNavLink"
-      href={`/admin/integrations?channelType=${encodeURIComponent(
+      href={`/admin/integrations?tab=${tab}&channelType=${encodeURIComponent(
         channel.channelType
       )}`}
       aria-current={current ? "page" : undefined}

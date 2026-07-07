@@ -41,10 +41,12 @@ import type {
   ChannelAuthChallengeRepository,
   ChannelConnectorRecord,
   ChannelConnectorRepository,
+  ChannelSessionRepository,
   ChannelProviderValidationJobRepository,
   DeploymentChannelCatalogOverrideRecord,
   DeploymentChannelCatalogOverrideRepository,
   DomainEventRepository,
+  TenantSecretCipher,
   TenantSecretRepository
 } from "@hulee/db";
 import {
@@ -173,10 +175,12 @@ export type TelegramBotApiClientFactory = (
 
 export type InternalIntegrationServiceOptions = {
   connectorRepository: ChannelConnectorRepository;
+  channelSessionRepository?: ChannelSessionRepository;
   channelCatalogOverrideRepository?: DeploymentChannelCatalogOverrideRepository;
   authChallengeRepository?: ChannelAuthChallengeRepository;
   providerValidationJobRepository?: ChannelProviderValidationJobRepository;
   providerOperationEvents?: DomainEventRepository;
+  authChallengeCipher?: Pick<TenantSecretCipher, "encrypt" | "decrypt">;
   secretResolver?: SecretResolver;
   secretWriter?: SecretWriter;
   botApiClientFactory?: TelegramBotApiClientFactory;
@@ -195,9 +199,19 @@ export type InternalIntegrationServiceOptions = {
 
 const telegramModuleId = "channel-telegram" as const;
 const telegramChannelType = "telegram_bot" as const;
+const telegramQrBridgeChannelType = "telegram_qr_bridge" as const;
+const whatsappQrBridgeChannelType = "whatsapp_qr_bridge" as const;
+const maxQrBridgeChannelType = "max_qr_bridge" as const;
 const telegramChannelClass = "bot_bridge" as const;
+const userBridgeChannelClass = "user_bridge" as const;
 const telegramProvider = "telegram";
+const whatsappProvider = "whatsapp";
+const maxProvider = "max";
 const defaultTelegramDisplayName = "Telegram Bot";
+const defaultTelegramQrDisplayName = "Telegram account";
+const defaultWhatsappQrDisplayName = "WhatsApp account";
+const defaultMaxQrDisplayName = "MAX account";
+const userBridgePrimarySessionKey = "primary";
 const telegramBotTokenValidationKind = "telegram_bot_token" as const;
 const defaultProviderValidationTimeoutMs = 15_000;
 const defaultProviderValidationPollIntervalMs = 250;
@@ -404,6 +418,76 @@ const channelOnboardingFlows = {
     ]
   }
 } satisfies Record<InternalChannelType, InternalChannelOnboardingFlow>;
+
+type UserBridgeChannelType =
+  | typeof telegramQrBridgeChannelType
+  | typeof whatsappQrBridgeChannelType
+  | typeof maxQrBridgeChannelType;
+
+const userBridgeChannelSpecs = {
+  telegram_qr_bridge: {
+    channelType: telegramQrBridgeChannelType,
+    provider: telegramProvider,
+    defaultDisplayName: defaultTelegramQrDisplayName,
+    authMode: "qr",
+    initialStep: "qr",
+    egressRequirement: managedMessengerVpnEgressRequirement,
+    allowedStartChallengeTypes: ["qr", "reauth"],
+    capabilities: {
+      inbound: true,
+      outbound: true,
+      qrAuth: true,
+      sessionRuntime: true,
+      attachmentsMetadata: true
+    }
+  },
+  whatsapp_qr_bridge: {
+    channelType: whatsappQrBridgeChannelType,
+    provider: whatsappProvider,
+    defaultDisplayName: defaultWhatsappQrDisplayName,
+    authMode: "qr",
+    initialStep: "qr",
+    egressRequirement: managedMessengerVpnEgressRequirement,
+    allowedStartChallengeTypes: ["qr", "reauth"],
+    capabilities: {
+      inbound: true,
+      outbound: true,
+      qrAuth: true,
+      sessionRuntime: true,
+      attachmentsMetadata: true
+    }
+  },
+  max_qr_bridge: {
+    channelType: maxQrBridgeChannelType,
+    provider: maxProvider,
+    defaultDisplayName: defaultMaxQrDisplayName,
+    authMode: "phone_code",
+    initialStep: "phone",
+    egressRequirement: deploymentPolicyDirectEgressRequirement,
+    allowedStartChallengeTypes: ["phone_code", "reauth"],
+    capabilities: {
+      inbound: true,
+      outbound: true,
+      phoneCodeAuth: true,
+      passwordAuth: true,
+      sessionRuntime: true,
+      attachmentsMetadata: true
+    }
+  }
+} satisfies Record<
+  UserBridgeChannelType,
+  {
+    channelType: UserBridgeChannelType;
+    provider: string;
+    defaultDisplayName: string;
+    authMode: "qr" | "phone_code";
+    initialStep: string;
+    egressRequirement: InternalChannelCatalogResponse["channels"][number]["egressRequirement"];
+    allowedStartChallengeTypes: readonly InternalChannelAuthChallengeType[];
+    capabilities: Record<string, boolean>;
+  }
+>;
+
 const channelCatalogV1 = [
   {
     channelType: "telegram_bot",
@@ -420,31 +504,33 @@ const channelCatalogV1 = [
     onboarding: channelOnboardingFlows.telegram_bot
   },
   {
-    channelType: "telegram_qr_bridge",
+    channelType: userBridgeChannelSpecs.telegram_qr_bridge.channelType,
     channelClass: "user_bridge",
-    provider: "telegram",
+    provider: userBridgeChannelSpecs.telegram_qr_bridge.provider,
     titleKey: "integrations.catalog.telegramQr.title",
     shortDescriptionKey: "integrations.catalog.telegramQr.description",
     descriptionKey: "integrations.catalog.telegramQr.description",
-    readiness: "coming_soon",
+    readiness: "available",
     visibility: "visible",
     supportsMultiple: true,
     capabilities: ["inbound", "outbound", "qr_auth", "session_runtime"],
-    egressRequirement: managedMessengerVpnEgressRequirement,
+    egressRequirement:
+      userBridgeChannelSpecs.telegram_qr_bridge.egressRequirement,
     onboarding: channelOnboardingFlows.telegram_qr_bridge
   },
   {
-    channelType: "whatsapp_qr_bridge",
+    channelType: userBridgeChannelSpecs.whatsapp_qr_bridge.channelType,
     channelClass: "user_bridge",
-    provider: "whatsapp",
+    provider: userBridgeChannelSpecs.whatsapp_qr_bridge.provider,
     titleKey: "integrations.catalog.whatsappQr.title",
     shortDescriptionKey: "integrations.catalog.whatsappQr.description",
     descriptionKey: "integrations.catalog.whatsappQr.description",
-    readiness: "coming_soon",
+    readiness: "available",
     visibility: "visible",
     supportsMultiple: true,
     capabilities: ["inbound", "outbound", "qr_auth", "session_runtime"],
-    egressRequirement: managedMessengerVpnEgressRequirement,
+    egressRequirement:
+      userBridgeChannelSpecs.whatsapp_qr_bridge.egressRequirement,
     onboarding: channelOnboardingFlows.whatsapp_qr_bridge
   },
   {
@@ -462,17 +548,17 @@ const channelCatalogV1 = [
     onboarding: channelOnboardingFlows.max_bot
   },
   {
-    channelType: "max_qr_bridge",
+    channelType: userBridgeChannelSpecs.max_qr_bridge.channelType,
     channelClass: "user_bridge",
-    provider: "max",
+    provider: userBridgeChannelSpecs.max_qr_bridge.provider,
     titleKey: "integrations.catalog.maxQr.title",
     shortDescriptionKey: "integrations.catalog.maxQr.description",
     descriptionKey: "integrations.catalog.maxQr.description",
-    readiness: "coming_soon",
+    readiness: "available",
     visibility: "visible",
     supportsMultiple: true,
     capabilities: ["inbound", "outbound", "code_auth", "session_runtime"],
-    egressRequirement: deploymentPolicyDirectEgressRequirement,
+    egressRequirement: userBridgeChannelSpecs.max_qr_bridge.egressRequirement,
     onboarding: channelOnboardingFlows.max_qr_bridge
   },
   {
@@ -599,63 +685,32 @@ export function createInternalIntegrationService(
     },
 
     async createChannelConnector(context, request) {
-      if (request.channelType !== telegramChannelType) {
-        throw new CoreError("validation.failed");
+      if (request.channelType === telegramChannelType) {
+        return createTelegramBotConnector({
+          context,
+          request,
+          repository: options.connectorRepository,
+          updatedAt: now(),
+          webhookConnectorIdFactory
+        });
       }
 
-      const updatedAt = now();
-      const connectorId = createRandomChannelConnectorId(request.channelType);
-      const channelExternalId = createDefaultTelegramChannelExternalId();
-      const config: InternalTelegramIntegrationConfig = {
-        channelExternalId,
-        mode: "webhook",
-        webhookConnectorId: webhookConnectorIdFactory({
-          tenantId: context.tenantId,
-          channelExternalId
-        }),
-        outboundEnabled: false
-      };
-      const diagnostics = buildTelegramDiagnostics({
-        enabled: false,
-        config,
-        checkedAt: updatedAt.toISOString()
-      });
+      const userBridgeSpec = getUserBridgeChannelSpec(request.channelType);
 
-      await options.connectorRepository.upsertConnector({
-        id: connectorId,
-        tenantId: context.tenantId,
-        channelType: telegramChannelType,
-        channelClass: telegramChannelClass,
-        provider: telegramProvider,
-        displayName: request.displayName?.trim() || defaultTelegramDisplayName,
-        status: "draft",
-        healthStatus: "unknown",
-        capabilities: {
-          inbound: true,
-          outbound: true,
-          attachmentsMetadata: true
-        },
-        onboardingState: {
-          step: "name"
-        },
-        config,
-        diagnostics,
-        createdByEmployeeId: context.employeeId,
-        updatedAt
-      });
+      if (userBridgeSpec) {
+        return createUserBridgeConnector({
+          context,
+          request,
+          repository: options.connectorRepository,
+          sessionRepository: requireChannelSessionRepository(
+            options.channelSessionRepository
+          ),
+          spec: userBridgeSpec,
+          updatedAt: now()
+        });
+      }
 
-      return {
-        connectorId,
-        channelType: telegramChannelType,
-        channelClass: telegramChannelClass,
-        provider: telegramProvider,
-        displayName: request.displayName?.trim() || defaultTelegramDisplayName,
-        status: "draft",
-        healthStatus: "unknown",
-        channelExternalId,
-        diagnosticsStatus: diagnostics.status,
-        ...(diagnostics.egress ? { egress: diagnostics.egress } : {})
-      };
+      throw new CoreError("validation.failed");
     },
 
     async enableChannelConnector(context, input) {
@@ -698,6 +753,12 @@ export function createInternalIntegrationService(
         tenantId: context.tenantId,
         connectorId: input.connectorId
       });
+
+      assertUserBridgeStartChallengeAllowed({
+        connector,
+        challengeType: input.request.challengeType
+      });
+
       const existingChallenge =
         await authChallengeRepository.findLatestActiveChallenge({
           tenantId: context.tenantId,
@@ -818,6 +879,12 @@ export function createInternalIntegrationService(
       await authChallengeRepository.upsertChallenge({
         ...authChallengePersistenceInputFromRecord(challenge),
         status: nextStatus,
+        secretPayloadEncrypted: submittedChannelAuthChallengeSecretPayload({
+          existingSecretPayloadEncrypted: challenge.secretPayloadEncrypted,
+          request: input.request,
+          cipher: options.authChallengeCipher,
+          submittedAt: updatedAt
+        }),
         updatedAt
       });
 
@@ -1345,6 +1412,173 @@ function requireAuthChallengeRepository(
   return repository;
 }
 
+function requireChannelSessionRepository(
+  repository: ChannelSessionRepository | undefined
+): ChannelSessionRepository {
+  if (!repository) {
+    throw new CoreError("validation.failed");
+  }
+
+  return repository;
+}
+
+async function createTelegramBotConnector(input: {
+  context: InternalIntegrationContext;
+  request: InternalChannelConnectorCreateRequest;
+  repository: ChannelConnectorRepository;
+  updatedAt: Date;
+  webhookConnectorIdFactory: NonNullable<
+    InternalIntegrationServiceOptions["webhookConnectorIdFactory"]
+  >;
+}): Promise<InternalChannelConnectorSummary> {
+  const connectorId = createRandomChannelConnectorId(input.request.channelType);
+  const channelExternalId = createDefaultTelegramChannelExternalId();
+  const config: InternalTelegramIntegrationConfig = {
+    channelExternalId,
+    mode: "webhook",
+    webhookConnectorId: input.webhookConnectorIdFactory({
+      tenantId: input.context.tenantId,
+      channelExternalId
+    }),
+    outboundEnabled: false
+  };
+  const diagnostics = buildTelegramDiagnostics({
+    enabled: false,
+    config,
+    checkedAt: input.updatedAt.toISOString()
+  });
+  const displayName =
+    input.request.displayName?.trim() || defaultTelegramDisplayName;
+
+  await input.repository.upsertConnector({
+    id: connectorId,
+    tenantId: input.context.tenantId,
+    channelType: telegramChannelType,
+    channelClass: telegramChannelClass,
+    provider: telegramProvider,
+    displayName,
+    status: "draft",
+    healthStatus: "unknown",
+    capabilities: {
+      inbound: true,
+      outbound: true,
+      attachmentsMetadata: true
+    },
+    onboardingState: {
+      step: "name"
+    },
+    config,
+    diagnostics,
+    createdByEmployeeId: input.context.employeeId,
+    updatedAt: input.updatedAt
+  });
+
+  return {
+    connectorId,
+    channelType: telegramChannelType,
+    channelClass: telegramChannelClass,
+    provider: telegramProvider,
+    displayName,
+    status: "draft",
+    healthStatus: "unknown",
+    channelExternalId,
+    diagnosticsStatus: diagnostics.status,
+    ...(diagnostics.egress ? { egress: diagnostics.egress } : {})
+  };
+}
+
+async function createUserBridgeConnector(input: {
+  context: InternalIntegrationContext;
+  request: InternalChannelConnectorCreateRequest;
+  repository: ChannelConnectorRepository;
+  sessionRepository: ChannelSessionRepository;
+  spec: (typeof userBridgeChannelSpecs)[UserBridgeChannelType];
+  updatedAt: Date;
+}): Promise<InternalChannelConnectorSummary> {
+  const connectorId = createRandomChannelConnectorId(input.request.channelType);
+  const sessionId = createRandomChannelSessionId();
+  const displayName =
+    input.request.displayName?.trim() || input.spec.defaultDisplayName;
+  const checkedAt = input.updatedAt.toISOString();
+  const diagnostics = {
+    status: "not_started",
+    checkedAt,
+    egress: buildUserBridgeEgressDiagnostics({
+      checkedAt,
+      requirement: input.spec.egressRequirement
+    }),
+    session: {
+      sessionKey: userBridgePrimarySessionKey,
+      status: "not_started"
+    }
+  };
+
+  await input.repository.upsertConnector({
+    id: connectorId,
+    tenantId: input.context.tenantId,
+    channelType: input.spec.channelType,
+    channelClass: userBridgeChannelClass,
+    provider: input.spec.provider,
+    displayName,
+    status: "onboarding",
+    healthStatus: "unknown",
+    capabilities: input.spec.capabilities,
+    onboardingState: {
+      step: input.spec.initialStep
+    },
+    config: {
+      sessionKey: userBridgePrimarySessionKey,
+      authMode: input.spec.authMode
+    },
+    diagnostics,
+    createdByEmployeeId: input.context.employeeId,
+    updatedAt: input.updatedAt
+  });
+
+  await input.sessionRepository.upsertSession({
+    id: sessionId,
+    tenantId: input.context.tenantId,
+    connectorId,
+    sessionKey: userBridgePrimarySessionKey,
+    status: "not_started",
+    publicState: {
+      stage: "not_started"
+    },
+    metadata: {
+      provider: input.spec.provider,
+      channelType: input.spec.channelType,
+      authMode: input.spec.authMode
+    },
+    updatedAt: input.updatedAt
+  });
+  await input.sessionRepository.appendSessionEvent({
+    id: createRandomChannelSessionEventId(),
+    tenantId: input.context.tenantId,
+    connectorId,
+    sessionId,
+    eventType: "session.created",
+    metadata: {
+      channelType: input.spec.channelType,
+      provider: input.spec.provider,
+      sessionKey: userBridgePrimarySessionKey
+    },
+    occurredAt: input.updatedAt,
+    updatedAt: input.updatedAt
+  });
+
+  return {
+    connectorId,
+    channelType: input.spec.channelType,
+    channelClass: userBridgeChannelClass,
+    provider: input.spec.provider,
+    displayName,
+    status: "onboarding",
+    healthStatus: "unknown",
+    diagnosticsStatus: diagnostics.status,
+    egress: diagnostics.egress
+  };
+}
+
 async function loadUserBridgeConnector(input: {
   repository: ChannelConnectorRepository;
   tenantId: TenantId;
@@ -1367,6 +1601,38 @@ async function loadUserBridgeConnector(input: {
   }
 
   return record;
+}
+
+function getUserBridgeChannelSpec(
+  channelType: string
+): (typeof userBridgeChannelSpecs)[UserBridgeChannelType] | undefined {
+  if (channelType === telegramQrBridgeChannelType) {
+    return userBridgeChannelSpecs.telegram_qr_bridge;
+  }
+
+  if (channelType === whatsappQrBridgeChannelType) {
+    return userBridgeChannelSpecs.whatsapp_qr_bridge;
+  }
+
+  if (channelType === maxQrBridgeChannelType) {
+    return userBridgeChannelSpecs.max_qr_bridge;
+  }
+
+  return undefined;
+}
+
+function assertUserBridgeStartChallengeAllowed(input: {
+  connector: ChannelConnectorRecord;
+  challengeType: InternalChannelAuthChallengeType;
+}): void {
+  const spec = getUserBridgeChannelSpec(input.connector.channelType);
+  const allowedStartChallengeTypes:
+    | readonly InternalChannelAuthChallengeType[]
+    | undefined = spec?.allowedStartChallengeTypes;
+
+  if (!allowedStartChallengeTypes?.includes(input.challengeType)) {
+    throw new CoreError("validation.failed");
+  }
 }
 
 async function loadConnectorAuthChallenge(input: {
@@ -1435,6 +1701,57 @@ function submittedChannelAuthChallengeStatus(input: {
   }
 
   return internalChannelAuthChallengeStatus(input.currentStatus) ?? "failed";
+}
+
+function submittedChannelAuthChallengeSecretPayload(input: {
+  existingSecretPayloadEncrypted: string | null;
+  request: InternalChannelAuthChallengeSubmitRequest;
+  cipher?: Pick<TenantSecretCipher, "encrypt" | "decrypt">;
+  submittedAt: Date;
+}): string | null {
+  const code = input.request.code?.trim();
+  const password = input.request.password?.trim();
+
+  if (!code && !password) {
+    return input.existingSecretPayloadEncrypted;
+  }
+
+  if (!input.cipher) {
+    return input.existingSecretPayloadEncrypted;
+  }
+
+  const existingPayload = readEncryptedAuthChallengePayload({
+    cipher: input.cipher,
+    secretPayloadEncrypted: input.existingSecretPayloadEncrypted
+  });
+
+  return input.cipher.encrypt(
+    JSON.stringify({
+      ...existingPayload,
+      ...(code ? { code } : {}),
+      ...(password ? { password } : {}),
+      submittedAt: input.submittedAt.toISOString()
+    })
+  );
+}
+
+function readEncryptedAuthChallengePayload(input: {
+  cipher: Pick<TenantSecretCipher, "decrypt">;
+  secretPayloadEncrypted: string | null;
+}): Record<string, unknown> {
+  if (!input.secretPayloadEncrypted) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(
+      input.cipher.decrypt(input.secretPayloadEncrypted)
+    );
+
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 function channelAuthChallengePublicPayload(input: {
@@ -1702,6 +2019,14 @@ function createRandomChannelConnectorId(
 
 function createRandomChannelAuthChallengeId(): string {
   return `cha_${randomUUID()}`;
+}
+
+function createRandomChannelSessionId(): string {
+  return `chs_${randomUUID()}`;
+}
+
+function createRandomChannelSessionEventId(): string {
+  return `cse_${randomUUID()}`;
 }
 
 function createDefaultTelegramChannelExternalId(): string {
@@ -3119,6 +3444,18 @@ function buildTelegramEgressDiagnostics(
     status: "unknown",
     profileKind: managedMessengerVpnEgressRequirement.defaultProfileKind,
     checkedAt
+  };
+}
+
+function buildUserBridgeEgressDiagnostics(input: {
+  checkedAt: string;
+  requirement: InternalChannelCatalogResponse["channels"][number]["egressRequirement"];
+}): InternalEgressDiagnostics {
+  return {
+    required: input.requirement.required,
+    status: "unknown",
+    profileKind: input.requirement.defaultProfileKind,
+    checkedAt: input.checkedAt
   };
 }
 

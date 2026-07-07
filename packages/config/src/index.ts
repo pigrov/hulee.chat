@@ -99,6 +99,8 @@ export type WorkerConfig = BaseAppConfig & {
   workerFeatures: readonly WorkerFeature[];
   publicBaseUrl?: string;
   publicWebhookBaseUrl?: string;
+  telegramUserApiId?: number;
+  telegramUserApiHash?: string;
   objectStorage?: ObjectStorageConfig;
   pollIntervalMs: number;
   outboxBatchSize: number;
@@ -258,6 +260,8 @@ const workerEnvSchema = baseEnvSchema.extend({
   HULEE_WORKER_FEATURES: optionalWorkerFeatures,
   HULEE_PUBLIC_BASE_URL: optionalHttpUrl,
   HULEE_PUBLIC_WEBHOOK_BASE_URL: optionalHttpUrl,
+  HULEE_TELEGRAM_USER_API_ID: optionalInteger(1, 2_147_483_647),
+  HULEE_TELEGRAM_USER_API_HASH: optionalNonEmptyString,
   HULEE_OBJECT_STORAGE_ENDPOINT: optionalHttpUrl,
   HULEE_OBJECT_STORAGE_REGION: optionalNonEmptyString,
   HULEE_OBJECT_STORAGE_BUCKET: optionalNonEmptyString,
@@ -290,6 +294,8 @@ const issueMessages: Record<string, string> = {
   HULEE_INTERNAL_API_SECRET: "must not be empty",
   HULEE_PUBLIC_BASE_URL: "must be a valid HTTP(S) URL",
   HULEE_PUBLIC_WEBHOOK_BASE_URL: "must be a valid HTTP(S) URL",
+  HULEE_TELEGRAM_USER_API_ID: "must be a positive integer",
+  HULEE_TELEGRAM_USER_API_HASH: "must not be empty",
   HULEE_SSE_ENABLED: "must be true, false, 1 or 0",
   HULEE_INTERNAL_API_BASE_URL: "must be a valid HTTP(S) URL",
   HULEE_AUTH_CHOICE_SECRET: "must not be empty",
@@ -579,6 +585,8 @@ export function loadWorkerConfig(env: EnvSource = process.env): WorkerConfig {
     publicWebhookBaseUrl:
       result.data.HULEE_PUBLIC_WEBHOOK_BASE_URL ??
       result.data.HULEE_PUBLIC_BASE_URL,
+    telegramUserApiId: result.data.HULEE_TELEGRAM_USER_API_ID,
+    telegramUserApiHash: result.data.HULEE_TELEGRAM_USER_API_HASH,
     objectStorage: buildObjectStorageConfig(result.data),
     pollIntervalMs: result.data.HULEE_WORKER_POLL_INTERVAL_MS ?? 1_000,
     outboxBatchSize: result.data.HULEE_OUTBOX_BATCH_SIZE ?? 50,

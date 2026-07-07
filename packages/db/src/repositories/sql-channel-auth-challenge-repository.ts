@@ -39,6 +39,12 @@ export type FindLatestActiveChannelAuthChallengeInput = {
   challengeType?: InternalChannelAuthChallengeType | string;
 };
 
+export type ListActiveChannelAuthChallengesInput = {
+  statuses?: readonly (InternalChannelAuthChallengeStatus | string)[];
+  limit?: number;
+  now?: Date;
+};
+
 export type UpsertChannelAuthChallengeInput = {
   id: string;
   tenantId: TenantId;
@@ -62,6 +68,9 @@ export type ChannelAuthChallengeRepository = {
   findLatestActiveChallenge(
     input: FindLatestActiveChannelAuthChallengeInput
   ): Promise<ChannelAuthChallengeRecord | null>;
+  listActiveChallenges(
+    input?: ListActiveChannelAuthChallengesInput
+  ): Promise<ChannelAuthChallengeRecord[]>;
   upsertChallenge(input: UpsertChannelAuthChallengeInput): Promise<void>;
 };
 
@@ -104,6 +113,14 @@ export function createSqlChannelAuthChallengeRepository(
       return result.rows[0] ? mapChannelAuthChallengeRow(result.rows[0]) : null;
     },
 
+    async listActiveChallenges(input = {}) {
+      const result = await rawExecutor.execute<ChannelAuthChallengeRow>(
+        buildListActiveChannelAuthChallengesSql(input)
+      );
+
+      return result.rows.map(mapChannelAuthChallengeRow);
+    },
+
     async upsertChallenge(input) {
       await rawExecutor.execute(buildUpsertChannelAuthChallengeSql(input));
     }
@@ -138,6 +155,29 @@ export function buildFindLatestActiveChannelAuthChallengeSql(
       ${typeClause}
     order by created_at desc, id desc
     limit 1
+  `;
+}
+
+export function buildListActiveChannelAuthChallengesSql(
+  input: ListActiveChannelAuthChallengesInput = {}
+): SQL {
+  const statuses =
+    input.statuses && input.statuses.length > 0
+      ? input.statuses
+      : defaultActiveChannelAuthChallengeStatuses;
+  const statusList = sql.join(
+    statuses.map((status) => sql`${status}`),
+    sql`, `
+  );
+  const now = input.now ?? new Date();
+
+  return sql`
+    select ${channelAuthChallengeSelectList}
+    from channel_auth_challenges
+    where status in (${statusList})
+      and (expires_at is null or expires_at > ${now})
+    order by updated_at asc, id asc
+    limit ${input.limit ?? 100}
   `;
 }
 
@@ -206,6 +246,13 @@ const channelAuthChallengeSelectList = sql`
   created_at,
   updated_at
 `;
+
+const defaultActiveChannelAuthChallengeStatuses = [
+  "pending",
+  "waiting",
+  "requires_code",
+  "requires_password"
+] as const;
 
 function mapChannelAuthChallengeRow(
   row: ChannelAuthChallengeRow

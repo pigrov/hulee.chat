@@ -1071,6 +1071,34 @@ button.iconButton:disabled {
   gap: 8px;
 }
 
+.authChallengeRefreshIndicator {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid
+    color-mix(
+      in srgb,
+      var(--hulee-color-brand-primary) 28%,
+      var(--hulee-color-border)
+    );
+  border-radius: var(--hulee-radius-control);
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 8%,
+    var(--hulee-color-surface-default)
+  );
+  color: var(--hulee-color-brand-primary);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.authChallengeStatusGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .authChallengeQrBox {
   display: grid;
   min-height: 128px;
@@ -1083,10 +1111,35 @@ button.iconButton:disabled {
   color: var(--hulee-color-text-muted);
 }
 
+.authChallengeQrBox[data-state="ready"] {
+  border-color: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 32%,
+    var(--hulee-color-border)
+  );
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 6%,
+    var(--hulee-color-surface-raised)
+  );
+}
+
 .authChallengeQrImage {
   width: min(220px, 100%);
   aspect-ratio: 1;
   object-fit: contain;
+}
+
+.authChallengeQrText {
+  display: grid;
+  max-width: 560px;
+  gap: 4px;
+  text-align: center;
+}
+
+.authChallengeQrText .sectionTitle,
+.authChallengeQrText .metaText {
+  margin: 0;
 }
 
 .authChallengePayload {
@@ -1096,6 +1149,58 @@ button.iconButton:disabled {
   line-height: 1.35;
   overflow-wrap: anywhere;
   text-align: center;
+}
+
+.authChallengeNotice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-default);
+  color: var(--hulee-color-text-default);
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.authChallengeNotice[data-variant="error"] {
+  border-color: color-mix(in srgb, var(--hulee-color-danger) 42%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-danger) 9%,
+    var(--hulee-color-surface-default)
+  );
+  color: var(--hulee-color-danger);
+}
+
+.authChallengeNotice[data-variant="info"] {
+  border-color: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 28%,
+    var(--hulee-color-border)
+  );
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 7%,
+    var(--hulee-color-surface-default)
+  );
+  color: var(--hulee-color-text-default);
+}
+
+.authChallengeNotice[data-variant="warning"] {
+  border-color: color-mix(
+    in srgb,
+    var(--hulee-color-accent) 42%,
+    var(--hulee-color-border)
+  );
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-accent) 9%,
+    var(--hulee-color-surface-default)
+  );
+  color: var(--hulee-color-text-default);
 }
 
 .buttonRow {
@@ -2158,8 +2263,33 @@ a.secondaryButton {
   grid-auto-rows: max-content;
   min-height: calc(100vh - 80px);
   max-height: calc(100vh - 80px);
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   overflow: hidden;
+}
+
+.integrationTabNav {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.integrationTabLink {
+  justify-content: center;
+  min-width: 0;
+}
+
+.integrationTabLink[aria-current="page"] {
+  border-color: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 42%,
+    var(--hulee-color-border)
+  );
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 14%,
+    transparent
+  );
+  color: var(--hulee-color-brand-primary);
 }
 
 .platformCompanyCatalog {

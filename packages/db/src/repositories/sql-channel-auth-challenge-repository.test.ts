@@ -61,6 +61,19 @@ describe("SQL channel auth challenge repository", () => {
     });
   });
 
+  it("lists runnable active challenges for worker processing", async () => {
+    const executor = new RecordingSqlExecutor([createChallengeRow()]);
+    const repository = createSqlChannelAuthChallengeRepository(executor);
+
+    await expect(
+      repository.listActiveChallenges({
+        now: new Date("2026-06-29T09:56:00.000Z"),
+        limit: 10
+      })
+    ).resolves.toHaveLength(1);
+    expect(executor.queries).toHaveLength(1);
+  });
+
   it("upserts challenge state and stores only encrypted secret payloads", async () => {
     const executor = new RecordingSqlExecutor([]);
     const repository = createSqlChannelAuthChallengeRepository(executor);

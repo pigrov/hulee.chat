@@ -7,6 +7,7 @@ import {
 
 import {
   createWorkerEgressMonitor,
+  createWorkerDirectAccountAuthSweeper,
   createWorkerTelegramAttachmentTransferSweeper,
   createWorkerOutboxHandler,
   createWorkerTelegramPollingSweeper,
@@ -44,6 +45,19 @@ const telegramBotServices = runtime.config.workerFeatures.includes(
         : undefined
     }
   : undefined;
+const directAccountAuthSweeper = runtime.config.workerFeatures.includes(
+  "telegram_user"
+)
+  ? createWorkerDirectAccountAuthSweeper({
+      database,
+      secretEncryptionKey: runtime.config.secretEncryptionKey,
+      telegramUserAuthEnabled: true,
+      telegramUserApiId: runtime.config.telegramUserApiId,
+      telegramUserApiHash: runtime.config.telegramUserApiHash,
+      logger: runtime.logger,
+      workerId: "worker:direct-account-auth"
+    })
+  : undefined;
 const egressMonitor = createWorkerEgressMonitor({
   config: runtime.config,
   repository: createSqlDeploymentEgressStatusRepository(database),
@@ -78,55 +92,85 @@ async function processNextBatch(): Promise<void> {
     return;
   }
 
-  if (telegramBotServices === undefined) {
+  if (
+    telegramBotServices === undefined &&
+    directAccountAuthSweeper === undefined
+  ) {
     return;
   }
 
   processing = true;
 
   try {
-    const result = await processOutboxBatch({
-      repository: telegramBotServices.outboxRepository,
-      handler: telegramBotServices.outboxHandler,
-      batchSize: runtime.config.outboxBatchSize,
-      now: new Date(),
-      retryDelayMs: runtime.config.outboxRetryDelayMs
-    });
-
-    if (result.claimed > 0) {
-      runtime.logger.info("worker.outbox_batch_processed", {
-        claimed: result.claimed,
-        processed: result.processed,
-        failed: result.failed,
-        skippedDuplicates: result.skippedDuplicates
+    if (telegramBotServices !== undefined) {
+      const result = await processOutboxBatch({
+        repository: telegramBotServices.outboxRepository,
+        handler: telegramBotServices.outboxHandler,
+        batchSize: runtime.config.outboxBatchSize,
+        now: new Date(),
+        retryDelayMs: runtime.config.outboxRetryDelayMs
       });
+
+      if (result.claimed > 0) {
+        runtime.logger.info("worker.outbox_batch_processed", {
+          claimed: result.claimed,
+          processed: result.processed,
+          failed: result.failed,
+          skippedDuplicates: result.skippedDuplicates
+        });
+      }
+
+      const pollingResult = await telegramBotServices.pollingSweeper.sweep();
+
+      if (
+        pollingResult.configsPolled > 0 ||
+        pollingResult.updatesReceived > 0
+      ) {
+        runtime.logger.info("worker.telegram_polling_sweep_processed", {
+          configsScanned: pollingResult.configsScanned,
+          configsPolled: pollingResult.configsPolled,
+          updatesReceived: pollingResult.updatesReceived,
+          updatesAccepted: pollingResult.updatesAccepted,
+          updatesFailed: pollingResult.updatesFailed
+        });
+      }
+
+      const attachmentTransferResult =
+        await telegramBotServices.attachmentTransferSweeper?.sweep();
+
+      if (
+        attachmentTransferResult &&
+        (attachmentTransferResult.attempted > 0 ||
+          attachmentTransferResult.failed > 0)
+      ) {
+        runtime.logger.info("worker.telegram_attachment_transfer_processed", {
+          scanned: attachmentTransferResult.scanned,
+          attempted: attachmentTransferResult.attempted,
+          stored: attachmentTransferResult.stored,
+          failed: attachmentTransferResult.failed
+        });
+      }
     }
 
-    const pollingResult = await telegramBotServices.pollingSweeper.sweep();
-
-    if (pollingResult.configsPolled > 0 || pollingResult.updatesReceived > 0) {
-      runtime.logger.info("worker.telegram_polling_sweep_processed", {
-        configsScanned: pollingResult.configsScanned,
-        configsPolled: pollingResult.configsPolled,
-        updatesReceived: pollingResult.updatesReceived,
-        updatesAccepted: pollingResult.updatesAccepted,
-        updatesFailed: pollingResult.updatesFailed
-      });
-    }
-
-    const attachmentTransferResult =
-      await telegramBotServices.attachmentTransferSweeper?.sweep();
+    const directAuthResult = await directAccountAuthSweeper?.sweep();
 
     if (
-      attachmentTransferResult &&
-      (attachmentTransferResult.attempted > 0 ||
-        attachmentTransferResult.failed > 0)
+      directAuthResult &&
+      (directAuthResult.claimed > 0 ||
+        directAuthResult.failed > 0 ||
+        directAuthResult.completed > 0)
     ) {
-      runtime.logger.info("worker.telegram_attachment_transfer_processed", {
-        scanned: attachmentTransferResult.scanned,
-        attempted: attachmentTransferResult.attempted,
-        stored: attachmentTransferResult.stored,
-        failed: attachmentTransferResult.failed
+      runtime.logger.info("worker.direct_account_auth_sweep_processed", {
+        scanned: directAuthResult.scanned,
+        claimed: directAuthResult.claimed,
+        processed: directAuthResult.processed,
+        pending: directAuthResult.pending,
+        completed: directAuthResult.completed,
+        failed: directAuthResult.failed,
+        expired: directAuthResult.expired,
+        skippedLeased: directAuthResult.skippedLeased,
+        skippedUnsupported: directAuthResult.skippedUnsupported,
+        skippedInactive: directAuthResult.skippedInactive
       });
     }
   } catch (error) {

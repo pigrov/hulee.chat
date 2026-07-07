@@ -79,8 +79,26 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   themeColor: defaultTheme["color.brand.primary"],
-  colorScheme: "light"
+  colorScheme: "light dark"
 };
+
+const themeScript = `
+(() => {
+  try {
+    const mode = window.localStorage.getItem("hulee-site-theme") || "system";
+    const resolved =
+      mode === "dark" || mode === "light"
+        ? mode
+        : window.matchMedia("(prefers-color-scheme: dark)").matches
+          ? "dark"
+          : "light";
+    document.documentElement.dataset.themeMode = mode;
+    document.documentElement.dataset.theme = resolved;
+  } catch {
+    document.documentElement.dataset.themeMode = "system";
+  }
+})();
+`;
 
 export default function RootLayout({
   children
@@ -88,8 +106,11 @@ export default function RootLayout({
   children: ReactNode;
 }): ReactNode {
   return (
-    <html lang="en">
-      <body>{children}</body>
+    <html lang="ru" suppressHydrationWarning>
+      <body>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+        {children}
+      </body>
     </html>
   );
 }

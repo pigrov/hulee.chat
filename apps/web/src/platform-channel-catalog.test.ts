@@ -29,7 +29,11 @@ describe("platform channel catalog", () => {
         }),
         expect.objectContaining({
           channelType: "whatsapp_qr_bridge",
-          readiness: "coming_soon"
+          readiness: "available"
+        }),
+        expect.objectContaining({
+          channelType: "max_qr_bridge",
+          readiness: "available"
         })
       ])
     );

@@ -11,8 +11,10 @@ import {
 import type { EgressRuntime } from "@hulee/modules";
 import {
   createAesGcmTenantSecretCipher,
+  createSqlChannelAuthChallengeRepository,
   createSqlAttachmentTransferRepository,
   createSqlChannelConnectorRepository,
+  createSqlChannelSessionRepository,
   createSqlChannelProviderValidationJobRepository,
   createSqlDeploymentEgressProviderPolicyRepository,
   createDrizzlePersistenceExecutor,
@@ -52,6 +54,13 @@ import {
   type TelegramPollingSweepResult
 } from "./telegram-polling-sweeper";
 import { createPolicyAwareDeploymentEgressRuntime } from "./policy-egress-runtime";
+import {
+  createDirectAccountAuthSweeper,
+  type DirectAccountAuthHandler,
+  type DirectAccountAuthSweeper,
+  type DirectAccountAuthSweepResult
+} from "./direct-account-auth-sweeper";
+import { createTelegramDirectAuthHandler } from "./telegram-direct-auth-handler";
 
 export type WorkerBoundary = {
   processesOutbox: true;
@@ -194,6 +203,23 @@ export type WorkerTelegramAttachmentTransferSweeper = {
   sweep(): Promise<TelegramAttachmentTransferSweepResult>;
 };
 
+export type WorkerDirectAccountAuthSweeperOptions = {
+  database: HuleeDatabase;
+  secretEncryptionKey?: string;
+  handlers?: readonly DirectAccountAuthHandler[];
+  telegramUserAuthEnabled?: boolean;
+  telegramUserApiId?: number;
+  telegramUserApiHash?: string;
+  logger?: Pick<Logger, "warn">;
+  workerId?: string;
+  limit?: number;
+  leaseMs?: number;
+};
+
+export type WorkerDirectAccountAuthSweeper = {
+  sweep(): Promise<DirectAccountAuthSweepResult>;
+};
+
 export function createWorkerTelegramPollingSweeper(
   options: WorkerTelegramPollingSweeperOptions
 ): WorkerTelegramPollingSweeper {
@@ -271,6 +297,41 @@ export function createWorkerTelegramAttachmentTransferSweeper(
   });
 }
 
+export function createWorkerDirectAccountAuthSweeper(
+  options: WorkerDirectAccountAuthSweeperOptions
+): DirectAccountAuthSweeper {
+  const authChallengeCipher = options.secretEncryptionKey
+    ? createAesGcmTenantSecretCipher({
+        key: options.secretEncryptionKey
+      })
+    : undefined;
+  const handlers =
+    options.handlers ??
+    (options.telegramUserAuthEnabled
+      ? [
+          createTelegramDirectAuthHandler({
+            apiId: options.telegramUserApiId,
+            apiHash: options.telegramUserApiHash,
+            sessionCipher: authChallengeCipher,
+            logger: options.logger
+          })
+        ]
+      : []);
+
+  return createDirectAccountAuthSweeper({
+    authChallengeRepository: createSqlChannelAuthChallengeRepository(
+      options.database
+    ),
+    sessionRepository: createSqlChannelSessionRepository(options.database),
+    connectorRepository: createSqlChannelConnectorRepository(options.database),
+    authChallengeCipher,
+    handlers,
+    workerId: options.workerId,
+    limit: options.limit,
+    leaseMs: options.leaseMs
+  });
+}
+
 function createWorkerDeploymentEgressRuntime(input: {
   database: HuleeDatabase;
   egressProfile?: WorkerConfig["egressProfile"];
@@ -298,6 +359,11 @@ export { runTelegramPollingSweep } from "./telegram-polling-sweeper";
 export { createTelegramAttachmentTransferSweeper } from "./telegram-attachment-transfer";
 export { createTelegramProviderOperationDispatcher } from "./telegram-provider-operation-dispatcher";
 export { createTelegramProviderValidationDispatcher } from "./telegram-provider-validation-dispatcher";
+export {
+  createDirectAccountAuthSweeper,
+  runDirectAccountAuthSweep
+} from "./direct-account-auth-sweeper";
+export { createTelegramDirectAuthHandler } from "./telegram-direct-auth-handler";
 export {
   createWorkerEgressMonitor,
   defaultEgressProbes,
@@ -341,6 +407,23 @@ export type {
   TelegramProviderValidationBotApiClientFactory,
   TelegramProviderValidationDispatcherOptions
 } from "./telegram-provider-validation-dispatcher";
+export type {
+  DirectAccountAuthChallengePatch,
+  DirectAccountAuthHandler,
+  DirectAccountAuthHandlerInput,
+  DirectAccountAuthHandlerResult,
+  DirectAccountAuthPublicPayload,
+  DirectAccountAuthSweeper,
+  DirectAccountAuthSweepOptions,
+  DirectAccountAuthSweepResult
+} from "./direct-account-auth-sweeper";
+export type {
+  CreateTelegramAuthClientInput,
+  TelegramAuthClient,
+  TelegramDirectAuthHandlerOptions,
+  TelegramDirectSessionPayload,
+  TelegramSelfUser
+} from "./telegram-direct-auth-handler";
 export type {
   EgressMonitorOptions,
   EgressProbeDefinition,

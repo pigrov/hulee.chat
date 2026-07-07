@@ -54,7 +54,7 @@ export const platformChannelCatalogDefinitions = [
     titleKey: "integrations.catalog.telegramQr.title",
     shortDescriptionKey: "integrations.catalog.telegramQr.description",
     descriptionKey: "integrations.catalog.telegramQr.description",
-    defaultReadiness: "coming_soon",
+    defaultReadiness: "available",
     defaultSortOrder: 200
   },
   {
@@ -64,7 +64,7 @@ export const platformChannelCatalogDefinitions = [
     titleKey: "integrations.catalog.whatsappQr.title",
     shortDescriptionKey: "integrations.catalog.whatsappQr.description",
     descriptionKey: "integrations.catalog.whatsappQr.description",
-    defaultReadiness: "coming_soon",
+    defaultReadiness: "available",
     defaultSortOrder: 300
   },
   {
@@ -84,7 +84,7 @@ export const platformChannelCatalogDefinitions = [
     titleKey: "integrations.catalog.maxQr.title",
     shortDescriptionKey: "integrations.catalog.maxQr.description",
     descriptionKey: "integrations.catalog.maxQr.description",
-    defaultReadiness: "coming_soon",
+    defaultReadiness: "available",
     defaultSortOrder: 500
   },
   {

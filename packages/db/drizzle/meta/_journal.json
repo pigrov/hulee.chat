@@ -176,6 +176,13 @@
       "when": 1783190127157,
       "tag": "0024_daffy_electro",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1783280000000,
+      "tag": "0025_direct_channel_sessions",
+      "breakpoints": true
     }
   ]
 }

@@ -3,9 +3,18 @@ import type {
   InternalChannelAuthChallengeType
 } from "@hulee/contracts";
 import type { createTranslator, I18nMessageKey } from "@hulee/i18n";
-import { CheckCircle2, KeyRound, Phone, QrCode, XCircle } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  KeyRound,
+  LoaderCircle,
+  Phone,
+  QrCode,
+  XCircle
+} from "lucide-react";
 import type { ReactNode } from "react";
 
+import { ChannelAuthChallengeAutoRefresh } from "./channel-auth-challenge-auto-refresh";
 import {
   ChannelAuthChallengeActionForm,
   ChannelAuthChallengeSubmitButton
@@ -38,8 +47,19 @@ export function ChannelAuthChallengePanel({
     | "complete";
   t: Translator;
 }): ReactNode {
+  const autoRefreshActive = isAutoRefreshChallenge(challenge);
+
   return (
     <div className="settingsForm setupStepPanel">
+      <ChannelAuthChallengeAutoRefresh
+        active={autoRefreshActive}
+        label={t("integrations.channel.auth.autoRefresh")}
+        refreshKey={
+          challenge
+            ? `${challenge.challengeId}:${challenge.status}:${challenge.updatedAt}`
+            : "inactive"
+        }
+      />
       {challenge ? (
         <ChallengeStatus challenge={challenge} locale={locale} t={t} />
       ) : null}
@@ -94,35 +114,89 @@ function QrChallengeStep({
   connectorId: string;
   t: Translator;
 }): ReactNode {
+  if (challenge && isActiveQrChallenge(challenge)) {
+    return (
+      <>
+        <QrChallengePreview challenge={challenge} t={t} />
+        <WaitingChallengeActions
+          challenge={challenge}
+          connectorId={connectorId}
+          t={t}
+        />
+      </>
+    );
+  }
+
   return (
     <>
-      {challenge?.publicPayload.qrImageDataUrl ||
-      challenge?.publicPayload.qrPayloadRef ? (
-        <div className="authChallengeQrBox">
-          {challenge.publicPayload.qrImageDataUrl ? (
-            <img
-              className="authChallengeQrImage"
-              src={challenge.publicPayload.qrImageDataUrl}
-              alt=""
-            />
-          ) : (
-            <QrCode size={32} aria-hidden="true" />
-          )}
-          {challenge.publicPayload.qrPayloadRef ? (
-            <span className="authChallengePayload">
-              {challenge.publicPayload.qrPayloadRef}
-            </span>
-          ) : null}
-        </div>
+      {challenge?.status === "expired" ? (
+        <ChallengeNotice
+          icon={<AlertTriangle size={16} aria-hidden="true" />}
+          message={t("integrations.channel.auth.expiredHint")}
+          variant="warning"
+        />
       ) : null}
       <StartChallengeForm
         challengeType={challengeType}
         connectorId={connectorId}
         icon={<QrCode size={16} aria-hidden="true" />}
-        label={t("integrations.channel.auth.start")}
+        label={t(
+          challenge
+            ? "integrations.channel.auth.restart"
+            : "integrations.channel.auth.start"
+        )}
         t={t}
       />
     </>
+  );
+}
+
+function QrChallengePreview({
+  challenge,
+  t
+}: {
+  challenge: InternalChannelAuthChallenge;
+  t: Translator;
+}): ReactNode {
+  const hasQr =
+    Boolean(challenge.publicPayload.qrImageDataUrl) ||
+    Boolean(challenge.publicPayload.qrPayloadRef);
+
+  return (
+    <div
+      className="authChallengeQrBox"
+      data-state={hasQr ? "ready" : "waiting"}
+    >
+      {challenge.publicPayload.qrImageDataUrl ? (
+        <img
+          className="authChallengeQrImage"
+          src={challenge.publicPayload.qrImageDataUrl}
+          alt={t("integrations.channel.auth.qrAlt")}
+        />
+      ) : hasQr ? (
+        <QrCode size={42} aria-hidden="true" />
+      ) : (
+        <LoaderCircle className="buttonSpinner" size={32} aria-hidden="true" />
+      )}
+      <div className="authChallengeQrText">
+        <p className="sectionTitle">
+          {hasQr
+            ? t("integrations.channel.auth.qrReady")
+            : t("integrations.channel.auth.qrWaiting")}
+        </p>
+        <p className="metaText">
+          {hasQr
+            ? t("integrations.channel.auth.qrReadyHint")
+            : t("integrations.channel.auth.qrWaitingHint")}
+        </p>
+      </div>
+      {!challenge.publicPayload.qrImageDataUrl &&
+      challenge.publicPayload.qrPayloadRef ? (
+        <span className="authChallengePayload">
+          {challenge.publicPayload.qrPayloadRef}
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -215,41 +289,66 @@ function PasswordChallengeStep({
   t: Translator;
 }): ReactNode {
   return (
-    <ChannelAuthChallengeActionForm
-      actionKind="submit"
-      className="settingsForm"
-      messages={channelAuthChallengeActionMessages(t)}
-    >
-      <ChallengeIdentityFields
-        challenge={challenge}
-        connectorId={connectorId}
+    <>
+      <ChallengeNotice
+        icon={<KeyRound size={16} aria-hidden="true" />}
+        message={t("integrations.channel.auth.passwordHint")}
+        variant="info"
       />
-      <label className="fieldStack">
-        <span className="detailLabel">
-          {t("integrations.channel.auth.password")}
-        </span>
-        <input
-          className="textInput"
-          name="password"
-          type="password"
-          autoComplete="current-password"
-          required
+      <ChannelAuthChallengeActionForm
+        actionKind="submit"
+        className="settingsForm"
+        messages={channelAuthChallengeActionMessages(t)}
+      >
+        <ChallengeIdentityFields
+          challenge={challenge}
+          connectorId={connectorId}
         />
-      </label>
-      <div className="buttonRow">
-        <ChannelAuthChallengeSubmitButton
-          className="primaryButton"
-          disabled={!challenge?.challengeId}
-          label={t("integrations.channel.auth.submitPassword")}
-        >
-          <KeyRound size={16} aria-hidden="true" />
-        </ChannelAuthChallengeSubmitButton>
-      </div>
-    </ChannelAuthChallengeActionForm>
+        <label className="fieldStack">
+          <span className="detailLabel">
+            {t("integrations.channel.auth.password")}
+          </span>
+          <input
+            className="textInput"
+            name="password"
+            type="password"
+            autoComplete="current-password"
+            required
+          />
+        </label>
+        <div className="buttonRow">
+          <ChannelAuthChallengeSubmitButton
+            className="primaryButton"
+            disabled={!challenge?.challengeId}
+            label={t("integrations.channel.auth.submitPassword")}
+          >
+            <KeyRound size={16} aria-hidden="true" />
+          </ChannelAuthChallengeSubmitButton>
+        </div>
+      </ChannelAuthChallengeActionForm>
+    </>
   );
 }
 
 function WaitingChallengeStep({
+  challenge,
+  connectorId,
+  t
+}: {
+  challenge?: InternalChannelAuthChallenge;
+  connectorId: string;
+  t: Translator;
+}): ReactNode {
+  return (
+    <WaitingChallengeActions
+      challenge={challenge}
+      connectorId={connectorId}
+      t={t}
+    />
+  );
+}
+
+function WaitingChallengeActions({
   challenge,
   connectorId,
   t
@@ -299,15 +398,49 @@ function ChallengeStatus({
   t: Translator;
 }): ReactNode {
   return (
-    <div className="diagnosticGrid">
-      <DetailItem
-        label={t("integrations.channel.auth.status")}
-        value={t(channelAuthChallengeStatusKey(challenge.status))}
-      />
-      <DetailItem
-        label={t("integrations.channel.auth.expiresAt")}
-        value={formatOptionalDateTime(challenge.expiresAt, locale, t)}
-      />
+    <>
+      <div className="diagnosticGrid authChallengeStatusGrid">
+        <DetailItem
+          label={t("integrations.channel.auth.status")}
+          value={t(channelAuthChallengeStatusKey(challenge.status))}
+        />
+        <DetailItem
+          label={t("integrations.channel.auth.expiresAt")}
+          value={formatOptionalDateTime(challenge.expiresAt, locale, t)}
+        />
+      </div>
+      {challenge.publicPayload.operatorHint &&
+      challenge.status !== "requires_password" ? (
+        <ChallengeNotice
+          icon={<AlertTriangle size={16} aria-hidden="true" />}
+          message={challenge.publicPayload.operatorHint}
+          variant="warning"
+        />
+      ) : null}
+      {isFailedChallenge(challenge) ? (
+        <ChallengeNotice
+          icon={<AlertTriangle size={16} aria-hidden="true" />}
+          message={challengeFailureMessage(challenge, t)}
+          variant="error"
+        />
+      ) : null}
+    </>
+  );
+}
+
+function ChallengeNotice({
+  icon,
+  message,
+  variant
+}: {
+  icon: ReactNode;
+  message: string;
+  variant: "error" | "info" | "warning";
+}): ReactNode {
+  return (
+    <div className="authChallengeNotice" data-variant={variant} role="status">
+      {icon}
+      <span>{message}</span>
     </div>
   );
 }
@@ -375,4 +508,51 @@ function channelAuthChallengeActionMessages(
     started: t("integrations.channel.auth.action.started"),
     submitted: t("integrations.channel.auth.action.submitted")
   };
+}
+
+function isAutoRefreshChallenge(
+  challenge: InternalChannelAuthChallenge | undefined
+): boolean {
+  return challenge?.status === "pending" || challenge?.status === "waiting";
+}
+
+function isActiveQrChallenge(
+  challenge: InternalChannelAuthChallenge | undefined
+): boolean {
+  return (
+    Boolean(challenge) &&
+    challenge?.challengeType === "qr" &&
+    (challenge.status === "pending" || challenge.status === "waiting")
+  );
+}
+
+function isFailedChallenge(
+  challenge: InternalChannelAuthChallenge | undefined
+): challenge is InternalChannelAuthChallenge {
+  return challenge?.status === "failed";
+}
+
+function challengeFailureMessage(
+  challenge: InternalChannelAuthChallenge,
+  t: Translator
+): string {
+  const message = challenge.errorMessage ?? "";
+
+  if (message.includes("TIMEOUT")) {
+    return t("integrations.channel.auth.error.timeout");
+  }
+
+  if (message.includes("PASSWORD")) {
+    return t("integrations.channel.auth.error.password");
+  }
+
+  if (
+    message.includes("API id/hash") ||
+    message.includes("not configured") ||
+    message.includes("Session encryption")
+  ) {
+    return t("integrations.channel.auth.error.config");
+  }
+
+  return t("integrations.channel.auth.error.failed");
 }

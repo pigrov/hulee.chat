@@ -1,0 +1,288 @@
+{
+  "metadata": {
+    "title": "{product} — all channels and the whole team without add-ons",
+    "description": "One inbox for sales, support, and internal requests. Connect channels and teammates without per-channel or per-agent subscription fees, then pay for stored history and files.",
+    "ogAlt": "{product} workspace for customer communication"
+  },
+  "navigation": [
+    { "label": "Model", "href": "#model" },
+    { "label": "Channels", "href": "#channels" },
+    { "label": "Compare", "href": "#comparison" },
+    { "label": "Plans", "href": "#plans" }
+  ],
+  "languageSwitcher": {
+    "ariaLabel": "Language selection",
+    "current": "Primary navigation"
+  },
+  "themeToggle": {
+    "label": "Theme",
+    "system": "System",
+    "light": "Light",
+    "dark": "Dark"
+  },
+  "actions": {
+    "signIn": "Sign in",
+    "primary": "Try it",
+    "secondary": "How pricing works",
+    "app": "Open app",
+    "register": "Create workspace"
+  },
+  "hero": {
+    "eyebrow": "Communication platform",
+    "title": "All channels and the whole team without add-ons",
+    "lead": "{product} brings Telegram, WhatsApp, MAX, VK, Avito, website chat, email, and internal requests into one workspace. You pay for the data you store, not for every channel or agent.",
+    "metrics": [
+      { "value": "0", "label": "per-channel fee from {product}" },
+      { "value": "0", "label": "per-agent add-on" },
+      { "value": "GB", "label": "clear storage-based usage" }
+    ]
+  },
+  "marketPain": {
+    "kicker": "Market pain",
+    "title": "Pricing usually grows with connections, not with value.",
+    "summary": "When every WhatsApp, Telegram, Avito account or new teammate becomes another subscription line, companies start saving on channels and lose control of conversations.",
+    "cards": [
+      {
+        "title": "Channels become a budget choice",
+        "description": "Teams decide which touchpoints to connect even though customers already write from different messengers and marketplaces.",
+        "icon": "network"
+      },
+      {
+        "title": "Agents become a cost center",
+        "description": "Growing support or sales teams increases the bill even when everyone works with the same customer base.",
+        "icon": "users"
+      },
+      {
+        "title": "History stays scattered",
+        "description": "Conversations live in phones, personal accounts, and narrow CRM integrations that are hard to control or hand over.",
+        "icon": "message"
+      }
+    ]
+  },
+  "pricingModel": {
+    "kicker": "Our model",
+    "title": "Pay for stored history, files, and company data.",
+    "summary": "Channels and teammates should not be artificial blockers. The resource that actually grows with the business is stored messages, attachments, files, and retention time.",
+    "steps": [
+      {
+        "title": "Connect the channels you need",
+        "description": "Telegram, WhatsApp, MAX, VK, Avito, website chat, email, and other providers plug in as adapters without a separate {product} channel subscription.",
+        "icon": "plug"
+      },
+      {
+        "title": "Bring the whole team",
+        "description": "Sales, support, managers, internal teams, and shift agents work in one workspace without paying for every account.",
+        "icon": "users"
+      },
+      {
+        "title": "Control storage",
+        "description": "The company can see how much space text, files, attachments, and history consume, then tune retention without losing control.",
+        "icon": "hardDrive"
+      }
+    ],
+    "note": "External provider costs such as WABA, SMS, AI, or transcription stay separate and transparent. {product} does not turn them into hidden channel subscriptions."
+  },
+  "channels": {
+    "kicker": "Channels",
+    "title": "Customers write everywhere. Teams need one inbox.",
+    "summary": "The site should show channel breadth without selling every icon as a tariff lock. Channels are entrances into one operating layer.",
+    "items": [
+      "Telegram Bot",
+      "Telegram Personal",
+      "WhatsApp",
+      "WABA",
+      "MAX",
+      "VK",
+      "Avito",
+      "Email",
+      "Website chat",
+      "SMS",
+      "Webhooks",
+      "Public API"
+    ]
+  },
+  "workflow": {
+    "kicker": "Product",
+    "title": "Not just messenger integration, but an operating layer for requests.",
+    "summary": "{product} should be more than a CRM widget: the center is the customer, case, history, roles, audit, and a clean handoff between people.",
+    "items": [
+      {
+        "title": "Unified inbox",
+        "description": "Incoming, assigned, all conversations, internal requests, and support queues live on one work surface.",
+        "icon": "message"
+      },
+      {
+        "title": "Customer card and history",
+        "description": "Contacts, sources, files, statuses, events, and owners stay inside the company, not with one manager.",
+        "icon": "database"
+      },
+      {
+        "title": "Roles, teams, and audit",
+        "description": "Managers can see access, routing, activity, channel errors, and the history of important actions.",
+        "icon": "shield"
+      }
+    ]
+  },
+  "audiences": {
+    "kicker": "Audience",
+    "title": "The model is strongest for teams that grow by channels and headcount.",
+    "items": [
+      {
+        "title": "Messenger sales",
+        "description": "Many managers, several accounts, customers from multiple sources, and a real pain around lost conversations.",
+        "icon": "barChart"
+      },
+      {
+        "title": "Support and service",
+        "description": "Queues, SLA, handoffs, file history, and quality control matter more than the specific messenger.",
+        "icon": "gauge"
+      },
+      {
+        "title": "Branch networks",
+        "description": "Many locations, local channels, and shifts need one access and storage policy.",
+        "icon": "building"
+      },
+      {
+        "title": "Enterprise and on-prem",
+        "description": "Private deployment, audit, SSO, export, data control, and company-layer extensions without forking core.",
+        "icon": "lock"
+      }
+    ]
+  },
+  "comparison": {
+    "kicker": "Comparison",
+    "title": "The market counts channels and agents. {product} counts the resource you own.",
+    "usualLabel": "Typical market model",
+    "huleeLabel": "{product}",
+    "rows": [
+      {
+        "label": "Channels",
+        "usual": "Each WhatsApp, Telegram, Avito, or other account can become a separate monthly fee.",
+        "hulee": "Channel connection is not a separate {product} subscription line."
+      },
+      {
+        "label": "Agents",
+        "usual": "Adding teammates often increases the subscription price.",
+        "hulee": "The team can grow without paying for every operator account."
+      },
+      {
+        "label": "Conversations",
+        "usual": "Plans can cap monthly dialogues or leads.",
+        "hulee": "History is company data, not an artificial limit on conversations."
+      },
+      {
+        "label": "Control",
+        "usual": "Costs become hard to predict as channels and branches grow.",
+        "hulee": "The bill is explained by storage, retention, AI, transcription, and external provider costs."
+      }
+    ]
+  },
+  "calculator": {
+    "kicker": "Calculator",
+    "title": "Pricing should be explainable before setup.",
+    "summary": "The landing page needs a calculator: a company enters channels, teammates, file volume, and retention, then sees expected usage and cost logic.",
+    "inputs": [
+      "How many channels and branches to connect",
+      "How many teammates will work in the inbox",
+      "How many files, voice notes, and attachments arrive monthly",
+      "How many months or years the history must be retained"
+    ],
+    "result": "Result: not a bill for channel icons, but a forecast for storage and transparent extra resources."
+  },
+  "trust": {
+    "kicker": "Data control",
+    "title": "Storage-based pricing only works when control is visible.",
+    "summary": "If storage is the paid resource, the site must show that data can be measured, retained, exported, and deployed privately.",
+    "items": [
+      {
+        "title": "Tenant boundary",
+        "description": "Data, files, events, queues, API, and storage always belong to one company boundary.",
+        "icon": "shield"
+      },
+      {
+        "title": "Retention and export",
+        "description": "The company chooses how long to keep history, what to archive, and how to export data.",
+        "icon": "database"
+      },
+      {
+        "title": "SaaS, isolated, and on-prem",
+        "description": "One core can run in the {product} cloud, a dedicated environment, or customer infrastructure.",
+        "icon": "cloud"
+      }
+    ]
+  },
+  "plans": {
+    "kicker": "Plan packaging",
+    "title": "Plans differ by resources and control, not by basic channel access.",
+    "summary": "This keeps the main promise without pretending infrastructure is infinite: channels and teammates are not priced separately.",
+    "items": [
+      {
+        "name": "Start",
+        "description": "For small teams that want to bring main channels into one inbox.",
+        "storage": "Baseline storage included",
+        "features": [
+          "Core channels",
+          "Team without per-agent add-ons",
+          "Basic analytics and export"
+        ]
+      },
+      {
+        "name": "Team",
+        "description": "For growing sales and support teams with more conversations.",
+        "storage": "More storage and retention",
+        "features": [
+          "Queues and roles",
+          "Channel diagnostics",
+          "API and webhooks within limits"
+        ]
+      },
+      {
+        "name": "Business",
+        "description": "For companies that need control, audit, and predictable limits.",
+        "storage": "Expanded storage",
+        "features": [
+          "Audit and policies",
+          "Higher throughput",
+          "Priority support"
+        ]
+      },
+      {
+        "name": "Enterprise",
+        "description": "For isolated SaaS, on-prem, white-label, and company-specific modules.",
+        "storage": "By infrastructure and license",
+        "features": [
+          "SSO and private deployment",
+          "White-label",
+          "Custom modules"
+        ]
+      }
+    ]
+  },
+  "faq": {
+    "kicker": "FAQ",
+    "title": "Questions the page should answer immediately.",
+    "items": [
+      {
+        "question": "Are channels really free?",
+        "answer": "{product} does not charge a separate subscription fee just to connect a channel. If an external provider charges for WABA, SMS, AI, or transcription, that cost is shown separately."
+      },
+      {
+        "question": "Is there an agent limit?",
+        "answer": "The base model does not price every operator account. Limits may exist for security, SLA, or enterprise policy reasons, but not as an artificial tax on team growth."
+      },
+      {
+        "question": "What counts as storage?",
+        "answer": "Message text, files, images, audio, attachments, exportable history, and technical data the company chooses to keep."
+      },
+      {
+        "question": "What happens over the storage limit?",
+        "answer": "First come warnings and retention recommendations. Hard limits should block new heavy uploads, not access to existing history and export."
+      }
+    ]
+  },
+  "cta": {
+    "kicker": "Next step",
+    "title": "Show every channel without fearing the bill.",
+    "summary": "Start with one inbox, bring the team, and calculate what it really costs to store company conversation history."
+  }
+}

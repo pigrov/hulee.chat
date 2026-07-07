@@ -1,7 +1,7 @@
 "use client";
 
 import { LoaderCircle } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useActionState, useEffect, useRef, type ReactNode } from "react";
 import { useFormStatus } from "react-dom";
 
@@ -30,6 +30,7 @@ export function ChannelAuthChallengeActionForm({
   readonly messages: ChannelAuthChallengeActionMessages;
 }): ReactNode {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const handledSuccessRef = useRef<string | undefined>(undefined);
   const [state, formAction, isPending] = useActionState(
     resolveChannelAuthChallengeAction(actionKind),
@@ -45,14 +46,14 @@ export function ChannelAuthChallengeActionForm({
     }
 
     handledSuccessRef.current = state.submittedAt;
-    const nextPath = channelAuthChallengePath(state);
+    const nextPath = channelAuthChallengePath(state, searchParams.get("tab"));
 
     if (nextPath) {
       router.replace(nextPath);
     }
 
     router.refresh();
-  }, [router, state]);
+  }, [router, searchParams, state]);
 
   return (
     <form className={className} action={formAction}>
@@ -124,11 +125,16 @@ function resolveChannelAuthChallengeAction(
 }
 
 function channelAuthChallengePath(
-  state: Extract<ChannelAuthChallengeActionState, { status: "success" }>
+  state: Extract<ChannelAuthChallengeActionState, { status: "success" }>,
+  tab: string | null
 ): string {
   const params = new URLSearchParams({
     connectorId: state.connectorId
   });
+
+  if (tab === "accounts" || tab === "channels") {
+    params.set("tab", tab);
+  }
 
   if (state.challengeId) {
     params.set("challengeId", state.challengeId);

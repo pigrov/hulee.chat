@@ -1,7 +1,7 @@
 "use client";
 
 import { LoaderCircle, Power, PowerOff, Trash2 } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useActionState, useEffect, useRef, type ReactNode } from "react";
 
 import { updateChannelConnectorLifecycleAction } from "./actions";
@@ -33,6 +33,7 @@ export function ChannelConnectorLifecycleActions({
   readonly status: string | undefined;
 }): ReactNode {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const handledSuccessRef = useRef<string | undefined>(undefined);
   const [state, formAction, isPending] = useActionState(
     updateChannelConnectorLifecycleAction,
@@ -50,12 +51,12 @@ export function ChannelConnectorLifecycleActions({
     handledSuccessRef.current = state.submittedAt;
 
     if (state.code === "deleted") {
-      router.push("/admin/integrations");
+      router.push(integrationListPath(searchParams.get("tab")));
       return;
     }
 
     router.refresh();
-  }, [router, state]);
+  }, [router, searchParams, state]);
 
   return (
     <div className="channelLifecycleActionStack">
@@ -120,6 +121,12 @@ export function ChannelConnectorLifecycleActions({
       ) : null}
     </div>
   );
+}
+
+function integrationListPath(tab: string | null): string {
+  return tab === "accounts" || tab === "channels"
+    ? `/admin/integrations?tab=${tab}`
+    : "/admin/integrations";
 }
 
 function LifecycleFields({

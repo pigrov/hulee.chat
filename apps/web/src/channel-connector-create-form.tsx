@@ -19,11 +19,13 @@ export type ChannelConnectorCreateMessages = Record<
 export function ChannelConnectorCreateForm({
   channelType,
   label,
-  messages
+  messages,
+  redirectTab
 }: {
   readonly channelType: string;
   readonly label: string;
   readonly messages: ChannelConnectorCreateMessages;
+  readonly redirectTab?: "accounts" | "channels";
 }): ReactNode {
   const router = useRouter();
   const handledSuccessRef = useRef<string | undefined>(undefined);
@@ -42,10 +44,16 @@ export function ChannelConnectorCreateForm({
     }
 
     handledSuccessRef.current = state.submittedAt;
-    router.push(
-      `/admin/integrations?connectorId=${encodeURIComponent(state.connectorId)}`
-    );
-  }, [router, state]);
+    const params = new URLSearchParams({
+      connectorId: state.connectorId
+    });
+
+    if (redirectTab) {
+      params.set("tab", redirectTab);
+    }
+
+    router.push(`/admin/integrations?${params.toString()}`);
+  }, [redirectTab, router, state]);
 
   return (
     <form className="buttonRow" action={formAction}>

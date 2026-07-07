@@ -38,6 +38,7 @@ export const initialTables = [
   { name: "tenant_modules", scope: "tenant", requiresTenantId: true },
   { name: "channel_connectors", scope: "tenant", requiresTenantId: true },
   { name: "channel_sessions", scope: "tenant", requiresTenantId: true },
+  { name: "channel_session_events", scope: "tenant", requiresTenantId: true },
   {
     name: "channel_auth_challenges",
     scope: "tenant",

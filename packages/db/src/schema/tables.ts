@@ -332,12 +332,24 @@ export const channelSessions = pgTable(
     sessionKey: text("session_key").notNull(),
     status: text("status").notNull().default("not_started"),
     sessionEncrypted: text("session_encrypted"),
+    sessionFingerprint: text("session_fingerprint"),
+    externalAccountId: text("external_account_id"),
+    displayAddress: text("display_address"),
     publicState: jsonb("public_state").notNull().default({}),
+    metadata: jsonb("metadata").notNull().default({}),
     challengeType: text("challenge_type"),
     challengeExpiresAt: timestamp("challenge_expires_at", {
       withTimezone: true
     }),
+    leaseOwner: text("lease_owner"),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
     lastConnectedAt: timestamp("last_connected_at", { withTimezone: true }),
+    lastDisconnectedAt: timestamp("last_disconnected_at", {
+      withTimezone: true
+    }),
+    lastHeartbeatAt: timestamp("last_heartbeat_at", { withTimezone: true }),
+    lastInboundAt: timestamp("last_inbound_at", { withTimezone: true }),
+    lastOutboundAt: timestamp("last_outbound_at", { withTimezone: true }),
     lastErrorAt: timestamp("last_error_at", { withTimezone: true }),
     lastErrorCode: text("last_error_code"),
     lastErrorMessage: text("last_error_message"),
@@ -354,7 +366,53 @@ export const channelSessions = pgTable(
       table.tenantId,
       table.connectorId
     ),
-    index("channel_sessions_tenant_status_idx").on(table.tenantId, table.status)
+    index("channel_sessions_tenant_status_idx").on(
+      table.tenantId,
+      table.status
+    ),
+    index("channel_sessions_tenant_lease_idx").on(
+      table.tenantId,
+      table.status,
+      table.leaseExpiresAt
+    ),
+    index("channel_sessions_tenant_heartbeat_idx").on(
+      table.tenantId,
+      table.lastHeartbeatAt
+    )
+  ]
+);
+
+export const channelSessionEvents = pgTable(
+  "channel_session_events",
+  {
+    id: text("id").primaryKey(),
+    tenantId: tenantIdColumn().references(() => tenants.id),
+    connectorId: text("connector_id")
+      .notNull()
+      .references(() => channelConnectors.id),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => channelSessions.id),
+    eventType: text("event_type").notNull(),
+    severity: text("severity").notNull().default("info"),
+    code: text("code"),
+    message: text("message"),
+    metadata: jsonb("metadata").notNull().default({}),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    ...timestamps
+  },
+  (table) => [
+    index("channel_session_events_tenant_idx").on(table.tenantId),
+    index("channel_session_events_tenant_connector_idx").on(
+      table.tenantId,
+      table.connectorId,
+      table.occurredAt
+    ),
+    index("channel_session_events_tenant_session_idx").on(
+      table.tenantId,
+      table.sessionId,
+      table.occurredAt
+    )
   ]
 );
 

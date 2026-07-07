@@ -32,9 +32,21 @@ export {
 export {
   buildFindChannelAuthChallengeSql,
   buildFindLatestActiveChannelAuthChallengeSql,
+  buildListActiveChannelAuthChallengesSql,
   buildUpsertChannelAuthChallengeSql,
   createSqlChannelAuthChallengeRepository
 } from "./sql-channel-auth-challenge-repository";
+export {
+  buildAppendChannelSessionEventSql,
+  buildClaimChannelSessionLeaseSql,
+  buildFindChannelSessionSql,
+  buildFindConnectorChannelSessionSql,
+  buildListChannelSessionEventsSql,
+  buildListRunnableChannelSessionsSql,
+  buildReleaseChannelSessionLeaseSql,
+  buildUpsertChannelSessionSql,
+  createSqlChannelSessionRepository
+} from "./sql-channel-session-repository";
 export {
   buildFindChannelProviderValidationJobSql,
   buildUpsertChannelProviderValidationJobSql,
@@ -270,8 +282,24 @@ export type {
   ChannelAuthChallengeRepository,
   FindChannelAuthChallengeInput,
   FindLatestActiveChannelAuthChallengeInput,
+  ListActiveChannelAuthChallengesInput,
   UpsertChannelAuthChallengeInput
 } from "./sql-channel-auth-challenge-repository";
+export type {
+  AppendChannelSessionEventInput,
+  ChannelSessionEventRecord,
+  ChannelSessionEventSeverity,
+  ChannelSessionRecord,
+  ChannelSessionRepository,
+  ChannelSessionStatus,
+  ClaimChannelSessionLeaseInput,
+  FindChannelSessionInput,
+  FindConnectorChannelSessionInput,
+  ListChannelSessionEventsInput,
+  ListRunnableChannelSessionsInput,
+  ReleaseChannelSessionLeaseInput,
+  UpsertChannelSessionInput
+} from "./sql-channel-session-repository";
 export type {
   ChannelProviderValidationJobRecord,
   ChannelProviderValidationJobRepository,

@@ -9,6 +9,7 @@ import {
   createSqlChannelAuthChallengeRepository,
   createSqlChannelConnectorRepository,
   createSqlChannelProviderValidationJobRepository,
+  createSqlChannelSessionRepository,
   createSqlDeploymentChannelCatalogOverrideRepository,
   createSqlDeploymentEgressStatusRepository,
   createSqlEmployeeDirectoryRepository,
@@ -143,13 +144,13 @@ export function createInternalApiDataPlaneHandler(
     rawExecutor: options.database,
     persistenceExecutor: createDrizzlePersistenceExecutor(options.database)
   });
-  const tenantSecrets = options.secretEncryptionKey
-    ? createSqlTenantSecretRepository(
-        options.database,
-        createAesGcmTenantSecretCipher({
-          key: options.secretEncryptionKey
-        })
-      )
+  const tenantSecretCipher = options.secretEncryptionKey
+    ? createAesGcmTenantSecretCipher({
+        key: options.secretEncryptionKey
+      })
+    : undefined;
+  const tenantSecrets = tenantSecretCipher
+    ? createSqlTenantSecretRepository(options.database, tenantSecretCipher)
     : undefined;
   const inboxAuthorization = createSqlInternalInboxAuthorizationService({
     database: options.database
@@ -182,11 +183,15 @@ export function createInternalApiDataPlaneHandler(
       connectorRepository: createSqlChannelConnectorRepository(
         options.database
       ),
+      channelSessionRepository: createSqlChannelSessionRepository(
+        options.database
+      ),
       channelCatalogOverrideRepository:
         createSqlDeploymentChannelCatalogOverrideRepository(options.database),
       authChallengeRepository: createSqlChannelAuthChallengeRepository(
         options.database
       ),
+      authChallengeCipher: tenantSecretCipher,
       providerValidationJobRepository:
         createSqlChannelProviderValidationJobRepository(options.database),
       providerOperationEvents: createSqlDomainEventRepository(options.database),

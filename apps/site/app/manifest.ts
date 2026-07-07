@@ -11,10 +11,10 @@ export default function manifest(): MetadataRoute.Manifest {
     short_name: shortAppName,
     description:
       "Communication workspace for service, sales, and internal operations teams.",
-    id: "/",
-    start_url: "/",
+    id: "/ru",
+    start_url: "/ru",
     scope: "/",
-    lang: "en",
+    lang: "ru",
     dir: "ltr",
     display: "standalone",
     display_override: ["standalone", "minimal-ui", "browser"],
