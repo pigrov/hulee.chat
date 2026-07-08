@@ -21,6 +21,8 @@ export type WebAccessSession = {
   sessionExpiresAt?: string;
   employeeId: EmployeeId;
   email?: string;
+  displayName?: string;
+  avatarUrl?: string | null;
   emailVerifiedAt?: string | null;
   systemRoleTemplateIds: readonly SystemRoleTemplateId[];
   permissions: readonly Permission[];

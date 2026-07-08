@@ -230,20 +230,22 @@ export function TelegramConnectorCompactStatus({
       <h3 className="telegramStatusTitle">
         {t("integrations.telegram.connectionStatusTitle")}
       </h3>
-      <TelegramStatusMetric
-        icon="inbound"
-        label={t("integrations.telegram.runtimeInboundReceivedAt")}
-        locale={locale}
-        value={inbound?.lastReceivedAt}
-        fallback={formatOptionalDateTime(inbound?.lastReceivedAt, locale, t)}
-      />
-      <TelegramStatusMetric
-        icon="outbound"
-        label={t("integrations.telegram.runtimeOutboundSentAt")}
-        locale={locale}
-        value={outbound?.lastSentAt}
-        fallback={formatOptionalDateTime(outbound?.lastSentAt, locale, t)}
-      />
+      <div className="telegramStatusMetrics">
+        <TelegramStatusMetric
+          icon="inbound"
+          label={t("integrations.telegram.runtimeInboundReceivedAt")}
+          locale={locale}
+          value={inbound?.lastReceivedAt}
+          fallback={formatOptionalDateTime(inbound?.lastReceivedAt, locale, t)}
+        />
+        <TelegramStatusMetric
+          icon="outbound"
+          label={t("integrations.telegram.runtimeOutboundSentAt")}
+          locale={locale}
+          value={outbound?.lastSentAt}
+          fallback={formatOptionalDateTime(outbound?.lastSentAt, locale, t)}
+        />
+      </div>
     </div>
   );
 }

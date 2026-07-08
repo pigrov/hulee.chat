@@ -582,6 +582,9 @@ export function webAccessSessionFromPrincipal(
       tenantAccount?.employeeId ??
       (`employee:platform:${principal.platformAdmin?.id ?? "anonymous"}` as EmployeeId),
     email: tenantAccount?.email ?? principal.platformAdmin?.email,
+    displayName:
+      tenantAccount?.displayName ?? principal.platformAdmin?.displayName,
+    avatarUrl: tenantAccount?.avatarUrl,
     emailVerifiedAt:
       tenantAccount?.emailVerifiedAt === undefined
         ? undefined

@@ -1452,11 +1452,20 @@ a.secondaryButton {
   font-weight: 700;
 }
 
+.telegramStatusMetrics {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px 24px;
+  align-items: start;
+}
+
 .telegramStatusMetric {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 16px;
+  min-width: 0;
 }
 
 .telegramStatusIcon {
@@ -1952,7 +1961,7 @@ a.secondaryButton {
   top: calc(100% + 10px);
   right: 0;
   display: grid;
-  width: min(320px, calc(100vw - 24px));
+  width: min(360px, calc(100vw - 24px));
   gap: 8px;
   padding: 10px;
   border: 1px solid var(--hulee-color-border);
@@ -1960,6 +1969,78 @@ a.secondaryButton {
   background: var(--hulee-color-surface-default);
   box-shadow: 0 20px 48px
     color-mix(in srgb, var(--hulee-color-text-default) 16%, transparent);
+}
+
+.topNavProfile {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 7%,
+    var(--hulee-color-surface-raised)
+  );
+}
+
+.topNavProfileAvatar {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  overflow: hidden;
+  place-items: center;
+  border: 1px solid
+    color-mix(
+      in srgb,
+      var(--hulee-color-brand-primary) 24%,
+      var(--hulee-color-border)
+    );
+  border-radius: 999px;
+  background: var(--hulee-color-surface-muted);
+  color: var(--hulee-color-brand-primary);
+  font-size: 14px;
+  font-weight: 750;
+  line-height: 1;
+}
+
+.topNavProfileAvatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.topNavProfileText {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.topNavProfileName,
+.topNavProfileEmail {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topNavProfileName {
+  color: var(--hulee-color-text-default);
+  font-size: 14px;
+  font-weight: 750;
+  line-height: 1.25;
+}
+
+.topNavProfileEmail {
+  color: var(--hulee-color-text-muted);
+  font-size: 12px;
+  font-weight: 550;
+  line-height: 1.2;
 }
 
 .topNavMenuGroup,
@@ -4220,6 +4301,10 @@ button.managementRow:not(.adminNavLink):not(.integrationNavLink):focus-visible {
   .topNavMenuPanel {
     left: auto;
     right: 0;
+  }
+
+  .telegramStatusMetrics {
+    grid-template-columns: 1fr;
   }
 
   .adminShellLayout {

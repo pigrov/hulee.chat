@@ -22,6 +22,7 @@ export type TenantAuthAccount = {
   email: string;
   emailVerifiedAt: Date | null;
   displayName: string;
+  avatarUrl?: string | null;
   passwordHash: string | null;
   systemRoleTemplateIds: readonly SystemRoleTemplateId[];
   permissions: readonly Permission[];
@@ -102,6 +103,7 @@ type TenantAuthAccountRow = {
   email: string;
   email_verified_at: SqlTimestamp | null;
   display_name: string;
+  profile?: unknown;
   password_hash: string | null;
   system_role_template_ids: unknown;
   permissions: unknown;
@@ -126,6 +128,7 @@ type AuthSessionRow = {
   employee_email: string | null;
   employee_email_verified_at: SqlTimestamp | null;
   employee_display_name: string | null;
+  employee_profile: unknown;
   employee_password_hash: string | null;
   employee_permissions: unknown;
   platform_admin_account_id: string | null;
@@ -212,6 +215,7 @@ export function buildFindTenantAccountByEmailSql(input: {
            accounts.email,
            accounts.email_verified_at,
            employees.display_name,
+           employees.profile,
            accounts.password_hash,
            '[]'::json as system_role_template_ids,
            tenant_permissions.permissions
@@ -239,6 +243,7 @@ export function buildListTenantAccountsByEmailSql(email: string): SQL {
            accounts.email,
            accounts.email_verified_at,
            employees.display_name,
+           employees.profile,
            accounts.password_hash,
            '[]'::json as system_role_template_ids,
            tenant_permissions.permissions
@@ -306,6 +311,7 @@ export function buildFindAuthSessionByTokenSql(token: string, now: Date): SQL {
            employees.email as employee_email,
            accounts.email_verified_at as employee_email_verified_at,
            employees.display_name as employee_display_name,
+           employees.profile as employee_profile,
            accounts.password_hash as employee_password_hash,
            tenant_permissions.permissions as employee_permissions,
            platform_admin_accounts.id as platform_admin_account_id,
@@ -532,6 +538,7 @@ function mapTenantAccountRow(row: TenantAuthAccountRow): TenantAuthAccount {
     emailVerifiedAt:
       row.email_verified_at === null ? null : new Date(row.email_verified_at),
     displayName: row.display_name,
+    avatarUrl: employeeAvatarUrl(row.employee_id as EmployeeId, row.profile),
     passwordHash: row.password_hash,
     systemRoleTemplateIds,
     permissions
@@ -556,6 +563,7 @@ function mapAuthSessionRow(row: AuthSessionRow): AuthSessionPrincipal {
           email: row.employee_email,
           email_verified_at: row.employee_email_verified_at,
           display_name: row.employee_display_name,
+          profile: row.employee_profile,
           password_hash: row.employee_password_hash,
           system_role_template_ids: [],
           permissions: row.employee_permissions
@@ -601,6 +609,30 @@ function parsePermissions(value: unknown): readonly Permission[] {
   return permissions.filter((permission): permission is Permission => {
     return typeof permission === "string" && isPermission(permission);
   });
+}
+
+function employeeAvatarUrl(
+  employeeId: EmployeeId,
+  profileValue: unknown
+): string | null {
+  const profile = recordFromUnknown(profileValue);
+  const avatar = recordFromUnknown(profile.avatar);
+  const version =
+    typeof avatar.version === "string" ? avatar.version.trim() : "";
+
+  if (version.length === 0) {
+    return null;
+  }
+
+  return `/employee-assets/${encodeURIComponent(
+    employeeId
+  )}/avatar?v=${encodeURIComponent(version)}`;
+}
+
+function recordFromUnknown(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 function buildAccessiblePermissionAggregationSql(

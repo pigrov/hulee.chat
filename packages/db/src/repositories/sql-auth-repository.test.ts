@@ -122,6 +122,14 @@ describe("SQL local auth repository", () => {
           employee_email: "admin@example.test",
           employee_email_verified_at: new Date("2026-06-22T10:00:00.000Z"),
           employee_display_name: "Admin",
+          employee_profile: {
+            avatar: {
+              storageKey: "employee/avatars/admin.webp",
+              mediaType: "image/webp",
+              sizeBytes: 1024,
+              version: "avatar-version-1"
+            }
+          },
           employee_password_hash: "scrypt:v1:salt:hash",
           employee_permissions: ["tenant.manage", "message.reply"],
           platform_admin_account_id: "platform-admin-1",
@@ -144,6 +152,7 @@ describe("SQL local auth repository", () => {
         tenantDisplayName: "Local Company",
         employeeId,
         emailVerifiedAt: new Date("2026-06-22T10:00:00.000Z"),
+        avatarUrl: "/employee-assets/employee_auth/avatar?v=avatar-version-1",
         systemRoleTemplateIds: [],
         permissions: ["tenant.manage", "message.reply"]
       },

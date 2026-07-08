@@ -230,37 +230,54 @@ function QrChallengePreview({
 }
 
 function PhoneChallengeStep({
+  cancelDeletesConnector,
+  channelType,
+  challenge,
   challengeType,
   connectorId,
   t
 }: {
+  cancelDeletesConnector: boolean;
+  channelType?: string;
+  challenge?: InternalChannelAuthChallenge;
   challengeType: InternalChannelAuthChallengeType;
   connectorId: string;
   t: Translator;
 }): ReactNode {
   return (
-    <ChannelAuthChallengeActionForm
-      actionKind="start"
-      className="settingsForm"
-      messages={channelAuthChallengeActionMessages(t)}
-    >
-      <input type="hidden" name="connectorId" value={connectorId} />
-      <input type="hidden" name="challengeType" value={challengeType} />
-      <label className="fieldStack">
-        <span className="detailLabel">
-          {t("integrations.channel.auth.phoneNumber")}
-        </span>
-        <PhoneNumberInput className="textInput" name="phoneNumber" required />
-      </label>
-      <div className="buttonRow">
-        <ChannelAuthChallengeSubmitButton
-          className="primaryButton"
-          label={t("integrations.channel.auth.start")}
-        >
-          <Phone size={16} aria-hidden="true" />
-        </ChannelAuthChallengeSubmitButton>
-      </div>
-    </ChannelAuthChallengeActionForm>
+    <>
+      <ChannelAuthChallengeActionForm
+        actionKind="start"
+        className="settingsForm"
+        messages={channelAuthChallengeActionMessages(t)}
+      >
+        <input type="hidden" name="connectorId" value={connectorId} />
+        <input type="hidden" name="challengeType" value={challengeType} />
+        <label className="fieldStack">
+          <span className="detailLabel">
+            {t("integrations.channel.auth.phoneNumber")}
+          </span>
+          <PhoneNumberInput className="textInput" name="phoneNumber" required />
+        </label>
+        <div className="buttonRow">
+          <ChannelAuthChallengeSubmitButton
+            className="primaryButton"
+            label={t("integrations.channel.auth.start")}
+          >
+            <Phone size={16} aria-hidden="true" />
+          </ChannelAuthChallengeSubmitButton>
+        </div>
+      </ChannelAuthChallengeActionForm>
+      {cancelDeletesConnector && channelType ? (
+        <WaitingChallengeActions
+          cancelDeletesConnector={cancelDeletesConnector}
+          channelType={channelType}
+          challenge={challenge}
+          connectorId={connectorId}
+          t={t}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -419,7 +436,7 @@ function WaitingChallengeActions({
         ) : null}
         <ChannelAuthChallengeSubmitButton
           className="secondaryButton"
-          disabled={!challenge?.challengeId}
+          disabled={!challenge?.challengeId && !cancelDeletesConnector}
           label={t("integrations.channel.auth.cancel")}
         >
           <XCircle size={16} aria-hidden="true" />

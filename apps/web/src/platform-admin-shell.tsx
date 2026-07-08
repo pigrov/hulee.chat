@@ -111,6 +111,7 @@ export function PlatformAdminShell({
               eyebrow={t(platformSectionGroupTitleKey(current))}
               icon={<PlatformSectionIcon sectionId={current} />}
               menuGroups={menuGroups}
+              profile={sessionProfileFromAccess(access)}
               roleLabel={t("navigation.platformAdmin")}
               t={t}
               title={title}
@@ -159,6 +160,14 @@ function buildPlatformMenuGroups({
       items: primaryItems
     }
   ];
+}
+
+function sessionProfileFromAccess(access: WebAccessSession) {
+  return {
+    avatarUrl: access.avatarUrl,
+    displayName: access.displayName,
+    email: access.email
+  };
 }
 
 function PlatformNavigation({

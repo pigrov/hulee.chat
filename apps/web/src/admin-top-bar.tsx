@@ -31,12 +31,19 @@ export type AdminTopBarMenuGroup = {
   readonly items: readonly AdminTopBarMenuItem[];
 };
 
+export type AdminTopBarProfile = {
+  readonly displayName?: string;
+  readonly email?: string;
+  readonly avatarUrl?: string | null;
+};
+
 export function AdminTopBar({
   brand,
   eyebrow,
   icon,
   menuGroups,
   notice,
+  profile,
   roleLabel,
   t,
   title,
@@ -47,12 +54,15 @@ export function AdminTopBar({
   icon: ReactNode;
   menuGroups: readonly AdminTopBarMenuGroup[];
   notice?: ReactNode;
+  profile?: AdminTopBarProfile;
   roleLabel: string;
   t: Translator;
   title: string;
   titleId: string;
 }): ReactNode {
   const helpHref = brand.links?.help ?? brand.links?.support;
+  const profileName = profileDisplayName(profile, roleLabel);
+  const profileEmail = profile?.email?.trim();
 
   return (
     <header className="adminTopBar">
@@ -88,6 +98,21 @@ export function AdminTopBar({
             <ChevronDown size={15} aria-hidden="true" />
           </summary>
           <div className="topNavMenuPanel">
+            <div className="topNavProfile">
+              <span className="topNavProfileAvatar" aria-hidden="true">
+                {profile?.avatarUrl ? (
+                  <img src={profile.avatarUrl} alt="" />
+                ) : (
+                  profileInitials(profileName)
+                )}
+              </span>
+              <span className="topNavProfileText">
+                <span className="topNavProfileName">{profileName}</span>
+                {profileEmail ? (
+                  <span className="topNavProfileEmail">{profileEmail}</span>
+                ) : null}
+              </span>
+            </div>
             {menuGroups.map((group) =>
               group.items.length > 0 ? (
                 <nav
@@ -123,4 +148,30 @@ export function AdminTopBar({
       </div>
     </header>
   );
+}
+
+function profileDisplayName(
+  profile: AdminTopBarProfile | undefined,
+  fallback: string
+): string {
+  const displayName = profile?.displayName?.trim();
+
+  if (displayName && displayName.length > 0) {
+    return displayName;
+  }
+
+  const email = profile?.email?.trim();
+
+  return email && email.length > 0 ? email : fallback;
+}
+
+function profileInitials(displayName: string): string {
+  const initials = displayName
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("");
+
+  return initials.length > 0 ? initials : "?";
 }

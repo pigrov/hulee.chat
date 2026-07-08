@@ -169,6 +169,7 @@ export function TenantAdminShell({
                   </form>
                 ) : undefined
               }
+              profile={sessionProfileFromAccess(access)}
               roleLabel={t("admin.scope.tenant")}
               t={t}
               title={title}
@@ -222,6 +223,14 @@ function buildTenantAdminMenuGroups({
       items: primaryItems
     }
   ];
+}
+
+function sessionProfileFromAccess(access: WebAccessSession) {
+  return {
+    avatarUrl: access.avatarUrl,
+    displayName: access.displayName,
+    email: access.email
+  };
 }
 
 function TenantAdminNavLink({

@@ -428,12 +428,13 @@ function GenericChannelConnectorPanel({
   const authStepKind = isAuthChallengeStep(step.kind) ? step.kind : undefined;
   const connectionState = genericChannelConnectionState(connector);
   const problemMessage = genericChannelProblemMessage(connector, t);
-  const pendingDirectQrAuth =
+  const pendingDirectAuth =
     connector.channelClass === "user_bridge" &&
     connector.status !== "connected" &&
     connector.status !== "disabled" &&
     connector.status !== "deleted" &&
-    authStepKind === "qr_code";
+    authStepKind !== undefined;
+  const pendingDirectQrAuth = pendingDirectAuth && authStepKind === "qr_code";
   const showAuthChallenge =
     connector.status !== "connected" &&
     connector.status !== "disabled" &&
@@ -441,18 +442,24 @@ function GenericChannelConnectorPanel({
     authStepKind !== undefined;
 
   return (
-    <section className="settingsPanel" aria-labelledby="channel-detail-title">
-      <div className="sectionHeader">
-        <div>
-          <p className="eyebrow">{t("admin.integrations.channelSettings")}</p>
-          <h2 className="sectionTitle" id="channel-detail-title">
-            {connector.displayName}
-          </h2>
+    <section
+      className="settingsPanel"
+      aria-label={pendingDirectAuth ? connector.displayName : undefined}
+      aria-labelledby={pendingDirectAuth ? undefined : "channel-detail-title"}
+    >
+      {pendingDirectAuth ? null : (
+        <div className="sectionHeader">
+          <div>
+            <p className="eyebrow">{t("admin.integrations.channelSettings")}</p>
+            <h2 className="sectionTitle" id="channel-detail-title">
+              {connector.displayName}
+            </h2>
+          </div>
+          <GenericChannelConnectionBadge state={connectionState} t={t} />
         </div>
-        <GenericChannelConnectionBadge state={connectionState} t={t} />
-      </div>
+      )}
 
-      {pendingDirectQrAuth ? null : (
+      {pendingDirectAuth ? null : (
         <ChannelConnectorSettingsForm
           connectorId={connector.connectorId}
           defaultDisplayName={connector.displayName}
@@ -471,7 +478,7 @@ function GenericChannelConnectorPanel({
         />
       )}
 
-      {!pendingDirectQrAuth && problemMessage ? (
+      {!pendingDirectAuth && problemMessage ? (
         <p
           className="telegramConnectionNotice"
           data-variant="error"
@@ -481,7 +488,7 @@ function GenericChannelConnectorPanel({
         </p>
       ) : null}
 
-      {pendingDirectQrAuth ? null : (
+      {pendingDirectAuth ? null : (
         <GenericChannelCompactStatus
           connector={connector}
           locale={locale}
@@ -492,7 +499,7 @@ function GenericChannelConnectorPanel({
       {showAuthChallenge ? (
         <ChannelAuthChallengePanel
           autoStart={pendingDirectQrAuth && challenge === undefined}
-          cancelDeletesConnector={pendingDirectQrAuth}
+          cancelDeletesConnector={pendingDirectAuth}
           channelType={connector.channelType}
           challenge={challenge}
           challengeType={resolveChallengeType({
@@ -589,44 +596,46 @@ function GenericChannelCompactStatus({
       <h3 className="telegramStatusTitle">
         {t("integrations.channel.connectionStatusTitle")}
       </h3>
-      <GenericChannelStatusMetric
-        icon="session"
-        label={t("integrations.channel.connectionMetric.sessionState")}
-        value={channelSessionStatusLabel(connector.session?.status, t)}
-      />
-      <GenericChannelStatusMetric
-        icon="checked"
-        label={t("integrations.channel.connectionMetric.lastCheckedAt")}
-        locale={locale}
-        value={connector.session?.lastHeartbeatAt}
-        fallback={formatOptionalDateTime(
-          connector.session?.lastHeartbeatAt,
-          locale,
-          t
-        )}
-      />
-      <GenericChannelStatusMetric
-        icon="inbound"
-        label={t("integrations.channel.connectionMetric.inboundReceivedAt")}
-        locale={locale}
-        value={connector.session?.lastInboundAt}
-        fallback={formatOptionalDateTime(
-          connector.session?.lastInboundAt,
-          locale,
-          t
-        )}
-      />
-      <GenericChannelStatusMetric
-        icon="outbound"
-        label={t("integrations.channel.connectionMetric.outboundSentAt")}
-        locale={locale}
-        value={connector.session?.lastOutboundAt}
-        fallback={formatOptionalDateTime(
-          connector.session?.lastOutboundAt,
-          locale,
-          t
-        )}
-      />
+      <div className="telegramStatusMetrics">
+        <GenericChannelStatusMetric
+          icon="session"
+          label={t("integrations.channel.connectionMetric.sessionState")}
+          value={channelSessionStatusLabel(connector.session?.status, t)}
+        />
+        <GenericChannelStatusMetric
+          icon="checked"
+          label={t("integrations.channel.connectionMetric.lastCheckedAt")}
+          locale={locale}
+          value={connector.session?.lastHeartbeatAt}
+          fallback={formatOptionalDateTime(
+            connector.session?.lastHeartbeatAt,
+            locale,
+            t
+          )}
+        />
+        <GenericChannelStatusMetric
+          icon="inbound"
+          label={t("integrations.channel.connectionMetric.inboundReceivedAt")}
+          locale={locale}
+          value={connector.session?.lastInboundAt}
+          fallback={formatOptionalDateTime(
+            connector.session?.lastInboundAt,
+            locale,
+            t
+          )}
+        />
+        <GenericChannelStatusMetric
+          icon="outbound"
+          label={t("integrations.channel.connectionMetric.outboundSentAt")}
+          locale={locale}
+          value={connector.session?.lastOutboundAt}
+          fallback={formatOptionalDateTime(
+            connector.session?.lastOutboundAt,
+            locale,
+            t
+          )}
+        />
+      </div>
     </div>
   );
 }

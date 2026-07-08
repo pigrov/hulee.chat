@@ -49,6 +49,7 @@ describe("web session principal mapping", () => {
         email: "admin@example.test",
         emailVerifiedAt: null,
         displayName: "Admin",
+        avatarUrl: "/employee-assets/employee-1/avatar?v=v1",
         passwordHash: null,
         systemRoleTemplateIds: ["tenant_admin"],
         permissions: ["tenant.manage", "roles.manage"]
@@ -66,6 +67,8 @@ describe("web session principal mapping", () => {
       tenantId: "tenant-1",
       employeeId: "employee-1",
       email: "admin@example.test",
+      displayName: "Admin",
+      avatarUrl: "/employee-assets/employee-1/avatar?v=v1",
       systemRoleTemplateIds: ["tenant_admin"],
       permissions: ["tenant.manage", "roles.manage"],
       platformRoles: ["platform_admin"]
