@@ -30,6 +30,7 @@ import en from "../../content/landing.en.json";
 import kk from "../../content/landing.kk.json";
 import ru from "../../content/landing.ru.json";
 import { ThemeToggle } from "./theme-toggle";
+import { ThemeImage } from "./theme-image";
 
 type Locale = "ru" | "en" | "kk";
 
@@ -57,6 +58,11 @@ type ContentItem = {
   title: string;
   description: string;
   icon: IconName;
+};
+
+type ThemeImageAsset = {
+  src: string;
+  darkSrc?: string;
 };
 
 type Metric = {
@@ -196,6 +202,48 @@ const brandLockupAsset =
   "/icons/icon-512x512.png";
 const heroImage = "/marketing/hero-workspace-2-transparent-x2.png";
 const heroDarkImage = "/marketing/hero-workspace-2-transparent-x2-dark.png";
+const heroMetricIcons = [
+  {
+    src: "/marketing/hero-metric-channel-light.png",
+    darkSrc: "/marketing/hero-metric-channel-dark.png"
+  },
+  {
+    src: "/marketing/hero-metric-operator-light.png",
+    darkSrc: "/marketing/hero-metric-operator-dark.png"
+  },
+  {
+    src: "/marketing/hero-metric-storage-light.png",
+    darkSrc: "/marketing/hero-metric-storage-dark.png"
+  }
+] as const;
+const painCardImages = [
+  {
+    src: "/marketing/pain-channels-transparent-light.png",
+    darkSrc: "/marketing/pain-channels-transparent-dark.png"
+  },
+  {
+    src: "/marketing/pain-operators-transparent-light.png",
+    darkSrc: "/marketing/pain-operators-transparent-dark.png"
+  },
+  {
+    src: "/marketing/pain-history-transparent-light.png",
+    darkSrc: "/marketing/pain-history-transparent-dark.png"
+  }
+] as const satisfies readonly ThemeImageAsset[];
+const modelStepImages = [
+  {
+    src: "/marketing/model-channels-transparent-light.png",
+    darkSrc: "/marketing/model-channels-transparent-dark.png"
+  },
+  {
+    src: "/marketing/model-team-transparent-light.png",
+    darkSrc: "/marketing/model-team-transparent-dark.png"
+  },
+  {
+    src: "/marketing/model-storage-transparent-light.png",
+    darkSrc: "/marketing/model-storage-transparent-dark.png"
+  }
+] as const satisfies readonly ThemeImageAsset[];
 const chatBaseUrl = "https://chat.hulee.ru";
 
 const iconMap: Record<IconName, LucideIcon> = {
@@ -306,50 +354,44 @@ export default async function LandingPage({
 
   return (
     <main className="site">
+      <header className="site-header">
+        <Link
+          className="brand-lockup"
+          href={`/${typedLocale}`}
+          aria-label={productName}
+        >
+          <Image
+            className="brand-lockup__logo"
+            src={brandLockupAsset}
+            alt=""
+            width={150}
+            height={50}
+            priority
+          />
+        </Link>
+
+        <nav className="site-nav" aria-label={content.languageSwitcher.current}>
+          {content.navigation.map((item) => (
+            <Link key={item.href} href={localizedHref(typedLocale, item.href)}>
+              {item.label}
+            </Link>
+          ))}
+        </nav>
+
+        <div className="header-tools">
+          <LanguageSwitcher
+            locale={typedLocale}
+            labels={content.languageSwitcher}
+          />
+          <ThemeToggle labels={content.themeToggle} />
+          <a className="header-action" href={`${chatBaseUrl}/login`}>
+            <span>{content.actions.signIn}</span>
+            <ArrowRight aria-hidden="true" />
+          </a>
+        </div>
+      </header>
+
       <section className="hero" aria-labelledby="hero-title">
-        <header className="site-header">
-          <Link
-            className="brand-lockup"
-            href={`/${typedLocale}`}
-            aria-label={productName}
-          >
-            <Image
-              className="brand-lockup__logo"
-              src={brandLockupAsset}
-              alt=""
-              width={150}
-              height={50}
-              priority
-            />
-          </Link>
-
-          <nav
-            className="site-nav"
-            aria-label={content.languageSwitcher.current}
-          >
-            {content.navigation.map((item) => (
-              <Link
-                key={item.href}
-                href={localizedHref(typedLocale, item.href)}
-              >
-                {item.label}
-              </Link>
-            ))}
-          </nav>
-
-          <div className="header-tools">
-            <LanguageSwitcher
-              locale={typedLocale}
-              labels={content.languageSwitcher}
-            />
-            <ThemeToggle labels={content.themeToggle} />
-            <a className="header-action" href={`${chatBaseUrl}/login`}>
-              <span>{content.actions.signIn}</span>
-              <ArrowRight aria-hidden="true" />
-            </a>
-          </div>
-        </header>
-
         <div className="hero__stage">
           <div className="hero__content">
             <p className="eyebrow">{content.hero.eyebrow}</p>
@@ -374,31 +416,42 @@ export default async function LandingPage({
           </div>
 
           <div className="hero__media" aria-hidden="true">
-            <Image
-              className="hero__background hero__background--light"
+            <ThemeImage
+              className="hero__background"
               src={heroImage}
+              darkSrc={heroDarkImage}
               alt=""
               fill
               priority
-              sizes="(max-width: 980px) 100vw, 70vw"
-            />
-            <Image
-              className="hero__background hero__background--dark"
-              src={heroDarkImage}
-              alt=""
-              fill
               sizes="(max-width: 980px) 100vw, 70vw"
             />
           </div>
         </div>
 
         <dl className="hero__metrics" aria-label={content.hero.eyebrow}>
-          {content.hero.metrics.map((metric) => (
-            <div className="metric" key={metric.label}>
-              <dt>{metric.value}</dt>
-              <dd>{copy(metric.label)}</dd>
-            </div>
-          ))}
+          {content.hero.metrics.map((metric, index) => {
+            const icon = heroMetricIcons[index];
+
+            return (
+              <div className="metric" key={metric.label}>
+                {icon ? (
+                  <ThemeImage
+                    className="metric__icon"
+                    src={icon.src}
+                    darkSrc={icon.darkSrc}
+                    alt=""
+                    width={78}
+                    height={78}
+                    aria-hidden="true"
+                  />
+                ) : null}
+                <div className="metric__body">
+                  <dt>{metric.value}</dt>
+                  <dd>{copy(metric.label)}</dd>
+                </div>
+              </div>
+            );
+          })}
         </dl>
       </section>
 
@@ -409,6 +462,7 @@ export default async function LandingPage({
         title={copy(content.marketPain.title)}
         summary={copy(content.marketPain.summary)}
         items={content.marketPain.cards}
+        cardImages={painCardImages}
         variant="cards"
       />
 
@@ -425,6 +479,7 @@ export default async function LandingPage({
         <div className="section__inner model-steps">
           {content.pricingModel.steps.map((step, index) => (
             <FeatureCard
+              image={modelStepImages[index]}
               item={step}
               key={step.title}
               marker={String(index + 1).padStart(2, "0")}
@@ -432,7 +487,12 @@ export default async function LandingPage({
           ))}
         </div>
         <div className="section__inner">
-          <p className="model-note">{copy(content.pricingModel.note)}</p>
+          <aside className="model-note">
+            <span className="model-note__icon" aria-hidden="true">
+              <WalletCards />
+            </span>
+            <p>{copy(content.pricingModel.note)}</p>
+          </aside>
         </div>
       </section>
 
@@ -631,6 +691,7 @@ function StorySection({
   title,
   summary,
   items,
+  cardImages,
   variant
 }: {
   id: string;
@@ -639,6 +700,7 @@ function StorySection({
   title: string;
   summary: string;
   items: ContentItem[];
+  cardImages?: readonly ThemeImageAsset[];
   variant: "cards" | "list";
 }) {
   return (
@@ -656,9 +718,13 @@ function StorySection({
           variant === "cards" ? "feature-grid" : "principle-list"
         }`}
       >
-        {items.map((item) =>
+        {items.map((item, index) =>
           variant === "cards" ? (
-            <FeatureCard item={item} key={item.title} />
+            <FeatureCard
+              image={cardImages?.[index]}
+              item={item}
+              key={item.title}
+            />
           ) : (
             <FeatureRow item={item} key={item.title} />
           )
@@ -668,15 +734,43 @@ function StorySection({
   );
 }
 
-function FeatureCard({ item, marker }: { item: ContentItem; marker?: string }) {
+function FeatureCard({
+  item,
+  marker,
+  image
+}: {
+  item: ContentItem;
+  marker?: string;
+  image?: ThemeImageAsset;
+}) {
   const Icon = iconMap[item.icon];
 
   return (
-    <article className="feature-card">
-      <div className="feature-card__top">
-        <Icon aria-hidden="true" />
-        {marker ? <span>{marker}</span> : null}
-      </div>
+    <article
+      className={`feature-card${image ? " feature-card--with-image" : ""}`}
+    >
+      {image ? (
+        <>
+          {marker ? (
+            <span className="feature-card__marker">{marker}</span>
+          ) : null}
+          <ThemeImage
+            className="feature-card__image"
+            src={image.src}
+            darkSrc={image.darkSrc}
+            alt=""
+            width={512}
+            height={512}
+            sizes="(max-width: 980px) 90vw, 32vw"
+            aria-hidden="true"
+          />
+        </>
+      ) : (
+        <div className="feature-card__top">
+          <Icon aria-hidden="true" />
+          {marker ? <span>{marker}</span> : null}
+        </div>
+      )}
       <h3>{copy(item.title)}</h3>
       <p>{copy(item.description)}</p>
     </article>
