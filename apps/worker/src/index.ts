@@ -60,8 +60,16 @@ import {
   type DirectAccountAuthSweeper,
   type DirectAccountAuthSweepResult
 } from "./direct-account-auth-sweeper";
+import {
+  createDirectAccountSessionMonitor,
+  type DirectAccountSessionMonitor,
+  type DirectAccountSessionMonitorResult,
+  type DirectAccountSessionProbeHandler
+} from "./direct-account-session-monitor";
 import { createTelegramDirectAuthHandler } from "./telegram-direct-auth-handler";
+import { createTelegramDirectSessionProbeHandler } from "./telegram-direct-session-probe";
 import { createWhatsAppDirectAuthHandler } from "./whatsapp-direct-auth-handler";
+import { createWhatsAppDirectSessionProbeHandler } from "./whatsapp-direct-session-probe";
 
 export type WorkerBoundary = {
   processesOutbox: true;
@@ -222,6 +230,25 @@ export type WorkerDirectAccountAuthSweeper = {
   sweep(): Promise<DirectAccountAuthSweepResult>;
 };
 
+export type WorkerDirectAccountSessionMonitorOptions = {
+  database: HuleeDatabase;
+  secretEncryptionKey?: string;
+  handlers?: readonly DirectAccountSessionProbeHandler[];
+  telegramUserMonitoringEnabled?: boolean;
+  telegramUserApiId?: number;
+  telegramUserApiHash?: string;
+  whatsappUserMonitoringEnabled?: boolean;
+  logger?: Pick<Logger, "warn">;
+  workerId?: string;
+  limit?: number;
+  leaseMs?: number;
+  monitorIntervalMs?: number;
+};
+
+export type WorkerDirectAccountSessionMonitor = {
+  sweep(): Promise<DirectAccountSessionMonitorResult>;
+};
+
 export function createWorkerTelegramPollingSweeper(
   options: WorkerTelegramPollingSweeperOptions
 ): WorkerTelegramPollingSweeper {
@@ -342,6 +369,46 @@ export function createWorkerDirectAccountAuthSweeper(
   });
 }
 
+export function createWorkerDirectAccountSessionMonitor(
+  options: WorkerDirectAccountSessionMonitorOptions
+): DirectAccountSessionMonitor {
+  const sessionCipher = options.secretEncryptionKey
+    ? createAesGcmTenantSecretCipher({
+        key: options.secretEncryptionKey
+      })
+    : undefined;
+  const handlers = options.handlers ?? [
+    ...(options.telegramUserMonitoringEnabled
+      ? [
+          createTelegramDirectSessionProbeHandler({
+            apiId: options.telegramUserApiId,
+            apiHash: options.telegramUserApiHash,
+            sessionCipher,
+            logger: options.logger
+          })
+        ]
+      : []),
+    ...(options.whatsappUserMonitoringEnabled
+      ? [
+          createWhatsAppDirectSessionProbeHandler({
+            sessionCipher,
+            logger: options.logger
+          })
+        ]
+      : [])
+  ];
+
+  return createDirectAccountSessionMonitor({
+    sessionRepository: createSqlChannelSessionRepository(options.database),
+    connectorRepository: createSqlChannelConnectorRepository(options.database),
+    handlers,
+    workerId: options.workerId,
+    limit: options.limit,
+    leaseMs: options.leaseMs,
+    monitorIntervalMs: options.monitorIntervalMs
+  });
+}
+
 function createWorkerDeploymentEgressRuntime(input: {
   database: HuleeDatabase;
   egressProfile?: WorkerConfig["egressProfile"];
@@ -373,6 +440,10 @@ export {
   createDirectAccountAuthSweeper,
   runDirectAccountAuthSweep
 } from "./direct-account-auth-sweeper";
+export {
+  createDirectAccountSessionMonitor,
+  runDirectAccountSessionMonitor
+} from "./direct-account-session-monitor";
 export { createTelegramDirectAuthHandler } from "./telegram-direct-auth-handler";
 export { createWhatsAppDirectAuthHandler } from "./whatsapp-direct-auth-handler";
 export {

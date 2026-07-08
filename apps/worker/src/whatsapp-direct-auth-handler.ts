@@ -203,7 +203,7 @@ export function createWhatsAppDirectAuthHandler(
   };
 }
 
-function createWhatsAppSocketConnector(input: {
+export function createWhatsAppSocketConnector(input: {
   logger?: Pick<Logger, "warn">;
   fetchLatestVersion?: typeof fetchLatestBaileysVersion;
   makeSocket?: typeof makeWASocket;
@@ -414,7 +414,7 @@ function createWhatsAppVersionResolver(
   };
 }
 
-function createWhatsAppSessionState(
+export function createWhatsAppSessionState(
   input: {
     initialSessionPayload?: WhatsAppDirectSessionPayload | null;
     logger?: ILogger;
@@ -503,7 +503,7 @@ function createWhatsAppSessionState(
   };
 }
 
-function encryptWhatsAppSessionPayload(input: {
+export function encryptWhatsAppSessionPayload(input: {
   cipher: Pick<TenantSecretCipher, "encrypt">;
   payload: WhatsAppDirectSessionPayload;
 }): string {
@@ -512,7 +512,7 @@ function encryptWhatsAppSessionPayload(input: {
   );
 }
 
-function deserializeWhatsAppSessionPayload(input: {
+export function deserializeWhatsAppSessionPayload(input: {
   cipher: Pick<TenantSecretCipher, "decrypt">;
   sessionEncrypted: string | null;
 }): WhatsAppDirectSessionPayload | null {
@@ -560,7 +560,7 @@ async function createQrSvgDataUrl(qrPayload: string): Promise<string> {
   )}`;
 }
 
-function buildWhatsAppSelfUser(
+export function buildWhatsAppSelfUser(
   sessionPayload: WhatsAppDirectSessionPayload
 ): WhatsAppSelfUser {
   const me = readRecord(sessionPayload.creds.me) ?? {};
@@ -589,7 +589,7 @@ function readWhatsAppSessionKeys(
   return keys;
 }
 
-function readWhatsAppSelfUser(value: unknown): WhatsAppSelfUser {
+export function readWhatsAppSelfUser(value: unknown): WhatsAppSelfUser {
   if (!isRecord(value)) {
     return {};
   }
@@ -600,7 +600,7 @@ function readWhatsAppSelfUser(value: unknown): WhatsAppSelfUser {
   };
 }
 
-function displayAddressForWhatsAppUser(
+export function displayAddressForWhatsAppUser(
   user: WhatsAppSelfUser
 ): string | undefined {
   const phone = extractWhatsAppPhone(user.id);
@@ -608,7 +608,7 @@ function displayAddressForWhatsAppUser(
   return phone ? `+${phone}` : (user.name ?? user.id);
 }
 
-function displayNameForWhatsAppUser(user: WhatsAppSelfUser): string {
+export function displayNameForWhatsAppUser(user: WhatsAppSelfUser): string {
   const displayAddress = displayAddressForWhatsAppUser(user);
 
   return displayAddress
@@ -683,14 +683,16 @@ function createNoopBaileysLogger(): ILogger {
   return createBaileysLogger(undefined);
 }
 
-function getWhatsAppDisconnectCode(lastDisconnect: unknown): number | null {
+export function getWhatsAppDisconnectCode(
+  lastDisconnect: unknown
+): number | null {
   const output = readRecord(readRecord(lastDisconnect)?.error)?.output;
   const statusCode = readRecord(output)?.statusCode;
 
   return typeof statusCode === "number" ? statusCode : null;
 }
 
-function getWhatsAppDisconnectMessage(lastDisconnect: unknown): string {
+export function getWhatsAppDisconnectMessage(lastDisconnect: unknown): string {
   const error = readRecord(lastDisconnect)?.error;
 
   if (error instanceof Error && error.message) {

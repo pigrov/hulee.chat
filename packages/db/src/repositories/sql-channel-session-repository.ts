@@ -80,6 +80,7 @@ export type FindConnectorChannelSessionInput = {
 
 export type ListRunnableChannelSessionsInput = {
   status: ChannelSessionStatus | string;
+  heartbeatBefore?: Date;
   limit?: number;
 };
 
@@ -297,11 +298,18 @@ export function buildFindConnectorChannelSessionSql(
 export function buildListRunnableChannelSessionsSql(
   input: ListRunnableChannelSessionsInput
 ): SQL {
+  const heartbeatDueClause = input.heartbeatBefore
+    ? sql`
+      and (last_heartbeat_at is null or last_heartbeat_at <= ${input.heartbeatBefore})
+    `
+    : sql``;
+
   return sql`
     select ${channelSessionSelectList}
     from channel_sessions
     where status = ${input.status}
       and (lease_expires_at is null or lease_expires_at <= now())
+      ${heartbeatDueClause}
     order by updated_at asc, id asc
     limit ${input.limit ?? 100}
   `;

@@ -371,14 +371,14 @@ async function createQrSvgDataUrl(qrPayload: string): Promise<string> {
   )}`;
 }
 
-function encryptTelegramSessionPayload(input: {
+export function encryptTelegramSessionPayload(input: {
   cipher: Pick<TenantSecretCipher, "encrypt">;
   payload: TelegramDirectSessionPayload;
 }): string {
   return input.cipher.encrypt(JSON.stringify(input.payload));
 }
 
-function deserializeTelegramSessionPayload(input: {
+export function deserializeTelegramSessionPayload(input: {
   cipher: Pick<TenantSecretCipher, "decrypt">;
   sessionEncrypted: string | null;
 }): TelegramDirectSessionPayload | null {
@@ -409,7 +409,7 @@ function deserializeTelegramSessionPayload(input: {
   }
 }
 
-function serializeTelegramUser(user: unknown): TelegramSelfUser {
+export function serializeTelegramUser(user: unknown): TelegramSelfUser {
   const record = isRecord(user) ? user : {};
 
   return {
@@ -433,7 +433,7 @@ function readTelegramSelfUser(value: unknown): TelegramSelfUser | undefined {
   };
 }
 
-function displayAddressForTelegramUser(
+export function displayAddressForTelegramUser(
   user: TelegramSelfUser
 ): string | undefined {
   if (user.username) {
@@ -445,7 +445,7 @@ function displayAddressForTelegramUser(
   return fullName || user.id;
 }
 
-function displayNameForTelegramUser(user: TelegramSelfUser): string {
+export function displayNameForTelegramUser(user: TelegramSelfUser): string {
   const displayAddress = displayAddressForTelegramUser(user);
 
   return displayAddress

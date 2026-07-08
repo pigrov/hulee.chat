@@ -8,6 +8,7 @@ import {
 import {
   createWorkerEgressMonitor,
   createWorkerDirectAccountAuthSweeper,
+  createWorkerDirectAccountSessionMonitor,
   createWorkerTelegramAttachmentTransferSweeper,
   createWorkerOutboxHandler,
   createWorkerTelegramPollingSweeper,
@@ -61,6 +62,22 @@ const directAccountAuthSweeper =
         workerId: "worker:direct-account-auth"
       })
     : undefined;
+const directAccountSessionMonitor =
+  runtime.config.workerFeatures.includes("telegram_user") ||
+  runtime.config.workerFeatures.includes("whatsapp_user")
+    ? createWorkerDirectAccountSessionMonitor({
+        database,
+        secretEncryptionKey: runtime.config.secretEncryptionKey,
+        telegramUserMonitoringEnabled:
+          runtime.config.workerFeatures.includes("telegram_user"),
+        telegramUserApiId: runtime.config.telegramUserApiId,
+        telegramUserApiHash: runtime.config.telegramUserApiHash,
+        whatsappUserMonitoringEnabled:
+          runtime.config.workerFeatures.includes("whatsapp_user"),
+        logger: runtime.logger,
+        workerId: "worker:direct-account-session-monitor"
+      })
+    : undefined;
 const egressMonitor = createWorkerEgressMonitor({
   config: runtime.config,
   repository: createSqlDeploymentEgressStatusRepository(database),
@@ -97,7 +114,8 @@ async function processNextBatch(): Promise<void> {
 
   if (
     telegramBotServices === undefined &&
-    directAccountAuthSweeper === undefined
+    directAccountAuthSweeper === undefined &&
+    directAccountSessionMonitor === undefined
   ) {
     return;
   }
@@ -174,6 +192,28 @@ async function processNextBatch(): Promise<void> {
         skippedLeased: directAuthResult.skippedLeased,
         skippedUnsupported: directAuthResult.skippedUnsupported,
         skippedInactive: directAuthResult.skippedInactive
+      });
+    }
+
+    const directSessionMonitorResult =
+      await directAccountSessionMonitor?.sweep();
+
+    if (
+      directSessionMonitorResult &&
+      (directSessionMonitorResult.checked > 0 ||
+        directSessionMonitorResult.degraded > 0 ||
+        directSessionMonitorResult.reauthRequired > 0)
+    ) {
+      runtime.logger.info("worker.direct_account_session_monitor_processed", {
+        scanned: directSessionMonitorResult.scanned,
+        claimed: directSessionMonitorResult.claimed,
+        checked: directSessionMonitorResult.checked,
+        healthy: directSessionMonitorResult.healthy,
+        degraded: directSessionMonitorResult.degraded,
+        reauthRequired: directSessionMonitorResult.reauthRequired,
+        skippedLeased: directSessionMonitorResult.skippedLeased,
+        skippedUnsupported: directSessionMonitorResult.skippedUnsupported,
+        skippedInactive: directSessionMonitorResult.skippedInactive
       });
     }
   } catch (error) {

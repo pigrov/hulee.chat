@@ -9,7 +9,7 @@ import type {
   InternalChannelCatalogItem,
   InternalChannelConnectorSummary
 } from "@hulee/contracts";
-import { ArrowDown, ArrowUp } from "lucide-react";
+import { Activity, ArrowDown, ArrowUp, Clock3 } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
@@ -590,6 +590,22 @@ function GenericChannelCompactStatus({
         {t("integrations.channel.connectionStatusTitle")}
       </h3>
       <GenericChannelStatusMetric
+        icon="session"
+        label={t("integrations.channel.connectionMetric.sessionState")}
+        value={channelSessionStatusLabel(connector.session?.status, t)}
+      />
+      <GenericChannelStatusMetric
+        icon="checked"
+        label={t("integrations.channel.connectionMetric.lastCheckedAt")}
+        locale={locale}
+        value={connector.session?.lastHeartbeatAt}
+        fallback={formatOptionalDateTime(
+          connector.session?.lastHeartbeatAt,
+          locale,
+          t
+        )}
+      />
+      <GenericChannelStatusMetric
         icon="inbound"
         label={t("integrations.channel.connectionMetric.inboundReceivedAt")}
         locale={locale}
@@ -622,13 +638,20 @@ function GenericChannelStatusMetric({
   locale,
   value
 }: {
-  fallback: string;
-  icon: "inbound" | "outbound";
+  fallback?: string;
+  icon: "inbound" | "outbound" | "session" | "checked";
   label: string;
-  locale: string;
+  locale?: string;
   value?: string;
 }): ReactNode {
-  const Icon = icon === "inbound" ? ArrowDown : ArrowUp;
+  const Icon =
+    icon === "inbound"
+      ? ArrowDown
+      : icon === "outbound"
+        ? ArrowUp
+        : icon === "checked"
+          ? Clock3
+          : Activity;
 
   return (
     <div className="telegramStatusMetric">
@@ -638,11 +661,37 @@ function GenericChannelStatusMetric({
       <span className="telegramStatusBody">
         <span className="telegramStatusLabel">{label}</span>
         <strong className="telegramStatusValue">
-          <LocalDateTime fallback={fallback} locale={locale} value={value} />
+          {fallback && locale ? (
+            <LocalDateTime fallback={fallback} locale={locale} value={value} />
+          ) : (
+            value
+          )}
         </strong>
       </span>
     </div>
   );
+}
+
+function channelSessionStatusLabel(
+  status: string | undefined,
+  t: Translator
+): string {
+  return t(channelSessionStatusKey(status));
+}
+
+function channelSessionStatusKey(status: string | undefined): I18nMessageKey {
+  switch (status) {
+    case "not_started":
+    case "pending_auth":
+    case "connected":
+    case "reconnecting":
+    case "disconnected":
+    case "revoked":
+    case "error":
+      return `integrations.channel.sessionStatus.${status}` as I18nMessageKey;
+    default:
+      return "integrations.channel.sessionStatus.unknown";
+  }
 }
 
 function GenericChannelLifecycleActions({
