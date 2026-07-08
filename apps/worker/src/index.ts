@@ -70,6 +70,8 @@ import { createTelegramDirectAuthHandler } from "./telegram-direct-auth-handler"
 import { createTelegramDirectSessionProbeHandler } from "./telegram-direct-session-probe";
 import { createWhatsAppDirectAuthHandler } from "./whatsapp-direct-auth-handler";
 import { createWhatsAppDirectSessionProbeHandler } from "./whatsapp-direct-session-probe";
+import { createMaxDirectAuthHandler } from "./max-direct-auth-handler";
+import { createMaxDirectSessionProbeHandler } from "./max-direct-session-probe";
 
 export type WorkerBoundary = {
   processesOutbox: true;
@@ -220,6 +222,7 @@ export type WorkerDirectAccountAuthSweeperOptions = {
   telegramUserApiId?: number;
   telegramUserApiHash?: string;
   whatsappUserAuthEnabled?: boolean;
+  maxUserAuthEnabled?: boolean;
   logger?: Pick<Logger, "warn">;
   workerId?: string;
   limit?: number;
@@ -238,6 +241,7 @@ export type WorkerDirectAccountSessionMonitorOptions = {
   telegramUserApiId?: number;
   telegramUserApiHash?: string;
   whatsappUserMonitoringEnabled?: boolean;
+  maxUserMonitoringEnabled?: boolean;
   logger?: Pick<Logger, "warn">;
   workerId?: string;
   limit?: number;
@@ -352,6 +356,14 @@ export function createWorkerDirectAccountAuthSweeper(
             logger: options.logger
           })
         ]
+      : []),
+    ...(options.maxUserAuthEnabled
+      ? [
+          createMaxDirectAuthHandler({
+            sessionCipher: authChallengeCipher,
+            logger: options.logger
+          })
+        ]
       : [])
   ];
 
@@ -391,6 +403,14 @@ export function createWorkerDirectAccountSessionMonitor(
     ...(options.whatsappUserMonitoringEnabled
       ? [
           createWhatsAppDirectSessionProbeHandler({
+            sessionCipher,
+            logger: options.logger
+          })
+        ]
+      : []),
+    ...(options.maxUserMonitoringEnabled
+      ? [
+          createMaxDirectSessionProbeHandler({
             sessionCipher,
             logger: options.logger
           })
@@ -446,6 +466,8 @@ export {
 } from "./direct-account-session-monitor";
 export { createTelegramDirectAuthHandler } from "./telegram-direct-auth-handler";
 export { createWhatsAppDirectAuthHandler } from "./whatsapp-direct-auth-handler";
+export { createMaxDirectAuthHandler } from "./max-direct-auth-handler";
+export { createMaxDirectSessionProbeHandler } from "./max-direct-session-probe";
 export {
   createWorkerEgressMonitor,
   defaultEgressProbes,
@@ -514,6 +536,8 @@ export type {
   WhatsAppSelfUser,
   WhatsAppSocketHandle
 } from "./whatsapp-direct-auth-handler";
+export type { MaxDirectAuthHandlerOptions } from "./max-direct-auth-handler";
+export type { MaxDirectSessionProbeHandlerOptions } from "./max-direct-session-probe";
 export type {
   EgressMonitorOptions,
   EgressProbeDefinition,

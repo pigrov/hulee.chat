@@ -48,7 +48,8 @@ const telegramBotServices = runtime.config.workerFeatures.includes(
   : undefined;
 const directAccountAuthSweeper =
   runtime.config.workerFeatures.includes("telegram_user") ||
-  runtime.config.workerFeatures.includes("whatsapp_user")
+  runtime.config.workerFeatures.includes("whatsapp_user") ||
+  runtime.config.workerFeatures.includes("max_user")
     ? createWorkerDirectAccountAuthSweeper({
         database,
         secretEncryptionKey: runtime.config.secretEncryptionKey,
@@ -58,13 +59,15 @@ const directAccountAuthSweeper =
         telegramUserApiHash: runtime.config.telegramUserApiHash,
         whatsappUserAuthEnabled:
           runtime.config.workerFeatures.includes("whatsapp_user"),
+        maxUserAuthEnabled: runtime.config.workerFeatures.includes("max_user"),
         logger: runtime.logger,
         workerId: "worker:direct-account-auth"
       })
     : undefined;
 const directAccountSessionMonitor =
   runtime.config.workerFeatures.includes("telegram_user") ||
-  runtime.config.workerFeatures.includes("whatsapp_user")
+  runtime.config.workerFeatures.includes("whatsapp_user") ||
+  runtime.config.workerFeatures.includes("max_user")
     ? createWorkerDirectAccountSessionMonitor({
         database,
         secretEncryptionKey: runtime.config.secretEncryptionKey,
@@ -74,6 +77,8 @@ const directAccountSessionMonitor =
         telegramUserApiHash: runtime.config.telegramUserApiHash,
         whatsappUserMonitoringEnabled:
           runtime.config.workerFeatures.includes("whatsapp_user"),
+        maxUserMonitoringEnabled:
+          runtime.config.workerFeatures.includes("max_user"),
         logger: runtime.logger,
         workerId: "worker:direct-account-session-monitor"
       })
