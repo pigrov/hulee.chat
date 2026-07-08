@@ -266,6 +266,56 @@ describe("direct account auth sweeper", () => {
     expect(repositories.sessionRepository.events).toHaveLength(1);
   });
 
+  it("expires active challenges that passed their TTL", async () => {
+    const connector = createConnector({
+      channelType: "max_qr_bridge",
+      provider: "max"
+    });
+    const session = createSession(connector);
+    const challenge = createChallenge(connector, {
+      challengeType: "phone_code",
+      status: "requires_code",
+      expiresAt: new Date(now.getTime() - 1_000)
+    });
+    const repositories = createRepositories({
+      connectors: [connector],
+      sessions: [session],
+      challenges: [challenge]
+    });
+    const handler: DirectAccountAuthHandler = {
+      name: "max-test",
+      channelTypes: ["max_qr_bridge"],
+      challengeTypes: ["phone_code"],
+      async run() {
+        throw new Error("Expired challenge should not reach handler.");
+      }
+    };
+
+    await expect(
+      runDirectAccountAuthSweep({
+        ...repositories,
+        handlers: [handler],
+        authChallengeCipher: fakeCipher,
+        workerId: "worker-1",
+        now
+      })
+    ).resolves.toMatchObject({
+      scanned: 1,
+      claimed: 0,
+      processed: 0,
+      expired: 1
+    });
+    expect(
+      repositories.authChallengeRepository.records.get(challenge.id)
+    ).toMatchObject({
+      status: "expired",
+      completedAt: now,
+      publicPayload: {
+        operatorHint: "Authorization challenge expired. Start a new one."
+      }
+    });
+  });
+
   it("processes multiple QR challenges concurrently", async () => {
     const telegramConnector = createConnector({
       channelType: "telegram_qr_bridge",
@@ -475,14 +525,8 @@ class InMemoryChannelAuthChallengeRepository implements ChannelAuthChallengeRepo
         "requires_password"
       ]
     );
-    const nowValue = input.now ?? new Date();
-
     return [...this.records.values()]
-      .filter(
-        (record) =>
-          statuses.has(record.status) &&
-          (!record.expiresAt || record.expiresAt.getTime() > nowValue.getTime())
-      )
+      .filter((record) => statuses.has(record.status))
       .sort((left, right) => {
         const byUpdatedAt =
           left.updatedAt.getTime() - right.updatedAt.getTime();
@@ -797,6 +841,7 @@ function createChallenge(
     challengeType: InternalChannelAuthChallengeType;
     status: InternalChannelAuthChallengeStatus;
     secretPayloadEncrypted?: string;
+    expiresAt?: Date;
   }
 ): ChannelAuthChallengeRecord {
   return {
@@ -809,7 +854,7 @@ function createChallenge(
     secretPayloadEncrypted: input.secretPayloadEncrypted ?? null,
     errorCode: null,
     errorMessage: null,
-    expiresAt: new Date(now.getTime() + 5 * 60_000),
+    expiresAt: input.expiresAt ?? new Date(now.getTime() + 5 * 60_000),
     completedAt: null,
     createdByEmployeeId: null,
     createdAt: now,

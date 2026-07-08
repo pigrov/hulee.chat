@@ -169,13 +169,10 @@ export function buildListActiveChannelAuthChallengesSql(
     statuses.map((status) => sql`${status}`),
     sql`, `
   );
-  const now = input.now ?? new Date();
-
   return sql`
     select ${channelAuthChallengeSelectList}
     from channel_auth_challenges
     where status in (${statusList})
-      and (expires_at is null or expires_at > ${now})
     order by updated_at asc, id asc
     limit ${input.limit ?? 100}
   `;
