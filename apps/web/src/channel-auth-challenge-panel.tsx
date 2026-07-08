@@ -23,6 +23,7 @@ import type { ChannelAuthChallengeActionMessages } from "./channel-auth-challeng
 import { DetailItem } from "./app-chrome";
 import { PhoneNumberInput } from "./contact-fields";
 import { formatOptionalDateTime } from "./formatting";
+import { LocalDateTime } from "./local-date-time";
 
 type Translator = ReturnType<typeof createTranslator>["t"];
 
@@ -464,6 +465,12 @@ function ChallengeStatus({
   locale: string;
   t: Translator;
 }): ReactNode {
+  const expiresAtFallback = formatOptionalDateTime(
+    challenge.expiresAt,
+    locale,
+    t
+  );
+
   return (
     <>
       <div className="diagnosticGrid authChallengeStatusGrid">
@@ -473,7 +480,13 @@ function ChallengeStatus({
         />
         <DetailItem
           label={t("integrations.channel.auth.expiresAt")}
-          value={formatOptionalDateTime(challenge.expiresAt, locale, t)}
+          value={
+            <LocalDateTime
+              fallback={expiresAtFallback}
+              locale={locale}
+              value={challenge.expiresAt}
+            />
+          }
         />
       </div>
       {challenge.publicPayload.operatorHint &&
