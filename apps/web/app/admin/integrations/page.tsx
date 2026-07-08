@@ -498,7 +498,11 @@ function GenericChannelConnectorPanel({
 
       {showAuthChallenge ? (
         <ChannelAuthChallengePanel
-          autoStart={pendingDirectQrAuth && challenge === undefined}
+          autoStart={
+            pendingDirectQrAuth &&
+            challenge === undefined &&
+            !hasAlternateDirectAccountAuth(connector.channelType)
+          }
           cancelDeletesConnector={pendingDirectAuth}
           channelType={connector.channelType}
           challenge={challenge}
@@ -513,6 +517,12 @@ function GenericChannelConnectorPanel({
         />
       ) : null}
     </section>
+  );
+}
+
+function hasAlternateDirectAccountAuth(channelType: string): boolean {
+  return (
+    channelType === "telegram_qr_bridge" || channelType === "whatsapp_qr_bridge"
   );
 }
 

@@ -30,6 +30,7 @@ const defaultWhatsAppAuthTimeoutMs = 7 * 60 * 1000;
 const defaultWhatsAppVersionCacheMs = 6 * 60 * 60 * 1000;
 const whatsappQrBridgeChannelType = "whatsapp_qr_bridge";
 const whatsappQrChallengeType = "qr";
+const whatsappPhoneCodeChallengeType = "phone_code";
 const whatsappReauthChallengeType = "reauth";
 
 export type WhatsAppSelfUser = {
@@ -55,6 +56,8 @@ export type ConnectWhatsAppSocketLoopInput = {
   sessionState: WhatsAppDirectSessionState;
   timeoutMs: number;
   onQr(qrPayload: string): Promise<void>;
+  pairingPhoneNumber?: string;
+  onPairingCode?(pairingCode: string): Promise<void>;
   onRestart?(): Promise<void>;
 };
 
@@ -97,7 +100,11 @@ export function createWhatsAppDirectAuthHandler(
   return {
     name: "whatsapp-direct-auth",
     channelTypes: [whatsappQrBridgeChannelType],
-    challengeTypes: [whatsappQrChallengeType, whatsappReauthChallengeType],
+    challengeTypes: [
+      whatsappQrChallengeType,
+      whatsappPhoneCodeChallengeType,
+      whatsappReauthChallengeType
+    ],
 
     async run(
       input: DirectAccountAuthHandlerInput
@@ -124,12 +131,40 @@ export function createWhatsAppDirectAuthHandler(
         })
       });
       let socket: WhatsAppSocketHandle | undefined;
+      const authMode =
+        input.challenge.challengeType === whatsappPhoneCodeChallengeType
+          ? "pairing_code"
+          : "qr";
+      let pairingPhoneNumber: string | undefined;
+
+      if (authMode === "pairing_code") {
+        try {
+          pairingPhoneNumber = readWhatsAppPairingPhoneNumber(input.challenge);
+        } catch (error) {
+          return failedResult({
+            errorCode: "validation.failed",
+            errorMessage: errorMessage(error),
+            operatorHint:
+              "WhatsApp phone number should be in international format, for example +79991234567."
+          });
+        }
+      }
+
+      if (authMode === "pairing_code" && !pairingPhoneNumber) {
+        return failedResult({
+          errorCode: "validation.failed",
+          errorMessage: "WhatsApp phone number is required.",
+          operatorHint:
+            "Start WhatsApp authorization again and enter the account phone number in international format."
+        });
+      }
 
       try {
         socket = await connectWhatsAppSocketLoop({
           sessionId: input.session.id,
           sessionState,
           timeoutMs: authTimeoutMs,
+          pairingPhoneNumber,
           onQr: async (qrPayload) => {
             await input.updateChallenge({
               status: "waiting",
@@ -137,6 +172,20 @@ export function createWhatsAppDirectAuthHandler(
                 qrPayloadRef: qrPayload,
                 qrImageDataUrl: await createQrImageDataUrl(qrPayload),
                 expiresAt: input.challenge.expiresAt?.toISOString()
+              }
+            });
+          },
+          onPairingCode: async (pairingCode) => {
+            await input.updateChallenge({
+              status: "waiting",
+              publicPayload: {
+                phoneNumber: pairingPhoneNumber
+                  ? `+${pairingPhoneNumber}`
+                  : undefined,
+                pairingCode: formatWhatsAppPairingCode(pairingCode),
+                expiresAt: input.challenge.expiresAt?.toISOString(),
+                operatorHint:
+                  "Enter the pairing code in WhatsApp linked devices. The page will update after authorization."
               }
             });
           },
@@ -180,7 +229,7 @@ export function createWhatsAppDirectAuthHandler(
           },
           metadata: {
             provider: "whatsapp",
-            authMode: "qr"
+            authMode
           },
           diagnostics: {
             lastAuthAt: completedAt
@@ -248,6 +297,7 @@ export function createWhatsAppSocketConnector(input: {
 
     return await new Promise((resolve, reject) => {
       let settled = false;
+      let pairingCodeRequested = false;
       const timeout = setTimeout(() => {
         try {
           socket.end(new Error("WHATSAPP_QR_AUTH_TIMEOUT"));
@@ -284,7 +334,7 @@ export function createWhatsAppSocketConnector(input: {
       function onConnectionUpdate(update: Partial<ConnectionState>): void {
         void (async () => {
           try {
-            if (update.qr) {
+            if (update.qr && !options.pairingPhoneNumber) {
               await options.onQr(update.qr);
             }
 
@@ -322,6 +372,31 @@ export function createWhatsAppSocketConnector(input: {
       }
 
       socket.ev.on("connection.update", onConnectionUpdate);
+
+      if (options.pairingPhoneNumber) {
+        void requestPairingCode().catch((error: unknown) => {
+          finish(
+            error instanceof Error ? error : new Error(String(error)),
+            true
+          );
+        });
+      }
+
+      async function requestPairingCode(): Promise<void> {
+        if (
+          pairingCodeRequested ||
+          options.sessionState.state.creds.registered
+        ) {
+          return;
+        }
+
+        pairingCodeRequested = true;
+        const pairingCode = await socket.requestPairingCode(
+          options.pairingPhoneNumber as string
+        );
+
+        await options.onPairingCode?.(pairingCode);
+      }
     });
   }
 
@@ -621,6 +696,37 @@ function extractWhatsAppPhone(userId: string | undefined): string | undefined {
   const digits = value?.replace(/\D/g, "");
 
   return digits && digits.length >= 10 ? digits : undefined;
+}
+
+function readWhatsAppPairingPhoneNumber(
+  challenge: DirectAccountAuthHandlerInput["challenge"]
+): string | undefined {
+  if (!isRecord(challenge.publicPayload)) {
+    return undefined;
+  }
+
+  const phoneNumber = readString(challenge.publicPayload.phoneNumber);
+
+  return phoneNumber
+    ? normalizeWhatsAppPairingPhoneNumber(phoneNumber)
+    : undefined;
+}
+
+function normalizeWhatsAppPairingPhoneNumber(phoneNumber: string): string {
+  const digits = phoneNumber.replace(/\D/g, "");
+
+  if (digits.length < 10 || digits.length > 15) {
+    throw new Error("WHATSAPP_PHONE_NUMBER_INVALID");
+  }
+
+  return digits;
+}
+
+function formatWhatsAppPairingCode(pairingCode: string): string {
+  const normalized = pairingCode.replace(/\s+/g, "").toUpperCase();
+  const groups = normalized.match(/.{1,4}/g);
+
+  return groups ? groups.join("-") : normalized;
 }
 
 function failedResult(input: {

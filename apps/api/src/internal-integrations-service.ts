@@ -441,11 +441,15 @@ const userBridgeChannelSpecs = {
     authMode: "qr",
     initialStep: "qr",
     egressRequirement: managedMessengerVpnEgressRequirement,
-    allowedStartChallengeTypes: ["qr", "reauth"],
+    allowedStartChallengeTypes: ["qr", "phone_code", "reauth"],
+    initialChallengeStatuses: {
+      phone_code: "pending"
+    },
     capabilities: {
       inbound: true,
       outbound: true,
       qrAuth: true,
+      phoneCodeAuth: true,
       sessionRuntime: true,
       attachmentsMetadata: true
     }
@@ -457,11 +461,15 @@ const userBridgeChannelSpecs = {
     authMode: "qr",
     initialStep: "qr",
     egressRequirement: managedMessengerVpnEgressRequirement,
-    allowedStartChallengeTypes: ["qr", "reauth"],
+    allowedStartChallengeTypes: ["qr", "phone_code", "reauth"],
+    initialChallengeStatuses: {
+      phone_code: "pending"
+    },
     capabilities: {
       inbound: true,
       outbound: true,
       qrAuth: true,
+      pairingCodeAuth: true,
       sessionRuntime: true,
       attachmentsMetadata: true
     }
@@ -474,6 +482,9 @@ const userBridgeChannelSpecs = {
     initialStep: "phone",
     egressRequirement: deploymentPolicyDirectEgressRequirement,
     allowedStartChallengeTypes: ["phone_code", "reauth"],
+    initialChallengeStatuses: {
+      phone_code: "requires_code"
+    },
     capabilities: {
       inbound: true,
       outbound: true,
@@ -493,6 +504,12 @@ const userBridgeChannelSpecs = {
     initialStep: string;
     egressRequirement: InternalChannelCatalogResponse["channels"][number]["egressRequirement"];
     allowedStartChallengeTypes: readonly InternalChannelAuthChallengeType[];
+    initialChallengeStatuses?: Partial<
+      Record<
+        InternalChannelAuthChallengeType,
+        InternalChannelAuthChallengeStatus
+      >
+    >;
     capabilities: Record<string, boolean>;
   }
 >;
@@ -522,7 +539,13 @@ const channelCatalogV1 = [
     readiness: "available",
     visibility: "visible",
     supportsMultiple: true,
-    capabilities: ["inbound", "outbound", "qr_auth", "session_runtime"],
+    capabilities: [
+      "inbound",
+      "outbound",
+      "qr_auth",
+      "phone_code_auth",
+      "session_runtime"
+    ],
     egressRequirement:
       userBridgeChannelSpecs.telegram_qr_bridge.egressRequirement,
     onboarding: channelOnboardingFlows.telegram_qr_bridge
@@ -537,7 +560,13 @@ const channelCatalogV1 = [
     readiness: "available",
     visibility: "visible",
     supportsMultiple: true,
-    capabilities: ["inbound", "outbound", "qr_auth", "session_runtime"],
+    capabilities: [
+      "inbound",
+      "outbound",
+      "qr_auth",
+      "pairing_code_auth",
+      "session_runtime"
+    ],
     egressRequirement:
       userBridgeChannelSpecs.whatsapp_qr_bridge.egressRequirement,
     onboarding: channelOnboardingFlows.whatsapp_qr_bridge
@@ -826,6 +855,7 @@ export function createInternalIntegrationService(
         connector,
         challengeType: input.request.challengeType
       });
+      const spec = getUserBridgeChannelSpec(connector.channelType);
 
       const existingChallenge =
         await authChallengeRepository.findLatestActiveChallenge({
@@ -854,9 +884,10 @@ export function createInternalIntegrationService(
       }
 
       const expiresAt = new Date(updatedAt.getTime() + 10 * 60 * 1000);
-      const status = initialChannelAuthChallengeStatus(
-        input.request.challengeType
-      );
+      const status = initialChannelAuthChallengeStatus({
+        challengeType: input.request.challengeType,
+        spec
+      });
       const publicPayload = channelAuthChallengePublicPayload({
         challengeType: input.request.challengeType,
         phoneNumber: input.request.phoneNumber,
@@ -1760,10 +1791,25 @@ function authChallengePersistenceInputFromRecord(
   };
 }
 
-function initialChannelAuthChallengeStatus(
-  challengeType: InternalChannelAuthChallengeType
-): InternalChannelAuthChallengeStatus {
-  switch (challengeType) {
+function initialChannelAuthChallengeStatus(input: {
+  challengeType: InternalChannelAuthChallengeType;
+  spec?: (typeof userBridgeChannelSpecs)[UserBridgeChannelType];
+}): InternalChannelAuthChallengeStatus {
+  const initialChallengeStatuses = input.spec?.initialChallengeStatuses as
+    | Partial<
+        Record<
+          InternalChannelAuthChallengeType,
+          InternalChannelAuthChallengeStatus
+        >
+      >
+    | undefined;
+  const override = initialChallengeStatuses?.[input.challengeType];
+
+  if (override) {
+    return override;
+  }
+
+  switch (input.challengeType) {
     case "phone_code":
       return "requires_code";
     case "password":
@@ -1962,6 +2008,9 @@ function publicChannelAuthChallengePayload(
       : {}),
     ...(readRecordString(payload, "phoneNumber")
       ? { phoneNumber: readRecordString(payload, "phoneNumber") }
+      : {}),
+    ...(readRecordString(payload, "pairingCode")
+      ? { pairingCode: readRecordString(payload, "pairingCode") }
       : {}),
     ...(readRecordString(payload, "expiresAt")
       ? { expiresAt: readRecordString(payload, "expiresAt") }

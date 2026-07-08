@@ -17,6 +17,7 @@ const defaultTelegramPasswordPollIntervalMs = 2_000;
 const defaultTelegramConnectionRetries = 3;
 const telegramQrBridgeChannelType = "telegram_qr_bridge";
 const telegramQrChallengeType = "qr";
+const telegramPhoneCodeChallengeType = "phone_code";
 const telegramReauthChallengeType = "reauth";
 
 export type TelegramSelfUser = {
@@ -45,6 +46,15 @@ export type TelegramAuthClient = {
         token: Buffer | Uint8Array;
         expires: number;
       }): Promise<void>;
+      password(hint?: string): Promise<string>;
+      onError(error: Error): Promise<boolean> | boolean;
+    }
+  ): Promise<unknown>;
+  signInUser(
+    apiCredentials: { apiId: number; apiHash: string },
+    authParams: {
+      phoneNumber: string | (() => Promise<string>);
+      phoneCode(isCodeViaApp?: boolean): Promise<string>;
       password(hint?: string): Promise<string>;
       onError(error: Error): Promise<boolean> | boolean;
     }
@@ -100,7 +110,11 @@ export function createTelegramDirectAuthHandler(
   return {
     name: "telegram-direct-auth",
     channelTypes: [telegramQrBridgeChannelType],
-    challengeTypes: [telegramQrChallengeType, telegramReauthChallengeType],
+    challengeTypes: [
+      telegramQrChallengeType,
+      telegramPhoneCodeChallengeType,
+      telegramReauthChallengeType
+    ],
 
     async run(
       input: DirectAccountAuthHandlerInput
@@ -143,47 +157,58 @@ export function createTelegramDirectAuthHandler(
 
       try {
         await client.connect();
-        const authPromise = client.signInUserWithQrCode(apiConfig, {
-          qrCode: async ({ token, expires }) => {
-            const qrPayload = buildTelegramQrUrl(token);
-            await input.updateChallenge({
-              status: "waiting",
-              publicPayload: {
-                qrPayloadRef: qrPayload,
-                qrImageDataUrl: await createQrImageDataUrl(qrPayload),
-                expiresAt: new Date(expires * 1000).toISOString()
-              }
-            });
-          },
-          password: async (hint?: string) => {
-            await input.updateChallenge({
-              status: "requires_password",
-              publicPayload: {
-                operatorHint: hint
-                  ? `Telegram requires a two-step verification password. Hint: ${hint}`
-                  : "Telegram requires a two-step verification password."
-              }
-            });
+        const authMode =
+          input.challenge.challengeType === telegramPhoneCodeChallengeType
+            ? "phone_code"
+            : "qr";
+        const onAuthError = async (error: Error): Promise<boolean> => {
+          authErrorMessage ??= errorMessage(error);
+          options.logger?.warn("Telegram direct auth error.", {
+            connectorId: input.connector.id,
+            challengeId: input.challenge.id,
+            sessionId: input.session.id,
+            error: errorMessage(error)
+          });
 
-            return waitForPassword({
-              input,
-              passwordTimeoutMs,
-              passwordPollIntervalMs,
-              wait
-            });
-          },
-          onError: async (error) => {
-            authErrorMessage ??= errorMessage(error);
-            options.logger?.warn("Telegram direct auth error.", {
-              connectorId: input.connector.id,
-              challengeId: input.challenge.id,
-              sessionId: input.session.id,
-              error: errorMessage(error)
-            });
+          return true;
+        };
+        const password = async (hint?: string): Promise<string> => {
+          await input.updateChallenge({
+            status: "requires_password",
+            publicPayload: {
+              operatorHint: hint
+                ? `Telegram requires a two-step verification password. Hint: ${hint}`
+                : "Telegram requires a two-step verification password."
+            }
+          });
 
-            return true;
-          }
-        });
+          return waitForPassword({
+            input,
+            passwordTimeoutMs,
+            passwordPollIntervalMs,
+            wait
+          });
+        };
+        const authPromise =
+          authMode === "phone_code"
+            ? startTelegramPhoneCodeAuth({
+                apiConfig,
+                client,
+                input,
+                password,
+                passwordTimeoutMs,
+                passwordPollIntervalMs,
+                wait,
+                onAuthError
+              })
+            : startTelegramQrAuth({
+                apiConfig,
+                client,
+                createQrImageDataUrl,
+                input,
+                password,
+                onAuthError
+              });
         authPromise.catch(() => undefined);
 
         const timeoutPromise = new Promise<never>((_resolve, reject) => {
@@ -221,7 +246,7 @@ export function createTelegramDirectAuthHandler(
           },
           metadata: {
             provider: "telegram",
-            authMode: "qr"
+            authMode
           },
           diagnostics: {
             lastAuthAt: new Date().toISOString()
@@ -261,6 +286,72 @@ function createDefaultTelegramAuthClient(
       connectionRetries: input.connectionRetries
     }
   ) as unknown as TelegramAuthClient;
+}
+
+function startTelegramQrAuth(input: {
+  apiConfig: { apiId: number; apiHash: string };
+  client: TelegramAuthClient;
+  createQrImageDataUrl(qrPayload: string): Promise<string>;
+  input: DirectAccountAuthHandlerInput;
+  password(hint?: string): Promise<string>;
+  onAuthError(error: Error): Promise<boolean>;
+}): Promise<unknown> {
+  return input.client.signInUserWithQrCode(input.apiConfig, {
+    qrCode: async ({ token, expires }) => {
+      const qrPayload = buildTelegramQrUrl(token);
+      await input.input.updateChallenge({
+        status: "waiting",
+        publicPayload: {
+          qrPayloadRef: qrPayload,
+          qrImageDataUrl: await input.createQrImageDataUrl(qrPayload),
+          expiresAt: new Date(expires * 1000).toISOString()
+        }
+      });
+    },
+    password: input.password,
+    onError: input.onAuthError
+  });
+}
+
+function startTelegramPhoneCodeAuth(input: {
+  apiConfig: { apiId: number; apiHash: string };
+  client: TelegramAuthClient;
+  input: DirectAccountAuthHandlerInput;
+  password(hint?: string): Promise<string>;
+  passwordTimeoutMs: number;
+  passwordPollIntervalMs: number;
+  wait(milliseconds: number): Promise<void>;
+  onAuthError(error: Error): Promise<boolean>;
+}): Promise<unknown> {
+  const phoneNumber = readChallengePhoneNumber(input.input.challenge);
+
+  if (!phoneNumber) {
+    throw new Error("TELEGRAM_PHONE_NUMBER_REQUIRED");
+  }
+
+  return input.client.signInUser(input.apiConfig, {
+    phoneNumber,
+    phoneCode: async (isCodeViaApp?: boolean) => {
+      await input.input.updateChallenge({
+        status: "requires_code",
+        publicPayload: {
+          phoneNumber,
+          operatorHint: isCodeViaApp
+            ? "Telegram sent a login code to the Telegram app."
+            : "Telegram sent a login code by SMS or phone call."
+        }
+      });
+
+      return waitForCode({
+        input: input.input,
+        codeTimeoutMs: input.passwordTimeoutMs,
+        pollIntervalMs: input.passwordPollIntervalMs,
+        wait: input.wait
+      });
+    },
+    password: input.password,
+    onError: input.onAuthError
+  });
 }
 
 function normalizeTimeoutMs(
@@ -333,6 +424,37 @@ async function waitForPassword(input: {
   throw new Error("TELEGRAM_2FA_PASSWORD_TIMEOUT");
 }
 
+async function waitForCode(input: {
+  input: DirectAccountAuthHandlerInput;
+  codeTimeoutMs: number;
+  pollIntervalMs: number;
+  wait(milliseconds: number): Promise<void>;
+}): Promise<string> {
+  const deadline = Date.now() + input.codeTimeoutMs;
+
+  while (Date.now() < deadline) {
+    const latest = await input.input.loadLatestChallenge();
+
+    if (!latest) {
+      throw new Error("TELEGRAM_AUTH_CHALLENGE_NOT_FOUND");
+    }
+
+    if (isTerminalChallengeStatus(latest.challenge.status)) {
+      throw new Error(`TELEGRAM_AUTH_CHALLENGE_${latest.challenge.status}`);
+    }
+
+    const code = readChallengeCode(latest.challengeSecretPayload);
+
+    if (code) {
+      return code;
+    }
+
+    await input.wait(input.pollIntervalMs);
+  }
+
+  throw new Error("TELEGRAM_PHONE_CODE_TIMEOUT");
+}
+
 function isTerminalChallengeStatus(status: string): boolean {
   return (
     status === "succeeded" ||
@@ -350,6 +472,27 @@ function readChallengePassword(
     readString(payload.telegramPassword) ??
     readString(payload.twoFactorPassword)
   );
+}
+
+function readChallengeCode(
+  payload: Record<string, unknown>
+): string | undefined {
+  return (
+    readString(payload.code) ??
+    readString(payload.telegramCode) ??
+    readString(payload.phoneCode) ??
+    readString(payload.verificationCode)
+  );
+}
+
+function readChallengePhoneNumber(
+  challenge: DirectAccountAuthHandlerInput["challenge"]
+): string | undefined {
+  if (!isRecord(challenge.publicPayload)) {
+    return undefined;
+  }
+
+  return readString(challenge.publicPayload.phoneNumber);
 }
 
 function buildTelegramQrUrl(token: Buffer | Uint8Array): string {

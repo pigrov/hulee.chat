@@ -152,6 +152,8 @@ function QrChallengeStep({
     );
   }
 
+  const hasAlternatePhoneAuth = Boolean(alternatePhoneAuthConfig(channelType));
+
   return (
     <>
       {challenge?.status === "expired" ? (
@@ -171,11 +173,67 @@ function QrChallengeStep({
             ? "integrations.channel.auth.autoStart"
             : challenge
               ? "integrations.channel.auth.restart"
-              : "integrations.channel.auth.start"
+              : hasAlternatePhoneAuth
+                ? "integrations.channel.auth.startQr"
+                : "integrations.channel.auth.start"
         )}
         t={t}
       />
+      {!challenge && hasAlternatePhoneAuth ? (
+        <AlternatePhoneAuthForm
+          channelType={channelType}
+          connectorId={connectorId}
+          t={t}
+        />
+      ) : null}
     </>
+  );
+}
+
+function AlternatePhoneAuthForm({
+  channelType,
+  connectorId,
+  t
+}: {
+  channelType?: string;
+  connectorId: string;
+  t: Translator;
+}): ReactNode {
+  const config = alternatePhoneAuthConfig(channelType);
+
+  if (!config) {
+    return null;
+  }
+
+  return (
+    <div className="authChallengeAlternative">
+      <div className="authChallengeAlternativeText">
+        <p className="sectionTitle">{t(config.titleKey)}</p>
+        <p className="metaText">{t(config.hintKey)}</p>
+      </div>
+      <ChannelAuthChallengeActionForm
+        actionKind="start"
+        className="authChallengeAlternativeForm"
+        messages={channelAuthChallengeActionMessages(t)}
+      >
+        <input type="hidden" name="connectorId" value={connectorId} />
+        <input type="hidden" name="challengeType" value="phone_code" />
+        <label className="fieldStack">
+          <span className="detailLabel">
+            {t("integrations.channel.auth.phoneNumber")}
+          </span>
+          <PhoneNumberInput className="textInput" name="phoneNumber" required />
+        </label>
+        <div className="buttonRow">
+          <ChannelAuthChallengeSubmitButton
+            className="secondaryButton"
+            label={t(config.buttonKey)}
+          >
+            <Phone size={16} aria-hidden="true" />
+          </ChannelAuthChallengeSubmitButton>
+        </div>
+      </ChannelAuthChallengeActionForm>
+    </div>
   );
 }
 
@@ -391,13 +449,40 @@ function WaitingChallengeStep({
   t: Translator;
 }): ReactNode {
   return (
-    <WaitingChallengeActions
-      cancelDeletesConnector={cancelDeletesConnector}
-      channelType={channelType}
-      challenge={challenge}
-      connectorId={connectorId}
-      t={t}
-    />
+    <>
+      {challenge?.publicPayload.pairingCode ? (
+        <PairingCodePreview challenge={challenge} t={t} />
+      ) : null}
+      <WaitingChallengeActions
+        cancelDeletesConnector={cancelDeletesConnector}
+        channelType={channelType}
+        challenge={challenge}
+        connectorId={connectorId}
+        t={t}
+      />
+    </>
+  );
+}
+
+function PairingCodePreview({
+  challenge,
+  t
+}: {
+  challenge: InternalChannelAuthChallenge;
+  t: Translator;
+}): ReactNode {
+  return (
+    <div className="authChallengePairingBox">
+      <p className="detailLabel">
+        {t("integrations.channel.auth.pairingCode")}
+      </p>
+      <p className="authChallengePairingCode">
+        {challenge.publicPayload.pairingCode}
+      </p>
+      <p className="metaText">
+        {t("integrations.channel.auth.pairingCodeHint.whatsapp")}
+      </p>
+    </div>
   );
 }
 
@@ -590,6 +675,32 @@ function qrReadyHintKey(channelType: string | undefined): I18nMessageKey {
   }
 
   return "integrations.channel.auth.qrReadyHint";
+}
+
+function alternatePhoneAuthConfig(channelType: string | undefined):
+  | {
+      titleKey: I18nMessageKey;
+      hintKey: I18nMessageKey;
+      buttonKey: I18nMessageKey;
+    }
+  | undefined {
+  if (channelType === "telegram_qr_bridge") {
+    return {
+      titleKey: "integrations.channel.auth.telegramPhoneTitle",
+      hintKey: "integrations.channel.auth.telegramPhoneHint",
+      buttonKey: "integrations.channel.auth.startTelegramPhone"
+    };
+  }
+
+  if (channelType === "whatsapp_qr_bridge") {
+    return {
+      titleKey: "integrations.channel.auth.whatsappPairingTitle",
+      hintKey: "integrations.channel.auth.whatsappPairingHint",
+      buttonKey: "integrations.channel.auth.startWhatsAppPairing"
+    };
+  }
+
+  return undefined;
 }
 
 function channelAuthChallengeActionMessages(

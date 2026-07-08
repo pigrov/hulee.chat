@@ -418,8 +418,7 @@ describe("internal integrations service", () => {
       service.startChannelAuthChallenge(context, {
         connectorId: "telegram_qr_bridge:tenant-integrations",
         request: {
-          challengeType: "phone_code",
-          phoneNumber: "+79990000000"
+          challengeType: "password"
         }
       })
     ).rejects.toMatchObject({

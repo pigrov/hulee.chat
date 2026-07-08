@@ -852,6 +852,7 @@ export const internalChannelAuthChallengePublicPayloadSchema = z
     qrImageDataUrl: z.string().trim().min(1).max(20000).optional(),
     qrPayloadRef: z.string().trim().min(1).max(500).optional(),
     phoneNumber: z.string().trim().min(1).max(80).optional(),
+    pairingCode: z.string().trim().min(1).max(80).optional(),
     expiresAt: z.string().datetime({ offset: true }).optional(),
     operatorHint: z.string().trim().min(1).max(500).optional()
   })

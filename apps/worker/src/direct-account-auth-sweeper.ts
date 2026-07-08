@@ -36,6 +36,7 @@ export type DirectAccountAuthPublicPayload = {
   qrImageDataUrl?: string;
   qrPayloadRef?: string;
   phoneNumber?: string;
+  pairingCode?: string;
   expiresAt?: string;
   operatorHint?: string;
 };
@@ -1048,6 +1049,9 @@ function publicPayloadFromUnknown(
       : {}),
     ...(readString(value.phoneNumber)
       ? { phoneNumber: readString(value.phoneNumber) }
+      : {}),
+    ...(readString(value.pairingCode)
+      ? { pairingCode: readString(value.pairingCode) }
       : {}),
     ...(readString(value.expiresAt)
       ? { expiresAt: readString(value.expiresAt) }

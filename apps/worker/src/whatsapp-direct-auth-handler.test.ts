@@ -188,6 +188,70 @@ describe("whatsapp direct auth handler", () => {
       }
     });
   });
+
+  it("publishes a pairing code for phone-based WhatsApp linking", async () => {
+    const updates: unknown[] = [];
+    let loopInput: ConnectWhatsAppSocketLoopInput | undefined;
+    const connector = createConnector();
+    const session = createSession(connector);
+    const challenge = createChallenge(connector, {
+      challengeType: "phone_code",
+      status: "pending",
+      publicPayload: {
+        phoneNumber: "+7 (999) 123-45-67"
+      }
+    });
+    const handler = createWhatsAppDirectAuthHandler({
+      sessionCipher: fakeCipher,
+      authTimeoutMs: 30_000,
+      connectWhatsAppSocketLoop: async (input) => {
+        loopInput = input;
+        await input.onPairingCode?.("abcd1234");
+        await input.sessionState.saveCreds({
+          me: {
+            id: "79991234567:1@s.whatsapp.net",
+            name: "Dmitry"
+          },
+          registered: true
+        } as Parameters<typeof input.sessionState.saveCreds>[0]);
+
+        return {};
+      }
+    });
+
+    const result = await handler.run(
+      createHandlerInput({
+        connector,
+        session,
+        challenge,
+        updates
+      })
+    );
+
+    expect(loopInput).toMatchObject({
+      pairingPhoneNumber: "79991234567"
+    });
+    expect(updates).toContainEqual(
+      expect.objectContaining({
+        status: "waiting",
+        publicPayload: {
+          phoneNumber: "+79991234567",
+          pairingCode: "ABCD-1234",
+          expiresAt: challenge.expiresAt?.toISOString(),
+          operatorHint:
+            "Enter the pairing code in WhatsApp linked devices. The page will update after authorization."
+        }
+      })
+    );
+    expect(result).toMatchObject({
+      status: "completed",
+      externalAccountId: "79991234567:1@s.whatsapp.net",
+      metadata: {
+        provider: "whatsapp",
+        authMode: "pairing_code"
+      }
+    });
+  });
 });
 
 function createHandlerInput(input: {
@@ -278,6 +342,7 @@ function createChallenge(
   input: {
     challengeType: InternalChannelAuthChallengeType;
     status: InternalChannelAuthChallengeStatus;
+    publicPayload?: Record<string, unknown>;
   }
 ): ChannelAuthChallengeRecord {
   return {
@@ -286,7 +351,7 @@ function createChallenge(
     connectorId: connector.id,
     challengeType: input.challengeType,
     status: input.status,
-    publicPayload: {},
+    publicPayload: input.publicPayload ?? {},
     secretPayloadEncrypted: null,
     errorCode: null,
     errorMessage: null,

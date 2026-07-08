@@ -201,6 +201,61 @@ describe("telegram direct auth handler", () => {
       externalAccountId: "123"
     });
   });
+
+  it("sends a phone login code and completes after submitted code", async () => {
+    const updates: unknown[] = [];
+    const connector = createConnector();
+    const session = createSession(connector);
+    const challenge = createChallenge(connector, {
+      challengeType: "phone_code",
+      status: "pending",
+      publicPayload: {
+        phoneNumber: "+79991234567"
+      }
+    });
+    const handler = createTelegramDirectAuthHandler({
+      apiId: 12345,
+      apiHash: "api-hash",
+      sessionCipher: fakeCipher,
+      authTimeoutMs: 30_000,
+      passwordTimeoutMs: 30_000,
+      passwordPollIntervalMs: 250,
+      sleep: async () => undefined,
+      createTelegramClient() {
+        return new FakeTelegramAuthClient("phone_code");
+      }
+    });
+
+    const result = await handler.run(
+      createHandlerInput({
+        connector,
+        session,
+        challenge,
+        latestChallengeSecretPayload: {
+          code: "12345"
+        },
+        updates
+      })
+    );
+
+    expect(updates).toContainEqual(
+      expect.objectContaining({
+        status: "requires_code",
+        publicPayload: {
+          phoneNumber: "+79991234567",
+          operatorHint: "Telegram sent a login code to the Telegram app."
+        }
+      })
+    );
+    expect(result).toMatchObject({
+      status: "completed",
+      externalAccountId: "123",
+      metadata: {
+        provider: "telegram",
+        authMode: "phone_code"
+      }
+    });
+  });
 });
 
 class FakeTelegramAuthClient implements TelegramAuthClient {
@@ -212,7 +267,7 @@ class FakeTelegramAuthClient implements TelegramAuthClient {
   disconnectCount = 0;
 
   constructor(
-    private readonly behavior: "success" | "password",
+    private readonly behavior: "success" | "password" | "phone_code",
     private readonly sessionString = "saved-telegram-session"
   ) {}
 
@@ -243,6 +298,31 @@ class FakeTelegramAuthClient implements TelegramAuthClient {
     if (this.behavior === "password") {
       expect(await authParams.password("hint text")).toBe("2fa-secret");
     }
+
+    return {
+      id: 123n,
+      username: "hulee_user",
+      firstName: "Hulee",
+      lastName: "User"
+    };
+  }
+
+  async signInUser(
+    _apiCredentials: { apiId: number; apiHash: string },
+    authParams: {
+      phoneNumber: string | (() => Promise<string>);
+      phoneCode(isCodeViaApp?: boolean): Promise<string>;
+      password(hint?: string): Promise<string>;
+      onError(error: Error): Promise<boolean> | boolean;
+    }
+  ): Promise<unknown> {
+    const phoneNumber =
+      typeof authParams.phoneNumber === "function"
+        ? await authParams.phoneNumber()
+        : authParams.phoneNumber;
+
+    expect(phoneNumber).toBe("+79991234567");
+    expect(await authParams.phoneCode(true)).toBe("12345");
 
     return {
       id: 123n,
@@ -341,6 +421,7 @@ function createChallenge(
   input: {
     challengeType: InternalChannelAuthChallengeType;
     status: InternalChannelAuthChallengeStatus;
+    publicPayload?: Record<string, unknown>;
   }
 ): ChannelAuthChallengeRecord {
   return {
@@ -349,7 +430,7 @@ function createChallenge(
     connectorId: connector.id,
     challengeType: input.challengeType,
     status: input.status,
-    publicPayload: {},
+    publicPayload: input.publicPayload ?? {},
     secretPayloadEncrypted: null,
     errorCode: null,
     errorMessage: null,

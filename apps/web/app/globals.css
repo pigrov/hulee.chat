@@ -1151,6 +1151,60 @@ button.iconButton:disabled {
   text-align: center;
 }
 
+.authChallengeAlternative {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 5%,
+    var(--hulee-color-surface-raised)
+  );
+}
+
+.authChallengeAlternativeText {
+  display: grid;
+  gap: 4px;
+}
+
+.authChallengeAlternativeForm .settingsFormFieldset {
+  display: grid;
+  gap: 10px;
+}
+
+.authChallengePairingBox {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 18px;
+  border: 1px solid
+    color-mix(
+      in srgb,
+      var(--hulee-color-brand-primary) 28%,
+      var(--hulee-color-border)
+    );
+  border-radius: var(--hulee-radius-control);
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-brand-primary) 7%,
+    var(--hulee-color-surface-raised)
+  );
+  text-align: center;
+}
+
+.authChallengePairingCode {
+  margin: 0;
+  color: var(--hulee-color-text-default);
+  font-family:
+    ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: clamp(28px, 4vw, 46px);
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
 .authChallengeNotice {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
