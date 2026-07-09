@@ -50,6 +50,8 @@ const defaultMaxTimezone = "Europe/Moscow";
 const defaultMaxScreen = "1080x1920 1.0x";
 const defaultMaxUserAgent =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36";
+const maxRateLimitOperatorHint =
+  "MAX temporarily limited authorization attempts. Wait a few minutes before requesting or submitting a new code.";
 const defaultMaxAllowedEarlyOpcodes = [
   5, 6, 17, 18, 19, 23, 101, 109, 110, 115, 116, 288, 289, 291
 ] as const;
@@ -534,6 +536,14 @@ async function recoverOrFail(input: {
 
   const recovery = resolveMaxRecoverableState(input.method, details.code);
 
+  if (isMaxRateLimitError(details.code)) {
+    return failedResult({
+      errorCode: "provider.temporary_failure",
+      errorMessage: details.localizedMessage,
+      operatorHint: maxRateLimitOperatorHint
+    });
+  }
+
   if (recovery.state === "phone_required") {
     return failedResult({
       errorCode: "provider.permanent_failure",
@@ -629,6 +639,10 @@ function readErrorDetails(error: unknown): {
     message: String(error),
     localizedMessage: String(error)
   };
+}
+
+function isMaxRateLimitError(code: string): boolean {
+  return code === "error.limit.violate";
 }
 
 function maxOperatorHint(

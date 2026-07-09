@@ -70,7 +70,12 @@ export function ChannelAuthChallengePanel({
         }
       />
       {challenge ? (
-        <ChallengeStatus challenge={challenge} locale={locale} t={t} />
+        <ChallengeStatus
+          challenge={challenge}
+          channelType={channelType}
+          locale={locale}
+          t={t}
+        />
       ) : null}
       {renderChallengeStep({
         autoStart,
@@ -615,10 +620,12 @@ function CompleteChallengeStep({ t }: { t: Translator }): ReactNode {
 
 function ChallengeStatus({
   challenge,
+  channelType,
   locale,
   t
 }: {
   challenge: InternalChannelAuthChallenge;
+  channelType?: string;
   locale: string;
   t: Translator;
 }): ReactNode {
@@ -627,6 +634,11 @@ function ChallengeStatus({
     locale,
     t
   );
+  const failedChallenge = isFailedChallenge(challenge) ? challenge : undefined;
+  const operatorHint =
+    !failedChallenge && challenge.status !== "requires_password"
+      ? challenge.publicPayload.operatorHint
+      : undefined;
 
   return (
     <>
@@ -646,21 +658,17 @@ function ChallengeStatus({
           }
         />
       </div>
-      {challenge.publicPayload.operatorHint &&
-      challenge.status !== "requires_password" ? (
+      {operatorHint ? (
         <ChallengeNotice
           icon={<AlertTriangle size={16} aria-hidden="true" />}
-          message={localizedChallengeOperatorHint(
-            challenge.publicPayload.operatorHint,
-            t
-          )}
+          message={localizedChallengeOperatorHint(operatorHint, t)}
           variant="warning"
         />
       ) : null}
-      {isFailedChallenge(challenge) ? (
+      {failedChallenge ? (
         <ChallengeNotice
           icon={<AlertTriangle size={16} aria-hidden="true" />}
-          message={challengeFailureMessage(challenge, t)}
+          message={challengeFailureMessage(failedChallenge, channelType, t)}
           variant="error"
         />
       ) : null}
@@ -696,9 +704,38 @@ function localizedChallengeOperatorHint(
       return t("integrations.channel.auth.maxCodeRequiredOperatorHint");
     case "MAX verification code should contain 4 to 10 digits.":
       return t("integrations.channel.auth.maxCodeFormatOperatorHint");
+    case "MAX authorization expired or rejected the request. Start a new authorization challenge.":
+      return t("integrations.channel.auth.maxExpiredOrRejectedOperatorHint");
+    case "MAX authorization request is being processed.":
+      return t("integrations.channel.auth.maxProcessingOperatorHint");
+    case "MAX temporarily limited authorization attempts. Wait a few minutes before requesting or submitting a new code.":
+      return t("integrations.channel.auth.maxRateLimitedOperatorHint");
     default:
-      return message;
+      return localizedPrefixedChallengeOperatorHint(message, t);
   }
+}
+
+function localizedPrefixedChallengeOperatorHint(
+  message: string,
+  t: Translator
+): string {
+  const codePrefix = "MAX did not accept the verification code.";
+  const passwordPrefix =
+    "MAX did not accept the two-step verification password.";
+
+  if (message.startsWith(codePrefix)) {
+    return t("integrations.channel.auth.maxCodeRejectedOperatorHint", {
+      message: message.slice(codePrefix.length).trim()
+    });
+  }
+
+  if (message.startsWith(passwordPrefix)) {
+    return t("integrations.channel.auth.maxPasswordRejectedOperatorHint", {
+      message: message.slice(passwordPrefix.length).trim()
+    });
+  }
+
+  return message;
 }
 
 function StartChallengeForm({
@@ -849,16 +886,18 @@ function isFailedChallenge(
 
 function challengeFailureMessage(
   challenge: InternalChannelAuthChallenge,
+  channelType: string | undefined,
   t: Translator
 ): string {
   const message = challenge.errorMessage ?? "";
+  const errorCode = challenge.errorCode ?? "";
 
   if (message.includes("TIMEOUT")) {
-    return t("integrations.channel.auth.error.timeout");
+    return t(channelAuthFailureKey(channelType, "timeout"));
   }
 
   if (message.includes("PASSWORD")) {
-    return t("integrations.channel.auth.error.password");
+    return t(channelAuthFailureKey(channelType, "password"));
   }
 
   if (
@@ -866,8 +905,35 @@ function challengeFailureMessage(
     message.includes("not configured") ||
     message.includes("Session encryption")
   ) {
-    return t("integrations.channel.auth.error.config");
+    return t(channelAuthFailureKey(channelType, "config"));
   }
 
-  return t("integrations.channel.auth.error.failed");
+  if (
+    channelType === "max_qr_bridge" &&
+    (errorCode === "provider.temporary_failure" ||
+      message.includes(maxTooManyAttemptsProviderMessage) ||
+      message.toLowerCase().includes("too many"))
+  ) {
+    return t("integrations.channel.auth.error.max.rateLimited");
+  }
+
+  return t(channelAuthFailureKey(channelType, "failed"));
 }
+
+function channelAuthFailureKey(
+  channelType: string | undefined,
+  kind: "config" | "failed" | "password" | "timeout"
+): I18nMessageKey {
+  if (channelType === "max_qr_bridge") {
+    return `integrations.channel.auth.error.max.${kind}` as I18nMessageKey;
+  }
+
+  if (channelType === "whatsapp_qr_bridge") {
+    return `integrations.channel.auth.error.whatsapp.${kind}` as I18nMessageKey;
+  }
+
+  return `integrations.channel.auth.error.telegram.${kind}` as I18nMessageKey;
+}
+
+const maxTooManyAttemptsProviderMessage =
+  "\u0421\u043b\u0438\u0448\u043a\u043e\u043c \u043c\u043d\u043e\u0433\u043e \u043f\u043e\u043f\u044b\u0442\u043e\u043a";

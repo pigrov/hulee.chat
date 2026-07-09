@@ -16,6 +16,7 @@ import {
   createMaxDirectAuthHandler,
   type MaxDirectAuthHandlerOptions
 } from "./max-direct-auth-handler";
+import { MaxSocketRequestError } from "./max-direct-transport-client";
 import {
   deserializeMaxSessionPayload,
   readMaxChallengeSecretPayload
@@ -186,6 +187,49 @@ describe("max direct auth handler", () => {
       },
       profile: {
         username: "max_user"
+      }
+    });
+  });
+
+  it("surfaces MAX rate limits as a temporary provider failure", async () => {
+    const connector = createConnector();
+    const session = createSession(connector);
+    const challenge = createChallenge(connector, {
+      challengeType: "phone_code",
+      status: "requires_code"
+    });
+    const fakeClient = new FakeMaxClient([
+      new MaxSocketRequestError(18, {
+        error: "error.limit.violate",
+        localizedMessage: "Попробуйте позже Слишком много попыток"
+      })
+    ]);
+    const handler = createMaxDirectAuthHandler({
+      sessionCipher: fakeCipher,
+      createTransportClient: createFakeTransportFactory(fakeClient)
+    });
+
+    const result = await handler.run(
+      createHandlerInput({
+        connector,
+        session,
+        challenge,
+        challengeSecretPayload: {
+          deviceId: "device-1",
+          phoneNumber: "+79991234567",
+          maxAuthToken: "max-auth-token",
+          code: "123456"
+        }
+      })
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      errorCode: "provider.temporary_failure",
+      errorMessage: "Попробуйте позже Слишком много попыток",
+      publicPayload: {
+        operatorHint:
+          "MAX temporarily limited authorization attempts. Wait a few minutes before requesting or submitting a new code."
       }
     });
   });
