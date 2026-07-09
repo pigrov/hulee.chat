@@ -70,6 +70,12 @@ type Metric = {
   label: string;
 };
 
+type ChannelStat = {
+  title: string;
+  description: string;
+  icon: IconName;
+};
+
 type ComparisonRow = {
   label: string;
   usual: string;
@@ -136,6 +142,8 @@ type LandingContent = {
     title: string;
     summary: string;
     items: string[];
+    stats: ChannelStat[];
+    note: string;
   };
   workflow: {
     kicker: string;
@@ -200,8 +208,20 @@ const brandLockupAsset =
   defaultBrandProfile.assets.mark ??
   defaultBrandProfile.assets.pwaIcon ??
   "/icons/icon-512x512.png";
-const heroImage = "/marketing/hero-workspace-2-transparent-x2.png";
-const heroDarkImage = "/marketing/hero-workspace-2-transparent-x2-dark.png";
+const heroImages = {
+  ru: {
+    src: "/marketing/hero-workspace-2-transparent-x2.png",
+    darkSrc: "/marketing/hero-workspace-2-transparent-x2-dark.png"
+  },
+  en: {
+    src: "/marketing/hero-workspace-2-transparent-x2-en.png",
+    darkSrc: "/marketing/hero-workspace-2-transparent-x2-dark-en.png"
+  },
+  kk: {
+    src: "/marketing/hero-workspace-2-transparent-x2-kk.png",
+    darkSrc: "/marketing/hero-workspace-2-transparent-x2-dark-kk.png"
+  }
+} satisfies Record<Locale, ThemeImageAsset>;
 const heroMetricIcons = [
   {
     src: "/marketing/hero-metric-channel-light.png",
@@ -302,6 +322,8 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { locale } = await params;
   const content = getContent(locale);
+  const typedLocale = locale as Locale;
+  const heroAsset = heroImages[typedLocale] ?? heroImages.ru;
   const siteUrl = new URL(
     process.env.HULEE_SITE_BASE_URL ?? "https://hulee.ru"
   );
@@ -326,7 +348,7 @@ export async function generateMetadata({
       type: "website",
       images: [
         {
-          url: heroImage,
+          url: heroAsset.src,
           width: 2400,
           height: 1600,
           alt: copy(content.metadata.ogAlt)
@@ -338,7 +360,7 @@ export async function generateMetadata({
       card: "summary_large_image",
       title: copy(content.metadata.title),
       description: copy(content.metadata.description),
-      images: [heroImage]
+      images: [heroAsset.src]
     }
   };
 }
@@ -351,6 +373,7 @@ export default async function LandingPage({
   const { locale } = await params;
   const content = getContent(locale);
   const typedLocale = locale as Locale;
+  const heroAsset = heroImages[typedLocale] ?? heroImages.ru;
 
   return (
     <main className="site">
@@ -418,8 +441,8 @@ export default async function LandingPage({
           <div className="hero__media" aria-hidden="true">
             <ThemeImage
               className="hero__background"
-              src={heroImage}
-              darkSrc={heroDarkImage}
+              src={heroAsset.src}
+              darkSrc={heroAsset.darkSrc}
               alt=""
               fill
               priority
@@ -497,19 +520,52 @@ export default async function LandingPage({
       </section>
 
       <section className="section section--channels" id="channels">
-        <div className="section__inner split">
-          <div>
+        <div className="channels-card">
+          <div className="channels-card__content">
             <p className="section-kicker">{content.channels.kicker}</p>
             <h2>{copy(content.channels.title)}</h2>
+            <p className="section__summary">{copy(content.channels.summary)}</p>
+
+            <div className="channel-cloud" aria-label={content.channels.kicker}>
+              {content.channels.items.map((channel) => (
+                <span className="channel-pill" key={channel}>
+                  <span className="channel-pill__mark" aria-hidden="true" />
+                  {channel}
+                </span>
+              ))}
+            </div>
+
+            <dl className="channel-metrics">
+              {content.channels.stats.map((stat) => {
+                const Icon = iconMap[stat.icon];
+
+                return (
+                  <div className="channel-metric" key={stat.title}>
+                    <Icon className="channel-metric__icon" aria-hidden="true" />
+                    <div>
+                      <dt>{copy(stat.title)}</dt>
+                      <dd>{copy(stat.description)}</dd>
+                    </div>
+                  </div>
+                );
+              })}
+            </dl>
+
+            <aside className="channel-note">
+              <ShieldCheck aria-hidden="true" />
+              <p>{copy(content.channels.note)}</p>
+            </aside>
           </div>
-          <p className="section__summary">{copy(content.channels.summary)}</p>
-        </div>
-        <div className="section__inner channel-cloud">
-          {content.channels.items.map((channel) => (
-            <span className="channel-pill" key={channel}>
-              {channel}
+          <div className="channels-visual" aria-hidden="true">
+            <span className="channels-visual__node channels-visual__node--telegram" />
+            <span className="channels-visual__node channels-visual__node--whatsapp" />
+            <span className="channels-visual__node channels-visual__node--vk" />
+            <span className="channels-visual__node channels-visual__node--api" />
+            <span className="channels-visual__node channels-visual__node--mail" />
+            <span className="channels-visual__hub">
+              <MessageSquare />
             </span>
-          ))}
+          </div>
         </div>
       </section>
 

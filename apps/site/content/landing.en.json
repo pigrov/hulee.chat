@@ -32,8 +32,8 @@
     "title": "All channels and the whole team without add-ons",
     "lead": "{product} brings Telegram, WhatsApp, MAX, VK, Avito, website chat, email, and internal requests into one workspace. You pay for the data you store, not for every channel or agent.",
     "metrics": [
-      { "value": "0", "label": "per-channel fee from {product}" },
-      { "value": "0", "label": "per-agent add-on" },
+      { "value": "0$", "label": "per-channel fee from {product}" },
+      { "value": "0$", "label": "per-agent add-on" },
       { "value": "GB", "label": "clear storage-based usage" }
     ]
   },
@@ -83,23 +83,41 @@
     "note": "External provider costs such as WABA, SMS, AI, or transcription stay separate and transparent. {product} does not turn them into hidden channel subscriptions."
   },
   "channels": {
-    "kicker": "Channels",
-    "title": "Customers write everywhere. Teams need one inbox.",
-    "summary": "The site should show channel breadth without selling every icon as a tariff lock. Channels are entrances into one operating layer.",
+    "kicker": "CHANNELS",
+    "title": "Customers write where it is convenient. The team answers from one window.",
+    "summary": "Connect Telegram, WhatsApp, MAX, VK, Avito, website, email, SMS, webhooks, and API to {product}. Every request, file, and customer history lands in one inbox for sales, support, and internal teams.",
     "items": [
-      "Telegram Bot",
-      "Telegram Personal",
+      "Telegram",
       "WhatsApp",
-      "WABA",
       "MAX",
       "VK",
       "Avito",
+      "Website",
       "Email",
-      "Website chat",
       "SMS",
       "Webhooks",
-      "Public API"
-    ]
+      "Public API",
+      "WABA",
+      "Internal"
+    ],
+    "stats": [
+      {
+        "title": "12+ channels",
+        "description": "Messengers, website, email, API, and internal requests.",
+        "icon": "globe"
+      },
+      {
+        "title": "1 inbox",
+        "description": "Every conversation enters one shared workspace.",
+        "icon": "message"
+      },
+      {
+        "title": "No channel add-on",
+        "description": "A channel is an entry point, not a separate subscription.",
+        "icon": "wallet"
+      }
+    ],
+    "note": "Channels can expand without tariff hooks. {product} charges for the real resource: stored data, history, and files."
   },
   "workflow": {
     "kicker": "Product",
