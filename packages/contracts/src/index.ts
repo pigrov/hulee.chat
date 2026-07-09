@@ -809,5 +809,14 @@ export type StorageProvider = {
   health(): Promise<AdapterHealth>;
 };
 
+export {
+  defaultSourceCapabilities,
+  normalizeSourceCapabilities,
+  replyCapabilitySchema,
+  resolveReplyCapability,
+  sourceCapabilitiesSchema
+} from "./source-capabilities";
+export type { ResolveReplyCapabilityInput } from "./source-capabilities";
+
 export * from "./public-api-v1";
 export * from "./internal-api-v1";

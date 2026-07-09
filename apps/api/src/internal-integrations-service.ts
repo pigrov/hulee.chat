@@ -35,7 +35,8 @@ import {
   internalEgressDiagnosticsSchema,
   internalTelegramBotTokenValidateResponseSchema,
   internalTelegramIntegrationDiagnosticsSchema,
-  isPlatformErrorCode
+  isPlatformErrorCode,
+  normalizeSourceCapabilities
 } from "@hulee/contracts";
 import { CoreError } from "@hulee/core";
 import type {
@@ -1935,7 +1936,7 @@ function sourceCapabilitiesForChannelConnector(record: ChannelConnectorRecord) {
   const isUserBridge = record.channelClass === userBridgeChannelClass;
   const isTelegramBot = record.channelType === telegramChannelType;
 
-  return {
+  return normalizeSourceCapabilities({
     canReceive: true,
     canReply: true,
     canFetchHistory: isUserBridge,
@@ -1952,7 +1953,7 @@ function sourceCapabilitiesForChannelConnector(record: ChannelConnectorRecord) {
     oauthSupported: false,
     sandboxAvailable: false,
     legalRisk: isUserBridge ? "high" : "low"
-  };
+  });
 }
 
 function sourceDiagnosticsForChannelConnector(record: ChannelConnectorRecord) {

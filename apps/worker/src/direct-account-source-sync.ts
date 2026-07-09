@@ -1,6 +1,6 @@
-import type {
-  SourceCapabilities,
-  SourceConnectionStatus
+import {
+  normalizeSourceCapabilities,
+  type SourceConnectionStatus
 } from "@hulee/contracts";
 import type {
   ChannelConnectorRecord,
@@ -9,7 +9,7 @@ import type {
 } from "@hulee/db";
 import { createHash } from "node:crypto";
 
-const directAccountCapabilities: SourceCapabilities = {
+const directAccountCapabilities = normalizeSourceCapabilities({
   canReceive: true,
   canReply: true,
   canFetchHistory: true,
@@ -26,7 +26,7 @@ const directAccountCapabilities: SourceCapabilities = {
   oauthSupported: false,
   sandboxAvailable: false,
   legalRisk: "high"
-};
+});
 
 export type DirectAccountSourceSyncInput = {
   sourceRepository?: SourceIntegrationRepository;

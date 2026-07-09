@@ -87,6 +87,23 @@ Each source should declare capabilities explicitly:
 Capabilities are product behavior, not UI hints only. They drive onboarding,
 admin diagnostics, reply controls, entitlements and support policy.
 
+`SourceCapabilities` must be normalized before persistence or adapter handoff:
+missing boolean fields default to `false`, while optional risk and reply-window
+fields are preserved only when explicitly declared by the source.
+
+`ReplyCapability` is derived from source status, event direction, reply support,
+external reply links and reply windows. The shared decision order is:
+
+- inactive, disabled, deleted, errored or onboarding sources are read-only;
+- non-inbound events are read-only;
+- events outside the source reply window are expired;
+- sources with native reply support use `native_reply`;
+- sources without native reply support can expose an `external_link`;
+- sources with no available reply path are `unsupported`.
+
+This reply capability decision must be produced by shared contracts/helpers and
+then consumed by UI, public API, adapters and analytics.
+
 ## Data Rules
 
 - Store raw payload before normalization.
