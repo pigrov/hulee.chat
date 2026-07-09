@@ -1175,10 +1175,33 @@ button.iconButton:disabled {
 }
 
 .authChallengePhoneBox {
+  grid-template-columns: max-content max-content 1fr;
   align-content: start;
+  align-items: end;
+}
+
+.authChallengePhoneBox .authChallengeAlternativeText {
+  grid-column: 1 / -1;
+}
+
+.authChallengePhoneStartForm {
+  display: contents;
+}
+
+.authChallengePhoneStartForm .settingsFormFieldset {
+  display: contents;
+}
+
+.authChallengePhoneStartForm .fieldStack {
+  grid-column: 1 / -1;
+}
+
+.authChallengePhoneStartForm .actionStateNotice {
+  grid-column: 1 / -1;
 }
 
 .authChallengePhoneBox > .buttonRow {
+  grid-column: 2;
   margin-top: -2px;
 }
 

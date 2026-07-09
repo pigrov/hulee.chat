@@ -323,7 +323,7 @@ function PhoneChallengeStep({
         </div>
         <ChannelAuthChallengeActionForm
           actionKind="start"
-          className="authChallengeAlternativeForm"
+          className="authChallengeAlternativeForm authChallengePhoneStartForm"
           messages={channelAuthChallengeActionMessages(t)}
         >
           <input type="hidden" name="connectorId" value={connectorId} />
@@ -650,7 +650,10 @@ function ChallengeStatus({
       challenge.status !== "requires_password" ? (
         <ChallengeNotice
           icon={<AlertTriangle size={16} aria-hidden="true" />}
-          message={challenge.publicPayload.operatorHint}
+          message={localizedChallengeOperatorHint(
+            challenge.publicPayload.operatorHint,
+            t
+          )}
           variant="warning"
         />
       ) : null}
@@ -680,6 +683,22 @@ function ChallengeNotice({
       <span>{message}</span>
     </div>
   );
+}
+
+function localizedChallengeOperatorHint(
+  message: string,
+  t: Translator
+): string {
+  switch (message) {
+    case "MAX sent a verification code. Enter the code from the message.":
+      return t("integrations.channel.auth.maxCodeSentOperatorHint");
+    case "Enter the verification code from MAX to continue authorization.":
+      return t("integrations.channel.auth.maxCodeRequiredOperatorHint");
+    case "MAX verification code should contain 4 to 10 digits.":
+      return t("integrations.channel.auth.maxCodeFormatOperatorHint");
+    default:
+      return message;
+  }
 }
 
 function StartChallengeForm({
