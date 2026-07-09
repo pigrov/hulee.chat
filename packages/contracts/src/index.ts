@@ -849,6 +849,25 @@ export type {
   SourceIdentityConfidence,
   SourceIdentityResolverInput
 } from "./source-identity";
+export {
+  normalizeSourceConversationKeyCandidates,
+  normalizeSourceConversationResolverInput,
+  sourceConversationKeyCandidateSchema,
+  sourceConversationKeyKindSchema,
+  sourceConversationKeyStrengthSchema,
+  sourceConversationResolverInputSchema,
+  sourceConversationRoutingHintsSchema,
+  sourceConversationTypeHintSchema
+} from "./source-conversation";
+export type {
+  NormalizeSourceConversationResolverInput,
+  SourceConversationKeyCandidate,
+  SourceConversationKeyKind,
+  SourceConversationKeyStrength,
+  SourceConversationResolverInput,
+  SourceConversationRoutingHints,
+  SourceConversationTypeHint
+} from "./source-conversation";
 
 export * from "./public-api-v1";
 export * from "./internal-api-v1";

@@ -84,6 +84,29 @@ kind and value before resolver handoff, keeping the highest confidence version.
 The resolver owns matching/linking decisions; adapters and normalizers only
 describe evidence.
 
+## Conversation Resolver Input
+
+After identity resolution, source normalizers must provide a provider-neutral
+conversation resolver input. It includes tenant id, source connection id,
+optional source account id, source type, source name, source event type,
+visibility, event ids, optional resolved client id, optional existing
+conversation id and a list of conversation key candidates.
+
+Conversation keys are not messenger-specific thread ids only. Supported key
+kinds include external thread, external post, listing, order, review, lead,
+call, email thread, form submission, CRM record and custom. Keys are ranked as:
+
+- `exact`: canonical provider object or thread id that should map to one
+  conversation;
+- `strong`: stable business object id that can group events safely;
+- `weak`: fallback extracted value that may need additional identity or routing
+  context.
+
+The conversation resolver owns lookup, merge and creation decisions. Adapters
+and normalizers only describe grouping evidence, suggested conversation type and
+routing hints. This keeps marketplace questions, reviews, calls, forms and CRM
+events out of messenger-only assumptions.
+
 ## Capabilities
 
 Each source should declare capabilities explicitly:
