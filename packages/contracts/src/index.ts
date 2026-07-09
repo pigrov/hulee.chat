@@ -868,6 +868,29 @@ export type {
   SourceConversationRoutingHints,
   SourceConversationTypeHint
 } from "./source-conversation";
+export {
+  decideSourceProcessing,
+  sanitizeSourceDiagnosticDetails,
+  sourceProcessingDecisionActionSchema,
+  sourceProcessingDecisionSchema,
+  sourceProcessingDiagnosticsSchema,
+  sourceProcessingOutcomeSchema,
+  sourceProcessingStageSchema,
+  sourceReplayModeSchema,
+  sourceReplayReasonSchema,
+  sourceReplayRequestSchema
+} from "./source-processing";
+export type {
+  DecideSourceProcessingInput,
+  SourceProcessingDecision,
+  SourceProcessingDecisionAction,
+  SourceProcessingDiagnostics,
+  SourceProcessingOutcome,
+  SourceProcessingStage,
+  SourceReplayMode,
+  SourceReplayReason,
+  SourceReplayRequest
+} from "./source-processing";
 
 export * from "./public-api-v1";
 export * from "./internal-api-v1";

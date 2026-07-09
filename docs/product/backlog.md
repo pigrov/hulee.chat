@@ -101,7 +101,7 @@
 - [x] SOURCE-107 Identity resolver input contract for source identities.
 - [x] SOURCE-108 Conversation resolver input contract for non-messenger events.
 - [x] SOURCE-109 Link channel connectors to source connections without destructive rename.
-- [ ] SOURCE-110 Source diagnostics, replay and DLQ policy.
+- [x] SOURCE-110 Source diagnostics, replay and DLQ policy.
 - [ ] SOURCE-111 Source catalog categories for messengers, marketplaces, reviews, forms, email, telephony, CRM and API.
 - [ ] SOURCE-112 Contract tests for source adapters and normalizers.
 

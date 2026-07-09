@@ -107,6 +107,33 @@ and normalizers only describe grouping evidence, suggested conversation type and
 routing hints. This keeps marketplace questions, reviews, calls, forms and CRM
 events out of messenger-only assumptions.
 
+## Diagnostics, Replay and DLQ
+
+Every source processing step must emit safe diagnostics for operators. A
+diagnostic record includes tenant id, source connection id, optional source
+account id, raw or normalized event id, processing stage, outcome, attempt,
+max attempts, checked time, normalized platform error code, retryability, next
+attempt time, DLQ time, replayability, operator hint and sanitized details.
+
+Diagnostics must not expose raw payloads, headers, cookies, authorization
+values, tokens, passwords or secrets. Adapters can attach provider status,
+method name, normalized reason and correlation ids only after redaction.
+
+Replay and DLQ policy is shared across webhook, polling, email and API sources:
+
+- successful events are marked processed;
+- duplicate events are marked duplicate and are not replayable;
+- intentionally ignored events are marked ignored and are not replayable;
+- retryable or unknown failures are retried while attempts remain;
+- exhausted retryable failures and non-retryable failures are sent to DLQ with a
+  safe diagnostic reason;
+- DLQ records remain manually replayable after adapter, provider or
+  configuration fixes.
+
+Replay requests must be tenant-scoped, idempotent and identify either a raw
+event or normalized event. Replay can target a raw event, a normalized event or
+a DLQ record, and must record the operator/system reason.
+
 ## Capabilities
 
 Each source should declare capabilities explicitly:
