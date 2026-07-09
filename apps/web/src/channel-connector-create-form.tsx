@@ -20,12 +20,12 @@ export function ChannelConnectorCreateForm({
   channelType,
   label,
   messages,
-  redirectTab
+  sourceName
 }: {
   readonly channelType: string;
   readonly label: string;
   readonly messages: ChannelConnectorCreateMessages;
-  readonly redirectTab?: "accounts" | "channels";
+  readonly sourceName?: string;
 }): ReactNode {
   const router = useRouter();
   const handledSuccessRef = useRef<string | undefined>(undefined);
@@ -48,8 +48,8 @@ export function ChannelConnectorCreateForm({
       connectorId: state.connectorId
     });
 
-    if (redirectTab) {
-      params.set("tab", redirectTab);
+    if (sourceName) {
+      params.set("sourceName", sourceName);
     }
 
     if (state.challengeId) {
@@ -57,7 +57,7 @@ export function ChannelConnectorCreateForm({
     }
 
     router.push(`/admin/integrations?${params.toString()}`);
-  }, [redirectTab, router, state]);
+  }, [router, sourceName, state]);
 
   return (
     <form className="buttonRow" action={formAction}>

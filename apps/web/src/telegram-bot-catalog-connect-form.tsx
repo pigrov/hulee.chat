@@ -46,12 +46,14 @@ export function TelegramBotCatalogConnectForm({
   channelType,
   labels,
   messages,
-  notice
+  notice,
+  sourceName
 }: {
   readonly channelType: "telegram_bot";
   readonly labels: TelegramBotCatalogConnectFormLabels;
   readonly messages: TelegramBotCatalogConnectFormMessages;
   readonly notice?: TelegramBotCatalogConnectFormNotice;
+  readonly sourceName?: string;
 }): ReactNode {
   const router = useRouter();
   const handledSuccessRef = useRef<string | undefined>(undefined);
@@ -83,12 +85,17 @@ export function TelegramBotCatalogConnectForm({
     }
 
     handledSuccessRef.current = state.submittedAt;
-    router.push(
-      `/admin/integrations?connectorId=${encodeURIComponent(
-        state.connectorId
-      )}&connectionPendingAt=${encodeURIComponent(state.submittedAt)}`
-    );
-  }, [router, state]);
+    const params = new URLSearchParams({
+      connectorId: state.connectorId,
+      connectionPendingAt: state.submittedAt
+    });
+
+    if (sourceName) {
+      params.set("sourceName", sourceName);
+    }
+
+    router.push(`/admin/integrations?${params.toString()}`);
+  }, [router, sourceName, state]);
 
   return (
     <form className="settingsForm setupStepPanel" action={formAction}>

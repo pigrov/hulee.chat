@@ -35,6 +35,7 @@ export function ChannelAuthChallengePanel({
   challengeType,
   connectorId,
   locale,
+  sourceName,
   stepKind,
   t
 }: {
@@ -45,6 +46,7 @@ export function ChannelAuthChallengePanel({
   challengeType: InternalChannelAuthChallengeType;
   connectorId: string;
   locale: string;
+  sourceName?: string;
   stepKind:
     | "qr_code"
     | "phone_number"
@@ -77,6 +79,7 @@ export function ChannelAuthChallengePanel({
         challenge,
         challengeType,
         connectorId,
+        sourceName,
         stepKind,
         t
       })}
@@ -91,6 +94,7 @@ function renderChallengeStep(input: {
   challenge?: InternalChannelAuthChallenge;
   challengeType: InternalChannelAuthChallengeType;
   connectorId: string;
+  sourceName?: string;
   stepKind:
     | "qr_code"
     | "phone_number"
@@ -123,6 +127,7 @@ function QrChallengeStep({
   challenge,
   challengeType,
   connectorId,
+  sourceName,
   t
 }: {
   autoStart: boolean;
@@ -131,6 +136,7 @@ function QrChallengeStep({
   challenge?: InternalChannelAuthChallenge;
   challengeType: InternalChannelAuthChallengeType;
   connectorId: string;
+  sourceName?: string;
   t: Translator;
 }): ReactNode {
   if (challenge && isActiveQrChallenge(challenge)) {
@@ -146,6 +152,7 @@ function QrChallengeStep({
           channelType={channelType}
           challenge={challenge}
           connectorId={connectorId}
+          sourceName={sourceName}
           t={t}
         />
       </>
@@ -294,6 +301,7 @@ function PhoneChallengeStep({
   challenge,
   challengeType,
   connectorId,
+  sourceName,
   t
 }: {
   cancelDeletesConnector: boolean;
@@ -301,6 +309,7 @@ function PhoneChallengeStep({
   challenge?: InternalChannelAuthChallenge;
   challengeType: InternalChannelAuthChallengeType;
   connectorId: string;
+  sourceName?: string;
   t: Translator;
 }): ReactNode {
   const config = primaryPhoneAuthConfig(channelType);
@@ -344,6 +353,7 @@ function PhoneChallengeStep({
             channelType={channelType}
             challenge={challenge}
             connectorId={connectorId}
+            sourceName={sourceName}
             t={t}
           />
         ) : null}
@@ -381,6 +391,7 @@ function PhoneChallengeStep({
           channelType={channelType}
           challenge={challenge}
           connectorId={connectorId}
+          sourceName={sourceName}
           t={t}
         />
       ) : null}
@@ -488,12 +499,14 @@ function WaitingChallengeStep({
   channelType,
   challenge,
   connectorId,
+  sourceName,
   t
 }: {
   cancelDeletesConnector: boolean;
   channelType?: string;
   challenge?: InternalChannelAuthChallenge;
   connectorId: string;
+  sourceName?: string;
   t: Translator;
 }): ReactNode {
   return (
@@ -506,6 +519,7 @@ function WaitingChallengeStep({
         channelType={channelType}
         challenge={challenge}
         connectorId={connectorId}
+        sourceName={sourceName}
         t={t}
       />
     </>
@@ -539,12 +553,14 @@ function WaitingChallengeActions({
   channelType,
   challenge,
   connectorId,
+  sourceName,
   t
 }: {
   cancelDeletesConnector: boolean;
   channelType?: string;
   challenge?: InternalChannelAuthChallenge;
   connectorId: string;
+  sourceName?: string;
   t: Translator;
 }): ReactNode {
   return (
@@ -560,12 +576,20 @@ function WaitingChallengeActions({
         {cancelDeletesConnector && channelType ? (
           <>
             <input type="hidden" name="deleteConnectorOnCancel" value="on" />
-            <input type="hidden" name="redirectTab" value="accounts" />
             <input
               type="hidden"
               name="redirectChannelType"
               value={channelType}
             />
+            {sourceName ? (
+              <input
+                type="hidden"
+                name="redirectSourceName"
+                value={sourceName}
+              />
+            ) : (
+              <input type="hidden" name="redirectTab" value="accounts" />
+            )}
           </>
         ) : null}
         <ChannelAuthChallengeSubmitButton

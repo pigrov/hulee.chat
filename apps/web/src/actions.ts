@@ -1006,6 +1006,9 @@ export async function cancelChannelAuthChallengeAction(
     const redirectChannelType = normalizeOptionalFormValue(
       readOptionalFormString(formData, "redirectChannelType")
     );
+    const redirectSourceName = normalizeOptionalFormValue(
+      readOptionalFormString(formData, "redirectSourceName")
+    );
     const redirectTab = readOptionalFormString(formData, "redirectTab");
 
     if (challengeId) {
@@ -1032,6 +1035,10 @@ export async function cancelChannelAuthChallengeAction(
       redirectChannelType:
         deleteConnectorOnCancel && redirectChannelType
           ? redirectChannelType
+          : undefined,
+      redirectSourceName:
+        deleteConnectorOnCancel && redirectSourceName
+          ? redirectSourceName
           : undefined,
       redirectTab:
         deleteConnectorOnCancel &&

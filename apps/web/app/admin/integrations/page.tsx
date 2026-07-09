@@ -83,7 +83,6 @@ export default async function IntegrationsAdminPage({
     connectionPendingAt?: string;
     sourceConnectionId?: string;
     sourceName?: string;
-    tab?: string;
   }>;
 }): Promise<ReactNode> {
   const access = await resolveCurrentWebAccessSession();
@@ -132,7 +131,6 @@ export default async function IntegrationsAdminPage({
   const requestedSourceConnectionId = normalizeOptionalSearchParam(
     resolvedSearchParams?.sourceConnectionId
   );
-  const requestedTab = normalizeIntegrationsTab(resolvedSearchParams?.tab);
   const connectionPendingAt = normalizeOptionalSearchParam(
     resolvedSearchParams?.connectionPendingAt
   );
@@ -157,14 +155,6 @@ export default async function IntegrationsAdminPage({
     connectors: channelConnectors.connectors,
     requestedConnectorId
   });
-  const currentTab =
-    requestedTab === "sources"
-      ? "sources"
-      : selectedConnector?.channelClass === "user_bridge"
-        ? "accounts"
-        : selectedConnector
-          ? "channels"
-          : (requestedTab ?? "channels");
   const sourceCatalogGroups = sourceCatalog.categories
     .map((category) => ({
       category,
@@ -173,41 +163,50 @@ export default async function IntegrationsAdminPage({
       )
     }))
     .filter((group) => group.sources.length > 0);
-  const selectedSource =
-    currentTab === "sources" && requestedSourceName
-      ? sourceCatalog.sources.find(
-          (source) => source.sourceName === requestedSourceName
-        )
-      : undefined;
-  const selectedSourceConnection =
-    currentTab === "sources" && requestedSourceConnectionId
-      ? sourceConnections.connections.find(
-          (connection) =>
-            connection.sourceConnectionId === requestedSourceConnectionId
-        )
-      : undefined;
-  const displayedConnectors = channelConnectors.connectors.filter(
-    (connector) =>
-      currentTab === "sources"
-        ? false
-        : currentTab === "accounts"
-          ? connector.channelClass === "user_bridge"
-          : connector.channelClass !== "user_bridge"
+  const selectedSourceConnection = requestedSourceConnectionId
+    ? sourceConnections.connections.find(
+        (connection) =>
+          connection.sourceConnectionId === requestedSourceConnectionId
+      )
+    : undefined;
+  const requestedSource = requestedSourceName
+    ? sourceCatalog.sources.find(
+        (source) => source.sourceName === requestedSourceName
+      )
+    : undefined;
+  const selectedConnectorSource = selectedConnector
+    ? findSourceForChannelType(
+        sourceCatalog.sources,
+        selectedConnector.channelType
+      )
+    : undefined;
+  const requestedChannelSource = requestedChannelType
+    ? findSourceForChannelType(sourceCatalog.sources, requestedChannelType)
+    : undefined;
+  const selectedSource = selectedSourceConnection
+    ? sourceCatalog.sources.find(
+        (source) => source.sourceName === selectedSourceConnection.sourceName
+      )
+    : (selectedConnectorSource ??
+      requestedChannelSource ??
+      requestedSource ??
+      sourceCatalog.sources.find(
+        (source) => source.readiness === "available"
+      ) ??
+      sourceCatalog.sources[0]);
+  const selectedSourceName = selectedSource?.sourceName;
+  const selectedSourceChannelTypes = new Set(
+    selectedSource?.channelTypes ?? []
   );
   const selectedConnectorId = selectedConnector?.connectorId;
-  const availableChannels = channelCatalog.channels.filter(
+  const selectedSourceChannels = channelCatalog.channels.filter(
     (channel) =>
       channel.readiness === "available" &&
-      currentTab !== "sources" &&
-      (currentTab === "accounts"
-        ? channel.channelClass === "user_bridge"
-        : channel.channelClass !== "user_bridge")
+      selectedSourceChannelTypes.has(channel.channelType)
   );
   const selectedCatalogChannel =
-    currentTab !== "sources" &&
-    selectedConnector === undefined &&
-    requestedChannelType
-      ? availableChannels.find(
+    selectedConnector === undefined && requestedChannelType
+      ? selectedSourceChannels.find(
           (channel) => channel.channelType === requestedChannelType
         )
       : undefined;
@@ -217,60 +216,59 @@ export default async function IntegrationsAdminPage({
           connectorId: selectedConnector.connectorId
         })
       : undefined;
-  const integrationContent =
-    currentTab === "sources" ? (
-      selectedSourceConnection ? (
-        <SourceConnectionDetailPanel
-          connection={selectedSourceConnection}
-          locale={locale}
-          t={t}
-        />
-      ) : selectedSource ? (
-        <SourceCatalogDetailPanel source={selectedSource} t={t} />
-      ) : (
-        <NoSourceSelectedPanel t={t} />
-      )
-    ) : selectedConnector?.channelType === "telegram_bot" ? (
-      <TelegramIntegrationPanel
-        integration={
-          selectedTelegramIntegration ??
-          createEmptyTelegramIntegrationViewModel()
-        }
-        initialConnectionSubmittedAt={
-          selectedConnector.connectorId === requestedConnectorId
-            ? connectionPendingAt
-            : undefined
-        }
-        locale={locale}
-        t={t}
-      />
-    ) : selectedConnector ? (
-      <GenericChannelConnectorPanel
-        catalog={channelCatalog.channels}
-        challenge={
-          selectedConnector.channelClass === "user_bridge" &&
-          requestedChallengeId
-            ? await loadOptionalChannelAuthChallenge({
-                challengeId: requestedChallengeId,
-                connectorId: selectedConnector.connectorId,
-                options: internalApiAccess
-              })
-            : undefined
-        }
-        connector={selectedConnector}
-        locale={locale}
-        t={t}
-      />
-    ) : selectedCatalogChannel ? (
-      <ChannelCatalogDetailPanel
-        channel={selectedCatalogChannel}
-        locale={locale}
-        tab={currentTab}
-        t={t}
-      />
-    ) : (
-      <NoChannelSelectedPanel t={t} />
-    );
+  const integrationContent = selectedSourceConnection ? (
+    <SourceConnectionDetailPanel
+      connection={selectedSourceConnection}
+      locale={locale}
+      t={t}
+    />
+  ) : selectedConnector?.channelType === "telegram_bot" ? (
+    <TelegramIntegrationPanel
+      integration={
+        selectedTelegramIntegration ?? createEmptyTelegramIntegrationViewModel()
+      }
+      initialConnectionSubmittedAt={
+        selectedConnector.connectorId === requestedConnectorId
+          ? connectionPendingAt
+          : undefined
+      }
+      locale={locale}
+      t={t}
+    />
+  ) : selectedConnector ? (
+    <GenericChannelConnectorPanel
+      catalog={channelCatalog.channels}
+      challenge={
+        selectedConnector.channelClass === "user_bridge" && requestedChallengeId
+          ? await loadOptionalChannelAuthChallenge({
+              challengeId: requestedChallengeId,
+              connectorId: selectedConnector.connectorId,
+              options: internalApiAccess
+            })
+          : undefined
+      }
+      connector={selectedConnector}
+      locale={locale}
+      sourceName={selectedSourceName}
+      t={t}
+    />
+  ) : selectedCatalogChannel ? (
+    <ChannelCatalogDetailPanel
+      channel={selectedCatalogChannel}
+      locale={locale}
+      sourceName={selectedSourceName}
+      t={t}
+    />
+  ) : selectedSource ? (
+    <SourceCatalogDetailPanel
+      locale={locale}
+      methods={selectedSourceChannels}
+      source={selectedSource}
+      t={t}
+    />
+  ) : (
+    <NoSourceSelectedPanel t={t} />
+  );
 
   return (
     <TenantAdminShell
@@ -291,91 +289,26 @@ export default async function IntegrationsAdminPage({
           <div className="sectionHeader">
             <div>
               <h2 className="sectionTitle" id="integration-channel-list-title">
-                {t("admin.integrations.channelList")}
+                {t("admin.integrations.sourceList")}
               </h2>
             </div>
           </div>
 
           <nav
-            className="integrationTabNav"
-            aria-label={t("admin.integrations.tabs")}
-          >
-            <Link
-              className="secondaryButton integrationTabLink"
-              href="/admin/integrations?tab=channels"
-              aria-current={currentTab === "channels" ? "page" : undefined}
-            >
-              {t("admin.integrations.tab.channels")}
-            </Link>
-            <Link
-              className="secondaryButton integrationTabLink"
-              href="/admin/integrations?tab=accounts"
-              aria-current={currentTab === "accounts" ? "page" : undefined}
-            >
-              {t("admin.integrations.tab.accounts")}
-            </Link>
-            <Link
-              className="secondaryButton integrationTabLink"
-              href="/admin/integrations?tab=sources"
-              aria-current={currentTab === "sources" ? "page" : undefined}
-            >
-              {t("admin.integrations.tab.sources")}
-            </Link>
-          </nav>
-
-          <nav
             className="integrationList"
-            aria-label={t("admin.integrations.channelList")}
+            aria-label={t("admin.integrations.sourceList")}
           >
-            {currentTab === "sources" ? (
-              <SourceCatalogNavigation
-                currentSourceName={requestedSourceName}
-                currentSourceConnectionId={requestedSourceConnectionId}
-                connections={sourceConnections.connections}
-                groups={sourceCatalogGroups}
-                t={t}
-              />
-            ) : (
-              <>
-                <div className="integrationListGroup">
-                  <h3 className="detailLabel">
-                    {t(connectedGroupTitleKey(currentTab))}
-                  </h3>
-                  {displayedConnectors.length > 0 ? (
-                    displayedConnectors.map((connector) => (
-                      <ConnectorListItem
-                        key={connector.connectorId}
-                        connector={connector}
-                        catalog={channelCatalog.channels}
-                        current={connector.connectorId === selectedConnectorId}
-                        locale={locale}
-                        tab={currentTab}
-                        t={t}
-                      />
-                    ))
-                  ) : (
-                    <p className="metaText">
-                      {t(emptyConnectedGroupKey(currentTab))}
-                    </p>
-                  )}
-                </div>
-                <div className="integrationListGroup">
-                  <h3 className="detailLabel">
-                    {t(availableGroupTitleKey(currentTab))}
-                  </h3>
-                  {availableChannels.map((channel) => (
-                    <CatalogListItem
-                      key={channel.channelType}
-                      channel={channel}
-                      current={channel.channelType === requestedChannelType}
-                      locale={locale}
-                      tab={currentTab}
-                      t={t}
-                    />
-                  ))}
-                </div>
-              </>
-            )}
+            <SourceCatalogNavigation
+              catalog={channelCatalog.channels}
+              connectors={channelConnectors.connectors}
+              connections={sourceConnections.connections}
+              currentConnectorId={selectedConnectorId}
+              currentSourceConnectionId={requestedSourceConnectionId}
+              currentSourceName={selectedSourceName}
+              groups={sourceCatalogGroups}
+              locale={locale}
+              t={t}
+            />
           </nav>
         </aside>
 
@@ -389,77 +322,69 @@ export default async function IntegrationsAdminPage({
 }
 
 type Translator = ReturnType<typeof createTranslator>["t"];
-type IntegrationsTab = "channels" | "accounts" | "sources";
-type ChannelIntegrationsTab = Exclude<IntegrationsTab, "sources">;
-
-function normalizeIntegrationsTab(
-  value: string | undefined
-): IntegrationsTab | undefined {
-  return value === "accounts" || value === "channels" || value === "sources"
-    ? value
-    : undefined;
-}
-
-function connectedGroupTitleKey(tab: ChannelIntegrationsTab): I18nMessageKey {
-  return (
-    tab === "accounts"
-      ? "admin.integrations.connectedAccounts"
-      : "admin.integrations.connectedChannels"
-  ) as I18nMessageKey;
-}
-
-function availableGroupTitleKey(tab: ChannelIntegrationsTab): I18nMessageKey {
-  return (
-    tab === "accounts"
-      ? "admin.integrations.availableAccounts"
-      : "admin.integrations.availableChannels"
-  ) as I18nMessageKey;
-}
-
-function emptyConnectedGroupKey(tab: ChannelIntegrationsTab): I18nMessageKey {
-  return (
-    tab === "accounts"
-      ? "admin.integrations.noConnectedAccounts"
-      : "admin.integrations.noConnectedChannels"
-  ) as I18nMessageKey;
-}
-
 function SourceCatalogNavigation({
+  catalog,
+  connectors,
   connections,
+  currentConnectorId,
   currentSourceConnectionId,
   currentSourceName,
   groups,
+  locale,
   t
 }: {
+  catalog: readonly InternalChannelCatalogItem[];
+  connectors: readonly InternalChannelConnectorSummary[];
   connections: readonly InternalSourceConnectionSummary[];
+  currentConnectorId?: string;
   currentSourceConnectionId?: string;
   currentSourceName?: string;
   groups: readonly {
     category: InternalSourceCatalogCategory;
     sources: readonly InternalSourceCatalogItem[];
   }[];
+  locale: string;
   t: Translator;
 }): ReactNode {
+  const sources = groups.flatMap((group) => group.sources);
+  const hasConnections = connections.length > 0 || connectors.length > 0;
+
   return (
     <>
       <div className="integrationListGroup">
         <h3 className="detailLabel">
-          {t("admin.integrations.connectedSources")}
+          {t("admin.integrations.connectedIntegrations")}
         </h3>
-        {connections.length > 0 ? (
-          connections.map((connection) => (
-            <SourceConnectionListItem
-              key={connection.sourceConnectionId}
-              connection={connection}
-              current={
-                connection.sourceConnectionId === currentSourceConnectionId
-              }
-              t={t}
-            />
-          ))
+        {hasConnections ? (
+          <>
+            {connectors.map((connector) => (
+              <ConnectorListItem
+                key={connector.connectorId}
+                catalog={catalog}
+                connector={connector}
+                current={connector.connectorId === currentConnectorId}
+                locale={locale}
+                sourceName={
+                  findSourceForChannelType(sources, connector.channelType)
+                    ?.sourceName
+                }
+                t={t}
+              />
+            ))}
+            {connections.map((connection) => (
+              <SourceConnectionListItem
+                key={connection.sourceConnectionId}
+                connection={connection}
+                current={
+                  connection.sourceConnectionId === currentSourceConnectionId
+                }
+                t={t}
+              />
+            ))}
+          </>
         ) : (
           <p className="metaText">
-            {t("admin.integrations.noConnectedSources")}
+            {t("admin.integrations.noConnectedIntegrations")}
           </p>
         )}
       </div>
@@ -482,6 +407,49 @@ function SourceCatalogNavigation({
   );
 }
 
+function findSourceForChannelType(
+  sources: readonly InternalSourceCatalogItem[],
+  channelType: string
+): InternalSourceCatalogItem | undefined {
+  return sources.find((source) => source.channelTypes?.includes(channelType));
+}
+
+function channelConnectorHref({
+  connectorId,
+  sourceName
+}: {
+  connectorId: string;
+  sourceName?: string;
+}): string {
+  const params = new URLSearchParams({
+    connectorId
+  });
+
+  if (sourceName) {
+    params.set("sourceName", sourceName);
+  }
+
+  return `/admin/integrations?${params.toString()}`;
+}
+
+function channelCatalogHref({
+  channelType,
+  sourceName
+}: {
+  channelType: string;
+  sourceName?: string;
+}): string {
+  const params = new URLSearchParams({
+    channelType
+  });
+
+  if (sourceName) {
+    params.set("sourceName", sourceName);
+  }
+
+  return `/admin/integrations?${params.toString()}`;
+}
+
 function SourceConnectionListItem({
   connection,
   current,
@@ -494,7 +462,7 @@ function SourceConnectionListItem({
   return (
     <Link
       className="integrationListItem integrationNavLink"
-      href={`/admin/integrations?tab=sources&sourceConnectionId=${encodeURIComponent(
+      href={`/admin/integrations?sourceConnectionId=${encodeURIComponent(
         connection.sourceConnectionId
       )}`}
       aria-current={current ? "page" : undefined}
@@ -535,7 +503,7 @@ function SourceCatalogListItem({
   return (
     <Link
       className="integrationListItem integrationNavLink"
-      href={`/admin/integrations?tab=sources&sourceName=${encodeURIComponent(
+      href={`/admin/integrations?sourceName=${encodeURIComponent(
         source.sourceName
       )}`}
       aria-current={current ? "page" : undefined}
@@ -559,14 +527,19 @@ function SourceCatalogListItem({
 }
 
 function SourceCatalogDetailPanel({
+  locale,
+  methods,
   source,
   t
 }: {
+  locale: string;
+  methods: readonly InternalChannelCatalogItem[];
   source: InternalSourceCatalogItem;
   t: Translator;
 }): ReactNode {
   const title = resolveSourceTitle(source, t);
   const description = t(source.descriptionKey as I18nMessageKey);
+  const canConnect = source.readiness === "available";
 
   return (
     <section className="settingsPanel" aria-labelledby="source-detail-title">
@@ -581,59 +554,33 @@ function SourceCatalogDetailPanel({
         <SourceReadinessBadge readiness={source.readiness} t={t} />
       </div>
 
-      <div className="detailGrid sourceCatalogDetailGrid">
-        <SourceDetailItem
-          label={t("admin.integrations.sourceField.category")}
-          value={t(sourceCategoryKey(source.category))}
-        />
-        <SourceDetailItem
-          label={t("admin.integrations.sourceField.provider")}
-          value={source.provider ?? t("common.unknown")}
-        />
-        <SourceDetailItem
-          label={t("admin.integrations.sourceField.setupMode")}
-          value={t(sourceSetupModeKey(source.setupMode))}
-        />
-        <SourceDetailItem
-          label={t("admin.integrations.sourceField.multipleAccounts")}
-          value={
-            source.supportsMultipleAccounts ? t("common.yes") : t("common.no")
-          }
-        />
-      </div>
-
-      <div className="detailGrid sourceCatalogTokenGrid">
-        <SourceTokenList
-          label={t("admin.integrations.sourceField.authTypes")}
-          tokens={source.authTypes.map((value) => t(sourceAuthTypeKey(value)))}
-        />
-        <SourceTokenList
-          label={t("admin.integrations.sourceField.accountTypes")}
-          tokens={source.accountTypes.map((value) =>
-            t(sourceAccountTypeKey(value))
+      {!canConnect ? (
+        <p className="actionStateNotice" data-variant="info" role="status">
+          {t("admin.integrations.sourceConnectionPlanned")}
+        </p>
+      ) : source.setupMode === "channel_connector" ? (
+        <div className="integrationListGroup">
+          <h3 className="detailLabel">
+            {t("admin.integrations.connectionMethods")}
+          </h3>
+          {methods.length > 0 ? (
+            methods.map((method) => (
+              <CatalogListItem
+                key={method.channelType}
+                channel={method}
+                current={false}
+                locale={locale}
+                sourceName={source.sourceName}
+                t={t}
+              />
+            ))
+          ) : (
+            <p className="metaText">
+              {t("admin.integrations.noConnectionMethods")}
+            </p>
           )}
-        />
-        <SourceTokenList
-          label={t("admin.integrations.sourceField.eventTypes")}
-          tokens={source.eventTypes.map((value) =>
-            t(sourceEventTypeKey(value))
-          )}
-        />
-        <SourceTokenList
-          label={t("admin.integrations.sourceField.capabilities")}
-          tokens={source.capabilities.map((value) =>
-            t(sourceCapabilityKey(value))
-          )}
-        />
-        {source.channelTypes ? (
-          <SourceTokenList
-            label={t("admin.integrations.sourceField.channelTypes")}
-            tokens={source.channelTypes}
-          />
-        ) : null}
-      </div>
-
-      {source.setupMode === "source_connection" ? (
+        </div>
+      ) : source.setupMode === "source_connection" ? (
         <SourceConnectionCreateForm
           defaultDisplayName={title}
           label={t("admin.integrations.createSourceConnection")}
@@ -652,7 +599,11 @@ function SourceCatalogDetailPanel({
           }}
           sourceName={source.sourceName}
         />
-      ) : null}
+      ) : (
+        <p className="actionStateNotice" data-variant="info" role="status">
+          {t("admin.integrations.sourceConnectionPlanned")}
+        </p>
+      )}
     </section>
   );
 }
@@ -727,27 +678,6 @@ function SourceDetailItem({
   );
 }
 
-function SourceTokenList({
-  label,
-  tokens
-}: {
-  label: string;
-  tokens: readonly string[];
-}): ReactNode {
-  return (
-    <div className="detailItem sourceTokenList">
-      <span className="detailLabel">{label}</span>
-      <span className="sourceTokenPills">
-        {tokens.map((token) => (
-          <span className="sourceTokenPill" key={token}>
-            {token}
-          </span>
-        ))}
-      </span>
-    </div>
-  );
-}
-
 function NoSourceSelectedPanel({ t }: { t: Translator }): ReactNode {
   return (
     <section className="settingsPanel" aria-labelledby="source-empty-title">
@@ -769,12 +699,12 @@ function NoSourceSelectedPanel({ t }: { t: Translator }): ReactNode {
 function ChannelCatalogDetailPanel({
   channel,
   locale,
-  tab,
+  sourceName,
   t
 }: {
   channel: InternalChannelCatalogItem;
   locale: string;
-  tab: ChannelIntegrationsTab;
+  sourceName?: string;
   t: Translator;
 }): ReactNode {
   const title = resolveChannelTitle({
@@ -810,6 +740,7 @@ function ChannelCatalogDetailPanel({
             ),
             telegramTokenInvalid: t("admin.integrations.telegramTokenInvalid")
           }}
+          sourceName={sourceName}
         />
       ) : (
         <ChannelConnectorCreateForm
@@ -823,27 +754,9 @@ function ChannelCatalogDetailPanel({
             invalid: t("admin.integrations.actionStatus.invalid"),
             permission_denied: t("admin.roles.actionStatus.permissionDenied")
           }}
-          redirectTab={tab}
+          sourceName={sourceName}
         />
       )}
-    </section>
-  );
-}
-
-function NoChannelSelectedPanel({ t }: { t: Translator }): ReactNode {
-  return (
-    <section className="settingsPanel" aria-labelledby="channel-empty-title">
-      <div className="sectionHeader">
-        <div>
-          <p className="eyebrow">{t("admin.integrations.channelSettings")}</p>
-          <h2 className="sectionTitle" id="channel-empty-title">
-            {t("admin.integrations.selectChannel")}
-          </h2>
-          <p className="metaText">
-            {t("admin.integrations.selectChannelDescription")}
-          </p>
-        </div>
-      </div>
     </section>
   );
 }
@@ -853,12 +766,14 @@ function GenericChannelConnectorPanel({
   challenge,
   connector,
   locale,
+  sourceName,
   t
 }: {
   catalog: readonly InternalChannelCatalogItem[];
   challenge?: InternalChannelAuthChallenge;
   connector: InternalChannelConnectorSummary;
   locale: string;
+  sourceName?: string;
   t: Translator;
 }): ReactNode {
   const channel = catalog.find(
@@ -952,6 +867,7 @@ function GenericChannelConnectorPanel({
           })}
           connectorId={connector.connectorId}
           locale={locale}
+          sourceName={sourceName}
           stepKind={authStepKind}
           t={t}
         />
@@ -1184,14 +1100,14 @@ function ConnectorListItem({
   catalog,
   current,
   locale,
-  tab,
+  sourceName,
   t
 }: {
   connector: InternalChannelConnectorSummary;
   catalog: readonly InternalChannelCatalogItem[];
   current: boolean;
   locale: string;
-  tab: ChannelIntegrationsTab;
+  sourceName?: string;
   t: Translator;
 }): ReactNode {
   const channel = catalog.find(
@@ -1210,9 +1126,10 @@ function ConnectorListItem({
   return (
     <Link
       className="integrationListItem integrationNavLink"
-      href={`/admin/integrations?tab=${tab}&connectorId=${encodeURIComponent(
-        connector.connectorId
-      )}`}
+      href={channelConnectorHref({
+        connectorId: connector.connectorId,
+        sourceName
+      })}
       aria-current={current ? "page" : undefined}
     >
       <span className="metricIcon">
@@ -1243,21 +1160,22 @@ function CatalogListItem({
   channel,
   current,
   locale,
-  tab,
+  sourceName,
   t
 }: {
   channel: InternalChannelCatalogItem;
   current: boolean;
   locale: string;
-  tab: ChannelIntegrationsTab;
+  sourceName?: string;
   t: Translator;
 }): ReactNode {
   return (
     <Link
       className="integrationListItem integrationNavLink"
-      href={`/admin/integrations?tab=${tab}&channelType=${encodeURIComponent(
-        channel.channelType
-      )}`}
+      href={channelCatalogHref({
+        channelType: channel.channelType,
+        sourceName
+      })}
       aria-current={current ? "page" : undefined}
     >
       <span className="metricIcon">
@@ -1398,40 +1316,10 @@ function sourceConnectionStatusKey(
   return `admin.integrations.sourceStatus.${value}` as I18nMessageKey;
 }
 
-function sourceCategoryKey(
-  value: InternalSourceCatalogItem["category"]
-): I18nMessageKey {
-  return `sources.categories.${value}.title` as I18nMessageKey;
-}
-
-function sourceSetupModeKey(
-  value: InternalSourceCatalogItem["setupMode"]
-): I18nMessageKey {
-  return `sources.setupMode.${value}` as I18nMessageKey;
-}
-
 function sourceAuthTypeKey(
   value: InternalSourceCatalogItem["authTypes"][number]
 ): I18nMessageKey {
   return `sources.authType.${value}` as I18nMessageKey;
-}
-
-function sourceAccountTypeKey(
-  value: InternalSourceCatalogItem["accountTypes"][number]
-): I18nMessageKey {
-  return `sources.accountType.${value}` as I18nMessageKey;
-}
-
-function sourceEventTypeKey(
-  value: InternalSourceCatalogItem["eventTypes"][number]
-): I18nMessageKey {
-  return `sources.eventType.${value}` as I18nMessageKey;
-}
-
-function sourceCapabilityKey(
-  value: InternalSourceCatalogItem["capabilities"][number]
-): I18nMessageKey {
-  return `sources.capability.${value}` as I18nMessageKey;
 }
 
 type ConnectorListBadgeState = "ok" | "error" | "disabled" | "new";

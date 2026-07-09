@@ -59,7 +59,11 @@ export function ChannelAuthChallengeActionForm({
     }
 
     handledSuccessRef.current = state.submittedAt;
-    const nextPath = channelAuthChallengePath(state, searchParams.get("tab"));
+    const nextPath = channelAuthChallengePath({
+      sourceName: searchParams.get("sourceName"),
+      state,
+      tab: searchParams.get("tab")
+    });
 
     if (nextPath) {
       router.replace(nextPath);
@@ -137,15 +141,25 @@ function resolveChannelAuthChallengeAction(
   }
 }
 
-function channelAuthChallengePath(
-  state: Extract<ChannelAuthChallengeActionState, { status: "success" }>,
-  tab: string | null
-): string {
+function channelAuthChallengePath({
+  sourceName,
+  state,
+  tab
+}: {
+  sourceName: string | null;
+  state: Extract<ChannelAuthChallengeActionState, { status: "success" }>;
+  tab: string | null;
+}): string {
   if (state.redirectChannelType) {
     const params = new URLSearchParams({
-      tab: state.redirectTab ?? "accounts",
       channelType: state.redirectChannelType
     });
+
+    if (state.redirectSourceName) {
+      params.set("sourceName", state.redirectSourceName);
+    } else {
+      params.set("tab", state.redirectTab ?? "accounts");
+    }
 
     return `/admin/integrations?${params.toString()}`;
   }
@@ -154,7 +168,9 @@ function channelAuthChallengePath(
     connectorId: state.connectorId
   });
 
-  if (tab === "accounts" || tab === "channels") {
+  if (sourceName) {
+    params.set("sourceName", sourceName);
+  } else if (tab === "accounts" || tab === "channels") {
     params.set("tab", tab);
   }
 
