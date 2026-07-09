@@ -3562,6 +3562,9 @@ function channelConnectorSummaryFromRecord(
     displayName: record.displayName,
     status,
     healthStatus,
+    ...(record.sourceConnectionId
+      ? { sourceConnectionId: record.sourceConnectionId }
+      : {}),
     ...(channelExternalId ? { channelExternalId } : {}),
     ...(diagnosticsStatus ? { diagnosticsStatus } : {}),
     ...(egress ? { egress } : {})

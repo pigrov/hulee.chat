@@ -879,6 +879,7 @@ export const internalChannelConnectorSummarySchema = z
     displayName: z.string().trim().min(1).max(120),
     status: internalChannelConnectorStatusSchema,
     healthStatus: internalChannelConnectorHealthStatusSchema,
+    sourceConnectionId: z.string().trim().min(1).max(240).optional(),
     channelExternalId: z.string().trim().min(1).max(200).optional(),
     diagnosticsStatus: z.string().trim().min(1).max(80).optional(),
     egress: internalEgressDiagnosticsSchema.optional(),

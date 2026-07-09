@@ -151,10 +151,28 @@ export default async function IntegrationsAdminPage({
     loadChannelConnectors(internalApiAccess)
   ]);
   const { t, locale } = createTranslator(model.tenant.locale);
-  const selectedConnector = selectChannelConnector({
-    connectors: channelConnectors.connectors,
-    requestedConnectorId
-  });
+  const selectedConnector =
+    selectChannelConnector({
+      connectors: channelConnectors.connectors,
+      requestedConnectorId
+    }) ??
+    selectChannelConnectorBySourceConnectionId({
+      connectors: channelConnectors.connectors,
+      requestedSourceConnectionId
+    });
+  const connectorSourceConnectionIds = new Set(
+    channelConnectors.connectors.flatMap((connector) =>
+      connector.sourceConnectionId ? [connector.sourceConnectionId] : []
+    )
+  );
+  const sourceCatalogNames = new Set(
+    sourceCatalog.sources.map((source) => source.sourceName)
+  );
+  const visibleSourceConnections = sourceConnections.connections.filter(
+    (connection) =>
+      sourceCatalogNames.has(connection.sourceName) &&
+      !connectorSourceConnectionIds.has(connection.sourceConnectionId)
+  );
   const sourceCatalogGroups = sourceCatalog.categories
     .map((category) => ({
       category,
@@ -164,7 +182,7 @@ export default async function IntegrationsAdminPage({
     }))
     .filter((group) => group.sources.length > 0);
   const selectedSourceConnection = requestedSourceConnectionId
-    ? sourceConnections.connections.find(
+    ? visibleSourceConnections.find(
         (connection) =>
           connection.sourceConnectionId === requestedSourceConnectionId
       )
@@ -301,7 +319,7 @@ export default async function IntegrationsAdminPage({
             <SourceCatalogNavigation
               catalog={channelCatalog.channels}
               connectors={channelConnectors.connectors}
-              connections={sourceConnections.connections}
+              connections={visibleSourceConnections}
               currentConnectorId={selectedConnectorId}
               currentSourceConnectionId={requestedSourceConnectionId}
               currentSourceName={selectedSourceName}
@@ -1366,6 +1384,20 @@ function selectChannelConnector(input: {
 
   return input.connectors.find(
     (connector) => connector.connectorId === input.requestedConnectorId
+  );
+}
+
+function selectChannelConnectorBySourceConnectionId(input: {
+  connectors: readonly InternalChannelConnectorSummary[];
+  requestedSourceConnectionId?: string;
+}): InternalChannelConnectorSummary | undefined {
+  if (!input.requestedSourceConnectionId) {
+    return undefined;
+  }
+
+  return input.connectors.find(
+    (connector) =>
+      connector.sourceConnectionId === input.requestedSourceConnectionId
   );
 }
 
