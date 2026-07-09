@@ -108,10 +108,20 @@ then consumed by UI, public API, adapters and analytics.
 
 - Store raw payload before normalization.
 - Store provider timestamps separately from received timestamps.
-- Deduplicate by `tenantId + sourceConnectionId + sourceAccountId +
-externalEventId` when possible.
-- When external ids are missing, use a stable hash of source, thread, user,
-  timestamp, body and attachment hashes.
+- Deduplicate with tenant-scoped source idempotency keys. The canonical key
+  format is `source:v1:{raw|normalized}:{webhook|polling|email|api}:...`.
+- Include source connection and source account scope in idempotency keys so the
+  same external id from different connected accounts does not collide.
+- For webhook, polling and email sources, prefer provider external event ids,
+  then provider signatures, then explicit client keys, then stable
+  fingerprints.
+- For API sources, prefer the client-provided idempotency key before provider
+  ids or fallback fingerprints.
+- Keep raw and normalized idempotency phases separate. Normalized keys must also
+  include the source event type so one raw payload can safely materialize more
+  than one normalized event when needed.
+- When external ids are missing, use a stable fingerprint of source, thread,
+  user, timestamp, body and attachment hashes.
 - Keep source context separate from core message text so marketplaces, calls,
   reviews and lead forms do not become messenger-specific JSON fragments.
 - Retention policy must cover messages, attachments, raw payloads, transcripts,

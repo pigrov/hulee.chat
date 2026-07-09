@@ -97,7 +97,7 @@
 - [x] SOURCE-103 Raw inbound event store.
 - [x] SOURCE-104 Normalized inbound event model.
 - [x] SOURCE-105 Source capabilities and reply capability model.
-- [ ] SOURCE-106 Idempotency keys for webhook, polling, email and API sources.
+- [x] SOURCE-106 Idempotency keys for webhook, polling, email and API sources.
 - [ ] SOURCE-107 Identity resolver input contract for source identities.
 - [ ] SOURCE-108 Conversation resolver input contract for non-messenger events.
 - [x] SOURCE-109 Link channel connectors to source connections without destructive rename.

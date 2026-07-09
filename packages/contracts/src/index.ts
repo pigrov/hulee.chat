@@ -817,6 +817,23 @@ export {
   sourceCapabilitiesSchema
 } from "./source-capabilities";
 export type { ResolveReplyCapabilityInput } from "./source-capabilities";
+export {
+  createNormalizedSourceIdempotencyKey,
+  createRawSourceIdempotencyKey,
+  createSourceIdempotencyKey,
+  sourceIdempotencyIdentityKindSchema,
+  sourceIdempotencyKeySchema,
+  sourceIdempotencyPhaseSchema,
+  sourceInboundTransportSchema
+} from "./source-idempotency";
+export type {
+  CreateNormalizedSourceIdempotencyKeyInput,
+  CreateRawSourceIdempotencyKeyInput,
+  CreateSourceIdempotencyKeyInput,
+  SourceIdempotencyIdentityKind,
+  SourceIdempotencyPhase,
+  SourceInboundTransport
+} from "./source-idempotency";
 
 export * from "./public-api-v1";
 export * from "./internal-api-v1";

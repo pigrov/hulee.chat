@@ -1,9 +1,11 @@
-import type {
-  NormalizedInboundEventId,
-  RawInboundEventId,
-  SourceAccountId,
-  SourceConnectionId,
-  TenantId
+import {
+  createNormalizedSourceIdempotencyKey,
+  createRawSourceIdempotencyKey,
+  type NormalizedInboundEventId,
+  type RawInboundEventId,
+  type SourceAccountId,
+  type SourceConnectionId,
+  type TenantId
 } from "@hulee/contracts";
 import type { SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
@@ -127,13 +129,26 @@ describe("SQL source integration repository", () => {
   });
 
   it("records raw and normalized inbound events with idempotency conflict handling", async () => {
+    const rawIdempotencyKey = createRawSourceIdempotencyKey({
+      transport: "webhook",
+      sourceConnectionId,
+      sourceAccountId,
+      externalEventId: "ozon-message-1"
+    });
+    const normalizedIdempotencyKey = createNormalizedSourceIdempotencyKey({
+      transport: "webhook",
+      sourceConnectionId,
+      sourceAccountId,
+      sourceEventType: "message",
+      externalEventId: "ozon-message-1"
+    });
     const rawQuery = sqlText(
       buildRecordRawInboundEventSql({
         id: rawEventId,
         tenantId,
         sourceConnectionId,
         sourceAccountId,
-        idempotencyKey: "source:ozon:raw:1",
+        idempotencyKey: rawIdempotencyKey,
         receivedAt: now,
         payload: {
           text: "hello"
@@ -156,11 +171,13 @@ describe("SQL source integration repository", () => {
         normalizedPayload: {
           text: "hello"
         },
-        idempotencyKey: "source:ozon:normalized:1",
+        idempotencyKey: normalizedIdempotencyKey,
         updatedAt: now
       })
     );
 
+    expect(rawIdempotencyKey).toContain("source:v1:raw:webhook");
+    expect(normalizedIdempotencyKey).toContain("source:v1:normalized:webhook");
     expect(rawQuery).toContain("on conflict (tenant_id, idempotency_key)");
     expect(rawQuery).toContain("returning");
     expect(normalizedQuery).toContain(
