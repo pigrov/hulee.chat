@@ -214,8 +214,8 @@ type SourceConnectionRow = {
   diagnostics: unknown;
   metadata: unknown;
   created_by_employee_id: string | null;
-  created_at: Date;
-  updated_at: Date;
+  created_at: PgDateValue;
+  updated_at: PgDateValue;
 };
 
 type SourceAccountRow = {
@@ -228,8 +228,8 @@ type SourceAccountRow = {
   display_name: string;
   status: string;
   metadata: unknown;
-  created_at: Date;
-  updated_at: Date;
+  created_at: PgDateValue;
+  updated_at: PgDateValue;
 };
 
 type RawInboundEventRow = {
@@ -240,15 +240,15 @@ type RawInboundEventRow = {
   external_event_id: string | null;
   event_signature: string | null;
   idempotency_key: string;
-  received_at: Date;
-  provider_timestamp: Date | null;
+  received_at: PgDateValue;
+  provider_timestamp: PgDateValue | null;
   payload: unknown;
   headers: unknown;
   processing_status: string;
   error_code: string | null;
   error_message: string | null;
-  created_at: Date;
-  updated_at: Date;
+  created_at: PgDateValue;
+  updated_at: PgDateValue;
 };
 
 type NormalizedInboundEventRow = {
@@ -272,9 +272,11 @@ type NormalizedInboundEventRow = {
   message_id: string | null;
   idempotency_key: string;
   processing_status: string;
-  created_at: Date;
-  updated_at: Date;
+  created_at: PgDateValue;
+  updated_at: PgDateValue;
 };
+
+type PgDateValue = Date | string;
 
 export function createSqlSourceIntegrationRepository(
   executor: RawSqlExecutor | HuleeDatabase
@@ -660,8 +662,8 @@ function mapSourceConnectionRow(
     diagnostics: row.diagnostics,
     metadata: row.metadata,
     createdByEmployeeId: row.created_by_employee_id as EmployeeId | null,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
+    createdAt: normalizePgDate(row.created_at),
+    updatedAt: normalizePgDate(row.updated_at)
   };
 }
 
@@ -676,8 +678,8 @@ function mapSourceAccountRow(row: SourceAccountRow): SourceAccountRecord {
     displayName: row.display_name,
     status: row.status,
     metadata: row.metadata,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
+    createdAt: normalizePgDate(row.created_at),
+    updatedAt: normalizePgDate(row.updated_at)
   };
 }
 
@@ -690,15 +692,17 @@ function mapRawInboundEventRow(row: RawInboundEventRow): RawInboundEventRecord {
     externalEventId: row.external_event_id,
     eventSignature: row.event_signature,
     idempotencyKey: row.idempotency_key,
-    receivedAt: row.received_at,
-    providerTimestamp: row.provider_timestamp,
+    receivedAt: normalizePgDate(row.received_at),
+    providerTimestamp: row.provider_timestamp
+      ? normalizePgDate(row.provider_timestamp)
+      : null,
     payload: row.payload,
     headers: row.headers,
     processingStatus: row.processing_status,
     errorCode: row.error_code,
     errorMessage: row.error_message,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
+    createdAt: normalizePgDate(row.created_at),
+    updatedAt: normalizePgDate(row.updated_at)
   };
 }
 
@@ -726,9 +730,13 @@ function mapNormalizedInboundEventRow(
     messageId: row.message_id as MessageId | null,
     idempotencyKey: row.idempotency_key,
     processingStatus: row.processing_status,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
+    createdAt: normalizePgDate(row.created_at),
+    updatedAt: normalizePgDate(row.updated_at)
   };
+}
+
+function normalizePgDate(value: PgDateValue): Date {
+  return value instanceof Date ? value : new Date(value);
 }
 
 function requireReturnedRow<Row>(row: Row | undefined, label: string): Row {

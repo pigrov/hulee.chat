@@ -239,8 +239,8 @@ function createSourceConnectionRow(): Record<string, unknown> {
       owner: "platform"
     },
     created_by_employee_id: null,
-    created_at: now,
-    updated_at: now
+    created_at: now.toISOString(),
+    updated_at: now.toISOString()
   };
 }
 

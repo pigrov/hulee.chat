@@ -121,9 +121,11 @@ type ChannelConnectorRow = {
   diagnostics: unknown;
   source_connection_id?: string | null;
   created_by_employee_id: string | null;
-  created_at: Date;
-  updated_at: Date;
+  created_at: PgDateValue;
+  updated_at: PgDateValue;
 };
+
+type PgDateValue = Date | string;
 
 export function createSqlChannelConnectorRepository(
   executor: RawSqlExecutor | HuleeDatabase
@@ -383,7 +385,11 @@ function mapChannelConnectorRow(
     diagnostics: row.diagnostics,
     sourceConnectionId: row.source_connection_id as SourceConnectionId | null,
     createdByEmployeeId: row.created_by_employee_id as EmployeeId | null,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
+    createdAt: normalizePgDate(row.created_at),
+    updatedAt: normalizePgDate(row.updated_at)
   };
+}
+
+function normalizePgDate(value: PgDateValue): Date {
+  return value instanceof Date ? value : new Date(value);
 }

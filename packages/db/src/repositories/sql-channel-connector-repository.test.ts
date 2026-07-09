@@ -237,7 +237,7 @@ function createConnectorRow(): Record<string, unknown> {
     },
     source_connection_id: null,
     created_by_employee_id: null,
-    created_at: new Date("2026-06-22T10:00:00.000Z"),
-    updated_at: new Date("2026-06-22T10:00:00.000Z")
+    created_at: "2026-06-22T10:00:00.000Z",
+    updated_at: "2026-06-22T10:00:00.000Z"
   };
 }
