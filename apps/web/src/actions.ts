@@ -24,6 +24,7 @@ import { sql } from "drizzle-orm";
 import {
   cancelChannelAuthChallenge,
   createChannelConnector,
+  createSourceConnection,
   deleteChannelConnector,
   deleteTelegramWebhook,
   disableChannelConnector,
@@ -89,6 +90,10 @@ import type {
   ChannelConnectorCreateActionCode,
   ChannelConnectorCreateActionState
 } from "./channel-connector-create-action-state";
+import type {
+  SourceConnectionCreateActionCode,
+  SourceConnectionCreateActionState
+} from "./source-connection-create-action-state";
 import type {
   BrandingActionCode,
   BrandingActionState
@@ -610,6 +615,50 @@ export async function createChannelConnectorAction(
   }
 }
 
+export async function createSourceConnectionAction(
+  _previousState: SourceConnectionCreateActionState,
+  formData: FormData
+): Promise<SourceConnectionCreateActionState> {
+  await assertWebActionRequest();
+  const submittedAt = new Date().toISOString();
+
+  try {
+    const internalApiAccess = await assertVerifiedTenantPermission(
+      "modules.manage",
+      "/admin/integrations",
+      { redirectOnEmailNotVerified: false }
+    );
+    const sourceName = readRequiredFormString(formData, "sourceName").trim();
+    const displayName = readOptionalFormString(formData, "displayName")?.trim();
+    const response = await createSourceConnection(
+      {
+        sourceName,
+        displayName:
+          displayName === undefined || displayName.length === 0
+            ? undefined
+            : displayName
+      },
+      internalApiAccess
+    );
+
+    revalidatePath("/admin/integrations");
+
+    return {
+      code: "created",
+      sourceConnectionId: response.connection.sourceConnectionId,
+      webhookToken: response.webhookToken,
+      status: "success",
+      submittedAt
+    };
+  } catch (error) {
+    return {
+      code: sourceConnectionCreateFailureCode(error),
+      status: "error",
+      submittedAt
+    };
+  }
+}
+
 export async function connectTelegramBotChannelAction(
   _previousState: TelegramBotCatalogConnectActionState,
   formData: FormData
@@ -1054,6 +1103,26 @@ function channelConnectorCreateFailureCode(
 
   if (error instanceof CoreError && error.code === "permission.denied") {
     return "permission_denied";
+  }
+
+  return "invalid";
+}
+
+function sourceConnectionCreateFailureCode(
+  error: unknown
+): Exclude<SourceConnectionCreateActionCode, "created"> {
+  if (isEmailNotVerifiedError(error)) {
+    return "email_verification_required";
+  }
+
+  if (error instanceof CoreError) {
+    if (error.code === "permission.denied") {
+      return "permission_denied";
+    }
+
+    if (error.code === "module.unhealthy") {
+      return "module_unhealthy";
+    }
   }
 
   return "invalid";

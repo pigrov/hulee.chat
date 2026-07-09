@@ -22,6 +22,7 @@ import {
   createRbacDirectGrant,
   createRbacRole,
   createRbacRoleBinding,
+  createSourceConnection,
   deleteChannelConnector,
   deleteTelegramWebhook,
   disableChannelConnector,
@@ -34,6 +35,7 @@ import {
   loadRbacRoleBindings,
   loadRbacRoles,
   loadSourceCatalog,
+  loadSourceConnections,
   loadTenantBrand,
   loadInboxViewModel,
   loadTelegramIntegration,
@@ -356,6 +358,89 @@ describe("inbox API client", () => {
     expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(4, {
       method: "GET",
       path: "/internal/v1/egress/status",
+      effectivePermissionOverride: "modules.manage"
+    });
+  });
+
+  it("passes explicit effective permission override when loading source connections", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => {
+      return Response.json({
+        connections: [
+          {
+            sourceConnectionId: "source_connection:megapbx:1",
+            sourceName: "megapbx",
+            sourceType: "phone",
+            displayName: "MegaPBX",
+            status: "active",
+            authType: "webhook_secret",
+            webhookPath:
+              "/webhooks/sources/megapbx/source_connection%3Amegapbx%3A1",
+            webhookUrl:
+              "https://chat.example.test/webhooks/sources/megapbx/source_connection%3Amegapbx%3A1",
+            webhookSecretRef:
+              "tenant_secret:tenant-1:source.webhook_secret:megapbx",
+            createdAt: "2026-07-09T10:00:00.000Z",
+            updatedAt: "2026-07-09T10:00:00.000Z"
+          }
+        ]
+      });
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await loadSourceConnections({
+      effectivePermissionOverride: "modules.manage"
+    });
+
+    expect(buildInternalApiHeaders).toHaveBeenCalledWith({
+      method: "GET",
+      path: "/internal/v1/sources/connections",
+      effectivePermissionOverride: "modules.manage"
+    });
+  });
+
+  it("passes explicit effective permission override when creating source connections", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => {
+      return Response.json({
+        connection: {
+          sourceConnectionId: "source_connection:megapbx:1",
+          sourceName: "megapbx",
+          sourceType: "phone",
+          displayName: "MegaPBX",
+          status: "active",
+          authType: "webhook_secret",
+          webhookPath:
+            "/webhooks/sources/megapbx/source_connection%3Amegapbx%3A1",
+          webhookUrl:
+            "https://chat.example.test/webhooks/sources/megapbx/source_connection%3Amegapbx%3A1",
+          webhookSecretRef:
+            "tenant_secret:tenant-1:source.webhook_secret:megapbx",
+          createdAt: "2026-07-09T10:00:00.000Z",
+          updatedAt: "2026-07-09T10:00:00.000Z"
+        },
+        webhookToken: "test-source-webhook-token"
+      });
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createSourceConnection(
+      {
+        sourceName: "megapbx",
+        displayName: "MegaPBX"
+      },
+      {
+        effectivePermissionOverride: "modules.manage"
+      }
+    );
+
+    expect(buildInternalApiHeaders).toHaveBeenCalledWith({
+      method: "POST",
+      path: "/internal/v1/sources/connections",
+      body: {
+        sourceName: "megapbx",
+        displayName: "MegaPBX"
+      },
       effectivePermissionOverride: "modules.manage"
     });
   });

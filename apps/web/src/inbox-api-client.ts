@@ -23,6 +23,9 @@ import {
   internalRbacRoleResponseSchema,
   internalRbacRolesResponseSchema,
   internalSourceCatalogResponseSchema,
+  internalSourceConnectionCreateRequestSchema,
+  internalSourceConnectionCreateResponseSchema,
+  internalSourceConnectionsResponseSchema,
   internalTenantBrandResponseSchema,
   internalTenantBrandUpdateRequestSchema,
   internalTelegramBotTokenValidateRequestSchema,
@@ -55,6 +58,9 @@ import {
   type InternalRbacRoleResponse,
   type InternalRbacRolesResponse,
   type InternalSourceCatalogResponse,
+  type InternalSourceConnectionCreateRequest,
+  type InternalSourceConnectionCreateResponse,
+  type InternalSourceConnectionsResponse,
   type InternalTenantBrandResponse,
   type InternalTenantBrandUpdateRequest,
   type InternalTelegramBotTokenValidateRequest,
@@ -74,6 +80,9 @@ export type InboxViewModel = InternalInboxViewResponse;
 export type TenantBrandViewModel = InternalTenantBrandResponse;
 export type ChannelCatalogViewModel = InternalChannelCatalogResponse;
 export type SourceCatalogViewModel = InternalSourceCatalogResponse;
+export type SourceConnectionsViewModel = InternalSourceConnectionsResponse;
+export type SourceConnectionCreateViewModel =
+  InternalSourceConnectionCreateResponse;
 export type ChannelAuthChallengeViewModel =
   InternalChannelAuthChallengeResponse;
 export type ChannelConnectorsViewModel = InternalChannelConnectorsResponse;
@@ -475,6 +484,36 @@ export async function loadSourceCatalog(
   }
 
   return internalSourceCatalogResponseSchema.parse(await response.json());
+}
+
+export async function loadSourceConnections(
+  options: InternalApiAccessOptions<"modules.manage">
+): Promise<SourceConnectionsViewModel> {
+  return requestInternalApiJson({
+    method: "GET",
+    path: "/internal/v1/sources/connections",
+    schema: internalSourceConnectionsResponseSchema,
+    errorPrefix: "Internal source connections API returned",
+    options,
+    permission: "modules.manage"
+  });
+}
+
+export async function createSourceConnection(
+  input: InternalSourceConnectionCreateRequest,
+  options: InternalApiAccessOptions<"modules.manage">
+): Promise<SourceConnectionCreateViewModel> {
+  const request = internalSourceConnectionCreateRequestSchema.parse(input);
+
+  return requestInternalApiJson({
+    method: "POST",
+    path: "/internal/v1/sources/connections",
+    body: request,
+    schema: internalSourceConnectionCreateResponseSchema,
+    errorPrefix: "Internal source connection create API returned",
+    options,
+    permission: "modules.manage"
+  });
 }
 
 export async function loadChannelConnectors(

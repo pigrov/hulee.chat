@@ -9,7 +9,8 @@ import type {
   InternalChannelCatalogItem,
   InternalChannelConnectorSummary,
   InternalSourceCatalogCategory,
-  InternalSourceCatalogItem
+  InternalSourceCatalogItem,
+  InternalSourceConnectionSummary
 } from "@hulee/contracts";
 import {
   Activity,
@@ -48,6 +49,7 @@ import {
   loadChannelAuthChallenge,
   loadChannelConnectors,
   loadSourceCatalog,
+  loadSourceConnections,
   loadTelegramIntegration,
   type TelegramIntegrationViewModel
 } from "../../../src/inbox-api-client";
@@ -66,6 +68,7 @@ import { TelegramBotCatalogConnectForm } from "../../../src/telegram-bot-catalog
 import { TelegramIntegrationPanel } from "../../../src/telegram-integration-panel";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
 import { navigationAccessFromTenantAdminAccess } from "../../../src/tenant-admin-nav";
+import { SourceConnectionCreateForm } from "../../../src/source-connection-create-form";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -78,6 +81,7 @@ export default async function IntegrationsAdminPage({
     connectorId?: string;
     channelType?: string;
     connectionPendingAt?: string;
+    sourceConnectionId?: string;
     sourceName?: string;
     tab?: string;
   }>;
@@ -125,6 +129,9 @@ export default async function IntegrationsAdminPage({
   const requestedSourceName = normalizeOptionalSearchParam(
     resolvedSearchParams?.sourceName
   );
+  const requestedSourceConnectionId = normalizeOptionalSearchParam(
+    resolvedSearchParams?.sourceConnectionId
+  );
   const requestedTab = normalizeIntegrationsTab(resolvedSearchParams?.tab);
   const connectionPendingAt = normalizeOptionalSearchParam(
     resolvedSearchParams?.connectionPendingAt
@@ -132,13 +139,19 @@ export default async function IntegrationsAdminPage({
   const requestedChallengeId = normalizeOptionalSearchParam(
     resolvedSearchParams?.challengeId
   );
-  const [model, channelCatalog, sourceCatalog, channelConnectors] =
-    await Promise.all([
-      loadTenantAdminViewModel({ tenantId: access.tenantId, database }),
-      loadChannelCatalog(internalApiAccess),
-      loadSourceCatalog(internalApiAccess),
-      loadChannelConnectors(internalApiAccess)
-    ]);
+  const [
+    model,
+    channelCatalog,
+    sourceCatalog,
+    sourceConnections,
+    channelConnectors
+  ] = await Promise.all([
+    loadTenantAdminViewModel({ tenantId: access.tenantId, database }),
+    loadChannelCatalog(internalApiAccess),
+    loadSourceCatalog(internalApiAccess),
+    loadSourceConnections(internalApiAccess),
+    loadChannelConnectors(internalApiAccess)
+  ]);
   const { t, locale } = createTranslator(model.tenant.locale);
   const selectedConnector = selectChannelConnector({
     connectors: channelConnectors.connectors,
@@ -164,6 +177,13 @@ export default async function IntegrationsAdminPage({
     currentTab === "sources" && requestedSourceName
       ? sourceCatalog.sources.find(
           (source) => source.sourceName === requestedSourceName
+        )
+      : undefined;
+  const selectedSourceConnection =
+    currentTab === "sources" && requestedSourceConnectionId
+      ? sourceConnections.connections.find(
+          (connection) =>
+            connection.sourceConnectionId === requestedSourceConnectionId
         )
       : undefined;
   const displayedConnectors = channelConnectors.connectors.filter(
@@ -199,7 +219,13 @@ export default async function IntegrationsAdminPage({
       : undefined;
   const integrationContent =
     currentTab === "sources" ? (
-      selectedSource ? (
+      selectedSourceConnection ? (
+        <SourceConnectionDetailPanel
+          connection={selectedSourceConnection}
+          locale={locale}
+          t={t}
+        />
+      ) : selectedSource ? (
         <SourceCatalogDetailPanel source={selectedSource} t={t} />
       ) : (
         <NoSourceSelectedPanel t={t} />
@@ -304,6 +330,8 @@ export default async function IntegrationsAdminPage({
             {currentTab === "sources" ? (
               <SourceCatalogNavigation
                 currentSourceName={requestedSourceName}
+                currentSourceConnectionId={requestedSourceConnectionId}
+                connections={sourceConnections.connections}
                 groups={sourceCatalogGroups}
                 t={t}
               />
@@ -397,10 +425,14 @@ function emptyConnectedGroupKey(tab: ChannelIntegrationsTab): I18nMessageKey {
 }
 
 function SourceCatalogNavigation({
+  connections,
+  currentSourceConnectionId,
   currentSourceName,
   groups,
   t
 }: {
+  connections: readonly InternalSourceConnectionSummary[];
+  currentSourceConnectionId?: string;
   currentSourceName?: string;
   groups: readonly {
     category: InternalSourceCatalogCategory;
@@ -410,6 +442,27 @@ function SourceCatalogNavigation({
 }): ReactNode {
   return (
     <>
+      <div className="integrationListGroup">
+        <h3 className="detailLabel">
+          {t("admin.integrations.connectedSources")}
+        </h3>
+        {connections.length > 0 ? (
+          connections.map((connection) => (
+            <SourceConnectionListItem
+              key={connection.sourceConnectionId}
+              connection={connection}
+              current={
+                connection.sourceConnectionId === currentSourceConnectionId
+              }
+              t={t}
+            />
+          ))
+        ) : (
+          <p className="metaText">
+            {t("admin.integrations.noConnectedSources")}
+          </p>
+        )}
+      </div>
       {groups.map((group) => (
         <div className="integrationListGroup" key={group.category.category}>
           <h3 className="detailLabel">
@@ -426,6 +479,44 @@ function SourceCatalogNavigation({
         </div>
       ))}
     </>
+  );
+}
+
+function SourceConnectionListItem({
+  connection,
+  current,
+  t
+}: {
+  connection: InternalSourceConnectionSummary;
+  current: boolean;
+  t: Translator;
+}): ReactNode {
+  return (
+    <Link
+      className="integrationListItem integrationNavLink"
+      href={`/admin/integrations?tab=sources&sourceConnectionId=${encodeURIComponent(
+        connection.sourceConnectionId
+      )}`}
+      aria-current={current ? "page" : undefined}
+    >
+      <span className="metricIcon">
+        <SourceIcon sourceType={connection.sourceType} />
+      </span>
+      <div className="integrationListText">
+        <h3 className="listItemTitle" title={connection.displayName}>
+          {connection.displayName}
+        </h3>
+        <p
+          className="metaText integrationListType"
+          title={connection.sourceName}
+        >
+          {connection.sourceName}
+        </p>
+      </div>
+      <span className="integrationListBadges">
+        <SourceConnectionStatusBadge status={connection.status} t={t} />
+      </span>
+    </Link>
   );
 }
 
@@ -450,7 +541,7 @@ function SourceCatalogListItem({
       aria-current={current ? "page" : undefined}
     >
       <span className="metricIcon">
-        <SourceIcon source={source} />
+        <SourceIcon sourceType={source.sourceType} />
       </span>
       <div className="integrationListText">
         <h3 className="listItemTitle" title={title}>
@@ -540,6 +631,82 @@ function SourceCatalogDetailPanel({
             tokens={source.channelTypes}
           />
         ) : null}
+      </div>
+
+      {source.setupMode === "source_connection" ? (
+        <SourceConnectionCreateForm
+          defaultDisplayName={title}
+          label={t("admin.integrations.createSourceConnection")}
+          messages={{
+            created: t("admin.integrations.sourceActionStatus.created"),
+            displayName: t("admin.integrations.sourceField.displayName"),
+            email_verification_required: t(
+              "auth.emailVerification.status.required"
+            ),
+            invalid: t("admin.integrations.actionStatus.invalid"),
+            module_unhealthy: t(
+              "admin.integrations.sourceActionStatus.moduleUnhealthy"
+            ),
+            permission_denied: t("admin.roles.actionStatus.permissionDenied"),
+            webhookToken: t("admin.integrations.sourceField.webhookToken")
+          }}
+          sourceName={source.sourceName}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+function SourceConnectionDetailPanel({
+  connection,
+  locale,
+  t
+}: {
+  connection: InternalSourceConnectionSummary;
+  locale: string;
+  t: Translator;
+}): ReactNode {
+  return (
+    <section
+      className="settingsPanel"
+      aria-labelledby="source-connection-title"
+    >
+      <div className="sectionHeader">
+        <div>
+          <p className="eyebrow">{t("admin.integrations.sourceSettings")}</p>
+          <h2 className="sectionTitle" id="source-connection-title">
+            {connection.displayName}
+          </h2>
+          <p className="metaText">{connection.sourceName}</p>
+        </div>
+        <SourceConnectionStatusBadge status={connection.status} t={t} />
+      </div>
+
+      <div className="detailGrid sourceCatalogDetailGrid">
+        <SourceDetailItem
+          label={t("admin.integrations.sourceField.sourceType")}
+          value={connection.sourceType}
+        />
+        <SourceDetailItem
+          label={t("admin.integrations.sourceField.authType")}
+          value={t(sourceAuthTypeKey(connection.authType))}
+        />
+        <SourceDetailItem
+          label={t("admin.integrations.sourceField.webhookPath")}
+          value={connection.webhookPath ?? t("common.unknown")}
+        />
+        <SourceDetailItem
+          label={t("admin.integrations.sourceField.webhookUrl")}
+          value={connection.webhookUrl ?? t("common.unknown")}
+        />
+        <SourceDetailItem
+          label={t("admin.integrations.sourceField.webhookSecretRef")}
+          value={connection.webhookSecretRef ?? t("common.unknown")}
+        />
+        <SourceDetailItem
+          label={t("admin.integrations.sourceField.updatedAt")}
+          value={formatOptionalDateTime(connection.updatedAt, locale, t)}
+        />
       </div>
     </section>
   );
@@ -1114,26 +1281,26 @@ function CatalogListItem({
 }
 
 function SourceIcon({
-  source
+  sourceType
 }: {
-  source: InternalSourceCatalogItem;
+  sourceType: InternalSourceCatalogItem["sourceType"];
 }): ReactNode {
   const Icon =
-    source.category === "messengers"
+    sourceType === "messenger"
       ? MessageCircle
-      : source.category === "social"
+      : sourceType === "social"
         ? Users
-        : source.category === "marketplaces"
+        : sourceType === "marketplace"
           ? ShoppingBag
-          : source.category === "reviews"
+          : sourceType === "review"
             ? Star
-            : source.category === "forms"
+            : sourceType === "form"
               ? FileText
-              : source.category === "email"
+              : sourceType === "email"
                 ? Mail
-                : source.category === "telephony"
+                : sourceType === "phone"
                   ? PhoneCall
-                  : source.category === "api"
+                  : sourceType === "api"
                     ? Code2
                     : Building2;
 
@@ -1157,6 +1324,20 @@ function SourceReadinessBadge({
   );
 }
 
+function SourceConnectionStatusBadge({
+  status,
+  t
+}: {
+  status: InternalSourceConnectionSummary["status"];
+  t: Translator;
+}): ReactNode {
+  return (
+    <span className="channelStatusBadge" data-state={sourceStatusState(status)}>
+      {t(sourceConnectionStatusKey(status))}
+    </span>
+  );
+}
+
 function sourceReadinessState(
   readiness: InternalSourceCatalogItem["readiness"]
 ): ConnectorListBadgeState {
@@ -1166,6 +1347,24 @@ function sourceReadinessState(
 
   if (readiness === "disabled") {
     return "disabled";
+  }
+
+  return "new";
+}
+
+function sourceStatusState(
+  status: InternalSourceConnectionSummary["status"]
+): ConnectorListBadgeState {
+  if (status === "active") {
+    return "ok";
+  }
+
+  if (status === "disabled" || status === "deleted") {
+    return "disabled";
+  }
+
+  if (status === "degraded" || status === "error") {
+    return "error";
   }
 
   return "new";
@@ -1191,6 +1390,12 @@ function sourceReadinessKey(
   value: InternalSourceCatalogItem["readiness"]
 ): I18nMessageKey {
   return `admin.integrations.sourceReadiness.${value}` as I18nMessageKey;
+}
+
+function sourceConnectionStatusKey(
+  value: InternalSourceConnectionSummary["status"]
+): I18nMessageKey {
+  return `admin.integrations.sourceStatus.${value}` as I18nMessageKey;
 }
 
 function sourceCategoryKey(
