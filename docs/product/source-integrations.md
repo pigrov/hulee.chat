@@ -31,6 +31,32 @@ message/call/lead/review materialization.
 `ReplyCapability` describes how Hulee can answer: natively, through an external
 link, read-only, unsupported or expired.
 
+## Source Catalog
+
+The source catalog is the platform-wide taxonomy of external entry points. It is
+broader than the tenant-facing channel catalog: channels are only the
+communication subset that needs connector runtime, auth challenge, webhook or
+polling setup.
+
+Source catalog categories are stable product categories used by platform admin
+UI, tenant onboarding, documentation, entitlements and adapter contracts:
+
+- `messengers`: Telegram, WhatsApp, MAX, VK and other direct messaging sources;
+- `marketplaces`: seller cabinets and order/question sources;
+- `reviews`: maps and reputation platforms;
+- `forms`: website forms, lead forms and callback requests;
+- `email`: mailbox and alias sources;
+- `telephony`: calls, missed calls, recordings, calltracking and SIP sources;
+- `crm`: CRM systems of record and workflow sources;
+- `api`: public API clients and custom enterprise integrations.
+
+The catalog can also include `social`, `classifieds` and `internal` categories
+for non-messenger social events, listing platforms and employee-facing internal
+sources. Category definitions must declare source types, default capabilities
+and sort order. Catalog items must declare setup mode so the product knows
+whether onboarding should open a channel connector, source connection, public
+API key flow or manual setup.
+
 ## Source Types
 
 - `messenger`: Telegram, WhatsApp, MAX, VK messages, Viber, social direct

@@ -891,6 +891,29 @@ export type {
   SourceReplayReason,
   SourceReplayRequest
 } from "./source-processing";
+export {
+  groupSourceCatalogItemsByCategory,
+  normalizeSourceCatalogItem,
+  sourceCatalogCapabilitySchema,
+  sourceCatalogCategoryDefinitionSchema,
+  sourceCatalogCategoryDefinitions,
+  sourceCatalogCategoryForSourceType,
+  sourceCatalogCategorySchema,
+  sourceCatalogItemSchema,
+  sourceCatalogReadinessSchema,
+  sourceCatalogSetupModeSchema,
+  sourceCatalogVisibilitySchema,
+  sourceTypeBelongsToCategory
+} from "./source-catalog";
+export type {
+  SourceCatalogCapability,
+  SourceCatalogCategory,
+  SourceCatalogCategoryDefinition,
+  SourceCatalogItem,
+  SourceCatalogReadiness,
+  SourceCatalogSetupMode,
+  SourceCatalogVisibility
+} from "./source-catalog";
 
 export * from "./public-api-v1";
 export * from "./internal-api-v1";
