@@ -1,6 +1,10 @@
 import { z } from "zod";
 
 import type { PlatformErrorCode } from "./index";
+import {
+  sourceCatalogCategoryDefinitionSchema,
+  sourceCatalogItemSchema
+} from "./source-catalog";
 
 export const internalApiV1Version = "v1";
 
@@ -767,6 +771,18 @@ export const internalChannelCatalogResponseSchema = z
   })
   .strict();
 
+export const internalSourceCatalogCategorySchema =
+  sourceCatalogCategoryDefinitionSchema;
+
+export const internalSourceCatalogItemSchema = sourceCatalogItemSchema;
+
+export const internalSourceCatalogResponseSchema = z
+  .object({
+    categories: z.array(internalSourceCatalogCategorySchema),
+    sources: z.array(internalSourceCatalogItemSchema)
+  })
+  .strict();
+
 export const internalChannelAuthChallengeTypeSchema = z.enum([
   "qr",
   "phone_code",
@@ -1284,6 +1300,15 @@ export type InternalChannelCatalogItem = z.infer<
 >;
 export type InternalChannelCatalogResponse = z.infer<
   typeof internalChannelCatalogResponseSchema
+>;
+export type InternalSourceCatalogCategory = z.infer<
+  typeof internalSourceCatalogCategorySchema
+>;
+export type InternalSourceCatalogItem = z.infer<
+  typeof internalSourceCatalogItemSchema
+>;
+export type InternalSourceCatalogResponse = z.infer<
+  typeof internalSourceCatalogResponseSchema
 >;
 export type InternalChannelConnectorSummary = z.infer<
   typeof internalChannelConnectorSummarySchema

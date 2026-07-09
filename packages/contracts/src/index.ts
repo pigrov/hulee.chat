@@ -892,7 +892,9 @@ export type {
   SourceReplayRequest
 } from "./source-processing";
 export {
+  findSourceCatalogItem,
   groupSourceCatalogItemsByCategory,
+  listVisibleSourceCatalogItems,
   normalizeSourceCatalogItem,
   sourceCatalogCapabilitySchema,
   sourceCatalogCategoryDefinitionSchema,
@@ -900,6 +902,7 @@ export {
   sourceCatalogCategoryForSourceType,
   sourceCatalogCategorySchema,
   sourceCatalogItemSchema,
+  sourceCatalogItems,
   sourceCatalogReadinessSchema,
   sourceCatalogSetupModeSchema,
   sourceCatalogVisibilitySchema,

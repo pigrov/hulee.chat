@@ -261,6 +261,242 @@ export const sourceCatalogCategoryDefinitions: SourceCatalogCategoryDefinition[]
     }
   ];
 
+const sourceCatalogItemDefinitions = [
+  {
+    sourceName: "telegram",
+    sourceType: "messenger",
+    category: "messengers",
+    provider: "telegram",
+    titleKey: "sources.catalog.telegram.title",
+    shortDescriptionKey: "sources.catalog.telegram.shortDescription",
+    descriptionKey: "sources.catalog.telegram.description",
+    readiness: "available",
+    visibility: "visible",
+    setupMode: "channel_connector",
+    supportsMultipleAccounts: true,
+    authTypes: ["token", "custom"],
+    accountTypes: ["bot", "user_session"],
+    eventTypes: ["message", "status_update"],
+    capabilities: [
+      "receive_events",
+      "native_reply",
+      "file_receive",
+      "file_send",
+      "threading",
+      "delivery_status",
+      "polling_runtime"
+    ],
+    sortOrder: 100,
+    channelTypes: ["telegram_bot", "telegram_qr_bridge"]
+  },
+  {
+    sourceName: "whatsapp",
+    sourceType: "messenger",
+    category: "messengers",
+    provider: "whatsapp",
+    titleKey: "sources.catalog.whatsapp.title",
+    shortDescriptionKey: "sources.catalog.whatsapp.shortDescription",
+    descriptionKey: "sources.catalog.whatsapp.description",
+    readiness: "available",
+    visibility: "visible",
+    setupMode: "channel_connector",
+    supportsMultipleAccounts: true,
+    authTypes: ["custom"],
+    accountTypes: ["user_session"],
+    eventTypes: ["message", "status_update"],
+    capabilities: [
+      "receive_events",
+      "native_reply",
+      "file_receive",
+      "file_send",
+      "threading",
+      "delivery_status",
+      "polling_runtime"
+    ],
+    sortOrder: 110,
+    channelTypes: ["whatsapp_qr_bridge"]
+  },
+  {
+    sourceName: "max",
+    sourceType: "messenger",
+    category: "messengers",
+    provider: "max",
+    titleKey: "sources.catalog.max.title",
+    shortDescriptionKey: "sources.catalog.max.shortDescription",
+    descriptionKey: "sources.catalog.max.description",
+    readiness: "available",
+    visibility: "visible",
+    setupMode: "channel_connector",
+    supportsMultipleAccounts: true,
+    authTypes: ["custom"],
+    accountTypes: ["bot", "user_session"],
+    eventTypes: ["message", "status_update"],
+    capabilities: [
+      "receive_events",
+      "native_reply",
+      "file_receive",
+      "file_send",
+      "threading",
+      "delivery_status",
+      "polling_runtime"
+    ],
+    sortOrder: 120,
+    channelTypes: ["max_bot", "max_qr_bridge"]
+  },
+  {
+    sourceName: "vk_community",
+    sourceType: "social",
+    category: "social",
+    provider: "vk",
+    titleKey: "sources.catalog.vkCommunity.title",
+    shortDescriptionKey: "sources.catalog.vkCommunity.shortDescription",
+    descriptionKey: "sources.catalog.vkCommunity.description",
+    readiness: "coming_soon",
+    visibility: "visible",
+    setupMode: "channel_connector",
+    supportsMultipleAccounts: true,
+    authTypes: ["token", "oauth2"],
+    accountTypes: ["group"],
+    eventTypes: ["message", "comment", "status_update"],
+    capabilities: [
+      "receive_events",
+      "native_reply",
+      "external_reply",
+      "file_receive",
+      "threading"
+    ],
+    sortOrder: 200,
+    channelTypes: ["vk_community"]
+  },
+  {
+    sourceName: "megapbx",
+    sourceType: "phone",
+    category: "telephony",
+    provider: "megapbx",
+    titleKey: "sources.catalog.megapbx.title",
+    shortDescriptionKey: "sources.catalog.megapbx.shortDescription",
+    descriptionKey: "sources.catalog.megapbx.description",
+    readiness: "coming_soon",
+    visibility: "visible",
+    setupMode: "source_connection",
+    supportsMultipleAccounts: true,
+    authTypes: ["api_key", "webhook_secret"],
+    accountTypes: ["phone_number"],
+    eventTypes: ["call", "status_update"],
+    capabilities: [
+      "receive_events",
+      "history_fetch",
+      "webhook_delivery",
+      "transcription",
+      "analytics"
+    ],
+    sortOrder: 800
+  },
+  {
+    sourceName: "ozon",
+    sourceType: "marketplace",
+    category: "marketplaces",
+    provider: "ozon",
+    titleKey: "sources.catalog.ozon.title",
+    shortDescriptionKey: "sources.catalog.ozon.shortDescription",
+    descriptionKey: "sources.catalog.ozon.description",
+    readiness: "coming_soon",
+    visibility: "visible",
+    setupMode: "source_connection",
+    supportsMultipleAccounts: true,
+    authTypes: ["api_key"],
+    accountTypes: ["shop"],
+    eventTypes: ["order_question", "status_update"],
+    capabilities: [
+      "receive_events",
+      "native_reply",
+      "external_reply",
+      "customer_profile",
+      "analytics"
+    ],
+    sortOrder: 300
+  },
+  {
+    sourceName: "yandex_market",
+    sourceType: "marketplace",
+    category: "marketplaces",
+    provider: "yandex_market",
+    titleKey: "sources.catalog.yandexMarket.title",
+    shortDescriptionKey: "sources.catalog.yandexMarket.shortDescription",
+    descriptionKey: "sources.catalog.yandexMarket.description",
+    readiness: "coming_soon",
+    visibility: "visible",
+    setupMode: "source_connection",
+    supportsMultipleAccounts: true,
+    authTypes: ["api_key", "oauth2"],
+    accountTypes: ["shop"],
+    eventTypes: ["order_question", "status_update"],
+    capabilities: [
+      "receive_events",
+      "native_reply",
+      "external_reply",
+      "customer_profile",
+      "analytics"
+    ],
+    sortOrder: 310
+  },
+  {
+    sourceName: "public_api",
+    sourceType: "api",
+    category: "api",
+    provider: "hulee",
+    titleKey: "sources.catalog.publicApi.title",
+    shortDescriptionKey: "sources.catalog.publicApi.shortDescription",
+    descriptionKey: "sources.catalog.publicApi.description",
+    readiness: "coming_soon",
+    visibility: "visible",
+    setupMode: "public_api",
+    supportsMultipleAccounts: true,
+    authTypes: ["api_key", "webhook_secret"],
+    accountTypes: ["custom"],
+    eventTypes: ["message", "lead", "system", "status_update"],
+    capabilities: [
+      "receive_events",
+      "native_reply",
+      "webhook_delivery",
+      "api_keys",
+      "analytics"
+    ],
+    sortOrder: 1000
+  },
+  {
+    sourceName: "web_form",
+    sourceType: "form",
+    category: "forms",
+    provider: "hulee",
+    titleKey: "sources.catalog.webForm.title",
+    shortDescriptionKey: "sources.catalog.webForm.shortDescription",
+    descriptionKey: "sources.catalog.webForm.description",
+    readiness: "coming_soon",
+    visibility: "visible",
+    setupMode: "source_connection",
+    supportsMultipleAccounts: true,
+    authTypes: ["webhook_secret"],
+    accountTypes: ["site"],
+    eventTypes: ["lead", "status_update"],
+    capabilities: ["receive_events", "webhook_delivery", "analytics"],
+    sortOrder: 600
+  }
+] satisfies SourceCatalogItem[];
+
+export const sourceCatalogItems: SourceCatalogItem[] =
+  sourceCatalogItemDefinitions.map(normalizeSourceCatalogItem);
+
+export function listVisibleSourceCatalogItems(): SourceCatalogItem[] {
+  return sourceCatalogItems.filter((item) => item.visibility === "visible");
+}
+
+export function findSourceCatalogItem(
+  sourceName: string
+): SourceCatalogItem | undefined {
+  return sourceCatalogItems.find((item) => item.sourceName === sourceName);
+}
+
 export function sourceCatalogCategoryForSourceType(
   sourceType: SourceType | string
 ): SourceCatalogCategory {

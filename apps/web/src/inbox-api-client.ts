@@ -22,6 +22,7 @@ import {
   internalRbacRoleMutationRequestSchema,
   internalRbacRoleResponseSchema,
   internalRbacRolesResponseSchema,
+  internalSourceCatalogResponseSchema,
   internalTenantBrandResponseSchema,
   internalTenantBrandUpdateRequestSchema,
   internalTelegramBotTokenValidateRequestSchema,
@@ -53,6 +54,7 @@ import {
   type InternalRbacRoleMutationRequest,
   type InternalRbacRoleResponse,
   type InternalRbacRolesResponse,
+  type InternalSourceCatalogResponse,
   type InternalTenantBrandResponse,
   type InternalTenantBrandUpdateRequest,
   type InternalTelegramBotTokenValidateRequest,
@@ -71,6 +73,7 @@ export type InboxMessage = InternalInboxMessage;
 export type InboxViewModel = InternalInboxViewResponse;
 export type TenantBrandViewModel = InternalTenantBrandResponse;
 export type ChannelCatalogViewModel = InternalChannelCatalogResponse;
+export type SourceCatalogViewModel = InternalSourceCatalogResponse;
 export type ChannelAuthChallengeViewModel =
   InternalChannelAuthChallengeResponse;
 export type ChannelConnectorsViewModel = InternalChannelConnectorsResponse;
@@ -444,6 +447,34 @@ export async function loadChannelCatalog(
   }
 
   return internalChannelCatalogResponseSchema.parse(await response.json());
+}
+
+export async function loadSourceCatalog(
+  options: InternalApiAccessOptions<"modules.manage">
+): Promise<SourceCatalogViewModel> {
+  const url = new URL(
+    "/internal/v1/sources/catalog",
+    resolveInternalApiBaseUrl()
+  );
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: await buildInternalApiHeaders({
+      method: "GET",
+      path: internalPath(url),
+      effectivePermissionOverride: requireEffectivePermissionOverride(
+        options,
+        "modules.manage"
+      )
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Internal source catalog API returned HTTP ${response.status}.`
+    );
+  }
+
+  return internalSourceCatalogResponseSchema.parse(await response.json());
 }
 
 export async function loadChannelConnectors(

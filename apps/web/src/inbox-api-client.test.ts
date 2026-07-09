@@ -33,6 +33,7 @@ import {
   loadRbacDirectGrants,
   loadRbacRoleBindings,
   loadRbacRoles,
+  loadSourceCatalog,
   loadTenantBrand,
   loadInboxViewModel,
   loadTelegramIntegration,
@@ -256,6 +257,41 @@ describe("inbox API client", () => {
         });
       }
 
+      if (url.pathname.endsWith("/sources/catalog")) {
+        return Response.json({
+          categories: [
+            {
+              category: "marketplaces",
+              titleKey: "sources.categories.marketplaces.title",
+              descriptionKey: "sources.categories.marketplaces.description",
+              sourceTypes: ["marketplace"],
+              sortOrder: 300,
+              defaultCapabilities: ["receive_events", "native_reply"]
+            }
+          ],
+          sources: [
+            {
+              sourceName: "ozon",
+              sourceType: "marketplace",
+              category: "marketplaces",
+              provider: "ozon",
+              titleKey: "sources.catalog.ozon.title",
+              shortDescriptionKey: "sources.catalog.ozon.shortDescription",
+              descriptionKey: "sources.catalog.ozon.description",
+              readiness: "coming_soon",
+              visibility: "visible",
+              setupMode: "source_connection",
+              supportsMultipleAccounts: true,
+              authTypes: ["api_key"],
+              accountTypes: ["shop"],
+              eventTypes: ["order_question"],
+              capabilities: ["receive_events", "native_reply"],
+              sortOrder: 300
+            }
+          ]
+        });
+      }
+
       if (url.pathname.endsWith("/egress/status")) {
         return Response.json({
           profiles: [
@@ -292,6 +328,9 @@ describe("inbox API client", () => {
     await loadChannelCatalog({
       effectivePermissionOverride: "modules.manage"
     });
+    await loadSourceCatalog({
+      effectivePermissionOverride: "modules.manage"
+    });
     await loadChannelConnectors({
       effectivePermissionOverride: "modules.manage"
     });
@@ -306,10 +345,15 @@ describe("inbox API client", () => {
     });
     expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(2, {
       method: "GET",
-      path: "/internal/v1/channels/connectors",
+      path: "/internal/v1/sources/catalog",
       effectivePermissionOverride: "modules.manage"
     });
     expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(3, {
+      method: "GET",
+      path: "/internal/v1/channels/connectors",
+      effectivePermissionOverride: "modules.manage"
+    });
+    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(4, {
       method: "GET",
       path: "/internal/v1/egress/status",
       effectivePermissionOverride: "modules.manage"

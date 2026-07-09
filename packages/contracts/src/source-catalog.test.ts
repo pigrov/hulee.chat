@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  findSourceCatalogItem,
   groupSourceCatalogItemsByCategory,
+  listVisibleSourceCatalogItems,
   normalizeSourceCatalogItem,
   sourceCatalogCategoryDefinitions,
   sourceCatalogCategoryForSourceType,
-  sourceCatalogItemSchema
+  sourceCatalogItemSchema,
+  sourceCatalogItems
 } from "./source-catalog";
 
 describe("source catalog", () => {
@@ -69,6 +72,38 @@ describe("source catalog", () => {
       category: "marketplaces",
       setupMode: "source_connection"
     });
+  });
+
+  it("publishes the first MVP source catalog inventory", () => {
+    expect(sourceCatalogItems.map((item) => item.sourceName)).toEqual([
+      "telegram",
+      "whatsapp",
+      "max",
+      "vk_community",
+      "megapbx",
+      "ozon",
+      "yandex_market",
+      "public_api",
+      "web_form"
+    ]);
+
+    expect(findSourceCatalogItem("megapbx")).toMatchObject({
+      sourceType: "phone",
+      category: "telephony",
+      setupMode: "source_connection"
+    });
+    expect(findSourceCatalogItem("ozon")).toMatchObject({
+      sourceType: "marketplace",
+      category: "marketplaces",
+      authTypes: ["api_key"]
+    });
+    expect(findSourceCatalogItem("yandex_market")).toMatchObject({
+      sourceType: "marketplace",
+      category: "marketplaces"
+    });
+    expect(listVisibleSourceCatalogItems()).toHaveLength(
+      sourceCatalogItems.length
+    );
   });
 
   it("rejects catalog items when source type and category disagree", () => {

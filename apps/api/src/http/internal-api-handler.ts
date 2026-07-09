@@ -18,6 +18,7 @@ import type {
   InternalRbacRoleBindingsResponse,
   InternalRbacRoleResponse,
   InternalRbacRolesResponse,
+  InternalSourceCatalogResponse,
   InternalWorkQueue,
   InternalTenantBrandResponse,
   InternalTelegramBotTokenValidateResponse,
@@ -43,7 +44,9 @@ import {
   internalTelegramBotTokenValidateRequestSchema,
   internalTelegramIntegrationUpdateRequestSchema,
   internalWorkQueueUpsertRequestSchema,
-  isPlatformErrorCode
+  listVisibleSourceCatalogItems,
+  isPlatformErrorCode,
+  sourceCatalogCategoryDefinitions
 } from "@hulee/contracts";
 import {
   CoreError,
@@ -183,6 +186,9 @@ type RouteMatch =
     }
   | {
       route: "channel_catalog_view";
+    }
+  | {
+      route: "source_catalog_view";
     }
   | {
       route: "channel_connectors_view";
@@ -677,6 +683,15 @@ async function handleAuthenticatedRoute(input: {
       return jsonResponse(200, response);
     }
 
+    case "source_catalog_view": {
+      const response: InternalSourceCatalogResponse = {
+        categories: sourceCatalogCategoryDefinitions,
+        sources: listVisibleSourceCatalogItems()
+      };
+
+      return jsonResponse(200, response);
+    }
+
     case "channel_connectors_view": {
       const response: InternalChannelConnectorsResponse =
         await input.integrations.listChannelConnectors(input.session);
@@ -915,6 +930,7 @@ function internalRouteAuthorizationPolicy(
         permission: "roles.manage"
       };
     case "channel_catalog_view":
+    case "source_catalog_view":
     case "channel_connectors_view":
     case "channel_connector_create":
     case "channel_connector_update":
@@ -1124,6 +1140,12 @@ function matchRoute(request: ApiHttpRequest): RouteMatch | undefined {
   if (request.method === "GET" && path === "/internal/v1/channels/catalog") {
     return {
       route: "channel_catalog_view"
+    };
+  }
+
+  if (request.method === "GET" && path === "/internal/v1/sources/catalog") {
+    return {
+      route: "source_catalog_view"
     };
   }
 

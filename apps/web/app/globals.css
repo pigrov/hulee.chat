@@ -1795,6 +1795,36 @@ a.secondaryButton {
   font-weight: 600;
 }
 
+.sourceCatalogDetailGrid,
+.sourceCatalogTokenGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.sourceTokenList {
+  align-content: start;
+}
+
+.sourceTokenPills {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sourceTokenPill {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-muted);
+  color: var(--hulee-color-text-default);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .emptyState {
   display: grid;
   min-height: 180px;
@@ -4456,6 +4486,8 @@ button.managementRow:not(.adminNavLink):not(.integrationNavLink):focus-visible {
   .roleEditorGrid,
   .roleSubjectGrid,
   .employeeMembershipGrid,
+  .sourceCatalogDetailGrid,
+  .sourceCatalogTokenGrid,
   .brandPresetGrid,
   .brandColorGrid,
   .brandPreviewSurface {

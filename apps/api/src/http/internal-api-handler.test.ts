@@ -1644,6 +1644,10 @@ describe("internal API handler", () => {
       method: "GET",
       path: "/internal/v1/channels/catalog"
     });
+    const sourceCatalogResponse = await handler.handle({
+      method: "GET",
+      path: "/internal/v1/sources/catalog"
+    });
     const connectorsResponse = await handler.handle({
       method: "GET",
       path: "/internal/v1/channels/connectors"
@@ -1657,6 +1661,26 @@ describe("internal API handler", () => {
           readiness: "available"
         }
       ]
+    });
+    expect(sourceCatalogResponse.status).toBe(200);
+    expect(sourceCatalogResponse.body).toMatchObject({
+      categories: expect.arrayContaining([
+        expect.objectContaining({
+          category: "messengers"
+        })
+      ]),
+      sources: expect.arrayContaining([
+        expect.objectContaining({
+          sourceName: "megapbx",
+          sourceType: "phone",
+          readiness: "coming_soon"
+        }),
+        expect.objectContaining({
+          sourceName: "ozon",
+          sourceType: "marketplace",
+          readiness: "coming_soon"
+        })
+      ])
     });
     expect(connectorsResponse.status).toBe(200);
     expect(connectorsResponse.body).toMatchObject({

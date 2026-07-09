@@ -7,9 +7,25 @@ import {
 import type {
   InternalChannelAuthChallenge,
   InternalChannelCatalogItem,
-  InternalChannelConnectorSummary
+  InternalChannelConnectorSummary,
+  InternalSourceCatalogCategory,
+  InternalSourceCatalogItem
 } from "@hulee/contracts";
-import { Activity, ArrowDown, ArrowUp, Clock3 } from "lucide-react";
+import {
+  Activity,
+  ArrowDown,
+  ArrowUp,
+  Building2,
+  Clock3,
+  Code2,
+  FileText,
+  Mail,
+  MessageCircle,
+  PhoneCall,
+  ShoppingBag,
+  Star,
+  Users
+} from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
@@ -31,6 +47,7 @@ import {
   loadChannelCatalog,
   loadChannelAuthChallenge,
   loadChannelConnectors,
+  loadSourceCatalog,
   loadTelegramIntegration,
   type TelegramIntegrationViewModel
 } from "../../../src/inbox-api-client";
@@ -61,6 +78,7 @@ export default async function IntegrationsAdminPage({
     connectorId?: string;
     channelType?: string;
     connectionPendingAt?: string;
+    sourceName?: string;
     tab?: string;
   }>;
 }): Promise<ReactNode> {
@@ -104,6 +122,9 @@ export default async function IntegrationsAdminPage({
   const requestedChannelType = normalizeOptionalSearchParam(
     resolvedSearchParams?.channelType
   );
+  const requestedSourceName = normalizeOptionalSearchParam(
+    resolvedSearchParams?.sourceName
+  );
   const requestedTab = normalizeIntegrationsTab(resolvedSearchParams?.tab);
   const connectionPendingAt = normalizeOptionalSearchParam(
     resolvedSearchParams?.connectionPendingAt
@@ -111,38 +132,61 @@ export default async function IntegrationsAdminPage({
   const requestedChallengeId = normalizeOptionalSearchParam(
     resolvedSearchParams?.challengeId
   );
-  const [model, channelCatalog, channelConnectors] = await Promise.all([
-    loadTenantAdminViewModel({ tenantId: access.tenantId, database }),
-    loadChannelCatalog(internalApiAccess),
-    loadChannelConnectors(internalApiAccess)
-  ]);
+  const [model, channelCatalog, sourceCatalog, channelConnectors] =
+    await Promise.all([
+      loadTenantAdminViewModel({ tenantId: access.tenantId, database }),
+      loadChannelCatalog(internalApiAccess),
+      loadSourceCatalog(internalApiAccess),
+      loadChannelConnectors(internalApiAccess)
+    ]);
   const { t, locale } = createTranslator(model.tenant.locale);
   const selectedConnector = selectChannelConnector({
     connectors: channelConnectors.connectors,
     requestedConnectorId
   });
   const currentTab =
-    selectedConnector?.channelClass === "user_bridge"
-      ? "accounts"
-      : selectedConnector
-        ? "channels"
-        : (requestedTab ?? "channels");
+    requestedTab === "sources"
+      ? "sources"
+      : selectedConnector?.channelClass === "user_bridge"
+        ? "accounts"
+        : selectedConnector
+          ? "channels"
+          : (requestedTab ?? "channels");
+  const sourceCatalogGroups = sourceCatalog.categories
+    .map((category) => ({
+      category,
+      sources: sourceCatalog.sources.filter(
+        (source) => source.category === category.category
+      )
+    }))
+    .filter((group) => group.sources.length > 0);
+  const selectedSource =
+    currentTab === "sources" && requestedSourceName
+      ? sourceCatalog.sources.find(
+          (source) => source.sourceName === requestedSourceName
+        )
+      : undefined;
   const displayedConnectors = channelConnectors.connectors.filter(
     (connector) =>
-      currentTab === "accounts"
-        ? connector.channelClass === "user_bridge"
-        : connector.channelClass !== "user_bridge"
+      currentTab === "sources"
+        ? false
+        : currentTab === "accounts"
+          ? connector.channelClass === "user_bridge"
+          : connector.channelClass !== "user_bridge"
   );
   const selectedConnectorId = selectedConnector?.connectorId;
   const availableChannels = channelCatalog.channels.filter(
     (channel) =>
       channel.readiness === "available" &&
+      currentTab !== "sources" &&
       (currentTab === "accounts"
         ? channel.channelClass === "user_bridge"
         : channel.channelClass !== "user_bridge")
   );
   const selectedCatalogChannel =
-    selectedConnector === undefined && requestedChannelType
+    currentTab !== "sources" &&
+    selectedConnector === undefined &&
+    requestedChannelType
       ? availableChannels.find(
           (channel) => channel.channelType === requestedChannelType
         )
@@ -154,7 +198,13 @@ export default async function IntegrationsAdminPage({
         })
       : undefined;
   const integrationContent =
-    selectedConnector?.channelType === "telegram_bot" ? (
+    currentTab === "sources" ? (
+      selectedSource ? (
+        <SourceCatalogDetailPanel source={selectedSource} t={t} />
+      ) : (
+        <NoSourceSelectedPanel t={t} />
+      )
+    ) : selectedConnector?.channelType === "telegram_bot" ? (
       <TelegramIntegrationPanel
         integration={
           selectedTelegramIntegration ??
@@ -238,49 +288,66 @@ export default async function IntegrationsAdminPage({
             >
               {t("admin.integrations.tab.accounts")}
             </Link>
+            <Link
+              className="secondaryButton integrationTabLink"
+              href="/admin/integrations?tab=sources"
+              aria-current={currentTab === "sources" ? "page" : undefined}
+            >
+              {t("admin.integrations.tab.sources")}
+            </Link>
           </nav>
 
           <nav
             className="integrationList"
             aria-label={t("admin.integrations.channelList")}
           >
-            <div className="integrationListGroup">
-              <h3 className="detailLabel">
-                {t(connectedGroupTitleKey(currentTab))}
-              </h3>
-              {displayedConnectors.length > 0 ? (
-                displayedConnectors.map((connector) => (
-                  <ConnectorListItem
-                    key={connector.connectorId}
-                    connector={connector}
-                    catalog={channelCatalog.channels}
-                    current={connector.connectorId === selectedConnectorId}
-                    locale={locale}
-                    tab={currentTab}
-                    t={t}
-                  />
-                ))
-              ) : (
-                <p className="metaText">
-                  {t(emptyConnectedGroupKey(currentTab))}
-                </p>
-              )}
-            </div>
-            <div className="integrationListGroup">
-              <h3 className="detailLabel">
-                {t(availableGroupTitleKey(currentTab))}
-              </h3>
-              {availableChannels.map((channel) => (
-                <CatalogListItem
-                  key={channel.channelType}
-                  channel={channel}
-                  current={channel.channelType === requestedChannelType}
-                  locale={locale}
-                  tab={currentTab}
-                  t={t}
-                />
-              ))}
-            </div>
+            {currentTab === "sources" ? (
+              <SourceCatalogNavigation
+                currentSourceName={requestedSourceName}
+                groups={sourceCatalogGroups}
+                t={t}
+              />
+            ) : (
+              <>
+                <div className="integrationListGroup">
+                  <h3 className="detailLabel">
+                    {t(connectedGroupTitleKey(currentTab))}
+                  </h3>
+                  {displayedConnectors.length > 0 ? (
+                    displayedConnectors.map((connector) => (
+                      <ConnectorListItem
+                        key={connector.connectorId}
+                        connector={connector}
+                        catalog={channelCatalog.channels}
+                        current={connector.connectorId === selectedConnectorId}
+                        locale={locale}
+                        tab={currentTab}
+                        t={t}
+                      />
+                    ))
+                  ) : (
+                    <p className="metaText">
+                      {t(emptyConnectedGroupKey(currentTab))}
+                    </p>
+                  )}
+                </div>
+                <div className="integrationListGroup">
+                  <h3 className="detailLabel">
+                    {t(availableGroupTitleKey(currentTab))}
+                  </h3>
+                  {availableChannels.map((channel) => (
+                    <CatalogListItem
+                      key={channel.channelType}
+                      channel={channel}
+                      current={channel.channelType === requestedChannelType}
+                      locale={locale}
+                      tab={currentTab}
+                      t={t}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
           </nav>
         </aside>
 
@@ -294,15 +361,18 @@ export default async function IntegrationsAdminPage({
 }
 
 type Translator = ReturnType<typeof createTranslator>["t"];
-type IntegrationsTab = "channels" | "accounts";
+type IntegrationsTab = "channels" | "accounts" | "sources";
+type ChannelIntegrationsTab = Exclude<IntegrationsTab, "sources">;
 
 function normalizeIntegrationsTab(
   value: string | undefined
 ): IntegrationsTab | undefined {
-  return value === "accounts" || value === "channels" ? value : undefined;
+  return value === "accounts" || value === "channels" || value === "sources"
+    ? value
+    : undefined;
 }
 
-function connectedGroupTitleKey(tab: IntegrationsTab): I18nMessageKey {
+function connectedGroupTitleKey(tab: ChannelIntegrationsTab): I18nMessageKey {
   return (
     tab === "accounts"
       ? "admin.integrations.connectedAccounts"
@@ -310,7 +380,7 @@ function connectedGroupTitleKey(tab: IntegrationsTab): I18nMessageKey {
   ) as I18nMessageKey;
 }
 
-function availableGroupTitleKey(tab: IntegrationsTab): I18nMessageKey {
+function availableGroupTitleKey(tab: ChannelIntegrationsTab): I18nMessageKey {
   return (
     tab === "accounts"
       ? "admin.integrations.availableAccounts"
@@ -318,12 +388,215 @@ function availableGroupTitleKey(tab: IntegrationsTab): I18nMessageKey {
   ) as I18nMessageKey;
 }
 
-function emptyConnectedGroupKey(tab: IntegrationsTab): I18nMessageKey {
+function emptyConnectedGroupKey(tab: ChannelIntegrationsTab): I18nMessageKey {
   return (
     tab === "accounts"
       ? "admin.integrations.noConnectedAccounts"
       : "admin.integrations.noConnectedChannels"
   ) as I18nMessageKey;
+}
+
+function SourceCatalogNavigation({
+  currentSourceName,
+  groups,
+  t
+}: {
+  currentSourceName?: string;
+  groups: readonly {
+    category: InternalSourceCatalogCategory;
+    sources: readonly InternalSourceCatalogItem[];
+  }[];
+  t: Translator;
+}): ReactNode {
+  return (
+    <>
+      {groups.map((group) => (
+        <div className="integrationListGroup" key={group.category.category}>
+          <h3 className="detailLabel">
+            {t(group.category.titleKey as I18nMessageKey)}
+          </h3>
+          {group.sources.map((source) => (
+            <SourceCatalogListItem
+              key={source.sourceName}
+              current={source.sourceName === currentSourceName}
+              source={source}
+              t={t}
+            />
+          ))}
+        </div>
+      ))}
+    </>
+  );
+}
+
+function SourceCatalogListItem({
+  current,
+  source,
+  t
+}: {
+  current: boolean;
+  source: InternalSourceCatalogItem;
+  t: Translator;
+}): ReactNode {
+  const title = resolveSourceTitle(source, t);
+  const description = resolveSourceShortDescription(source, t);
+
+  return (
+    <Link
+      className="integrationListItem integrationNavLink"
+      href={`/admin/integrations?tab=sources&sourceName=${encodeURIComponent(
+        source.sourceName
+      )}`}
+      aria-current={current ? "page" : undefined}
+    >
+      <span className="metricIcon">
+        <SourceIcon source={source} />
+      </span>
+      <div className="integrationListText">
+        <h3 className="listItemTitle" title={title}>
+          {title}
+        </h3>
+        <p className="metaText integrationListType" title={description}>
+          {description}
+        </p>
+      </div>
+      <span className="integrationListBadges">
+        <SourceReadinessBadge readiness={source.readiness} t={t} />
+      </span>
+    </Link>
+  );
+}
+
+function SourceCatalogDetailPanel({
+  source,
+  t
+}: {
+  source: InternalSourceCatalogItem;
+  t: Translator;
+}): ReactNode {
+  const title = resolveSourceTitle(source, t);
+  const description = t(source.descriptionKey as I18nMessageKey);
+
+  return (
+    <section className="settingsPanel" aria-labelledby="source-detail-title">
+      <div className="sectionHeader">
+        <div>
+          <p className="eyebrow">{t("admin.integrations.sourceSettings")}</p>
+          <h2 className="sectionTitle" id="source-detail-title">
+            {title}
+          </h2>
+          <p className="metaText">{description}</p>
+        </div>
+        <SourceReadinessBadge readiness={source.readiness} t={t} />
+      </div>
+
+      <div className="detailGrid sourceCatalogDetailGrid">
+        <SourceDetailItem
+          label={t("admin.integrations.sourceField.category")}
+          value={t(sourceCategoryKey(source.category))}
+        />
+        <SourceDetailItem
+          label={t("admin.integrations.sourceField.provider")}
+          value={source.provider ?? t("common.unknown")}
+        />
+        <SourceDetailItem
+          label={t("admin.integrations.sourceField.setupMode")}
+          value={t(sourceSetupModeKey(source.setupMode))}
+        />
+        <SourceDetailItem
+          label={t("admin.integrations.sourceField.multipleAccounts")}
+          value={
+            source.supportsMultipleAccounts ? t("common.yes") : t("common.no")
+          }
+        />
+      </div>
+
+      <div className="detailGrid sourceCatalogTokenGrid">
+        <SourceTokenList
+          label={t("admin.integrations.sourceField.authTypes")}
+          tokens={source.authTypes.map((value) => t(sourceAuthTypeKey(value)))}
+        />
+        <SourceTokenList
+          label={t("admin.integrations.sourceField.accountTypes")}
+          tokens={source.accountTypes.map((value) =>
+            t(sourceAccountTypeKey(value))
+          )}
+        />
+        <SourceTokenList
+          label={t("admin.integrations.sourceField.eventTypes")}
+          tokens={source.eventTypes.map((value) =>
+            t(sourceEventTypeKey(value))
+          )}
+        />
+        <SourceTokenList
+          label={t("admin.integrations.sourceField.capabilities")}
+          tokens={source.capabilities.map((value) =>
+            t(sourceCapabilityKey(value))
+          )}
+        />
+        {source.channelTypes ? (
+          <SourceTokenList
+            label={t("admin.integrations.sourceField.channelTypes")}
+            tokens={source.channelTypes}
+          />
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function SourceDetailItem({
+  label,
+  value
+}: {
+  label: string;
+  value: string;
+}): ReactNode {
+  return (
+    <div className="detailItem">
+      <span className="detailLabel">{label}</span>
+      <strong className="detailValue">{value}</strong>
+    </div>
+  );
+}
+
+function SourceTokenList({
+  label,
+  tokens
+}: {
+  label: string;
+  tokens: readonly string[];
+}): ReactNode {
+  return (
+    <div className="detailItem sourceTokenList">
+      <span className="detailLabel">{label}</span>
+      <span className="sourceTokenPills">
+        {tokens.map((token) => (
+          <span className="sourceTokenPill" key={token}>
+            {token}
+          </span>
+        ))}
+      </span>
+    </div>
+  );
+}
+
+function NoSourceSelectedPanel({ t }: { t: Translator }): ReactNode {
+  return (
+    <section className="settingsPanel" aria-labelledby="source-empty-title">
+      <div className="sectionHeader">
+        <div>
+          <p className="eyebrow">{t("admin.integrations.sourceSettings")}</p>
+          <h2 className="sectionTitle" id="source-empty-title">
+            {t("admin.integrations.selectSource")}
+          </h2>
+          <p className="metaText">
+            {t("admin.integrations.selectSourceDescription")}
+          </p>
+        </div>
+      </div>
+    </section>
+  );
 }
 
 function ChannelCatalogDetailPanel({
@@ -334,7 +607,7 @@ function ChannelCatalogDetailPanel({
 }: {
   channel: InternalChannelCatalogItem;
   locale: string;
-  tab: IntegrationsTab;
+  tab: ChannelIntegrationsTab;
   t: Translator;
 }): ReactNode {
   const title = resolveChannelTitle({
@@ -751,7 +1024,7 @@ function ConnectorListItem({
   catalog: readonly InternalChannelCatalogItem[];
   current: boolean;
   locale: string;
-  tab: IntegrationsTab;
+  tab: ChannelIntegrationsTab;
   t: Translator;
 }): ReactNode {
   const channel = catalog.find(
@@ -809,7 +1082,7 @@ function CatalogListItem({
   channel: InternalChannelCatalogItem;
   current: boolean;
   locale: string;
-  tab: IntegrationsTab;
+  tab: ChannelIntegrationsTab;
   t: Translator;
 }): ReactNode {
   return (
@@ -838,6 +1111,122 @@ function CatalogListItem({
       </div>
     </Link>
   );
+}
+
+function SourceIcon({
+  source
+}: {
+  source: InternalSourceCatalogItem;
+}): ReactNode {
+  const Icon =
+    source.category === "messengers"
+      ? MessageCircle
+      : source.category === "social"
+        ? Users
+        : source.category === "marketplaces"
+          ? ShoppingBag
+          : source.category === "reviews"
+            ? Star
+            : source.category === "forms"
+              ? FileText
+              : source.category === "email"
+                ? Mail
+                : source.category === "telephony"
+                  ? PhoneCall
+                  : source.category === "api"
+                    ? Code2
+                    : Building2;
+
+  return <Icon size={24} strokeWidth={1.6} />;
+}
+
+function SourceReadinessBadge({
+  readiness,
+  t
+}: {
+  readiness: InternalSourceCatalogItem["readiness"];
+  t: Translator;
+}): ReactNode {
+  return (
+    <span
+      className="channelStatusBadge"
+      data-state={sourceReadinessState(readiness)}
+    >
+      {t(sourceReadinessKey(readiness))}
+    </span>
+  );
+}
+
+function sourceReadinessState(
+  readiness: InternalSourceCatalogItem["readiness"]
+): ConnectorListBadgeState {
+  if (readiness === "available") {
+    return "ok";
+  }
+
+  if (readiness === "disabled") {
+    return "disabled";
+  }
+
+  return "new";
+}
+
+function resolveSourceTitle(
+  source: InternalSourceCatalogItem,
+  t: Translator
+): string {
+  return t(source.titleKey as I18nMessageKey);
+}
+
+function resolveSourceShortDescription(
+  source: InternalSourceCatalogItem,
+  t: Translator
+): string {
+  return t(
+    (source.shortDescriptionKey ?? source.descriptionKey) as I18nMessageKey
+  );
+}
+
+function sourceReadinessKey(
+  value: InternalSourceCatalogItem["readiness"]
+): I18nMessageKey {
+  return `admin.integrations.sourceReadiness.${value}` as I18nMessageKey;
+}
+
+function sourceCategoryKey(
+  value: InternalSourceCatalogItem["category"]
+): I18nMessageKey {
+  return `sources.categories.${value}.title` as I18nMessageKey;
+}
+
+function sourceSetupModeKey(
+  value: InternalSourceCatalogItem["setupMode"]
+): I18nMessageKey {
+  return `sources.setupMode.${value}` as I18nMessageKey;
+}
+
+function sourceAuthTypeKey(
+  value: InternalSourceCatalogItem["authTypes"][number]
+): I18nMessageKey {
+  return `sources.authType.${value}` as I18nMessageKey;
+}
+
+function sourceAccountTypeKey(
+  value: InternalSourceCatalogItem["accountTypes"][number]
+): I18nMessageKey {
+  return `sources.accountType.${value}` as I18nMessageKey;
+}
+
+function sourceEventTypeKey(
+  value: InternalSourceCatalogItem["eventTypes"][number]
+): I18nMessageKey {
+  return `sources.eventType.${value}` as I18nMessageKey;
+}
+
+function sourceCapabilityKey(
+  value: InternalSourceCatalogItem["capabilities"][number]
+): I18nMessageKey {
+  return `sources.capability.${value}` as I18nMessageKey;
 }
 
 type ConnectorListBadgeState = "ok" | "error" | "disabled" | "new";
