@@ -4,18 +4,23 @@ import {
   BarChart3,
   Building2,
   Check,
+  Code2,
   Cloud,
   Database,
   Gauge,
   Globe2,
   HardDrive,
+  Heart,
   KeyRound,
   LockKeyhole,
+  Mail,
   MessageSquare,
   Network,
   Plug,
   ShieldCheck,
   Sparkles,
+  ShoppingBag,
+  Tags,
   Users,
   WalletCards,
   Zap
@@ -38,18 +43,23 @@ type IconName =
   | "barChart"
   | "building"
   | "check"
+  | "code"
   | "cloud"
   | "database"
   | "gauge"
   | "globe"
   | "hardDrive"
+  | "heart"
   | "key"
   | "lock"
+  | "mail"
   | "message"
   | "network"
   | "plug"
   | "shield"
+  | "shoppingBag"
   | "sparkles"
+  | "tag"
   | "users"
   | "wallet"
   | "zap";
@@ -74,6 +84,12 @@ type ChannelStat = {
   title: string;
   description: string;
   icon: IconName;
+};
+
+type ChannelGroup = {
+  title: string;
+  icon: IconName;
+  sources: string[];
 };
 
 type ComparisonRow = {
@@ -141,7 +157,7 @@ type LandingContent = {
     kicker: string;
     title: string;
     summary: string;
-    items: string[];
+    groups: ChannelGroup[];
     stats: ChannelStat[];
     note: string;
   };
@@ -222,6 +238,32 @@ const heroImages = {
     darkSrc: "/marketing/hero-workspace-2-transparent-x2-dark-kk.png"
   }
 } satisfies Record<Locale, ThemeImageAsset>;
+const channelsInboxImage = {
+  src: "/marketing/channels-inbox-light.png",
+  darkSrc: "/marketing/channels-inbox-dark.png"
+} satisfies ThemeImageAsset;
+const channelMetricIcons = [
+  {
+    src: "/marketing/channels-metric-inbox-light.png",
+    darkSrc: "/marketing/channels-metric-inbox-dark.png"
+  },
+  {
+    src: "/marketing/channels-metric-profile-light.png",
+    darkSrc: "/marketing/channels-metric-profile-dark.png"
+  },
+  {
+    src: "/marketing/channels-metric-cloud-light.png",
+    darkSrc: "/marketing/channels-metric-cloud-dark.png"
+  }
+] as const satisfies readonly ThemeImageAsset[];
+const modelNoteIcon = {
+  src: "/marketing/model-note-light.png",
+  darkSrc: "/marketing/model-note-dark.png"
+} satisfies ThemeImageAsset;
+const channelNoteIcon = {
+  src: "/marketing/channel-note-light.png",
+  darkSrc: "/marketing/channel-note-dark.png"
+} satisfies ThemeImageAsset;
 const heroMetricIcons = [
   {
     src: "/marketing/hero-metric-channel-light.png",
@@ -270,18 +312,23 @@ const iconMap: Record<IconName, LucideIcon> = {
   barChart: BarChart3,
   building: Building2,
   check: Check,
+  code: Code2,
   cloud: Cloud,
   database: Database,
   gauge: Gauge,
   globe: Globe2,
   hardDrive: HardDrive,
+  heart: Heart,
   key: KeyRound,
   lock: LockKeyhole,
+  mail: Mail,
   message: MessageSquare,
   network: Network,
   plug: Plug,
   shield: ShieldCheck,
+  shoppingBag: ShoppingBag,
   sparkles: Sparkles,
+  tag: Tags,
   users: Users,
   wallet: WalletCards,
   zap: Zap
@@ -511,61 +558,106 @@ export default async function LandingPage({
         </div>
         <div className="section__inner">
           <aside className="model-note">
-            <span className="model-note__icon" aria-hidden="true">
-              <WalletCards />
-            </span>
+            <ThemeImage
+              className="model-note__icon"
+              src={modelNoteIcon.src}
+              darkSrc={modelNoteIcon.darkSrc}
+              alt=""
+              width={64}
+              height={64}
+            />
             <p>{copy(content.pricingModel.note)}</p>
           </aside>
         </div>
       </section>
 
       <section className="section section--channels" id="channels">
-        <div className="channels-card">
-          <div className="channels-card__content">
+        <div className="section__inner split channels-head">
+          <div>
             <p className="section-kicker">{content.channels.kicker}</p>
             <h2>{copy(content.channels.title)}</h2>
-            <p className="section__summary">{copy(content.channels.summary)}</p>
+          </div>
+          <p className="section__summary">{copy(content.channels.summary)}</p>
+        </div>
 
-            <div className="channel-cloud" aria-label={content.channels.kicker}>
-              {content.channels.items.map((channel) => (
-                <span className="channel-pill" key={channel}>
-                  <span className="channel-pill__mark" aria-hidden="true" />
-                  {channel}
-                </span>
-              ))}
-            </div>
-
-            <dl className="channel-metrics">
-              {content.channels.stats.map((stat) => {
-                const Icon = iconMap[stat.icon];
+        <div className="channels-card">
+          <div className="channels-card__content">
+            <div
+              className="channel-groups"
+              aria-label={content.channels.kicker}
+            >
+              {content.channels.groups.map((group) => {
+                const Icon = iconMap[group.icon];
 
                 return (
-                  <div className="channel-metric" key={stat.title}>
-                    <Icon className="channel-metric__icon" aria-hidden="true" />
-                    <div>
-                      <dt>{copy(stat.title)}</dt>
-                      <dd>{copy(stat.description)}</dd>
+                  <div className="channel-group" key={group.title}>
+                    <span className="channel-group__icon" aria-hidden="true">
+                      <Icon />
+                    </span>
+                    <strong>{copy(group.title)}</strong>
+                    <div className="channel-group__sources">
+                      {group.sources.map((source, index) => (
+                        <span
+                          className={`channel-source channel-source--${(index % 6) + 1}`}
+                          key={source}
+                        >
+                          {copy(source)}
+                        </span>
+                      ))}
                     </div>
                   </div>
                 );
               })}
-            </dl>
+            </div>
 
             <aside className="channel-note">
-              <ShieldCheck aria-hidden="true" />
+              <ThemeImage
+                className="channel-note__icon"
+                src={channelNoteIcon.src}
+                darkSrc={channelNoteIcon.darkSrc}
+                alt=""
+                width={64}
+                height={64}
+              />
               <p>{copy(content.channels.note)}</p>
             </aside>
           </div>
           <div className="channels-visual" aria-hidden="true">
-            <span className="channels-visual__node channels-visual__node--telegram" />
-            <span className="channels-visual__node channels-visual__node--whatsapp" />
-            <span className="channels-visual__node channels-visual__node--vk" />
-            <span className="channels-visual__node channels-visual__node--api" />
-            <span className="channels-visual__node channels-visual__node--mail" />
-            <span className="channels-visual__hub">
-              <MessageSquare />
-            </span>
+            <ThemeImage
+              className="channels-visual__image"
+              src={channelsInboxImage.src}
+              darkSrc={channelsInboxImage.darkSrc}
+              alt=""
+              width={1536}
+              height={1536}
+              sizes="(max-width: 980px) 100vw, 50vw"
+            />
           </div>
+        </div>
+
+        <div className="channel-metrics" aria-label={content.channels.kicker}>
+          {content.channels.stats.map((stat, index) => {
+            const icon = channelMetricIcons[index];
+            const Icon = iconMap[stat.icon];
+
+            return (
+              <div className="channel-metric" key={stat.title}>
+                {icon ? (
+                  <ThemeImage
+                    className="channel-metric__icon"
+                    src={icon.src}
+                    darkSrc={icon.darkSrc}
+                    alt=""
+                    width={76}
+                    height={76}
+                  />
+                ) : (
+                  <Icon className="channel-metric__icon" aria-hidden="true" />
+                )}
+                <p>{copy(stat.description)}</p>
+              </div>
+            );
+          })}
         </div>
       </section>
 

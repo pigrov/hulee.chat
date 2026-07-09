@@ -83,41 +83,59 @@
     "note": "External provider costs such as WABA, SMS, AI, or transcription stay separate and transparent. {product} does not turn them into hidden channel subscriptions."
   },
   "channels": {
-    "kicker": "CHANNELS",
-    "title": "Customers write where it is convenient. The team answers from one window.",
-    "summary": "Connect Telegram, WhatsApp, MAX, VK, Avito, website, email, SMS, webhooks, and API to {product}. Every request, file, and customer history lands in one inbox for sales, support, and internal teams.",
-    "items": [
-      "Telegram",
-      "WhatsApp",
-      "MAX",
-      "VK",
-      "Avito",
-      "Website",
-      "Email",
-      "SMS",
-      "Webhooks",
-      "Public API",
-      "WABA",
-      "Internal"
+    "kicker": "UNIFIED INBOX",
+    "title": "One working layer for every channel and incoming source.",
+    "summary": "Customers write in messengers, social networks, marketplaces, classifieds, website, and email. {product} brings everything into one workspace for sales, support, and internal teams.",
+    "groups": [
+      {
+        "title": "Messengers",
+        "icon": "message",
+        "sources": ["Telegram", "WhatsApp", "MAX"]
+      },
+      {
+        "title": "Social media",
+        "icon": "heart",
+        "sources": ["VK", "Instagram"]
+      },
+      {
+        "title": "Marketplaces",
+        "icon": "shoppingBag",
+        "sources": ["Ozon", "WB", "Kaspi"]
+      },
+      {
+        "title": "Classifieds",
+        "icon": "tag",
+        "sources": ["Avito", "OLX", "Kolesa", "Krisha"]
+      },
+      {
+        "title": "Owned channels",
+        "icon": "mail",
+        "sources": ["Website", "Email", "Chat", "SMS"]
+      },
+      {
+        "title": "Integrations",
+        "icon": "code",
+        "sources": ["Public API", "Webhooks"]
+      }
     ],
     "stats": [
       {
-        "title": "12+ channels",
-        "description": "Messengers, website, email, API, and internal requests.",
-        "icon": "globe"
+        "title": "One inbox",
+        "description": "All incoming requests in one space. Nothing gets lost.",
+        "icon": "database"
       },
       {
-        "title": "1 inbox",
-        "description": "Every conversation enters one shared workspace.",
-        "icon": "message"
+        "title": "Unified profile",
+        "description": "Conversation history from every channel in one profile. Full context stays close.",
+        "icon": "users"
       },
       {
-        "title": "No channel add-on",
-        "description": "A channel is an entry point, not a separate subscription.",
-        "icon": "wallet"
+        "title": "No connection chaos",
+        "description": "Flexible connections and clear setup without unnecessary complexity.",
+        "icon": "cloud"
       }
     ],
-    "note": "Channels can expand without tariff hooks. {product} charges for the real resource: stored data, history, and files."
+    "note": "Connect the sources you need without feeling that each one is a separate tariff."
   },
   "workflow": {
     "kicker": "Product",
