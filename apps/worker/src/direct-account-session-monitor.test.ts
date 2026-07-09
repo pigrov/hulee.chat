@@ -10,17 +10,26 @@ import type {
   FindConnectorChannelSessionInput,
   ListChannelSessionEventsInput,
   ListRunnableChannelSessionsInput,
+  SourceConnectionRecord,
   ReleaseChannelSessionLeaseInput,
   UpsertChannelConnectorInput,
   UpsertChannelSessionInput
 } from "@hulee/db";
-import type { ChannelConnectorId, TenantId } from "@hulee/contracts";
+import type {
+  ChannelConnectorId,
+  SourceConnectionId,
+  TenantId
+} from "@hulee/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
   runDirectAccountSessionMonitor,
   type DirectAccountSessionProbeHandler
 } from "./direct-account-session-monitor";
+import {
+  createTestSourceConnection,
+  InMemorySourceIntegrationRepository
+} from "./test-source-integration-repository";
 
 const tenantId = "tenant_direct_monitor" as TenantId;
 const now = new Date("2026-07-08T10:00:00.000Z");
@@ -33,7 +42,15 @@ describe("direct account session monitor", () => {
     });
     const repositories = createRepositories({
       connectors: [connector],
-      sessions: [session]
+      sessions: [session],
+      sourceConnections: [
+        createTestSourceConnection({
+          id: "src_conn_telegram_1",
+          tenantId,
+          displayName: "Telegram source",
+          updatedAt: now
+        })
+      ]
     });
     const handler: DirectAccountSessionProbeHandler = {
       name: "telegram-test",
@@ -96,6 +113,23 @@ describe("direct account session monitor", () => {
       }
     });
     expect(repositories.sessionRepository.events).toHaveLength(1);
+    expect(
+      repositories.sourceRepository.connections.get("src_conn_telegram_1")
+    ).toMatchObject({
+      displayName: "Telegram account",
+      status: "active",
+      sourceName: "telegram_user_session"
+    });
+    expect([...repositories.sourceRepository.accounts.values()]).toEqual([
+      expect.objectContaining({
+        tenantId,
+        sourceConnectionId: "src_conn_telegram_1",
+        externalAccountId: "tg:100",
+        externalAccountName: "@hulee_user",
+        displayName: "@hulee_user",
+        status: "active"
+      })
+    ]);
   });
 
   it("marks a revoked provider session as reauth required", async () => {
@@ -106,7 +140,15 @@ describe("direct account session monitor", () => {
     });
     const repositories = createRepositories({
       connectors: [connector],
-      sessions: [session]
+      sessions: [session],
+      sourceConnections: [
+        createTestSourceConnection({
+          id: "src_conn_telegram_1",
+          tenantId,
+          displayName: "Telegram source",
+          updatedAt: now
+        })
+      ]
     });
     const handler: DirectAccountSessionProbeHandler = {
       name: "telegram-test",
@@ -143,6 +185,16 @@ describe("direct account session monitor", () => {
     ).toMatchObject({
       status: "reauth_required",
       healthStatus: "unhealthy"
+    });
+    expect(
+      repositories.sourceRepository.connections.get("src_conn_telegram_1")
+    ).toMatchObject({
+      status: "error",
+      diagnostics: expect.objectContaining({
+        monitorStatus: "reauth_required",
+        errorCode: "provider.permanent_failure",
+        errorMessage: "AUTH_KEY_UNREGISTERED"
+      })
     });
   });
 
@@ -186,15 +238,20 @@ describe("direct account session monitor", () => {
 function createRepositories(input: {
   connectors: readonly ChannelConnectorRecord[];
   sessions: readonly ChannelSessionRecord[];
+  sourceConnections?: readonly SourceConnectionRecord[];
 }): {
   connectorRepository: InMemoryChannelConnectorRepository;
   sessionRepository: InMemoryChannelSessionRepository;
+  sourceRepository: InMemorySourceIntegrationRepository;
 } {
   return {
     connectorRepository: new InMemoryChannelConnectorRepository(
       input.connectors
     ),
-    sessionRepository: new InMemoryChannelSessionRepository(input.sessions)
+    sessionRepository: new InMemoryChannelSessionRepository(input.sessions),
+    sourceRepository: new InMemorySourceIntegrationRepository({
+      connections: input.sourceConnections
+    })
   };
 }
 
@@ -251,6 +308,10 @@ class InMemoryChannelConnectorRepository implements ChannelConnectorRepository {
       onboardingState: input.onboardingState ?? existing?.onboardingState ?? {},
       config: input.config ?? existing?.config ?? {},
       diagnostics: input.diagnostics ?? existing?.diagnostics ?? {},
+      sourceConnectionId:
+        input.sourceConnectionId !== undefined
+          ? (String(input.sourceConnectionId) as SourceConnectionId)
+          : (existing?.sourceConnectionId ?? null),
       createdByEmployeeId:
         input.createdByEmployeeId ?? existing?.createdByEmployeeId ?? null,
       createdAt: existing?.createdAt ?? input.updatedAt,
@@ -425,6 +486,7 @@ function createConnector(
     onboardingState: {},
     config: {},
     diagnostics: {},
+    sourceConnectionId: "src_conn_telegram_1" as SourceConnectionId,
     createdByEmployeeId: null,
     createdAt: now,
     updatedAt: now,

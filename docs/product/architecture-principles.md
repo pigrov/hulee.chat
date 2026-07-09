@@ -7,23 +7,24 @@
 5. Core does not know provider-specific implementation details.
 6. Events are the integration backbone.
 7. External operations must be idempotent.
-8. Public contracts are versioned.
-9. UI supports extension slots.
-10. Operational diagnostics are product features.
-11. Design tokens are the only source of visual styling decisions.
-12. UI text lives in i18n dictionaries, not in components.
-13. Business logic is covered by unit tests.
-14. Provider adapters are covered by contract tests.
-15. On-prem packaging must not require a separate codebase.
-16. Web, mobile and desktop clients are first-class product clients.
-17. Shared client behavior lives in app-shell packages, not inside a single deployable app.
-18. Native capabilities are accessed only through a native-bridge contract.
-19. Native clients must not depend on server-only Next.js behavior.
-20. Notifications are logical platform events that fan out to web, mobile and desktop endpoints without duplicate visible alerts.
-21. UI slots are versioned module API and are rendered only through approved SlotHost boundaries.
-22. Branding and white-label are configuration, brand assets and design token overrides, not UI/core forks.
-23. Plans, licenses, quotas and limits are enforced through entitlement and usage policy evaluators, not ad hoc plan checks.
-24. Control-plane owns product/deployment/commercial metadata; data-plane owns customer business data and traffic.
+8. Sources are broader than channels; channels are communication-source adapters, not the universal integration shape.
+9. Public contracts are versioned.
+10. UI supports extension slots.
+11. Operational diagnostics are product features.
+12. Design tokens are the only source of visual styling decisions.
+13. UI text lives in i18n dictionaries, not in components.
+14. Business logic is covered by unit tests.
+15. Provider adapters are covered by contract tests.
+16. On-prem packaging must not require a separate codebase.
+17. Web, mobile and desktop clients are first-class product clients.
+18. Shared client behavior lives in app-shell packages, not inside a single deployable app.
+19. Native capabilities are accessed only through a native-bridge contract.
+20. Native clients must not depend on server-only Next.js behavior.
+21. Notifications are logical platform events that fan out to web, mobile and desktop endpoints without duplicate visible alerts.
+22. UI slots are versioned module API and are rendered only through approved SlotHost boundaries.
+23. Branding and white-label are configuration, brand assets and design token overrides, not UI/core forks.
+24. Plans, licenses, quotas and limits are enforced through entitlement and usage policy evaluators, not ad hoc plan checks.
+25. Control-plane owns product/deployment/commercial metadata; data-plane owns customer business data and traffic.
 
 ## Layering
 

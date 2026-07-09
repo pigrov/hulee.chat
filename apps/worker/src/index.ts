@@ -20,6 +20,7 @@ import {
   createDrizzlePersistenceExecutor,
   createExternalMessageRepository,
   createSqlOutboundDispatchRepository,
+  createSqlSourceIntegrationRepository,
   createSqlTenantSecretRepository,
   type HuleeDatabase
 } from "@hulee/db";
@@ -373,6 +374,7 @@ export function createWorkerDirectAccountAuthSweeper(
     ),
     sessionRepository: createSqlChannelSessionRepository(options.database),
     connectorRepository: createSqlChannelConnectorRepository(options.database),
+    sourceRepository: createSqlSourceIntegrationRepository(options.database),
     authChallengeCipher,
     handlers,
     workerId: options.workerId,
@@ -421,6 +423,7 @@ export function createWorkerDirectAccountSessionMonitor(
   return createDirectAccountSessionMonitor({
     sessionRepository: createSqlChannelSessionRepository(options.database),
     connectorRepository: createSqlChannelConnectorRepository(options.database),
+    sourceRepository: createSqlSourceIntegrationRepository(options.database),
     handlers,
     workerId: options.workerId,
     limit: options.limit,

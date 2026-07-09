@@ -2,7 +2,8 @@ import type {
   ChannelConnectorRecord,
   ChannelConnectorRepository,
   ChannelSessionRecord,
-  ChannelSessionRepository
+  ChannelSessionRepository,
+  SourceIntegrationRepository
 } from "@hulee/db";
 import type {
   ChannelConnectorHealthStatus,
@@ -10,6 +11,8 @@ import type {
   PlatformErrorCode
 } from "@hulee/contracts";
 import { randomUUID } from "node:crypto";
+
+import { syncDirectAccountSource } from "./direct-account-source-sync";
 
 const defaultMonitorIntervalMs = 10 * 60_000;
 const defaultLeaseMs = 2 * 60_000;
@@ -67,6 +70,7 @@ export type DirectAccountSessionProbeHandler = {
 export type DirectAccountSessionMonitorOptions = {
   sessionRepository: ChannelSessionRepository;
   connectorRepository: ChannelConnectorRepository;
+  sourceRepository?: SourceIntegrationRepository;
   handlers: readonly DirectAccountSessionProbeHandler[];
   workerId?: string;
   now?: Date;
@@ -322,6 +326,31 @@ async function markSessionHealthy(input: {
     input.probeResult.displayAddress ?? input.session.displayAddress;
   const externalAccountId =
     input.probeResult.externalAccountId ?? input.session.externalAccountId;
+  const connectorDisplayName =
+    input.probeResult.connectorDisplayName ?? input.connector.displayName;
+  const sessionPublicState =
+    input.probeResult.publicState ??
+    mergeRecord(input.session.publicState, {
+      stage: "connected"
+    });
+  const sessionMetadata = mergeRecord(
+    input.session.metadata,
+    input.probeResult.metadata
+  );
+  const connectorConfig = mergeRecord(input.connector.config, {
+    ...(input.probeResult.connectorConfig ?? {}),
+    ...(externalAccountId ? { channelExternalId: externalAccountId } : {})
+  });
+  const connectorDiagnostics = buildMonitorDiagnostics({
+    connector: input.connector,
+    session: input.session,
+    status: "connected",
+    probeStatus: "healthy",
+    checkedAt: input.now,
+    displayAddress,
+    operatorHint: input.probeResult.operatorHint,
+    extraDiagnostics: input.probeResult.diagnostics
+  });
 
   await input.options.sessionRepository.upsertSession({
     ...sessionPersistenceInput(input.session),
@@ -333,12 +362,8 @@ async function markSessionHealthy(input: {
       input.probeResult.sessionFingerprint ?? input.session.sessionFingerprint,
     externalAccountId,
     displayAddress,
-    publicState:
-      input.probeResult.publicState ??
-      mergeRecord(input.session.publicState, {
-        stage: "connected"
-      }),
-    metadata: mergeRecord(input.session.metadata, input.probeResult.metadata),
+    publicState: sessionPublicState,
+    metadata: sessionMetadata,
     lastHeartbeatAt: input.now,
     lastErrorAt: null,
     lastErrorCode: null,
@@ -347,25 +372,50 @@ async function markSessionHealthy(input: {
   });
   await input.options.connectorRepository.upsertConnector({
     ...connectorPersistenceInput(input.connector),
-    displayName:
-      input.probeResult.connectorDisplayName ?? input.connector.displayName,
+    displayName: connectorDisplayName,
     status: "connected",
     healthStatus: "healthy",
-    config: mergeRecord(input.connector.config, {
-      ...(input.probeResult.connectorConfig ?? {}),
-      ...(externalAccountId ? { channelExternalId: externalAccountId } : {})
-    }),
-    diagnostics: buildMonitorDiagnostics({
-      connector: input.connector,
-      session: input.session,
-      status: "connected",
-      probeStatus: "healthy",
-      checkedAt: input.now,
-      displayAddress,
-      operatorHint: input.probeResult.operatorHint,
-      extraDiagnostics: input.probeResult.diagnostics
-    }),
+    config: connectorConfig,
+    diagnostics: connectorDiagnostics,
     updatedAt: input.now
+  });
+  await syncDirectAccountSource({
+    sourceRepository: input.options.sourceRepository,
+    connector: {
+      ...input.connector,
+      displayName: connectorDisplayName,
+      status: "connected",
+      healthStatus: "healthy",
+      config: connectorConfig,
+      diagnostics: connectorDiagnostics,
+      updatedAt: input.now
+    },
+    session: {
+      ...input.session,
+      status: "connected",
+      ...(input.probeResult.sessionEncrypted
+        ? { sessionEncrypted: input.probeResult.sessionEncrypted }
+        : {}),
+      sessionFingerprint:
+        input.probeResult.sessionFingerprint ??
+        input.session.sessionFingerprint,
+      externalAccountId,
+      displayAddress,
+      publicState: sessionPublicState,
+      metadata: sessionMetadata,
+      lastHeartbeatAt: input.now,
+      lastErrorAt: null,
+      lastErrorCode: null,
+      lastErrorMessage: null,
+      updatedAt: input.now
+    },
+    status: "active",
+    checkedAt: input.now,
+    externalAccountId,
+    displayAddress,
+    diagnostics: {
+      monitorStatus: "healthy"
+    }
   });
   await appendMonitorSessionEvent({
     options: input.options,
@@ -387,6 +437,18 @@ async function markSessionDegraded(input: {
   probeResult: Extract<DirectAccountSessionProbeResult, { status: "degraded" }>;
   now: Date;
 }): Promise<void> {
+  const connectorDiagnostics = buildMonitorDiagnostics({
+    connector: input.connector,
+    session: input.session,
+    status: "degraded",
+    probeStatus: "degraded",
+    checkedAt: input.now,
+    errorCode: input.probeResult.errorCode ?? "provider.temporary_failure",
+    errorMessage: input.probeResult.errorMessage,
+    operatorHint: input.probeResult.operatorHint,
+    extraDiagnostics: input.probeResult.diagnostics
+  });
+
   await input.options.sessionRepository.upsertSession({
     ...sessionPersistenceInput(input.session),
     status: "connected",
@@ -400,18 +462,35 @@ async function markSessionDegraded(input: {
     ...connectorPersistenceInput(input.connector),
     status: "degraded",
     healthStatus: "degraded",
-    diagnostics: buildMonitorDiagnostics({
-      connector: input.connector,
-      session: input.session,
-      status: "degraded",
-      probeStatus: "degraded",
-      checkedAt: input.now,
-      errorCode: input.probeResult.errorCode ?? "provider.temporary_failure",
-      errorMessage: input.probeResult.errorMessage,
-      operatorHint: input.probeResult.operatorHint,
-      extraDiagnostics: input.probeResult.diagnostics
-    }),
+    diagnostics: connectorDiagnostics,
     updatedAt: input.now
+  });
+  await syncDirectAccountSource({
+    sourceRepository: input.options.sourceRepository,
+    connector: {
+      ...input.connector,
+      status: "degraded",
+      healthStatus: "degraded",
+      diagnostics: connectorDiagnostics,
+      updatedAt: input.now
+    },
+    session: {
+      ...input.session,
+      status: "connected",
+      lastHeartbeatAt: input.now,
+      lastErrorAt: input.now,
+      lastErrorCode:
+        input.probeResult.errorCode ?? "provider.temporary_failure",
+      lastErrorMessage: input.probeResult.errorMessage,
+      updatedAt: input.now
+    },
+    status: "degraded",
+    checkedAt: input.now,
+    diagnostics: {
+      monitorStatus: "degraded",
+      errorCode: input.probeResult.errorCode ?? "provider.temporary_failure",
+      errorMessage: input.probeResult.errorMessage
+    }
   });
   await appendMonitorSessionEvent({
     options: input.options,
@@ -435,6 +514,18 @@ async function markSessionReauthRequired(input: {
   >;
   now: Date;
 }): Promise<void> {
+  const connectorDiagnostics = buildMonitorDiagnostics({
+    connector: input.connector,
+    session: input.session,
+    status: "reauth_required",
+    probeStatus: "reauth_required",
+    checkedAt: input.now,
+    errorCode: input.probeResult.errorCode ?? "provider.permanent_failure",
+    errorMessage: input.probeResult.errorMessage,
+    operatorHint: input.probeResult.operatorHint,
+    extraDiagnostics: input.probeResult.diagnostics
+  });
+
   await input.options.sessionRepository.upsertSession({
     ...sessionPersistenceInput(input.session),
     status: "disconnected",
@@ -452,18 +543,39 @@ async function markSessionReauthRequired(input: {
     ...connectorPersistenceInput(input.connector),
     status: "reauth_required",
     healthStatus: "unhealthy",
-    diagnostics: buildMonitorDiagnostics({
-      connector: input.connector,
-      session: input.session,
-      status: "reauth_required",
-      probeStatus: "reauth_required",
-      checkedAt: input.now,
-      errorCode: input.probeResult.errorCode ?? "provider.permanent_failure",
-      errorMessage: input.probeResult.errorMessage,
-      operatorHint: input.probeResult.operatorHint,
-      extraDiagnostics: input.probeResult.diagnostics
-    }),
+    diagnostics: connectorDiagnostics,
     updatedAt: input.now
+  });
+  await syncDirectAccountSource({
+    sourceRepository: input.options.sourceRepository,
+    connector: {
+      ...input.connector,
+      status: "reauth_required",
+      healthStatus: "unhealthy",
+      diagnostics: connectorDiagnostics,
+      updatedAt: input.now
+    },
+    session: {
+      ...input.session,
+      status: "disconnected",
+      publicState: mergeRecord(input.session.publicState, {
+        stage: "reauth_required"
+      }),
+      lastDisconnectedAt: input.now,
+      lastHeartbeatAt: input.now,
+      lastErrorAt: input.now,
+      lastErrorCode:
+        input.probeResult.errorCode ?? "provider.permanent_failure",
+      lastErrorMessage: input.probeResult.errorMessage,
+      updatedAt: input.now
+    },
+    status: "error",
+    checkedAt: input.now,
+    diagnostics: {
+      monitorStatus: "reauth_required",
+      errorCode: input.probeResult.errorCode ?? "provider.permanent_failure",
+      errorMessage: input.probeResult.errorMessage
+    }
   });
   await appendMonitorSessionEvent({
     options: input.options,
@@ -588,6 +700,7 @@ function connectorPersistenceInput(connector: ChannelConnectorRecord) {
     onboardingState: connector.onboardingState,
     config: connector.config,
     diagnostics: connector.diagnostics,
+    sourceConnectionId: connector.sourceConnectionId ?? null,
     createdByEmployeeId: connector.createdByEmployeeId
   };
 }

@@ -53,6 +53,15 @@ export {
   createSqlChannelProviderValidationJobRepository
 } from "./sql-channel-provider-validation-job-repository";
 export {
+  buildFindSourceConnectionSql,
+  buildListTenantSourceConnectionsSql,
+  buildRecordNormalizedInboundEventSql,
+  buildRecordRawInboundEventSql,
+  buildUpsertSourceAccountSql,
+  buildUpsertSourceConnectionSql,
+  createSqlSourceIntegrationRepository
+} from "./sql-source-integration-repository";
+export {
   buildFindEnabledTenantModuleConfigByConfigStringSql,
   buildFindEnabledTenantModuleConfigSql,
   buildFindTenantModuleConfigSql,
@@ -307,6 +316,19 @@ export type {
   FindChannelProviderValidationJobInput,
   UpsertChannelProviderValidationJobInput
 } from "./sql-channel-provider-validation-job-repository";
+export type {
+  FindSourceConnectionInput,
+  ListTenantSourceConnectionsInput,
+  NormalizedInboundEventRecord,
+  RawInboundEventRecord,
+  RecordNormalizedInboundEventInput,
+  RecordRawInboundEventInput,
+  SourceAccountRecord,
+  SourceConnectionRecord,
+  SourceIntegrationRepository,
+  UpsertSourceAccountInput,
+  UpsertSourceConnectionInput
+} from "./sql-source-integration-repository";
 export type {
   FindEnabledTenantModuleConfigByConfigStringInput,
   FindEnabledTenantModuleConfigInput,

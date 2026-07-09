@@ -4,6 +4,7 @@
 
 - `auth`
 - `channel`
+- `source`
 - `telephony`
 - `crm`
 - `ai`
@@ -44,12 +45,29 @@ Core should depend on provider interfaces, not providers.
 Examples:
 
 - `AuthProvider`
+- `SourceAdapter`
 - `ChannelAdapter`
 - `TelephonyProvider`
 - `CrmProvider`
 - `AiProvider`
 - `StorageProvider`
 - `NotificationProvider`
+
+`ChannelAdapter` is the communication-channel specialization of the broader
+source integration model. Marketplaces, classifieds, reviews, forms, email,
+telephony, CRM and public API integrations should be modeled as source
+connections and source accounts before they materialize conversations, messages,
+calls, leads or reviews.
+
+## SourceAdapter Responsibilities
+
+- Accept webhook, polling, email, SDK, import or public API input.
+- Persist or request persistence of raw inbound payloads before normalization.
+- Normalize events into versioned source events.
+- Expose source and account capabilities.
+- Provide idempotency keys and provider timestamps.
+- Map provider errors to the platform error catalog.
+- Expose health checks, diagnostics and replay-safe processing hints.
 
 ## ChannelAdapter Responsibilities
 

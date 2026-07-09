@@ -1,0 +1,3 @@
+ALTER TABLE "channel_connectors" ADD COLUMN "source_connection_id" text;--> statement-breakpoint
+ALTER TABLE "channel_connectors" ADD CONSTRAINT "channel_connectors_source_connection_id_source_connections_id_fk" FOREIGN KEY ("source_connection_id") REFERENCES "public"."source_connections"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "channel_connectors_tenant_source_connection_idx" ON "channel_connectors" USING btree ("tenant_id","source_connection_id");

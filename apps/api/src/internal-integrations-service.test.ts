@@ -9,6 +9,7 @@ import type {
   InternalChannelAuthChallengeType,
   PlatformErrorCode,
   PlatformEvent,
+  SourceConnectionId,
   TenantId
 } from "@hulee/contracts";
 import type {
@@ -25,6 +26,7 @@ import type {
   DeploymentChannelCatalogOverrideRecord,
   DeploymentChannelCatalogOverrideRepository,
   DomainEventRepository,
+  FindSourceConnectionInput,
   FindActiveChannelConnectorByConfigStringInput,
   FindActiveChannelConnectorByExternalIdInput,
   FindChannelAuthChallengeInput,
@@ -40,11 +42,21 @@ import type {
   ClaimChannelSessionLeaseInput,
   ReleaseChannelSessionLeaseInput,
   ListActiveChannelConnectorsByTypeInput,
+  ListTenantSourceConnectionsInput,
   ListTenantChannelConnectorsInput,
+  NormalizedInboundEventRecord,
+  RawInboundEventRecord,
+  RecordNormalizedInboundEventInput,
+  RecordRawInboundEventInput,
+  SourceAccountRecord,
+  SourceConnectionRecord,
+  SourceIntegrationRepository,
   UpsertChannelAuthChallengeInput,
   UpsertChannelSessionInput,
   UpsertChannelConnectorInput,
-  UpsertChannelProviderValidationJobInput
+  UpsertChannelProviderValidationJobInput,
+  UpsertSourceAccountInput,
+  UpsertSourceConnectionInput
 } from "@hulee/db";
 import { describe, expect, it, vi } from "vitest";
 
@@ -463,8 +475,10 @@ describe("internal integrations service", () => {
 
   it("creates draft Telegram Bot connectors with server-side identity", async () => {
     const repository = new InMemoryChannelConnectorRepository();
+    const sourceRepository = new InMemorySourceIntegrationRepository();
     const service = createInternalIntegrationService({
       connectorRepository: repository,
+      sourceRepository,
       now: () => now,
       webhookConnectorIdFactory: () => "tgwh_created"
     });
@@ -494,9 +508,27 @@ describe("internal integrations service", () => {
           webhookConnectorId: "tgwh_created",
           outboundEnabled: false
         }),
+        sourceConnectionId: `source_connection:${response.connectorId}`,
         createdByEmployeeId: context.employeeId
       })
     );
+    expect([...sourceRepository.connections.values()]).toEqual([
+      expect.objectContaining({
+        id: `source_connection:${response.connectorId}`,
+        tenantId,
+        sourceType: "messenger",
+        sourceName: "telegram_bot",
+        displayName: "Telegram Bot",
+        status: "draft",
+        authType: "token",
+        config: {
+          channelConnectorId: response.connectorId,
+          channelType: "telegram_bot",
+          channelClass: "bot_bridge",
+          provider: "telegram"
+        }
+      })
+    ]);
   });
 
   it.each([
@@ -529,9 +561,11 @@ describe("internal integrations service", () => {
     async (expected) => {
       const connectorRepository = new InMemoryChannelConnectorRepository();
       const channelSessionRepository = new InMemoryChannelSessionRepository();
+      const sourceRepository = new InMemorySourceIntegrationRepository();
       const service = createInternalIntegrationService({
         connectorRepository,
         channelSessionRepository,
+        sourceRepository,
         now: () => now
       });
 
@@ -567,9 +601,32 @@ describe("internal integrations service", () => {
             sessionKey: "primary",
             authMode: expected.authMode
           },
+          sourceConnectionId: `source_connection:${response.connectorId}`,
           createdByEmployeeId: context.employeeId
         })
       );
+      expect([...sourceRepository.connections.values()]).toEqual([
+        expect.objectContaining({
+          id: `source_connection:${response.connectorId}`,
+          tenantId,
+          sourceType: "messenger",
+          sourceName:
+            expected.channelType === "telegram_qr_bridge"
+              ? "telegram_user_session"
+              : expected.channelType === "whatsapp_qr_bridge"
+                ? "whatsapp_user_session"
+                : "max_user_session",
+          displayName: expected.displayName,
+          status: "onboarding",
+          authType: "custom",
+          config: {
+            channelConnectorId: response.connectorId,
+            channelType: expected.channelType,
+            channelClass: "user_bridge",
+            provider: expected.provider
+          }
+        })
+      ]);
       expect([...channelSessionRepository.records.values()]).toEqual([
         expect.objectContaining({
           tenantId,
@@ -603,28 +660,34 @@ describe("internal integrations service", () => {
 
   it("disables, enables and soft-deletes tenant channel connectors", async () => {
     const repository = new InMemoryChannelConnectorRepository([
-      createTelegramConnector({
-        config: {
-          channelExternalId: "telegram-local",
-          mode: "webhook",
-          botTokenSecretRef: "secret:telegram",
-          outboundEnabled: false
-        },
-        diagnostics: {
-          status: "configured",
-          checkedAt: now.toISOString(),
-          checks: {
-            moduleEnabled: true,
-            configValid: true,
-            inboundWebhookReady: false,
-            outboundEnabled: false,
-            botTokenSecretRefConfigured: true
+      {
+        ...createTelegramConnector({
+          config: {
+            channelExternalId: "telegram-local",
+            mode: "webhook",
+            botTokenSecretRef: "secret:telegram",
+            outboundEnabled: false
+          },
+          diagnostics: {
+            status: "configured",
+            checkedAt: now.toISOString(),
+            checks: {
+              moduleEnabled: true,
+              configValid: true,
+              inboundWebhookReady: false,
+              outboundEnabled: false,
+              botTokenSecretRefConfigured: true
+            }
           }
-        }
-      })
+        }),
+        sourceConnectionId:
+          "source_connection:telegram_bot:tenant-integrations" as SourceConnectionId
+      }
     ]);
+    const sourceRepository = new InMemorySourceIntegrationRepository();
     const service = createInternalIntegrationService({
       connectorRepository: repository,
+      sourceRepository,
       now: () => now
     });
 
@@ -646,6 +709,14 @@ describe("internal integrations service", () => {
       diagnostics: {
         status: "disabled"
       }
+    });
+    expect(
+      sourceRepository.connections.get(
+        "source_connection:telegram_bot:tenant-integrations"
+      )
+    ).toMatchObject({
+      status: "disabled",
+      displayName: "Telegram Bot"
     });
 
     await expect(
@@ -671,6 +742,13 @@ describe("internal integrations service", () => {
         }
       }
     });
+    expect(
+      sourceRepository.connections.get(
+        "source_connection:telegram_bot:tenant-integrations"
+      )
+    ).toMatchObject({
+      status: "active"
+    });
 
     await expect(
       service.deleteChannelConnector(context, {
@@ -687,6 +765,13 @@ describe("internal integrations service", () => {
     ).toMatchObject({
       status: "deleted",
       healthStatus: "unknown"
+    });
+    expect(
+      sourceRepository.connections.get(
+        "source_connection:telegram_bot:tenant-integrations"
+      )
+    ).toMatchObject({
+      status: "deleted"
     });
   });
 
@@ -1710,10 +1795,80 @@ class InMemoryChannelConnectorRepository implements ChannelConnectorRepository {
       onboardingState: input.onboardingState ?? {},
       config: input.config ?? {},
       diagnostics: input.diagnostics ?? {},
+      sourceConnectionId:
+        (input.sourceConnectionId as SourceConnectionId | null | undefined) ??
+        existing?.sourceConnectionId ??
+        null,
       createdByEmployeeId: input.createdByEmployeeId ?? null,
       createdAt: existing?.createdAt ?? updatedAt,
       updatedAt
     });
+  }
+}
+
+class InMemorySourceIntegrationRepository implements SourceIntegrationRepository {
+  readonly connections = new Map<string, SourceConnectionRecord>();
+
+  async findSourceConnection(
+    input: FindSourceConnectionInput
+  ): Promise<SourceConnectionRecord | null> {
+    const record = this.connections.get(String(input.sourceConnectionId));
+
+    return record?.tenantId === input.tenantId ? record : null;
+  }
+
+  async listTenantSourceConnections(
+    input: ListTenantSourceConnectionsInput
+  ): Promise<SourceConnectionRecord[]> {
+    return [...this.connections.values()].filter(
+      (record) =>
+        record.tenantId === input.tenantId &&
+        (input.includeDeleted || record.status !== "deleted")
+    );
+  }
+
+  async upsertSourceConnection(
+    input: UpsertSourceConnectionInput
+  ): Promise<SourceConnectionRecord> {
+    const existing = this.connections.get(String(input.id));
+    const record: SourceConnectionRecord = {
+      id: String(input.id) as SourceConnectionRecord["id"],
+      tenantId: input.tenantId,
+      sourceType: input.sourceType,
+      sourceName: input.sourceName,
+      displayName: input.displayName,
+      status: input.status,
+      authType: input.authType,
+      capabilities: input.capabilities ?? {},
+      config: input.config ?? {},
+      diagnostics: input.diagnostics ?? {},
+      metadata: input.metadata ?? {},
+      createdByEmployeeId: input.createdByEmployeeId ?? null,
+      createdAt: existing?.createdAt ?? input.updatedAt,
+      updatedAt: input.updatedAt
+    };
+
+    this.connections.set(String(input.id), record);
+
+    return record;
+  }
+
+  async upsertSourceAccount(
+    _input: UpsertSourceAccountInput
+  ): Promise<SourceAccountRecord> {
+    throw new Error("Not implemented in this test fake.");
+  }
+
+  async recordRawInboundEvent(
+    _input: RecordRawInboundEventInput
+  ): Promise<RawInboundEventRecord> {
+    throw new Error("Not implemented in this test fake.");
+  }
+
+  async recordNormalizedInboundEvent(
+    _input: RecordNormalizedInboundEventInput
+  ): Promise<NormalizedInboundEventRecord> {
+    throw new Error("Not implemented in this test fake.");
   }
 }
 

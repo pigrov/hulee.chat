@@ -49,6 +49,14 @@ export const initialTables = [
     scope: "tenant",
     requiresTenantId: true
   },
+  { name: "source_connections", scope: "tenant", requiresTenantId: true },
+  { name: "source_accounts", scope: "tenant", requiresTenantId: true },
+  { name: "raw_inbound_events", scope: "tenant", requiresTenantId: true },
+  {
+    name: "normalized_inbound_events",
+    scope: "tenant",
+    requiresTenantId: true
+  },
   { name: "tenant_secrets", scope: "tenant", requiresTenantId: true },
   { name: "tenant_entitlements", scope: "tenant", requiresTenantId: true },
   { name: "tenant_usage_policies", scope: "tenant", requiresTenantId: true },

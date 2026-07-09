@@ -5,6 +5,7 @@ import type {
   ChannelConnectorStatus,
   ChannelType,
   EmployeeId,
+  SourceConnectionId,
   TenantId
 } from "@hulee/contracts";
 import { sql, type SQL } from "drizzle-orm";
@@ -25,6 +26,7 @@ export type ChannelConnectorRecord = {
   onboardingState: unknown;
   config: unknown;
   diagnostics: unknown;
+  sourceConnectionId?: SourceConnectionId | null;
   createdByEmployeeId: EmployeeId | null;
   createdAt: Date;
   updatedAt: Date;
@@ -77,6 +79,7 @@ export type UpsertChannelConnectorInput = {
   onboardingState?: unknown;
   config?: unknown;
   diagnostics?: unknown;
+  sourceConnectionId?: SourceConnectionId | string | null;
   createdByEmployeeId?: EmployeeId | null;
   updatedAt: Date;
 };
@@ -116,6 +119,7 @@ type ChannelConnectorRow = {
   onboarding_state: unknown;
   config: unknown;
   diagnostics: unknown;
+  source_connection_id?: string | null;
   created_by_employee_id: string | null;
   created_at: Date;
   updated_at: Date;
@@ -299,6 +303,7 @@ export function buildUpsertChannelConnectorSql(
       onboarding_state,
       config,
       diagnostics,
+      source_connection_id,
       created_by_employee_id,
       created_at,
       updated_at
@@ -316,6 +321,7 @@ export function buildUpsertChannelConnectorSql(
       ${JSON.stringify(input.onboardingState ?? {})}::jsonb,
       ${JSON.stringify(input.config ?? {})}::jsonb,
       ${JSON.stringify(input.diagnostics ?? {})}::jsonb,
+      ${input.sourceConnectionId ?? null},
       ${input.createdByEmployeeId ?? null},
       ${input.updatedAt},
       ${input.updatedAt}
@@ -331,6 +337,10 @@ export function buildUpsertChannelConnectorSql(
         onboarding_state = excluded.onboarding_state,
         config = excluded.config,
         diagnostics = excluded.diagnostics,
+        source_connection_id = coalesce(
+          excluded.source_connection_id,
+          channel_connectors.source_connection_id
+        ),
         updated_at = excluded.updated_at
     where channel_connectors.tenant_id = excluded.tenant_id
   `;
@@ -349,6 +359,7 @@ const channelConnectorSelectList = sql`
   onboarding_state,
   config,
   diagnostics,
+  source_connection_id,
   created_by_employee_id,
   created_at,
   updated_at
@@ -370,6 +381,7 @@ function mapChannelConnectorRow(
     onboardingState: row.onboarding_state,
     config: row.config,
     diagnostics: row.diagnostics,
+    sourceConnectionId: row.source_connection_id as SourceConnectionId | null,
     createdByEmployeeId: row.created_by_employee_id as EmployeeId | null,
     createdAt: row.created_at,
     updatedAt: row.updated_at

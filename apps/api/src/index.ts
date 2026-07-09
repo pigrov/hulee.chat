@@ -15,6 +15,7 @@ import {
   createSqlEmployeeDirectoryRepository,
   createSqlOrgStructureRepository,
   createSqlSecurityAuditRepository,
+  createSqlSourceIntegrationRepository,
   createSqlTenantSecretRepository,
   createSqlTenantApiKeyRepository,
   createSqlTenantRbacRepository,
@@ -183,6 +184,7 @@ export function createInternalApiDataPlaneHandler(
       connectorRepository: createSqlChannelConnectorRepository(
         options.database
       ),
+      sourceRepository: createSqlSourceIntegrationRepository(options.database),
       channelSessionRepository: createSqlChannelSessionRepository(
         options.database
       ),

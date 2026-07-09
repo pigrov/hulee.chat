@@ -18,6 +18,7 @@ import type {
 import {
   buildFindActiveChannelConnectorByConfigStringSql,
   buildFindActiveChannelConnectorByExternalIdSql,
+  buildUpsertChannelConnectorSql,
   createSqlChannelConnectorRepository
 } from "./sql-channel-connector-repository";
 
@@ -56,6 +57,7 @@ describe("SQL channel connector repository", () => {
       diagnostics: {
         status: "configured"
       },
+      sourceConnectionId: null,
       createdByEmployeeId: null,
       createdAt: new Date("2026-06-22T10:00:00.000Z"),
       updatedAt: new Date("2026-06-22T10:00:00.000Z")
@@ -170,6 +172,25 @@ describe("SQL channel connector repository", () => {
     expect(executor.queries).toHaveLength(1);
     expect(String(executor.queries[0])).not.toContain("telegram-token");
   });
+
+  it("keeps existing source connection link when updates omit it", () => {
+    const query = sqlText(
+      buildUpsertChannelConnectorSql({
+        id: connectorId,
+        tenantId,
+        channelType: "telegram_bot" as ChannelType,
+        channelClass: "bot_bridge" as ChannelClass,
+        provider: "telegram",
+        displayName: "Telegram Bot",
+        status: "connected" as ChannelConnectorStatus,
+        healthStatus: "healthy" as ChannelConnectorHealthStatus,
+        updatedAt: new Date("2026-06-22T10:00:00.000Z")
+      })
+    );
+
+    expect(query).toContain("source_connection_id = coalesce");
+    expect(query).toContain("channel_connectors.source_connection_id");
+  });
 });
 
 class RecordingSqlExecutor implements RawSqlExecutor {
@@ -214,6 +235,7 @@ function createConnectorRow(): Record<string, unknown> {
     diagnostics: {
       status: "configured"
     },
+    source_connection_id: null,
     created_by_employee_id: null,
     created_at: new Date("2026-06-22T10:00:00.000Z"),
     updated_at: new Date("2026-06-22T10:00:00.000Z")

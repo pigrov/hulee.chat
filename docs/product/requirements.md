@@ -66,6 +66,18 @@
 - Включение каналов на уровне tenant.
 - Диагностика webhook/send failures.
 
+## Source Integrations
+
+- Universal source model for messengers, social networks, marketplaces, classifieds, reviews, maps, website forms, email, telephony, CRM, public API and custom connectors.
+- Source connections per tenant with source type, source name, display name, status, auth type, capabilities, diagnostics and configuration.
+- Source accounts for concrete bots, user sessions, groups, shops, branches, mailboxes, phone numbers, ad accounts and custom resources.
+- Raw inbound event storage before normalization.
+- Normalized inbound events with event type, direction, external thread/message/user ids and payload version.
+- Reply capability per source event or conversation: native reply, external link, read-only, unsupported or expired.
+- Idempotency across webhook, polling, email and API sources.
+- Replay-safe processing and diagnostics for failed source events.
+- Source context for marketplace orders, listings, reviews, calls, lead forms and CRM mappings without provider-specific branches in core.
+
 ## Telephony
 
 - Telephony provider contract.

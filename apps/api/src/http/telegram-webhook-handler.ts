@@ -260,6 +260,7 @@ async function persistWebhookRuntimeDiagnostics(input: {
       onboardingState: record.onboardingState,
       config: record.config,
       diagnostics,
+      sourceConnectionId: record.sourceConnectionId,
       createdByEmployeeId: record.createdByEmployeeId,
       updatedAt: new Date(input.event.checkedAt)
     });

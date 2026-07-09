@@ -28,6 +28,7 @@ import type {
   InternalTelegramSetupStep,
   PlatformErrorCode,
   PlatformEvent,
+  SourceConnectionId,
   TenantId
 } from "@hulee/contracts";
 import {
@@ -48,6 +49,7 @@ import type {
   DeploymentChannelCatalogOverrideRecord,
   DeploymentChannelCatalogOverrideRepository,
   DomainEventRepository,
+  SourceIntegrationRepository,
   TenantSecretCipher,
   TenantSecretRepository
 } from "@hulee/db";
@@ -189,6 +191,7 @@ export type InternalIntegrationServiceOptions = {
   authChallengeRepository?: ChannelAuthChallengeRepository;
   providerValidationJobRepository?: ChannelProviderValidationJobRepository;
   providerOperationEvents?: DomainEventRepository;
+  sourceRepository?: SourceIntegrationRepository;
   authChallengeCipher?: Pick<TenantSecretCipher, "encrypt" | "decrypt">;
   secretResolver?: SecretResolver;
   secretWriter?: SecretWriter;
@@ -743,6 +746,7 @@ export function createInternalIntegrationService(
           context,
           request,
           repository: options.connectorRepository,
+          sourceRepository: options.sourceRepository,
           updatedAt: now(),
           webhookConnectorIdFactory
         });
@@ -758,6 +762,7 @@ export function createInternalIntegrationService(
           sessionRepository: requireChannelSessionRepository(
             options.channelSessionRepository
           ),
+          sourceRepository: options.sourceRepository,
           spec: userBridgeSpec,
           updatedAt: now()
         });
@@ -797,8 +802,14 @@ export function createInternalIntegrationService(
         onboardingState: updatedRecord.onboardingState,
         config: updatedRecord.config,
         diagnostics: updatedRecord.diagnostics,
+        sourceConnectionId: updatedRecord.sourceConnectionId,
         createdByEmployeeId: updatedRecord.createdByEmployeeId,
         updatedAt: updatedRecord.updatedAt
+      });
+      await upsertSourceConnectionForChannelConnector({
+        context,
+        record: updatedRecord,
+        sourceRepository: options.sourceRepository
       });
 
       const summary = channelConnectorSummaryFromRecord(updatedRecord);
@@ -814,6 +825,7 @@ export function createInternalIntegrationService(
       return updateChannelConnectorLifecycle({
         context,
         repository: options.connectorRepository,
+        sourceRepository: options.sourceRepository,
         connectorId: input.connectorId,
         action: "enable",
         updatedAt: now()
@@ -824,6 +836,7 @@ export function createInternalIntegrationService(
       return updateChannelConnectorLifecycle({
         context,
         repository: options.connectorRepository,
+        sourceRepository: options.sourceRepository,
         connectorId: input.connectorId,
         action: "disable",
         updatedAt: now()
@@ -834,6 +847,7 @@ export function createInternalIntegrationService(
       return updateChannelConnectorLifecycle({
         context,
         repository: options.connectorRepository,
+        sourceRepository: options.sourceRepository,
         connectorId: input.connectorId,
         action: "delete",
         updatedAt: now()
@@ -1171,6 +1185,7 @@ export function createInternalIntegrationService(
 
       await upsertTelegramConnector({
         repository: options.connectorRepository,
+        sourceRepository: options.sourceRepository,
         context,
         existingRecord,
         connectorId,
@@ -1208,6 +1223,7 @@ export function createInternalIntegrationService(
           connectorId: requireTelegramConnectorId(input),
           operation: "telegram.diagnostics.refresh",
           repository: options.connectorRepository,
+          sourceRepository: options.sourceRepository,
           events: options.providerOperationEvents,
           publicWebhookBaseUrl: options.publicWebhookBaseUrl,
           now
@@ -1218,6 +1234,7 @@ export function createInternalIntegrationService(
         context,
         connectorId: requireTelegramConnectorId(input),
         repository: options.connectorRepository,
+        sourceRepository: options.sourceRepository,
         secretResolver,
         botApiClientFactory,
         egressRuntime,
@@ -1234,6 +1251,7 @@ export function createInternalIntegrationService(
           connectorId: requireTelegramConnectorId(input),
           operation: "telegram.webhook.set",
           repository: options.connectorRepository,
+          sourceRepository: options.sourceRepository,
           events: options.providerOperationEvents,
           publicWebhookBaseUrl: options.publicWebhookBaseUrl,
           now
@@ -1245,6 +1263,7 @@ export function createInternalIntegrationService(
         context,
         connectorId: requireTelegramConnectorId(input),
         repository: options.connectorRepository,
+        sourceRepository: options.sourceRepository,
         secretResolver,
         botApiClientFactory,
         egressRuntime,
@@ -1261,6 +1280,7 @@ export function createInternalIntegrationService(
           connectorId: requireTelegramConnectorId(input),
           operation: "telegram.webhook.delete",
           repository: options.connectorRepository,
+          sourceRepository: options.sourceRepository,
           events: options.providerOperationEvents,
           publicWebhookBaseUrl: options.publicWebhookBaseUrl,
           now
@@ -1272,6 +1292,7 @@ export function createInternalIntegrationService(
         context,
         connectorId: requireTelegramConnectorId(input),
         repository: options.connectorRepository,
+        sourceRepository: options.sourceRepository,
         secretResolver,
         botApiClientFactory,
         egressRuntime,
@@ -1287,6 +1308,7 @@ type TelegramProviderOperationOptions = {
   context: InternalIntegrationContext;
   connectorId: string;
   repository: ChannelConnectorRepository;
+  sourceRepository?: SourceIntegrationRepository;
   secretResolver: SecretResolver;
   botApiClientFactory: TelegramBotApiClientFactory;
   egressRuntime: EgressRuntime;
@@ -1304,6 +1326,7 @@ type TelegramProviderOperationRequestOptions = {
   connectorId: string;
   operation: ChannelProviderOperation;
   repository: ChannelConnectorRepository;
+  sourceRepository?: SourceIntegrationRepository;
   events: DomainEventRepository;
   publicWebhookBaseUrl?: string;
   now: () => Date;
@@ -1378,6 +1401,7 @@ async function loadExistingTelegramConnector(input: {
 async function updateChannelConnectorLifecycle(input: {
   context: InternalIntegrationContext;
   repository: ChannelConnectorRepository;
+  sourceRepository?: SourceIntegrationRepository;
   connectorId: string;
   action: "enable" | "disable" | "delete";
   updatedAt: Date;
@@ -1419,8 +1443,14 @@ async function updateChannelConnectorLifecycle(input: {
     onboardingState: updatedRecord.onboardingState,
     config: updatedRecord.config,
     diagnostics: updatedRecord.diagnostics,
+    sourceConnectionId: updatedRecord.sourceConnectionId,
     createdByEmployeeId: updatedRecord.createdByEmployeeId,
     updatedAt: updatedRecord.updatedAt
+  });
+  await upsertSourceConnectionForChannelConnector({
+    context: input.context,
+    record: updatedRecord,
+    sourceRepository: input.sourceRepository
   });
 
   const summary = channelConnectorSummaryFromRecord(updatedRecord);
@@ -1521,16 +1551,54 @@ function requireChannelSessionRepository(
   return repository;
 }
 
+async function upsertSourceConnectionForChannelConnector(input: {
+  context: InternalIntegrationContext;
+  record: ChannelConnectorRecord;
+  sourceRepository?: SourceIntegrationRepository;
+}): Promise<void> {
+  if (!input.sourceRepository || !input.record.sourceConnectionId) {
+    return;
+  }
+
+  await input.sourceRepository.upsertSourceConnection({
+    id: input.record.sourceConnectionId,
+    tenantId: input.record.tenantId,
+    sourceType: "messenger",
+    sourceName: sourceNameForChannelConnector(input.record),
+    displayName: input.record.displayName,
+    status: sourceStatusFromChannelConnectorStatus(input.record.status),
+    authType: sourceAuthTypeForChannelConnector(input.record),
+    capabilities: sourceCapabilitiesForChannelConnector(input.record),
+    config: {
+      channelConnectorId: input.record.id,
+      channelType: input.record.channelType,
+      channelClass: input.record.channelClass,
+      provider: input.record.provider
+    },
+    diagnostics: sourceDiagnosticsForChannelConnector(input.record),
+    metadata: {
+      managedBy: "channel_connector",
+      createdByEmployeeId: input.context.employeeId
+    },
+    createdByEmployeeId: input.record.createdByEmployeeId,
+    updatedAt: input.record.updatedAt
+  });
+}
+
 async function createTelegramBotConnector(input: {
   context: InternalIntegrationContext;
   request: InternalChannelConnectorCreateRequest;
   repository: ChannelConnectorRepository;
+  sourceRepository?: SourceIntegrationRepository;
   updatedAt: Date;
   webhookConnectorIdFactory: NonNullable<
     InternalIntegrationServiceOptions["webhookConnectorIdFactory"]
   >;
 }): Promise<InternalChannelConnectorSummary> {
   const connectorId = createRandomChannelConnectorId(input.request.channelType);
+  const sourceConnectionId = input.sourceRepository
+    ? createSourceConnectionIdFromConnectorId(connectorId)
+    : null;
   const channelExternalId = createDefaultTelegramChannelExternalId();
   const config: InternalTelegramIntegrationConfig = {
     channelExternalId,
@@ -1548,6 +1616,34 @@ async function createTelegramBotConnector(input: {
   });
   const displayName =
     input.request.displayName?.trim() || defaultTelegramDisplayName;
+  await upsertSourceConnectionForChannelConnector({
+    context: input.context,
+    record: {
+      id: connectorId,
+      tenantId: input.context.tenantId,
+      channelType: telegramChannelType,
+      channelClass: telegramChannelClass,
+      provider: telegramProvider,
+      displayName,
+      status: "draft",
+      healthStatus: "unknown",
+      capabilities: {
+        inbound: true,
+        outbound: true,
+        attachmentsMetadata: true
+      },
+      onboardingState: {
+        step: "name"
+      },
+      config,
+      diagnostics,
+      sourceConnectionId,
+      createdByEmployeeId: input.context.employeeId,
+      createdAt: input.updatedAt,
+      updatedAt: input.updatedAt
+    },
+    sourceRepository: input.sourceRepository
+  });
 
   await input.repository.upsertConnector({
     id: connectorId,
@@ -1568,6 +1664,7 @@ async function createTelegramBotConnector(input: {
     },
     config,
     diagnostics,
+    sourceConnectionId,
     createdByEmployeeId: input.context.employeeId,
     updatedAt: input.updatedAt
   });
@@ -1591,10 +1688,14 @@ async function createUserBridgeConnector(input: {
   request: InternalChannelConnectorCreateRequest;
   repository: ChannelConnectorRepository;
   sessionRepository: ChannelSessionRepository;
+  sourceRepository?: SourceIntegrationRepository;
   spec: (typeof userBridgeChannelSpecs)[UserBridgeChannelType];
   updatedAt: Date;
 }): Promise<InternalChannelConnectorSummary> {
   const connectorId = createRandomChannelConnectorId(input.request.channelType);
+  const sourceConnectionId = input.sourceRepository
+    ? createSourceConnectionIdFromConnectorId(connectorId)
+    : null;
   const sessionId = createRandomChannelSessionId();
   const displayName =
     input.request.displayName?.trim() || input.spec.defaultDisplayName;
@@ -1611,6 +1712,33 @@ async function createUserBridgeConnector(input: {
       status: "not_started"
     }
   };
+  await upsertSourceConnectionForChannelConnector({
+    context: input.context,
+    record: {
+      id: connectorId,
+      tenantId: input.context.tenantId,
+      channelType: input.spec.channelType,
+      channelClass: userBridgeChannelClass,
+      provider: input.spec.provider,
+      displayName,
+      status: "onboarding",
+      healthStatus: "unknown",
+      capabilities: input.spec.capabilities,
+      onboardingState: {
+        step: input.spec.initialStep
+      },
+      config: {
+        sessionKey: userBridgePrimarySessionKey,
+        authMode: input.spec.authMode
+      },
+      diagnostics,
+      sourceConnectionId,
+      createdByEmployeeId: input.context.employeeId,
+      createdAt: input.updatedAt,
+      updatedAt: input.updatedAt
+    },
+    sourceRepository: input.sourceRepository
+  });
 
   await input.repository.upsertConnector({
     id: connectorId,
@@ -1630,6 +1758,7 @@ async function createUserBridgeConnector(input: {
       authMode: input.spec.authMode
     },
     diagnostics,
+    sourceConnectionId,
     createdByEmployeeId: input.context.employeeId,
     updatedAt: input.updatedAt
   });
@@ -1738,6 +1867,101 @@ function getUserBridgeChannelSpec(
   }
 
   return undefined;
+}
+
+function createSourceConnectionIdFromConnectorId(
+  connectorId: ChannelConnectorId
+): SourceConnectionId {
+  return `source_connection:${connectorId}` as SourceConnectionId;
+}
+
+function sourceNameForChannelConnector(record: ChannelConnectorRecord): string {
+  if (record.channelType === telegramChannelType) {
+    return "telegram_bot";
+  }
+
+  if (record.channelType === telegramQrBridgeChannelType) {
+    return "telegram_user_session";
+  }
+
+  if (record.channelType === whatsappQrBridgeChannelType) {
+    return "whatsapp_user_session";
+  }
+
+  if (record.channelType === maxQrBridgeChannelType) {
+    return "max_user_session";
+  }
+
+  return String(record.channelType);
+}
+
+function sourceAuthTypeForChannelConnector(
+  record: ChannelConnectorRecord
+): "token" | "custom" {
+  return record.channelType === telegramChannelType ? "token" : "custom";
+}
+
+function sourceStatusFromChannelConnectorStatus(
+  status: ChannelConnectorRecord["status"]
+) {
+  if (status === "draft") {
+    return "draft";
+  }
+
+  if (status === "onboarding") {
+    return "onboarding";
+  }
+
+  if (status === "connected") {
+    return "active";
+  }
+
+  if (status === "disabled") {
+    return "disabled";
+  }
+
+  if (status === "degraded") {
+    return "degraded";
+  }
+
+  if (status === "deleted") {
+    return "deleted";
+  }
+
+  return "error";
+}
+
+function sourceCapabilitiesForChannelConnector(record: ChannelConnectorRecord) {
+  const isUserBridge = record.channelClass === userBridgeChannelClass;
+  const isTelegramBot = record.channelType === telegramChannelType;
+
+  return {
+    canReceive: true,
+    canReply: true,
+    canFetchHistory: isUserBridge,
+    canSendFiles: true,
+    canReceiveFiles: true,
+    supportsThreads: record.channelType === telegramQrBridgeChannelType,
+    supportsReactions: isUserBridge,
+    supportsReadStatus: isUserBridge,
+    supportsDeliveryStatus: true,
+    webhookSupported: isTelegramBot,
+    pollingRequired: false,
+    customerProfile: true,
+    rateLimitsKnown: record.provider === telegramProvider,
+    oauthSupported: false,
+    sandboxAvailable: false,
+    legalRisk: isUserBridge ? "high" : "low"
+  };
+}
+
+function sourceDiagnosticsForChannelConnector(record: ChannelConnectorRecord) {
+  return {
+    channelStatus: record.status,
+    channelHealthStatus: record.healthStatus,
+    diagnosticsStatus: readRecordString(record.diagnostics, "status"),
+    checkedAt: readRecordString(record.diagnostics, "checkedAt")
+  };
 }
 
 function assertUserBridgeStartChallengeAllowed(input: {
@@ -2150,8 +2374,8 @@ function buildTelegramWebhookSecretTokenSecretRef(input: {
 
 function createRandomChannelConnectorId(
   channelType: InternalChannelType
-): string {
-  return `${channelType}:${randomUUID()}`;
+): ChannelConnectorId {
+  return `${channelType}:${randomUUID()}` as ChannelConnectorId;
 }
 
 function createRandomChannelAuthChallengeId(): string {
@@ -2351,6 +2575,7 @@ async function enqueueTelegramProviderOperation(
   await persistTelegramDiagnostics({
     context: options.context,
     repository: options.repository,
+    sourceRepository: options.sourceRepository,
     existingRecord: state.record,
     connectorId: state.connectorId,
     displayName: state.displayName,
@@ -2673,6 +2898,7 @@ async function loadTelegramState(options: TelegramProviderOperationOptions) {
 async function persistTelegramDiagnostics(input: {
   context: InternalIntegrationContext;
   repository: ChannelConnectorRepository;
+  sourceRepository?: SourceIntegrationRepository;
   existingRecord: ChannelConnectorRecord | null;
   connectorId: string;
   displayName: string;
@@ -2683,6 +2909,7 @@ async function persistTelegramDiagnostics(input: {
 }): Promise<void> {
   await upsertTelegramConnector({
     repository: input.repository,
+    sourceRepository: input.sourceRepository,
     context: input.context,
     existingRecord: input.existingRecord,
     connectorId: input.connectorId,
@@ -2772,6 +2999,7 @@ function telegramConfigEquals(
 
 async function upsertTelegramConnector(input: {
   repository: ChannelConnectorRepository;
+  sourceRepository?: SourceIntegrationRepository;
   context: InternalIntegrationContext;
   existingRecord: ChannelConnectorRecord | null;
   connectorId: string;
@@ -2783,8 +3011,15 @@ async function upsertTelegramConnector(input: {
   onboardingState?: unknown;
   updatedAt: Date;
 }): Promise<void> {
-  await input.repository.upsertConnector({
-    id: input.connectorId,
+  const sourceConnectionId =
+    input.existingRecord?.sourceConnectionId ??
+    (input.sourceRepository
+      ? createSourceConnectionIdFromConnectorId(
+          input.connectorId as ChannelConnectorId
+        )
+      : null);
+  const record: ChannelConnectorRecord = {
+    id: input.connectorId as ChannelConnectorId,
     tenantId: input.context.tenantId,
     channelType: telegramChannelType,
     channelClass: telegramChannelClass,
@@ -2804,9 +3039,34 @@ async function upsertTelegramConnector(input: {
       input.onboardingState ?? input.existingRecord?.onboardingState ?? {},
     config: input.config,
     diagnostics: input.diagnostics,
+    sourceConnectionId,
     createdByEmployeeId:
       input.existingRecord?.createdByEmployeeId ?? input.context.employeeId,
+    createdAt: input.existingRecord?.createdAt ?? input.updatedAt,
     updatedAt: input.updatedAt
+  };
+
+  await upsertSourceConnectionForChannelConnector({
+    context: input.context,
+    record,
+    sourceRepository: input.sourceRepository
+  });
+  await input.repository.upsertConnector({
+    id: record.id,
+    tenantId: record.tenantId,
+    channelType: record.channelType,
+    channelClass: record.channelClass,
+    provider: record.provider,
+    displayName: record.displayName,
+    status: record.status,
+    healthStatus: record.healthStatus,
+    capabilities: record.capabilities,
+    onboardingState: record.onboardingState,
+    config: record.config,
+    diagnostics: record.diagnostics,
+    sourceConnectionId: record.sourceConnectionId,
+    createdByEmployeeId: record.createdByEmployeeId,
+    updatedAt: record.updatedAt
   });
 }
 

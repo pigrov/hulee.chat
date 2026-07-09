@@ -3,6 +3,7 @@ import type {
   ChannelType,
   InternalChannelAuthChallengeStatus,
   InternalChannelAuthChallengeType,
+  SourceConnectionId,
   TenantId
 } from "@hulee/contracts";
 import type {
@@ -24,6 +25,7 @@ import type {
   ListChannelSessionEventsInput,
   ListRunnableChannelSessionsInput,
   ListTenantChannelConnectorsInput,
+  SourceConnectionRecord,
   ReleaseChannelSessionLeaseInput,
   UpsertChannelAuthChallengeInput,
   UpsertChannelConnectorInput,
@@ -35,6 +37,10 @@ import {
   runDirectAccountAuthSweep,
   type DirectAccountAuthHandler
 } from "./direct-account-auth-sweeper";
+import {
+  createTestSourceConnection,
+  InMemorySourceIntegrationRepository
+} from "./test-source-integration-repository";
 
 const tenantId = "tenant_direct_auth" as TenantId;
 const now = new Date("2026-07-07T10:00:00.000Z");
@@ -121,7 +127,8 @@ describe("direct account auth sweeper", () => {
   it("completes WhatsApp auth and persists encrypted session state", async () => {
     const connector = createConnector({
       channelType: "whatsapp_qr_bridge",
-      provider: "whatsapp"
+      provider: "whatsapp",
+      sourceConnectionId: "src_conn_whatsapp_1" as SourceConnectionId
     });
     const session = createSession(connector);
     const challenge = createChallenge(connector, {
@@ -136,7 +143,15 @@ describe("direct account auth sweeper", () => {
     const repositories = createRepositories({
       connectors: [connector],
       sessions: [session],
-      challenges: [challenge]
+      challenges: [challenge],
+      sourceConnections: [
+        createTestSourceConnection({
+          id: "src_conn_whatsapp_1",
+          tenantId,
+          displayName: "WhatsApp source",
+          updatedAt: now
+        })
+      ]
     });
     const handler: DirectAccountAuthHandler = {
       name: "whatsapp-test",
@@ -194,10 +209,31 @@ describe("direct account auth sweeper", () => {
       displayName: "WhatsApp (+79990000000)",
       status: "connected",
       healthStatus: "healthy",
+      sourceConnectionId: "src_conn_whatsapp_1",
       config: {
         channelExternalId: "79990000000@s.whatsapp.net"
       }
     });
+    expect(
+      repositories.sourceRepository.connections.get("src_conn_whatsapp_1")
+    ).toMatchObject({
+      displayName: "WhatsApp (+79990000000)",
+      status: "active",
+      sourceType: "messenger",
+      sourceName: "whatsapp_user_session",
+      authType: "custom"
+    });
+    expect([...repositories.sourceRepository.accounts.values()]).toEqual([
+      expect.objectContaining({
+        tenantId,
+        sourceConnectionId: "src_conn_whatsapp_1",
+        externalAccountId: "79990000000@s.whatsapp.net",
+        externalAccountName: "+79990000000",
+        accountType: "user_session",
+        displayName: "+79990000000",
+        status: "active"
+      })
+    ]);
   });
 
   it("records MAX auth failures on challenge, session and connector", async () => {
@@ -462,10 +498,12 @@ function createRepositories(input: {
   connectors: readonly ChannelConnectorRecord[];
   sessions: readonly ChannelSessionRecord[];
   challenges: readonly ChannelAuthChallengeRecord[];
+  sourceConnections?: readonly SourceConnectionRecord[];
 }): {
   connectorRepository: InMemoryChannelConnectorRepository;
   sessionRepository: InMemoryChannelSessionRepository;
   authChallengeRepository: InMemoryChannelAuthChallengeRepository;
+  sourceRepository: InMemorySourceIntegrationRepository;
 } {
   return {
     connectorRepository: new InMemoryChannelConnectorRepository(
@@ -474,7 +512,10 @@ function createRepositories(input: {
     sessionRepository: new InMemoryChannelSessionRepository(input.sessions),
     authChallengeRepository: new InMemoryChannelAuthChallengeRepository(
       input.challenges
-    )
+    ),
+    sourceRepository: new InMemorySourceIntegrationRepository({
+      connections: input.sourceConnections
+    })
   };
 }
 
@@ -625,6 +666,10 @@ class InMemoryChannelConnectorRepository implements ChannelConnectorRepository {
       onboardingState: input.onboardingState ?? {},
       config: input.config ?? {},
       diagnostics: input.diagnostics ?? {},
+      sourceConnectionId:
+        input.sourceConnectionId !== undefined
+          ? (String(input.sourceConnectionId) as SourceConnectionId)
+          : (existing?.sourceConnectionId ?? null),
       createdByEmployeeId: input.createdByEmployeeId ?? null,
       createdAt: existing?.createdAt ?? input.updatedAt,
       updatedAt: input.updatedAt
@@ -781,6 +826,7 @@ class InMemoryChannelSessionRepository implements ChannelSessionRepository {
 function createConnector(input: {
   channelType: "telegram_qr_bridge" | "whatsapp_qr_bridge" | "max_qr_bridge";
   provider: "telegram" | "whatsapp" | "max";
+  sourceConnectionId?: SourceConnectionId | null;
 }): ChannelConnectorRecord {
   const id = `${input.channelType}:connector-1` as ChannelConnectorId;
 
@@ -797,6 +843,7 @@ function createConnector(input: {
     onboardingState: {},
     config: {},
     diagnostics: {},
+    sourceConnectionId: input.sourceConnectionId ?? null,
     createdByEmployeeId: null,
     createdAt: now,
     updatedAt: now

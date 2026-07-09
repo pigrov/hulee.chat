@@ -5,6 +5,7 @@ import type {
   ChannelConnectorRepository,
   ChannelSessionRecord,
   ChannelSessionRepository,
+  SourceIntegrationRepository,
   TenantSecretCipher
 } from "@hulee/db";
 import type {
@@ -15,6 +16,8 @@ import type {
   PlatformErrorCode
 } from "@hulee/contracts";
 import { randomUUID } from "node:crypto";
+
+import { syncDirectAccountSource } from "./direct-account-source-sync";
 
 const primarySessionKey = "primary";
 const defaultLeaseMs = 5 * 60_000;
@@ -108,6 +111,7 @@ export type DirectAccountAuthSweepOptions = {
   authChallengeRepository: ChannelAuthChallengeRepository;
   sessionRepository: ChannelSessionRepository;
   connectorRepository: ChannelConnectorRepository;
+  sourceRepository?: SourceIntegrationRepository;
   handlers: readonly DirectAccountAuthHandler[];
   authChallengeCipher?: Pick<TenantSecretCipher, "encrypt" | "decrypt">;
   workerId?: string;
@@ -524,6 +528,36 @@ async function markChallengeCompleted(input: {
   >;
   now: Date;
 }): Promise<void> {
+  const externalAccountId =
+    input.handlerResult.externalAccountId ?? input.session.externalAccountId;
+  const displayAddress =
+    input.handlerResult.displayAddress ?? input.session.displayAddress;
+  const connectorDisplayName =
+    input.handlerResult.connectorDisplayName ?? input.connector.displayName;
+  const connectorConfig = mergeRecord(input.connector.config, {
+    ...(input.handlerResult.connectorConfig ?? {}),
+    ...(externalAccountId ? { channelExternalId: externalAccountId } : {})
+  });
+  const connectorDiagnostics = mergeRecord(input.connector.diagnostics, {
+    ...(input.handlerResult.diagnostics ?? {}),
+    status: "connected",
+    checkedAt: input.now.toISOString(),
+    session: {
+      sessionKey: primarySessionKey,
+      status: "connected",
+      displayAddress
+    }
+  });
+  const sessionPublicState =
+    input.handlerResult.publicState ??
+    mergeRecord(input.session.publicState, {
+      stage: "connected"
+    });
+  const sessionMetadata = mergeRecord(
+    input.session.metadata,
+    input.handlerResult.metadata
+  );
+
   await persistChallengePatch({
     repository: input.options.authChallengeRepository,
     challenge: input.challenge,
@@ -543,16 +577,10 @@ async function markChallengeCompleted(input: {
     sessionFingerprint:
       input.handlerResult.sessionFingerprint ??
       input.session.sessionFingerprint,
-    externalAccountId:
-      input.handlerResult.externalAccountId ?? input.session.externalAccountId,
-    displayAddress:
-      input.handlerResult.displayAddress ?? input.session.displayAddress,
-    publicState:
-      input.handlerResult.publicState ??
-      mergeRecord(input.session.publicState, {
-        stage: "connected"
-      }),
-    metadata: mergeRecord(input.session.metadata, input.handlerResult.metadata),
+    externalAccountId,
+    displayAddress,
+    publicState: sessionPublicState,
+    metadata: sessionMetadata,
     challengeType: null,
     challengeExpiresAt: null,
     lastConnectedAt: input.now,
@@ -563,28 +591,52 @@ async function markChallengeCompleted(input: {
   });
   await input.options.connectorRepository.upsertConnector({
     ...connectorPersistenceInput(input.connector),
-    displayName:
-      input.handlerResult.connectorDisplayName ?? input.connector.displayName,
+    displayName: connectorDisplayName,
     status: "connected",
     healthStatus: "healthy",
-    config: mergeRecord(input.connector.config, {
-      ...(input.handlerResult.connectorConfig ?? {}),
-      ...(input.handlerResult.externalAccountId
-        ? { channelExternalId: input.handlerResult.externalAccountId }
-        : {})
-    }),
-    diagnostics: mergeRecord(input.connector.diagnostics, {
-      ...(input.handlerResult.diagnostics ?? {}),
-      status: "connected",
-      checkedAt: input.now.toISOString(),
-      session: {
-        sessionKey: primarySessionKey,
-        status: "connected",
-        displayAddress:
-          input.handlerResult.displayAddress ?? input.session.displayAddress
-      }
-    }),
+    config: connectorConfig,
+    diagnostics: connectorDiagnostics,
     updatedAt: input.now
+  });
+  await syncDirectAccountSource({
+    sourceRepository: input.options.sourceRepository,
+    connector: {
+      ...input.connector,
+      displayName: connectorDisplayName,
+      status: "connected",
+      healthStatus: "healthy",
+      config: connectorConfig,
+      diagnostics: connectorDiagnostics,
+      updatedAt: input.now
+    },
+    session: {
+      ...input.session,
+      status: "connected",
+      sessionEncrypted: input.handlerResult.sessionEncrypted,
+      sessionFingerprint:
+        input.handlerResult.sessionFingerprint ??
+        input.session.sessionFingerprint,
+      externalAccountId,
+      displayAddress,
+      publicState: sessionPublicState,
+      metadata: sessionMetadata,
+      challengeType: null,
+      challengeExpiresAt: null,
+      lastConnectedAt: input.now,
+      lastErrorAt: null,
+      lastErrorCode: null,
+      lastErrorMessage: null,
+      updatedAt: input.now
+    },
+    status: "active",
+    checkedAt: input.now,
+    externalAccountId,
+    displayAddress,
+    diagnostics: {
+      authChallengeId: input.challenge.id,
+      authChallengeType: input.challenge.challengeType,
+      authStatus: "succeeded"
+    }
   });
   await appendAuthSessionEvent({
     options: input.options,
@@ -596,7 +648,7 @@ async function markChallengeCompleted(input: {
     metadata: {
       challengeId: input.challenge.id,
       challengeType: input.challenge.challengeType,
-      externalAccountId: input.handlerResult.externalAccountId ?? null
+      externalAccountId: externalAccountId ?? null
     }
   });
   input.result.completed += 1;
@@ -943,6 +995,7 @@ function connectorPersistenceInput(connector: ChannelConnectorRecord) {
     onboardingState: connector.onboardingState,
     config: connector.config,
     diagnostics: connector.diagnostics,
+    sourceConnectionId: connector.sourceConnectionId ?? null,
     createdByEmployeeId: connector.createdByEmployeeId,
     updatedAt: connector.updatedAt
   };

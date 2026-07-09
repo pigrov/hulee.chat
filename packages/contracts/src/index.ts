@@ -9,6 +9,13 @@ export type ConversationId = Brand<string, "ConversationId">;
 export type MessageId = Brand<string, "MessageId">;
 export type EventId = Brand<string, "EventId">;
 export type ChannelConnectorId = Brand<string, "ChannelConnectorId">;
+export type SourceConnectionId = Brand<string, "SourceConnectionId">;
+export type SourceAccountId = Brand<string, "SourceAccountId">;
+export type RawInboundEventId = Brand<string, "RawInboundEventId">;
+export type NormalizedInboundEventId = Brand<
+  string,
+  "NormalizedInboundEventId"
+>;
 
 export type DeploymentType = "saas_shared" | "saas_isolated" | "on_prem";
 
@@ -43,6 +50,178 @@ export type ChannelProviderOperation =
   | "telegram.diagnostics.refresh"
   | "telegram.webhook.set"
   | "telegram.webhook.delete";
+
+export type SourceType =
+  | "messenger"
+  | "social"
+  | "marketplace"
+  | "classified"
+  | "review"
+  | "email"
+  | "phone"
+  | "form"
+  | "internal"
+  | "crm"
+  | "api";
+
+export type SourceConnectionStatus =
+  | "draft"
+  | "onboarding"
+  | "active"
+  | "disabled"
+  | "degraded"
+  | "error"
+  | "deleted";
+
+export type SourceAuthType =
+  | "oauth2"
+  | "api_key"
+  | "token"
+  | "basic"
+  | "imap"
+  | "webhook_secret"
+  | "custom";
+
+export type SourceAccountType =
+  | "bot"
+  | "user_session"
+  | "group"
+  | "shop"
+  | "branch"
+  | "mailbox"
+  | "phone_number"
+  | "ad_account"
+  | "site"
+  | "custom";
+
+export type SourceEventType =
+  | "message"
+  | "comment"
+  | "review"
+  | "lead"
+  | "call"
+  | "order_question"
+  | "system"
+  | "status_update";
+
+export type SourceEventDirection = "inbound" | "outbound" | "system";
+
+export type SourceVisibility = "private" | "public" | "internal";
+
+export type SourceEventProcessingStatus =
+  | "new"
+  | "processed"
+  | "failed"
+  | "ignored"
+  | "duplicate";
+
+export type ReplyCapabilityMode =
+  | "native_reply"
+  | "external_link"
+  | "readonly"
+  | "expired"
+  | "unsupported";
+
+export type SourceCapabilities = {
+  canReceive: boolean;
+  canReply: boolean;
+  canFetchHistory: boolean;
+  canSendFiles: boolean;
+  canReceiveFiles: boolean;
+  supportsThreads: boolean;
+  supportsReactions: boolean;
+  supportsReadStatus: boolean;
+  supportsDeliveryStatus: boolean;
+  webhookSupported: boolean;
+  pollingRequired: boolean;
+  customerProfile: boolean;
+  rateLimitsKnown: boolean;
+  oauthSupported: boolean;
+  sandboxAvailable: boolean;
+  legalRisk?: "low" | "medium" | "high";
+  replyWindowSeconds?: number;
+};
+
+export type ReplyCapability = {
+  mode: ReplyCapabilityMode;
+  reason?: string;
+  externalReplyUrl?: string;
+  expiresAt?: string;
+};
+
+export type SourceConnection = {
+  id: SourceConnectionId;
+  tenantId: TenantId;
+  sourceType: SourceType;
+  sourceName: string;
+  displayName: string;
+  status: SourceConnectionStatus;
+  authType: SourceAuthType;
+  capabilities: SourceCapabilities;
+  config?: Record<string, unknown>;
+  diagnostics?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SourceAccount = {
+  id: SourceAccountId;
+  tenantId: TenantId;
+  sourceConnectionId: SourceConnectionId;
+  externalAccountId?: string;
+  externalAccountName?: string;
+  accountType: SourceAccountType;
+  displayName: string;
+  status: SourceConnectionStatus;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type RawInboundEvent = {
+  id: RawInboundEventId;
+  tenantId: TenantId;
+  sourceConnectionId: SourceConnectionId;
+  sourceAccountId?: SourceAccountId;
+  externalEventId?: string;
+  eventSignature?: string;
+  idempotencyKey: string;
+  receivedAt: string;
+  providerTimestamp?: string;
+  payload: unknown;
+  headers?: Record<string, unknown>;
+  processingStatus: SourceEventProcessingStatus;
+  errorCode?: PlatformErrorCode;
+  errorMessage?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type NormalizedInboundEvent = {
+  id: NormalizedInboundEventId;
+  rawEventId: RawInboundEventId;
+  tenantId: TenantId;
+  sourceConnectionId: SourceConnectionId;
+  sourceAccountId?: SourceAccountId;
+  sourceType: SourceType;
+  sourceName: string;
+  eventType: SourceEventType;
+  direction: SourceEventDirection;
+  visibility: SourceVisibility;
+  externalThreadId?: string;
+  externalMessageId?: string;
+  externalUserId?: string;
+  payloadVersion: EventSchemaVersion;
+  normalizedPayload: Record<string, unknown>;
+  replyCapability?: ReplyCapability;
+  conversationId?: ConversationId;
+  messageId?: MessageId;
+  idempotencyKey: string;
+  processingStatus: SourceEventProcessingStatus;
+  createdAt: string;
+  updatedAt: string;
+};
 
 export type EventSchemaVersion = "v1";
 
@@ -129,6 +308,25 @@ export type PlatformEvent =
         provider: string;
         validationKind: "telegram_bot_token";
         actorEmployeeId: EmployeeId;
+      }
+    >
+  | EventEnvelope<
+      "source.raw_event_received",
+      {
+        rawEventId: RawInboundEventId;
+        sourceConnectionId: SourceConnectionId;
+        sourceAccountId?: SourceAccountId;
+        sourceType: SourceType;
+        sourceName: string;
+      }
+    >
+  | EventEnvelope<
+      "source.normalized_event_created",
+      {
+        normalizedEventId: NormalizedInboundEventId;
+        rawEventId: RawInboundEventId;
+        sourceConnectionId: SourceConnectionId;
+        eventType: SourceEventType;
       }
     >
   | EventEnvelope<
@@ -245,6 +443,7 @@ export type PlatformEvent =
 export type ModuleType =
   | "auth"
   | "channel"
+  | "source"
   | "telephony"
   | "crm"
   | "ai"
@@ -467,6 +666,30 @@ export type AdapterHealth = {
   lastFailureAt?: string;
   lastErrorCode?: PlatformErrorCode;
   operatorHint?: string;
+};
+
+export type SourceAdapterNormalizeInput = {
+  connection: SourceConnection;
+  account?: SourceAccount;
+  rawEvent: RawInboundEvent;
+};
+
+export type SourceAdapterNormalizeResult = {
+  events: NormalizedInboundEvent[];
+};
+
+export type SourceAdapter = {
+  manifest: ModuleManifest;
+  sourceType: SourceType;
+  sourceName: string;
+  capabilities: SourceCapabilities;
+  normalize(
+    input: SourceAdapterNormalizeInput
+  ): Promise<SourceAdapterNormalizeResult>;
+  health(input?: {
+    connection?: SourceConnection;
+    account?: SourceAccount;
+  }): Promise<AdapterHealth>;
 };
 
 export type NormalizedAttachment = {

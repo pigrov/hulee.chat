@@ -305,6 +305,9 @@ export const channelConnectors = pgTable(
     onboardingState: jsonb("onboarding_state").notNull().default({}),
     config: jsonb("config").notNull().default({}),
     diagnostics: jsonb("diagnostics").notNull().default({}),
+    sourceConnectionId: text("source_connection_id").references(
+      () => sourceConnections.id
+    ),
     createdByEmployeeId: text("created_by_employee_id"),
     ...timestamps
   },
@@ -317,6 +320,10 @@ export const channelConnectors = pgTable(
     index("channel_connectors_tenant_status_idx").on(
       table.tenantId,
       table.status
+    ),
+    index("channel_connectors_tenant_source_connection_idx").on(
+      table.tenantId,
+      table.sourceConnectionId
     )
   ]
 );
@@ -479,6 +486,179 @@ export const channelProviderValidationJobs = pgTable(
     index("channel_provider_validation_jobs_tenant_created_idx").on(
       table.tenantId,
       table.createdAt
+    )
+  ]
+);
+
+export const sourceConnections = pgTable(
+  "source_connections",
+  {
+    id: text("id").primaryKey(),
+    tenantId: tenantIdColumn().references(() => tenants.id),
+    sourceType: text("source_type").notNull(),
+    sourceName: text("source_name").notNull(),
+    displayName: text("display_name").notNull(),
+    status: text("status").notNull().default("draft"),
+    authType: text("auth_type").notNull().default("custom"),
+    capabilities: jsonb("capabilities").notNull().default({}),
+    config: jsonb("config").notNull().default({}),
+    diagnostics: jsonb("diagnostics").notNull().default({}),
+    metadata: jsonb("metadata").notNull().default({}),
+    createdByEmployeeId: text("created_by_employee_id"),
+    ...timestamps
+  },
+  (table) => [
+    index("source_connections_tenant_idx").on(table.tenantId),
+    index("source_connections_tenant_type_idx").on(
+      table.tenantId,
+      table.sourceType
+    ),
+    index("source_connections_tenant_source_idx").on(
+      table.tenantId,
+      table.sourceName
+    ),
+    index("source_connections_tenant_status_idx").on(
+      table.tenantId,
+      table.status
+    )
+  ]
+);
+
+export const sourceAccounts = pgTable(
+  "source_accounts",
+  {
+    id: text("id").primaryKey(),
+    tenantId: tenantIdColumn().references(() => tenants.id),
+    sourceConnectionId: text("source_connection_id")
+      .notNull()
+      .references(() => sourceConnections.id),
+    externalAccountId: text("external_account_id"),
+    externalAccountName: text("external_account_name"),
+    accountType: text("account_type").notNull(),
+    displayName: text("display_name").notNull(),
+    status: text("status").notNull().default("active"),
+    metadata: jsonb("metadata").notNull().default({}),
+    ...timestamps
+  },
+  (table) => [
+    index("source_accounts_tenant_idx").on(table.tenantId),
+    index("source_accounts_tenant_connection_idx").on(
+      table.tenantId,
+      table.sourceConnectionId
+    ),
+    index("source_accounts_tenant_external_idx").on(
+      table.tenantId,
+      table.externalAccountId
+    ),
+    uniqueIndex("source_accounts_tenant_connection_external_unique").on(
+      table.tenantId,
+      table.sourceConnectionId,
+      table.externalAccountId
+    )
+  ]
+);
+
+export const rawInboundEvents = pgTable(
+  "raw_inbound_events",
+  {
+    id: text("id").primaryKey(),
+    tenantId: tenantIdColumn().references(() => tenants.id),
+    sourceConnectionId: text("source_connection_id")
+      .notNull()
+      .references(() => sourceConnections.id),
+    sourceAccountId: text("source_account_id").references(
+      () => sourceAccounts.id
+    ),
+    externalEventId: text("external_event_id"),
+    eventSignature: text("event_signature"),
+    idempotencyKey: text("idempotency_key").notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    providerTimestamp: timestamp("provider_timestamp", { withTimezone: true }),
+    payload: jsonb("payload").notNull(),
+    headers: jsonb("headers").notNull().default({}),
+    processingStatus: text("processing_status").notNull().default("new"),
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    ...timestamps
+  },
+  (table) => [
+    uniqueIndex("raw_inbound_events_tenant_idempotency_unique").on(
+      table.tenantId,
+      table.idempotencyKey
+    ),
+    index("raw_inbound_events_tenant_idx").on(table.tenantId),
+    index("raw_inbound_events_tenant_connection_idx").on(
+      table.tenantId,
+      table.sourceConnectionId,
+      table.receivedAt
+    ),
+    index("raw_inbound_events_tenant_account_idx").on(
+      table.tenantId,
+      table.sourceAccountId,
+      table.receivedAt
+    ),
+    index("raw_inbound_events_tenant_status_idx").on(
+      table.tenantId,
+      table.processingStatus
+    )
+  ]
+);
+
+export const normalizedInboundEvents = pgTable(
+  "normalized_inbound_events",
+  {
+    id: text("id").primaryKey(),
+    tenantId: tenantIdColumn().references(() => tenants.id),
+    rawEventId: text("raw_event_id")
+      .notNull()
+      .references(() => rawInboundEvents.id),
+    sourceConnectionId: text("source_connection_id")
+      .notNull()
+      .references(() => sourceConnections.id),
+    sourceAccountId: text("source_account_id").references(
+      () => sourceAccounts.id
+    ),
+    sourceType: text("source_type").notNull(),
+    sourceName: text("source_name").notNull(),
+    eventType: text("event_type").notNull(),
+    direction: text("direction").notNull(),
+    visibility: text("visibility").notNull().default("private"),
+    externalThreadId: text("external_thread_id"),
+    externalMessageId: text("external_message_id"),
+    externalUserId: text("external_user_id"),
+    payloadVersion: text("payload_version").notNull().default("v1"),
+    normalizedPayload: jsonb("normalized_payload").notNull().default({}),
+    replyCapability: jsonb("reply_capability").notNull().default({}),
+    conversationId: text("conversation_id"),
+    messageId: text("message_id"),
+    idempotencyKey: text("idempotency_key").notNull(),
+    processingStatus: text("processing_status").notNull().default("new"),
+    ...timestamps
+  },
+  (table) => [
+    uniqueIndex("normalized_inbound_events_tenant_idempotency_unique").on(
+      table.tenantId,
+      table.idempotencyKey
+    ),
+    index("normalized_inbound_events_tenant_idx").on(table.tenantId),
+    index("normalized_inbound_events_tenant_raw_idx").on(
+      table.tenantId,
+      table.rawEventId
+    ),
+    index("normalized_inbound_events_tenant_connection_idx").on(
+      table.tenantId,
+      table.sourceConnectionId,
+      table.createdAt
+    ),
+    index("normalized_inbound_events_tenant_thread_idx").on(
+      table.tenantId,
+      table.externalThreadId
+    ),
+    index("normalized_inbound_events_tenant_status_idx").on(
+      table.tenantId,
+      table.processingStatus
     )
   ]
 );

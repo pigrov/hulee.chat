@@ -1,0 +1,120 @@
+# Source Integrations
+
+## Product Frame
+
+Hulee treats every external entry point as a source of work for the inbox. A
+source can be a messenger, marketplace, classified, review platform, map listing,
+website widget, form, email mailbox, phone provider, CRM, helpdesk or public API
+client.
+
+Channels are a tenant-facing subset of sources for communication surfaces such
+as Telegram, WhatsApp, MAX, VK and email. The platform architecture should not
+assume that every integration is a chat channel.
+
+## Core Terms
+
+`SourceConnection` is the tenant-level connection to an external source. It owns
+source type, source name, display name, status, auth type, capabilities,
+diagnostics and source-level configuration.
+
+`SourceAccount` is a concrete external account or resource inside a source:
+bot, user session, VK group, marketplace shop, Avito account, 2GIS branch,
+mailbox, phone number, webchat site or custom resource.
+
+`RawInboundEvent` is the immutable provider payload before normalization. It is
+used for audit, diagnostics, replay and adapter fixes.
+
+`NormalizedInboundEvent` is the versioned Hulee event derived from raw payload.
+It is the input for identity resolution, conversation resolution, routing and
+message/call/lead/review materialization.
+
+`ReplyCapability` describes how Hulee can answer: natively, through an external
+link, read-only, unsupported or expired.
+
+## Source Types
+
+- `messenger`: Telegram, WhatsApp, MAX, VK messages, Viber, social direct
+  messages.
+- `social`: comments, mentions, community messages and page events.
+- `marketplace`: Ozon, Wildberries, Yandex Market, Kaspi and seller cabinets.
+- `classified`: Avito, OLX, Kolesa, Krisha and vertical listing platforms.
+- `review`: maps, review platforms and reputation sources.
+- `email`: mailboxes, aliases and email fallback integrations.
+- `phone`: calls, missed calls, recordings, calltracking and SIP providers.
+- `form`: website forms, lead forms and callback requests.
+- `internal`: employee support cases and internal service requests.
+- `crm`: Bitrix24, amoCRM, RetailCRM and customer systems of record.
+- `api`: Public API, webhooks and custom enterprise integrations.
+
+## Inbound Pipeline
+
+```text
+External Source
+  -> SourceConnection / SourceAccount
+  -> RawInboundEvent
+  -> Normalizer
+  -> NormalizedInboundEvent
+  -> Identity Resolver
+  -> Conversation Resolver
+  -> Routing Engine
+  -> Message / Call / Lead / Review / System Event
+  -> Inbox / Storage / Search / Analytics
+  -> Reply Adapter / CRM Sync / Outgoing Webhooks
+```
+
+Every step must be tenant-scoped, idempotent and diagnosable.
+
+## Capabilities
+
+Each source should declare capabilities explicitly:
+
+- receive messages or events;
+- send native replies;
+- fetch history;
+- receive and send files;
+- support threads;
+- support reactions;
+- support read or delivery status;
+- support webhook delivery;
+- require polling;
+- expose customer profile;
+- have documented rate limits;
+- support OAuth or safer auth;
+- have sandbox support;
+- carry legal/support risk;
+- limit reply windows.
+
+Capabilities are product behavior, not UI hints only. They drive onboarding,
+admin diagnostics, reply controls, entitlements and support policy.
+
+## Data Rules
+
+- Store raw payload before normalization.
+- Store provider timestamps separately from received timestamps.
+- Deduplicate by `tenantId + sourceConnectionId + sourceAccountId +
+externalEventId` when possible.
+- When external ids are missing, use a stable hash of source, thread, user,
+  timestamp, body and attachment hashes.
+- Keep source context separate from core message text so marketplaces, calls,
+  reviews and lead forms do not become messenger-specific JSON fragments.
+- Retention policy must cover messages, attachments, raw payloads, transcripts,
+  embeddings and audit records separately.
+
+## Relationship To Channel Connectors
+
+Existing `channel_connectors`, `channel_sessions` and
+`channel_auth_challenges` remain the runtime model for communication channels
+that need bot tokens, user sessions, QR/code login or provider-specific
+connectivity.
+
+Future work should link a channel connector to a source connection instead of
+making every source a channel connector. Non-chat sources should use source
+connections directly.
+
+## MVP Scope
+
+The first source foundation slice should add contracts and persistence skeleton
+for source connections, source accounts, raw inbound events and normalized
+inbound events. It should not migrate existing messenger connectors until the
+new pipeline is exercised by a simple source such as Public API, web forms or
+email.

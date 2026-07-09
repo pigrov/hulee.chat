@@ -89,6 +89,22 @@
 - [ ] MAX adapter.
 - [ ] WhatsApp/Wazzup adapter.
 
+## Epic 7A. Source Integrations
+
+- [ ] SOURCE-100 Source integration foundation.
+- [ ] SOURCE-101 SourceConnection contract and persistence.
+- [ ] SOURCE-102 SourceAccount contract and persistence.
+- [ ] SOURCE-103 Raw inbound event store.
+- [ ] SOURCE-104 Normalized inbound event model.
+- [ ] SOURCE-105 Source capabilities and reply capability model.
+- [ ] SOURCE-106 Idempotency keys for webhook, polling, email and API sources.
+- [ ] SOURCE-107 Identity resolver input contract for source identities.
+- [ ] SOURCE-108 Conversation resolver input contract for non-messenger events.
+- [ ] SOURCE-109 Link channel connectors to source connections without destructive rename.
+- [ ] SOURCE-110 Source diagnostics, replay and DLQ policy.
+- [ ] SOURCE-111 Source catalog categories for messengers, marketplaces, reviews, forms, email, telephony, CRM and API.
+- [ ] SOURCE-112 Contract tests for source adapters and normalizers.
+
 ## Epic 8. Telephony
 
 - [ ] TelephonyProvider contract.
