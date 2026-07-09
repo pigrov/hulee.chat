@@ -303,6 +303,54 @@ function PhoneChallengeStep({
   connectorId: string;
   t: Translator;
 }): ReactNode {
+  const config = primaryPhoneAuthConfig(channelType);
+
+  if (config) {
+    return (
+      <div className="authChallengeAlternative authChallengePhoneBox">
+        <div className="authChallengeAlternativeText">
+          <p className="sectionTitle">{t(config.titleKey)}</p>
+          <p className="metaText">{t(config.hintKey)}</p>
+        </div>
+        <ChannelAuthChallengeActionForm
+          actionKind="start"
+          className="authChallengeAlternativeForm"
+          messages={channelAuthChallengeActionMessages(t)}
+        >
+          <input type="hidden" name="connectorId" value={connectorId} />
+          <input type="hidden" name="challengeType" value={challengeType} />
+          <label className="fieldStack">
+            <span className="detailLabel">
+              {t("integrations.channel.auth.phoneNumber")}
+            </span>
+            <PhoneNumberInput
+              className="textInput"
+              name="phoneNumber"
+              required
+            />
+          </label>
+          <div className="buttonRow">
+            <ChannelAuthChallengeSubmitButton
+              className="primaryButton"
+              label={t(config.buttonKey)}
+            >
+              <Phone size={16} aria-hidden="true" />
+            </ChannelAuthChallengeSubmitButton>
+          </div>
+        </ChannelAuthChallengeActionForm>
+        {cancelDeletesConnector && channelType ? (
+          <WaitingChallengeActions
+            cancelDeletesConnector={cancelDeletesConnector}
+            channelType={channelType}
+            challenge={challenge}
+            connectorId={connectorId}
+            t={t}
+          />
+        ) : null}
+      </div>
+    );
+  }
+
   return (
     <>
       <ChannelAuthChallengeActionForm
@@ -697,6 +745,24 @@ function alternatePhoneAuthConfig(channelType: string | undefined):
       titleKey: "integrations.channel.auth.whatsappPairingTitle",
       hintKey: "integrations.channel.auth.whatsappPairingHint",
       buttonKey: "integrations.channel.auth.startWhatsAppPairing"
+    };
+  }
+
+  return undefined;
+}
+
+function primaryPhoneAuthConfig(channelType: string | undefined):
+  | {
+      titleKey: I18nMessageKey;
+      hintKey: I18nMessageKey;
+      buttonKey: I18nMessageKey;
+    }
+  | undefined {
+  if (channelType === "max_qr_bridge") {
+    return {
+      titleKey: "integrations.channel.auth.maxPhoneTitle",
+      hintKey: "integrations.channel.auth.maxPhoneHint",
+      buttonKey: "integrations.channel.auth.startMaxPhone"
     };
   }
 

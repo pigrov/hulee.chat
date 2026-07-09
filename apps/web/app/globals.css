@@ -1174,6 +1174,14 @@ button.iconButton:disabled {
   gap: 10px;
 }
 
+.authChallengePhoneBox {
+  align-content: start;
+}
+
+.authChallengePhoneBox > .buttonRow {
+  margin-top: -2px;
+}
+
 .authChallengePairingBox {
   display: grid;
   justify-items: center;
