@@ -914,6 +914,16 @@ export type {
   SourceCatalogSetupMode,
   SourceCatalogVisibility
 } from "./source-catalog";
+export {
+  assertSourceNormalizerContract,
+  SourceNormalizerContractError
+} from "./source-normalizer-contract";
+export type {
+  SourceNormalizerContractAdapter,
+  SourceNormalizerContractCase,
+  SourceNormalizerContractEvent,
+  SourceNormalizerContractReport
+} from "./source-normalizer-contract";
 
 export * from "./public-api-v1";
 export * from "./internal-api-v1";

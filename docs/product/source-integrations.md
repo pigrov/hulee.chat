@@ -160,6 +160,24 @@ Replay requests must be tenant-scoped, idempotent and identify either a raw
 event or normalized event. Replay can target a raw event, a normalized event or
 a DLQ record, and must record the operator/system reason.
 
+## Adapter Contract Tests
+
+Every source adapter and normalizer must have contract tests against the shared
+source normalizer contract. These tests must validate:
+
+- raw events use source-scoped raw idempotency keys;
+- normalized events use normalized idempotency keys and keep tenant,
+  source connection and source account scope from the raw event;
+- normalized event source type and source name match the adapter manifest;
+- inbound materialized events provide identity resolver and conversation
+  resolver inputs;
+- reply capability and processing diagnostics are parseable shared contracts;
+- ignored and duplicate raw events are explicit and do not silently drop work.
+
+Adapter-specific tests can add provider payload fixtures, but they must not
+replace the shared contract harness. This keeps marketplaces, forms, email,
+telephony, CRM, public API and messengers on the same processing boundary.
+
 ## Capabilities
 
 Each source should declare capabilities explicitly:

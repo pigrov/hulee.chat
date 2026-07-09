@@ -103,7 +103,7 @@
 - [x] SOURCE-109 Link channel connectors to source connections without destructive rename.
 - [x] SOURCE-110 Source diagnostics, replay and DLQ policy.
 - [x] SOURCE-111 Source catalog categories for messengers, marketplaces, reviews, forms, email, telephony, CRM and API.
-- [ ] SOURCE-112 Contract tests for source adapters and normalizers.
+- [x] SOURCE-112 Contract tests for source adapters and normalizers.
 
 ## Epic 8. Telephony
 
