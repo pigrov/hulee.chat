@@ -834,6 +834,21 @@ export type {
   SourceIdempotencyPhase,
   SourceInboundTransport
 } from "./source-idempotency";
+export {
+  normalizeSourceIdentityCandidates,
+  normalizeSourceIdentityResolverInput,
+  sourceIdentityCandidateKindSchema,
+  sourceIdentityCandidateSchema,
+  sourceIdentityConfidenceSchema,
+  sourceIdentityResolverInputSchema
+} from "./source-identity";
+export type {
+  NormalizeSourceIdentityResolverInput,
+  SourceIdentityCandidate,
+  SourceIdentityCandidateKind,
+  SourceIdentityConfidence,
+  SourceIdentityResolverInput
+} from "./source-identity";
 
 export * from "./public-api-v1";
 export * from "./internal-api-v1";

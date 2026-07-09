@@ -64,6 +64,26 @@ External Source
 
 Every step must be tenant-scoped, idempotent and diagnosable.
 
+## Identity Resolver Input
+
+Source normalizers must hand identity resolution a provider-neutral input:
+tenant id, source connection id, optional source account id, source type, source
+name, source event type, visibility, external thread id, external user id,
+event ids, profile snapshot and a list of identity candidates.
+
+Identity candidates are typed and ranked:
+
+- `verified`: provider-verified phone/email or trusted account identity;
+- `strong`: stable provider user id, username, source customer id or profile
+  URL;
+- `weak`: display name or low-confidence extracted value.
+
+Supported candidate kinds are external user id, email, phone, username, profile
+URL, display name, source customer id and custom. Candidates are deduplicated by
+kind and value before resolver handoff, keeping the highest confidence version.
+The resolver owns matching/linking decisions; adapters and normalizers only
+describe evidence.
+
 ## Capabilities
 
 Each source should declare capabilities explicitly:
