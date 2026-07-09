@@ -19,6 +19,8 @@ import type {
   InternalRbacRoleResponse,
   InternalRbacRolesResponse,
   InternalSourceCatalogResponse,
+  InternalSourceConnectionCreateResponse,
+  InternalSourceConnectionsResponse,
   InternalWorkQueue,
   InternalTenantBrandResponse,
   InternalTelegramBotTokenValidateResponse,
@@ -32,6 +34,7 @@ import {
   internalChannelAuthChallengeSubmitRequestSchema,
   internalChannelConnectorCreateRequestSchema,
   internalChannelConnectorUpdateRequestSchema,
+  internalSourceConnectionCreateRequestSchema,
   internalAccessDecisionRequestSchema,
   internalInboxConversationRoutingUpdateRequestSchema,
   internalApiV1Version,
@@ -189,6 +192,12 @@ type RouteMatch =
     }
   | {
       route: "source_catalog_view";
+    }
+  | {
+      route: "source_connections_view";
+    }
+  | {
+      route: "source_connection_create";
     }
   | {
       route: "channel_connectors_view";
@@ -692,6 +701,23 @@ async function handleAuthenticatedRoute(input: {
       return jsonResponse(200, response);
     }
 
+    case "source_connections_view": {
+      const response: InternalSourceConnectionsResponse =
+        await input.integrations.listSourceConnections(input.session);
+
+      return jsonResponse(200, response);
+    }
+
+    case "source_connection_create": {
+      const request = internalSourceConnectionCreateRequestSchema.parse(
+        input.request.body
+      );
+      const response: InternalSourceConnectionCreateResponse =
+        await input.integrations.createSourceConnection(input.session, request);
+
+      return jsonResponse(201, response);
+    }
+
     case "channel_connectors_view": {
       const response: InternalChannelConnectorsResponse =
         await input.integrations.listChannelConnectors(input.session);
@@ -931,6 +957,8 @@ function internalRouteAuthorizationPolicy(
       };
     case "channel_catalog_view":
     case "source_catalog_view":
+    case "source_connections_view":
+    case "source_connection_create":
     case "channel_connectors_view":
     case "channel_connector_create":
     case "channel_connector_update":
@@ -1146,6 +1174,21 @@ function matchRoute(request: ApiHttpRequest): RouteMatch | undefined {
   if (request.method === "GET" && path === "/internal/v1/sources/catalog") {
     return {
       route: "source_catalog_view"
+    };
+  }
+
+  if (request.method === "GET" && path === "/internal/v1/sources/connections") {
+    return {
+      route: "source_connections_view"
+    };
+  }
+
+  if (
+    request.method === "POST" &&
+    path === "/internal/v1/sources/connections"
+  ) {
+    return {
+      route: "source_connection_create"
     };
   }
 

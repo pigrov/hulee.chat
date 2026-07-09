@@ -531,6 +531,75 @@ describe("internal integrations service", () => {
     ]);
   });
 
+  it("creates standalone MegaPBX source connections with webhook secret storage", async () => {
+    const repository = new InMemoryChannelConnectorRepository();
+    const sourceRepository = new InMemorySourceIntegrationRepository();
+    const secretWriter = new InMemorySecretWriter();
+    const service = createInternalIntegrationService({
+      connectorRepository: repository,
+      sourceRepository,
+      secretWriter,
+      publicWebhookBaseUrl: "https://chat.example.test",
+      now: () => now
+    });
+
+    const response = await service.createSourceConnection(context, {
+      sourceName: "megapbx",
+      displayName: "Sales MegaPBX",
+      webhookToken: "megapbx-webhook-token"
+    });
+
+    expect(response).toMatchObject({
+      connection: {
+        sourceConnectionId: expect.stringMatching(
+          /^source_connection:megapbx:/
+        ),
+        sourceName: "megapbx",
+        sourceType: "phone",
+        displayName: "Sales MegaPBX",
+        status: "onboarding",
+        authType: "webhook_secret",
+        webhookPath: expect.stringContaining("/webhooks/sources/megapbx/"),
+        webhookUrl: expect.stringContaining(
+          "https://chat.example.test/webhooks/sources/megapbx/"
+        ),
+        webhookSecretRef: expect.stringContaining(
+          "secret:tenant-integrations/source-megapbx/webhook-"
+        )
+      },
+      webhookToken: "megapbx-webhook-token"
+    });
+    expect(secretWriter.upserts).toEqual([
+      expect.objectContaining({
+        tenantId,
+        secretRef: response.connection.webhookSecretRef,
+        purpose: "source.webhook_secret",
+        plainText: "megapbx-webhook-token"
+      })
+    ]);
+    expect([...sourceRepository.connections.values()]).toEqual([
+      expect.objectContaining({
+        id: response.connection.sourceConnectionId,
+        tenantId,
+        sourceType: "phone",
+        sourceName: "megapbx",
+        displayName: "Sales MegaPBX",
+        status: "onboarding",
+        authType: "webhook_secret",
+        config: expect.objectContaining({
+          webhookPath: response.connection.webhookPath,
+          webhookUrl: response.connection.webhookUrl,
+          webhookSecretRef: response.connection.webhookSecretRef,
+          tokenField: "crm_token"
+        })
+      })
+    ]);
+
+    await expect(service.listSourceConnections(context)).resolves.toEqual({
+      connections: [response.connection]
+    });
+  });
+
   it.each([
     {
       channelType: "telegram_qr_bridge" as const,
@@ -2177,7 +2246,8 @@ class InMemoryDomainEventRepository implements DomainEventRepository {
 type InMemorySecretPurpose =
   | "telegram.bot_token"
   | "telegram.bot_token_validation"
-  | "telegram.webhook_secret_token";
+  | "telegram.webhook_secret_token"
+  | "source.webhook_secret";
 
 class InMemorySecretWriter {
   readonly upserts: {

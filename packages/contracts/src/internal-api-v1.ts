@@ -783,6 +783,75 @@ export const internalSourceCatalogResponseSchema = z
   })
   .strict();
 
+export const internalSourceConnectionStatusSchema = z.enum([
+  "draft",
+  "onboarding",
+  "active",
+  "disabled",
+  "degraded",
+  "error",
+  "deleted"
+]);
+
+export const internalSourceAuthTypeSchema = z.enum([
+  "oauth2",
+  "api_key",
+  "token",
+  "basic",
+  "imap",
+  "webhook_secret",
+  "custom"
+]);
+
+export const internalSourceConnectionSummarySchema = z
+  .object({
+    sourceConnectionId: z.string().trim().min(1).max(240),
+    sourceName: z.string().trim().min(1).max(120),
+    sourceType: z.enum([
+      "messenger",
+      "social",
+      "marketplace",
+      "classified",
+      "review",
+      "email",
+      "phone",
+      "form",
+      "internal",
+      "crm",
+      "api"
+    ]),
+    displayName: z.string().trim().min(1).max(160),
+    status: internalSourceConnectionStatusSchema,
+    authType: internalSourceAuthTypeSchema,
+    webhookPath: z.string().trim().min(1).max(1_000).optional(),
+    webhookUrl: z.string().trim().min(1).max(1_000).optional(),
+    webhookSecretRef: z.string().trim().min(1).max(1_000).optional(),
+    createdAt: z.string().datetime({ offset: true }),
+    updatedAt: z.string().datetime({ offset: true })
+  })
+  .strict();
+
+export const internalSourceConnectionsResponseSchema = z
+  .object({
+    connections: z.array(internalSourceConnectionSummarySchema)
+  })
+  .strict();
+
+export const internalSourceConnectionCreateRequestSchema = z
+  .object({
+    sourceName: z.string().trim().min(1).max(120),
+    displayName: z.string().trim().min(1).max(160).optional(),
+    webhookToken: z.string().trim().min(16).max(200).optional()
+  })
+  .strict();
+
+export const internalSourceConnectionCreateResponseSchema = z
+  .object({
+    connection: internalSourceConnectionSummarySchema,
+    webhookToken: z.string().trim().min(16).max(200).optional()
+  })
+  .strict();
+
 export const internalChannelAuthChallengeTypeSchema = z.enum([
   "qr",
   "phone_code",
@@ -1309,6 +1378,24 @@ export type InternalSourceCatalogItem = z.infer<
 >;
 export type InternalSourceCatalogResponse = z.infer<
   typeof internalSourceCatalogResponseSchema
+>;
+export type InternalSourceConnectionStatus = z.infer<
+  typeof internalSourceConnectionStatusSchema
+>;
+export type InternalSourceAuthType = z.infer<
+  typeof internalSourceAuthTypeSchema
+>;
+export type InternalSourceConnectionSummary = z.infer<
+  typeof internalSourceConnectionSummarySchema
+>;
+export type InternalSourceConnectionsResponse = z.infer<
+  typeof internalSourceConnectionsResponseSchema
+>;
+export type InternalSourceConnectionCreateRequest = z.infer<
+  typeof internalSourceConnectionCreateRequestSchema
+>;
+export type InternalSourceConnectionCreateResponse = z.infer<
+  typeof internalSourceConnectionCreateResponseSchema
 >;
 export type InternalChannelConnectorSummary = z.infer<
   typeof internalChannelConnectorSummarySchema

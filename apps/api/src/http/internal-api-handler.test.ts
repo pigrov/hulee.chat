@@ -293,6 +293,44 @@ function createHandler(input?: {
       }
     ]
   }));
+  const listSourceConnections = vi.fn(async () => ({
+    connections: [
+      {
+        sourceConnectionId: "source_connection:megapbx:1",
+        sourceName: "megapbx",
+        sourceType: "phone" as const,
+        displayName: "MegaPBX",
+        status: "onboarding" as const,
+        authType: "webhook_secret" as const,
+        webhookPath:
+          "/webhooks/sources/megapbx/source_connection%3Amegapbx%3A1",
+        webhookUrl:
+          "https://chat.example.test/webhooks/sources/megapbx/source_connection%3Amegapbx%3A1",
+        webhookSecretRef: "secret:tenant_1/source-megapbx/webhook-source-1",
+        createdAt: "2026-07-09T10:00:00.000Z",
+        updatedAt: "2026-07-09T10:00:00.000Z"
+      }
+    ]
+  }));
+  const createSourceConnection = vi.fn(async () => ({
+    connection: {
+      sourceConnectionId: "source_connection:megapbx:generated",
+      sourceName: "megapbx",
+      sourceType: "phone" as const,
+      displayName: "MegaPBX",
+      status: "onboarding" as const,
+      authType: "webhook_secret" as const,
+      webhookPath:
+        "/webhooks/sources/megapbx/source_connection%3Amegapbx%3Agenerated",
+      webhookUrl:
+        "https://chat.example.test/webhooks/sources/megapbx/source_connection%3Amegapbx%3Agenerated",
+      webhookSecretRef:
+        "secret:tenant_1/source-megapbx/webhook-source-generated",
+      createdAt: "2026-07-09T10:00:00.000Z",
+      updatedAt: "2026-07-09T10:00:00.000Z"
+    },
+    webhookToken: "source-webhook-token-generated"
+  }));
   const createChannelConnector = vi.fn(async () => ({
     connectorId: "telegram_bot:generated",
     channelType: "telegram_bot" as const,
@@ -558,6 +596,8 @@ function createHandler(input?: {
     integrations: {
       listChannelCatalog,
       listChannelConnectors,
+      listSourceConnections,
+      createSourceConnection,
       createChannelConnector,
       updateChannelConnector,
       enableChannelConnector,
@@ -612,6 +652,8 @@ function createHandler(input?: {
     loadFileContent,
     listChannelCatalog,
     listChannelConnectors,
+    listSourceConnections,
+    createSourceConnection,
     createChannelConnector,
     updateChannelConnector,
     enableChannelConnector,
@@ -1635,10 +1677,15 @@ describe("internal API handler", () => {
 
   it("loads channel catalog and connector summaries through modules.manage permission", async () => {
     const modulesManageSession = sessionWithPermissions(["modules.manage"]);
-    const { handler, listChannelCatalog, listChannelConnectors } =
-      createHandler({
-        session: modulesManageSession
-      });
+    const {
+      handler,
+      listChannelCatalog,
+      listChannelConnectors,
+      listSourceConnections,
+      createSourceConnection
+    } = createHandler({
+      session: modulesManageSession
+    });
 
     const catalogResponse = await handler.handle({
       method: "GET",
@@ -1647,6 +1694,18 @@ describe("internal API handler", () => {
     const sourceCatalogResponse = await handler.handle({
       method: "GET",
       path: "/internal/v1/sources/catalog"
+    });
+    const sourceConnectionsResponse = await handler.handle({
+      method: "GET",
+      path: "/internal/v1/sources/connections"
+    });
+    const sourceConnectionCreateResponse = await handler.handle({
+      method: "POST",
+      path: "/internal/v1/sources/connections",
+      body: {
+        sourceName: "megapbx",
+        displayName: "MegaPBX"
+      }
     });
     const connectorsResponse = await handler.handle({
       method: "GET",
@@ -1682,6 +1741,25 @@ describe("internal API handler", () => {
         })
       ])
     });
+    expect(sourceConnectionsResponse.status).toBe(200);
+    expect(sourceConnectionsResponse.body).toMatchObject({
+      connections: [
+        {
+          sourceConnectionId: "source_connection:megapbx:1",
+          sourceName: "megapbx",
+          sourceType: "phone",
+          status: "onboarding"
+        }
+      ]
+    });
+    expect(sourceConnectionCreateResponse.status).toBe(201);
+    expect(sourceConnectionCreateResponse.body).toMatchObject({
+      connection: {
+        sourceConnectionId: "source_connection:megapbx:generated",
+        sourceName: "megapbx"
+      },
+      webhookToken: "source-webhook-token-generated"
+    });
     expect(connectorsResponse.status).toBe(200);
     expect(connectorsResponse.body).toMatchObject({
       connectors: [
@@ -1694,6 +1772,11 @@ describe("internal API handler", () => {
     });
     expect(listChannelCatalog).toHaveBeenCalledWith(modulesManageSession);
     expect(listChannelConnectors).toHaveBeenCalledWith(modulesManageSession);
+    expect(listSourceConnections).toHaveBeenCalledWith(modulesManageSession);
+    expect(createSourceConnection).toHaveBeenCalledWith(modulesManageSession, {
+      sourceName: "megapbx",
+      displayName: "MegaPBX"
+    });
   });
 
   it("loads egress status through modules.manage permission", async () => {

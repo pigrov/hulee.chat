@@ -19,6 +19,10 @@ import type {
   InternalChannelOnboardingFlow,
   InternalChannelType,
   InternalEgressDiagnostics,
+  InternalSourceConnectionCreateRequest,
+  InternalSourceConnectionCreateResponse,
+  InternalSourceConnectionSummary,
+  InternalSourceConnectionsResponse,
   InternalTelegramBotTokenValidateRequest,
   InternalTelegramBotTokenValidateResponse,
   InternalTelegramIntegrationConfig,
@@ -35,6 +39,7 @@ import {
   internalEgressDiagnosticsSchema,
   internalTelegramBotTokenValidateResponseSchema,
   internalTelegramIntegrationDiagnosticsSchema,
+  findSourceCatalogItem,
   isPlatformErrorCode,
   normalizeSourceCapabilities
 } from "@hulee/contracts";
@@ -50,6 +55,7 @@ import type {
   DeploymentChannelCatalogOverrideRecord,
   DeploymentChannelCatalogOverrideRepository,
   DomainEventRepository,
+  SourceConnectionRecord,
   SourceIntegrationRepository,
   TenantSecretCipher,
   TenantSecretRepository
@@ -89,6 +95,13 @@ export type InternalIntegrationService = {
   listChannelConnectors(
     context: InternalIntegrationContext
   ): Promise<InternalChannelConnectorsResponse>;
+  listSourceConnections(
+    context: InternalIntegrationContext
+  ): Promise<InternalSourceConnectionsResponse>;
+  createSourceConnection(
+    context: InternalIntegrationContext,
+    request: InternalSourceConnectionCreateRequest
+  ): Promise<InternalSourceConnectionCreateResponse>;
   createChannelConnector(
     context: InternalIntegrationContext,
     request: InternalChannelConnectorCreateRequest
@@ -175,7 +188,8 @@ export type SecretWriter = {
     purpose:
       | "telegram.bot_token"
       | "telegram.bot_token_validation"
-      | "telegram.webhook_secret_token";
+      | "telegram.webhook_secret_token"
+      | "source.webhook_secret";
     plainText: string;
     updatedAt: Date;
   }): Promise<void>;
@@ -738,6 +752,108 @@ export function createInternalIntegrationService(
 
       return {
         connectors: summaries
+      };
+    },
+
+    async listSourceConnections(context) {
+      if (!options.sourceRepository) {
+        return {
+          connections: []
+        };
+      }
+
+      const records =
+        await options.sourceRepository.listTenantSourceConnections({
+          tenantId: context.tenantId,
+          includeDeleted: false
+        });
+
+      return {
+        connections: records.map(toInternalSourceConnectionSummary)
+      };
+    },
+
+    async createSourceConnection(context, request) {
+      if (!options.sourceRepository || !options.secretWriter) {
+        throw new CoreError("module.unhealthy");
+      }
+
+      const source = findSourceCatalogItem(request.sourceName);
+
+      if (!source || source.setupMode !== "source_connection") {
+        throw new CoreError("validation.failed");
+      }
+
+      const sourceConnectionId = createStandaloneSourceConnectionId(
+        source.sourceName
+      );
+      const webhookToken = request.webhookToken?.trim() || createWebhookToken();
+      const webhookSecretRef = createTenantSecretRef({
+        tenantId: context.tenantId,
+        moduleId: `source-${source.sourceName}`,
+        secretName: `webhook-${randomUUID()}`
+      });
+      const webhookPath = createSourceWebhookPath({
+        sourceName: source.sourceName,
+        sourceConnectionId
+      });
+      const webhookUrl = options.publicWebhookBaseUrl
+        ? new URL(webhookPath, options.publicWebhookBaseUrl).toString()
+        : undefined;
+      const updatedAt = now();
+
+      await options.secretWriter.upsertSecret({
+        tenantId: context.tenantId,
+        secretRef: webhookSecretRef,
+        purpose: "source.webhook_secret",
+        plainText: webhookToken,
+        updatedAt
+      });
+
+      const record = await options.sourceRepository.upsertSourceConnection({
+        id: sourceConnectionId,
+        tenantId: context.tenantId,
+        sourceType: source.sourceType,
+        sourceName: source.sourceName,
+        displayName:
+          request.displayName?.trim() ||
+          defaultSourceDisplayName(source.sourceName),
+        status: "onboarding",
+        authType: "webhook_secret",
+        capabilities: normalizeSourceCapabilities({
+          canReceive: source.capabilities.includes("receive_events"),
+          canReply: source.capabilities.includes("native_reply"),
+          canFetchHistory: source.capabilities.includes("history_fetch"),
+          canSendFiles: source.capabilities.includes("file_send"),
+          canReceiveFiles: source.capabilities.includes("file_receive"),
+          supportsThreads: source.capabilities.includes("threading"),
+          supportsReactions: source.capabilities.includes("reactions"),
+          supportsReadStatus: source.capabilities.includes("read_status"),
+          supportsDeliveryStatus:
+            source.capabilities.includes("delivery_status"),
+          webhookSupported: source.capabilities.includes("webhook_delivery"),
+          pollingRequired: source.capabilities.includes("polling_runtime"),
+          customerProfile: source.capabilities.includes("customer_profile"),
+          oauthSupported: source.capabilities.includes("oauth"),
+          sandboxAvailable: Boolean(source.metadata?.sandboxAvailable)
+        }),
+        config: {
+          webhookPath,
+          ...(webhookUrl ? { webhookUrl } : {}),
+          webhookSecretRef,
+          tokenField: "crm_token"
+        },
+        metadata: {
+          category: source.category,
+          provider: source.provider ?? source.sourceName
+        },
+        createdByEmployeeId: context.employeeId,
+        updatedAt
+      });
+
+      return {
+        connection: toInternalSourceConnectionSummary(record),
+        webhookToken
       };
     },
 
@@ -1550,6 +1666,68 @@ function requireChannelSessionRepository(
   }
 
   return repository;
+}
+
+function toInternalSourceConnectionSummary(
+  record: SourceConnectionRecord
+): InternalSourceConnectionSummary {
+  const config = isRecord(record.config) ? record.config : {};
+
+  return {
+    sourceConnectionId: record.id,
+    sourceName: record.sourceName,
+    sourceType:
+      record.sourceType as InternalSourceConnectionSummary["sourceType"],
+    displayName: record.displayName,
+    status: record.status as InternalSourceConnectionSummary["status"],
+    authType: record.authType as InternalSourceConnectionSummary["authType"],
+    ...optionalStringField("webhookPath", config.webhookPath),
+    ...optionalStringField("webhookUrl", config.webhookUrl),
+    ...optionalStringField("webhookSecretRef", config.webhookSecretRef),
+    createdAt: record.createdAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString()
+  };
+}
+
+function createStandaloneSourceConnectionId(
+  sourceName: string
+): SourceConnectionId {
+  return `source_connection:${sourceName}:${randomUUID()}` as SourceConnectionId;
+}
+
+function createSourceWebhookPath(input: {
+  sourceName: string;
+  sourceConnectionId: SourceConnectionId;
+}): string {
+  return `/webhooks/sources/${encodeURIComponent(
+    input.sourceName
+  )}/${encodeURIComponent(input.sourceConnectionId)}`;
+}
+
+function createWebhookToken(): string {
+  return randomBytes(32).toString("base64url");
+}
+
+function defaultSourceDisplayName(sourceName: string): string {
+  switch (sourceName) {
+    case "megapbx":
+      return "MegaPBX";
+    case "ozon":
+      return "Ozon";
+    case "yandex_market":
+      return "Yandex Market";
+    default:
+      return sourceName;
+  }
+}
+
+function optionalStringField<TKey extends string>(
+  key: TKey,
+  value: unknown
+): Partial<Record<TKey, string>> {
+  return typeof value === "string" && value.trim().length > 0
+    ? ({ [key]: value.trim() } as Partial<Record<TKey, string>>)
+    : {};
 }
 
 async function upsertSourceConnectionForChannelConnector(input: {
