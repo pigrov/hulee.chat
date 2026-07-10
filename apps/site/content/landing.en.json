@@ -138,26 +138,44 @@
     "note": "Connect the sources you need without feeling that each one is a separate tariff."
   },
   "workflow": {
+    "marker": "4",
     "kicker": "Product",
-    "title": "Not just messenger integration, but an operating layer for requests.",
-    "summary": "{product} should be more than a CRM widget: the center is the customer, case, history, roles, audit, and a clean handoff between people.",
+    "title": "A platform for handling requests of any complexity.",
+    "summary": "{product} brings channels, data, and processes into one system so every team works by the same rules.",
     "items": [
       {
-        "title": "Unified inbox",
-        "description": "Incoming, assigned, all conversations, internal requests, and support queues live on one work surface.",
-        "icon": "message"
+        "title": "Request sources",
+        "description": "Messengers, social networks, marketplaces, classifieds, websites, email, telephony, and API.",
+        "icon": "mail"
       },
       {
-        "title": "Customer card and history",
-        "description": "Contacts, sources, files, statuses, events, and owners stay inside the company, not with one manager.",
+        "title": "Unified customer profile",
+        "description": "All channels, conversations, orders, views, and files in one profile.",
+        "icon": "users"
+      },
+      {
+        "title": "Processes and routing",
+        "description": "Auto-assignment, scenarios, rules, priorities, and SLA.",
+        "icon": "network"
+      },
+      {
+        "title": "Team and roles",
+        "description": "Departments, roles, access rights, shifts, and internal comments.",
+        "icon": "users"
+      },
+      {
+        "title": "Data and storage",
+        "description": "History, attachments, events, retention, export, and action audit.",
         "icon": "database"
       },
       {
-        "title": "Roles, teams, and audit",
-        "description": "Managers can see access, routing, activity, channel errors, and the history of important actions.",
-        "icon": "shield"
+        "title": "Diagnostics and reports",
+        "description": "Channel load, efficiency, errors, and response quality.",
+        "icon": "barChart"
       }
-    ]
+    ],
+    "noteLead": "A channel is an entry point.",
+    "note": "{product} is the system where requests are handled, stored, and controlled. You manage data, teams, and processes inside your own company."
   },
   "audiences": {
     "kicker": "Audience",

@@ -162,10 +162,13 @@ type LandingContent = {
     note: string;
   };
   workflow: {
+    marker: string;
     kicker: string;
     title: string;
     summary: string;
     items: ContentItem[];
+    noteLead: string;
+    note: string;
   };
   audiences: {
     kicker: string;
@@ -263,6 +266,10 @@ const modelNoteIcon = {
 const channelNoteIcon = {
   src: "/marketing/channel-note-light.png",
   darkSrc: "/marketing/channel-note-dark.png"
+} satisfies ThemeImageAsset;
+const workflowDashboardImage = {
+  src: "/marketing/workflow-dashboard-light.png",
+  darkSrc: "/marketing/workflow-dashboard-dark.png"
 } satisfies ThemeImageAsset;
 const heroMetricIcons = [
   {
@@ -661,15 +668,7 @@ export default async function LandingPage({
         </div>
       </section>
 
-      <StorySection
-        id="workflow"
-        className="section--workflow"
-        kicker={content.workflow.kicker}
-        title={copy(content.workflow.title)}
-        summary={copy(content.workflow.summary)}
-        items={content.workflow.items}
-        variant="list"
-      />
+      <WorkflowSection content={content.workflow} />
 
       <section className="section section--audiences" id="audiences">
         <div className="section__inner">
@@ -829,6 +828,61 @@ function LanguageSwitcher({
         </Link>
       ))}
     </div>
+  );
+}
+
+function WorkflowSection({ content }: { content: LandingContent["workflow"] }) {
+  return (
+    <section className="section section--workflow" id="workflow">
+      <div className="workflow-copy">
+        <div className="workflow-copy__head">
+          <span className="workflow-marker">{content.marker}</span>
+          <p className="section-kicker">{content.kicker}</p>
+          <h2>{copy(content.title)}</h2>
+        </div>
+        <p className="workflow-summary">{copy(content.summary)}</p>
+
+        <div className="workflow-grid">
+          {content.items.map((item, index) => {
+            const Icon = iconMap[item.icon];
+
+            return (
+              <article
+                className="workflow-card"
+                data-workflow-card={index + 1}
+                key={item.title}
+              >
+                <span className="workflow-card__icon" aria-hidden="true">
+                  <Icon />
+                </span>
+                <h3>{copy(item.title)}</h3>
+                <p>{copy(item.description)}</p>
+              </article>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="workflow-dashboard" aria-hidden="true">
+        <ThemeImage
+          className="workflow-dashboard__image"
+          src={workflowDashboardImage.src}
+          darkSrc={workflowDashboardImage.darkSrc}
+          alt=""
+          width={1536}
+          height={1536}
+          sizes="(max-width: 980px) 100vw, 48vw"
+        />
+      </div>
+
+      <aside className="workflow-note">
+        <ShieldCheck aria-hidden="true" />
+        <p>
+          <strong>{copy(content.noteLead)}</strong>{" "}
+          <span>{copy(content.note)}</span>
+        </p>
+      </aside>
+    </section>
   );
 }
 
