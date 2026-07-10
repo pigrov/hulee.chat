@@ -1436,10 +1436,8 @@ svg {
 
 .section--workflow {
   display: grid;
-  grid-template-columns: minmax(280px, 0.34fr) minmax(0, 0.33fr) minmax(
-      0,
-      0.33fr
-    );
+  width: 100%;
+  grid-template-columns: minmax(280px, 390px) minmax(0, 381px) minmax(0, 381px);
   grid-template-areas:
     "head head summary"
     "card3 visual visual"
@@ -1449,11 +1447,12 @@ svg {
     "note note note";
   gap: 14px;
   align-items: stretch;
-  background: #fdfdfe;
+  justify-content: center;
+  background: linear-gradient(180deg, #f4f6ff 0%, #eef1ff 100%);
 }
 
 :root[data-theme="dark"] .section--workflow {
-  background: var(--site-bg);
+  background: linear-gradient(180deg, #151b33 0%, #202747 100%);
 }
 
 .workflow-copy {
@@ -1469,45 +1468,14 @@ svg {
   max-width: 760px;
 }
 
-.workflow-marker {
-  display: grid;
-  width: 44px;
-  height: 44px;
-  place-items: center;
-  margin-bottom: 22px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, var(--site-primary), var(--site-accent));
-  color: var(--site-primary-fg);
-  font-size: 1.34rem;
-  font-weight: 900;
-  line-height: 1;
-  box-shadow:
-    0 14px 28px rgb(79 70 229 / 22%),
-    inset 0 1px 0 rgb(255 255 255 / 32%);
-}
-
-:root[data-theme="dark"] .workflow-marker {
-  color: var(--site-primary-fg);
-  box-shadow:
-    0 14px 30px rgb(129 140 248 / 24%),
-    inset 0 1px 0 rgb(255 255 255 / 18%);
-}
-
 .workflow-summary {
   grid-area: summary;
-  align-self: start;
-  max-width: 720px;
+  align-self: end;
+  max-width: 660px;
   margin: 0;
-  border-radius: 0;
-  background: rgb(246 247 255 / 76%);
   color: var(--site-text-muted);
-  font-size: 1.02rem;
+  font-size: 1rem;
   line-height: 1.7;
-  padding: 28px 30px;
-}
-
-:root[data-theme="dark"] .workflow-summary {
-  background: rgb(17 22 43 / 56%);
 }
 
 .workflow-grid {
@@ -2205,6 +2173,10 @@ svg {
     padding: 62px 16px;
   }
 
+  .section--workflow {
+    padding-inline: 16px;
+  }
+
   .feature-card,
   .plan-card,
   .faq-item {
@@ -2230,14 +2202,6 @@ svg {
   .audience-grid,
   .plan-grid {
     grid-template-columns: 1fr;
-  }
-
-  .workflow-marker {
-    width: 38px;
-    height: 38px;
-    margin-bottom: 18px;
-    border-radius: 9px;
-    font-size: 1.18rem;
   }
 
   .workflow-summary {

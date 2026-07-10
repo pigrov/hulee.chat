@@ -162,7 +162,6 @@ type LandingContent = {
     note: string;
   };
   workflow: {
-    marker: string;
     kicker: string;
     title: string;
     summary: string;
@@ -836,7 +835,6 @@ function WorkflowSection({ content }: { content: LandingContent["workflow"] }) {
     <section className="section section--workflow" id="workflow">
       <div className="workflow-copy">
         <div className="workflow-copy__head">
-          <span className="workflow-marker">{content.marker}</span>
           <p className="section-kicker">{content.kicker}</p>
           <h2>{copy(content.title)}</h2>
         </div>
