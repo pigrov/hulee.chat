@@ -30,6 +30,7 @@ import type {
 } from "@hulee/contracts";
 import {
   getPlatformErrorDefinition,
+  internalChannelAuthChallengeCancelRequestSchema,
   internalChannelAuthChallengeStartRequestSchema,
   internalChannelAuthChallengeSubmitRequestSchema,
   internalChannelConnectorCreateRequestSchema,
@@ -813,10 +814,14 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "channel_auth_challenge_cancel": {
+      const request = internalChannelAuthChallengeCancelRequestSchema.parse(
+        input.request.body
+      );
       const response: InternalChannelAuthChallengeResponse =
         await input.integrations.cancelChannelAuthChallenge(input.session, {
           connectorId: input.route.connectorId,
-          challengeId: input.route.challengeId
+          challengeId: input.route.challengeId,
+          request
         });
 
       return jsonResponse(200, response);

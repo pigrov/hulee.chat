@@ -1994,7 +1994,8 @@ describe("internal API handler", () => {
       modulesManageSession,
       {
         connectorId: "telegram_qr_bridge:tenant-1",
-        challengeId: "challenge-1"
+        challengeId: "challenge-1",
+        request: {}
       }
     );
   });

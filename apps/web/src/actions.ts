@@ -1003,6 +1003,10 @@ export async function cancelChannelAuthChallengeAction(
     const challengeId = readOptionalFormString(formData, "challengeId")?.trim();
     const deleteConnectorOnCancel =
       readOptionalFormString(formData, "deleteConnectorOnCancel") === "on";
+    const clearChallengeOnCancel =
+      readOptionalFormString(formData, "clearChallengeOnCancel") === "on";
+    const resetSessionOnCancel =
+      readOptionalFormString(formData, "resetSessionOnCancel") === "on";
     const redirectChannelType = normalizeOptionalFormValue(
       readOptionalFormString(formData, "redirectChannelType")
     );
@@ -1013,7 +1017,7 @@ export async function cancelChannelAuthChallengeAction(
 
     if (challengeId) {
       await cancelChannelAuthChallenge(
-        { connectorId, challengeId },
+        { connectorId, challengeId, resetSession: resetSessionOnCancel },
         internalApiAccess
       ).catch((error) => {
         if (!deleteConnectorOnCancel) {
@@ -1031,7 +1035,7 @@ export async function cancelChannelAuthChallengeAction(
     return channelAuthChallengeActionSuccess({
       code: "cancelled",
       connectorId,
-      challengeId,
+      challengeId: clearChallengeOnCancel ? undefined : challengeId,
       redirectChannelType:
         deleteConnectorOnCancel && redirectChannelType
           ? redirectChannelType

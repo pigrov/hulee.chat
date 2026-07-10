@@ -1031,6 +1031,8 @@
   "integrations.channel.auth.startTelegramPhone": "Send code",
   "integrations.channel.auth.startWhatsAppPairing": "Get pairing code",
   "integrations.channel.auth.startMaxPhone": "Get code",
+  "integrations.channel.auth.maxCodePhoneHint": "The MAX code will be sent to {phoneNumber}.",
+  "integrations.channel.auth.changePhoneNumber": "Change number",
   "integrations.channel.auth.maxCodeSentOperatorHint": "MAX sent a verification code. Enter the code from the message.",
   "integrations.channel.auth.maxCodeRequiredOperatorHint": "Enter the verification code from MAX to continue authorization.",
   "integrations.channel.auth.maxCodeFormatOperatorHint": "MAX verification code should contain 4 to 10 digits.",

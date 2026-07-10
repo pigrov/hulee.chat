@@ -2,6 +2,7 @@ import type {
   ChannelConnectorId,
   ChannelProviderOperation,
   EmployeeId,
+  InternalChannelAuthChallengeCancelRequest,
   EventId,
   InternalChannelAuthChallengeResponse,
   InternalChannelAuthChallengeStartRequest,
@@ -146,7 +147,11 @@ export type InternalIntegrationService = {
   ): Promise<InternalChannelAuthChallengeResponse>;
   cancelChannelAuthChallenge(
     context: InternalIntegrationContext,
-    input: { connectorId: string; challengeId: string }
+    input: {
+      connectorId: string;
+      challengeId: string;
+      request?: InternalChannelAuthChallengeCancelRequest;
+    }
   ): Promise<InternalChannelAuthChallengeResponse>;
   loadTelegramIntegration(
     context: InternalIntegrationContext,
@@ -1149,6 +1154,20 @@ export function createInternalIntegrationService(
         updatedAt
       });
 
+      if (input.request?.resetSession) {
+        await resetUserBridgeAuthSession({
+          context,
+          connectorId: input.connectorId,
+          connectorRepository: options.connectorRepository,
+          sessionRepository: requireChannelSessionRepository(
+            options.channelSessionRepository
+          ),
+          sourceRepository: options.sourceRepository,
+          challengeId: challenge.id,
+          updatedAt
+        });
+      }
+
       const cancelledChallenge = await authChallengeRepository.findChallenge({
         tenantId: context.tenantId,
         challengeId: challenge.id
@@ -1984,6 +2003,130 @@ async function createUserBridgeConnector(input: {
     diagnosticsStatus: diagnostics.status,
     egress: diagnostics.egress
   };
+}
+
+async function resetUserBridgeAuthSession(input: {
+  challengeId: string;
+  connectorId: string;
+  connectorRepository: ChannelConnectorRepository;
+  context: InternalIntegrationContext;
+  sessionRepository: ChannelSessionRepository;
+  sourceRepository?: SourceIntegrationRepository;
+  updatedAt: Date;
+}): Promise<void> {
+  const connector = await loadUserBridgeConnector({
+    repository: input.connectorRepository,
+    tenantId: input.context.tenantId,
+    connectorId: input.connectorId
+  });
+  const spec = getUserBridgeChannelSpec(connector.channelType);
+
+  if (!spec) {
+    throw new CoreError("validation.failed");
+  }
+
+  const sessionKey =
+    readRecordString(connector.config, "sessionKey") ??
+    userBridgePrimarySessionKey;
+  const session = await input.sessionRepository.findConnectorSession({
+    tenantId: input.context.tenantId,
+    connectorId: connector.id,
+    sessionKey
+  });
+
+  if (!session) {
+    throw new CoreError("validation.failed");
+  }
+
+  const checkedAt = input.updatedAt.toISOString();
+  const diagnostics = {
+    status: "not_started",
+    checkedAt,
+    egress: buildUserBridgeEgressDiagnostics({
+      checkedAt,
+      requirement: spec.egressRequirement
+    }),
+    session: {
+      sessionKey,
+      status: "not_started"
+    }
+  };
+  const updatedConnector = {
+    ...connector,
+    status: "onboarding",
+    healthStatus: "unknown",
+    onboardingState: {
+      step: spec.initialStep
+    },
+    diagnostics,
+    updatedAt: input.updatedAt
+  };
+
+  await input.connectorRepository.upsertConnector({
+    id: updatedConnector.id,
+    tenantId: updatedConnector.tenantId,
+    channelType: updatedConnector.channelType,
+    channelClass: updatedConnector.channelClass,
+    provider: updatedConnector.provider,
+    displayName: updatedConnector.displayName,
+    status: updatedConnector.status,
+    healthStatus: updatedConnector.healthStatus,
+    capabilities: updatedConnector.capabilities,
+    onboardingState: updatedConnector.onboardingState,
+    config: updatedConnector.config,
+    diagnostics: updatedConnector.diagnostics,
+    sourceConnectionId: updatedConnector.sourceConnectionId,
+    createdByEmployeeId: updatedConnector.createdByEmployeeId,
+    updatedAt: updatedConnector.updatedAt
+  });
+  await upsertSourceConnectionForChannelConnector({
+    context: input.context,
+    record: updatedConnector,
+    sourceRepository: input.sourceRepository
+  });
+  await input.sessionRepository.upsertSession({
+    id: session.id,
+    tenantId: session.tenantId,
+    connectorId: session.connectorId,
+    sessionKey,
+    status: "not_started",
+    sessionEncrypted: null,
+    sessionFingerprint: null,
+    externalAccountId: null,
+    displayAddress: null,
+    publicState: {
+      stage: "not_started"
+    },
+    metadata: {
+      authMode: spec.authMode,
+      channelType: spec.channelType,
+      provider: spec.provider
+    },
+    challengeType: null,
+    challengeExpiresAt: null,
+    leaseOwner: null,
+    leaseExpiresAt: null,
+    lastConnectedAt: null,
+    lastDisconnectedAt: input.updatedAt,
+    lastHeartbeatAt: input.updatedAt,
+    lastErrorAt: null,
+    lastErrorCode: null,
+    lastErrorMessage: null,
+    updatedAt: input.updatedAt
+  });
+  await input.sessionRepository.appendSessionEvent({
+    id: createRandomChannelSessionEventId(),
+    tenantId: input.context.tenantId,
+    connectorId: connector.id,
+    sessionId: session.id,
+    eventType: "auth.session_reset",
+    metadata: {
+      challengeId: input.challengeId,
+      sessionKey
+    },
+    occurredAt: input.updatedAt,
+    updatedAt: input.updatedAt
+  });
 }
 
 async function loadUserBridgeConnector(input: {

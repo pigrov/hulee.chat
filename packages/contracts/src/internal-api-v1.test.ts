@@ -4,6 +4,7 @@ import {
   internalApiErrorResponseSchema,
   internalAccessDecisionRequestSchema,
   internalAccessDecisionResponseSchema,
+  internalChannelAuthChallengeCancelRequestSchema,
   internalChannelAuthChallengeResponseSchema,
   internalChannelAuthChallengeStartRequestSchema,
   internalChannelAuthChallengeSubmitRequestSchema,
@@ -1053,6 +1054,17 @@ describe("internal API v1 schemas", () => {
       })
     ).toEqual({
       code: "12345"
+    });
+
+    expect(
+      internalChannelAuthChallengeCancelRequestSchema.parse(undefined)
+    ).toEqual({});
+    expect(
+      internalChannelAuthChallengeCancelRequestSchema.parse({
+        resetSession: true
+      })
+    ).toEqual({
+      resetSession: true
     });
 
     expect(

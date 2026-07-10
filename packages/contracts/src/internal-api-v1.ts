@@ -991,6 +991,13 @@ export const internalChannelAuthChallengeSubmitRequestSchema = z
     message: "code or password is required."
   });
 
+export const internalChannelAuthChallengeCancelRequestSchema = z
+  .object({
+    resetSession: z.boolean().optional()
+  })
+  .strict()
+  .default({});
+
 export const internalTelegramIntegrationModeSchema = z.enum([
   "webhook",
   "polling"
@@ -1430,6 +1437,9 @@ export type InternalChannelAuthChallengeStartRequest = z.infer<
 >;
 export type InternalChannelAuthChallengeSubmitRequest = z.infer<
   typeof internalChannelAuthChallengeSubmitRequestSchema
+>;
+export type InternalChannelAuthChallengeCancelRequest = z.infer<
+  typeof internalChannelAuthChallengeCancelRequestSchema
 >;
 export type InternalTelegramIntegrationConfig = z.infer<
   typeof internalTelegramIntegrationConfigSchema

@@ -638,6 +638,16 @@ describe("inbox API client", () => {
         effectivePermissionOverride: "modules.manage"
       }
     );
+    await cancelChannelAuthChallenge(
+      {
+        connectorId: "telegram_qr_bridge:second",
+        challengeId: "challenge-2",
+        resetSession: true
+      },
+      {
+        effectivePermissionOverride: "modules.manage"
+      }
+    );
 
     expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(1, {
       method: "POST",
@@ -664,6 +674,14 @@ describe("inbox API client", () => {
     expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(4, {
       method: "POST",
       path: "/internal/v1/channels/connectors/telegram_qr_bridge%3Asecond/auth-challenges/challenge-1/cancel",
+      effectivePermissionOverride: "modules.manage"
+    });
+    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(5, {
+      method: "POST",
+      path: "/internal/v1/channels/connectors/telegram_qr_bridge%3Asecond/auth-challenges/challenge-2/cancel",
+      body: {
+        resetSession: true
+      },
       effectivePermissionOverride: "modules.manage"
     });
   });

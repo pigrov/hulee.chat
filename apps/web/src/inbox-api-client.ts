@@ -827,24 +827,30 @@ export async function submitChannelAuthChallenge(
 }
 
 export async function cancelChannelAuthChallenge(
-  input: { connectorId: string; challengeId: string },
+  input: { connectorId: string; challengeId: string; resetSession?: boolean },
   options: InternalApiAccessOptions<"modules.manage">
 ): Promise<ChannelAuthChallengeViewModel> {
   const url = new URL(
     `${channelAuthChallengeItemPath(input.connectorId, input.challengeId)}/cancel`,
     resolveInternalApiBaseUrl()
   );
+  const body = input.resetSession ? { resetSession: true } : undefined;
   const response = await fetch(url, {
     method: "POST",
     cache: "no-store",
-    headers: await buildInternalApiHeaders({
-      method: "POST",
-      path: internalPath(url),
-      effectivePermissionOverride: requireEffectivePermissionOverride(
-        options,
-        "modules.manage"
-      )
-    })
+    headers: {
+      ...(await buildInternalApiHeaders({
+        method: "POST",
+        path: internalPath(url),
+        ...(body ? { body } : {}),
+        effectivePermissionOverride: requireEffectivePermissionOverride(
+          options,
+          "modules.manage"
+        )
+      })),
+      ...(body ? { "content-type": "application/json; charset=utf-8" } : {})
+    },
+    body: body ? JSON.stringify(body) : undefined
   });
 
   if (!response.ok) {

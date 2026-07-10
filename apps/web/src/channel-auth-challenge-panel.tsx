@@ -405,45 +405,168 @@ function PhoneChallengeStep({
 }
 
 function CodeChallengeStep({
+  cancelDeletesConnector,
+  channelType,
   challenge,
   connectorId,
+  sourceName,
+  t
+}: {
+  cancelDeletesConnector: boolean;
+  channelType?: string;
+  challenge?: InternalChannelAuthChallenge;
+  connectorId: string;
+  sourceName?: string;
+  t: Translator;
+}): ReactNode {
+  const phoneNumber = challenge?.publicPayload.phoneNumber;
+  const isMaxPhoneCodeChallenge =
+    channelType === "max_qr_bridge" &&
+    challenge?.challengeType === "phone_code";
+
+  return (
+    <>
+      {isMaxPhoneCodeChallenge && phoneNumber ? (
+        <ChallengeNotice
+          icon={<Phone size={16} aria-hidden="true" />}
+          message={t("integrations.channel.auth.maxCodePhoneHint", {
+            phoneNumber
+          })}
+          variant="info"
+        />
+      ) : null}
+      <ChannelAuthChallengeActionForm
+        actionKind="submit"
+        className="settingsForm"
+        messages={channelAuthChallengeActionMessages(t)}
+      >
+        <ChallengeIdentityFields
+          challenge={challenge}
+          connectorId={connectorId}
+        />
+        <label className="fieldStack">
+          <span className="detailLabel">
+            {t("integrations.channel.auth.code")}
+          </span>
+          <input
+            className="textInput"
+            name="code"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            required
+          />
+        </label>
+        <div className="buttonRow">
+          <ChannelAuthChallengeSubmitButton
+            className="primaryButton"
+            disabled={!challenge?.challengeId}
+            label={t("integrations.channel.auth.submitCode")}
+          >
+            <KeyRound size={16} aria-hidden="true" />
+          </ChannelAuthChallengeSubmitButton>
+        </div>
+      </ChannelAuthChallengeActionForm>
+      {isMaxPhoneCodeChallenge ? (
+        <div className="buttonRow">
+          <ChannelAuthChallengeCancelButton
+            challenge={challenge}
+            clearChallengeOnCancel
+            connectorId={connectorId}
+            disabled={!challenge?.challengeId}
+            icon={<Phone size={16} aria-hidden="true" />}
+            label={t("integrations.channel.auth.changePhoneNumber")}
+            resetSessionOnCancel
+            t={t}
+          />
+          <ChannelAuthChallengeCancelButton
+            challenge={challenge}
+            connectorId={connectorId}
+            deleteConnectorOnCancel={cancelDeletesConnector}
+            disabled={!challenge?.challengeId && !cancelDeletesConnector}
+            icon={<XCircle size={16} aria-hidden="true" />}
+            label={t("integrations.channel.auth.cancel")}
+            redirectChannelType={channelType}
+            redirectSourceName={sourceName}
+            redirectTab={sourceName ? undefined : "accounts"}
+            t={t}
+          />
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function ChannelAuthChallengeCancelButton({
+  challenge,
+  clearChallengeOnCancel = false,
+  connectorId,
+  deleteConnectorOnCancel = false,
+  disabled = false,
+  icon,
+  label,
+  redirectChannelType,
+  redirectSourceName,
+  redirectTab,
+  resetSessionOnCancel = false,
   t
 }: {
   challenge?: InternalChannelAuthChallenge;
+  clearChallengeOnCancel?: boolean;
   connectorId: string;
+  deleteConnectorOnCancel?: boolean;
+  disabled?: boolean;
+  icon: ReactNode;
+  label: string;
+  redirectChannelType?: string;
+  redirectSourceName?: string;
+  redirectTab?: string;
+  resetSessionOnCancel?: boolean;
   t: Translator;
 }): ReactNode {
   return (
     <ChannelAuthChallengeActionForm
-      actionKind="submit"
-      className="settingsForm"
+      actionKind="cancel"
       messages={channelAuthChallengeActionMessages(t)}
     >
       <ChallengeIdentityFields
         challenge={challenge}
         connectorId={connectorId}
       />
-      <label className="fieldStack">
-        <span className="detailLabel">
-          {t("integrations.channel.auth.code")}
-        </span>
-        <input
-          className="textInput"
-          name="code"
-          inputMode="numeric"
-          autoComplete="one-time-code"
-          required
-        />
-      </label>
-      <div className="buttonRow">
-        <ChannelAuthChallengeSubmitButton
-          className="primaryButton"
-          disabled={!challenge?.challengeId}
-          label={t("integrations.channel.auth.submitCode")}
-        >
-          <KeyRound size={16} aria-hidden="true" />
-        </ChannelAuthChallengeSubmitButton>
-      </div>
+      {clearChallengeOnCancel ? (
+        <input type="hidden" name="clearChallengeOnCancel" value="on" />
+      ) : null}
+      {resetSessionOnCancel ? (
+        <input type="hidden" name="resetSessionOnCancel" value="on" />
+      ) : null}
+      {deleteConnectorOnCancel ? (
+        <>
+          <input type="hidden" name="deleteConnectorOnCancel" value="on" />
+          {redirectChannelType ? (
+            <input
+              type="hidden"
+              name="redirectChannelType"
+              value={redirectChannelType}
+            />
+          ) : null}
+          {redirectSourceName ? (
+            <input
+              type="hidden"
+              name="redirectSourceName"
+              value={redirectSourceName}
+            />
+          ) : null}
+          {redirectTab ? (
+            <input type="hidden" name="redirectTab" value={redirectTab} />
+          ) : null}
+        </>
+      ) : null}
+      <ChannelAuthChallengeSubmitButton
+        className="secondaryButton"
+        disabled={disabled}
+        label={label}
+      >
+        {icon}
+      </ChannelAuthChallengeSubmitButton>
     </ChannelAuthChallengeActionForm>
   );
 }

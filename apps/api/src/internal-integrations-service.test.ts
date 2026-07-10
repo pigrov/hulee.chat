@@ -243,8 +243,25 @@ describe("internal integrations service", () => {
         onboardingStep: "phone"
       })
     ]);
+    const channelSessionRepository = new InMemoryChannelSessionRepository();
+    await channelSessionRepository.upsertSession({
+      id: "channel_session:max-primary",
+      tenantId,
+      connectorId: "max_qr_bridge:tenant-integrations",
+      sessionKey: "primary",
+      status: "pending_auth",
+      sessionEncrypted: "sealed:session",
+      publicState: {
+        stage: "code_sent"
+      },
+      challengeType: "phone_code",
+      challengeExpiresAt: new Date(now.getTime() + 10 * 60 * 1000),
+      lastHeartbeatAt: now,
+      updatedAt: now
+    });
     const service = createInternalIntegrationService({
       connectorRepository,
+      channelSessionRepository,
       authChallengeRepository,
       authChallengeCipher: fakeAuthChallengeCipher,
       now: () => now
@@ -308,7 +325,10 @@ describe("internal integrations service", () => {
     await expect(
       service.cancelChannelAuthChallenge(context, {
         connectorId: "max_qr_bridge:tenant-integrations",
-        challengeId: startResponse.challenge.challengeId
+        challengeId: startResponse.challenge.challengeId,
+        request: {
+          resetSession: true
+        }
       })
     ).resolves.toMatchObject({
       challenge: {
@@ -316,6 +336,32 @@ describe("internal integrations service", () => {
         completedAt: now.toISOString()
       }
     });
+    expect(
+      connectorRepository.records.get("max_qr_bridge:tenant-integrations")
+    ).toMatchObject({
+      status: "onboarding",
+      healthStatus: "unknown",
+      onboardingState: {
+        step: "phone"
+      }
+    });
+    expect(
+      channelSessionRepository.records.get("channel_session:max-primary")
+    ).toMatchObject({
+      status: "not_started",
+      sessionEncrypted: null,
+      challengeType: null,
+      lastErrorCode: null,
+      publicState: {
+        stage: "not_started"
+      }
+    });
+    expect(channelSessionRepository.events).toContainEqual(
+      expect.objectContaining({
+        eventType: "auth.session_reset",
+        connectorId: "max_qr_bridge:tenant-integrations"
+      })
+    );
   });
 
   it("exposes active user-bridge auth challenges in connector summaries", async () => {
