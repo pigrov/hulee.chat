@@ -76,7 +76,10 @@ describe("internal RBAC service", () => {
         actorEmployeeId: adminEmployeeId,
         action: "role.created",
         entityType: "role",
-        entityId: "role:tenant-1:custom:id-1"
+        entityId: "role:tenant-1:custom:id-1",
+        metadata: expect.objectContaining({
+          authorizationScopes: [{ type: "tenant" }]
+        })
       })
     );
     expect(events.append).toHaveBeenCalledWith(
@@ -132,7 +135,10 @@ describe("internal RBAC service", () => {
         })
       ]
     });
-    const service = createInternalRbacService(testOptions({ state }));
+    const audit: Pick<SecurityAuditRepository, "record"> = {
+      record: vi.fn(async () => undefined)
+    };
+    const service = createInternalRbacService(testOptions({ state, audit }));
 
     await expect(
       service.createRoleBinding(context(), {
@@ -158,6 +164,17 @@ describe("internal RBAC service", () => {
         }
       }
     });
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "role_binding.created",
+        metadata: expect.objectContaining({
+          authorizationScopes: [
+            { type: "org_unit", id: "org-sales" },
+            { type: "queue", id: "queue-sales" }
+          ]
+        })
+      })
+    );
 
     await expect(
       service.createRoleBinding(context(), {
@@ -176,9 +193,51 @@ describe("internal RBAC service", () => {
     });
   });
 
+  it("audits the union of cross-scope binding subject and destination resources", async () => {
+    const state = rbacState({
+      roles: [
+        role("role-admin", ["roles.manage", "conversation.read"]),
+        role("role-agent", ["conversation.read"])
+      ],
+      roleBindings: [
+        binding({
+          id: "binding-admin",
+          roleId: "role-admin",
+          employeeId: adminEmployeeId,
+          scope: { type: "tenant" }
+        })
+      ]
+    });
+    const audit = auditSpy();
+    const service = createInternalRbacService(testOptions({ state, audit }));
+
+    await service.createRoleBinding(context(), {
+      roleId: "role-agent",
+      subject: { type: "team", id: "team-sales" },
+      scope: { type: "queue", id: "queue-claims" }
+    });
+
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "role_binding.created",
+        metadata: expect.objectContaining({
+          subjectType: "team",
+          subjectId: "team-sales",
+          scopeType: "queue",
+          scopeId: "queue-claims",
+          authorizationScopes: [
+            { type: "org_unit", id: "org-sales" },
+            { type: "team", id: "team-sales" },
+            { type: "queue", id: "queue-claims" }
+          ]
+        })
+      })
+    );
+  });
+
   it("creates direct grants with validated scope, target employee, audit and event", async () => {
     const state = rbacState({
-      roles: [role("role-admin", ["roles.manage"])],
+      roles: [role("role-admin", ["roles.manage", "conversation.assign"])],
       roleBindings: [
         binding({
           id: "binding-admin",
@@ -233,7 +292,13 @@ describe("internal RBAC service", () => {
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({
         action: "direct_grant.created",
-        entityType: "direct_grant"
+        entityType: "direct_grant",
+        metadata: expect.objectContaining({
+          authorizationScopes: [
+            { type: "org_unit", id: "org-sales" },
+            { type: "queue", id: "queue-sales" }
+          ]
+        })
       })
     );
     expect(events.append).toHaveBeenCalledWith(
@@ -246,6 +311,966 @@ describe("internal RBAC service", () => {
       })
     );
   });
+
+  it("deduplicates future direct grants without exposing them in the active administration list", async () => {
+    const futureGrant: DirectPermissionGrant = {
+      id: "grant-future",
+      tenantId,
+      employeeId: targetEmployeeId,
+      permission: "conversation.assign",
+      scope: { type: "queue", id: "queue-sales" },
+      reason: "scheduled coverage",
+      startsAt: "2026-07-01T10:00:00.000Z"
+    };
+    const state = rbacState({
+      roles: [role("role-admin", ["roles.manage", "conversation.assign"])],
+      roleBindings: [
+        binding({
+          id: "binding-admin",
+          roleId: "role-admin",
+          employeeId: adminEmployeeId,
+          scope: { type: "tenant" }
+        })
+      ],
+      directGrants: [futureGrant]
+    });
+    const audit = auditSpy();
+    const events = eventSpy();
+    const service = createInternalRbacService(
+      testOptions({ state, audit, events })
+    );
+
+    await expect(service.listDirectGrants(context())).resolves.toEqual({
+      directGrants: []
+    });
+    await expect(
+      service.createDirectGrant(context(), {
+        employeeId: targetEmployeeId,
+        permission: "conversation.assign",
+        scope: { type: "queue", id: "queue-sales" },
+        reason: "duplicate scheduled coverage"
+      })
+    ).resolves.toEqual({
+      directGrant: expect.objectContaining({
+        id: "grant-future",
+        startsAt: "2026-07-01T10:00:00.000Z"
+      })
+    });
+
+    expect(state.directGrants).toEqual([futureGrant]);
+    expect(state.repository.createDirectGrant).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+    expect(events.append).not.toHaveBeenCalled();
+  });
+
+  it("revokes future direct grants through the same authorized target and scope checks", async () => {
+    const state = rbacState({
+      roles: [role("role-admin", ["roles.manage"])],
+      roleBindings: [
+        binding({
+          id: "binding-admin",
+          roleId: "role-admin",
+          employeeId: adminEmployeeId,
+          scope: { type: "tenant" }
+        })
+      ],
+      directGrants: [
+        {
+          id: "grant-future",
+          tenantId,
+          employeeId: targetEmployeeId,
+          permission: "conversation.assign",
+          scope: { type: "queue", id: "queue-sales" },
+          reason: "scheduled coverage",
+          startsAt: "2026-07-01T10:00:00.000Z"
+        }
+      ]
+    });
+    const audit = auditSpy();
+    const events = eventSpy();
+    const service = createInternalRbacService(
+      testOptions({ state, audit, events })
+    );
+
+    await expect(
+      service.revokeDirectGrant(context(), { grantId: "grant-future" })
+    ).resolves.toEqual({ revoked: true });
+
+    expect(state.repository.revokeDirectGrant).toHaveBeenCalledWith({
+      tenantId,
+      grantId: "grant-future",
+      revokedAt: now
+    });
+    expect(state.directGrants[0]?.revokedAt).toBe(now.toISOString());
+    expect(audit.record).toHaveBeenCalledTimes(1);
+    expect(events.append).toHaveBeenCalledTimes(1);
+  });
+
+  it("denies delegated permissions above tenant role-management authority without side effects", async () => {
+    const state = rbacState({
+      roles: [role("role-admin", ["roles.manage"])],
+      roleBindings: [
+        binding({
+          id: "binding-admin",
+          roleId: "role-admin",
+          employeeId: adminEmployeeId,
+          scope: { type: "tenant" }
+        })
+      ]
+    });
+    const audit = auditSpy();
+    const events = eventSpy();
+    const service = createInternalRbacService(
+      testOptions({ state, audit, events })
+    );
+
+    await expect(
+      service.createDirectGrant(context(), {
+        employeeId: targetEmployeeId,
+        permission: "conversation.assign",
+        scope: { type: "queue", id: "queue-sales" },
+        reason: "temporary coverage"
+      })
+    ).rejects.toMatchObject({ code: "permission.denied" });
+
+    expect(state.repository.createDirectGrant).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+    expect(events.append).not.toHaveBeenCalled();
+  });
+
+  it("denies direct self-grants even when the actor already owns the delegated authority", async () => {
+    const state = rbacState({
+      roles: [role("role-admin", ["roles.manage", "conversation.assign"])],
+      roleBindings: [
+        binding({
+          id: "binding-admin",
+          roleId: "role-admin",
+          employeeId: adminEmployeeId,
+          scope: { type: "tenant" }
+        })
+      ]
+    });
+    const audit = auditSpy();
+    const events = eventSpy();
+    const service = createInternalRbacService(
+      testOptions({ state, audit, events })
+    );
+
+    await expect(
+      service.createDirectGrant(context(), {
+        employeeId: adminEmployeeId,
+        permission: "conversation.assign",
+        scope: { type: "tenant" },
+        reason: "self escalation"
+      })
+    ).rejects.toMatchObject({ code: "permission.denied" });
+
+    expect(state.repository.createDirectGrant).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+    expect(events.append).not.toHaveBeenCalled();
+  });
+
+  it("denies direct and structurally self-applying role bindings without side effects", async () => {
+    const state = rbacState({
+      roles: [
+        role("role-admin", ["roles.manage", "conversation.read"]),
+        role("role-agent", ["conversation.read"])
+      ],
+      roleBindings: [
+        binding({
+          id: "binding-admin",
+          roleId: "role-admin",
+          employeeId: adminEmployeeId,
+          scope: { type: "tenant" }
+        })
+      ]
+    });
+    const audit = auditSpy();
+    const events = eventSpy();
+    const service = createInternalRbacService(
+      testOptions({
+        state,
+        audit,
+        events,
+        employees: [
+          employee(adminEmployeeId, { teamIds: ["team-sales"] }),
+          employee(targetEmployeeId, { queueIds: ["queue-sales"] })
+        ]
+      })
+    );
+
+    for (const subject of [
+      { type: "employee" as const, id: adminEmployeeId },
+      { type: "team" as const, id: "team-sales" }
+    ]) {
+      await expect(
+        service.createRoleBinding(context(), {
+          roleId: "role-agent",
+          subject,
+          scope:
+            subject.type === "team"
+              ? { type: "team", id: "team-sales" }
+              : { type: "tenant" }
+        })
+      ).rejects.toMatchObject({ code: "permission.denied" });
+    }
+
+    expect(state.repository.createRoleBinding).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+    expect(events.append).not.toHaveBeenCalled();
+  });
+
+  it("denies a visible binding scope when the server-loaded Employee target is outside actor scope", async () => {
+    const state = rbacState({
+      roles: [
+        role("role-admin", ["roles.manage", "conversation.read"]),
+        role("role-agent", ["conversation.read"])
+      ],
+      roleBindings: [
+        binding({
+          id: "binding-admin",
+          roleId: "role-admin",
+          employeeId: adminEmployeeId,
+          scope: { type: "queue", id: "queue-sales" }
+        })
+      ]
+    });
+    const audit = auditSpy();
+    const events = eventSpy();
+    const service = createInternalRbacService(
+      testOptions({
+        state,
+        audit,
+        events,
+        employees: [
+          employee(adminEmployeeId),
+          employee(targetEmployeeId, { queueIds: ["queue-claims"] })
+        ]
+      })
+    );
+
+    await expect(
+      service.createRoleBinding(context(), {
+        roleId: "role-agent",
+        subject: { type: "employee", id: targetEmployeeId },
+        scope: { type: "queue", id: "queue-sales" }
+      })
+    ).rejects.toMatchObject({ code: "permission.denied" });
+
+    expect(state.repository.createRoleBinding).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+    expect(events.append).not.toHaveBeenCalled();
+  });
+
+  it("denies revoking a binding whose server-loaded subject is outside actor scope", async () => {
+    const state = rbacState({
+      roles: [
+        role("role-admin", ["roles.manage"]),
+        role("role-agent", ["conversation.read"])
+      ],
+      roleBindings: [
+        binding({
+          id: "binding-admin",
+          roleId: "role-admin",
+          employeeId: adminEmployeeId,
+          scope: { type: "queue", id: "queue-sales" }
+        }),
+        binding({
+          id: "binding-hidden-target",
+          roleId: "role-agent",
+          employeeId: targetEmployeeId,
+          scope: { type: "queue", id: "queue-sales" }
+        })
+      ]
+    });
+    const audit = auditSpy();
+    const events = eventSpy();
+    const service = createInternalRbacService(
+      testOptions({
+        state,
+        audit,
+        events,
+        employees: [
+          employee(adminEmployeeId),
+          employee(targetEmployeeId, { queueIds: ["queue-claims"] })
+        ]
+      })
+    );
+
+    for (const bindingId of ["binding-hidden-target", "binding-missing"]) {
+      await expect(
+        service.revokeRoleBinding(context(), { bindingId })
+      ).rejects.toMatchObject({ code: "permission.denied" });
+    }
+
+    expect(state.repository.revokeRoleBinding).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+    expect(events.append).not.toHaveBeenCalled();
+  });
+
+  it("returns the same denial for hidden and unknown direct grants without side effects", async () => {
+    const state = rbacState({
+      roles: [role("role-admin", ["roles.manage"])],
+      roleBindings: [
+        binding({
+          id: "binding-admin",
+          roleId: "role-admin",
+          employeeId: adminEmployeeId,
+          scope: { type: "queue", id: "queue-sales" }
+        })
+      ],
+      directGrants: [
+        {
+          id: "grant-hidden-target",
+          tenantId,
+          employeeId: targetEmployeeId,
+          permission: "conversation.read",
+          scope: { type: "queue", id: "queue-sales" },
+          reason: "coverage"
+        }
+      ]
+    });
+    const audit = auditSpy();
+    const events = eventSpy();
+    const service = createInternalRbacService(
+      testOptions({
+        state,
+        audit,
+        events,
+        employees: [
+          employee(adminEmployeeId),
+          employee(targetEmployeeId, { queueIds: ["queue-claims"] })
+        ]
+      })
+    );
+
+    for (const grantId of ["grant-hidden-target", "grant-missing"]) {
+      await expect(
+        service.revokeDirectGrant(context(), { grantId })
+      ).rejects.toMatchObject({ code: "permission.denied" });
+    }
+
+    expect(state.repository.revokeDirectGrant).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+    expect(events.append).not.toHaveBeenCalled();
+  });
+
+  it("denies role permission additions above the actor ceiling for every active binding", async () => {
+    const state = rbacState({
+      roles: [
+        role("role-admin", ["roles.manage"]),
+        role("role-agent", ["conversation.read"])
+      ],
+      roleBindings: [
+        binding({
+          id: "binding-admin",
+          roleId: "role-admin",
+          employeeId: adminEmployeeId,
+          scope: { type: "tenant" }
+        }),
+        binding({
+          id: "binding-agent",
+          roleId: "role-agent",
+          employeeId: targetEmployeeId,
+          scope: { type: "tenant" }
+        })
+      ]
+    });
+    const audit = auditSpy();
+    const events = eventSpy();
+    const service = createInternalRbacService(
+      testOptions({ state, audit, events })
+    );
+
+    await expect(
+      service.updateRole(context(), {
+        roleId: "role-agent",
+        request: {
+          name: "Agent",
+          permissions: ["conversation.read", "tenant.manage"]
+        }
+      })
+    ).rejects.toMatchObject({ code: "permission.denied" });
+
+    expect(
+      state.repository.updateCustomRoleWithPermissions
+    ).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+    expect(events.append).not.toHaveBeenCalled();
+  });
+
+  it("rejects a role update that would make a future binding scope illegal", async () => {
+    const state = rbacState({
+      roles: [
+        role("role-admin", ["roles.manage", "tenant.manage"]),
+        role("role-agent", ["conversation.read"])
+      ],
+      roleBindings: [
+        binding({
+          id: "binding-admin",
+          roleId: "role-admin",
+          employeeId: adminEmployeeId,
+          scope: { type: "tenant" }
+        }),
+        binding({
+          id: "binding-agent-future",
+          roleId: "role-agent",
+          employeeId: targetEmployeeId,
+          scope: { type: "queue", id: "queue-sales" },
+          startsAt: "2026-07-01T10:00:00.000Z"
+        })
+      ]
+    });
+    const audit = auditSpy();
+    const events = eventSpy();
+    const service = createInternalRbacService(
+      testOptions({ state, audit, events })
+    );
+
+    await expect(
+      service.updateRole(context(), {
+        roleId: "role-agent",
+        request: {
+          name: "Agent",
+          permissions: ["tenant.manage"]
+        }
+      })
+    ).rejects.toMatchObject({ code: "validation.failed" });
+
+    expect(
+      state.repository.updateCustomRoleWithPermissions
+    ).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+    expect(events.append).not.toHaveBeenCalled();
+  });
+
+  it("allows a tenant role manager to add only authority the actor already owns", async () => {
+    const state = rbacState({
+      roles: [
+        role("role-admin", ["roles.manage", "conversation.assign"]),
+        role("role-agent", ["conversation.read"])
+      ],
+      roleBindings: [
+        binding({
+          id: "binding-admin",
+          roleId: "role-admin",
+          employeeId: adminEmployeeId,
+          scope: { type: "tenant" }
+        }),
+        binding({
+          id: "binding-agent",
+          roleId: "role-agent",
+          employeeId: targetEmployeeId,
+          scope: { type: "queue", id: "queue-sales" }
+        })
+      ]
+    });
+    const audit = auditSpy();
+    const events = eventSpy();
+    const service = createInternalRbacService(
+      testOptions({ state, audit, events })
+    );
+
+    await expect(
+      service.updateRole(context(), {
+        roleId: "role-agent",
+        request: {
+          name: "Agent",
+          permissions: ["conversation.read", "conversation.assign"]
+        }
+      })
+    ).resolves.toMatchObject({
+      role: {
+        id: "role-agent",
+        permissions: ["conversation.read", "conversation.assign"]
+      }
+    });
+
+    expect(
+      state.repository.updateCustomRoleWithPermissions
+    ).toHaveBeenCalledTimes(1);
+    expect(audit.record).toHaveBeenCalledTimes(1);
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "role.updated",
+        metadata: expect.objectContaining({
+          authorizationScopes: [
+            { type: "tenant" },
+            { type: "org_unit", id: "org-sales" },
+            { type: "queue", id: "queue-sales" }
+          ]
+        })
+      })
+    );
+    expect(events.append).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when a role update would affect an unresolved client binding", async () => {
+    const state = rbacState({
+      roles: [
+        role("role-admin", ["roles.manage", "client.view", "client.edit"]),
+        role("role-client", ["client.view"])
+      ],
+      roleBindings: [
+        binding({
+          id: "binding-admin",
+          roleId: "role-admin",
+          employeeId: adminEmployeeId,
+          scope: { type: "tenant" }
+        }),
+        binding({
+          id: "binding-client",
+          roleId: "role-client",
+          employeeId: targetEmployeeId,
+          scope: { type: "client", id: "client-unresolved" }
+        })
+      ]
+    });
+    const audit = auditSpy();
+    const events = eventSpy();
+    const service = createInternalRbacService(
+      testOptions({ state, audit, events })
+    );
+
+    await expect(
+      service.updateRole(context(), {
+        roleId: "role-client",
+        request: {
+          name: "Client",
+          permissions: ["client.view", "client.edit"]
+        }
+      })
+    ).rejects.toMatchObject({ code: "permission.denied" });
+
+    expect(
+      state.repository.updateCustomRoleWithPermissions
+    ).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+    expect(events.append).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for new client scopes but allows tenant-only cleanup of an existing grant", async () => {
+    const existingGrant: DirectPermissionGrant = {
+      id: "grant-client",
+      tenantId,
+      employeeId: targetEmployeeId,
+      permission: "client.view",
+      scope: { type: "client", id: "client-unresolved" },
+      reason: "legacy exact grant"
+    };
+    const state = rbacState({
+      roles: [
+        role("role-admin", ["roles.manage", "client.view", "conversation.read"])
+      ],
+      roleBindings: [
+        binding({
+          id: "binding-admin",
+          roleId: "role-admin",
+          employeeId: adminEmployeeId,
+          scope: { type: "tenant" }
+        })
+      ],
+      directGrants: [existingGrant]
+    });
+    const audit = auditSpy();
+    const events = eventSpy();
+    const service = createInternalRbacService(
+      testOptions({ state, audit, events })
+    );
+
+    for (const request of [
+      {
+        permission: "client.view" as const,
+        scope: { type: "client" as const, id: "client-unresolved" }
+      },
+      {
+        permission: "conversation.read" as const,
+        scope: {
+          type: "conversation" as const,
+          id: "conversation-unresolved"
+        }
+      }
+    ]) {
+      await expect(
+        service.createDirectGrant(context(), {
+          employeeId: targetEmployeeId,
+          ...request,
+          reason: "must resolve canonically"
+        })
+      ).rejects.toMatchObject({ code: "permission.denied" });
+    }
+    expect(state.repository.createDirectGrant).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+    expect(events.append).not.toHaveBeenCalled();
+
+    await expect(
+      service.revokeDirectGrant(context(), { grantId: "grant-client" })
+    ).resolves.toEqual({ revoked: true });
+    expect(state.repository.revokeDirectGrant).toHaveBeenCalledTimes(1);
+    expect(audit.record).toHaveBeenCalledTimes(1);
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "direct_grant.revoked",
+        metadata: expect.objectContaining({
+          scopeType: "client",
+          scopeId: "client-unresolved",
+          authorizationScopes: [
+            { type: "queue", id: "queue-sales" },
+            { type: "client", id: "client-unresolved" }
+          ]
+        })
+      })
+    );
+    expect(events.append).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed for new client and conversation role bindings without canonical loaders", async () => {
+    const state = rbacState({
+      roles: [
+        role("role-admin", [
+          "roles.manage",
+          "client.view",
+          "conversation.read"
+        ]),
+        role("role-client", ["client.view"]),
+        role("role-conversation", ["conversation.read"])
+      ],
+      roleBindings: [
+        binding({
+          id: "binding-admin",
+          roleId: "role-admin",
+          employeeId: adminEmployeeId,
+          scope: { type: "tenant" }
+        })
+      ]
+    });
+    const audit = auditSpy();
+    const events = eventSpy();
+    const service = createInternalRbacService(
+      testOptions({ state, audit, events })
+    );
+
+    for (const request of [
+      {
+        roleId: "role-client",
+        scope: { type: "client" as const, id: "client-unresolved" }
+      },
+      {
+        roleId: "role-conversation",
+        scope: {
+          type: "conversation" as const,
+          id: "conversation-unresolved"
+        }
+      }
+    ]) {
+      await expect(
+        service.createRoleBinding(context(), {
+          roleId: request.roleId,
+          subject: { type: "employee", id: targetEmployeeId },
+          scope: request.scope
+        })
+      ).rejects.toMatchObject({ code: "permission.denied" });
+    }
+
+    expect(state.repository.createRoleBinding).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+    expect(events.append).not.toHaveBeenCalled();
+  });
+
+  it("preserves tenant role management received through an actor team binding", async () => {
+    const state = rbacState({
+      roles: [role("role-admin", ["roles.manage"])],
+      roleBindings: [
+        binding({
+          id: "binding-admin-team",
+          roleId: "role-admin",
+          subject: { type: "team", id: "team-sales" },
+          scope: { type: "tenant" }
+        })
+      ]
+    });
+    const audit = auditSpy();
+    const events = eventSpy();
+    const service = createInternalRbacService(
+      testOptions({
+        state,
+        audit,
+        events,
+        employees: [
+          employee(adminEmployeeId, { teamIds: ["team-sales"] }),
+          employee(targetEmployeeId, { queueIds: ["queue-sales"] })
+        ]
+      })
+    );
+
+    await expect(
+      service.updateRole(context(), {
+        roleId: "role-admin",
+        request: {
+          name: "Admin",
+          permissions: ["conversation.read"]
+        }
+      })
+    ).rejects.toMatchObject({ code: "permission.denied" });
+
+    expect(
+      state.repository.updateCustomRoleWithPermissions
+    ).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+    expect(events.append).not.toHaveBeenCalled();
+  });
+
+  it("audits future binding facets when archiving a role", async () => {
+    const state = rbacState({
+      roles: [
+        role("role-admin", ["roles.manage"]),
+        role("role-agent", ["conversation.read"])
+      ],
+      roleBindings: [
+        binding({
+          id: "binding-admin",
+          roleId: "role-admin",
+          employeeId: adminEmployeeId,
+          scope: { type: "tenant" }
+        }),
+        binding({
+          id: "binding-agent-future",
+          roleId: "role-agent",
+          employeeId: targetEmployeeId,
+          scope: { type: "queue", id: "queue-sales" },
+          startsAt: "2026-07-01T10:00:00.000Z"
+        })
+      ]
+    });
+    const audit = auditSpy();
+    const service = createInternalRbacService(testOptions({ state, audit }));
+
+    await expect(
+      service.archiveRole(context(), { roleId: "role-agent" })
+    ).resolves.toMatchObject({
+      role: { id: "role-agent", status: "archived" }
+    });
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "role.archived",
+        metadata: expect.objectContaining({
+          authorizationScopes: [
+            { type: "tenant" },
+            { type: "org_unit", id: "org-sales" },
+            { type: "queue", id: "queue-sales" }
+          ]
+        })
+      })
+    );
+  });
+
+  it("restores an archived role only when every future binding stays within the actor ceiling", async () => {
+    const state = rbacState({
+      roles: [
+        role("role-admin", ["roles.manage", "conversation.assign"]),
+        role("role-agent", ["conversation.assign"], {
+          status: "archived",
+          archivedAt: "2026-06-23T10:00:00.000Z"
+        })
+      ],
+      roleBindings: [
+        binding({
+          id: "binding-admin",
+          roleId: "role-admin",
+          employeeId: adminEmployeeId,
+          scope: { type: "tenant" }
+        }),
+        binding({
+          id: "binding-agent-future",
+          roleId: "role-agent",
+          employeeId: targetEmployeeId,
+          scope: { type: "queue", id: "queue-sales" },
+          startsAt: "2026-07-01T10:00:00.000Z"
+        })
+      ]
+    });
+    const audit = auditSpy();
+    const events = eventSpy();
+    const service = createInternalRbacService(
+      testOptions({ state, audit, events })
+    );
+
+    await expect(
+      service.restoreRole(context(), { roleId: "role-agent" })
+    ).resolves.toMatchObject({
+      role: { id: "role-agent", status: "active" }
+    });
+    expect(state.repository.setCustomRoleStatus).toHaveBeenCalledOnce();
+    expect(audit.record).toHaveBeenCalledOnce();
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "role.restored",
+        metadata: expect.objectContaining({
+          authorizationScopes: [
+            { type: "tenant" },
+            { type: "org_unit", id: "org-sales" },
+            { type: "queue", id: "queue-sales" }
+          ]
+        })
+      })
+    );
+    expect(events.append).toHaveBeenCalledOnce();
+  });
+
+  it("denies restoring authority above the actor ceiling through a future binding", async () => {
+    const state = rbacState({
+      roles: [
+        role("role-admin", ["roles.manage"]),
+        role("role-agent", ["conversation.assign"], {
+          status: "archived",
+          archivedAt: "2026-06-23T10:00:00.000Z"
+        })
+      ],
+      roleBindings: [
+        binding({
+          id: "binding-admin",
+          roleId: "role-admin",
+          employeeId: adminEmployeeId,
+          scope: { type: "tenant" }
+        }),
+        binding({
+          id: "binding-agent-future",
+          roleId: "role-agent",
+          employeeId: targetEmployeeId,
+          scope: { type: "queue", id: "queue-sales" },
+          startsAt: "2026-07-01T10:00:00.000Z"
+        })
+      ]
+    });
+    const audit = auditSpy();
+    const events = eventSpy();
+    const service = createInternalRbacService(
+      testOptions({ state, audit, events })
+    );
+
+    await expect(
+      service.restoreRole(context(), { roleId: "role-agent" })
+    ).rejects.toMatchObject({ code: "permission.denied" });
+    expect(state.repository.setCustomRoleStatus).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+    expect(events.append).not.toHaveBeenCalled();
+  });
+
+  it("denies restoring a role through a group binding that applies to the actor", async () => {
+    const state = rbacState({
+      roles: [
+        role("role-admin", ["roles.manage", "conversation.assign"]),
+        role("role-agent", ["conversation.assign"], {
+          status: "archived",
+          archivedAt: "2026-06-23T10:00:00.000Z"
+        })
+      ],
+      roleBindings: [
+        binding({
+          id: "binding-admin",
+          roleId: "role-admin",
+          employeeId: adminEmployeeId,
+          scope: { type: "tenant" }
+        }),
+        binding({
+          id: "binding-agent-team",
+          roleId: "role-agent",
+          subject: { type: "team", id: "team-sales" },
+          scope: { type: "queue", id: "queue-sales" }
+        })
+      ]
+    });
+    const audit = auditSpy();
+    const events = eventSpy();
+    const service = createInternalRbacService(
+      testOptions({
+        state,
+        audit,
+        events,
+        employees: [
+          employee(adminEmployeeId, { teamIds: ["team-sales"] }),
+          employee(targetEmployeeId)
+        ]
+      })
+    );
+
+    await expect(
+      service.restoreRole(context(), { roleId: "role-agent" })
+    ).rejects.toMatchObject({ code: "permission.denied" });
+    expect(state.repository.setCustomRoleStatus).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+    expect(events.append).not.toHaveBeenCalled();
+  });
+
+  it.each(["employee", "team"] as const)(
+    "denies extending temporary authority through a self-applying %s binding",
+    async (subjectType) => {
+      const state = rbacState({
+        roles: [
+          role("role-admin", ["roles.manage"]),
+          role("role-agent", ["conversation.read"])
+        ],
+        roleBindings: [
+          binding({
+            id: "binding-admin",
+            roleId: "role-admin",
+            employeeId: adminEmployeeId,
+            scope: { type: "tenant" }
+          }),
+          binding({
+            id: "binding-agent-self",
+            roleId: "role-agent",
+            subject:
+              subjectType === "employee"
+                ? { type: "employee", id: adminEmployeeId }
+                : { type: "team", id: "team-sales" },
+            scope: { type: "queue", id: "queue-sales" }
+          })
+        ],
+        directGrants: [
+          {
+            id: "grant-temporary",
+            tenantId,
+            employeeId: adminEmployeeId,
+            permission: "conversation.assign",
+            scope: { type: "tenant" },
+            reason: "temporary authority",
+            expiresAt: "2026-06-25T10:00:00.000Z"
+          }
+        ]
+      });
+      const audit = auditSpy();
+      const events = eventSpy();
+      const service = createInternalRbacService(
+        testOptions({
+          state,
+          audit,
+          events,
+          employees: [
+            employee(adminEmployeeId, {
+              teamIds: subjectType === "team" ? ["team-sales"] : []
+            }),
+            employee(targetEmployeeId)
+          ]
+        })
+      );
+
+      await expect(
+        service.updateRole(context(), {
+          roleId: "role-agent",
+          request: {
+            name: "Agent",
+            permissions: ["conversation.read", "conversation.assign"]
+          }
+        })
+      ).rejects.toMatchObject({ code: "permission.denied" });
+      expect(
+        state.repository.updateCustomRoleWithPermissions
+      ).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+      expect(events.append).not.toHaveBeenCalled();
+    }
+  );
 
   it("prevents removing the current employee's own role management permission", async () => {
     const state = rbacState({
@@ -284,14 +1309,17 @@ function testOptions(input: {
   state: ReturnType<typeof rbacState>;
   audit?: Pick<SecurityAuditRepository, "record">;
   events?: Pick<DomainEventRepository, "append">;
+  employees?: readonly TenantEmployeeRecord[];
 }) {
   const employees = new Map(
-    [
-      employee(adminEmployeeId),
-      employee(targetEmployeeId, {
-        queueIds: ["queue-sales"]
-      })
-    ].map((record) => [record.employeeId, record])
+    (
+      input.employees ?? [
+        employee(adminEmployeeId),
+        employee(targetEmployeeId, {
+          queueIds: ["queue-sales"]
+        })
+      ]
+    ).map((record) => [record.employeeId, record])
   );
   let nextId = 1;
 
@@ -379,7 +1407,9 @@ function rbacState(input: {
     | "revokeDirectGrant"
     | "listRoleDefinitions"
     | "listRoleBindings"
+    | "listCurrentAndScheduledRoleBindings"
     | "listDirectGrants"
+    | "listCurrentAndScheduledDirectGrants"
     | "listDirectGrantsForEmployee"
   > = {
     createRoleWithPermissions: vi.fn(async (createInput) => {
@@ -496,11 +1526,31 @@ function rbacState(input: {
         );
       })
     ),
+    listCurrentAndScheduledRoleBindings: vi.fn(async (listInput) =>
+      roleBindings.filter((candidate) => {
+        return (
+          candidate.tenantId === listInput.tenantId &&
+          candidate.revokedAt === undefined &&
+          (candidate.expiresAt === undefined ||
+            Date.parse(candidate.expiresAt) > listInput.at.getTime())
+        );
+      })
+    ),
     listDirectGrants: vi.fn(async (listInput) =>
       directGrants.filter((candidate) => {
         return (
           candidate.tenantId === listInput.tenantId &&
           isTemporalAccessActive(candidate, listInput.at)
+        );
+      })
+    ),
+    listCurrentAndScheduledDirectGrants: vi.fn(async (listInput) =>
+      directGrants.filter((candidate) => {
+        return (
+          candidate.tenantId === listInput.tenantId &&
+          candidate.revokedAt === undefined &&
+          (candidate.expiresAt === undefined ||
+            Date.parse(candidate.expiresAt) > listInput.at.getTime())
         );
       })
     ),
@@ -544,18 +1594,44 @@ function role(
 function binding(input: {
   id: string;
   roleId: string;
-  employeeId: EmployeeId;
+  employeeId?: EmployeeId;
+  subject?: PermissionRoleBinding["subject"];
   scope: PermissionRoleBinding["scope"];
+  startsAt?: string;
+  expiresAt?: string;
+  revokedAt?: string;
 }): PermissionRoleBinding {
+  const subject =
+    input.subject ??
+    (input.employeeId === undefined
+      ? undefined
+      : { type: "employee" as const, id: input.employeeId });
+
+  if (subject === undefined) {
+    throw new Error("Binding fixture requires a subject.");
+  }
+
   return {
     id: input.id,
     tenantId,
     roleId: input.roleId,
-    subject: {
-      type: "employee",
-      id: input.employeeId
-    },
-    scope: input.scope
+    subject,
+    scope: input.scope,
+    startsAt: input.startsAt,
+    expiresAt: input.expiresAt,
+    revokedAt: input.revokedAt
+  };
+}
+
+function auditSpy(): Pick<SecurityAuditRepository, "record"> {
+  return {
+    record: vi.fn(async () => undefined)
+  };
+}
+
+function eventSpy(): Pick<DomainEventRepository, "append"> {
+  return {
+    append: vi.fn(async () => undefined)
   };
 }
 

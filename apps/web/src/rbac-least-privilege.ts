@@ -19,10 +19,6 @@ export function assertCanGrantScopedPermissions(input: {
 }): void {
   assertCanManageScopedAccess(input);
 
-  if (hasTenantRoleManagement(input)) {
-    return;
-  }
-
   for (const permission of input.target.permissions) {
     const decision = canAccess({
       actor: input.actor,
@@ -52,13 +48,4 @@ export function assertCanManageScopedAccess(input: {
   if (!decision.allowed) {
     throw new CoreError("permission.denied");
   }
-}
-
-function hasTenantRoleManagement(input: {
-  readonly effectiveGrants: readonly EffectivePermissionGrant[];
-}): boolean {
-  return input.effectiveGrants.some(
-    (grant) =>
-      grant.permission === "roles.manage" && grant.scope.type === "tenant"
-  );
 }

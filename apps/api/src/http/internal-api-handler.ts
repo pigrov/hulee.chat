@@ -941,8 +941,7 @@ function internalRouteAuthorizationPolicy(
     case "org_unit_upsert":
     case "work_queue_upsert":
       return {
-        kind: "signed_effective_permission_override",
-        permission: "employees.manage"
+        kind: "service_effective_access"
       };
     case "access_decision":
     case "rbac_roles_view":
@@ -957,8 +956,7 @@ function internalRouteAuthorizationPolicy(
     case "rbac_direct_grant_create":
     case "rbac_direct_grant_revoke":
       return {
-        kind: "signed_effective_permission_override",
-        permission: "roles.manage"
+        kind: "service_effective_access"
       };
     case "channel_catalog_view":
     case "source_catalog_view":

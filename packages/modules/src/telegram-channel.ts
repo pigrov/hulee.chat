@@ -2,14 +2,16 @@ import type {
   AdapterHealth,
   ChannelAdapter,
   DeliveryResult,
-  ModuleManifest,
   NormalizedAttachment,
   NormalizedIncomingMessage,
   NormalizedOutgoingMessage,
   PlatformErrorCode,
   TenantId
 } from "@hulee/contracts";
+import { defineModuleManifest } from "@hulee/contracts";
 import { z } from "zod";
+
+import { telegramChannelDataGovernance } from "./data-governance";
 
 import type { EgressProfileResolution, EgressRuntime } from "./egress";
 
@@ -359,7 +361,7 @@ export type TelegramChannelInboundEnvelope = z.infer<
   typeof telegramChannelInboundEnvelopeSchema
 >;
 
-export const telegramChannelManifest = {
+export const telegramChannelManifest = defineModuleManifest({
   id: "channel-telegram",
   type: "channel",
   name: "Telegram channel",
@@ -403,8 +405,10 @@ export const telegramChannelManifest = {
       order: 100
     }
   ],
-  healthChecks: ["telegram.webhook", "telegram.bot_api", "telegram.outbound"]
-} satisfies ModuleManifest;
+  healthChecks: ["telegram.webhook", "telegram.bot_api", "telegram.outbound"],
+  dataHandling: "tenant_or_customer_data",
+  dataGovernance: telegramChannelDataGovernance
+});
 
 export function parseTelegramChannelConfig(
   input: unknown

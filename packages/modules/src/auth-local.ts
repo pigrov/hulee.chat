@@ -1,4 +1,4 @@
-import type { AuthProvider, ModuleManifest } from "@hulee/contracts";
+import { defineModuleManifest, type AuthProvider } from "@hulee/contracts";
 import { randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 
@@ -7,14 +7,18 @@ const hashVersion = "scrypt:v1";
 const passwordHashBytes = 64;
 const maximumPasswordInputLength = 1024;
 
-export const localAuthManifest = {
+import { localAuthDataGovernance } from "./data-governance";
+
+export const localAuthManifest = defineModuleManifest({
   id: "auth-local",
   type: "auth",
   name: "Local auth",
   version: "0.0.0",
   capabilities: ["auth.email_password"],
-  configSchema: {}
-} satisfies ModuleManifest;
+  configSchema: {},
+  dataHandling: "tenant_or_customer_data",
+  dataGovernance: localAuthDataGovernance
+});
 
 export type LocalAuthProvider = AuthProvider & {
   verifyPassword(input: {

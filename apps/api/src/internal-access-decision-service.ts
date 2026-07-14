@@ -58,7 +58,11 @@ export function createInternalAccessDecisionService(
   return {
     async inspectAccessDecision(context, request) {
       const permission = parsePermission(request.permission);
-      const evaluatedAt = parseEvaluationTime(request.at, now);
+      const authorizationAt = now();
+      const evaluatedAt = parseEvaluationTime(
+        request.at,
+        () => authorizationAt
+      );
       const resource = normalizeResourceContext(request.resource);
       const permissionResource = toPermissionResourceContext(
         context.tenantId,
@@ -72,8 +76,19 @@ export function createInternalAccessDecisionService(
       const requesterSnapshot = await resolveAccessSnapshot({
         employee: requester,
         rbacRepository: options.rbacRepository,
-        at: evaluatedAt
+        at: authorizationAt
       });
+      const hasTenantInspection = canAccess({
+        actor: requesterSnapshot.actor,
+        permission: "roles.manage",
+        resource: { tenantId: context.tenantId },
+        effectiveGrants: requesterSnapshot.effectiveGrants
+      }).allowed;
+
+      if (!hasTenantInspection) {
+        assertCanonicalScopedInspectionResource(resource);
+      }
+
       const inspectionDecision = canAccess({
         actor: requesterSnapshot.actor,
         permission: "roles.manage",
@@ -90,6 +105,10 @@ export function createInternalAccessDecisionService(
         tenantId: context.tenantId,
         employeeId: request.employeeId as EmployeeId
       });
+      assertCanInspectEmployeeTarget({
+        requesterSnapshot,
+        targetEmployee
+      });
       const targetSnapshot = await resolveAccessSnapshot({
         employee: targetEmployee,
         rbacRepository: options.rbacRepository,
@@ -101,7 +120,16 @@ export function createInternalAccessDecisionService(
         resource: permissionResource,
         effectiveGrants: targetSnapshot.effectiveGrants
       });
-      const candidateGrants = targetSnapshot.effectiveGrants
+      const visibleEffectiveGrants = hasTenantInspection
+        ? targetSnapshot.effectiveGrants
+        : targetSnapshot.effectiveGrants.filter((grant) =>
+            isGrantRelevantToResource({
+              actor: targetSnapshot.actor,
+              grant,
+              resource: permissionResource
+            })
+          );
+      const candidateGrants = visibleEffectiveGrants
         .filter((grant) => grant.permission === permission)
         .map(toInternalGrant);
 
@@ -119,7 +147,7 @@ export function createInternalAccessDecisionService(
               : toInternalGrant(decision.matchedGrant)
         },
         candidateGrants,
-        effectiveGrantCount: targetSnapshot.effectiveGrants.length
+        effectiveGrantCount: visibleEffectiveGrants.length
       };
     }
   };
@@ -135,15 +163,82 @@ async function loadActiveEmployee(input: {
     employeeId: input.employeeId
   });
 
-  if (employee === null) {
-    throw new CoreError("tenant.not_found");
-  }
-
-  if (employee.deactivatedAt !== null) {
+  if (
+    employee === null ||
+    employee.tenantId !== input.tenantId ||
+    employee.deactivatedAt !== null
+  ) {
     throw new CoreError("permission.denied");
   }
 
   return employee;
+}
+
+function assertCanInspectEmployeeTarget(input: {
+  readonly requesterSnapshot: AccessSnapshot;
+  readonly targetEmployee: TenantEmployeeRecord;
+}): void {
+  const baseResource: PermissionResourceContext = {
+    tenantId: input.targetEmployee.tenantId,
+    orgUnitIds: input.targetEmployee.orgUnitIds,
+    teamIds: input.targetEmployee.teamIds
+  };
+  const targetResources = [
+    baseResource,
+    ...input.targetEmployee.queueIds.map((queueId) => ({
+      ...baseResource,
+      queueId
+    }))
+  ];
+
+  if (
+    !targetResources.some(
+      (resource) =>
+        canAccess({
+          actor: input.requesterSnapshot.actor,
+          permission: "roles.manage",
+          resource,
+          effectiveGrants: input.requesterSnapshot.effectiveGrants
+        }).allowed
+    )
+  ) {
+    throw new CoreError("permission.denied");
+  }
+}
+
+function assertCanonicalScopedInspectionResource(
+  resource: InternalAccessDecisionResourceContext
+): void {
+  const hasNonStructuralRelation =
+    resource.assignedEmployeeId !== undefined ||
+    resource.assignedEmployeeIds !== undefined ||
+    resource.assignedTeamIds !== undefined ||
+    resource.ownerEmployeeId !== undefined ||
+    resource.clientId !== undefined ||
+    resource.conversationId !== undefined;
+  const structuralAnchorCount =
+    (resource.orgUnitId === undefined ? 0 : 1) +
+    (resource.orgUnitIds?.length ?? 0) +
+    (resource.teamId === undefined ? 0 : 1) +
+    (resource.teamIds?.length ?? 0) +
+    (resource.queueId === undefined ? 0 : 1);
+
+  if (hasNonStructuralRelation || structuralAnchorCount !== 1) {
+    throw new CoreError("permission.denied");
+  }
+}
+
+function isGrantRelevantToResource(input: {
+  readonly actor: PermissionActor;
+  readonly grant: EffectivePermissionGrant;
+  readonly resource: PermissionResourceContext;
+}): boolean {
+  return canAccess({
+    actor: input.actor,
+    permission: input.grant.permission,
+    resource: input.resource,
+    effectiveGrants: [input.grant]
+  }).allowed;
 }
 
 async function resolveAccessSnapshot(input: {

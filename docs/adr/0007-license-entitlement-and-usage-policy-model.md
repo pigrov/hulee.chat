@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed.
+Accepted.
 
 ## Context
 
@@ -39,3 +39,6 @@ On-prem deployments use signed license snapshots and local usage policies. AI an
 - Over-limit behavior should preserve access to existing customer data according to policy.
 - Usage metering must be tenant-scoped, idempotent and auditable.
 - Payment providers and invoice automation can be added later without rewriting core feature gates.
+- A plan/entitlement may select only inside an approved purpose/legal lifecycle
+  envelope. It cannot create a retention purpose, override a legal maximum or
+  hold, force destructive deletion or block an already-authorized export.

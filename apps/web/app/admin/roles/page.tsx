@@ -1,4 +1,5 @@
 import {
+  canAccess,
   permissionCatalog,
   type DirectPermissionGrant,
   type PermissionRoleBinding,
@@ -46,10 +47,7 @@ import {
   roleTemplateCatalog,
   type RoleTemplateDefinition
 } from "../../../src/role-templates";
-import {
-  hasEffectivePermission,
-  resolveEmployeeEffectiveAccess
-} from "../../../src/rbac-effective-access";
+import { resolveEmployeeEffectiveAccess } from "../../../src/rbac-effective-access";
 import {
   permissionDomainKey,
   permissionScopeTypeKey,
@@ -97,7 +95,15 @@ export default async function RolesAdminPage({
     at: now
   });
 
-  if (!hasEffectivePermission(accessSnapshot, "roles.manage")) {
+  if (
+    accessSnapshot === undefined ||
+    !canAccess({
+      actor: accessSnapshot.actor,
+      effectiveGrants: accessSnapshot.effectiveGrants,
+      permission: "roles.manage",
+      resource: { tenantId: access.tenantId }
+    }).allowed
+  ) {
     const adminAccess = {
       session: access,
       effectiveAccess: accessSnapshot
@@ -989,7 +995,7 @@ function subjectValue(
   switch (subject.type) {
     case "employee":
       return references.employee
-        ? `${references.employee.displayName} (${references.employee.email})`
+        ? `${references.employee.displayName} (${references.employee.employeeId})`
         : subject.id;
     case "org_unit":
       return (
@@ -1013,7 +1019,9 @@ function employeeValue(
   employeeId: string,
   employee: TenantEmployeeRecord | undefined
 ): string {
-  return employee ? `${employee.displayName} (${employee.email})` : employeeId;
+  return employee
+    ? `${employee.displayName} (${employee.employeeId})`
+    : employeeId;
 }
 
 function roleStatusKey(status: TenantRoleRecord["status"]): I18nMessageKey {

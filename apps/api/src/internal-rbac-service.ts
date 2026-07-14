@@ -118,7 +118,9 @@ export type InternalRbacServiceOptions = {
     | "revokeDirectGrant"
     | "listRoleDefinitions"
     | "listRoleBindings"
+    | "listCurrentAndScheduledRoleBindings"
     | "listDirectGrants"
+    | "listCurrentAndScheduledDirectGrants"
     | "listDirectGrantsForEmployee"
   >;
   employeeRepository: Pick<EmployeeDirectoryRepository, "findEmployee">;
@@ -221,7 +223,8 @@ export function createInternalRbacService(
           roleId,
           name: role.name,
           permissions: role.permissions,
-          permissionCount: role.permissions.length
+          permissionCount: role.permissions.length,
+          authorizationScopes: [{ type: "tenant" }]
         },
         occurredAt: at,
         event: createRbacEvent({
@@ -249,11 +252,15 @@ export function createInternalRbacService(
     async updateRole(context, input) {
       const at = now();
       const role = prepareCustomTenantRole(input.request);
-      const [roles, bindings] = await Promise.all([
+      const [roles, bindings, currentAndScheduledBindings] = await Promise.all([
         options.rbacRepository.listRoleDefinitions({
           tenantId: context.tenantId
         }),
         options.rbacRepository.listRoleBindings({
+          tenantId: context.tenantId,
+          at
+        }),
+        options.rbacRepository.listCurrentAndScheduledRoleBindings({
           tenantId: context.tenantId,
           at
         })
@@ -262,7 +269,7 @@ export function createInternalRbacService(
         (candidate) => candidate.id === input.roleId
       );
 
-      await assertTenantRoleManagement({
+      const actorPrivilege = await assertTenantRoleManagement({
         context,
         rbacRepository: options.rbacRepository,
         employeeRepository: options.employeeRepository,
@@ -272,8 +279,8 @@ export function createInternalRbacService(
       });
       assertCustomRole(existingRole);
       assertRoleUpdateDoesNotRemoveOwnRoleManagement({
+        actorPrivilege,
         bindings,
-        currentEmployeeId: context.employeeId,
         existingRole,
         nextRole: role
       });
@@ -282,6 +289,26 @@ export function createInternalRbacService(
         existingRole.permissions,
         role.permissions
       );
+
+      await assertRoleUpdateBindingSafety({
+        actorPrivilege,
+        addedPermissions: permissionsDelta.addedPermissions,
+        bindings: currentAndScheduledBindings.filter(
+          (binding) => binding.roleId === input.roleId
+        ),
+        nextPermissions: role.permissions,
+        tenantId: context.tenantId,
+        employeeRepository: options.employeeRepository,
+        orgStructureRepository: options.orgStructureRepository
+      });
+      const authorizationScopes = await resolveRoleMutationAuthorizationScopes({
+        tenantId: context.tenantId,
+        bindings: currentAndScheduledBindings.filter(
+          (binding) => binding.roleId === input.roleId
+        ),
+        employeeRepository: options.employeeRepository,
+        orgStructureRepository: options.orgStructureRepository
+      });
 
       await options.rbacRepository.updateCustomRoleWithPermissions({
         tenantId: context.tenantId,
@@ -307,6 +334,7 @@ export function createInternalRbacService(
           nextDescription: role.description,
           previousPermissions: existingRole.permissions,
           nextPermissions: role.permissions,
+          authorizationScopes,
           ...permissionsDelta
         },
         occurredAt: at,
@@ -341,18 +369,22 @@ export function createInternalRbacService(
 
     async archiveRole(context, input) {
       const at = now();
-      const [roles, bindings] = await Promise.all([
+      const [roles, bindings, currentAndScheduledBindings] = await Promise.all([
         options.rbacRepository.listRoleDefinitions({
           tenantId: context.tenantId
         }),
         options.rbacRepository.listRoleBindings({
           tenantId: context.tenantId,
           at
+        }),
+        options.rbacRepository.listCurrentAndScheduledRoleBindings({
+          tenantId: context.tenantId,
+          at
         })
       ]);
       const role = roles.find((candidate) => candidate.id === input.roleId);
 
-      await assertTenantRoleManagement({
+      const actorPrivilege = await assertTenantRoleManagement({
         context,
         rbacRepository: options.rbacRepository,
         employeeRepository: options.employeeRepository,
@@ -364,10 +396,25 @@ export function createInternalRbacService(
 
       if (
         role.status === "active" &&
-        isRoleAssignedToEmployee(bindings, input.roleId, context.employeeId)
+        bindings.some(
+          (binding) =>
+            binding.roleId === input.roleId &&
+            roleBindingSubjectAppliesToActor(
+              actorPrivilege.actor,
+              binding.subject
+            )
+        )
       ) {
         throw new CoreError("permission.denied");
       }
+      const authorizationScopes = await resolveRoleMutationAuthorizationScopes({
+        tenantId: context.tenantId,
+        bindings: currentAndScheduledBindings.filter(
+          (binding) => binding.roleId === input.roleId
+        ),
+        employeeRepository: options.employeeRepository,
+        orgStructureRepository: options.orgStructureRepository
+      });
 
       await options.rbacRepository.setCustomRoleStatus({
         tenantId: context.tenantId,
@@ -386,7 +433,8 @@ export function createInternalRbacService(
         metadata: {
           roleId: input.roleId,
           name: role.name,
-          status: "archived"
+          status: "archived",
+          authorizationScopes
         },
         occurredAt: at,
         event: createRbacEvent({
@@ -414,18 +462,23 @@ export function createInternalRbacService(
 
     async restoreRole(context, input) {
       const at = now();
-      const [roles, roleBindings] = await Promise.all([
-        options.rbacRepository.listRoleDefinitions({
-          tenantId: context.tenantId
-        }),
-        options.rbacRepository.listRoleBindings({
-          tenantId: context.tenantId,
-          at
-        })
-      ]);
+      const [roles, roleBindings, currentAndScheduledBindings] =
+        await Promise.all([
+          options.rbacRepository.listRoleDefinitions({
+            tenantId: context.tenantId
+          }),
+          options.rbacRepository.listRoleBindings({
+            tenantId: context.tenantId,
+            at
+          }),
+          options.rbacRepository.listCurrentAndScheduledRoleBindings({
+            tenantId: context.tenantId,
+            at
+          })
+        ]);
       const role = roles.find((candidate) => candidate.id === input.roleId);
 
-      await assertTenantRoleManagement({
+      const actorPrivilege = await assertTenantRoleManagement({
         context,
         rbacRepository: options.rbacRepository,
         employeeRepository: options.employeeRepository,
@@ -434,6 +487,28 @@ export function createInternalRbacService(
         at
       });
       assertCustomRole(role);
+
+      if (role.status === "archived") {
+        await assertRoleUpdateBindingSafety({
+          actorPrivilege,
+          addedPermissions: role.permissions,
+          bindings: currentAndScheduledBindings.filter(
+            (binding) => binding.roleId === input.roleId
+          ),
+          nextPermissions: role.permissions,
+          tenantId: context.tenantId,
+          employeeRepository: options.employeeRepository,
+          orgStructureRepository: options.orgStructureRepository
+        });
+      }
+      const authorizationScopes = await resolveRoleMutationAuthorizationScopes({
+        tenantId: context.tenantId,
+        bindings: currentAndScheduledBindings.filter(
+          (binding) => binding.roleId === input.roleId
+        ),
+        employeeRepository: options.employeeRepository,
+        orgStructureRepository: options.orgStructureRepository
+      });
 
       await options.rbacRepository.setCustomRoleStatus({
         tenantId: context.tenantId,
@@ -452,7 +527,8 @@ export function createInternalRbacService(
         metadata: {
           roleId: input.roleId,
           name: role.name,
-          status: "active"
+          status: "active",
+          authorizationScopes
         },
         occurredAt: at,
         event: createRbacEvent({
@@ -509,17 +585,22 @@ export function createInternalRbacService(
       const scope = toPermissionScope(request.scope);
       const subject = toRoleBindingSubject(request.subject);
       const temporalWindow = normalizeTemporalWindow(request, at);
-      const [roles, roleBindings] = await Promise.all([
-        options.rbacRepository.listRoleDefinitions({
-          tenantId: context.tenantId
-        }),
-        options.rbacRepository.listRoleBindings({
-          tenantId: context.tenantId,
-          at
-        })
-      ]);
+      const [roles, roleBindings, currentAndScheduledBindings] =
+        await Promise.all([
+          options.rbacRepository.listRoleDefinitions({
+            tenantId: context.tenantId
+          }),
+          options.rbacRepository.listRoleBindings({
+            tenantId: context.tenantId,
+            at
+          }),
+          options.rbacRepository.listCurrentAndScheduledRoleBindings({
+            tenantId: context.tenantId,
+            at
+          })
+        ]);
       const role = roles.find((candidate) => candidate.id === request.roleId);
-      const existingBinding = roleBindings.find((binding) => {
+      const existingBinding = currentAndScheduledBindings.find((binding) => {
         return (
           binding.roleId === request.roleId &&
           binding.subject.type === subject.type &&
@@ -527,35 +608,46 @@ export function createInternalRbacService(
           areScopesEqual(binding.scope, scope)
         );
       });
-
-      if (role === undefined || role.status !== "active") {
-        throw new CoreError("validation.failed");
-      }
-
-      assertPermissionsAllowedForScope(role.permissions, scope.type);
-      await assertAssignableRoleBindingSubject({
-        tenantId: context.tenantId,
-        subject,
+      const actorPrivilege = await resolveRoleManagementActorPrivilege({
+        context,
         employeeRepository: options.employeeRepository,
-        orgStructureRepository: options.orgStructureRepository
+        rbacRepository: options.rbacRepository,
+        roles,
+        roleBindings,
+        at
       });
 
-      const [targetResource, actorPrivilege] = await Promise.all([
+      const [subjectResources, targetResource] = await Promise.all([
+        resolveRoleBindingSubjectResources({
+          tenantId: context.tenantId,
+          subject,
+          employeeRepository: options.employeeRepository,
+          orgStructureRepository: options.orgStructureRepository,
+          activeOnly: true
+        }),
         resolveKnownScopeResource({
           tenantId: context.tenantId,
           scope,
           orgStructureRepository: options.orgStructureRepository
-        }),
-        resolveRoleManagementActorPrivilege({
-          context,
-          employeeRepository: options.employeeRepository,
-          rbacRepository: options.rbacRepository,
-          roles,
-          roleBindings,
-          at
         })
       ]);
 
+      assertRoleBindingDoesNotApplyToActor(actorPrivilege.actor, subject);
+      assertCanManageRoleTarget({
+        actorPrivilege,
+        resources: subjectResources
+      });
+      assertCanManageResolvedScope({
+        actorPrivilege,
+        scope,
+        resource: targetResource
+      });
+
+      if (role === undefined || role.status !== "active") {
+        throw new CoreError("permission.denied");
+      }
+
+      assertPermissionsAllowedForScope(role.permissions, scope.type);
       assertCanGrantScopedPermissions({
         actor: actorPrivilege.actor,
         effectiveGrants: actorPrivilege.effectiveGrants,
@@ -597,7 +689,11 @@ export function createInternalRbacService(
         metadata: {
           roleId: request.roleId,
           ...roleBindingSubjectMetadata(subject),
-          ...scopeMetadata(scope)
+          ...scopeMetadata(scope),
+          authorizationScopes: rbacMutationAuthorizationScopes({
+            scope,
+            resources: [...subjectResources, targetResource]
+          })
         },
         occurredAt: at,
         event: createRbacEvent({
@@ -629,53 +725,65 @@ export function createInternalRbacService(
 
     async revokeRoleBinding(context, input) {
       const at = now();
-      const [roles, roleBindings] = await Promise.all([
-        options.rbacRepository.listRoleDefinitions({
-          tenantId: context.tenantId
-        }),
-        options.rbacRepository.listRoleBindings({
-          tenantId: context.tenantId,
-          at
-        })
-      ]);
-      const binding = roleBindings.find(
+      const [roles, roleBindings, currentAndScheduledBindings] =
+        await Promise.all([
+          options.rbacRepository.listRoleDefinitions({
+            tenantId: context.tenantId
+          }),
+          options.rbacRepository.listRoleBindings({
+            tenantId: context.tenantId,
+            at
+          }),
+          options.rbacRepository.listCurrentAndScheduledRoleBindings({
+            tenantId: context.tenantId,
+            at
+          })
+        ]);
+      const binding = currentAndScheduledBindings.find(
         (candidate) => candidate.id === input.bindingId
       );
+      const actorPrivilege = await resolveRoleManagementActorPrivilege({
+        context,
+        employeeRepository: options.employeeRepository,
+        rbacRepository: options.rbacRepository,
+        roles,
+        roleBindings,
+        at
+      });
 
       if (binding === undefined || binding.id === undefined) {
-        throw new CoreError("validation.failed");
-      }
-
-      if (
-        binding.subject.type === "employee" &&
-        binding.subject.id === context.employeeId
-      ) {
         throw new CoreError("permission.denied");
       }
 
-      const [targetResource, actorPrivilege] = await Promise.all([
+      const [subjectResources, targetResource] = await Promise.all([
+        resolveRoleBindingSubjectResources({
+          tenantId: context.tenantId,
+          subject: binding.subject,
+          employeeRepository: options.employeeRepository,
+          orgStructureRepository: options.orgStructureRepository,
+          activeOnly: false
+        }),
         resolveKnownScopeResource({
           tenantId: context.tenantId,
           scope: binding.scope,
           orgStructureRepository: options.orgStructureRepository,
           activeOnly: false
-        }),
-        resolveRoleManagementActorPrivilege({
-          context,
-          employeeRepository: options.employeeRepository,
-          rbacRepository: options.rbacRepository,
-          roles,
-          roleBindings,
-          at
         })
       ]);
 
-      assertCanManageScopedAccess({
-        actor: actorPrivilege.actor,
-        effectiveGrants: actorPrivilege.effectiveGrants,
-        target: {
-          resource: targetResource
-        }
+      assertRoleBindingDoesNotApplyToActor(
+        actorPrivilege.actor,
+        binding.subject
+      );
+      assertCanManageRoleTarget({
+        actorPrivilege,
+        resources: subjectResources
+      });
+      assertCanManageResolvedScope({
+        actorPrivilege,
+        scope: binding.scope,
+        resource: targetResource,
+        allowUnresolvedExactScopeForTenantCleanup: true
       });
 
       await options.rbacRepository.revokeRoleBinding({
@@ -694,7 +802,11 @@ export function createInternalRbacService(
         metadata: {
           roleId: binding.roleId,
           ...roleBindingSubjectMetadata(binding.subject),
-          ...scopeMetadata(binding.scope)
+          ...scopeMetadata(binding.scope),
+          authorizationScopes: rbacMutationAuthorizationScopes({
+            scope: binding.scope,
+            resources: [...subjectResources, targetResource]
+          })
         },
         occurredAt: at,
         event: createRbacEvent({
@@ -761,16 +873,7 @@ export function createInternalRbacService(
       const reason = normalizeReason(request.reason);
       const temporalWindow = normalizeTemporalWindow(request, at);
       const targetEmployeeId = request.employeeId as EmployeeId;
-      const [target, grants, roles, roleBindings] = await Promise.all([
-        options.employeeRepository.findEmployee({
-          tenantId: context.tenantId,
-          employeeId: targetEmployeeId
-        }),
-        options.rbacRepository.listDirectGrantsForEmployee({
-          tenantId: context.tenantId,
-          employeeId: targetEmployeeId,
-          at
-        }),
+      const [roles, roleBindings] = await Promise.all([
         options.rbacRepository.listRoleDefinitions({
           tenantId: context.tenantId
         }),
@@ -779,26 +882,39 @@ export function createInternalRbacService(
           at
         })
       ]);
-
-      assertActiveEmployee(target);
-      assertPermissionScopeAllowed(permission, scope.type);
-
-      const [targetResource, actorPrivilege] = await Promise.all([
+      const actorPrivilege = await resolveRoleManagementActorPrivilege({
+        context,
+        employeeRepository: options.employeeRepository,
+        rbacRepository: options.rbacRepository,
+        roles,
+        roleBindings,
+        at
+      });
+      const [target, targetResource] = await Promise.all([
+        options.employeeRepository.findEmployee({
+          tenantId: context.tenantId,
+          employeeId: targetEmployeeId
+        }),
         resolveKnownScopeResource({
           tenantId: context.tenantId,
           scope,
           orgStructureRepository: options.orgStructureRepository
-        }),
-        resolveRoleManagementActorPrivilege({
-          context,
-          employeeRepository: options.employeeRepository,
-          rbacRepository: options.rbacRepository,
-          roles,
-          roleBindings,
-          at
         })
       ]);
 
+      assertActiveEmployee(target);
+      const targetEmployeeResources = employeePermissionResources(target);
+      assertPermissionScopeAllowed(permission, scope.type);
+      assertEmployeeIsNotActor(actorPrivilege.actor, target);
+      assertCanManageRoleTarget({
+        actorPrivilege,
+        resources: targetEmployeeResources
+      });
+      assertCanManageResolvedScope({
+        actorPrivilege,
+        scope,
+        resource: targetResource
+      });
       assertCanGrantScopedPermissions({
         actor: actorPrivilege.actor,
         effectiveGrants: actorPrivilege.effectiveGrants,
@@ -807,10 +923,17 @@ export function createInternalRbacService(
           resource: targetResource
         }
       });
+      const grants =
+        await options.rbacRepository.listCurrentAndScheduledDirectGrants({
+          tenantId: context.tenantId,
+          at
+        });
 
       const existingGrant = grants.find((grant) => {
         return (
-          grant.permission === permission && areScopesEqual(grant.scope, scope)
+          grant.employeeId === targetEmployeeId &&
+          grant.permission === permission &&
+          areScopesEqual(grant.scope, scope)
         );
       });
 
@@ -849,7 +972,11 @@ export function createInternalRbacService(
           permission,
           reason,
           expiresAt: temporalWindow.expiresAt,
-          ...scopeMetadata(scope)
+          ...scopeMetadata(scope),
+          authorizationScopes: rbacMutationAuthorizationScopes({
+            scope,
+            resources: [...targetEmployeeResources, targetResource]
+          })
         },
         occurredAt: at,
         event: createRbacEvent({
@@ -888,7 +1015,7 @@ export function createInternalRbacService(
           tenantId: context.tenantId,
           at
         }),
-        options.rbacRepository.listDirectGrants({
+        options.rbacRepository.listCurrentAndScheduledDirectGrants({
           tenantId: context.tenantId,
           at
         })
@@ -896,38 +1023,44 @@ export function createInternalRbacService(
       const grant = directGrants.find(
         (candidate) => candidate.id === input.grantId
       );
+      const actorPrivilege = await resolveRoleManagementActorPrivilege({
+        context,
+        employeeRepository: options.employeeRepository,
+        rbacRepository: options.rbacRepository,
+        roles,
+        roleBindings,
+        at
+      });
 
       if (grant === undefined || grant.id === undefined) {
-        throw new CoreError("validation.failed");
-      }
-
-      if (grant.employeeId === context.employeeId) {
         throw new CoreError("permission.denied");
       }
 
-      const [targetResource, actorPrivilege] = await Promise.all([
+      const [target, targetResource] = await Promise.all([
+        options.employeeRepository.findEmployee({
+          tenantId: context.tenantId,
+          employeeId: grant.employeeId
+        }),
         resolveKnownScopeResource({
           tenantId: context.tenantId,
           scope: grant.scope,
           orgStructureRepository: options.orgStructureRepository,
           activeOnly: false
-        }),
-        resolveRoleManagementActorPrivilege({
-          context,
-          employeeRepository: options.employeeRepository,
-          rbacRepository: options.rbacRepository,
-          roles,
-          roleBindings,
-          at
         })
       ]);
 
-      assertCanManageScopedAccess({
-        actor: actorPrivilege.actor,
-        effectiveGrants: actorPrivilege.effectiveGrants,
-        target: {
-          resource: targetResource
-        }
+      assertEmployeeExists(target);
+      const targetEmployeeResources = employeePermissionResources(target);
+      assertEmployeeIsNotActor(actorPrivilege.actor, target);
+      assertCanManageRoleTarget({
+        actorPrivilege,
+        resources: targetEmployeeResources
+      });
+      assertCanManageResolvedScope({
+        actorPrivilege,
+        scope: grant.scope,
+        resource: targetResource,
+        allowUnresolvedExactScopeForTenantCleanup: true
       });
 
       await options.rbacRepository.revokeDirectGrant({
@@ -947,7 +1080,11 @@ export function createInternalRbacService(
           targetEmployeeId: grant.employeeId,
           permission: grant.permission,
           reason: grant.reason,
-          ...scopeMetadata(grant.scope)
+          ...scopeMetadata(grant.scope),
+          authorizationScopes: rbacMutationAuthorizationScopes({
+            scope: grant.scope,
+            resources: [...targetEmployeeResources, targetResource]
+          })
         },
         occurredAt: at,
         event: createRbacEvent({
@@ -990,7 +1127,7 @@ async function assertTenantRoleManagement(input: {
   readonly roles: readonly TenantRoleRecord[];
   readonly roleBindings?: readonly PermissionRoleBinding[];
   readonly at: Date;
-}): Promise<void> {
+}): Promise<RoleManagementActorPrivilege> {
   const actorPrivilege = await resolveRoleManagementActorPrivilege(input);
 
   assertCanManageScopedAccess({
@@ -1002,6 +1139,8 @@ async function assertTenantRoleManagement(input: {
       }
     }
   });
+
+  return actorPrivilege;
 }
 
 async function resolveRoleManagementActorPrivilege(input: {
@@ -1062,10 +1201,6 @@ function assertCanGrantScopedPermissions(input: {
 }): void {
   assertCanManageScopedAccess(input);
 
-  if (hasTenantRoleManagement(input)) {
-    return;
-  }
-
   for (const permission of input.target.permissions) {
     const decision = canAccess({
       actor: input.actor,
@@ -1102,16 +1237,7 @@ function assertCanManageScopedAccess(input: {
   }
 }
 
-function hasTenantRoleManagement(input: {
-  readonly effectiveGrants: readonly EffectivePermissionGrant[];
-}): boolean {
-  return input.effectiveGrants.some(
-    (grant) =>
-      grant.permission === "roles.manage" && grant.scope.type === "tenant"
-  );
-}
-
-async function assertAssignableRoleBindingSubject(input: {
+async function resolveRoleBindingSubjectResources(input: {
   readonly tenantId: TenantId;
   readonly subject: PermissionRoleBindingSubject;
   readonly employeeRepository: Pick<
@@ -1122,7 +1248,8 @@ async function assertAssignableRoleBindingSubject(input: {
     OrgStructureRepository,
     "listOrgUnits" | "listTeams" | "listWorkQueues"
   >;
-}): Promise<void> {
+  readonly activeOnly: boolean;
+}): Promise<readonly PermissionResourceContext[]> {
   switch (input.subject.type) {
     case "employee": {
       const target = await input.employeeRepository.findEmployee({
@@ -1130,45 +1257,278 @@ async function assertAssignableRoleBindingSubject(input: {
         employeeId: input.subject.id
       });
 
-      assertActiveEmployee(target);
-      return;
+      if (input.activeOnly) {
+        assertActiveEmployee(target);
+      } else {
+        assertEmployeeExists(target);
+      }
+
+      return employeePermissionResources(target);
     }
     case "org_unit": {
       const orgUnits = await input.orgStructureRepository.listOrgUnits({
         tenantId: input.tenantId,
-        activeOnly: true
+        activeOnly: input.activeOnly
       });
+      const orgUnit = orgUnits.find(
+        (candidate) => candidate.id === input.subject.id
+      );
 
-      if (!orgUnits.some((orgUnit) => orgUnit.id === input.subject.id)) {
-        throw new CoreError("validation.failed");
+      if (orgUnit === undefined) {
+        throw new CoreError("permission.denied");
       }
 
-      return;
+      return [
+        {
+          tenantId: orgUnit.tenantId,
+          orgUnitId: orgUnit.id,
+          orgUnitIds: [orgUnit.id]
+        }
+      ];
     }
     case "team": {
       const teams = await input.orgStructureRepository.listTeams({
         tenantId: input.tenantId
       });
+      const team = teams.find((candidate) => candidate.id === input.subject.id);
 
-      if (!teams.some((team) => team.id === input.subject.id)) {
-        throw new CoreError("validation.failed");
+      if (team === undefined) {
+        throw new CoreError("permission.denied");
       }
 
-      return;
+      return [
+        {
+          tenantId: team.tenantId,
+          teamId: team.id,
+          teamIds: [team.id]
+        }
+      ];
     }
     case "queue": {
       const workQueues = await input.orgStructureRepository.listWorkQueues({
         tenantId: input.tenantId,
-        activeOnly: true
+        activeOnly: input.activeOnly
       });
+      const workQueue = workQueues.find(
+        (candidate) => candidate.id === input.subject.id
+      );
 
-      if (!workQueues.some((workQueue) => workQueue.id === input.subject.id)) {
-        throw new CoreError("validation.failed");
+      if (workQueue === undefined) {
+        throw new CoreError("permission.denied");
       }
 
-      return;
+      return [
+        {
+          tenantId: workQueue.tenantId,
+          orgUnitId: workQueue.owningOrgUnitId ?? undefined,
+          queueId: workQueue.id
+        }
+      ];
     }
   }
+}
+
+function assertCanManageRoleTarget(input: {
+  readonly actorPrivilege: RoleManagementActorPrivilege;
+  readonly resources: readonly PermissionResourceContext[];
+}): void {
+  const allowed = input.resources.some(
+    (resource) =>
+      canAccess({
+        actor: input.actorPrivilege.actor,
+        effectiveGrants: input.actorPrivilege.effectiveGrants,
+        permission: "roles.manage",
+        resource
+      }).allowed
+  );
+
+  if (!allowed) {
+    throw new CoreError("permission.denied");
+  }
+}
+
+function assertCanManageResolvedScope(input: {
+  readonly actorPrivilege: RoleManagementActorPrivilege;
+  readonly scope: PermissionScope;
+  readonly resource: PermissionResourceContext;
+  readonly allowUnresolvedExactScopeForTenantCleanup?: boolean;
+}): void {
+  if (input.scope.type === "client" || input.scope.type === "conversation") {
+    if (!input.allowUnresolvedExactScopeForTenantCleanup) {
+      throw new CoreError("permission.denied");
+    }
+
+    assertCanManageScopedAccess({
+      actor: input.actorPrivilege.actor,
+      effectiveGrants: input.actorPrivilege.effectiveGrants,
+      target: {
+        resource: { tenantId: input.actorPrivilege.actor.tenantId }
+      }
+    });
+  }
+
+  assertCanManageScopedAccess({
+    actor: input.actorPrivilege.actor,
+    effectiveGrants: input.actorPrivilege.effectiveGrants,
+    target: { resource: input.resource }
+  });
+}
+
+function assertEmployeeIsNotActor(
+  actor: PermissionActor,
+  target: TenantEmployeeRecord
+): void {
+  if (actor.employeeId === target.employeeId) {
+    throw new CoreError("permission.denied");
+  }
+}
+
+function assertRoleBindingDoesNotApplyToActor(
+  actor: PermissionActor,
+  subject: PermissionRoleBindingSubject
+): void {
+  if (roleBindingSubjectAppliesToActor(actor, subject)) {
+    throw new CoreError("permission.denied");
+  }
+}
+
+function roleBindingSubjectAppliesToActor(
+  actor: PermissionActor,
+  subject: PermissionRoleBindingSubject
+): boolean {
+  switch (subject.type) {
+    case "employee":
+      return subject.id === actor.employeeId;
+    case "org_unit":
+      return actor.orgUnitIds?.includes(subject.id) ?? false;
+    case "team":
+      return actor.teamIds?.includes(subject.id) ?? false;
+    case "queue":
+      return actor.queueIds?.includes(subject.id) ?? false;
+  }
+}
+
+function employeePermissionResources(
+  employee: TenantEmployeeRecord
+): readonly PermissionResourceContext[] {
+  const baseResource: PermissionResourceContext = {
+    tenantId: employee.tenantId,
+    orgUnitIds: employee.orgUnitIds,
+    teamIds: employee.teamIds
+  };
+
+  return [
+    baseResource,
+    ...employee.queueIds.map((queueId) => ({
+      ...baseResource,
+      queueId
+    }))
+  ];
+}
+
+async function assertRoleUpdateBindingSafety(input: {
+  readonly actorPrivilege: RoleManagementActorPrivilege;
+  readonly addedPermissions: readonly Permission[];
+  readonly bindings: readonly PermissionRoleBinding[];
+  readonly nextPermissions: readonly Permission[];
+  readonly tenantId: TenantId;
+  readonly employeeRepository: Pick<
+    EmployeeDirectoryRepository,
+    "findEmployee"
+  >;
+  readonly orgStructureRepository: Pick<
+    OrgStructureRepository,
+    "listOrgUnits" | "listTeams" | "listWorkQueues"
+  >;
+}): Promise<void> {
+  for (const binding of input.bindings) {
+    assertPermissionsAllowedForScope(input.nextPermissions, binding.scope.type);
+
+    if (input.addedPermissions.length === 0) {
+      continue;
+    }
+
+    assertRoleBindingDoesNotApplyToActor(
+      input.actorPrivilege.actor,
+      binding.subject
+    );
+
+    const [subjectResources, targetResource] = await Promise.all([
+      resolveRoleBindingSubjectResources({
+        tenantId: input.tenantId,
+        subject: binding.subject,
+        employeeRepository: input.employeeRepository,
+        orgStructureRepository: input.orgStructureRepository,
+        activeOnly: false
+      }),
+      resolveKnownScopeResource({
+        tenantId: input.tenantId,
+        scope: binding.scope,
+        orgStructureRepository: input.orgStructureRepository,
+        activeOnly: false
+      })
+    ]);
+
+    assertCanManageRoleTarget({
+      actorPrivilege: input.actorPrivilege,
+      resources: subjectResources
+    });
+    assertCanManageResolvedScope({
+      actorPrivilege: input.actorPrivilege,
+      scope: binding.scope,
+      resource: targetResource
+    });
+    assertCanGrantScopedPermissions({
+      actor: input.actorPrivilege.actor,
+      effectiveGrants: input.actorPrivilege.effectiveGrants,
+      target: {
+        permissions: input.addedPermissions,
+        resource: targetResource
+      }
+    });
+  }
+}
+
+async function resolveRoleMutationAuthorizationScopes(input: {
+  readonly tenantId: TenantId;
+  readonly bindings: readonly PermissionRoleBinding[];
+  readonly employeeRepository: Pick<
+    EmployeeDirectoryRepository,
+    "findEmployee"
+  >;
+  readonly orgStructureRepository: Pick<
+    OrgStructureRepository,
+    "listOrgUnits" | "listTeams" | "listWorkQueues"
+  >;
+}): Promise<readonly InternalAccessDecisionScope[]> {
+  const scopes: InternalAccessDecisionScope[] = [{ type: "tenant" }];
+
+  for (const binding of input.bindings) {
+    const [subjectResources, targetResource] = await Promise.all([
+      resolveRoleBindingSubjectResources({
+        tenantId: input.tenantId,
+        subject: binding.subject,
+        employeeRepository: input.employeeRepository,
+        orgStructureRepository: input.orgStructureRepository,
+        activeOnly: false
+      }),
+      resolveKnownScopeResource({
+        tenantId: input.tenantId,
+        scope: binding.scope,
+        orgStructureRepository: input.orgStructureRepository,
+        activeOnly: false
+      })
+    ]);
+
+    scopes.push(
+      ...rbacMutationAuthorizationScopes({
+        scope: binding.scope,
+        resources: [...subjectResources, targetResource]
+      })
+    );
+  }
+
+  return normalizeRbacAuthorizationScopes(scopes);
 }
 
 async function resolveKnownScopeResource(input: {
@@ -1206,7 +1566,7 @@ async function resolveKnownScopeResource(input: {
       });
 
       if (!orgUnits.some((orgUnit) => orgUnit.id === scope.id)) {
-        throw new CoreError("validation.failed");
+        throw new CoreError("permission.denied");
       }
 
       return {
@@ -1221,7 +1581,7 @@ async function resolveKnownScopeResource(input: {
       });
 
       if (!teams.some((team) => team.id === scope.id)) {
-        throw new CoreError("validation.failed");
+        throw new CoreError("permission.denied");
       }
 
       return {
@@ -1240,7 +1600,7 @@ async function resolveKnownScopeResource(input: {
       );
 
       if (workQueue === undefined) {
-        throw new CoreError("validation.failed");
+        throw new CoreError("permission.denied");
       }
 
       return {
@@ -1260,6 +1620,14 @@ function assertActiveEmployee(
   }
 }
 
+function assertEmployeeExists(
+  employee: TenantEmployeeRecord | null
+): asserts employee is TenantEmployeeRecord {
+  if (employee === null) {
+    throw new CoreError("permission.denied");
+  }
+}
+
 function assertCustomRole(
   role: TenantRoleRecord | undefined
 ): asserts role is TenantRoleRecord {
@@ -1269,41 +1637,44 @@ function assertCustomRole(
 }
 
 function assertRoleUpdateDoesNotRemoveOwnRoleManagement(input: {
+  readonly actorPrivilege: RoleManagementActorPrivilege;
   readonly bindings: readonly PermissionRoleBinding[];
-  readonly currentEmployeeId: EmployeeId;
   readonly existingRole: TenantRoleRecord;
   readonly nextRole: PreparedCustomTenantRole;
 }): void {
   if (
-    !isRoleAssignedToEmployee(
-      input.bindings,
-      input.existingRole.id,
-      input.currentEmployeeId
-    )
+    !input.existingRole.permissions.includes("roles.manage") ||
+    input.nextRole.permissions.includes("roles.manage")
   ) {
     return;
   }
 
   if (
-    input.existingRole.permissions.includes("roles.manage") &&
-    !input.nextRole.permissions.includes("roles.manage")
+    !input.bindings.some(
+      (binding) =>
+        binding.roleId === input.existingRole.id &&
+        binding.scope.type === "tenant" &&
+        roleBindingSubjectAppliesToActor(
+          input.actorPrivilege.actor,
+          binding.subject
+        )
+    )
   ) {
+    return;
+  }
+
+  const tenantRoleManagement = input.actorPrivilege.effectiveGrants.find(
+    (grant) =>
+      grant.permission === "roles.manage" && grant.scope.type === "tenant"
+  );
+  const hasIndependentSource = tenantRoleManagement?.sources.some(
+    (source) =>
+      source.type === "direct_grant" || source.roleId !== input.existingRole.id
+  );
+
+  if (!hasIndependentSource) {
     throw new CoreError("permission.denied");
   }
-}
-
-function isRoleAssignedToEmployee(
-  bindings: readonly PermissionRoleBinding[],
-  roleId: string,
-  employeeId: EmployeeId
-): boolean {
-  return bindings.some((binding) => {
-    return (
-      binding.roleId === roleId &&
-      binding.subject.type === "employee" &&
-      binding.subject.id === employeeId
-    );
-  });
 }
 
 function toPermission(value: string): Permission {
@@ -1493,12 +1864,82 @@ function scopeId(scope: PermissionScope): string | undefined {
   return "id" in scope ? scope.id : undefined;
 }
 
-function scopeMetadata(scope: PermissionScope): Record<string, string> {
+function scopeMetadata(scope: PermissionScope): Record<string, unknown> {
   const id = scopeId(scope);
 
   return id === undefined
-    ? { scopeType: scope.type }
-    : { scopeType: scope.type, scopeId: id };
+    ? {
+        scopeType: scope.type,
+        authorizationScopes: [permissionScopeEventPayload(scope)]
+      }
+    : {
+        scopeType: scope.type,
+        scopeId: id,
+        authorizationScopes: [permissionScopeEventPayload(scope)]
+      };
+}
+
+function rbacMutationAuthorizationScopes(input: {
+  readonly scope: PermissionScope;
+  readonly resources: readonly PermissionResourceContext[];
+}): readonly InternalAccessDecisionScope[] {
+  const literalScope = permissionScopeEventPayload(input.scope);
+  const scopes: InternalAccessDecisionScope[] = [literalScope];
+
+  for (const resource of input.resources) {
+    for (const orgUnitId of resourceIds(
+      resource.orgUnitId,
+      resource.orgUnitIds
+    )) {
+      scopes.push({ type: "org_unit", id: orgUnitId });
+    }
+
+    for (const teamId of resourceIds(resource.teamId, resource.teamIds)) {
+      scopes.push({ type: "team", id: teamId });
+    }
+
+    if (resource.queueId !== undefined) {
+      scopes.push({ type: "queue", id: resource.queueId });
+    }
+  }
+
+  return normalizeRbacAuthorizationScopes(scopes);
+}
+
+function normalizeRbacAuthorizationScopes(
+  input: readonly InternalAccessDecisionScope[]
+): readonly InternalAccessDecisionScope[] {
+  const scopes = new Map<string, InternalAccessDecisionScope>();
+
+  for (const scope of input) {
+    scopes.set("id" in scope ? `${scope.type}:${scope.id}` : scope.type, scope);
+  }
+
+  const order: Record<InternalAccessDecisionScope["type"], number> = {
+    tenant: 0,
+    org_unit: 1,
+    team: 2,
+    queue: 3,
+    assigned: 4,
+    own: 5,
+    client: 6,
+    conversation: 7
+  };
+
+  return [...scopes.values()].sort(
+    (left, right) =>
+      order[left.type] - order[right.type] ||
+      ("id" in left && "id" in right ? left.id.localeCompare(right.id) : 0)
+  );
+}
+
+function resourceIds(
+  scalarId: string | undefined,
+  ids: readonly string[] | undefined
+): readonly string[] {
+  return [
+    ...new Set([...(scalarId === undefined ? [] : [scalarId]), ...(ids ?? [])])
+  ];
 }
 
 function roleBindingSubjectMetadata(

@@ -197,6 +197,34 @@
       "when": 1783538501207,
       "tag": "0027_sturdy_black_bird",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1783956458168,
+      "tag": "0028_groovy_purifiers",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1784015838211,
+      "tag": "0029_inbox_v2_identity_transport_foundation",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1784033003114,
+      "tag": "0030_inbox_v2_work_item_responsibility_foundation",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1784057973557,
+      "tag": "0031_inbox_v2_timeline_message_foundation",
+      "breakpoints": true
     }
   ]
 }

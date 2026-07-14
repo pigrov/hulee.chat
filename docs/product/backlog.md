@@ -64,6 +64,24 @@
 - [ ] Inbox search.
 - [ ] SSE realtime updates with polling fallback.
 
+## Epic 5A. Inbox V2 Architecture And Delivery
+
+The canonical task-level plan, dependencies, acceptance criteria, verification
+gates and completion evidence for the conversation/message/inbox refactor live
+in `docs/product/inbox-v2-backlog.md`.
+
+The accepted cross-ADR implementation-entry review lives in
+`docs/product/inbox-v2-epic-0-architecture-review.md`; it does not duplicate task
+status.
+
+Its data lifecycle/privacy baseline is ADR 0015 and
+`docs/product/inbox-v2-data-lifecycle-and-privacy.md`; implementation status
+remains only in the Inbox V2 backlog.
+
+Do not duplicate Inbox V2 task status in this general backlog. The related
+items in Epic 4, Epic 5, Epic 7, Epic 8, Epic 9, Epic 11 and Epic 12 are complete
+only when the mapped Inbox V2 release gates are verified in that document.
+
 ## Epic 6. Module System
 
 - [ ] Module manifest.
@@ -104,6 +122,52 @@
 - [x] SOURCE-110 Source diagnostics, replay and DLQ policy.
 - [x] SOURCE-111 Source catalog categories for messengers, marketplaces, reviews, forms, email, telephony, CRM and API.
 - [x] SOURCE-112 Contract tests for source adapters and normalizers.
+
+The provider discovery items below do not block the current Inbox V2
+Telegram/WhatsApp/MAX release gate.
+
+- [ ] SOURCE-113 Viber official integration decision package.
+  - State: `planned`; Priority: `P1`; Depends on: SOURCE-105 and INB2-ARCH-010.
+  - Acceptance: evaluate `viber_chatbot` and `viber_business_messages`
+    separately; keep `viber_qr_bridge` out of the production catalog without an
+    approved transport contract; record consent, phone addressing, reply,
+    history, group, media/status, partner, pricing, SLA/DPA and resale rules.
+  - Verification: official links are current; a sandbox, direct commercial
+    approval or partner contract is tested, otherwise the surface remains
+    `commercial_approval`/`partner_required`; fixtures do not promise private
+    groups or history without evidence.
+  - Evidence: `docs/product/messenger-integration-landscape.md` plus a dated
+    direct/partner/no-go result without secrets; contract fixtures and live smoke
+    are required only after access is granted.
+
+- [ ] SOURCE-114 Select WeChat/WeCom production surfaces.
+  - State: `planned`; Priority: `P1`; Depends on: SOURCE-105 and INB2-ARCH-010.
+  - Acceptance: Official Account, WeChat Customer Service, customer groups and
+    conversation archive remain separate manifests; each declares read/write,
+    roster, reply-window, consent, license and region constraints.
+  - Verification: selected APIs pass sandbox fixtures or retain a concrete
+    account/region/partner blocker; archive evidence never enables reply.
+  - Evidence: decision matrix, official docs, sandbox results and verification
+    date.
+
+- [ ] SOURCE-115 Complete imo partner API discovery.
+  - State: `planned`; Priority: `P2`; Depends on: INB2-ARCH-010.
+  - Acceptance: obtain or explicitly fail to obtain an API specification for
+    auth, webhooks, history, roster, outbound, multi-tenant/resale, SLA/DPA and
+    sandbox access; consumer web login remains unsupported.
+  - Verification: without a proven contract the catalog remains
+    `partner_required` and the composer offers no native reply.
+  - Evidence: partner correspondence reference, specification/sandbox fixtures
+    or a dated no-go decision.
+
+- [ ] SOURCE-116 Prioritize the next official messaging portfolio slice.
+  - State: `planned`; Priority: `P1`; Depends on: INB2-ARCH-010.
+  - Acceptance: Meta Messenger/Instagram, TikTok, LINE, Zalo, RCS, Kakao, Apple
+    and enterprise/community providers are weighted by target market, API
+    maturity, groups, business initiation, region, cost and support risk.
+  - Verification: product approves one global and one regional candidate and
+    creates separate adapter tasks with exact provider-surface contracts.
+  - Evidence: weighted score, owner/date, official links and decision record.
 
 ## Epic 8. Telephony
 

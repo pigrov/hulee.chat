@@ -1,3 +1,17 @@
 export type { TableDefinition, TableScope } from "./metadata";
 export { initialTables } from "./metadata";
+export * from "./inbox-v2/client-merge";
+export * from "./inbox-v2/conversation-client-link";
+export * from "./inbox-v2/external-thread";
+export * from "./inbox-v2/identity-foundation";
+export * from "./inbox-v2/outbound-transport";
+export * from "./inbox-v2/participant-membership";
+export * from "./inbox-v2/provider-semantic-ordering";
+export * from "./inbox-v2/provider-roster-evidence";
+export * from "./inbox-v2/source-account-identity";
+export * from "./inbox-v2/source-occurrence";
+export * from "./inbox-v2/source-thread-binding";
+export * from "./inbox-v2/tenant-policy-authority";
+export * from "./inbox-v2/timeline-message";
+export * from "./inbox-v2/work-item";
 export * from "./tables";

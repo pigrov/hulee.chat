@@ -215,159 +215,123 @@ export async function updateInboxConversationRouting(input: {
   );
 }
 
-export async function loadRbacRoles(
-  options: InternalApiAccessOptions<"roles.manage">
-): Promise<RbacRolesViewModel> {
-  return requestInternalApiJson({
+export async function loadRbacRoles(): Promise<RbacRolesViewModel> {
+  return requestServiceAuthorizedInternalApiJson({
     method: "GET",
     path: "/internal/v1/rbac/roles",
     schema: internalRbacRolesResponseSchema,
-    errorPrefix: "Internal RBAC roles API returned",
-    options,
-    permission: "roles.manage"
+    errorPrefix: "Internal RBAC roles API returned"
   });
 }
 
 export async function createRbacRole(
-  input: InternalRbacRoleMutationRequest,
-  options: InternalApiAccessOptions<"roles.manage">
+  input: InternalRbacRoleMutationRequest
 ): Promise<InternalRbacRoleResponse> {
-  return requestInternalApiJson({
+  return requestServiceAuthorizedInternalApiJson({
     method: "POST",
     path: "/internal/v1/rbac/roles",
     body: internalRbacRoleMutationRequestSchema.parse(input),
     schema: internalRbacRoleResponseSchema,
-    errorPrefix: "Internal RBAC role create API returned",
-    options,
-    permission: "roles.manage"
+    errorPrefix: "Internal RBAC role create API returned"
   });
 }
 
 export async function updateRbacRole(
   roleId: string,
-  input: InternalRbacRoleMutationRequest,
-  options: InternalApiAccessOptions<"roles.manage">
+  input: InternalRbacRoleMutationRequest
 ): Promise<InternalRbacRoleResponse> {
-  return requestInternalApiJson({
+  return requestServiceAuthorizedInternalApiJson({
     method: "PATCH",
     path: `/internal/v1/rbac/roles/${encodeURIComponent(roleId)}`,
     body: internalRbacRoleMutationRequestSchema.parse(input),
     schema: internalRbacRoleResponseSchema,
-    errorPrefix: "Internal RBAC role update API returned",
-    options,
-    permission: "roles.manage"
+    errorPrefix: "Internal RBAC role update API returned"
   });
 }
 
 export async function archiveRbacRole(
-  roleId: string,
-  options: InternalApiAccessOptions<"roles.manage">
+  roleId: string
 ): Promise<InternalRbacRoleResponse> {
-  return requestInternalApiJson({
+  return requestServiceAuthorizedInternalApiJson({
     method: "POST",
     path: `/internal/v1/rbac/roles/${encodeURIComponent(roleId)}/archive`,
     schema: internalRbacRoleResponseSchema,
-    errorPrefix: "Internal RBAC role archive API returned",
-    options,
-    permission: "roles.manage"
+    errorPrefix: "Internal RBAC role archive API returned"
   });
 }
 
 export async function restoreRbacRole(
-  roleId: string,
-  options: InternalApiAccessOptions<"roles.manage">
+  roleId: string
 ): Promise<InternalRbacRoleResponse> {
-  return requestInternalApiJson({
+  return requestServiceAuthorizedInternalApiJson({
     method: "POST",
     path: `/internal/v1/rbac/roles/${encodeURIComponent(roleId)}/restore`,
     schema: internalRbacRoleResponseSchema,
-    errorPrefix: "Internal RBAC role restore API returned",
-    options,
-    permission: "roles.manage"
+    errorPrefix: "Internal RBAC role restore API returned"
   });
 }
 
-export async function loadRbacRoleBindings(
-  options: InternalApiAccessOptions<"roles.manage">
-): Promise<RbacRoleBindingsViewModel> {
-  return requestInternalApiJson({
+export async function loadRbacRoleBindings(): Promise<RbacRoleBindingsViewModel> {
+  return requestServiceAuthorizedInternalApiJson({
     method: "GET",
     path: "/internal/v1/rbac/role-bindings",
     schema: internalRbacRoleBindingsResponseSchema,
-    errorPrefix: "Internal RBAC role bindings API returned",
-    options,
-    permission: "roles.manage"
+    errorPrefix: "Internal RBAC role bindings API returned"
   });
 }
 
 export async function createRbacRoleBinding(
-  input: InternalRbacRoleBindingCreateRequest,
-  options: InternalApiAccessOptions<"roles.manage">
+  input: InternalRbacRoleBindingCreateRequest
 ): Promise<InternalRbacRoleBindingResponse> {
-  return requestInternalApiJson({
+  return requestServiceAuthorizedInternalApiJson({
     method: "POST",
     path: "/internal/v1/rbac/role-bindings",
     body: internalRbacRoleBindingCreateRequestSchema.parse(input),
     schema: internalRbacRoleBindingResponseSchema,
-    errorPrefix: "Internal RBAC role binding create API returned",
-    options,
-    permission: "roles.manage"
+    errorPrefix: "Internal RBAC role binding create API returned"
   });
 }
 
 export async function revokeRbacRoleBinding(
-  bindingId: string,
-  options: InternalApiAccessOptions<"roles.manage">
+  bindingId: string
 ): Promise<InternalRbacRevokeResponse> {
-  return requestInternalApiJson({
+  return requestServiceAuthorizedInternalApiJson({
     method: "DELETE",
     path: `/internal/v1/rbac/role-bindings/${encodeURIComponent(bindingId)}`,
     schema: internalRbacRevokeResponseSchema,
-    errorPrefix: "Internal RBAC role binding revoke API returned",
-    options,
-    permission: "roles.manage"
+    errorPrefix: "Internal RBAC role binding revoke API returned"
   });
 }
 
-export async function loadRbacDirectGrants(
-  options: InternalApiAccessOptions<"roles.manage">
-): Promise<RbacDirectGrantsViewModel> {
-  return requestInternalApiJson({
+export async function loadRbacDirectGrants(): Promise<RbacDirectGrantsViewModel> {
+  return requestServiceAuthorizedInternalApiJson({
     method: "GET",
     path: "/internal/v1/rbac/direct-grants",
     schema: internalRbacDirectGrantsResponseSchema,
-    errorPrefix: "Internal RBAC direct grants API returned",
-    options,
-    permission: "roles.manage"
+    errorPrefix: "Internal RBAC direct grants API returned"
   });
 }
 
 export async function createRbacDirectGrant(
-  input: InternalRbacDirectGrantCreateRequest,
-  options: InternalApiAccessOptions<"roles.manage">
+  input: InternalRbacDirectGrantCreateRequest
 ): Promise<InternalRbacDirectGrantResponse> {
-  return requestInternalApiJson({
+  return requestServiceAuthorizedInternalApiJson({
     method: "POST",
     path: "/internal/v1/rbac/direct-grants",
     body: internalRbacDirectGrantCreateRequestSchema.parse(input),
     schema: internalRbacDirectGrantResponseSchema,
-    errorPrefix: "Internal RBAC direct grant create API returned",
-    options,
-    permission: "roles.manage"
+    errorPrefix: "Internal RBAC direct grant create API returned"
   });
 }
 
 export async function revokeRbacDirectGrant(
-  grantId: string,
-  options: InternalApiAccessOptions<"roles.manage">
+  grantId: string
 ): Promise<InternalRbacRevokeResponse> {
-  return requestInternalApiJson({
+  return requestServiceAuthorizedInternalApiJson({
     method: "DELETE",
     path: `/internal/v1/rbac/direct-grants/${encodeURIComponent(grantId)}`,
     schema: internalRbacRevokeResponseSchema,
-    errorPrefix: "Internal RBAC direct grant revoke API returned",
-    options,
-    permission: "roles.manage"
+    errorPrefix: "Internal RBAC direct grant revoke API returned"
   });
 }
 
@@ -1066,18 +1030,39 @@ type InternalApiResponseSchema<TResponse> = {
   parse(value: unknown): TResponse;
 };
 
-async function requestInternalApiJson<
-  TResponse,
-  TPermission extends Permission
->(input: {
+type InternalApiJsonRequest<TResponse> = {
   readonly method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   readonly path: string;
   readonly body?: unknown;
   readonly schema: InternalApiResponseSchema<TResponse>;
   readonly errorPrefix: string;
-  readonly options: InternalApiAccessOptions<TPermission>;
-  readonly permission: TPermission;
-}): Promise<TResponse> {
+};
+
+async function requestServiceAuthorizedInternalApiJson<TResponse>(
+  input: InternalApiJsonRequest<TResponse>
+): Promise<TResponse> {
+  return executeInternalApiJsonRequest(input);
+}
+
+async function requestInternalApiJson<
+  TResponse,
+  TPermission extends Permission
+>(
+  input: InternalApiJsonRequest<TResponse> & {
+    readonly options: InternalApiAccessOptions<TPermission>;
+    readonly permission: TPermission;
+  }
+): Promise<TResponse> {
+  return executeInternalApiJsonRequest(
+    input,
+    requireEffectivePermissionOverride(input.options, input.permission)
+  );
+}
+
+async function executeInternalApiJsonRequest<TResponse>(
+  input: InternalApiJsonRequest<TResponse>,
+  effectivePermissionOverride?: Permission
+): Promise<TResponse> {
   const url = new URL(input.path, resolveInternalApiBaseUrl());
   const body =
     input.body === undefined ? undefined : JSON.stringify(input.body);
@@ -1089,10 +1074,9 @@ async function requestInternalApiJson<
         method: input.method,
         path: internalPath(url),
         body: input.body,
-        effectivePermissionOverride: requireEffectivePermissionOverride(
-          input.options,
-          input.permission
-        )
+        ...(effectivePermissionOverride === undefined
+          ? {}
+          : { effectivePermissionOverride })
       })),
       ...(body === undefined
         ? {}

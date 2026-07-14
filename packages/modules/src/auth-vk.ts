@@ -1,6 +1,8 @@
-import type { AuthProvider, ModuleManifest } from "@hulee/contracts";
+import { defineModuleManifest, type AuthProvider } from "@hulee/contracts";
 
-export const vkAuthManifest = {
+import { vkAuthDataGovernance } from "./data-governance";
+
+export const vkAuthManifest = defineModuleManifest({
   id: "auth-vk",
   type: "auth",
   name: "VK auth",
@@ -32,8 +34,10 @@ export const vkAuthManifest = {
       order: 40
     }
   ],
-  healthChecks: ["vk.oauth.config"]
-} satisfies ModuleManifest;
+  healthChecks: ["vk.oauth.config"],
+  dataHandling: "tenant_or_customer_data",
+  dataGovernance: vkAuthDataGovernance
+});
 
 export type VkAuthProvider = AuthProvider;
 

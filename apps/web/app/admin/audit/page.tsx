@@ -4,19 +4,15 @@ import {
   permissionCatalog,
   type Permission
 } from "@hulee/core";
+import type { EmployeeId } from "@hulee/contracts";
 import {
   accessAuditActions,
   createSqlEmployeeDirectoryRepository,
-  createSqlOrgStructureRepository,
   createSqlSecurityAuditRepository,
   createSqlTenantRbacRepository,
   type AccessAuditAction,
   type AccessAuditRecord,
-  type ConversationRoutingAuditRecord,
-  type TenantEmployeeRecord,
-  type TenantRoleRecord,
-  type TeamRecord,
-  type WorkQueueRecord
+  type ConversationRoutingAuditRecord
 } from "@hulee/db";
 import { createTranslator, type I18nMessageKey } from "@hulee/i18n";
 import { ListChecks, Route, Search } from "lucide-react";
@@ -24,18 +20,15 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AccessDeniedPage } from "../../../src/access-denied";
+import { resolveAdminAuditAuthorization } from "../../../src/admin-audit-access";
 import { formatDateTime } from "../../../src/formatting";
 import { loadTenantAdminViewModel } from "../../../src/admin-view-model";
 import { permissionScopeTypeKey } from "../../../src/rbac-permission-display";
-import { roleName } from "../../../src/rbac-role-display";
 import {
   getWebDatabase,
   resolveCurrentWebAccessSession
 } from "../../../src/session";
-import {
-  hasEffectivePermission,
-  resolveEmployeeEffectiveAccess
-} from "../../../src/rbac-effective-access";
+import { resolveEmployeeEffectiveAccess } from "../../../src/rbac-effective-access";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
 import { navigationAccessFromTenantAdminAccess } from "../../../src/tenant-admin-nav";
 
@@ -91,7 +84,9 @@ export default async function AuditAdminPage({
     rbacRepository
   });
 
-  if (!hasEffectivePermission(accessSnapshot, "audit.view")) {
+  const auditAuthorization = resolveAdminAuditAuthorization(accessSnapshot);
+
+  if (auditAuthorization === undefined) {
     const adminAccess = {
       session: access,
       effectiveAccess: accessSnapshot
@@ -106,21 +101,12 @@ export default async function AuditAdminPage({
   }
 
   const securityAuditRepository = createSqlSecurityAuditRepository(database);
-  const orgStructureRepository = createSqlOrgStructureRepository(database);
-  const [model, employees, roles, teams, workQueues, resolvedSearchParams] =
-    await Promise.all([
-      loadTenantAdminViewModel({ tenantId: access.tenantId, database }),
-      employeeRepository.listEmployees({ tenantId: access.tenantId }),
-      rbacRepository.listRoleDefinitions({ tenantId: access.tenantId }),
-      orgStructureRepository.listTeams({ tenantId: access.tenantId }),
-      orgStructureRepository.listWorkQueues({
-        tenantId: access.tenantId,
-        activeOnly: true
-      }),
-      searchParams
-    ]);
+  const [model, resolvedSearchParams] = await Promise.all([
+    loadTenantAdminViewModel({ tenantId: access.tenantId, database }),
+    searchParams
+  ]);
   const { t, locale } = createTranslator(model.tenant.locale);
-  const filters = resolveAuditFilters(resolvedSearchParams, employees, roles);
+  const filters = resolveAuditFilters(resolvedSearchParams);
   const includeAccessAudit = shouldIncludeAccessAudit(filters);
   const includeRoutingAudit = shouldIncludeRoutingAudit(filters);
   const [accessAuditRecords, routingAuditRecords] = await Promise.all([
@@ -128,6 +114,7 @@ export default async function AuditAdminPage({
       ? Promise.resolve<readonly AccessAuditRecord[]>([])
       : securityAuditRepository.listAccessRecords({
           tenantId: access.tenantId,
+          authorization: auditAuthorization,
           limit: 50,
           action: filters.accessAction,
           actorEmployeeId: filters.actorEmployeeId,
@@ -141,6 +128,7 @@ export default async function AuditAdminPage({
       ? Promise.resolve<readonly ConversationRoutingAuditRecord[]>([])
       : securityAuditRepository.listConversationRoutingRecords({
           tenantId: access.tenantId,
+          authorization: auditAuthorization,
           limit: 50,
           actorEmployeeId: filters.actorEmployeeId,
           conversationId: filters.conversationId,
@@ -214,50 +202,35 @@ export default async function AuditAdminPage({
             </label>
             <label className="fieldStack">
               <span className="detailLabel">{t("admin.audit.actor")}</span>
-              <select
-                className="selectInput"
+              <input
+                className="textInput"
                 defaultValue={filters.actorEmployeeId ?? ""}
                 name="auditActorEmployeeId"
-              >
-                <option value="">{t("admin.audit.allActors")}</option>
-                {employees.map((employee) => (
-                  <option key={employee.employeeId} value={employee.employeeId}>
-                    {employee.displayName}
-                  </option>
-                ))}
-              </select>
+                placeholder={t("admin.audit.allActors")}
+                type="text"
+              />
             </label>
             <label className="fieldStack">
               <span className="detailLabel">
                 {t("admin.audit.targetEmployee")}
               </span>
-              <select
-                className="selectInput"
+              <input
+                className="textInput"
                 defaultValue={filters.targetEmployeeId ?? ""}
                 name="auditTargetEmployeeId"
-              >
-                <option value="">{t("admin.audit.allEmployees")}</option>
-                {employees.map((employee) => (
-                  <option key={employee.employeeId} value={employee.employeeId}>
-                    {employee.displayName}
-                  </option>
-                ))}
-              </select>
+                placeholder={t("admin.audit.allEmployees")}
+                type="text"
+              />
             </label>
             <label className="fieldStack">
               <span className="detailLabel">{t("admin.audit.role")}</span>
-              <select
-                className="selectInput"
+              <input
+                className="textInput"
                 defaultValue={filters.roleId ?? ""}
                 name="auditRoleId"
-              >
-                <option value="">{t("admin.audit.allRoles")}</option>
-                {roles.map((role) => (
-                  <option key={role.id} value={role.id}>
-                    {roleName(role, t)}
-                  </option>
-                ))}
-              </select>
+                placeholder={t("admin.audit.allRoles")}
+                type="text"
+              />
             </label>
             <label className="fieldStack">
               <span className="detailLabel">{t("admin.audit.permission")}</span>
@@ -280,7 +253,7 @@ export default async function AuditAdminPage({
               </span>
               <input
                 className="textInput"
-                defaultValue={resolvedSearchParams?.auditConversationId ?? ""}
+                defaultValue={filters.conversationId ?? ""}
                 name="auditConversationId"
                 type="text"
               />
@@ -329,22 +302,17 @@ export default async function AuditAdminPage({
                 records.map((record) =>
                   record.type === "access" ? (
                     <AccessAuditRow
-                      employees={employees}
                       key={record.id}
                       locale={locale}
                       record={record.record}
-                      roles={roles}
                       t={t}
                     />
                   ) : (
                     <RoutingAuditRow
-                      employees={employees}
                       key={record.id}
                       locale={locale}
                       record={record.record}
-                      teams={teams}
                       t={t}
-                      workQueues={workQueues}
                     />
                   )
                 )
@@ -358,26 +326,16 @@ export default async function AuditAdminPage({
 }
 
 function AccessAuditRow({
-  employees,
   locale,
   record,
-  roles,
   t
 }: {
-  employees: readonly TenantEmployeeRecord[];
   locale: string;
   record: AccessAuditRecord;
-  roles: readonly TenantRoleRecord[];
   t: Translator;
 }): ReactNode {
-  const actor = findEmployee(employees, record.actorEmployeeId);
   const targetEmployeeId = metadataString(record.metadata, "targetEmployeeId");
-  const targetEmployee = findEmployee(employees, targetEmployeeId);
   const roleId = metadataString(record.metadata, "roleId");
-  const role =
-    roleId === undefined
-      ? undefined
-      : roles.find((candidate) => candidate.id === roleId);
   const permission = metadataString(record.metadata, "permission");
   const reason = metadataString(record.metadata, "reason");
   const scope = scopeValueFromAuditMetadata(record.metadata, t);
@@ -398,7 +356,7 @@ function AccessAuditRow({
         </p>
         <p className="metaText">
           {t("admin.audit.actorValue", {
-            value: formatActor(record.actorEmployeeId, actor, t)
+            value: formatActor(record.actorEmployeeId, t)
           })}
         </p>
         <p className="metaText">
@@ -411,14 +369,14 @@ function AccessAuditRow({
         {targetEmployeeId === undefined ? null : (
           <span className="badge">
             {t("admin.audit.targetEmployeeValue", {
-              value: employeeValue(targetEmployeeId, targetEmployee)
+              value: targetEmployeeId
             })}
           </span>
         )}
         {roleId === undefined ? null : (
           <span className="badge">
             {t("admin.audit.roleValue", {
-              value: role === undefined ? roleId : roleName(role, t)
+              value: roleId
             })}
           </span>
         )}
@@ -449,22 +407,14 @@ function AccessAuditRow({
 }
 
 function RoutingAuditRow({
-  employees,
   locale,
   record,
-  teams,
-  t,
-  workQueues
+  t
 }: {
-  employees: readonly TenantEmployeeRecord[];
   locale: string;
   record: ConversationRoutingAuditRecord;
-  teams: readonly TeamRecord[];
   t: Translator;
-  workQueues: readonly WorkQueueRecord[];
 }): ReactNode {
-  const actor = findEmployee(employees, record.actorEmployeeId);
-
   return (
     <article className="managementRow accessAuditRow">
       <span className="metricIcon">
@@ -481,7 +431,7 @@ function RoutingAuditRow({
         </p>
         <p className="metaText">
           {t("admin.audit.actorValue", {
-            value: formatActor(record.actorEmployeeId, actor, t)
+            value: formatActor(record.actorEmployeeId, t)
           })}
         </p>
         <p className="metaText">
@@ -498,7 +448,7 @@ function RoutingAuditRow({
               metadata: record.metadata,
               nextKey: "currentQueueId",
               previousKey: "previousCurrentQueueId",
-              resolveLabel: (queueId) => queueLabel(queueId, workQueues)
+              resolveLabel: opaqueAuditId
             })
           })}
         </span>
@@ -509,8 +459,7 @@ function RoutingAuditRow({
               metadata: record.metadata,
               nextKey: "assignedEmployeeId",
               previousKey: "previousAssignedEmployeeId",
-              resolveLabel: (employeeId) =>
-                employeeValue(employeeId, findEmployee(employees, employeeId))
+              resolveLabel: opaqueAuditId
             })
           })}
         </span>
@@ -521,7 +470,7 @@ function RoutingAuditRow({
               metadata: record.metadata,
               nextKey: "assignedTeamId",
               previousKey: "previousAssignedTeamId",
-              resolveLabel: (teamId) => teamLabel(teamId, teams)
+              resolveLabel: opaqueAuditId
             })
           })}
         </span>
@@ -590,30 +539,25 @@ function resolveAuditFilters(
         auditTargetEmployeeId?: string;
         auditTo?: string;
       }
-    | undefined,
-  employees: readonly TenantEmployeeRecord[],
-  roles: readonly TenantRoleRecord[]
+    | undefined
 ): {
   readonly accessAction?: AccessAuditAction;
-  readonly actorEmployeeId?: TenantEmployeeRecord["employeeId"];
+  readonly actorEmployeeId?: EmployeeId;
   readonly conversationId?: string;
   readonly eventType: AuditEventType;
   readonly from?: Date;
   readonly permission?: Permission;
   readonly roleId?: string;
-  readonly targetEmployeeId?: TenantEmployeeRecord["employeeId"];
+  readonly targetEmployeeId?: EmployeeId;
   readonly to?: Date;
 } {
-  const actor = findEmployee(employees, searchParams?.auditActorEmployeeId);
-  const targetEmployee = findEmployee(
-    employees,
+  const actorEmployeeId = normalizeOptionalFilter(
+    searchParams?.auditActorEmployeeId
+  ) as EmployeeId | undefined;
+  const targetEmployeeId = normalizeOptionalFilter(
     searchParams?.auditTargetEmployeeId
-  );
-  const roleId =
-    searchParams?.auditRoleId &&
-    roles.some((role) => role.id === searchParams.auditRoleId)
-      ? searchParams.auditRoleId
-      : undefined;
+  ) as EmployeeId | undefined;
+  const roleId = normalizeOptionalFilter(searchParams?.auditRoleId);
   const permission =
     searchParams?.auditPermission && isPermission(searchParams.auditPermission)
       ? searchParams.auditPermission
@@ -624,13 +568,13 @@ function resolveAuditFilters(
 
   return {
     accessAction: resolveAccessAuditAction(searchParams?.auditAction),
-    actorEmployeeId: actor?.employeeId,
+    actorEmployeeId,
     conversationId,
     eventType: resolveAuditEventType(searchParams?.auditEventType),
     from: resolveAuditDate(searchParams?.auditFrom, "start"),
     permission,
     roleId,
-    targetEmployeeId: targetEmployee?.employeeId,
+    targetEmployeeId,
     to: resolveAuditDate(searchParams?.auditTo, "end")
   };
 }
@@ -673,28 +617,20 @@ function normalizeOptionalFilter(
 ): string | undefined {
   const trimmedValue = value?.trim();
 
-  return trimmedValue === undefined || trimmedValue === ""
+  return trimmedValue === undefined ||
+    trimmedValue === "" ||
+    trimmedValue.length > 200
     ? undefined
     : trimmedValue;
 }
 
 function formatActor(
   actorEmployeeId: string | undefined,
-  actor: TenantEmployeeRecord | undefined,
   t: Translator
 ): string {
   return actorEmployeeId === undefined
     ? t("admin.audit.systemActor")
-    : employeeValue(actorEmployeeId, actor);
-}
-
-function findEmployee(
-  employees: readonly TenantEmployeeRecord[],
-  employeeId: string | undefined
-): TenantEmployeeRecord | undefined {
-  return employeeId === undefined
-    ? undefined
-    : employees.find((employee) => employee.employeeId === employeeId);
+    : actorEmployeeId;
 }
 
 function metadataString(
@@ -739,26 +675,8 @@ function formatRoutingTransition(input: {
   }`;
 }
 
-function employeeValue(
-  employeeId: string,
-  employee: TenantEmployeeRecord | undefined
-): string {
-  return employee === undefined
-    ? employeeId
-    : `${employee.displayName} (${employee.email})`;
-}
-
-function queueLabel(
-  queueId: string,
-  workQueues: readonly WorkQueueRecord[]
-): string {
-  return (
-    workQueues.find((workQueue) => workQueue.id === queueId)?.name ?? queueId
-  );
-}
-
-function teamLabel(teamId: string, teams: readonly TeamRecord[]): string {
-  return teams.find((team) => team.id === teamId)?.name ?? teamId;
+function opaqueAuditId(id: string): string {
+  return id;
 }
 
 function accessAuditActionKey(action: AccessAuditAction): I18nMessageKey {

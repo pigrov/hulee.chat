@@ -8,6 +8,7 @@
   "dependencies": {
     "@hulee/contact-identity": "workspace:*",
     "@hulee/contracts": "workspace:*",
-    "@hulee/entitlements": "workspace:*"
+    "@hulee/entitlements": "workspace:*",
+    "zod": "^4.4.3"
   }
 }

@@ -83,6 +83,71 @@ export type {
 export { createSequentialIdFactory } from "./ids";
 export type { IdFactory } from "./ids";
 export {
+  createInboxV2ModulePermissionCatalogRegistrationSchema,
+  evaluateInboxV2PermissionScopePairLegality,
+  getInboxV2PermissionDefinition,
+  INBOX_V2_PERMISSION_SCOPE_CATALOG_SCHEMA_ID,
+  INBOX_V2_PERMISSION_SCOPE_CATALOG_VERSION,
+  inboxV1PermissionMappingCatalogRegistration,
+  inboxV1PermissionMappingCatalogRegistrationSchema,
+  inboxV1ToV2PermissionMappings,
+  inboxV2PermissionCatalog,
+  inboxV2PermissionCatalogRegistration,
+  inboxV2PermissionCatalogRegistrationSchema,
+  inboxV2PermissionGuardProfileIds,
+  inboxV2PermissionGuardProfileCatalogRegistration,
+  inboxV2PermissionGuardProfileCatalogRegistrationSchema,
+  inboxV2PermissionGuardProfiles,
+  inboxV2PermissionScopeCatalog,
+  inboxV2PermissionScopeCatalogSchema,
+  inboxV2PermissionScopeTypes,
+  inboxV2ScopeCatalog,
+  inboxV2ScopeCatalogRegistration,
+  inboxV2ScopeCatalogRegistrationSchema,
+  isInboxV2PermissionScopePairLegal,
+  isInboxV2PermissionId,
+  isInboxV2PermissionScope,
+  migrateInboxV1PermissionScopeToV2,
+  parseInboxV2PermissionScope
+} from "./inbox-v2-permission-catalog";
+export type {
+  InboxV1PermissionMappingDefinition,
+  InboxV1PermissionMappingDisposition,
+  InboxV1PermissionScopeMigrationResult,
+  InboxV2OrgUnitScopeMode,
+  InboxV2PermissionCatalogEntry,
+  InboxV2PermissionDefinition,
+  InboxV2PermissionGuardProfileId,
+  InboxV2PermissionId,
+  InboxV2PermissionPrincipalKind,
+  InboxV2PermissionScope,
+  InboxV2PermissionScopeDefinition,
+  InboxV2PermissionScopePairLegality,
+  InboxV2PermissionScopeType
+} from "./inbox-v2-permission-catalog";
+export {
+  deriveInboxV2Capabilities,
+  evaluateInboxV2AuthorizationPlan,
+  toInboxV2PublicAuthorizationDecision
+} from "./inbox-v2-authorization-policy";
+export type {
+  InboxV2AuthorizationDecision,
+  InboxV2AuthorizationInternalReason,
+  InboxV2AuthorizationPlanInput,
+  InboxV2AuthorizationPublicErrorCode,
+  InboxV2AuthorizationRequirement,
+  InboxV2CanonicalScopeFact,
+  InboxV2CurrentAuthorizationFacts,
+  InboxV2DerivedCapability,
+  InboxV2PolicyGrant,
+  InboxV2PolicyGuardEvidence,
+  InboxV2PolicyPrincipal,
+  InboxV2PolicyRevisionCheck,
+  InboxV2PolicyTimestamp,
+  InboxV2PublicAuthorizationDecision,
+  InboxV2RequirementDecision
+} from "./inbox-v2-authorization-policy";
+export {
   canonicalInternalApiSignaturePayload,
   createInternalApiSignature,
   internalApiSignatureHeader,

@@ -15,13 +15,32 @@ const actor = {
 };
 
 describe("RBAC least privilege", () => {
-  it("allows tenant role managers to grant any scoped permission", () => {
+  it("applies the delegated-permission ceiling to tenant role managers", () => {
     expect(() =>
       assertCanGrantScopedPermissions({
         actor,
         effectiveGrants: [
           grant("roles.manage", { type: "tenant" }),
           grant("message.reply", { type: "org_unit", id: "org-sales" })
+        ],
+        target: {
+          permissions: ["message.reply"],
+          resource: {
+            tenantId,
+            queueId: "queue-claims"
+          }
+        }
+      })
+    ).toThrow(new CoreError("permission.denied"));
+  });
+
+  it("allows tenant role managers to grant permissions they hold on the target", () => {
+    expect(() =>
+      assertCanGrantScopedPermissions({
+        actor,
+        effectiveGrants: [
+          grant("roles.manage", { type: "tenant" }),
+          grant("message.reply", { type: "tenant" })
         ],
         target: {
           permissions: ["message.reply"],

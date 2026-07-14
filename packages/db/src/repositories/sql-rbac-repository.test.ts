@@ -355,6 +355,54 @@ describe("SQL RBAC repository", () => {
     expect(query.params).toEqual(expect.arrayContaining([tenantId, now]));
   });
 
+  it("lists current and future non-revoked role bindings for safe administration", async () => {
+    const futureStartsAt = "2026-07-01T10:00:00.000Z";
+    const executor = new RecordingSqlExecutor([
+      [
+        {
+          id: "binding-future",
+          tenant_id: tenantId,
+          role_id: "role-sales",
+          subject_type: "employee",
+          subject_id: employeeId,
+          scope_type: "queue",
+          scope_id: "queue-sales",
+          starts_at: futureStartsAt,
+          expires_at: null,
+          revoked_at: null
+        }
+      ]
+    ]);
+    const repository = createSqlTenantRbacRepository(executor);
+
+    await expect(
+      repository.listCurrentAndScheduledRoleBindings({ tenantId, at: now })
+    ).resolves.toEqual([
+      {
+        id: "binding-future",
+        tenantId,
+        roleId: "role-sales",
+        subject: {
+          type: "employee",
+          id: employeeId
+        },
+        scope: {
+          type: "queue",
+          id: "queue-sales"
+        },
+        startsAt: futureStartsAt
+      }
+    ]);
+
+    const query = renderQuery(executor.queries[0]);
+
+    expect(query.sql).toContain("from tenant_role_bindings");
+    expect(query.sql).toContain("revoked_at is null");
+    expect(query.sql).not.toContain("starts_at is null");
+    expect(query.sql).toContain("expires_at is null or expires_at > $2");
+    expect(query.params).toEqual([tenantId, now]);
+  });
+
   it("lists expired tenant role bindings for administration", async () => {
     const executor = new RecordingSqlExecutor([
       [
@@ -449,6 +497,52 @@ describe("SQL RBAC repository", () => {
     expect(query.sql).toContain("where tenant_id = $1");
     expect(query.sql).toContain("revoked_at is null");
     expect(query.params).toEqual(expect.arrayContaining([tenantId, now]));
+  });
+
+  it("lists current and future non-revoked direct grants for safe administration", async () => {
+    const futureStartsAt = "2026-07-01T10:00:00.000Z";
+    const executor = new RecordingSqlExecutor([
+      [
+        {
+          id: "grant-future",
+          tenant_id: tenantId,
+          employee_id: employeeId,
+          permission: "conversation.assign",
+          scope_type: "queue",
+          scope_id: "queue-sales",
+          reason: "scheduled coverage",
+          starts_at: futureStartsAt,
+          expires_at: null,
+          revoked_at: null
+        }
+      ]
+    ]);
+    const repository = createSqlTenantRbacRepository(executor);
+
+    await expect(
+      repository.listCurrentAndScheduledDirectGrants({ tenantId, at: now })
+    ).resolves.toEqual([
+      {
+        id: "grant-future",
+        tenantId,
+        employeeId,
+        permission: "conversation.assign",
+        scope: {
+          type: "queue",
+          id: "queue-sales"
+        },
+        reason: "scheduled coverage",
+        startsAt: futureStartsAt
+      }
+    ]);
+
+    const query = renderQuery(executor.queries[0]);
+
+    expect(query.sql).toContain("from direct_permission_grants");
+    expect(query.sql).toContain("revoked_at is null");
+    expect(query.sql).not.toContain("starts_at is null");
+    expect(query.sql).toContain("expires_at is null or expires_at > $2");
+    expect(query.params).toEqual([tenantId, now]);
   });
 
   it("lists expired direct grants for administration", async () => {
@@ -554,6 +648,31 @@ describe("SQL RBAC repository", () => {
     ).rejects.toThrow(new CoreError("tenant.boundary_violation"));
   });
 
+  it("rejects cross-tenant rows returned from current/scheduled binding reads", async () => {
+    const repository = createSqlTenantRbacRepository(
+      new RecordingSqlExecutor([
+        [
+          {
+            id: "binding-cross-tenant",
+            tenant_id: otherTenantId,
+            role_id: "role-sales",
+            subject_type: "employee",
+            subject_id: employeeId,
+            scope_type: "tenant",
+            scope_id: null,
+            starts_at: null,
+            expires_at: null,
+            revoked_at: null
+          }
+        ]
+      ])
+    );
+
+    await expect(
+      repository.listCurrentAndScheduledRoleBindings({ tenantId, at: now })
+    ).rejects.toThrow(new CoreError("tenant.boundary_violation"));
+  });
+
   it("rejects cross-tenant rows returned from binding reads", async () => {
     const repository = createSqlTenantRbacRepository(
       new RecordingSqlExecutor([
@@ -608,6 +727,31 @@ describe("SQL RBAC repository", () => {
         employeeId,
         at: now
       })
+    ).rejects.toThrow(new CoreError("tenant.boundary_violation"));
+  });
+
+  it("rejects cross-tenant rows returned from current/scheduled direct grant reads", async () => {
+    const repository = createSqlTenantRbacRepository(
+      new RecordingSqlExecutor([
+        [
+          {
+            id: "grant-cross-tenant",
+            tenant_id: otherTenantId,
+            employee_id: employeeId,
+            permission: "conversation.assign",
+            scope_type: "queue",
+            scope_id: "queue-sales",
+            reason: "scheduled coverage",
+            starts_at: "2026-07-01T10:00:00.000Z",
+            expires_at: null,
+            revoked_at: null
+          }
+        ]
+      ])
+    );
+
+    await expect(
+      repository.listCurrentAndScheduledDirectGrants({ tenantId, at: now })
     ).rejects.toThrow(new CoreError("tenant.boundary_violation"));
   });
 

@@ -822,25 +822,28 @@ describe("internal inbox command service", () => {
         conversationId: routedConversation.id,
         request: {
           currentQueueId: "queue-sales",
-          assignedEmployeeId: "employee-2"
+          assignedEmployeeId: "employee-2",
+          assignedTeamId: "team-sales"
         }
       })
     ).resolves.toEqual({
       conversationId: routedConversation.id,
       currentQueueId: "queue-sales",
       assignedEmployeeId: "employee-2",
-      assignedTeamId: undefined
+      assignedTeamId: "team-sales"
     });
     expect(repository.conversations[0]).toMatchObject({
       currentQueueId: "queue-sales",
-      assignedEmployeeId: "employee-2"
+      assignedEmployeeId: "employee-2",
+      assignedTeamId: "team-sales"
     });
     expect(repository.routingEvents).toMatchObject([
       {
         type: "conversation.assigned",
         payload: {
           currentQueueId: "queue-sales",
-          assignedEmployeeId: "employee-2"
+          assignedEmployeeId: "employee-2",
+          assignedTeamId: "team-sales"
         }
       }
     ]);
@@ -858,9 +861,60 @@ describe("internal inbox command service", () => {
           previousAssignedEmployeeId: null,
           assignedEmployeeId: "employee-2",
           previousAssignedTeamId: null,
-          assignedTeamId: null
+          assignedTeamId: "team-sales",
+          authorizationScopes: [
+            { type: "queue", id: "queue-sales" },
+            { type: "team", id: "team-sales" }
+          ]
         },
         occurredAt: now
+      }
+    ]);
+  });
+
+  it("records immutable source and destination facets for cross-scope routing", async () => {
+    const routedConversation: Conversation = {
+      ...conversation,
+      currentQueueId: "queue-sales",
+      assignedTeamId: "team-sales"
+    };
+    const auditRecords: unknown[] = [];
+    const repository = new InMemoryExternalMessageRepository([
+      routedConversation
+    ]);
+    const service = createInternalInboxCommandService({
+      repository,
+      authorization: createTenantAssignAuthorization(),
+      now: () => now,
+      audit: {
+        async record(record) {
+          auditRecords.push(record);
+        }
+      }
+    });
+
+    await service.updateConversationRouting(context, {
+      conversationId: routedConversation.id,
+      request: {
+        currentQueueId: "queue-claims",
+        assignedTeamId: "team-claims"
+      }
+    });
+
+    expect(auditRecords).toMatchObject([
+      {
+        metadata: {
+          previousCurrentQueueId: "queue-sales",
+          currentQueueId: "queue-claims",
+          previousAssignedTeamId: "team-sales",
+          assignedTeamId: "team-claims",
+          authorizationScopes: [
+            { type: "queue", id: "queue-sales" },
+            { type: "queue", id: "queue-claims" },
+            { type: "team", id: "team-sales" },
+            { type: "team", id: "team-claims" }
+          ]
+        }
       }
     ]);
   });
@@ -1132,6 +1186,40 @@ function createAssignAuthorization(): InternalInboxAuthorizationService {
               scope: {
                 type: "queue",
                 id: "queue-sales"
+              }
+            }
+          ],
+          directGrants: []
+        };
+      }
+    },
+    now: () => now
+  });
+}
+
+function createTenantAssignAuthorization(): InternalInboxAuthorizationService {
+  return createInternalInboxAuthorizationService({
+    employeeRepository: createEmployeeRepository(employee),
+    rbacRepository: {
+      async listEffectiveAccessSources() {
+        return {
+          roles: [
+            {
+              id: "role-tenant-assign",
+              tenantId,
+              permissions: ["conversation.assign"]
+            }
+          ],
+          roleBindings: [
+            {
+              tenantId,
+              roleId: "role-tenant-assign",
+              subject: {
+                type: "employee",
+                id: context.employeeId
+              },
+              scope: {
+                type: "tenant"
               }
             }
           ],

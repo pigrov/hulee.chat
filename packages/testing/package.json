@@ -6,6 +6,8 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@hulee/contracts": "workspace:*"
+    "@hulee/contracts": "workspace:*",
+    "@hulee/core": "workspace:*",
+    "zod": "^4.4.3"
   }
 }

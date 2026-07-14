@@ -1,5 +1,9 @@
+import { sql } from "drizzle-orm";
 import {
+  bigint,
   boolean,
+  check,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -8,6 +12,7 @@ import {
   primaryKey,
   text,
   timestamp,
+  unique,
   uniqueIndex
 } from "drizzle-orm/pg-core";
 
@@ -37,6 +42,18 @@ export const conversationType = pgEnum("conversation_type", [
   "support_case",
   "intake"
 ]);
+export const inboxV2ConversationTopology = pgEnum(
+  "inbox_v2_conversation_topology",
+  ["direct", "group", "case", "object"]
+);
+export const inboxV2ConversationTransport = pgEnum(
+  "inbox_v2_conversation_transport",
+  ["internal", "external"]
+);
+export const inboxV2ConversationLifecycle = pgEnum(
+  "inbox_v2_conversation_lifecycle",
+  ["active", "ended"]
+);
 export const messageDirection = pgEnum("message_direction", [
   "inbound",
   "outbound"
@@ -508,6 +525,7 @@ export const sourceConnections = pgTable(
     ...timestamps
   },
   (table) => [
+    unique("source_connections_tenant_id_unique").on(table.tenantId, table.id),
     index("source_connections_tenant_idx").on(table.tenantId),
     index("source_connections_tenant_type_idx").on(
       table.tenantId,
@@ -541,6 +559,17 @@ export const sourceAccounts = pgTable(
     ...timestamps
   },
   (table) => [
+    unique("source_accounts_tenant_id_unique").on(table.tenantId, table.id),
+    unique("source_accounts_tenant_id_connection_unique").on(
+      table.tenantId,
+      table.id,
+      table.sourceConnectionId
+    ),
+    foreignKey({
+      name: "source_accounts_tenant_connection_fk",
+      columns: [table.tenantId, table.sourceConnectionId],
+      foreignColumns: [sourceConnections.tenantId, sourceConnections.id]
+    }),
     index("source_accounts_tenant_idx").on(table.tenantId),
     index("source_accounts_tenant_connection_idx").on(
       table.tenantId,
@@ -569,6 +598,14 @@ export const rawInboundEvents = pgTable(
     sourceAccountId: text("source_account_id").references(
       () => sourceAccounts.id
     ),
+    sourceAccountScopeKey: text("source_account_scope_key")
+      .notNull()
+      .generatedAlwaysAs(
+        sql`case
+          when source_account_id is null then '0:'
+          else '1:' || octet_length(source_account_id)::text || ':' || source_account_id
+        end`
+      ),
     externalEventId: text("external_event_id"),
     eventSignature: text("event_signature"),
     idempotencyKey: text("idempotency_key").notNull(),
@@ -584,6 +621,45 @@ export const rawInboundEvents = pgTable(
     ...timestamps
   },
   (table) => [
+    unique("raw_inbound_events_tenant_id_unique").on(table.tenantId, table.id),
+    unique("raw_inbound_events_tenant_id_connection_unique").on(
+      table.tenantId,
+      table.id,
+      table.sourceConnectionId
+    ),
+    unique("raw_inbound_events_tenant_id_account_unique").on(
+      table.tenantId,
+      table.id,
+      table.sourceAccountId
+    ),
+    unique("raw_inbound_events_tenant_id_account_scope_unique").on(
+      table.tenantId,
+      table.id,
+      table.sourceAccountScopeKey
+    ),
+    foreignKey({
+      name: "raw_inbound_events_tenant_connection_fk",
+      columns: [table.tenantId, table.sourceConnectionId],
+      foreignColumns: [sourceConnections.tenantId, sourceConnections.id]
+    }),
+    foreignKey({
+      name: "raw_inbound_events_tenant_account_fk",
+      columns: [table.tenantId, table.sourceAccountId],
+      foreignColumns: [sourceAccounts.tenantId, sourceAccounts.id]
+    }),
+    foreignKey({
+      name: "raw_inbound_events_account_connection_fk",
+      columns: [
+        table.tenantId,
+        table.sourceAccountId,
+        table.sourceConnectionId
+      ],
+      foreignColumns: [
+        sourceAccounts.tenantId,
+        sourceAccounts.id,
+        sourceAccounts.sourceConnectionId
+      ]
+    }),
     uniqueIndex("raw_inbound_events_tenant_idempotency_unique").on(
       table.tenantId,
       table.idempotencyKey
@@ -620,6 +696,14 @@ export const normalizedInboundEvents = pgTable(
     sourceAccountId: text("source_account_id").references(
       () => sourceAccounts.id
     ),
+    sourceAccountScopeKey: text("source_account_scope_key")
+      .notNull()
+      .generatedAlwaysAs(
+        sql`case
+          when source_account_id is null then '0:'
+          else '1:' || octet_length(source_account_id)::text || ':' || source_account_id
+        end`
+      ),
     sourceType: text("source_type").notNull(),
     sourceName: text("source_name").notNull(),
     eventType: text("event_type").notNull(),
@@ -638,6 +722,66 @@ export const normalizedInboundEvents = pgTable(
     ...timestamps
   },
   (table) => [
+    unique("normalized_inbound_events_tenant_id_unique").on(
+      table.tenantId,
+      table.id
+    ),
+    unique("normalized_inbound_events_tenant_id_connection_unique").on(
+      table.tenantId,
+      table.id,
+      table.sourceConnectionId
+    ),
+    unique("normalized_inbound_events_tenant_id_account_unique").on(
+      table.tenantId,
+      table.id,
+      table.sourceAccountId
+    ),
+    foreignKey({
+      name: "normalized_inbound_events_tenant_raw_fk",
+      columns: [table.tenantId, table.rawEventId],
+      foreignColumns: [rawInboundEvents.tenantId, rawInboundEvents.id]
+    }),
+    foreignKey({
+      name: "normalized_inbound_events_tenant_connection_fk",
+      columns: [table.tenantId, table.sourceConnectionId],
+      foreignColumns: [sourceConnections.tenantId, sourceConnections.id]
+    }),
+    foreignKey({
+      name: "normalized_inbound_events_tenant_account_fk",
+      columns: [table.tenantId, table.sourceAccountId],
+      foreignColumns: [sourceAccounts.tenantId, sourceAccounts.id]
+    }),
+    foreignKey({
+      name: "normalized_inbound_events_account_connection_fk",
+      columns: [
+        table.tenantId,
+        table.sourceAccountId,
+        table.sourceConnectionId
+      ],
+      foreignColumns: [
+        sourceAccounts.tenantId,
+        sourceAccounts.id,
+        sourceAccounts.sourceConnectionId
+      ]
+    }),
+    foreignKey({
+      name: "normalized_inbound_events_raw_connection_fk",
+      columns: [table.tenantId, table.rawEventId, table.sourceConnectionId],
+      foreignColumns: [
+        rawInboundEvents.tenantId,
+        rawInboundEvents.id,
+        rawInboundEvents.sourceConnectionId
+      ]
+    }),
+    foreignKey({
+      name: "normalized_inbound_events_raw_account_scope_fk",
+      columns: [table.tenantId, table.rawEventId, table.sourceAccountScopeKey],
+      foreignColumns: [
+        rawInboundEvents.tenantId,
+        rawInboundEvents.id,
+        rawInboundEvents.sourceAccountScopeKey
+      ]
+    }),
     uniqueIndex("normalized_inbound_events_tenant_idempotency_unique").on(
       table.tenantId,
       table.idempotencyKey
@@ -650,6 +794,11 @@ export const normalizedInboundEvents = pgTable(
     index("normalized_inbound_events_tenant_connection_idx").on(
       table.tenantId,
       table.sourceConnectionId,
+      table.createdAt
+    ),
+    index("normalized_inbound_events_tenant_account_idx").on(
+      table.tenantId,
+      table.sourceAccountId,
       table.createdAt
     ),
     index("normalized_inbound_events_tenant_thread_idx").on(
@@ -849,6 +998,7 @@ export const employees = pgTable(
     ...timestamps
   },
   (table) => [
+    unique("employees_tenant_id_unique").on(table.tenantId, table.id),
     index("employees_tenant_idx").on(table.tenantId),
     index("employees_tenant_status_idx").on(table.tenantId, table.deactivatedAt)
   ]
@@ -1052,7 +1202,10 @@ export const teams = pgTable(
     name: text("name").notNull(),
     ...timestamps
   },
-  (table) => [index("teams_tenant_idx").on(table.tenantId)]
+  (table) => [
+    unique("teams_tenant_id_unique").on(table.tenantId, table.id),
+    index("teams_tenant_idx").on(table.tenantId)
+  ]
 );
 
 export const orgUnits = pgTable(
@@ -1067,6 +1220,7 @@ export const orgUnits = pgTable(
     ...timestamps
   },
   (table) => [
+    unique("org_units_tenant_id_unique").on(table.tenantId, table.id),
     uniqueIndex("org_units_tenant_name_unique").on(table.tenantId, table.name),
     index("org_units_tenant_idx").on(table.tenantId),
     index("org_units_tenant_parent_idx").on(
@@ -1090,6 +1244,7 @@ export const workQueues = pgTable(
     ...timestamps
   },
   (table) => [
+    unique("work_queues_tenant_id_unique").on(table.tenantId, table.id),
     uniqueIndex("work_queues_tenant_name_unique").on(
       table.tenantId,
       table.name
@@ -1206,7 +1361,10 @@ export const clients = pgTable(
     ),
     ...timestamps
   },
-  (table) => [index("clients_tenant_idx").on(table.tenantId)]
+  (table) => [
+    unique("clients_tenant_id_unique").on(table.tenantId, table.id),
+    index("clients_tenant_idx").on(table.tenantId)
+  ]
 );
 
 export const clientContacts = pgTable(
@@ -1222,11 +1380,208 @@ export const clientContacts = pgTable(
     ...timestamps
   },
   (table) => [
+    unique("client_contacts_tenant_id_unique").on(table.tenantId, table.id),
+    foreignKey({
+      name: "client_contacts_tenant_client_fk",
+      columns: [table.tenantId, table.clientId],
+      foreignColumns: [clients.tenantId, clients.id]
+    }),
     index("client_contacts_tenant_client_idx").on(
       table.tenantId,
       table.clientId
     ),
     index("client_contacts_tenant_value_idx").on(table.tenantId, table.value)
+  ]
+);
+
+export const inboxV2Conversations = pgTable(
+  "inbox_v2_conversations",
+  {
+    tenantId: tenantIdColumn().references(() => tenants.id),
+    id: text("id").notNull(),
+    topology: inboxV2ConversationTopology("topology").notNull(),
+    transport: inboxV2ConversationTransport("transport").notNull(),
+    purposeId: text("purpose_id").notNull(),
+    lifecycle: inboxV2ConversationLifecycle("lifecycle")
+      .notNull()
+      .default("active"),
+    revision: bigint("revision", { mode: "bigint" })
+      .notNull()
+      .default(sql`1`),
+    lastChangedStreamPosition: bigint("last_changed_stream_position", {
+      mode: "bigint"
+    }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, precision: 3 })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 })
+      .notNull()
+      .defaultNow()
+  },
+  (table) => [
+    primaryKey({
+      name: "inbox_v2_conversations_pk",
+      columns: [table.tenantId, table.id]
+    }),
+    unique("inbox_v2_conversations_tenant_id_shape_unique").on(
+      table.tenantId,
+      table.id,
+      table.transport,
+      table.topology
+    ),
+    check(
+      "inbox_v2_conversations_purpose_format_check",
+      sql`char_length(${table.purposeId}) <= 256 and (
+        (
+          ${table.purposeId} ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'
+          and char_length(split_part(${table.purposeId}, ':', 2)) <= 160
+        ) or (
+          ${table.purposeId} ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'
+          and char_length(split_part(${table.purposeId}, ':', 2)) <= 80
+          and char_length(split_part(${table.purposeId}, ':', 3)) <= 160
+          and split_part(${table.purposeId}, ':', 2) not in (
+            'core', 'hulee', 'module', 'platform', 'system'
+          )
+        )
+      )`
+    ),
+    check("inbox_v2_conversations_revision_check", sql`${table.revision} >= 1`),
+    check(
+      "inbox_v2_conversations_stream_position_check",
+      sql`${table.lastChangedStreamPosition} >= 1`
+    ),
+    check(
+      "inbox_v2_conversations_timestamps_check",
+      sql`isfinite(${table.createdAt})
+        and isfinite(${table.updatedAt})
+        and ${table.updatedAt} >= ${table.createdAt}`
+    ),
+    index("inbox_v2_conversations_tenant_lifecycle_updated_idx").on(
+      table.tenantId,
+      table.lifecycle,
+      table.updatedAt.desc(),
+      table.id
+    ),
+    index("inbox_v2_conversations_tenant_shape_updated_idx").on(
+      table.tenantId,
+      table.transport,
+      table.topology,
+      table.lifecycle,
+      table.updatedAt.desc(),
+      table.id
+    ),
+    index("inbox_v2_conversations_tenant_purpose_updated_idx").on(
+      table.tenantId,
+      table.purposeId,
+      table.lifecycle,
+      table.updatedAt.desc(),
+      table.id
+    )
+  ]
+);
+
+export const inboxV2ConversationHeads = pgTable(
+  "inbox_v2_conversation_heads",
+  {
+    tenantId: tenantIdColumn().references(() => tenants.id),
+    conversationId: text("conversation_id").notNull(),
+    latestTimelineSequence: bigint("latest_timeline_sequence", {
+      mode: "bigint"
+    })
+      .notNull()
+      .default(sql`0`),
+    latestActivityItemId: text("latest_activity_item_id"),
+    latestActivityTimelineSequence: bigint(
+      "latest_activity_timeline_sequence",
+      { mode: "bigint" }
+    ),
+    latestActivityAt: timestamp("latest_activity_at", {
+      withTimezone: true,
+      precision: 3
+    }),
+    revision: bigint("revision", { mode: "bigint" })
+      .notNull()
+      .default(sql`1`),
+    lastChangedStreamPosition: bigint("last_changed_stream_position", {
+      mode: "bigint"
+    }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, precision: 3 })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 })
+      .notNull()
+      .defaultNow()
+  },
+  (table) => [
+    primaryKey({
+      name: "inbox_v2_conversation_heads_pk",
+      columns: [table.tenantId, table.conversationId]
+    }),
+    foreignKey({
+      name: "inbox_v2_conversation_heads_conversation_fk",
+      columns: [table.tenantId, table.conversationId],
+      foreignColumns: [inboxV2Conversations.tenantId, inboxV2Conversations.id]
+    }).onDelete("cascade"),
+    check(
+      "inbox_v2_conversation_heads_timeline_sequence_check",
+      sql`${table.latestTimelineSequence} >= 0`
+    ),
+    check(
+      "inbox_v2_conversation_heads_activity_tuple_check",
+      sql`(
+        ${table.latestActivityItemId} is null
+        and ${table.latestActivityTimelineSequence} is null
+        and ${table.latestActivityAt} is null
+      ) or (
+        ${table.latestActivityItemId} is not null
+        and ${table.latestActivityTimelineSequence} is not null
+        and ${table.latestActivityAt} is not null
+      )`
+    ),
+    check(
+      "inbox_v2_conversation_heads_activity_item_check",
+      sql`${table.latestActivityItemId} is null or (
+        char_length(${table.latestActivityItemId}) <= 256
+        and ${table.latestActivityItemId} ~ '^timeline_item:[A-Za-z0-9][A-Za-z0-9._~:-]{0,199}$'
+      )`
+    ),
+    check(
+      "inbox_v2_conversation_heads_activity_sequence_check",
+      sql`${table.latestActivityTimelineSequence} is null or (
+        ${table.latestActivityTimelineSequence} >= 1
+        and ${table.latestActivityTimelineSequence} <= ${table.latestTimelineSequence}
+      )`
+    ),
+    check(
+      "inbox_v2_conversation_heads_revision_check",
+      sql`${table.revision} >= 1`
+    ),
+    check(
+      "inbox_v2_conversation_heads_stream_position_check",
+      sql`${table.lastChangedStreamPosition} >= 1`
+    ),
+    check(
+      "inbox_v2_conversation_heads_timestamps_check",
+      sql`isfinite(${table.createdAt})
+        and isfinite(${table.updatedAt})
+        and (${table.latestActivityAt} is null or isfinite(${table.latestActivityAt}))
+        and ${table.updatedAt} >= ${table.createdAt}`
+    ),
+    index("inbox_v2_conversation_heads_tenant_activity_idx").on(
+      table.tenantId,
+      table.latestActivityAt.desc().nullsLast(),
+      table.conversationId
+    ),
+    index("inbox_v2_conversation_heads_tenant_updated_idx").on(
+      table.tenantId,
+      table.updatedAt.desc(),
+      table.conversationId
+    ),
+    index("inbox_v2_conversation_heads_tenant_stream_idx").on(
+      table.tenantId,
+      table.lastChangedStreamPosition,
+      table.conversationId
+    )
   ]
 );
 
@@ -1345,6 +1700,7 @@ export const files = pgTable(
     ...timestamps
   },
   (table) => [
+    unique("files_tenant_id_unique").on(table.tenantId, table.id),
     uniqueIndex("files_tenant_storage_key_unique").on(
       table.tenantId,
       table.storageKey
@@ -1396,6 +1752,7 @@ export const eventStore = pgTable(
     ...timestamps
   },
   (table) => [
+    unique("event_store_tenant_id_unique").on(table.tenantId, table.id),
     index("event_store_tenant_type_idx").on(table.tenantId, table.type),
     index("event_store_tenant_occurred_idx").on(
       table.tenantId,

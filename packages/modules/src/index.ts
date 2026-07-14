@@ -1,33 +1,45 @@
-import type { ModuleManifest } from "@hulee/contracts";
+import { defineModuleManifest, defineModuleManifests } from "@hulee/contracts";
 
 import { localAuthManifest } from "./auth-local";
 import { vkAuthManifest } from "./auth-vk";
 import { publicApiChannelManifest } from "./public-api-channel";
 import { telegramChannelManifest } from "./telegram-channel";
+import {
+  basicLicenseDataGovernance,
+  s3StorageDataGovernance
+} from "./data-governance";
 
-export const standardModuleManifests: readonly ModuleManifest[] = [
+export const s3StorageManifest = defineModuleManifest({
+  id: "storage-s3",
+  type: "storage",
+  name: "S3-compatible storage",
+  version: "0.0.0",
+  capabilities: ["storage.object"],
+  configSchema: {},
+  secretsSchema: {},
+  dataHandling: "tenant_or_customer_data",
+  dataGovernance: s3StorageDataGovernance
+});
+
+export const basicLicenseManifest = defineModuleManifest({
+  id: "license-basic",
+  type: "billing",
+  name: "Basic license",
+  version: "0.0.0",
+  capabilities: ["license.snapshot", "entitlements.local"],
+  configSchema: {},
+  dataHandling: "tenant_or_customer_data",
+  dataGovernance: basicLicenseDataGovernance
+});
+
+export const standardModuleManifests = defineModuleManifests([
   localAuthManifest,
   vkAuthManifest,
   publicApiChannelManifest,
   telegramChannelManifest,
-  {
-    id: "storage-s3",
-    type: "storage",
-    name: "S3-compatible storage",
-    version: "0.0.0",
-    capabilities: ["storage.object"],
-    configSchema: {},
-    secretsSchema: {}
-  },
-  {
-    id: "license-basic",
-    type: "billing",
-    name: "Basic license",
-    version: "0.0.0",
-    capabilities: ["license.snapshot", "entitlements.local"],
-    configSchema: {}
-  }
-];
+  s3StorageManifest,
+  basicLicenseManifest
+]);
 
 export {
   createLocalAuthProvider,

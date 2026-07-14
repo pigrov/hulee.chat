@@ -40,14 +40,11 @@ export async function createCustomTenantRoleAction(
 
   try {
     await assertVerifiedRolesPermission();
-    await createRbacRole(
-      {
-        name: readRequiredFormString(formData, "name"),
-        description: readOptionalFormString(formData, "description"),
-        permissions: readFormStringList(formData, "permissions")
-      },
-      rolesManageAccessOptions()
-    );
+    await createRbacRole({
+      name: readRequiredFormString(formData, "name"),
+      description: readOptionalFormString(formData, "description"),
+      permissions: readFormStringList(formData, "permissions")
+    });
 
     revalidateRoleAdminPaths();
 
@@ -76,20 +73,17 @@ export async function createRoleFromTemplateAction(
     const { t } = createTranslator(
       resolveLocale(readOptionalFormString(formData, "locale"))
     );
-    const { roles } = await loadRbacRoles(rolesManageAccessOptions());
+    const { roles } = await loadRbacRoles();
     const name = uniqueRoleTemplateName(
       roles.map((role) => role.name),
       t(template.nameKey)
     );
 
-    await createRbacRole(
-      {
-        name,
-        description: t(template.descriptionKey),
-        permissions: [...template.permissions]
-      },
-      rolesManageAccessOptions()
-    );
+    await createRbacRole({
+      name,
+      description: t(template.descriptionKey),
+      permissions: [...template.permissions]
+    });
 
     revalidateRoleAdminPaths();
 
@@ -108,15 +102,11 @@ export async function updateCustomTenantRoleAction(
 
   try {
     await assertVerifiedRolesPermission();
-    await updateRbacRole(
-      readRequiredFormString(formData, "roleId"),
-      {
-        name: readRequiredFormString(formData, "name"),
-        description: readOptionalFormString(formData, "description"),
-        permissions: readFormStringList(formData, "permissions")
-      },
-      rolesManageAccessOptions()
-    );
+    await updateRbacRole(readRequiredFormString(formData, "roleId"), {
+      name: readRequiredFormString(formData, "name"),
+      description: readOptionalFormString(formData, "description"),
+      permissions: readFormStringList(formData, "permissions")
+    });
 
     revalidateRoleAdminPaths();
 
@@ -135,10 +125,7 @@ export async function archiveCustomTenantRoleAction(
 
   try {
     await assertVerifiedRolesPermission();
-    await archiveRbacRole(
-      readRequiredFormString(formData, "roleId"),
-      rolesManageAccessOptions()
-    );
+    await archiveRbacRole(readRequiredFormString(formData, "roleId"));
 
     revalidateRoleAdminPaths();
 
@@ -157,10 +144,7 @@ export async function restoreCustomTenantRoleAction(
 
   try {
     await assertVerifiedRolesPermission();
-    await restoreRbacRole(
-      readRequiredFormString(formData, "roleId"),
-      rolesManageAccessOptions()
-    );
+    await restoreRbacRole(readRequiredFormString(formData, "roleId"));
 
     revalidateRoleAdminPaths();
 
@@ -179,17 +163,14 @@ export async function assignTenantRoleAction(
 
   try {
     await assertVerifiedRolesPermission();
-    await createRbacRoleBinding(
-      {
-        roleId: readRequiredFormString(formData, "roleId"),
-        subject: readRoleBindingSubject(formData),
-        scope: normalizePermissionScope({
-          type: readRequiredFormString(formData, "scopeType"),
-          id: readOptionalFormString(formData, "scopeId")
-        })
-      },
-      rolesManageAccessOptions()
-    );
+    await createRbacRoleBinding({
+      roleId: readRequiredFormString(formData, "roleId"),
+      subject: readRoleBindingSubject(formData),
+      scope: normalizePermissionScope({
+        type: readRequiredFormString(formData, "scopeType"),
+        id: readOptionalFormString(formData, "scopeId")
+      })
+    });
 
     revalidateRoleAdminPaths();
 
@@ -208,10 +189,7 @@ export async function revokeTenantRoleBindingAction(
 
   try {
     await assertVerifiedRolesPermission();
-    await revokeRbacRoleBinding(
-      readRequiredFormString(formData, "bindingId"),
-      rolesManageAccessOptions()
-    );
+    await revokeRbacRoleBinding(readRequiredFormString(formData, "bindingId"));
 
     revalidateRoleAdminPaths();
 
@@ -232,22 +210,16 @@ export async function createDirectPermissionGrantAction(
     await assertVerifiedRolesPermission();
     const expiresAt = readOptionalFormDate(formData, "expiresAt");
 
-    await createRbacDirectGrant(
-      {
-        employeeId: readRequiredFormString(
-          formData,
-          "employeeId"
-        ) as EmployeeId,
-        permission: readPermissionFormValue(formData, "permission"),
-        scope: normalizePermissionScope({
-          type: readRequiredFormString(formData, "scopeType"),
-          id: readOptionalFormString(formData, "scopeId")
-        }),
-        reason: readRequiredLimitedFormString(formData, "reason", 500),
-        expiresAt: expiresAt?.toISOString()
-      },
-      rolesManageAccessOptions()
-    );
+    await createRbacDirectGrant({
+      employeeId: readRequiredFormString(formData, "employeeId") as EmployeeId,
+      permission: readPermissionFormValue(formData, "permission"),
+      scope: normalizePermissionScope({
+        type: readRequiredFormString(formData, "scopeType"),
+        id: readOptionalFormString(formData, "scopeId")
+      }),
+      reason: readRequiredLimitedFormString(formData, "reason", 500),
+      expiresAt: expiresAt?.toISOString()
+    });
 
     revalidateRoleAdminPaths();
 
@@ -266,10 +238,7 @@ export async function revokeDirectPermissionGrantAction(
 
   try {
     await assertVerifiedRolesPermission();
-    await revokeRbacDirectGrant(
-      readRequiredFormString(formData, "grantId"),
-      rolesManageAccessOptions()
-    );
+    await revokeRbacDirectGrant(readRequiredFormString(formData, "grantId"));
 
     revalidateRoleAdminPaths();
 
@@ -283,14 +252,6 @@ async function assertVerifiedRolesPermission(): Promise<void> {
   await assertWebDbBackedAdminCommandBoundary(
     webDbBackedAdminCommandBoundaries.roleAccess
   );
-}
-
-function rolesManageAccessOptions(): {
-  readonly effectivePermissionOverride: "roles.manage";
-} {
-  return {
-    effectivePermissionOverride: "roles.manage"
-  };
 }
 
 function revalidateRoleAdminPaths(): void {

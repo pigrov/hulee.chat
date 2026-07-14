@@ -19,6 +19,24 @@
 - `docs/product/open-questions.md`
 - `docs/adr/`
 
+Перед работой с Inbox V2 дополнительно прочитай:
+
+- `docs/product/inbox-v2-backlog.md`
+- `docs/product/inbox-v2-epic-0-architecture-review.md`
+- `docs/product/inbox-v2-baseline.md`
+- `docs/product/inbox-v2-direct-messenger-matrix.md`
+- `docs/product/inbox-v2-direct-messenger-cells.csv`
+- `docs/product/inbox-v2-data-lifecycle-and-privacy.md`
+- `docs/product/inbox-v2-migration-and-cutover.md`
+- `docs/product/inbox-v2-scenarios-and-glossary.md`
+- `docs/adr/0009-inbox-v2-domain-boundaries.md`
+- `docs/adr/0010-inbox-v2-participants-identity-and-authorship.md`
+- `docs/adr/0011-inbox-v2-external-threads-bindings-and-routing.md`
+- `docs/adr/0012-inbox-v2-sequence-revisions-and-realtime-recovery.md`
+- `docs/adr/0013-inbox-v2-responsibility-collaboration-and-rbac.md`
+- `docs/adr/0014-inbox-v1-to-v2-migration-cutover.md`
+- `docs/adr/0015-inbox-v2-data-lifecycle-privacy-and-audit.md`
+
 ## Цель
 
 Hulee - новая модульная платформа коммуникаций, клиентского сервиса и внутренних обращений для компаний. Продукт должен изначально поддерживать две поставки:

@@ -23,6 +23,10 @@ import type { ReactNode } from "react";
 
 import { AccessDeniedPage } from "../../../src/access-denied";
 import {
+  canManageTenantStructure,
+  filterAdminStructureRows
+} from "../../../src/admin-structure-access";
+import {
   AdminSectionFrame,
   type AdminSectionFrameItem
 } from "../../../src/admin-section-frame";
@@ -43,10 +47,7 @@ import {
   getWebDatabase,
   resolveCurrentWebAccessSession
 } from "../../../src/session";
-import {
-  hasEffectivePermission,
-  resolveEmployeeEffectiveAccess
-} from "../../../src/rbac-effective-access";
+import { resolveEmployeeEffectiveAccess } from "../../../src/rbac-effective-access";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
 import { navigationAccessFromTenantAdminAccess } from "../../../src/tenant-admin-nav";
 import { OrgUnitTree } from "../../../src/org-structure-tree";
@@ -90,7 +91,7 @@ export default async function OrgStructureAdminPage({
     rbacRepository
   });
 
-  if (!hasEffectivePermission(accessSnapshot, "employees.manage")) {
+  if (accessSnapshot === undefined) {
     const adminAccess = {
       session: access,
       effectiveAccess: accessSnapshot
@@ -105,7 +106,7 @@ export default async function OrgStructureAdminPage({
   }
 
   const repository = createSqlOrgStructureRepository(database);
-  const [model, orgUnits, teams, workQueues, resolvedSearchParams] =
+  const [model, allOrgUnits, allTeams, allWorkQueues, resolvedSearchParams] =
     await Promise.all([
       loadTenantAdminViewModel({ tenantId: access.tenantId, database }),
       repository.listOrgUnits({ tenantId: access.tenantId }),
@@ -113,6 +114,33 @@ export default async function OrgStructureAdminPage({
       repository.listWorkQueues({ tenantId: access.tenantId }),
       searchParams
     ]);
+  const { orgUnits, teams, workQueues } = filterAdminStructureRows({
+    access: accessSnapshot,
+    orgUnits: allOrgUnits,
+    teams: allTeams,
+    workQueues: allWorkQueues
+  });
+  const canManageTenant = canManageTenantStructure(accessSnapshot);
+
+  if (
+    !canManageTenant &&
+    orgUnits.length === 0 &&
+    teams.length === 0 &&
+    workQueues.length === 0
+  ) {
+    const adminAccess = {
+      session: access,
+      effectiveAccess: accessSnapshot
+    };
+
+    return (
+      <AccessDeniedPage
+        current="tenant-admin"
+        navigationAccess={navigationAccessFromTenantAdminAccess(adminAccess)}
+      />
+    );
+  }
+
   const { t } = createTranslator(model.tenant.locale);
   const orgStructureHelp = createOrgStructureHelp(t);
   const actionMessages = orgStructureActionMessages(t);
@@ -159,46 +187,50 @@ export default async function OrgStructureAdminPage({
       >
         {selectedSection === "org_units" ? (
           <>
-            <section
-              className="settingsPanel helpPanel"
-              aria-labelledby="org-unit-create-title"
-            >
-              <div className="sectionHeader">
-                <div>
-                  <p className="eyebrow">{t("admin.orgStructure.orgUnits")}</p>
-                  <h2 className="sectionTitle" id="org-unit-create-title">
-                    {t("admin.orgStructure.createOrgUnit")}
-                  </h2>
-                  <p className="metaText">
-                    {t("admin.orgStructure.createOrgUnit.description")}
-                  </p>
-                </div>
-              </div>
-              <PersistentHelpDisclosure
-                content={orgStructureHelp.createOrgUnit}
-                id="org-unit-create-help"
-                labels={orgStructureHelp.labels}
-                storageKey="hulee:admin:org-structure:create-org-unit:help"
-              />
-
-              <OrgStructureActionForm
-                actionKind="upsertOrgUnit"
-                className="settingsForm orgStructureCreateForm"
-                messages={actionMessages}
-                resetOnSuccess
+            {canManageTenant || orgUnits.length > 0 ? (
+              <section
+                className="settingsPanel helpPanel"
+                aria-labelledby="org-unit-create-title"
               >
-                <input name="section" type="hidden" value="org_units" />
-                <OrgUnitNameField t={t} />
-                <OrgUnitKindField t={t} />
-                <OrgUnitParentField orgUnits={orgUnits} t={t} />
-                <OrgStructureSubmitButton
-                  className="primaryButton"
-                  label={t("admin.orgStructure.create")}
+                <div className="sectionHeader">
+                  <div>
+                    <p className="eyebrow">
+                      {t("admin.orgStructure.orgUnits")}
+                    </p>
+                    <h2 className="sectionTitle" id="org-unit-create-title">
+                      {t("admin.orgStructure.createOrgUnit")}
+                    </h2>
+                    <p className="metaText">
+                      {t("admin.orgStructure.createOrgUnit.description")}
+                    </p>
+                  </div>
+                </div>
+                <PersistentHelpDisclosure
+                  content={orgStructureHelp.createOrgUnit}
+                  id="org-unit-create-help"
+                  labels={orgStructureHelp.labels}
+                  storageKey="hulee:admin:org-structure:create-org-unit:help"
+                />
+
+                <OrgStructureActionForm
+                  actionKind="upsertOrgUnit"
+                  className="settingsForm orgStructureCreateForm"
+                  messages={actionMessages}
+                  resetOnSuccess
                 >
-                  <Plus size={18} aria-hidden="true" />
-                </OrgStructureSubmitButton>
-              </OrgStructureActionForm>
-            </section>
+                  <input name="section" type="hidden" value="org_units" />
+                  <OrgUnitNameField t={t} />
+                  <OrgUnitKindField t={t} />
+                  <OrgUnitParentField orgUnits={orgUnits} t={t} />
+                  <OrgStructureSubmitButton
+                    className="primaryButton"
+                    label={t("admin.orgStructure.create")}
+                  >
+                    <Plus size={18} aria-hidden="true" />
+                  </OrgStructureSubmitButton>
+                </OrgStructureActionForm>
+              </section>
+            ) : null}
 
             <section
               className="settingsPanel helpPanel"
@@ -260,44 +292,46 @@ export default async function OrgStructureAdminPage({
 
         {selectedSection === "teams" ? (
           <>
-            <section
-              className="settingsPanel helpPanel"
-              aria-labelledby="team-create-title"
-            >
-              <div className="sectionHeader">
-                <div>
-                  <p className="eyebrow">{t("admin.orgStructure.teams")}</p>
-                  <h2 className="sectionTitle" id="team-create-title">
-                    {t("admin.orgStructure.createTeam")}
-                  </h2>
-                  <p className="metaText">
-                    {t("admin.orgStructure.createTeam.description")}
-                  </p>
-                </div>
-              </div>
-              <PersistentHelpDisclosure
-                content={orgStructureHelp.createTeam}
-                id="team-create-help"
-                labels={orgStructureHelp.labels}
-                storageKey="hulee:admin:org-structure:create-team:help"
-              />
-
-              <OrgStructureActionForm
-                actionKind="upsertTeam"
-                className="settingsForm orgStructureCreateForm"
-                messages={actionMessages}
-                resetOnSuccess
+            {canManageTenant ? (
+              <section
+                className="settingsPanel helpPanel"
+                aria-labelledby="team-create-title"
               >
-                <input name="section" type="hidden" value="teams" />
-                <TeamNameField t={t} />
-                <OrgStructureSubmitButton
-                  className="primaryButton"
-                  label={t("admin.orgStructure.create")}
+                <div className="sectionHeader">
+                  <div>
+                    <p className="eyebrow">{t("admin.orgStructure.teams")}</p>
+                    <h2 className="sectionTitle" id="team-create-title">
+                      {t("admin.orgStructure.createTeam")}
+                    </h2>
+                    <p className="metaText">
+                      {t("admin.orgStructure.createTeam.description")}
+                    </p>
+                  </div>
+                </div>
+                <PersistentHelpDisclosure
+                  content={orgStructureHelp.createTeam}
+                  id="team-create-help"
+                  labels={orgStructureHelp.labels}
+                  storageKey="hulee:admin:org-structure:create-team:help"
+                />
+
+                <OrgStructureActionForm
+                  actionKind="upsertTeam"
+                  className="settingsForm orgStructureCreateForm"
+                  messages={actionMessages}
+                  resetOnSuccess
                 >
-                  <Plus size={18} aria-hidden="true" />
-                </OrgStructureSubmitButton>
-              </OrgStructureActionForm>
-            </section>
+                  <input name="section" type="hidden" value="teams" />
+                  <TeamNameField t={t} />
+                  <OrgStructureSubmitButton
+                    className="primaryButton"
+                    label={t("admin.orgStructure.create")}
+                  >
+                    <Plus size={18} aria-hidden="true" />
+                  </OrgStructureSubmitButton>
+                </OrgStructureActionForm>
+              </section>
+            ) : null}
 
             <section
               className="settingsPanel helpPanel"
@@ -341,48 +375,50 @@ export default async function OrgStructureAdminPage({
 
         {selectedSection === "work_queues" ? (
           <>
-            <section
-              className="settingsPanel helpPanel"
-              aria-labelledby="work-queue-create-title"
-            >
-              <div className="sectionHeader">
-                <div>
-                  <p className="eyebrow">
-                    {t("admin.orgStructure.workQueues")}
-                  </p>
-                  <h2 className="sectionTitle" id="work-queue-create-title">
-                    {t("admin.orgStructure.createWorkQueue")}
-                  </h2>
-                  <p className="metaText">
-                    {t("admin.orgStructure.createWorkQueue.description")}
-                  </p>
-                </div>
-              </div>
-              <PersistentHelpDisclosure
-                content={orgStructureHelp.createWorkQueue}
-                id="work-queue-create-help"
-                labels={orgStructureHelp.labels}
-                storageKey="hulee:admin:org-structure:create-work-queue:help"
-              />
-
-              <OrgStructureActionForm
-                actionKind="upsertWorkQueue"
-                className="settingsForm orgStructureCreateForm"
-                messages={actionMessages}
-                resetOnSuccess
+            {canManageTenant || orgUnits.length > 0 ? (
+              <section
+                className="settingsPanel helpPanel"
+                aria-labelledby="work-queue-create-title"
               >
-                <input name="section" type="hidden" value="work_queues" />
-                <WorkQueueNameField t={t} />
-                <WorkQueueKindField t={t} />
-                <WorkQueueOwnerField orgUnits={orgUnits} t={t} />
-                <OrgStructureSubmitButton
-                  className="primaryButton"
-                  label={t("admin.orgStructure.create")}
+                <div className="sectionHeader">
+                  <div>
+                    <p className="eyebrow">
+                      {t("admin.orgStructure.workQueues")}
+                    </p>
+                    <h2 className="sectionTitle" id="work-queue-create-title">
+                      {t("admin.orgStructure.createWorkQueue")}
+                    </h2>
+                    <p className="metaText">
+                      {t("admin.orgStructure.createWorkQueue.description")}
+                    </p>
+                  </div>
+                </div>
+                <PersistentHelpDisclosure
+                  content={orgStructureHelp.createWorkQueue}
+                  id="work-queue-create-help"
+                  labels={orgStructureHelp.labels}
+                  storageKey="hulee:admin:org-structure:create-work-queue:help"
+                />
+
+                <OrgStructureActionForm
+                  actionKind="upsertWorkQueue"
+                  className="settingsForm orgStructureCreateForm"
+                  messages={actionMessages}
+                  resetOnSuccess
                 >
-                  <Plus size={18} aria-hidden="true" />
-                </OrgStructureSubmitButton>
-              </OrgStructureActionForm>
-            </section>
+                  <input name="section" type="hidden" value="work_queues" />
+                  <WorkQueueNameField t={t} />
+                  <WorkQueueKindField t={t} />
+                  <WorkQueueOwnerField orgUnits={orgUnits} t={t} />
+                  <OrgStructureSubmitButton
+                    className="primaryButton"
+                    label={t("admin.orgStructure.create")}
+                  >
+                    <Plus size={18} aria-hidden="true" />
+                  </OrgStructureSubmitButton>
+                </OrgStructureActionForm>
+              </section>
+            ) : null}
 
             <section
               className="settingsPanel helpPanel"

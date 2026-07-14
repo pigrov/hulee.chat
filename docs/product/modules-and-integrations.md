@@ -18,10 +18,12 @@
 
 ## Module Manifest
 
-Every module should declare:
+Every module declares whether it can persist, derive, export or transmit tenant/
+customer data. `dataGovernance` may be absent only for a module that declares
+`dataHandling: "none"` and whose schemas, jobs and routes pass that validation.
 
 ```ts
-type ModuleManifest = {
+type ModuleManifestBase = {
   id: string;
   type: string;
   name: string;
@@ -36,11 +38,62 @@ type ModuleManifest = {
   uiSlots?: UiSlotContribution[];
   healthChecks?: string[];
 };
+
+type ModuleDataClassDeclaration = {
+  id: `module:${string}:${string}`;
+  parentCoreClass: `core:${string}`;
+  storageRootIds: Array<`module:${string}:${string}`>;
+  sensitivity: DataSensitivity;
+  allowedPurposes: ProcessingPurpose[];
+  parentBehavior: "independent" | "inherits_all_live_parents";
+  subjectLinkBehavior: SubjectLinkBehavior;
+  exportProjectionRef: string;
+  exportHandlerRef: string;
+  deleteHandlerRef: string;
+  verificationHandlerRef: string;
+};
+
+type ModuleExternalDataRoute = {
+  id: string;
+  dataClassIds: DataClass[];
+  purpose: ProcessingPurpose;
+  recipientCategory: string;
+  regionProfileRef: string;
+  deleteCapabilityRef: string;
+};
+
+type ModuleDataGovernanceContribution = {
+  schemaVersion: number;
+  dataClasses: ModuleDataClassDeclaration[];
+  externalRoutes: ModuleExternalDataRoute[];
+  migrationAndUninstallHandlerRef: string;
+};
+
+type ModuleManifest = ModuleManifestBase &
+  (
+    | { dataHandling: "none"; dataGovernance?: never }
+    | {
+        dataHandling: "tenant_or_customer_data";
+        dataGovernance: ModuleDataGovernanceContribution;
+      }
+  );
 ```
 
 ## Adapter Contracts
 
 Core should depend on provider interfaces, not providers.
+
+Any module that stores, derives, exports or sends tenant/customer data declares
+the complete typed ADR 0015 contribution above. Activation fails closed when a
+storage root, parent/sensitivity/purpose, subject/export behavior, external route
+or delete/verification handler is unknown or incompatible. Module disable/
+uninstall does not orphan data or bypass retention/legal hold; the core registry
+must retain a compatible migration/lifecycle handler or block removal with a
+diagnostic.
+
+Manifest validation also proves that every `module:*` class/root ID is namespaced
+to the declaring manifest ID and that every `core:*` parent exists in the pinned
+core catalog version.
 
 Examples:
 
@@ -62,10 +115,17 @@ calls, leads or reviews.
 ## SourceAdapter Responsibilities
 
 - Accept webhook, polling, email, SDK, import or public API input.
-- Persist or request persistence of raw inbound payloads before normalization.
+- Persist or request persistence of the immutable safe occurrence envelope
+  before normalization; separately submit only the classified, secret-stripped
+  provider payload/evidence accepted by the pre-persistence sanitizer.
 - Normalize events into versioned source events.
+- Declare versioned account/thread/message identity realms, scope and
+  canonicalization; provider-wide scope requires authoritative evidence.
 - Expose source and account capabilities.
+- Produce bounded secret-free opaque route descriptors for exact bindings.
 - Provide idempotency keys and provider timestamps.
+- Declare send retry safety before provider I/O and support exact outcome
+  reconciliation without choosing another route.
 - Map provider errors to the platform error catalog.
 - Expose health checks, diagnostics and replay-safe processing hints.
 

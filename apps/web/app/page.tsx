@@ -231,6 +231,10 @@ export default async function InboxPage({
           getWebDatabase()
         ).listConversationRoutingRecords({
           tenantId: access.tenantId,
+          authorization: {
+            kind: "conversation",
+            conversationId: selectedConversation.id
+          },
           conversationId: selectedConversation.id,
           limit: 3
         })

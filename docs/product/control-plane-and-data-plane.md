@@ -50,6 +50,8 @@ Each data-plane deployment owns:
 - public API keys and request audit;
 - provider adapters and integration diagnostics;
 - realtime streams for inbox updates.
+- data-governance profiles, subject links, legal holds/restrictions, privacy
+  requests, exports, deletion runs/evidence and restore erasure ledger.
 
 The data-plane can run in:
 
@@ -67,6 +69,8 @@ The data-plane can run in:
 - Sync from control-plane to data-plane must be idempotent and versioned.
 - Control-plane outages should not immediately stop existing data-plane users from reading and processing business data.
 - Data-plane must expose safe operational status back to control-plane without leaking customer message contents or files.
+- Control-plane lifecycle/commercial metadata cannot become a global subject
+  index, customer export store or copy of hold/delete evidence payloads.
 
 ## Minimal Future Entities
 

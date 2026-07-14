@@ -958,11 +958,11 @@ describe("internal API handler", () => {
     expect(loadTenantBrand).not.toHaveBeenCalled();
   });
 
-  it("loads and upserts org structure through employees.manage permission", async () => {
-    const employeesManageSession = sessionWithPermissions(["employees.manage"]);
+  it("delegates org structure authorization to the service", async () => {
+    const orgStructureSession = sessionWithPermissions([]);
     const { handler, loadOrgStructure, upsertOrgUnit, upsertWorkQueue } =
       createHandler({
-        session: employeesManageSession
+        session: orgStructureSession
       });
     const loadResponse = await handler.handle({
       method: "GET",
@@ -1012,13 +1012,13 @@ describe("internal API handler", () => {
       kind: "claims",
       owningOrgUnitId: "org-sales"
     });
-    expect(loadOrgStructure).toHaveBeenCalledWith(employeesManageSession);
-    expect(upsertOrgUnit).toHaveBeenCalledWith(employeesManageSession, {
+    expect(loadOrgStructure).toHaveBeenCalledWith(orgStructureSession);
+    expect(upsertOrgUnit).toHaveBeenCalledWith(orgStructureSession, {
       name: "Sales",
       kind: "department",
       status: "active"
     });
-    expect(upsertWorkQueue).toHaveBeenCalledWith(employeesManageSession, {
+    expect(upsertWorkQueue).toHaveBeenCalledWith(orgStructureSession, {
       name: "Claims",
       kind: "claims",
       owningOrgUnitId: "org-sales",
@@ -1027,8 +1027,8 @@ describe("internal API handler", () => {
     });
   });
 
-  it("requires employees.manage for org structure routes", async () => {
-    const { handler } = createHandler({
+  it("does not enforce permission headers for org structure routes", async () => {
+    const { handler, loadOrgStructure } = createHandler({
       session: sessionWithPermissions([
         "tenant.manage",
         "inbox.read",
@@ -1040,56 +1040,12 @@ describe("internal API handler", () => {
       path: "/internal/v1/org-structure"
     });
 
-    expect(response.status).toBe(403);
-    expect(response.body).toMatchObject({
-      error: {
-        code: "permission.denied"
-      }
-    });
+    expect(response.status).toBe(200);
+    expect(loadOrgStructure).toHaveBeenCalledOnce();
   });
 
-  it("requires narrow employees.manage override for org structure routes", async () => {
-    const { handler, loadOrgStructure, upsertOrgUnit, upsertWorkQueue } =
-      createHandler({
-        session: sessionWithPermissions(["employees.manage", "tenant.manage"])
-      });
-    const loadResponse = await handler.handle({
-      method: "GET",
-      path: "/internal/v1/org-structure"
-    });
-    const orgUnitResponse = await handler.handle({
-      method: "PUT",
-      path: "/internal/v1/org-structure/org-units",
-      body: {
-        name: "Sales",
-        kind: "department"
-      }
-    });
-    const queueResponse = await handler.handle({
-      method: "PUT",
-      path: "/internal/v1/org-structure/work-queues",
-      body: {
-        name: "Claims",
-        kind: "claims",
-        owningOrgUnitId: "org-sales"
-      }
-    });
-
-    for (const response of [loadResponse, orgUnitResponse, queueResponse]) {
-      expect(response.status).toBe(403);
-      expect(response.body).toMatchObject({
-        error: {
-          code: "permission.denied"
-        }
-      });
-    }
-    expect(loadOrgStructure).not.toHaveBeenCalled();
-    expect(upsertOrgUnit).not.toHaveBeenCalled();
-    expect(upsertWorkQueue).not.toHaveBeenCalled();
-  });
-
-  it("inspects access decisions through roles.manage permission", async () => {
-    const rolesManageSession = sessionWithPermissions(["roles.manage"]);
+  it("delegates access-decision authorization to the DB-backed service", async () => {
+    const rolesManageSession = sessionWithPermissions([]);
     const { handler, inspectAccessDecision } = createHandler({
       session: rolesManageSession
     });
@@ -1125,10 +1081,13 @@ describe("internal API handler", () => {
     });
   });
 
-  it("requires a signed narrow roles.manage override for access decisions", async () => {
+  it("does not let coarse signed permissions bypass an access-decision service denial", async () => {
     const { handler, inspectAccessDecision } = createHandler({
       session: sessionWithPermissions(["roles.manage", "tenant.manage"])
     });
+    inspectAccessDecision.mockRejectedValueOnce(
+      new CoreError("permission.denied")
+    );
     const response = await handler.handle({
       method: "POST",
       path: "/internal/v1/access/decision",
@@ -1145,7 +1104,7 @@ describe("internal API handler", () => {
         code: "permission.denied"
       }
     });
-    expect(inspectAccessDecision).not.toHaveBeenCalled();
+    expect(inspectAccessDecision).toHaveBeenCalledOnce();
   });
 
   it("rejects invalid access decision payloads before service execution", async () => {
@@ -1166,8 +1125,8 @@ describe("internal API handler", () => {
     expect(inspectAccessDecision).not.toHaveBeenCalled();
   });
 
-  it("manages RBAC roles through roles.manage permission", async () => {
-    const rolesManageSession = sessionWithPermissions(["roles.manage"]);
+  it("delegates RBAC role authorization to the DB-backed service", async () => {
+    const rolesManageSession = sessionWithPermissions([]);
     const {
       handler,
       listRoles,
@@ -1263,8 +1222,8 @@ describe("internal API handler", () => {
     });
   });
 
-  it("manages role bindings and direct grants through roles.manage permission", async () => {
-    const rolesManageSession = sessionWithPermissions(["roles.manage"]);
+  it("delegates scoped bindings and grants to the DB-backed RBAC service", async () => {
+    const rolesManageSession = sessionWithPermissions([]);
     const {
       handler,
       listRoleBindings,
@@ -1392,11 +1351,14 @@ describe("internal API handler", () => {
     });
   });
 
-  it("requires a signed narrow roles.manage override for RBAC management routes", async () => {
+  it("does not let coarse signed permissions bypass RBAC service denials", async () => {
     const { handler, listRoles, createRoleBinding, createDirectGrant } =
       createHandler({
         session: sessionWithPermissions(["roles.manage", "tenant.manage"])
       });
+    listRoles.mockRejectedValueOnce(new CoreError("permission.denied"));
+    createRoleBinding.mockRejectedValueOnce(new CoreError("permission.denied"));
+    createDirectGrant.mockRejectedValueOnce(new CoreError("permission.denied"));
     const rolesResponse = await handler.handle({
       method: "GET",
       path: "/internal/v1/rbac/roles"
@@ -1436,9 +1398,9 @@ describe("internal API handler", () => {
         }
       });
     }
-    expect(listRoles).not.toHaveBeenCalled();
-    expect(createRoleBinding).not.toHaveBeenCalled();
-    expect(createDirectGrant).not.toHaveBeenCalled();
+    expect(listRoles).toHaveBeenCalledOnce();
+    expect(createRoleBinding).toHaveBeenCalledOnce();
+    expect(createDirectGrant).toHaveBeenCalledOnce();
   });
 
   it("rejects invalid RBAC payloads before service execution", async () => {

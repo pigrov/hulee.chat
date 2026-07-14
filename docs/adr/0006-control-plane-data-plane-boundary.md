@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed.
+Accepted.
 
 ## Context
 
@@ -38,3 +38,6 @@ MVP may run without a separate physical control-plane service, but the ownership
 - Enterprise SaaS can use Hulee-managed control-plane metadata while keeping the data-plane physically isolated.
 - Data-plane uses local snapshots of license, entitlements, module catalog and deployment config.
 - Future SaaS signup/provisioning work can be added without changing core message processing.
+- License/control-plane unavailability never moves customer content into the
+  control-plane and does not disable the local authorized read, privacy/tenant
+  export, deletion, hold or evidence operations required by ADR 0015.

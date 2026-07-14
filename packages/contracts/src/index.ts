@@ -1,21 +1,32 @@
-export type Brand<TValue, TBrand extends string> = TValue & {
-  readonly __brand: TBrand;
-};
+import type {
+  ChannelConnectorId,
+  ClientId,
+  ConversationId,
+  EmployeeId,
+  EventId,
+  MessageId,
+  NormalizedInboundEventId,
+  RawInboundEventId,
+  SourceAccountId,
+  SourceConnectionId,
+  TenantId
+} from "./base-ids";
+import type { ModuleManifest } from "./module-manifest";
 
-export type TenantId = Brand<string, "TenantId">;
-export type EmployeeId = Brand<string, "EmployeeId">;
-export type ClientId = Brand<string, "ClientId">;
-export type ConversationId = Brand<string, "ConversationId">;
-export type MessageId = Brand<string, "MessageId">;
-export type EventId = Brand<string, "EventId">;
-export type ChannelConnectorId = Brand<string, "ChannelConnectorId">;
-export type SourceConnectionId = Brand<string, "SourceConnectionId">;
-export type SourceAccountId = Brand<string, "SourceAccountId">;
-export type RawInboundEventId = Brand<string, "RawInboundEventId">;
-export type NormalizedInboundEventId = Brand<
-  string,
-  "NormalizedInboundEventId"
->;
+export type { Brand } from "./brand";
+export type {
+  ChannelConnectorId,
+  ClientId,
+  ConversationId,
+  EmployeeId,
+  EventId,
+  MessageId,
+  NormalizedInboundEventId,
+  RawInboundEventId,
+  SourceAccountId,
+  SourceConnectionId,
+  TenantId
+} from "./base-ids";
 
 export type DeploymentType = "saas_shared" | "saas_isolated" | "on_prem";
 
@@ -439,60 +450,6 @@ export type PlatformEvent =
         reason: string;
       }
     >;
-
-export type ModuleType =
-  | "auth"
-  | "channel"
-  | "source"
-  | "telephony"
-  | "crm"
-  | "ai"
-  | "marketing"
-  | "analytics"
-  | "storage"
-  | "notification"
-  | "workflow"
-  | "billing"
-  | "company";
-
-export type UiSlotId =
-  | "tenant.settings.section"
-  | "integration.settings.section"
-  | "client.profile.card"
-  | "conversation.composer.tool"
-  | "conversation.message.action"
-  | "inbox.sidebar.section"
-  | "admin.section"
-  | "reports.section"
-  | "support.case.panel";
-
-export type UiClientKind = "web" | "mobile" | "desktop";
-
-export type UiSlotContribution = {
-  id: string;
-  slot: UiSlotId;
-  componentRef: string;
-  titleKey?: string;
-  requiredPermissions?: string[];
-  supportedClients?: UiClientKind[];
-  order?: number;
-};
-
-export type ModuleManifest = {
-  id: string;
-  type: ModuleType;
-  name: string;
-  version: string;
-  capabilities: string[];
-  configSchema: unknown;
-  secretsSchema?: unknown;
-  permissions?: string[];
-  events?: string[];
-  webhooks?: string[];
-  jobs?: string[];
-  uiSlots?: UiSlotContribution[];
-  healthChecks?: string[];
-};
 
 export type PlatformErrorCode =
   | "auth.invalid_credentials"
@@ -928,6 +885,9 @@ export type {
   SourceNormalizerContractReport
 } from "./source-normalizer-contract";
 
+export * from "./module-manifest";
+
 export * from "./public-api-v1";
 export * from "./internal-api-v1";
 export * from "./source-megapbx";
+export * from "./inbox-v2";

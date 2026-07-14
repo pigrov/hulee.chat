@@ -496,7 +496,9 @@ function toConversationRoutingResponse(
 function conversationRoutingAuditMetadata(input: {
   previousConversation: InternalInboxConversationAccessResource;
   nextConversation: InternalInboxConversationAccessResource;
-}): Record<string, string | null> {
+}): Record<string, unknown> {
+  const authorizationScopes = conversationRoutingAuthorizationScopes(input);
+
   return {
     conversationId: input.nextConversation.id,
     previousCurrentQueueId: input.previousConversation.currentQueueId ?? null,
@@ -505,8 +507,32 @@ function conversationRoutingAuditMetadata(input: {
       input.previousConversation.assignedEmployeeId ?? null,
     assignedEmployeeId: input.nextConversation.assignedEmployeeId ?? null,
     previousAssignedTeamId: input.previousConversation.assignedTeamId ?? null,
-    assignedTeamId: input.nextConversation.assignedTeamId ?? null
+    assignedTeamId: input.nextConversation.assignedTeamId ?? null,
+    authorizationScopes
   };
+}
+
+function conversationRoutingAuthorizationScopes(input: {
+  previousConversation: InternalInboxConversationAccessResource;
+  nextConversation: InternalInboxConversationAccessResource;
+}): readonly { readonly type: "queue" | "team"; readonly id: string }[] {
+  const scopes = new Map<
+    string,
+    { readonly type: "queue" | "team"; readonly id: string }
+  >();
+
+  const addScope = (type: "queue" | "team", id: string | undefined): void => {
+    if (id !== undefined) {
+      scopes.set(`${type}:${id}`, { type, id });
+    }
+  };
+
+  addScope("queue", input.previousConversation.currentQueueId);
+  addScope("queue", input.nextConversation.currentQueueId);
+  addScope("team", input.previousConversation.assignedTeamId);
+  addScope("team", input.nextConversation.assignedTeamId);
+
+  return [...scopes.values()];
 }
 
 async function resolveInboxAccessSnapshot(input: {

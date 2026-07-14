@@ -4,12 +4,16 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { PrivilegedActionReauthRequiredError } from "./privileged-action-policy";
 
 const mocks = vi.hoisted(() => ({
-  assertCurrentWebEffectiveTenantPermission: vi.fn()
+  assertWebTenantEmailVerified: vi.fn(),
+  requireCurrentWebAccessSession: vi.fn()
+}));
+
+vi.mock("./access", () => ({
+  assertWebTenantEmailVerified: mocks.assertWebTenantEmailVerified
 }));
 
 vi.mock("./session", () => ({
-  assertCurrentWebEffectiveTenantPermission:
-    mocks.assertCurrentWebEffectiveTenantPermission
+  requireCurrentWebAccessSession: mocks.requireCurrentWebAccessSession
 }));
 
 import {
@@ -23,7 +27,7 @@ const employeeId = "employee-1" as EmployeeId;
 describe("web admin command boundary", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.assertCurrentWebEffectiveTenantPermission.mockResolvedValue({
+    mocks.requireCurrentWebAccessSession.mockResolvedValue({
       tenantId,
       employeeId,
       sessionCreatedAt: new Date().toISOString(),
@@ -36,29 +40,25 @@ describe("web admin command boundary", () => {
   it("keeps DB-backed admin command families explicit", () => {
     expect(webDbBackedAdminCommandBoundaries).toMatchObject({
       employeeLifecycle: {
-        permission: "employees.manage",
         requireVerifiedEmail: true,
         requireRecentSession: false
       },
       employeeMembership: {
-        permission: "roles.manage",
         requireVerifiedEmail: true,
         requireRecentSession: true
       },
       orgStructure: {
-        permission: "employees.manage",
         requireVerifiedEmail: true,
         requireRecentSession: false
       },
       roleAccess: {
-        permission: "roles.manage",
         requireVerifiedEmail: true,
         requireRecentSession: true
       }
     });
   });
 
-  it("checks effective RBAC through the shared session guard", async () => {
+  it("checks authentication and email verification without a coarse permission", async () => {
     await expect(
       assertWebDbBackedAdminCommandBoundary(
         webDbBackedAdminCommandBoundaries.orgStructure
@@ -67,15 +67,14 @@ describe("web admin command boundary", () => {
       tenantId,
       employeeId
     });
-    expect(
-      mocks.assertCurrentWebEffectiveTenantPermission
-    ).toHaveBeenCalledWith("employees.manage", {
-      requireVerifiedEmail: true
-    });
+    expect(mocks.requireCurrentWebAccessSession).toHaveBeenCalledOnce();
+    expect(mocks.assertWebTenantEmailVerified).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId, employeeId })
+    );
   });
 
   it("requires a recent session for role and membership mutations", async () => {
-    mocks.assertCurrentWebEffectiveTenantPermission.mockResolvedValueOnce({
+    mocks.requireCurrentWebAccessSession.mockResolvedValueOnce({
       tenantId,
       employeeId,
       sessionCreatedAt: "2020-01-01T00:00:00.000Z",

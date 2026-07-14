@@ -810,19 +810,11 @@ describe("inbox API client", () => {
         effectivePermissionOverride: "modules.manage"
       } as never)
     ).rejects.toEqual(new CoreError("permission.denied"));
-    await expect(
-      loadRbacRoles({
-        effectivePermissionOverride: "tenant.manage"
-      } as never)
-    ).rejects.toEqual(new CoreError("permission.denied"));
     expect(buildInternalApiHeaders).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("passes explicit effective permission override for RBAC admin clients", async () => {
-    const rolesManageOptions = {
-      effectivePermissionOverride: "roles.manage" as const
-    };
+  it("uses signed identity without coarse permission enforcement for RBAC clients", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (url, request) => {
       return Response.json(
         rbacResponseForRequest(String(url), request?.method ?? "GET")
@@ -831,138 +823,121 @@ describe("inbox API client", () => {
 
     vi.stubGlobal("fetch", fetchMock);
 
-    await loadRbacRoles(rolesManageOptions);
-    await createRbacRole(
-      {
-        name: "Sales",
-        description: "Sales team",
-        permissions: ["client.view"]
+    await loadRbacRoles();
+    await createRbacRole({
+      name: "Sales",
+      description: "Sales team",
+      permissions: ["client.view"]
+    });
+    await updateRbacRole("role-sales", {
+      name: "Sales custom",
+      description: undefined,
+      permissions: ["client.view", "message.reply"]
+    });
+    await archiveRbacRole("role-sales");
+    await restoreRbacRole("role-sales");
+    await loadRbacRoleBindings();
+    await createRbacRoleBinding({
+      roleId: "role-sales",
+      subject: {
+        type: "employee",
+        id: "employee-2"
       },
-      rolesManageOptions
-    );
-    await updateRbacRole(
-      "role-sales",
-      {
-        name: "Sales custom",
-        description: undefined,
-        permissions: ["client.view", "message.reply"]
+      scope: {
+        type: "tenant"
+      }
+    });
+    await revokeRbacRoleBinding("binding-sales");
+    await loadRbacDirectGrants();
+    await createRbacDirectGrant({
+      employeeId: "employee-2",
+      permission: "client.view",
+      scope: {
+        type: "tenant"
       },
-      rolesManageOptions
-    );
-    await archiveRbacRole("role-sales", rolesManageOptions);
-    await restoreRbacRole("role-sales", rolesManageOptions);
-    await loadRbacRoleBindings(rolesManageOptions);
-    await createRbacRoleBinding(
-      {
-        roleId: "role-sales",
-        subject: {
-          type: "employee",
-          id: "employee-2"
-        },
-        scope: {
-          type: "tenant"
-        }
-      },
-      rolesManageOptions
-    );
-    await revokeRbacRoleBinding("binding-sales", rolesManageOptions);
-    await loadRbacDirectGrants(rolesManageOptions);
-    await createRbacDirectGrant(
-      {
-        employeeId: "employee-2",
-        permission: "client.view",
-        scope: {
-          type: "tenant"
-        },
-        reason: "Temporary sales handoff"
-      },
-      rolesManageOptions
-    );
-    await revokeRbacDirectGrant("grant-client", rolesManageOptions);
+      reason: "Temporary sales handoff"
+    });
+    await revokeRbacDirectGrant("grant-client");
 
-    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(1, {
-      method: "GET",
-      path: "/internal/v1/rbac/roles",
-      effectivePermissionOverride: "roles.manage"
-    });
-    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(2, {
-      method: "POST",
-      path: "/internal/v1/rbac/roles",
-      body: {
-        name: "Sales",
-        description: "Sales team",
-        permissions: ["client.view"]
-      },
-      effectivePermissionOverride: "roles.manage"
-    });
-    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(3, {
-      method: "PATCH",
-      path: "/internal/v1/rbac/roles/role-sales",
-      body: {
-        name: "Sales custom",
-        description: undefined,
-        permissions: ["client.view", "message.reply"]
-      },
-      effectivePermissionOverride: "roles.manage"
-    });
-    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(4, {
-      method: "POST",
-      path: "/internal/v1/rbac/roles/role-sales/archive",
-      effectivePermissionOverride: "roles.manage"
-    });
-    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(5, {
-      method: "POST",
-      path: "/internal/v1/rbac/roles/role-sales/restore",
-      effectivePermissionOverride: "roles.manage"
-    });
-    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(6, {
-      method: "GET",
-      path: "/internal/v1/rbac/role-bindings",
-      effectivePermissionOverride: "roles.manage"
-    });
-    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(7, {
-      method: "POST",
-      path: "/internal/v1/rbac/role-bindings",
-      body: {
-        roleId: "role-sales",
-        subject: {
-          type: "employee",
-          id: "employee-2"
-        },
-        scope: {
-          type: "tenant"
+    const headerInputs = vi
+      .mocked(buildInternalApiHeaders)
+      .mock.calls.map(([headerInput]) => headerInput);
+
+    expect(headerInputs).toEqual([
+      { method: "GET", path: "/internal/v1/rbac/roles", body: undefined },
+      {
+        method: "POST",
+        path: "/internal/v1/rbac/roles",
+        body: {
+          name: "Sales",
+          description: "Sales team",
+          permissions: ["client.view"]
         }
       },
-      effectivePermissionOverride: "roles.manage"
-    });
-    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(8, {
-      method: "DELETE",
-      path: "/internal/v1/rbac/role-bindings/binding-sales",
-      effectivePermissionOverride: "roles.manage"
-    });
-    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(9, {
-      method: "GET",
-      path: "/internal/v1/rbac/direct-grants",
-      effectivePermissionOverride: "roles.manage"
-    });
-    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(10, {
-      method: "POST",
-      path: "/internal/v1/rbac/direct-grants",
-      body: {
-        employeeId: "employee-2",
-        permission: "client.view",
-        scope: {
-          type: "tenant"
-        },
-        reason: "Temporary sales handoff"
+      {
+        method: "PATCH",
+        path: "/internal/v1/rbac/roles/role-sales",
+        body: {
+          name: "Sales custom",
+          description: undefined,
+          permissions: ["client.view", "message.reply"]
+        }
       },
-      effectivePermissionOverride: "roles.manage"
-    });
-    expect(buildInternalApiHeaders).toHaveBeenNthCalledWith(11, {
-      method: "DELETE",
-      path: "/internal/v1/rbac/direct-grants/grant-client",
-      effectivePermissionOverride: "roles.manage"
-    });
+      {
+        method: "POST",
+        path: "/internal/v1/rbac/roles/role-sales/archive",
+        body: undefined
+      },
+      {
+        method: "POST",
+        path: "/internal/v1/rbac/roles/role-sales/restore",
+        body: undefined
+      },
+      {
+        method: "GET",
+        path: "/internal/v1/rbac/role-bindings",
+        body: undefined
+      },
+      {
+        method: "POST",
+        path: "/internal/v1/rbac/role-bindings",
+        body: {
+          roleId: "role-sales",
+          subject: { type: "employee", id: "employee-2" },
+          scope: { type: "tenant" }
+        }
+      },
+      {
+        method: "DELETE",
+        path: "/internal/v1/rbac/role-bindings/binding-sales",
+        body: undefined
+      },
+      {
+        method: "GET",
+        path: "/internal/v1/rbac/direct-grants",
+        body: undefined
+      },
+      {
+        method: "POST",
+        path: "/internal/v1/rbac/direct-grants",
+        body: {
+          employeeId: "employee-2",
+          permission: "client.view",
+          scope: { type: "tenant" },
+          reason: "Temporary sales handoff"
+        }
+      },
+      {
+        method: "DELETE",
+        path: "/internal/v1/rbac/direct-grants/grant-client",
+        body: undefined
+      }
+    ]);
+    expect(
+      headerInputs.every(
+        (headerInput) => !("effectivePermissionOverride" in headerInput)
+      )
+    ).toBe(true);
     expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
       name: "Sales",
       description: "Sales team",

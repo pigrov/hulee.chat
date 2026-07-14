@@ -18,6 +18,10 @@ import {
 
 import { AccessDeniedPage } from "../../../src/access-denied";
 import {
+  canAccessTenantResource,
+  loadEmployeeDirectoryForAccess
+} from "../../../src/admin-resource-access";
+import {
   AdminSectionFrame,
   type AdminSectionFrameItem
 } from "../../../src/admin-section-frame";
@@ -33,10 +37,7 @@ import {
   getWebDatabase,
   resolveCurrentWebAccessSession
 } from "../../../src/session";
-import {
-  hasEffectivePermission,
-  resolveEmployeeEffectiveAccess
-} from "../../../src/rbac-effective-access";
+import { resolveEmployeeEffectiveAccess } from "../../../src/rbac-effective-access";
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
 import { navigationAccessFromTenantAdminAccess } from "../../../src/tenant-admin-nav";
 
@@ -70,7 +71,24 @@ export default async function EmployeesAdminPage({
     rbacRepository
   });
 
-  if (!hasEffectivePermission(accessSnapshot, "employees.manage")) {
+  const [model, employees, resolvedSearchParams] = await Promise.all([
+    loadTenantAdminViewModel({ tenantId: access.tenantId, database }),
+    loadEmployeeDirectoryForAccess({
+      access: accessSnapshot,
+      repository
+    }),
+    searchParams
+  ]);
+  const canManageTenantEmployees = canAccessTenantResource({
+    access: accessSnapshot,
+    permission: "employees.manage"
+  });
+  const canManageTenantRoles = canAccessTenantResource({
+    access: accessSnapshot,
+    permission: "roles.manage"
+  });
+
+  if (!canManageTenantEmployees && employees.length === 0) {
     const adminAccess = {
       session: access,
       effectiveAccess: accessSnapshot
@@ -84,17 +102,13 @@ export default async function EmployeesAdminPage({
     );
   }
 
-  const [model, employees, invitations, resolvedSearchParams] =
-    await Promise.all([
-      loadTenantAdminViewModel({ tenantId: access.tenantId, database }),
-      repository.listEmployees({ tenantId: access.tenantId }),
-      repository.listInvitations({ tenantId: access.tenantId, limit: 25 }),
-      searchParams
-    ]);
+  const invitations = canManageTenantEmployees
+    ? await repository.listInvitations({ tenantId: access.tenantId, limit: 25 })
+    : [];
   const { t, locale } = createTranslator(model.tenant.locale);
-  const canManageRoles = hasEffectivePermission(accessSnapshot, "roles.manage");
   const selectedSection = resolveEmployeeAdminSection(
-    resolvedSearchParams?.section
+    resolvedSearchParams?.section,
+    canManageTenantEmployees
   );
   const employeeActionMessages = employeeAdminActionMessages(t);
   const employeeAdminSections: readonly AdminSectionFrameItem<EmployeeAdminSectionId>[] =
@@ -105,18 +119,22 @@ export default async function EmployeesAdminPage({
         href: employeeAdminSectionHref("directory"),
         icon: <UsersRound size={18} aria-hidden="true" />
       },
-      {
-        id: "invite",
-        title: t("admin.employees.inviteEmployee"),
-        href: employeeAdminSectionHref("invite"),
-        icon: <UserPlus size={18} aria-hidden="true" />
-      },
-      {
-        id: "invitations",
-        title: t("admin.employees.recentInvites"),
-        href: employeeAdminSectionHref("invitations"),
-        icon: <Mail size={18} aria-hidden="true" />
-      }
+      ...(canManageTenantEmployees
+        ? [
+            {
+              id: "invite" as const,
+              title: t("admin.employees.inviteEmployee"),
+              href: employeeAdminSectionHref("invite"),
+              icon: <UserPlus size={18} aria-hidden="true" />
+            },
+            {
+              id: "invitations" as const,
+              title: t("admin.employees.recentInvites"),
+              href: employeeAdminSectionHref("invitations"),
+              icon: <Mail size={18} aria-hidden="true" />
+            }
+          ]
+        : [])
     ];
 
   return (
@@ -136,54 +154,56 @@ export default async function EmployeesAdminPage({
         sections={employeeAdminSections}
         selectedSection={selectedSection}
       >
-        <section
-          className="settingsPanel"
-          aria-labelledby="employee-invite-title"
-          hidden={selectedSection !== "invite"}
-        >
-          <div className="sectionHeader">
-            <div>
-              <p className="eyebrow">{t("admin.employees.invite")}</p>
-              <h2 className="sectionTitle" id="employee-invite-title">
-                {t("admin.employees.inviteEmployee")}
-              </h2>
-            </div>
-            <span className="badge">
-              <Mail size={14} aria-hidden="true" />
-              {t("admin.employees.emailInvite")}
-            </span>
-          </div>
-
-          <EmployeeAdminActionForm
-            actionKind="inviteEmployee"
-            className="settingsForm"
-            manualInviteLinkLabel={t("admin.employees.manualInviteLink")}
-            messages={employeeActionMessages}
-            resetOnSuccess
+        {canManageTenantEmployees ? (
+          <section
+            className="settingsPanel"
+            aria-labelledby="employee-invite-title"
+            hidden={selectedSection !== "invite"}
           >
-            <label className="fieldStack">
-              <span className="detailLabel">{t("auth.email")}</span>
-              <EmailInput className="textInput" name="email" required />
-            </label>
-            <label className="fieldStack">
-              <span className="detailLabel">
-                {t("admin.employees.displayName")}
+            <div className="sectionHeader">
+              <div>
+                <p className="eyebrow">{t("admin.employees.invite")}</p>
+                <h2 className="sectionTitle" id="employee-invite-title">
+                  {t("admin.employees.inviteEmployee")}
+                </h2>
+              </div>
+              <span className="badge">
+                <Mail size={14} aria-hidden="true" />
+                {t("admin.employees.emailInvite")}
               </span>
-              <input
-                className="textInput"
-                name="displayName"
-                type="text"
-                autoComplete="name"
-              />
-            </label>
-            <EmployeeAdminSubmitButton
-              className="primaryButton"
-              label={t("admin.employees.sendInvite")}
+            </div>
+
+            <EmployeeAdminActionForm
+              actionKind="inviteEmployee"
+              className="settingsForm"
+              manualInviteLinkLabel={t("admin.employees.manualInviteLink")}
+              messages={employeeActionMessages}
+              resetOnSuccess
             >
-              <UserPlus size={18} aria-hidden="true" />
-            </EmployeeAdminSubmitButton>
-          </EmployeeAdminActionForm>
-        </section>
+              <label className="fieldStack">
+                <span className="detailLabel">{t("auth.email")}</span>
+                <EmailInput className="textInput" name="email" required />
+              </label>
+              <label className="fieldStack">
+                <span className="detailLabel">
+                  {t("admin.employees.displayName")}
+                </span>
+                <input
+                  className="textInput"
+                  name="displayName"
+                  type="text"
+                  autoComplete="name"
+                />
+              </label>
+              <EmployeeAdminSubmitButton
+                className="primaryButton"
+                label={t("admin.employees.sendInvite")}
+              >
+                <UserPlus size={18} aria-hidden="true" />
+              </EmployeeAdminSubmitButton>
+            </EmployeeAdminActionForm>
+          </section>
+        ) : null}
 
         <section
           className="settingsPanel"
@@ -222,7 +242,7 @@ export default async function EmployeesAdminPage({
                     </span>
                   </div>
                   <div className="rowActions">
-                    {canManageRoles ? (
+                    {canManageTenantRoles ? (
                       <Link
                         className="secondaryButton"
                         href={`/admin/employees/${encodeURIComponent(employee.employeeId)}/access`}
@@ -231,7 +251,8 @@ export default async function EmployeesAdminPage({
                         {t("admin.employees.openRoles")}
                       </Link>
                     ) : null}
-                    {!employee.deactivatedAt &&
+                    {canManageTenantEmployees &&
+                    !employee.deactivatedAt &&
                     employee.employeeId !== access.employeeId ? (
                       <EmployeeAdminActionForm
                         actionKind="deactivateEmployee"
@@ -261,91 +282,93 @@ export default async function EmployeesAdminPage({
           </div>
         </section>
 
-        <section
-          className="settingsPanel"
-          aria-labelledby="employee-invitations-title"
-          hidden={selectedSection !== "invitations"}
-        >
-          <div className="sectionHeader">
-            <div>
-              <p className="eyebrow">{t("admin.employees.invites")}</p>
-              <h2 className="sectionTitle" id="employee-invitations-title">
-                {t("admin.employees.recentInvites")}
-              </h2>
+        {canManageTenantEmployees ? (
+          <section
+            className="settingsPanel"
+            aria-labelledby="employee-invitations-title"
+            hidden={selectedSection !== "invitations"}
+          >
+            <div className="sectionHeader">
+              <div>
+                <p className="eyebrow">{t("admin.employees.invites")}</p>
+                <h2 className="sectionTitle" id="employee-invitations-title">
+                  {t("admin.employees.recentInvites")}
+                </h2>
+              </div>
+              <span className="badge">{invitations.length}</span>
             </div>
-            <span className="badge">{invitations.length}</span>
-          </div>
 
-          <div className="managementList">
-            {invitations.length === 0 ? (
-              <p className="metaText">{t("admin.employees.noInvitations")}</p>
-            ) : (
-              invitations.map((invitation) => (
-                <article className="managementRow" key={invitation.id}>
-                  <div>
-                    <h3 className="listItemTitle">
-                      <EmailText asLink={false} value={invitation.email} />
-                    </h3>
-                    <p className="metaText">
-                      {t("admin.employees.expiresAt", {
-                        value: formatDateTime(invitation.expiresAt, locale)
-                      })}
-                    </p>
-                  </div>
-                  <div className="rowActions">
-                    <span className="badge">
-                      {t(invitationStatusKey(invitation, new Date()))}
-                    </span>
-                    {!invitation.acceptedAt ? (
-                      <EmployeeAdminActionForm
-                        actionKind="resendInvite"
-                        className="inlineForm"
-                        manualInviteLinkLabel={t(
-                          "admin.employees.manualInviteLink"
-                        )}
-                        messages={employeeActionMessages}
-                      >
-                        <input
-                          name="invitationId"
-                          type="hidden"
-                          value={invitation.id}
-                        />
-                        <EmployeeAdminSubmitButton
-                          className="secondaryButton"
-                          label={t("admin.employees.resendInvite")}
+            <div className="managementList">
+              {invitations.length === 0 ? (
+                <p className="metaText">{t("admin.employees.noInvitations")}</p>
+              ) : (
+                invitations.map((invitation) => (
+                  <article className="managementRow" key={invitation.id}>
+                    <div>
+                      <h3 className="listItemTitle">
+                        <EmailText asLink={false} value={invitation.email} />
+                      </h3>
+                      <p className="metaText">
+                        {t("admin.employees.expiresAt", {
+                          value: formatDateTime(invitation.expiresAt, locale)
+                        })}
+                      </p>
+                    </div>
+                    <div className="rowActions">
+                      <span className="badge">
+                        {t(invitationStatusKey(invitation, new Date()))}
+                      </span>
+                      {!invitation.acceptedAt ? (
+                        <EmployeeAdminActionForm
+                          actionKind="resendInvite"
+                          className="inlineForm"
+                          manualInviteLinkLabel={t(
+                            "admin.employees.manualInviteLink"
+                          )}
+                          messages={employeeActionMessages}
                         >
-                          <RotateCw size={14} aria-hidden="true" />
-                        </EmployeeAdminSubmitButton>
-                      </EmployeeAdminActionForm>
-                    ) : null}
-                    {!invitation.acceptedAt && !invitation.revokedAt ? (
-                      <EmployeeAdminActionForm
-                        actionKind="revokeInvite"
-                        className="inlineForm"
-                        manualInviteLinkLabel={t(
-                          "admin.employees.manualInviteLink"
-                        )}
-                        messages={employeeActionMessages}
-                      >
-                        <input
-                          name="invitationId"
-                          type="hidden"
-                          value={invitation.id}
-                        />
-                        <EmployeeAdminSubmitButton
-                          className="dangerButton"
-                          label={t("admin.employees.revokeInvite")}
+                          <input
+                            name="invitationId"
+                            type="hidden"
+                            value={invitation.id}
+                          />
+                          <EmployeeAdminSubmitButton
+                            className="secondaryButton"
+                            label={t("admin.employees.resendInvite")}
+                          >
+                            <RotateCw size={14} aria-hidden="true" />
+                          </EmployeeAdminSubmitButton>
+                        </EmployeeAdminActionForm>
+                      ) : null}
+                      {!invitation.acceptedAt && !invitation.revokedAt ? (
+                        <EmployeeAdminActionForm
+                          actionKind="revokeInvite"
+                          className="inlineForm"
+                          manualInviteLinkLabel={t(
+                            "admin.employees.manualInviteLink"
+                          )}
+                          messages={employeeActionMessages}
                         >
-                          <XCircle size={14} aria-hidden="true" />
-                        </EmployeeAdminSubmitButton>
-                      </EmployeeAdminActionForm>
-                    ) : null}
-                  </div>
-                </article>
-              ))
-            )}
-          </div>
-        </section>
+                          <input
+                            name="invitationId"
+                            type="hidden"
+                            value={invitation.id}
+                          />
+                          <EmployeeAdminSubmitButton
+                            className="dangerButton"
+                            label={t("admin.employees.revokeInvite")}
+                          >
+                            <XCircle size={14} aria-hidden="true" />
+                          </EmployeeAdminSubmitButton>
+                        </EmployeeAdminActionForm>
+                      ) : null}
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+          </section>
+        ) : null}
       </AdminSectionFrame>
     </TenantAdminShell>
   );
@@ -356,9 +379,16 @@ function employeeAdminSectionHref(section: EmployeeAdminSectionId): string {
 }
 
 function resolveEmployeeAdminSection(
-  value: string | undefined
+  value: string | undefined,
+  canManageTenantEmployees: boolean
 ): EmployeeAdminSectionId {
-  return isEmployeeAdminSectionId(value) ? value : "directory";
+  if (!isEmployeeAdminSectionId(value)) {
+    return "directory";
+  }
+
+  return value === "directory" || canManageTenantEmployees
+    ? value
+    : "directory";
 }
 
 function isEmployeeAdminSectionId(

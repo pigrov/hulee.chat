@@ -38,6 +38,7 @@ Unit tests are mandatory for:
 - domain services;
 - permissions;
 - entitlement and usage limit decisions;
+- data lifecycle policy, hold/restriction and export/delete decisions;
 - assignment logic;
 - message routing;
 - adapter mappers;
@@ -59,6 +60,9 @@ Required where relevant:
 - UI slot contract tests;
 - queue/outbox processing tests;
 - tenant isolation tests.
+- same-tenant composite-FK and destructive lifecycle-worker isolation tests;
+- object/version/index/cache deletion and restore-erasure reconciliation tests;
+- typed audit/privacy-evidence redaction and finite-retention tests;
 - native bridge contract tests.
 - mobile/desktop packaging smoke tests where relevant.
 

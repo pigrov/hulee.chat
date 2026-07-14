@@ -58,7 +58,6 @@ vi.mock("./web-admin-command-boundary", () => ({
     mocks.assertWebDbBackedAdminCommandBoundary,
   webDbBackedAdminCommandBoundaries: {
     roleAccess: {
-      permission: "roles.manage",
       requireVerifiedEmail: true,
       requireRecentSession: true
     }
@@ -68,10 +67,6 @@ vi.mock("./web-admin-command-boundary", () => ({
 const tenantId = "tenant-test" as TenantId;
 const adminEmployeeId = "employee-admin" as EmployeeId;
 const targetEmployeeId = "employee-agent" as EmployeeId;
-const rolesManageOptions = {
-  effectivePermissionOverride: "roles.manage"
-};
-
 describe("role management actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -133,18 +128,14 @@ describe("role management actions", () => {
     );
 
     expect(mocks.assertWebDbBackedAdminCommandBoundary).toHaveBeenCalledWith({
-      permission: "roles.manage",
       requireVerifiedEmail: true,
       requireRecentSession: true
     });
-    expect(mocks.createRbacRole).toHaveBeenCalledWith(
-      {
-        name: "Sales custom",
-        description: "Sales scoped permissions",
-        permissions: ["client.view", "message.reply"]
-      },
-      rolesManageOptions
-    );
+    expect(mocks.createRbacRole).toHaveBeenCalledWith({
+      name: "Sales custom",
+      description: "Sales scoped permissions",
+      permissions: ["client.view", "message.reply"]
+    });
     expectRoleAdminRevalidation();
   });
 
@@ -162,12 +153,11 @@ describe("role management actions", () => {
       { code: "template_created", status: "success" }
     );
 
-    expect(mocks.loadRbacRoles).toHaveBeenCalledWith(rolesManageOptions);
+    expect(mocks.loadRbacRoles).toHaveBeenCalledWith();
     expect(mocks.createRbacRole).toHaveBeenCalledWith(
       expect.objectContaining({
         permissions: expect.arrayContaining(["client.view", "message.reply"])
-      }),
-      rolesManageOptions
+      })
     );
   });
 
@@ -194,19 +184,12 @@ describe("role management actions", () => {
       { code: "archived", status: "success" }
     );
 
-    expect(mocks.updateRbacRole).toHaveBeenCalledWith(
-      "role-sales",
-      {
-        name: "Sales custom",
-        description: undefined,
-        permissions: ["client.view"]
-      },
-      rolesManageOptions
-    );
-    expect(mocks.archiveRbacRole).toHaveBeenCalledWith(
-      "role-sales",
-      rolesManageOptions
-    );
+    expect(mocks.updateRbacRole).toHaveBeenCalledWith("role-sales", {
+      name: "Sales custom",
+      description: undefined,
+      permissions: ["client.view"]
+    });
+    expect(mocks.archiveRbacRole).toHaveBeenCalledWith("role-sales");
   });
 
   it("restores custom roles through the internal RBAC API", async () => {
@@ -220,10 +203,7 @@ describe("role management actions", () => {
       { code: "restored", status: "success" }
     );
 
-    expect(mocks.restoreRbacRole).toHaveBeenCalledWith(
-      "role-sales",
-      rolesManageOptions
-    );
+    expect(mocks.restoreRbacRole).toHaveBeenCalledWith("role-sales");
   });
 
   it("assigns active roles through the internal RBAC API", async () => {
@@ -241,19 +221,16 @@ describe("role management actions", () => {
       { code: "assigned", status: "success" }
     );
 
-    expect(mocks.createRbacRoleBinding).toHaveBeenCalledWith(
-      {
-        roleId: "role-sales",
-        subject: {
-          type: "employee",
-          id: targetEmployeeId
-        },
-        scope: {
-          type: "tenant"
-        }
+    expect(mocks.createRbacRoleBinding).toHaveBeenCalledWith({
+      roleId: "role-sales",
+      subject: {
+        type: "employee",
+        id: targetEmployeeId
       },
-      rolesManageOptions
-    );
+      scope: {
+        type: "tenant"
+      }
+    });
   });
 
   it("revokes role bindings through the internal RBAC API", async () => {
@@ -267,10 +244,7 @@ describe("role management actions", () => {
       { code: "revoked", status: "success" }
     );
 
-    expect(mocks.revokeRbacRoleBinding).toHaveBeenCalledWith(
-      "binding-sales",
-      rolesManageOptions
-    );
+    expect(mocks.revokeRbacRoleBinding).toHaveBeenCalledWith("binding-sales");
   });
 
   it("adds a direct grant through the internal RBAC API", async () => {
@@ -291,18 +265,15 @@ describe("role management actions", () => {
       { code: "direct_grant_created", status: "success" }
     );
 
-    expect(mocks.createRbacDirectGrant).toHaveBeenCalledWith(
-      {
-        employeeId: targetEmployeeId,
-        permission: "client.view",
-        scope: {
-          type: "tenant"
-        },
-        reason: "Temporary sales handoff",
-        expiresAt: expect.any(String)
+    expect(mocks.createRbacDirectGrant).toHaveBeenCalledWith({
+      employeeId: targetEmployeeId,
+      permission: "client.view",
+      scope: {
+        type: "tenant"
       },
-      rolesManageOptions
-    );
+      reason: "Temporary sales handoff",
+      expiresAt: expect.any(String)
+    });
   });
 
   it("revokes direct grants through the internal RBAC API", async () => {
@@ -317,10 +288,7 @@ describe("role management actions", () => {
       { code: "direct_grant_revoked", status: "success" }
     );
 
-    expect(mocks.revokeRbacDirectGrant).toHaveBeenCalledWith(
-      "grant-client",
-      rolesManageOptions
-    );
+    expect(mocks.revokeRbacDirectGrant).toHaveBeenCalledWith("grant-client");
   });
 
   it("maps internal RBAC permission denials to role action state", async () => {

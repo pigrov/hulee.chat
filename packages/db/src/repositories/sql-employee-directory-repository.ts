@@ -14,6 +14,7 @@ import { sql, type SQL } from "drizzle-orm";
 import type { HuleeDatabase } from "../client";
 import type { RawSqlExecutor } from "./sql-outbox-repository";
 import type { TenantAuthAccount } from "./sql-auth-repository";
+import { assertTenantScopedRows } from "./tenant-scope";
 import {
   mapOptionalSqlTimestamp,
   mapSqlTimestamp,
@@ -58,6 +59,12 @@ export type EmployeeInvitationPreview = {
 
 export type ListTenantEmployeesInput = {
   tenantId: TenantId;
+};
+
+export type ListTenantEmployeesByMembershipScopesInput = {
+  tenantId: TenantId;
+  orgUnitIds: readonly string[];
+  teamIds: readonly string[];
 };
 
 export type ListTenantInvitationsInput = {
@@ -121,6 +128,9 @@ export type RefreshEmployeeInvitationPersistenceInput = {
 export type EmployeeDirectoryRepository = {
   listEmployees(
     input: ListTenantEmployeesInput
+  ): Promise<readonly TenantEmployeeRecord[]>;
+  listEmployeesByMembershipScopes(
+    input: ListTenantEmployeesByMembershipScopesInput
   ): Promise<readonly TenantEmployeeRecord[]>;
   listInvitations(
     input: ListTenantInvitationsInput
@@ -211,8 +221,33 @@ export function createSqlEmployeeDirectoryRepository(
       const result = await rawExecutor.execute<EmployeeRow>(
         buildListTenantEmployeesSql(input)
       );
+      const employees = result.rows.map(mapEmployeeRow);
 
-      return result.rows.map(mapEmployeeRow);
+      assertTenantScopedRows(input.tenantId, employees);
+
+      return employees;
+    },
+
+    async listEmployeesByMembershipScopes(input) {
+      const orgUnitIds = normalizeMembershipScopeIds(input.orgUnitIds);
+      const teamIds = normalizeMembershipScopeIds(input.teamIds);
+
+      if (orgUnitIds.length === 0 && teamIds.length === 0) {
+        return [];
+      }
+
+      const result = await rawExecutor.execute<EmployeeRow>(
+        buildListTenantEmployeesByMembershipScopesSql({
+          tenantId: input.tenantId,
+          orgUnitIds,
+          teamIds
+        })
+      );
+      const employees = result.rows.map(mapEmployeeRow);
+
+      assertTenantScopedRows(input.tenantId, employees);
+
+      return employees;
     },
 
     async listInvitations(input) {
@@ -238,7 +273,15 @@ export function createSqlEmployeeDirectoryRepository(
       );
       const row = result.rows[0];
 
-      return row === undefined ? null : mapEmployeeRow(row);
+      if (row === undefined) {
+        return null;
+      }
+
+      const employee = mapEmployeeRow(row);
+
+      assertTenantScopedRows(input.tenantId, [employee]);
+
+      return employee;
     },
 
     async findInvitation(input) {
@@ -312,6 +355,73 @@ export function createSqlEmployeeDirectoryRepository(
 export function buildListTenantEmployeesSql(
   input: ListTenantEmployeesInput
 ): SQL {
+  return buildListTenantEmployeeRowsSql(
+    sql`employees.tenant_id = ${input.tenantId}`
+  );
+}
+
+export function buildListTenantEmployeesByMembershipScopesSql(
+  input: ListTenantEmployeesByMembershipScopesInput
+): SQL {
+  const orgUnitIds = normalizeMembershipScopeIds(input.orgUnitIds);
+  const teamIds = normalizeMembershipScopeIds(input.teamIds);
+  const scopePredicates: SQL[] = [];
+
+  if (orgUnitIds.length > 0) {
+    scopePredicates.push(sql`
+      exists (
+        select 1
+        from employee_org_unit_memberships scoped_org_unit_memberships
+        inner join org_units scoped_org_units
+          on scoped_org_units.tenant_id =
+              scoped_org_unit_memberships.tenant_id
+         and scoped_org_units.id =
+              scoped_org_unit_memberships.org_unit_id
+         and scoped_org_units.status = 'active'
+        where scoped_org_unit_memberships.tenant_id = employees.tenant_id
+          and scoped_org_unit_memberships.employee_id = employees.id
+          and scoped_org_unit_memberships.org_unit_id in (
+            ${sql.join(
+              orgUnitIds.map((orgUnitId) => sql`${orgUnitId}`),
+              sql`, `
+            )}
+          )
+      )
+    `);
+  }
+
+  if (teamIds.length > 0) {
+    scopePredicates.push(sql`
+      exists (
+        select 1
+        from employee_team_memberships scoped_team_memberships
+        inner join teams scoped_teams
+          on scoped_teams.tenant_id = scoped_team_memberships.tenant_id
+         and scoped_teams.id = scoped_team_memberships.team_id
+        where scoped_team_memberships.tenant_id = employees.tenant_id
+          and scoped_team_memberships.employee_id = employees.id
+          and scoped_team_memberships.status = 'active'
+          and scoped_team_memberships.team_id in (
+            ${sql.join(
+              teamIds.map((teamId) => sql`${teamId}`),
+              sql`, `
+            )}
+          )
+      )
+    `);
+  }
+
+  if (scopePredicates.length === 0) {
+    throw new CoreError("validation.failed");
+  }
+
+  return buildListTenantEmployeeRowsSql(sql`
+    employees.tenant_id = ${input.tenantId}
+    and (${sql.join(scopePredicates, sql` or `)})
+  `);
+}
+
+function buildListTenantEmployeeRowsSql(where: SQL): SQL {
   return sql`
     select employees.tenant_id,
            employees.id as employee_id,
@@ -374,9 +484,20 @@ export function buildListTenantEmployeesSql(
       where employee_work_queue_memberships.tenant_id = employees.tenant_id
         and employee_work_queue_memberships.employee_id = employees.id
     ) work_queue_membership_rows on true
-    where employees.tenant_id = ${input.tenantId}
-    order by employees.created_at asc
+    where ${where}
+    order by employees.created_at asc,
+             employees.id asc
   `;
+}
+
+function normalizeMembershipScopeIds(
+  ids: readonly string[]
+): readonly string[] {
+  if (ids.some((id) => id.trim().length === 0)) {
+    throw new CoreError("validation.failed");
+  }
+
+  return [...new Set(ids)].sort();
 }
 
 export function buildFindTenantEmployeeSql(

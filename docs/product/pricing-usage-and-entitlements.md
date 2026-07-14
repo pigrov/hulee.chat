@@ -88,6 +88,14 @@ Resource examples:
 - seats: active employees or named seats;
 - retention: message/file/audit retention windows.
 
+Retention entitlements operate only inside the approved ADR 0015 lifecycle and
+jurisdiction envelope. A plan may include or sell a longer optional period, but
+it cannot silently repurpose collected data, exceed a legal maximum, shorten a
+legal/contractual minimum, bypass legal hold or make verified export/delete
+unavailable. A downgrade requires policy preview, notice/cooling period and an
+explicit tenant decision where applicable; non-payment is never an immediate
+deletion instruction.
+
 ## SaaS Overage Behavior
 
 Limits should degrade product behavior predictably:
@@ -101,6 +109,10 @@ Limits should degrade product behavior predictably:
 - seats hard limit: block activating additional employees, not existing login by default.
 
 Expired or over-limit plans should not immediately block access to existing business data. Read, export and audit access should follow a documented policy.
+
+Privacy request, legal hold, tenant offboarding export and policy-required
+deletion/evidence operations remain available even when an entitlement/license
+expires. Their workload may be rate-bounded operationally but not disabled.
 
 ## On-Prem Model
 

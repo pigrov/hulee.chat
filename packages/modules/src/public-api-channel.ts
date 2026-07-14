@@ -2,23 +2,29 @@ import type {
   AdapterHealth,
   ChannelAdapter,
   DeliveryResult,
-  ModuleManifest,
   NormalizedIncomingMessage,
   NormalizedOutgoingMessage,
   TenantId
 } from "@hulee/contracts";
-import { publicApiInboundMessageRequestSchema } from "@hulee/contracts";
+import {
+  defineModuleManifest,
+  publicApiInboundMessageRequestSchema
+} from "@hulee/contracts";
 import { z } from "zod";
 
-export const publicApiChannelManifest = {
+import { publicApiChannelDataGovernance } from "./data-governance";
+
+export const publicApiChannelManifest = defineModuleManifest({
   id: "channel-public-api",
   type: "channel",
   name: "Public API channel",
   version: "0.0.0",
   capabilities: ["channel.inbound", "channel.outbound"],
   configSchema: {},
-  healthChecks: ["public_api_channel.health"]
-} satisfies ModuleManifest;
+  healthChecks: ["public_api_channel.health"],
+  dataHandling: "tenant_or_customer_data",
+  dataGovernance: publicApiChannelDataGovernance
+});
 
 export const publicApiChannelInboundEnvelopeSchema = z
   .object({

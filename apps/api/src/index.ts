@@ -216,7 +216,11 @@ export function createInternalApiDataPlaneHandler(
       database: options.database
     }),
     orgStructure: createInternalOrgStructureService({
-      repository: createSqlOrgStructureRepository(options.database)
+      repository: createSqlOrgStructureRepository(options.database),
+      employeeRepository: createSqlEmployeeDirectoryRepository(
+        options.database
+      ),
+      rbacRepository: createSqlTenantRbacRepository(options.database)
     }),
     accessDecisions: createInternalAccessDecisionService({
       employeeRepository: createSqlEmployeeDirectoryRepository(

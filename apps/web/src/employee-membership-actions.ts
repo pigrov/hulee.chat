@@ -2,10 +2,10 @@
 
 import type { EmployeeId, TenantId } from "@hulee/contracts";
 import {
+  CoreError,
   resolveEffectivePermissionGrants,
   type EffectivePermissionGrant,
-  type PermissionActor,
-  type PermissionResourceContext
+  type PermissionActor
 } from "@hulee/core";
 import {
   createSqlEmployeeDirectoryRepository,
@@ -24,7 +24,11 @@ import { randomUUID } from "node:crypto";
 import { assertWebActionRequest } from "./action-security";
 import type { WebAccessSession } from "./access";
 import { type EmployeeMembershipActionState } from "./employee-membership-action-state";
-import { assertCanUpdateEmployeeMemberships } from "./employee-membership-access";
+import {
+  assertCanManageEmployeeMembershipTarget,
+  assertCanUpdateEmployeeMemberships,
+  type EmployeeMembershipAccessResource
+} from "./employee-membership-access";
 import { roleActionFailureStatus } from "./role-action-status";
 import { getWebDatabase, isEmailNotVerifiedError } from "./session";
 import {
@@ -44,39 +48,79 @@ export async function setEmployeeOrgUnitMembershipsAction(
       formData,
       "employeeId"
     ) as EmployeeId;
-    const session = await assertVerifiedMembershipPermission();
+    const session = await assertVerifiedMembershipSession();
     const now = new Date();
-    const repository = createSqlOrgStructureRepository(getWebDatabase());
-    const employeeRepository =
-      createSqlEmployeeDirectoryRepository(getWebDatabase());
+    const database = getWebDatabase();
+    const repository = createSqlOrgStructureRepository(database);
+    const employeeRepository = createSqlEmployeeDirectoryRepository(database);
+    const rbacRepository = createSqlTenantRbacRepository(database);
     const orgUnitIds = uniqueFormStringList(formData, "orgUnitId");
-    const [employee, orgUnits] = await Promise.all([
+    const [
+      employee,
+      orgUnits,
+      teams,
+      workQueues,
+      actorPrivilege,
+      roles,
+      roleBindings
+    ] = await Promise.all([
       employeeRepository.findEmployee({
         tenantId: session.tenantId,
         employeeId
       }),
       repository.listOrgUnits({
+        tenantId: session.tenantId,
+        activeOnly: false
+      }),
+      repository.listTeams({
         tenantId: session.tenantId
+      }),
+      repository.listWorkQueues({
+        tenantId: session.tenantId,
+        activeOnly: false
+      }),
+      resolveMembershipActorPrivilege({
+        session,
+        employeeRepository,
+        rbacRepository,
+        now
+      }),
+      rbacRepository.listRoleDefinitions({ tenantId: session.tenantId }),
+      rbacRepository.listCurrentAndScheduledRoleBindings({
+        tenantId: session.tenantId,
+        at: now
       })
     ]);
 
     assertActiveEmployee(employee);
+    assertCanManageEmployeeMembershipTarget({
+      ...actorPrivilege,
+      target: employee
+    });
     assertKnownIds(
       orgUnitIds,
       orgUnits
         .filter((orgUnit) => orgUnit.status === "active")
         .map((orgUnit) => orgUnit.id)
     );
-    assertCanUpdateEmployeeMemberships({
-      ...(await resolveMembershipActorPrivilege({
-        session,
-        employeeRepository,
-        now
-      })),
+    const authorizationScopes = assertCanUpdateEmployeeMemberships({
+      ...actorPrivilege,
+      target: employee,
+      membershipType: "org_unit",
       previousIds: employee.orgUnitIds,
       nextIds: orgUnitIds,
-      resources: orgUnitMembershipResources(orgUnits)
+      resources: structuralMembershipResources({
+        orgUnits,
+        teams,
+        workQueues
+      }),
+      roleBindings,
+      roles
     });
+
+    if (sameMembershipIds(employee.orgUnitIds, orgUnitIds)) {
+      return employeeMembershipActionSuccess(submittedAt);
+    }
 
     await repository.setEmployeeOrgUnitMemberships({
       tenantId: session.tenantId,
@@ -92,7 +136,8 @@ export async function setEmployeeOrgUnitMembershipsAction(
       employeeId,
       metadata: {
         employeeId,
-        orgUnitIds
+        orgUnitIds,
+        authorizationScopes
       },
       occurredAt: now
     });
@@ -117,39 +162,79 @@ export async function setEmployeeWorkQueueMembershipsAction(
       formData,
       "employeeId"
     ) as EmployeeId;
-    const session = await assertVerifiedMembershipPermission();
+    const session = await assertVerifiedMembershipSession();
     const now = new Date();
-    const repository = createSqlOrgStructureRepository(getWebDatabase());
-    const employeeRepository =
-      createSqlEmployeeDirectoryRepository(getWebDatabase());
+    const database = getWebDatabase();
+    const repository = createSqlOrgStructureRepository(database);
+    const employeeRepository = createSqlEmployeeDirectoryRepository(database);
+    const rbacRepository = createSqlTenantRbacRepository(database);
     const workQueueIds = uniqueFormStringList(formData, "workQueueId");
-    const [employee, workQueues] = await Promise.all([
+    const [
+      employee,
+      orgUnits,
+      teams,
+      workQueues,
+      actorPrivilege,
+      roles,
+      roleBindings
+    ] = await Promise.all([
       employeeRepository.findEmployee({
         tenantId: session.tenantId,
         employeeId
       }),
-      repository.listWorkQueues({
+      repository.listOrgUnits({
+        tenantId: session.tenantId,
+        activeOnly: false
+      }),
+      repository.listTeams({
         tenantId: session.tenantId
+      }),
+      repository.listWorkQueues({
+        tenantId: session.tenantId,
+        activeOnly: false
+      }),
+      resolveMembershipActorPrivilege({
+        session,
+        employeeRepository,
+        rbacRepository,
+        now
+      }),
+      rbacRepository.listRoleDefinitions({ tenantId: session.tenantId }),
+      rbacRepository.listCurrentAndScheduledRoleBindings({
+        tenantId: session.tenantId,
+        at: now
       })
     ]);
 
     assertActiveEmployee(employee);
+    assertCanManageEmployeeMembershipTarget({
+      ...actorPrivilege,
+      target: employee
+    });
     assertKnownIds(
       workQueueIds,
       workQueues
         .filter((workQueue) => workQueue.status === "active")
         .map((workQueue) => workQueue.id)
     );
-    assertCanUpdateEmployeeMemberships({
-      ...(await resolveMembershipActorPrivilege({
-        session,
-        employeeRepository,
-        now
-      })),
+    const authorizationScopes = assertCanUpdateEmployeeMemberships({
+      ...actorPrivilege,
+      target: employee,
+      membershipType: "queue",
       previousIds: employee.queueIds,
       nextIds: workQueueIds,
-      resources: workQueueMembershipResources(workQueues)
+      resources: structuralMembershipResources({
+        orgUnits,
+        teams,
+        workQueues
+      }),
+      roleBindings,
+      roles
     });
+
+    if (sameMembershipIds(employee.queueIds, workQueueIds)) {
+      return employeeMembershipActionSuccess(submittedAt);
+    }
 
     await repository.setEmployeeWorkQueueMemberships({
       tenantId: session.tenantId,
@@ -165,7 +250,8 @@ export async function setEmployeeWorkQueueMembershipsAction(
       employeeId,
       metadata: {
         employeeId,
-        workQueueIds
+        workQueueIds,
+        authorizationScopes
       },
       occurredAt: now
     });
@@ -190,37 +276,77 @@ export async function setEmployeeTeamMembershipsAction(
       formData,
       "employeeId"
     ) as EmployeeId;
-    const session = await assertVerifiedMembershipPermission();
+    const session = await assertVerifiedMembershipSession();
     const now = new Date();
-    const repository = createSqlOrgStructureRepository(getWebDatabase());
-    const employeeRepository =
-      createSqlEmployeeDirectoryRepository(getWebDatabase());
+    const database = getWebDatabase();
+    const repository = createSqlOrgStructureRepository(database);
+    const employeeRepository = createSqlEmployeeDirectoryRepository(database);
+    const rbacRepository = createSqlTenantRbacRepository(database);
     const teamIds = uniqueFormStringList(formData, "teamId");
-    const [employee, teams] = await Promise.all([
+    const [
+      employee,
+      orgUnits,
+      teams,
+      workQueues,
+      actorPrivilege,
+      roles,
+      roleBindings
+    ] = await Promise.all([
       employeeRepository.findEmployee({
         tenantId: session.tenantId,
         employeeId
       }),
+      repository.listOrgUnits({
+        tenantId: session.tenantId,
+        activeOnly: false
+      }),
       repository.listTeams({
         tenantId: session.tenantId
+      }),
+      repository.listWorkQueues({
+        tenantId: session.tenantId,
+        activeOnly: false
+      }),
+      resolveMembershipActorPrivilege({
+        session,
+        employeeRepository,
+        rbacRepository,
+        now
+      }),
+      rbacRepository.listRoleDefinitions({ tenantId: session.tenantId }),
+      rbacRepository.listCurrentAndScheduledRoleBindings({
+        tenantId: session.tenantId,
+        at: now
       })
     ]);
 
     assertActiveEmployee(employee);
+    assertCanManageEmployeeMembershipTarget({
+      ...actorPrivilege,
+      target: employee
+    });
     assertKnownIds(
       teamIds,
       teams.map((team) => team.id)
     );
-    assertCanUpdateEmployeeMemberships({
-      ...(await resolveMembershipActorPrivilege({
-        session,
-        employeeRepository,
-        now
-      })),
+    const authorizationScopes = assertCanUpdateEmployeeMemberships({
+      ...actorPrivilege,
+      target: employee,
+      membershipType: "team",
       previousIds: employee.teamIds,
       nextIds: teamIds,
-      resources: teamMembershipResources(teams)
+      resources: structuralMembershipResources({
+        orgUnits,
+        teams,
+        workQueues
+      }),
+      roleBindings,
+      roles
     });
+
+    if (sameMembershipIds(employee.teamIds, teamIds)) {
+      return employeeMembershipActionSuccess(submittedAt);
+    }
 
     await repository.setEmployeeTeamMemberships({
       tenantId: session.tenantId,
@@ -236,7 +362,8 @@ export async function setEmployeeTeamMembershipsAction(
       employeeId,
       metadata: {
         employeeId,
-        teamIds
+        teamIds,
+        authorizationScopes
       },
       occurredAt: now
     });
@@ -249,7 +376,7 @@ export async function setEmployeeTeamMembershipsAction(
   }
 }
 
-async function assertVerifiedMembershipPermission(): Promise<WebAccessSession> {
+async function assertVerifiedMembershipSession(): Promise<WebAccessSession> {
   return assertWebDbBackedAdminCommandBoundary(
     webDbBackedAdminCommandBoundaries.employeeMembership
   );
@@ -260,6 +387,7 @@ async function resolveMembershipActorPrivilege(input: {
   readonly employeeRepository: ReturnType<
     typeof createSqlEmployeeDirectoryRepository
   >;
+  readonly rbacRepository: ReturnType<typeof createSqlTenantRbacRepository>;
   readonly now: Date;
 }): Promise<{
   readonly actor: PermissionActor;
@@ -273,9 +401,7 @@ async function resolveMembershipActorPrivilege(input: {
   assertActiveEmployee(currentEmployee);
 
   const actor = permissionActorFromEmployee(currentEmployee);
-  const sources = await createSqlTenantRbacRepository(
-    getWebDatabase()
-  ).listEffectiveAccessSources({
+  const sources = await input.rbacRepository.listEffectiveAccessSources({
     actor,
     at: input.now
   });
@@ -306,11 +432,9 @@ function permissionActorFromEmployee(
 
 function orgUnitMembershipResources(
   orgUnits: readonly OrgUnitRecord[]
-): readonly {
-  readonly id: string;
-  readonly resource: PermissionResourceContext;
-}[] {
+): readonly EmployeeMembershipAccessResource[] {
   return orgUnits.map((orgUnit) => ({
+    type: "org_unit",
     id: orgUnit.id,
     resource: {
       tenantId: orgUnit.tenantId,
@@ -322,11 +446,9 @@ function orgUnitMembershipResources(
 
 function workQueueMembershipResources(
   workQueues: readonly WorkQueueRecord[]
-): readonly {
-  readonly id: string;
-  readonly resource: PermissionResourceContext;
-}[] {
+): readonly EmployeeMembershipAccessResource[] {
   return workQueues.map((workQueue) => ({
+    type: "queue",
     id: workQueue.id,
     resource: {
       tenantId: workQueue.tenantId,
@@ -336,11 +458,11 @@ function workQueueMembershipResources(
   }));
 }
 
-function teamMembershipResources(teams: readonly TeamRecord[]): readonly {
-  readonly id: string;
-  readonly resource: PermissionResourceContext;
-}[] {
+function teamMembershipResources(
+  teams: readonly TeamRecord[]
+): readonly EmployeeMembershipAccessResource[] {
   return teams.map((team) => ({
+    type: "team",
     id: team.id,
     resource: {
       tenantId: team.tenantId,
@@ -350,11 +472,36 @@ function teamMembershipResources(teams: readonly TeamRecord[]): readonly {
   }));
 }
 
+function structuralMembershipResources(input: {
+  readonly orgUnits: readonly OrgUnitRecord[];
+  readonly teams: readonly TeamRecord[];
+  readonly workQueues: readonly WorkQueueRecord[];
+}): readonly EmployeeMembershipAccessResource[] {
+  return [
+    ...orgUnitMembershipResources(input.orgUnits),
+    ...teamMembershipResources(input.teams),
+    ...workQueueMembershipResources(input.workQueues)
+  ];
+}
+
+function sameMembershipIds(
+  previousIds: readonly string[],
+  nextIds: readonly string[]
+): boolean {
+  if (previousIds.length !== nextIds.length) {
+    return false;
+  }
+
+  const nextIdSet = new Set(nextIds);
+
+  return previousIds.every((id) => nextIdSet.has(id));
+}
+
 function assertActiveEmployee<
   TEmployee extends { readonly deactivatedAt: Date | null }
 >(employee: TEmployee | null): asserts employee is TEmployee {
   if (employee === null || employee.deactivatedAt !== null) {
-    throw new Error("Employee is not active.");
+    throw new CoreError("permission.denied");
   }
 }
 
@@ -366,7 +513,7 @@ function assertKnownIds(
 
   for (const selectedId of selectedIds) {
     if (!knownIdSet.has(selectedId)) {
-      throw new Error("Membership reference is not available.");
+      throw new CoreError("permission.denied");
     }
   }
 }

@@ -106,6 +106,231 @@ export const initialTables = [
   },
   { name: "clients", scope: "tenant", requiresTenantId: true },
   { name: "client_contacts", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_bot_identities", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_conversations", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_conversation_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_conversation_client_link_evidence_references", scope: "tenant", requiresTenantId: true },
+  {
+    name: "inbox_v2_conversation_client_link_heads",
+    scope: "tenant",
+    requiresTenantId: true
+  },
+  // prettier-ignore
+  { name: "inbox_v2_conversation_client_links", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_conversation_client_link_roles", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_conversation_client_link_transitions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_conversation_client_link_transition_operations", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_conversation_participants", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_conversation_membership_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_conversation_membership_commits", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_participant_membership_episodes", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_participant_membership_transitions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_external_identities", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_identity_claims", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_identity_claim_evidence_references", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_identity_claim_transitions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_identity_claim_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_client_merge_graph_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_client_merge_node_states", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_client_merge_redirects", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_external_thread_key_registry", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_external_threads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_external_thread_aliases", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_account_provisional_keys", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_account_identity_conflicts", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_account_identity_conflict_candidates", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_account_identities", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_account_identity_transitions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_account_identity_verified_snapshots", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_account_identity_aliases", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_thread_binding_evidence_sets", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_thread_binding_evidence_references", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_thread_bindings", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_thread_binding_remote_access_episodes", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_thread_binding_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_thread_binding_snapshots", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_thread_binding_provider_roles", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_thread_binding_capability_entries", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_thread_binding_capability_required_roles", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_thread_binding_route_attributes", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_thread_binding_transitions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_thread_binding_transition_matched_permissions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_occurrences", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_occurrence_provider_references", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_occurrence_provider_timestamps", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_timeline_items", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_timeline_subject_details", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_messages", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_action_attributions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_message_attachment_anchors", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_timeline_contents", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_timeline_content_revisions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_timeline_content_payloads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_timeline_content_contact_values", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_message_revisions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_message_reference_contexts", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_message_reference_canonical_targets", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_message_reference_external_targets", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_message_reference_unresolved_targets", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_message_reference_unresolved_candidates", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_staff_notes", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_staff_note_revisions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_message_transport_links", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_message_transport_link_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_outbound_route_consumptions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_message_provider_lifecycle_operations", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_message_provider_lifecycle_transitions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_message_reactions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_message_reaction_transitions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_message_reaction_slot_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_message_provider_reaction_observations", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_provider_semantic_ordering_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_message_transport_fact_commits", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_message_delivery_observations", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_provider_receipt_observations", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_provider_receipt_opaque_payloads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_external_message_references", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_thread_route_policy_versions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_thread_route_policy_fallback_bindings", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_thread_route_policy_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_outbound_routes", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_outbound_multi_send_operations", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_outbound_dispatches", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_outbound_dispatch_attempts", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_outbound_dispatch_reconciliation_decisions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_outbound_dispatch_reconciliation_permissions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_outbound_dispatch_artifacts", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_occurrence_resolution_transitions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_occurrence_resolution_candidates", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_outbound_dispatch_artifact_reference_links", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_outbound_multi_send_children", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_provider_roster_evidence", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_provider_roster_member_evidence", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_tenant_policy_versions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_tenant_policy_activation_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_tenant_policy_activation_transitions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_work_queue_versions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_work_queue_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_employee_assignment_fence_versions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_employee_assignment_fence_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_work_items", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_conversation_work_item_slots", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_work_item_sla_snapshots", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_work_queue_eligibility_decisions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_work_item_creation_decisions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_work_item_primary_assignments", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_work_item_transitions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_work_item_servicing_team_episodes", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_work_item_relation_transitions", scope: "tenant", requiresTenantId: true },
   { name: "conversations", scope: "tenant", requiresTenantId: true },
   {
     name: "conversation_participants",

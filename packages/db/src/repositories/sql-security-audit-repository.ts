@@ -82,8 +82,24 @@ export type AccessAuditRecord = {
   occurredAt: string;
 };
 
+export type SecurityAuditAuthorization =
+  | {
+      readonly kind: "tenant";
+    }
+  | {
+      readonly kind: "scoped";
+      readonly orgUnitIds: readonly string[];
+      readonly teamIds: readonly string[];
+      readonly queueIds: readonly string[];
+    }
+  | {
+      readonly kind: "conversation";
+      readonly conversationId: string;
+    };
+
 export type ListAccessAuditRecordsInput = {
   tenantId: TenantId;
+  authorization: SecurityAuditAuthorization;
   limit: number;
   action?: AccessAuditAction;
   actorEmployeeId?: EmployeeId;
@@ -105,6 +121,7 @@ export type ConversationRoutingAuditRecord = {
 
 export type ListConversationRoutingAuditRecordsInput = {
   tenantId: TenantId;
+  authorization: SecurityAuditAuthorization;
   conversationId?: string;
   limit: number;
   actorEmployeeId?: EmployeeId;
@@ -142,7 +159,10 @@ export function createSqlSecurityAuditRepository(
 
       assertTenantScopedAccessAuditRows(input.tenantId, records);
 
-      return records;
+      return filterSecurityAuditRecordsByAuthorization(
+        input.authorization,
+        records
+      );
     },
 
     async listConversationRoutingRecords(
@@ -155,7 +175,10 @@ export function createSqlSecurityAuditRepository(
 
       assertTenantScopedConversationRoutingAuditRows(input, records);
 
-      return records;
+      return filterSecurityAuditRecordsByAuthorization(
+        input.authorization,
+        records
+      );
     }
   };
 }
@@ -198,6 +221,11 @@ export function buildListConversationRoutingAuditRecordsSql(
   const from = input.from ?? null;
   const to = input.to ?? null;
   const limit = normalizeLimit(input.limit);
+  const authorizationPredicate = buildSecurityAuditAuthorizationPredicate(
+    input.authorization,
+    "routing",
+    conversationId
+  );
 
   return sql`
     select id,
@@ -214,6 +242,7 @@ export function buildListConversationRoutingAuditRecordsSql(
       and (${conversationId}::text is null or entity_id = ${conversationId})
       and (${from}::timestamptz is null or created_at >= ${from})
       and (${to}::timestamptz is null or created_at <= ${to})
+      and ${authorizationPredicate}
     order by created_at desc
     limit ${limit}
   `;
@@ -230,6 +259,10 @@ export function buildListAccessAuditRecordsSql(
   const from = input.from ?? null;
   const to = input.to ?? null;
   const limit = normalizeLimit(input.limit);
+  const authorizationPredicate = buildSecurityAuditAuthorizationPredicate(
+    input.authorization,
+    "access"
+  );
 
   return sql`
     select id,
@@ -255,6 +288,7 @@ export function buildListAccessAuditRecordsSql(
       and (${permission}::text is null or metadata->>'permission' = ${permission})
       and (${from}::timestamptz is null or created_at >= ${from})
       and (${to}::timestamptz is null or created_at <= ${to})
+      and ${authorizationPredicate}
     order by created_at desc
     limit ${limit}
   `;
@@ -333,6 +367,300 @@ function normalizeOptionalFilter(value: string | undefined): string | null {
   return value.trim();
 }
 
+function buildSecurityAuditAuthorizationPredicate(
+  authorization: SecurityAuditAuthorization,
+  listKind: "access" | "routing",
+  routeConversationId: string | null = null
+): SQL {
+  if (authorization.kind === "tenant") {
+    return sql`true`;
+  }
+
+  if (authorization.kind === "conversation") {
+    const conversationId = normalizeOptionalFilter(
+      authorization.conversationId
+    );
+
+    return listKind === "routing" &&
+      conversationId !== null &&
+      routeConversationId === conversationId
+      ? sql`entity_id = ${conversationId}`
+      : sql`false`;
+  }
+
+  const scopePredicates = [
+    ...buildAuthorizationScopePredicates("org_unit", authorization.orgUnitIds),
+    ...buildAuthorizationScopePredicates("team", authorization.teamIds),
+    ...buildAuthorizationScopePredicates("queue", authorization.queueIds)
+  ];
+
+  if (scopePredicates.length === 0) {
+    return sql`false`;
+  }
+
+  return sql`exists (
+    select 1
+    from jsonb_array_elements(
+      case
+        when jsonb_typeof(metadata->'authorizationScopes') = 'array'
+          then metadata->'authorizationScopes'
+        else '[]'::jsonb
+      end
+    ) as authorization_scope(scope)
+    where ${sql.join(scopePredicates, sql` or `)}
+  )`;
+}
+
+function buildAuthorizationScopePredicates(
+  type: "org_unit" | "team" | "queue",
+  ids: readonly string[]
+): readonly SQL[] {
+  return normalizeAuthorizationScopeIds(ids).map(
+    (id) =>
+      sql`(authorization_scope.scope->>'type' = ${type} and authorization_scope.scope->>'id' = ${id})`
+  );
+}
+
+function normalizeAuthorizationScopeIds(ids: readonly string[]): string[] {
+  return [
+    ...new Set(ids.map((id) => id.trim()).filter((id) => id.length > 0))
+  ].sort();
+}
+
+function filterSecurityAuditRecordsByAuthorization<
+  AuditRecord extends { readonly metadata: Record<string, unknown> }
+>(
+  authorization: SecurityAuditAuthorization,
+  records: readonly AuditRecord[]
+): readonly AuditRecord[] {
+  if (authorization.kind !== "scoped") {
+    return records;
+  }
+
+  const allowedScopeIds = {
+    org_unit: new Set(normalizeAuthorizationScopeIds(authorization.orgUnitIds)),
+    team: new Set(normalizeAuthorizationScopeIds(authorization.teamIds)),
+    queue: new Set(normalizeAuthorizationScopeIds(authorization.queueIds))
+  };
+
+  return records.flatMap((record) => {
+    const matchingScopes = matchingSecurityAuditAuthorizationScopes(
+      record.metadata.authorizationScopes,
+      allowedScopeIds
+    );
+
+    if (matchingScopes.length === 0) {
+      return [];
+    }
+
+    return [
+      {
+        ...record,
+        metadata: redactScopedSecurityAuditMetadata(
+          record.metadata,
+          allowedScopeIds,
+          matchingScopes
+        )
+      } as AuditRecord
+    ];
+  });
+}
+
+type StructuralAuditScopeType = "org_unit" | "team" | "queue";
+
+type AllowedStructuralAuditScopeIds = Readonly<
+  Record<StructuralAuditScopeType, ReadonlySet<string>>
+>;
+
+type SecurityAuditAuthorizationScope = {
+  readonly type: StructuralAuditScopeType;
+  readonly id: string;
+};
+
+const omittedAuditMetadataValue = Symbol("omitted-audit-metadata-value");
+
+function matchingSecurityAuditAuthorizationScopes(
+  value: unknown,
+  allowedScopeIds: AllowedStructuralAuditScopeIds
+): readonly SecurityAuditAuthorizationScope[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const matchingScopes = new Map<string, SecurityAuditAuthorizationScope>();
+
+  for (const rawScope of value) {
+    if (
+      rawScope === null ||
+      typeof rawScope !== "object" ||
+      Array.isArray(rawScope)
+    ) {
+      continue;
+    }
+
+    const candidate = rawScope as Record<string, unknown>;
+    const type = candidate.type;
+    const id = candidate.id;
+
+    if (
+      typeof id === "string" &&
+      isStructuralAuditScopeType(type) &&
+      allowedScopeIds[type].has(id)
+    ) {
+      matchingScopes.set(`${type}:${id}`, { type, id });
+    }
+  }
+
+  return [...matchingScopes.values()];
+}
+
+function redactScopedSecurityAuditMetadata(
+  metadata: Record<string, unknown>,
+  allowedScopeIds: AllowedStructuralAuditScopeIds,
+  matchingScopes: readonly SecurityAuditAuthorizationScope[]
+): Record<string, unknown> {
+  return {
+    ...redactSecurityAuditMetadataObject(metadata, allowedScopeIds),
+    authorizationScopes: matchingScopes
+  };
+}
+
+function redactSecurityAuditMetadataObject(
+  metadata: Record<string, unknown>,
+  allowedScopeIds: AllowedStructuralAuditScopeIds
+): Record<string, unknown> {
+  const redactedMetadata: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(metadata)) {
+    if (key === "authorizationScopes") {
+      continue;
+    }
+
+    if (isScopedAuditIdentifierAlwaysHidden(key, metadata)) {
+      continue;
+    }
+
+    const dimension = structuralAuditDimensionForMetadataKey(key, metadata);
+    const redactedValue =
+      dimension === undefined
+        ? redactNestedSecurityAuditMetadataValue(value, allowedScopeIds)
+        : redactStructuralAuditMetadataValue(value, allowedScopeIds[dimension]);
+
+    if (redactedValue !== omittedAuditMetadataValue) {
+      redactedMetadata[key] = redactedValue;
+    }
+  }
+
+  return redactedMetadata;
+}
+
+function isScopedAuditIdentifierAlwaysHidden(
+  key: string,
+  metadata: Record<string, unknown>
+): boolean {
+  const normalizedKey = key.replace(/[^a-z]/gi, "").toLowerCase();
+
+  if (normalizedKey === "scopeid" || normalizedKey === "scopeids") {
+    return !isStructuralAuditScopeType(metadata.scopeType);
+  }
+
+  if (normalizedKey === "subjectid" || normalizedKey === "subjectids") {
+    return (
+      metadata.subjectType !== "employee" &&
+      !isStructuralAuditScopeType(metadata.subjectType)
+    );
+  }
+
+  return (
+    (normalizedKey === "id" || normalizedKey === "ids") &&
+    (metadata.type === "client" || metadata.type === "conversation")
+  );
+}
+
+function redactNestedSecurityAuditMetadataValue(
+  value: unknown,
+  allowedScopeIds: AllowedStructuralAuditScopeIds
+): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) =>
+      redactNestedSecurityAuditMetadataValue(item, allowedScopeIds)
+    );
+  }
+
+  if (value !== null && typeof value === "object") {
+    return redactSecurityAuditMetadataObject(
+      value as Record<string, unknown>,
+      allowedScopeIds
+    );
+  }
+
+  return value;
+}
+
+function redactStructuralAuditMetadataValue(
+  value: unknown,
+  allowedIds: ReadonlySet<string>
+): unknown | typeof omittedAuditMetadataValue {
+  if (value === null) {
+    return null;
+  }
+
+  if (typeof value === "string") {
+    return allowedIds.has(value) ? value : omittedAuditMetadataValue;
+  }
+
+  if (Array.isArray(value)) {
+    return value.filter(
+      (candidate): candidate is string =>
+        typeof candidate === "string" && allowedIds.has(candidate)
+    );
+  }
+
+  return omittedAuditMetadataValue;
+}
+
+function structuralAuditDimensionForMetadataKey(
+  key: string,
+  metadata: Record<string, unknown>
+): StructuralAuditScopeType | undefined {
+  const normalizedKey = key.replace(/[^a-z]/gi, "").toLowerCase();
+
+  if (normalizedKey !== "id" && normalizedKey !== "ids") {
+    if (!normalizedKey.endsWith("id") && !normalizedKey.endsWith("ids")) {
+      return undefined;
+    }
+
+    if (normalizedKey.includes("orgunit")) {
+      return "org_unit";
+    }
+
+    if (normalizedKey.includes("queue")) {
+      return "queue";
+    }
+
+    if (normalizedKey.includes("team")) {
+      return "team";
+    }
+  }
+
+  const explicitScopeType =
+    normalizedKey === "scopeid" || normalizedKey === "scopeids"
+      ? metadata.scopeType
+      : normalizedKey === "subjectid" || normalizedKey === "subjectids"
+        ? metadata.subjectType
+        : metadata.type;
+
+  return isStructuralAuditScopeType(explicitScopeType)
+    ? explicitScopeType
+    : undefined;
+}
+
+function isStructuralAuditScopeType(
+  value: unknown
+): value is StructuralAuditScopeType {
+  return value === "org_unit" || value === "team" || value === "queue";
+}
+
 function isAccessAuditAction(action: string): action is AccessAuditAction {
   return accessAuditActions.includes(action as AccessAuditAction);
 }
@@ -373,7 +701,9 @@ function assertTenantScopedConversationRoutingAuditRows(
       (record) =>
         record.tenantId !== input.tenantId ||
         (input.conversationId !== undefined &&
-          record.conversationId !== input.conversationId)
+          record.conversationId !== input.conversationId) ||
+        (input.authorization.kind === "conversation" &&
+          record.conversationId !== input.authorization.conversationId)
     )
   ) {
     throw new CoreError("tenant.boundary_violation");

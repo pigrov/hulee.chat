@@ -2,8 +2,10 @@
 
 import type { EmployeeId, TenantId } from "@hulee/contracts";
 import {
+  createSqlEmployeeDirectoryRepository,
   createSqlOrgStructureRepository,
   createSqlSecurityAuditRepository,
+  createSqlTenantRbacRepository,
   orgStructureStatuses,
   orgUnitKinds,
   workQueueKinds,
@@ -20,6 +22,14 @@ import { revalidatePath } from "next/cache";
 import { randomUUID } from "node:crypto";
 
 import { assertWebActionRequest } from "./action-security";
+import {
+  assertCanManageOrgAnchor,
+  assertCanManageOrgUnit,
+  assertCanManageTeam,
+  assertCanManageTenantStructure,
+  assertCanManageWorkQueue,
+  requireAdminStructureAccess
+} from "./admin-structure-access";
 import { getWebDatabase, isEmailNotVerifiedError } from "./session";
 import type { WebAccessSession } from "./access";
 import {
@@ -41,33 +51,39 @@ export async function upsertOrgUnitAction(
 
   try {
     const session = await assertVerifiedOrgStructurePermission();
-    const repository = createSqlOrgStructureRepository(getWebDatabase());
+    const { access, repository } = await loadOrgStructureCommandAccess(session);
     const now = new Date();
     const requestedId = readOptionalFormString(formData, "id");
-    const existingOrgUnits =
-      requestedId === undefined
-        ? undefined
-        : await repository.listOrgUnits({ tenantId: session.tenantId });
+    const orgUnits = await repository.listOrgUnits({
+      tenantId: session.tenantId
+    });
     const existing =
       requestedId === undefined
         ? undefined
-        : existingOrgUnits?.find((orgUnit) => orgUnit.id === requestedId);
+        : orgUnits.find((orgUnit) => orgUnit.id === requestedId);
 
     if (requestedId !== undefined && existing === undefined) {
       throw new Error("Org unit not found.");
     }
 
-    const parentOrgUnitId = readOptionalFormString(formData, "parentOrgUnitId");
+    const parentOrgUnitId =
+      existing?.parentOrgUnitId ??
+      readOptionalFormString(formData, "parentOrgUnitId") ??
+      null;
+    const destinationParent = findOrgUnitReference(
+      orgUnits,
+      parentOrgUnitId,
+      existing === undefined
+    );
 
-    if (
-      existing !== undefined &&
-      parentOrgUnitId !== undefined &&
-      existingOrgUnits !== undefined &&
-      collectOrgUnitDescendantIds(existingOrgUnits, existing.id).has(
-        parentOrgUnitId
-      )
-    ) {
-      throw new Error("Org unit cannot be moved under its descendant.");
+    if (existing === undefined) {
+      assertCanManageOrgAnchor({
+        access,
+        tenantId: session.tenantId,
+        orgUnit: destinationParent
+      });
+    } else {
+      assertCanManageOrgUnit({ access, orgUnit: existing });
     }
 
     const id = existing?.id ?? `org_unit:${session.tenantId}:${randomUUID()}`;
@@ -93,7 +109,14 @@ export async function upsertOrgUnitAction(
         name: orgUnit.name,
         kind: orgUnit.kind,
         parentOrgUnitId: orgUnit.parentOrgUnitId,
-        status: orgUnit.status
+        status: orgUnit.status,
+        authorizationScopes: auditAuthorizationScopes(
+          entityAuditScope("org_unit", orgUnit.id),
+          existing === undefined
+            ? null
+            : orgAnchorAuditScope(existing.parentOrgUnitId),
+          orgAnchorAuditScope(orgUnit.parentOrgUnitId)
+        )
       },
       occurredAt: now
     });
@@ -113,10 +136,11 @@ export async function moveOrgUnitParentAction(formData: FormData): Promise<{
 
   try {
     const session = await assertVerifiedOrgStructurePermission();
-    const repository = createSqlOrgStructureRepository(getWebDatabase());
+    const { access, repository } = await loadOrgStructureCommandAccess(session);
     const now = new Date();
     const id = readRequiredFormString(formData, "id");
-    const parentOrgUnitId = readOptionalFormString(formData, "parentOrgUnitId");
+    const parentOrgUnitId =
+      readOptionalFormString(formData, "parentOrgUnitId") ?? null;
     const orgUnits = await repository.listOrgUnits({
       tenantId: session.tenantId
     });
@@ -126,13 +150,27 @@ export async function moveOrgUnitParentAction(formData: FormData): Promise<{
       throw new Error("Org unit not found.");
     }
 
-    if (parentOrgUnitId !== undefined) {
-      const parent = orgUnits.find((orgUnit) => orgUnit.id === parentOrgUnitId);
+    const destinationParent = findOrgUnitReference(
+      orgUnits,
+      parentOrgUnitId,
+      true
+    );
+    assertCanManageOrgUnit({ access, orgUnit: existing });
 
-      if (parent === undefined) {
-        throw new Error("Parent org unit not found.");
-      }
+    if (existing.parentOrgUnitId !== parentOrgUnitId) {
+      assertCanManageOrgAnchor({
+        access,
+        tenantId: session.tenantId,
+        orgUnit: findOrgUnitReference(orgUnits, existing.parentOrgUnitId, false)
+      });
+      assertCanManageOrgAnchor({
+        access,
+        tenantId: session.tenantId,
+        orgUnit: destinationParent
+      });
+    }
 
+    if (parentOrgUnitId !== null) {
       if (parentOrgUnitId === existing.id) {
         throw new Error("Org unit cannot be moved under itself.");
       }
@@ -164,7 +202,12 @@ export async function moveOrgUnitParentAction(formData: FormData): Promise<{
         name: orgUnit.name,
         previousParentOrgUnitId: existing.parentOrgUnitId,
         nextParentOrgUnitId: orgUnit.parentOrgUnitId,
-        status: orgUnit.status
+        status: orgUnit.status,
+        authorizationScopes: auditAuthorizationScopes(
+          entityAuditScope("org_unit", orgUnit.id),
+          orgAnchorAuditScope(existing.parentOrgUnitId),
+          orgAnchorAuditScope(orgUnit.parentOrgUnitId)
+        )
       },
       occurredAt: now
     });
@@ -187,7 +230,7 @@ export async function setOrgUnitStatusAction(
 
   try {
     const session = await assertVerifiedOrgStructurePermission();
-    const repository = createSqlOrgStructureRepository(getWebDatabase());
+    const { access, repository } = await loadOrgStructureCommandAccess(session);
     const now = new Date();
     const id = readRequiredFormString(formData, "id");
     const status = readOrgStructureStatus(formData, "status");
@@ -196,6 +239,8 @@ export async function setOrgUnitStatusAction(
     if (existing === undefined) {
       throw new Error("Org unit not found.");
     }
+
+    assertCanManageOrgUnit({ access, orgUnit: existing });
 
     const orgUnit = await repository.upsertOrgUnit({
       id: existing.id,
@@ -218,7 +263,12 @@ export async function setOrgUnitStatusAction(
       metadata: {
         name: orgUnit.name,
         previousStatus: existing.status,
-        nextStatus: orgUnit.status
+        nextStatus: orgUnit.status,
+        authorizationScopes: auditAuthorizationScopes(
+          entityAuditScope("org_unit", orgUnit.id),
+          orgAnchorAuditScope(existing.parentOrgUnitId),
+          orgAnchorAuditScope(orgUnit.parentOrgUnitId)
+        )
       },
       occurredAt: now
     });
@@ -244,7 +294,7 @@ export async function upsertTeamAction(
 
   try {
     const session = await assertVerifiedOrgStructurePermission();
-    const repository = createSqlOrgStructureRepository(getWebDatabase());
+    const { access, repository } = await loadOrgStructureCommandAccess(session);
     const now = new Date();
     const requestedId = readOptionalFormString(formData, "id");
     const existing =
@@ -254,6 +304,12 @@ export async function upsertTeamAction(
 
     if (requestedId !== undefined && existing === undefined) {
       throw new Error("Team not found.");
+    }
+
+    if (existing === undefined) {
+      assertCanManageTenantStructure(access);
+    } else {
+      assertCanManageTeam({ access, team: existing });
     }
 
     const id = existing?.id ?? `team:${session.tenantId}:${randomUUID()}`;
@@ -273,7 +329,11 @@ export async function upsertTeamAction(
       entityType: "team",
       entityId: team.id,
       metadata: {
-        name: team.name
+        name: team.name,
+        authorizationScopes: auditAuthorizationScopes(
+          entityAuditScope("team", team.id),
+          existing === undefined ? tenantAuditScope() : null
+        )
       },
       occurredAt: now
     });
@@ -296,16 +356,66 @@ export async function upsertWorkQueueAction(
 
   try {
     const session = await assertVerifiedOrgStructurePermission();
-    const repository = createSqlOrgStructureRepository(getWebDatabase());
+    const { access, repository } = await loadOrgStructureCommandAccess(session);
     const now = new Date();
     const requestedId = readOptionalFormString(formData, "id");
+    const [orgUnits, workQueues] = await Promise.all([
+      repository.listOrgUnits({ tenantId: session.tenantId }),
+      repository.listWorkQueues({ tenantId: session.tenantId })
+    ]);
     const existing =
       requestedId === undefined
         ? undefined
-        : await findWorkQueue(repository, session.tenantId, requestedId);
+        : workQueues.find((workQueue) => workQueue.id === requestedId);
 
     if (requestedId !== undefined && existing === undefined) {
       throw new Error("Work queue not found.");
+    }
+
+    const requestedOwningOrgUnitId = readOptionalFormString(
+      formData,
+      "owningOrgUnitId"
+    );
+    const owningOrgUnitId =
+      existing === undefined
+        ? (requestedOwningOrgUnitId ?? null)
+        : requestedOwningOrgUnitId !== undefined
+          ? requestedOwningOrgUnitId
+          : readOptionalFormString(formData, "owningOrgUnitIntent") ===
+              "unowned"
+            ? null
+            : existing.owningOrgUnitId;
+    const destinationOwner = findOrgUnitReference(
+      orgUnits,
+      owningOrgUnitId,
+      true
+    );
+
+    if (existing === undefined) {
+      assertCanManageOrgAnchor({
+        access,
+        tenantId: session.tenantId,
+        orgUnit: destinationOwner
+      });
+    } else {
+      assertCanManageWorkQueue({ access, workQueue: existing });
+
+      if (existing.owningOrgUnitId !== owningOrgUnitId) {
+        assertCanManageOrgAnchor({
+          access,
+          tenantId: session.tenantId,
+          orgUnit: findOrgUnitReference(
+            orgUnits,
+            existing.owningOrgUnitId,
+            false
+          )
+        });
+        assertCanManageOrgAnchor({
+          access,
+          tenantId: session.tenantId,
+          orgUnit: destinationOwner
+        });
+      }
     }
 
     const id = existing?.id ?? `work_queue:${session.tenantId}:${randomUUID()}`;
@@ -314,7 +424,7 @@ export async function upsertWorkQueueAction(
       tenantId: session.tenantId,
       name: readRequiredLimitedFormString(formData, "name", 120),
       kind: readWorkQueueKind(formData, "kind"),
-      owningOrgUnitId: readOptionalFormString(formData, "owningOrgUnitId"),
+      owningOrgUnitId,
       status: existing?.status ?? "active",
       routingConfig: existing?.routingConfig ?? {},
       updatedAt: now
@@ -332,7 +442,14 @@ export async function upsertWorkQueueAction(
         name: workQueue.name,
         kind: workQueue.kind,
         owningOrgUnitId: workQueue.owningOrgUnitId,
-        status: workQueue.status
+        status: workQueue.status,
+        authorizationScopes: auditAuthorizationScopes(
+          entityAuditScope("queue", workQueue.id),
+          existing === undefined
+            ? null
+            : orgAnchorAuditScope(existing.owningOrgUnitId),
+          orgAnchorAuditScope(workQueue.owningOrgUnitId)
+        )
       },
       occurredAt: now
     });
@@ -355,7 +472,7 @@ export async function setWorkQueueStatusAction(
 
   try {
     const session = await assertVerifiedOrgStructurePermission();
-    const repository = createSqlOrgStructureRepository(getWebDatabase());
+    const { access, repository } = await loadOrgStructureCommandAccess(session);
     const now = new Date();
     const id = readRequiredFormString(formData, "id");
     const status = readOrgStructureStatus(formData, "status");
@@ -364,6 +481,8 @@ export async function setWorkQueueStatusAction(
     if (existing === undefined) {
       throw new Error("Work queue not found.");
     }
+
+    assertCanManageWorkQueue({ access, workQueue: existing });
 
     const workQueue = await repository.upsertWorkQueue({
       id: existing.id,
@@ -387,7 +506,12 @@ export async function setWorkQueueStatusAction(
       metadata: {
         name: workQueue.name,
         previousStatus: existing.status,
-        nextStatus: workQueue.status
+        nextStatus: workQueue.status,
+        authorizationScopes: auditAuthorizationScopes(
+          entityAuditScope("queue", workQueue.id),
+          orgAnchorAuditScope(existing.owningOrgUnitId),
+          orgAnchorAuditScope(workQueue.owningOrgUnitId)
+        )
       },
       occurredAt: now
     });
@@ -443,6 +567,21 @@ async function assertVerifiedOrgStructurePermission(): Promise<WebAccessSession>
   );
 }
 
+async function loadOrgStructureCommandAccess(session: WebAccessSession) {
+  const database = getWebDatabase();
+  const access = await requireAdminStructureAccess({
+    tenantId: session.tenantId,
+    employeeId: session.employeeId,
+    employeeRepository: createSqlEmployeeDirectoryRepository(database),
+    rbacRepository: createSqlTenantRbacRepository(database)
+  });
+
+  return {
+    access,
+    repository: createSqlOrgStructureRepository(database)
+  };
+}
+
 async function findOrgUnit(
   repository: OrgStructureRepository,
   tenantId: TenantId,
@@ -451,6 +590,24 @@ async function findOrgUnit(
   const orgUnits = await repository.listOrgUnits({ tenantId });
 
   return orgUnits.find((orgUnit) => orgUnit.id === id);
+}
+
+function findOrgUnitReference(
+  orgUnits: readonly OrgUnitRecord[],
+  orgUnitId: string | null,
+  requireActive: boolean
+): OrgUnitRecord | null {
+  if (orgUnitId === null) {
+    return null;
+  }
+
+  const orgUnit = orgUnits.find((candidate) => candidate.id === orgUnitId);
+
+  if (orgUnit === undefined || (requireActive && orgUnit.status !== "active")) {
+    throw new Error("Org unit not found.");
+  }
+
+  return orgUnit;
 }
 
 function collectOrgUnitDescendantIds(
@@ -505,6 +662,53 @@ async function findTeam(
   const teams = await repository.listTeams({ tenantId });
 
   return teams.find((team) => team.id === id);
+}
+
+type OrgStructureAuditAuthorizationScope =
+  | { readonly type: "tenant" }
+  | {
+      readonly type: "org_unit" | "team" | "queue";
+      readonly id: string;
+    };
+
+function auditAuthorizationScopes(
+  ...scopes: readonly (OrgStructureAuditAuthorizationScope | null)[]
+): readonly OrgStructureAuditAuthorizationScope[] {
+  const scopesByKey = new Map<string, OrgStructureAuditAuthorizationScope>();
+
+  for (const scope of scopes) {
+    if (scope === null) {
+      continue;
+    }
+
+    const key =
+      scope.type === "tenant" ? scope.type : `${scope.type}:${scope.id}`;
+
+    if (!scopesByKey.has(key)) {
+      scopesByKey.set(key, scope);
+    }
+  }
+
+  return [...scopesByKey.values()];
+}
+
+function tenantAuditScope(): OrgStructureAuditAuthorizationScope {
+  return { type: "tenant" };
+}
+
+function orgAnchorAuditScope(
+  orgUnitId: string | null
+): OrgStructureAuditAuthorizationScope {
+  return orgUnitId === null
+    ? tenantAuditScope()
+    : entityAuditScope("org_unit", orgUnitId);
+}
+
+function entityAuditScope<TType extends "org_unit" | "team" | "queue">(
+  type: TType,
+  id: string
+): { readonly type: TType; readonly id: string } {
+  return { type, id };
 }
 
 async function recordOrgStructureAudit(input: {

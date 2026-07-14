@@ -19,6 +19,7 @@ import {
 import {
   createSqlAuthEmailTokenRepository,
   createSqlEmployeeDirectoryRepository,
+  createSqlTenantRbacRepository,
   hashEmployeeInvitationToken,
   type EmployeeInvitationPreview,
   type TenantEmployeeAvatarAsset,
@@ -34,6 +35,11 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { resolvePublicBaseUrl, sendEmployeeInvitationEmail } from "./email";
 import { requestEmailChangeVerificationForAccount } from "./auth-email";
 import { assertWebActionRequest } from "./action-security";
+import {
+  assertCanAccessEmployeeResource,
+  assertCanAccessTenantResource,
+  requireAdminResourceAccess
+} from "./admin-resource-access";
 import { authActionError, type AuthActionState } from "./auth-action-state";
 import { assertWebAuthRateLimit } from "./auth-rate-limit";
 import { requireValidPassword } from "./password-policy";
@@ -96,7 +102,7 @@ export async function inviteEmployeeAction(
   const submittedAt = new Date().toISOString();
 
   try {
-    const session = await assertVerifiedEmployeeManagementPermission({
+    const session = await assertVerifiedEmployeeAdminSession({
       redirectOnEmailNotVerified: false
     });
     const rawEmail = readRequiredFormString(formData, "email");
@@ -105,6 +111,14 @@ export async function inviteEmployeeAction(
     const token = randomBytes(32).toString("base64url");
     const tokenHash = hashEmployeeInvitationToken(token);
     const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
+    const adminAccess = await resolveEmployeeAdminResourceAccess({
+      session,
+      employeeRepository: repository
+    });
+    assertCanAccessTenantResource({
+      access: adminAccess,
+      permission: "employees.manage"
+    });
     const email = normalizeEmployeeEmail(rawEmail);
     const created = createEmployeeInvitation({
       now: now.toISOString(),
@@ -151,7 +165,7 @@ export async function deactivateEmployeeAction(
   const submittedAt = new Date().toISOString();
 
   try {
-    const session = await assertVerifiedEmployeeManagementPermission({
+    const session = await assertVerifiedEmployeeAdminSession({
       redirectOnEmailNotVerified: false
     });
     const employeeId = readRequiredFormString(
@@ -159,6 +173,14 @@ export async function deactivateEmployeeAction(
       "employeeId"
     ) as EmployeeId;
     const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
+    const adminAccess = await resolveEmployeeAdminResourceAccess({
+      session,
+      employeeRepository: repository
+    });
+    assertCanAccessTenantResource({
+      access: adminAccess,
+      permission: "employees.manage"
+    });
     const target = await repository.findEmployee({
       tenantId: session.tenantId,
       employeeId
@@ -199,7 +221,7 @@ export async function updateEmployeeProfileAction(
   await assertWebActionRequest();
 
   try {
-    const session = await assertVerifiedEmployeeManagementPermission({
+    const session = await assertVerifiedEmployeeAdminSession({
       redirectOnEmailNotVerified: false
     });
     const employeeId = readRequiredFormString(
@@ -212,14 +234,24 @@ export async function updateEmployeeProfileAction(
     const phoneNumber = normalizeEmployeePhoneNumber(
       readOptionalFormString(formData, "phoneNumber")
     );
-    const target = await repository.findEmployee({
-      tenantId: session.tenantId,
-      employeeId
-    });
+    const [target, adminAccess] = await Promise.all([
+      repository.findEmployee({
+        tenantId: session.tenantId,
+        employeeId
+      }),
+      resolveEmployeeAdminResourceAccess({
+        session,
+        employeeRepository: repository
+      })
+    ]);
 
-    if (target === null) {
-      throw new Error("Employee not found.");
-    }
+    assertActiveEmployeeAdminTarget(target);
+
+    assertCanAccessEmployeeResource({
+      access: adminAccess,
+      employee: target,
+      permission: "employees.manage"
+    });
 
     const avatar =
       avatarFile === undefined
@@ -287,7 +319,7 @@ export async function requestEmployeeEmailChangeAction(
   const submittedAt = new Date().toISOString();
 
   try {
-    const session = await assertVerifiedEmployeeManagementPermission({
+    const session = await assertVerifiedEmployeeAdminSession({
       redirectOnEmailNotVerified: false
     });
     const employeeId = readRequiredFormString(
@@ -299,14 +331,24 @@ export async function requestEmployeeEmailChangeAction(
     );
     const database = getWebDatabase();
     const employeeRepository = createSqlEmployeeDirectoryRepository(database);
-    const target = await employeeRepository.findEmployee({
-      tenantId: session.tenantId,
-      employeeId
-    });
+    const [target, adminAccess] = await Promise.all([
+      employeeRepository.findEmployee({
+        tenantId: session.tenantId,
+        employeeId
+      }),
+      resolveEmployeeAdminResourceAccess({
+        session,
+        employeeRepository
+      })
+    ]);
 
-    if (target === null || target.deactivatedAt !== null) {
-      throw new EmployeeEmailChangeActionError("email_change_unavailable");
-    }
+    assertActiveEmployeeAdminTarget(target);
+
+    assertCanAccessEmployeeResource({
+      access: adminAccess,
+      employee: target,
+      permission: "employees.manage"
+    });
 
     if (target.accountId === null) {
       throw new EmployeeEmailChangeActionError("email_change_unavailable");
@@ -327,7 +369,7 @@ export async function requestEmployeeEmailChangeAction(
       existingAccount !== null &&
       existingAccount.accountId !== target.accountId
     ) {
-      throw new EmployeeEmailChangeActionError("email_change_duplicate");
+      throw new EmployeeEmailChangeActionError("email_change_unavailable");
     }
 
     const emailResult = await requestEmailChangeVerificationForAccount({
@@ -361,11 +403,19 @@ export async function revokeEmployeeInviteAction(
   const submittedAt = new Date().toISOString();
 
   try {
-    const session = await assertVerifiedEmployeeManagementPermission({
+    const session = await assertVerifiedEmployeeAdminSession({
       redirectOnEmailNotVerified: false
     });
     const invitationId = readRequiredFormString(formData, "invitationId");
     const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
+    const adminAccess = await resolveEmployeeAdminResourceAccess({
+      session,
+      employeeRepository: repository
+    });
+    assertCanAccessTenantResource({
+      access: adminAccess,
+      permission: "employees.manage"
+    });
     const preview = await repository.findInvitation({
       tenantId: session.tenantId,
       invitationId
@@ -407,11 +457,19 @@ export async function resendEmployeeInviteAction(
   const submittedAt = new Date().toISOString();
 
   try {
-    const session = await assertVerifiedEmployeeManagementPermission({
+    const session = await assertVerifiedEmployeeAdminSession({
       redirectOnEmailNotVerified: false
     });
     const invitationId = readRequiredFormString(formData, "invitationId");
     const repository = createSqlEmployeeDirectoryRepository(getWebDatabase());
+    const adminAccess = await resolveEmployeeAdminResourceAccess({
+      session,
+      employeeRepository: repository
+    });
+    assertCanAccessTenantResource({
+      access: adminAccess,
+      permission: "employees.manage"
+    });
     const now = new Date();
     const token = randomBytes(32).toString("base64url");
     const tokenHash = hashEmployeeInvitationToken(token);
@@ -676,7 +734,7 @@ function readRequiredFormString(formData: FormData, name: string): string {
   return value.trim();
 }
 
-async function assertVerifiedEmployeeManagementPermission(
+async function assertVerifiedEmployeeAdminSession(
   options: { readonly redirectOnEmailNotVerified?: boolean } = {}
 ): Promise<WebAccessSession> {
   try {
@@ -691,6 +749,28 @@ async function assertVerifiedEmployeeManagementPermission(
     }
 
     throw error;
+  }
+}
+
+async function resolveEmployeeAdminResourceAccess(input: {
+  readonly session: WebAccessSession;
+  readonly employeeRepository: ReturnType<
+    typeof createSqlEmployeeDirectoryRepository
+  >;
+}) {
+  return requireAdminResourceAccess({
+    tenantId: input.session.tenantId,
+    employeeId: input.session.employeeId,
+    employeeRepository: input.employeeRepository,
+    rbacRepository: createSqlTenantRbacRepository(getWebDatabase())
+  });
+}
+
+function assertActiveEmployeeAdminTarget<
+  TEmployee extends { readonly deactivatedAt: Date | null }
+>(employee: TEmployee | null): asserts employee is TEmployee {
+  if (employee === null || employee.deactivatedAt !== null) {
+    throw new CoreError("permission.denied");
   }
 }
 

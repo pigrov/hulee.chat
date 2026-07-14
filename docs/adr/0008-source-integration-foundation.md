@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted.
 
 ## Context
 
@@ -23,7 +23,12 @@ Hulee will introduce a source integration layer above channels:
 - `SourceConnection` describes a tenant connection to an external source.
 - `SourceAccount` describes a concrete account, shop, branch, mailbox, phone
   number, group, bot or custom resource inside a source.
-- `RawInboundEvent` stores the original inbound payload before normalization.
+- `RawInboundEvent` stores an immutable accepted-occurrence envelope before
+  normalization. Its separately classified, purgeable provider payload/evidence
+  is persisted only after the adapter-declared pre-persistence sanitizer strips
+  credentials, authorization/cookie/session material and non-allowlisted
+  headers; policy may omit or quarantine an unsafe payload while keeping a safe
+  diagnosable envelope.
 - `NormalizedInboundEvent` stores the versioned platform event that can be
   resolved into a client, conversation, message, call, lead, review or system
   event.
@@ -39,8 +44,9 @@ integrations should be modeled through source connections first.
 
 - `channel_*` tables continue to support messenger-specific sessions,
   challenges and diagnostics.
-- New inbound sources must pass through raw event storage, idempotency,
-  normalization and conversation/message resolution.
+- New inbound sources must pass through safe occurrence-envelope persistence,
+  idempotency, normalization and typed materialization/resolution. Raw provider
+  payload retention is independent and finite under ADR 0015.
 - Adapter capabilities should be typed around receive, reply, history,
   attachments, threading, delivery status and legal/support risk.
 - UI can keep the tenant-facing "Channels" wording for communication sources,

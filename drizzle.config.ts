@@ -6,7 +6,10 @@ const env = mergeEnvSources(loadLocalEnvFile(), process.env);
 
 export default defineConfig({
   dialect: "postgresql",
-  schema: "./packages/db/src/schema/tables.ts",
+  schema: [
+    "./packages/db/src/schema/tables.ts",
+    "./packages/db/src/schema/inbox-v2/*.ts"
+  ],
   out: "./packages/db/drizzle",
   dbCredentials: {
     url: env.DATABASE_URL ?? defaultDatabaseUrl

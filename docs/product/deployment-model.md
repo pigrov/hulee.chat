@@ -41,6 +41,16 @@ Required packaging:
 
 On-prem deployments enforce a signed license and local usage policies. Expensive external services such as AI and transcription can use customer-owned provider credentials, Hulee-managed add-ons or disabled/offline mode depending on entitlement.
 
+Every deployment keeps a local versioned ADR 0015 data-governance context:
+regime-specific processing responsibility, jurisdictions, residency/cross-border
+routes, lifecycle profile and privacy-request SLAs. Shared SaaS resolves it per
+tenant; isolated/on-prem may use a deployment-specific profile without a fork.
+
+Backups and object versions have finite policy windows. Restore must reapply a
+newer erasure/legal-hold ledger before API/workers/search/analytics become
+available. On-prem packaging supplies the same local export/delete/hold/evidence
+commands even when the SaaS control plane is offline or the license is expired.
+
 ## Release Strategy
 
 - Core releases are versioned.
@@ -49,6 +59,13 @@ On-prem deployments enforce a signed license and local usage policies. Expensive
 - Mobile and desktop app releases are versioned and traceable to compatible core/API versions.
 - On-prem upgrades must run migrations explicitly and produce a rollback/backup plan.
 - Company-layer must declare compatible core version.
+
+Inbox V1 to V2 disposition follows ADR 0014 and
+`docs/product/inbox-v2-migration-and-cutover.md`. The current pre-production
+fast path directly replaces V1 only after inventory proves no supported
+deployment/consumer/valuable data; a preserve deployment still uses expand-only
+migrations, one fenced side-effect owner and a separate destructive contraction
+after backup/restore and observation evidence.
 
 ## RBAC Migration State
 

@@ -98,6 +98,11 @@ export type ListTenantRoleBindingsInput = {
   readonly at: Date;
 };
 
+export type ListCurrentAndScheduledTenantRoleBindingsInput = {
+  readonly tenantId: TenantId;
+  readonly at: Date;
+};
+
 export type ListExpiredTenantRoleBindingsInput = {
   readonly tenantId: TenantId;
   readonly at: Date;
@@ -116,6 +121,11 @@ export type ListActorDirectPermissionGrantsInput = {
 };
 
 export type ListTenantDirectPermissionGrantsInput = {
+  readonly tenantId: TenantId;
+  readonly at: Date;
+};
+
+export type ListCurrentAndScheduledTenantDirectPermissionGrantsInput = {
   readonly tenantId: TenantId;
   readonly at: Date;
 };
@@ -157,6 +167,9 @@ export type TenantRbacRepository = {
   listRoleBindings(
     input: ListTenantRoleBindingsInput
   ): Promise<readonly PermissionRoleBinding[]>;
+  listCurrentAndScheduledRoleBindings(
+    input: ListCurrentAndScheduledTenantRoleBindingsInput
+  ): Promise<readonly PermissionRoleBinding[]>;
   listExpiredRoleBindings(
     input: ListExpiredTenantRoleBindingsInput
   ): Promise<readonly PermissionRoleBinding[]>;
@@ -168,6 +181,9 @@ export type TenantRbacRepository = {
   ): Promise<readonly DirectPermissionGrant[]>;
   listDirectGrants(
     input: ListTenantDirectPermissionGrantsInput
+  ): Promise<readonly DirectPermissionGrant[]>;
+  listCurrentAndScheduledDirectGrants(
+    input: ListCurrentAndScheduledTenantDirectPermissionGrantsInput
   ): Promise<readonly DirectPermissionGrant[]>;
   listExpiredDirectGrants(
     input: ListExpiredTenantDirectPermissionGrantsInput
@@ -281,6 +297,17 @@ export function createSqlTenantRbacRepository(
       return bindings;
     },
 
+    async listCurrentAndScheduledRoleBindings(input) {
+      const result = await rawExecutor.execute<TenantRoleBindingRow>(
+        buildListCurrentAndScheduledTenantRoleBindingsSql(input)
+      );
+      const bindings = result.rows.map(mapTenantRoleBindingRow);
+
+      assertTenantScopedRows(input.tenantId, bindings);
+
+      return bindings;
+    },
+
     async listExpiredRoleBindings(input) {
       const result = await rawExecutor.execute<TenantRoleBindingRow>(
         buildListExpiredTenantRoleBindingsSql(input)
@@ -317,6 +344,17 @@ export function createSqlTenantRbacRepository(
     async listDirectGrants(input) {
       const result = await rawExecutor.execute<DirectPermissionGrantRow>(
         buildListTenantDirectPermissionGrantsSql(input)
+      );
+      const grants = result.rows.map(mapDirectPermissionGrantRow);
+
+      assertTenantScopedRows(input.tenantId, grants);
+
+      return grants;
+    },
+
+    async listCurrentAndScheduledDirectGrants(input) {
+      const result = await rawExecutor.execute<DirectPermissionGrantRow>(
+        buildListCurrentAndScheduledTenantDirectPermissionGrantsSql(input)
       );
       const grants = result.rows.map(mapDirectPermissionGrantRow);
 
@@ -839,6 +877,30 @@ export function buildListTenantRoleBindingsSql(
   `;
 }
 
+export function buildListCurrentAndScheduledTenantRoleBindingsSql(
+  input: ListCurrentAndScheduledTenantRoleBindingsInput
+): SQL {
+  assertNonEmpty(input.tenantId);
+
+  return sql`
+    select id,
+           tenant_id,
+           role_id,
+           subject_type,
+           subject_id,
+           scope_type,
+           scope_id,
+           starts_at,
+           expires_at,
+           revoked_at
+    from tenant_role_bindings
+    where tenant_id = ${input.tenantId}
+      and revoked_at is null
+      and (expires_at is null or expires_at > ${input.at})
+    order by created_at asc
+  `;
+}
+
 export function buildListExpiredTenantRoleBindingsSql(
   input: ListExpiredTenantRoleBindingsInput
 ): SQL {
@@ -940,6 +1002,30 @@ export function buildListTenantDirectPermissionGrantsSql(
     where tenant_id = ${input.tenantId}
       and revoked_at is null
       and (starts_at is null or starts_at <= ${input.at})
+      and (expires_at is null or expires_at > ${input.at})
+    order by created_at asc
+  `;
+}
+
+export function buildListCurrentAndScheduledTenantDirectPermissionGrantsSql(
+  input: ListCurrentAndScheduledTenantDirectPermissionGrantsInput
+): SQL {
+  assertNonEmpty(input.tenantId);
+
+  return sql`
+    select id,
+           tenant_id,
+           employee_id,
+           permission,
+           scope_type,
+           scope_id,
+           reason,
+           starts_at,
+           expires_at,
+           revoked_at
+    from direct_permission_grants
+    where tenant_id = ${input.tenantId}
+      and revoked_at is null
       and (expires_at is null or expires_at > ${input.at})
     order by created_at asc
   `;

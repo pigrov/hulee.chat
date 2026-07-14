@@ -170,6 +170,314 @@ describe("internal access decision service", () => {
         ]
       }
     ]);
+    expect(response.effectiveGrantCount).toBe(1);
+  });
+
+  it("filters scoped diagnostics to grants relevant to the authorized resource", async () => {
+    const service = createInternalAccessDecisionService(
+      testOptions({
+        employees: [
+          employee({
+            employeeId: adminEmployeeId,
+            queueIds: ["queue-sales"]
+          }),
+          employee({
+            employeeId: targetEmployeeId,
+            queueIds: ["queue-sales", "queue-claims"]
+          })
+        ],
+        sourcesByEmployeeId: {
+          [adminEmployeeId]: sources({
+            roles: [role("role-manager", ["roles.manage"])],
+            roleBindings: [
+              binding({
+                id: "binding-manager",
+                roleId: "role-manager",
+                employeeId: adminEmployeeId,
+                scope: { type: "queue", id: "queue-sales" }
+              })
+            ]
+          }),
+          [targetEmployeeId]: sources({
+            roles: [role("role-reader", ["conversation.read"])],
+            roleBindings: [
+              binding({
+                id: "binding-sales",
+                roleId: "role-reader",
+                employeeId: targetEmployeeId,
+                scope: { type: "queue", id: "queue-sales" }
+              }),
+              binding({
+                id: "binding-claims",
+                roleId: "role-reader",
+                employeeId: targetEmployeeId,
+                scope: { type: "queue", id: "queue-claims" }
+              })
+            ]
+          })
+        }
+      })
+    );
+
+    const response = await service.inspectAccessDecision(context(), {
+      employeeId: targetEmployeeId,
+      permission: "conversation.read",
+      resource: { queueId: "queue-sales" }
+    });
+
+    expect(response.decision.allowed).toBe(true);
+    expect(response.candidateGrants).toEqual([
+      {
+        permission: "conversation.read",
+        scope: { type: "queue", id: "queue-sales" },
+        sources: [
+          {
+            type: "role_binding",
+            roleId: "role-reader",
+            bindingId: "binding-sales"
+          }
+        ]
+      }
+    ]);
+    expect(response.effectiveGrantCount).toBe(1);
+  });
+
+  it.each([
+    {
+      label: "a mixed structural resource",
+      resource: { queueId: "queue-sales", orgUnitId: "org-claims" }
+    },
+    {
+      label: "a structural anchor combined with an exact conversation",
+      resource: {
+        queueId: "queue-sales",
+        conversationId: "conversation-secret"
+      }
+    },
+    {
+      label: "a structural anchor combined with dynamic assignment",
+      resource: {
+        queueId: "queue-sales",
+        assignedEmployeeId: targetEmployeeId
+      }
+    },
+    {
+      label: "multiple IDs in one structural dimension",
+      resource: { queueId: "queue-sales", teamIds: ["team-secret"] }
+    }
+  ])("fails closed for scoped inspection of $label", async ({ resource }) => {
+    const listEffectiveAccessSources = vi.fn(
+      async (input: { actor: PermissionActor }) =>
+        input.actor.employeeId === adminEmployeeId
+          ? sources({
+              roles: [role("role-manager", ["roles.manage"])],
+              roleBindings: [
+                binding({
+                  id: "binding-manager",
+                  roleId: "role-manager",
+                  employeeId: adminEmployeeId,
+                  scope: { type: "queue", id: "queue-sales" }
+                })
+              ]
+            })
+          : sources({
+              roles: [role("role-reader", ["conversation.read"])],
+              roleBindings: [
+                binding({
+                  id: "binding-secret",
+                  roleId: "role-reader",
+                  employeeId: targetEmployeeId,
+                  scope: {
+                    type: "conversation",
+                    id: "conversation-secret"
+                  }
+                })
+              ]
+            })
+    );
+    const service = createInternalAccessDecisionService({
+      employeeRepository: {
+        async findEmployee(input) {
+          return input.employeeId === adminEmployeeId
+            ? employee({
+                employeeId: adminEmployeeId,
+                queueIds: ["queue-sales"]
+              })
+            : employee({
+                employeeId: targetEmployeeId,
+                queueIds: ["queue-sales"]
+              });
+        }
+      },
+      rbacRepository: { listEffectiveAccessSources },
+      now: () => now
+    });
+
+    await expect(
+      service.inspectAccessDecision(context(), {
+        employeeId: targetEmployeeId,
+        permission: "conversation.read",
+        resource
+      })
+    ).rejects.toMatchObject({ code: "permission.denied" });
+    expect(listEffectiveAccessSources).toHaveBeenCalledTimes(1);
+  });
+
+  it("denies a scoped requester before loading grants for an unrelated target", async () => {
+    const listEffectiveAccessSources = vi.fn(
+      async (input: { actor: PermissionActor }) =>
+        input.actor.employeeId === adminEmployeeId
+          ? sources({
+              roles: [role("role-manager", ["roles.manage"])],
+              roleBindings: [
+                binding({
+                  id: "binding-manager",
+                  roleId: "role-manager",
+                  employeeId: adminEmployeeId,
+                  scope: { type: "queue", id: "queue-sales" }
+                })
+              ]
+            })
+          : sources({
+              roles: [role("role-reader", ["conversation.read"])],
+              roleBindings: [
+                binding({
+                  id: "binding-reader",
+                  roleId: "role-reader",
+                  employeeId: targetEmployeeId,
+                  scope: { type: "queue", id: "queue-claims" }
+                })
+              ]
+            })
+    );
+    const service = createInternalAccessDecisionService({
+      employeeRepository: {
+        async findEmployee(input) {
+          return input.employeeId === adminEmployeeId
+            ? employee({
+                employeeId: adminEmployeeId,
+                queueIds: ["queue-sales"]
+              })
+            : employee({
+                employeeId: targetEmployeeId,
+                queueIds: ["queue-claims"]
+              });
+        }
+      },
+      rbacRepository: { listEffectiveAccessSources },
+      now: () => now
+    });
+
+    await expect(
+      service.inspectAccessDecision(context(), {
+        employeeId: targetEmployeeId,
+        permission: "conversation.read",
+        resource: { queueId: "queue-sales" }
+      })
+    ).rejects.toMatchObject({ code: "permission.denied" });
+    expect(listEffectiveAccessSources).toHaveBeenCalledTimes(1);
+    expect(listEffectiveAccessSources).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: expect.objectContaining({ employeeId: adminEmployeeId })
+      })
+    );
+  });
+
+  it("never revives expired requester authority for a historical target evaluation", async () => {
+    const listEffectiveAccessSources = vi.fn(
+      async (input: { actor: PermissionActor }) =>
+        input.actor.employeeId === adminEmployeeId
+          ? sources({
+              roles: [role("role-expired-manager", ["roles.manage"])],
+              roleBindings: [
+                {
+                  ...binding({
+                    id: "binding-expired-manager",
+                    roleId: "role-expired-manager",
+                    employeeId: adminEmployeeId,
+                    scope: { type: "tenant" }
+                  }),
+                  expiresAt: "2026-06-24T09:00:00.000Z"
+                }
+              ]
+            })
+          : sources({
+              roles: [role("role-reader", ["conversation.read"])],
+              roleBindings: [
+                binding({
+                  id: "binding-reader",
+                  roleId: "role-reader",
+                  employeeId: targetEmployeeId,
+                  scope: { type: "tenant" }
+                })
+              ]
+            })
+    );
+    const service = createInternalAccessDecisionService({
+      employeeRepository: {
+        async findEmployee(input) {
+          return input.employeeId === adminEmployeeId
+            ? employee({ employeeId: adminEmployeeId })
+            : employee({ employeeId: targetEmployeeId });
+        }
+      },
+      rbacRepository: { listEffectiveAccessSources },
+      now: () => now
+    });
+
+    await expect(
+      service.inspectAccessDecision(context(), {
+        employeeId: targetEmployeeId,
+        permission: "conversation.read",
+        resource: {},
+        at: "2026-06-24T08:00:00.000Z"
+      })
+    ).rejects.toMatchObject({ code: "permission.denied" });
+    expect(listEffectiveAccessSources).toHaveBeenCalledTimes(1);
+    expect(listEffectiveAccessSources).toHaveBeenCalledWith(
+      expect.objectContaining({ at: now })
+    );
+  });
+
+  it("returns the same denial for missing and deactivated targets", async () => {
+    const deactivatedEmployeeId = "employee-deactivated" as EmployeeId;
+    const service = createInternalAccessDecisionService(
+      testOptions({
+        employees: [
+          employee({ employeeId: adminEmployeeId }),
+          employee({
+            employeeId: deactivatedEmployeeId,
+            deactivatedAt: new Date("2026-06-24T09:00:00.000Z")
+          })
+        ],
+        sourcesByEmployeeId: {
+          [adminEmployeeId]: sources({
+            roles: [role("role-admin", ["roles.manage"])],
+            roleBindings: [
+              binding({
+                id: "binding-admin",
+                roleId: "role-admin",
+                employeeId: adminEmployeeId,
+                scope: { type: "tenant" }
+              })
+            ]
+          })
+        }
+      })
+    );
+
+    for (const employeeId of [
+      "employee-missing" as EmployeeId,
+      deactivatedEmployeeId
+    ]) {
+      await expect(
+        service.inspectAccessDecision(context(), {
+          employeeId,
+          permission: "conversation.read",
+          resource: { queueId: "queue-sales" }
+        })
+      ).rejects.toMatchObject({ code: "permission.denied" });
+    }
   });
 
   it("denies inspection before loading the target employee when admin scope does not cover the resource", async () => {

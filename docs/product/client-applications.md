@@ -53,6 +53,42 @@ The preferred long-term approach is shared packages plus separate app entrypoint
 - `apps/web` may use Next.js features deeply.
 - `apps/mobile` and `apps/desktop` should use the shared UI/app-shell packages and only the subset of web behavior that can run inside the native shell.
 
+## Inbox State And Synchronization
+
+Web, mobile and desktop use the same normalized Inbox V2 state graph and reducer
+from `packages/app-shell`. Conversations, heads, timeline items, messages,
+participants, WorkItems and per-employee state exist once by ID; list and
+timeline indexes contain ordered IDs instead of copied entities. Confirmed
+server state and optimistic overlays are separate.
+
+SSE and polling use the same versioned `InboxSyncBatch`. Snapshot and HTTP
+mutation results carry compatible normalized revisioned entities and enter the
+same reducer, but only a contiguous SSE/poll batch advances the applied cursor;
+an HTTP result never skips unknown stream positions. A stale HTTP response
+cannot replace a newer entity revision, and the active timeline and sidebar
+head reference the same normalized Message.
+
+The primary cursor covers the Employee's complete authorized Inbox and does not
+change with folder, filter, pagination, selected Conversation or bounded
+timeline cache. Any narrower optimized subscription owns a separate cursor and
+cannot advance the primary applied cursor.
+
+Client caches follow ADR 0015. Confirmed entities/content are encrypted or kept
+in the minimum platform-appropriate cache, carry tenant/user/generation scope and
+are purged on logout/session or authorization loss, subject restriction,
+revisioned content tombstone and authoritative resync. Offline/native storage
+cannot extend server retention indefinitely. OS/push-provider notification
+history is an explicit external residual, so push payloads are content-minimized
+and expire independently.
+
+For web, ingress routes the same-origin realtime path directly to the streaming
+API, which validates the shared secure application session and revalidates it
+during the connection; browser-supplied internal actor headers are ignored and
+server HMAC credentials are never exposed to browser code or URL query strings.
+Native shells use their authorized client transport and the same SSE envelope,
+with polling fallback. Detailed ordering, resume and recovery rules are fixed by
+ADR 0012.
+
 ## Mobile: Capacitor
 
 Capacitor is the standard mobile shell for Android and iOS.

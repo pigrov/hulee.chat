@@ -1,5 +1,6 @@
 import type { EmployeeId } from "@hulee/contracts";
 import {
+  canAccess,
   permissionCatalog,
   type DirectPermissionGrant,
   type PermissionRoleBinding
@@ -72,10 +73,7 @@ import {
   getWebDatabase,
   resolveCurrentWebAccessSession
 } from "../../../../../src/session";
-import {
-  hasEffectivePermission,
-  resolveEmployeeEffectiveAccess
-} from "../../../../../src/rbac-effective-access";
+import { resolveEmployeeEffectiveAccess } from "../../../../../src/rbac-effective-access";
 import { TenantAdminShell } from "../../../../../src/tenant-admin-shell";
 import { navigationAccessFromTenantAdminAccess } from "../../../../../src/tenant-admin-nav";
 
@@ -113,7 +111,15 @@ export default async function EmployeeAccessAdminPage({
     at: now
   });
 
-  if (!hasEffectivePermission(accessSnapshot, "roles.manage")) {
+  if (
+    accessSnapshot === undefined ||
+    !canAccess({
+      actor: accessSnapshot.actor,
+      effectiveGrants: accessSnapshot.effectiveGrants,
+      permission: "roles.manage",
+      resource: { tenantId: access.tenantId }
+    }).allowed
+  ) {
     const adminAccess = {
       session: access,
       effectiveAccess: accessSnapshot
@@ -175,7 +181,38 @@ export default async function EmployeeAccessAdminPage({
   ]);
 
   if (employee === null) {
-    redirect("/admin/employees");
+    return (
+      <AccessDeniedPage
+        current="tenant-admin"
+        navigationAccess={navigationAccessFromTenantAdminAccess({
+          session: access,
+          effectiveAccess: accessSnapshot
+        })}
+      />
+    );
+  }
+
+  if (
+    !canAccess({
+      actor: accessSnapshot.actor,
+      effectiveGrants: accessSnapshot.effectiveGrants,
+      permission: "employees.manage",
+      resource: {
+        tenantId: employee.tenantId,
+        orgUnitIds: employee.orgUnitIds,
+        teamIds: employee.teamIds
+      }
+    }).allowed
+  ) {
+    return (
+      <AccessDeniedPage
+        current="tenant-admin"
+        navigationAccess={navigationAccessFromTenantAdminAccess({
+          session: access,
+          effectiveAccess: accessSnapshot
+        })}
+      />
+    );
   }
 
   const { t } = createTranslator(model.tenant.locale);

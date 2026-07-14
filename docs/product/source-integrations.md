@@ -21,8 +21,18 @@ diagnostics and source-level configuration.
 bot, user session, VK group, marketplace shop, Avito account, 2GIS branch,
 mailbox, phone number, webchat site or custom resource.
 
-`RawInboundEvent` is the immutable provider payload before normalization. It is
-used for audit, diagnostics, replay and adapter fixes.
+For scoped Inbox V2 authorization a SourceAccount may have an explicit
+tenant-safe administrative owning org unit/access policy with temporal history
+and revision. It is never inferred from provider participants, account owner
+profile, linked Client or WorkItem responsible. Using a SourceAccount for send
+requires its own ADR 0013 permission in addition to Conversation/WorkItem
+authority and binding capability.
+
+`RawInboundEvent` is the immutable provider-occurrence envelope before
+normalization, with a separately classified restricted payload/evidence object.
+The accepted occurrence is never rewritten, but ADR 0015 may purge its payload
+after the replay/diagnostic purpose ends and retain only a finite safe dedupe/
+outcome skeleton.
 
 `NormalizedInboundEvent` is the versioned Hulee event derived from raw payload.
 It is the input for identity resolution, conversation resolution, routing and
@@ -71,6 +81,35 @@ API key flow or manual setup.
 - `internal`: employee support cases and internal service requests.
 - `crm`: Bitrix24, amoCRM, RetailCRM and customer systems of record.
 - `api`: Public API, webhooks and custom enterprise integrations.
+
+## Messaging Access Models
+
+Messenger catalog entries identify an exact provider surface and access model,
+not only a brand:
+
+- `personal_session_bridge`: a normal user account connected through a
+  provider-approved or otherwise explicitly accepted session transport;
+- `official_business_account`: a bot, official account or verified business
+  identity connected through an official API;
+- `phone_addressed_business_agent`: a consented business-messaging surface that
+  addresses customers by phone/provider identity;
+- `workspace_or_community_app`: an app/bot participating in an enterprise,
+  workspace or community conversation;
+- `archive_or_compliance_feed`: a licensed/consented read surface that never
+  implies permission to send.
+
+Consumer web/desktop QR or phone login is a device-onboarding mechanism, not
+proof of an integration API. A provider surface may enter the production catalog
+only with an approved programmable contract and capability evidence. Capability
+profiles belong to the exact surface and SourceThreadBinding; one surface cannot
+lend its group, history, roster or reply rights to another surface from the same
+brand.
+
+The dated provider research, Viber personal-session decision and wider market
+shortlist live in `docs/product/messenger-integration-landscape.md`.
+The readable Telegram/WhatsApp/MAX private/group capability baseline lives in
+`docs/product/inbox-v2-direct-messenger-matrix.md`; its canonical per-surface
+evidence/task ledger is `docs/product/inbox-v2-direct-messenger-cells.csv`.
 
 ## Inbound Pipeline
 
@@ -133,6 +172,28 @@ and normalizers only describe grouping evidence, suggested conversation type and
 routing hints. This keeps marketplace questions, reviews, calls, forms and CRM
 events out of messenger-only assumptions.
 
+For externally replyable direct/group threads, an unscoped
+`externalThreadId` is insufficient. The adapter supplies a versioned thread and
+message identity realm, provider object kind, provider/connection/account scope,
+scope owner and opaque canonical subject. Core never lowercases provider IDs or
+uses Client/sender/title as a thread key. Provider-scoped groups observed by
+several accounts share one ExternalThread; account-scoped private dialogs do
+not.
+
+Each account's access is a SourceThreadBinding with its own opaque destination,
+remote membership, administrative enablement, health, capabilities and cursor.
+Raw idempotency remains account-scoped, while an exact adapter-declared external
+message reference can attach several SourceOccurrences to one TimelineItem.
+Every normal external send persists one server-authorized immutable binding/
+route before provider I/O; fallback, reroute and multi-send are explicit.
+Each provider attempt also pins the adapter contract and retry-safety mechanism
+before I/O. An expired lease or possibly accepted timeout becomes an explicit
+unknown outcome; only exact reconciliation or an authorized duplicate-risk
+decision may open a new attempt on the same route. The adapter cannot upgrade an
+unsafe attempt to idempotent after failure.
+Provider owner/admin/member status and SourceExternalIdentity claims remain
+source evidence and never satisfy a Hulee permission/scope relation.
+
 ## Diagnostics, Replay and DLQ
 
 Every source processing step must emit safe diagnostics for operators. A
@@ -182,8 +243,14 @@ telephony, CRM, public API and messengers on the same processing boundary.
 
 Each source should declare capabilities explicitly:
 
+- provider surface and messaging access model;
+- supported private, group, workspace/community and broadcast conversation
+  kinds;
+- participant roster fidelity: `full`, `partial`, `none` or `unknown`;
 - receive messages or events;
 - send native replies;
+- read from and write to groups independently;
+- support business-initiated messages and phone-addressed recipients;
 - fetch history;
 - receive and send files;
 - support threads;
@@ -195,8 +262,9 @@ Each source should declare capabilities explicitly:
 - have documented rate limits;
 - support OAuth or safer auth;
 - have sandbox support;
-- carry legal/support risk;
-- limit reply windows.
+- require consent, partner access, paid archive or other commercial enablement;
+- carry explicit commercial/legal/support status and risk;
+- limit reply windows or require replies in the native client.
 
 Capabilities are product behavior, not UI hints only. They drive onboarding,
 admin diagnostics, reply controls, entitlements and support policy.
@@ -220,12 +288,27 @@ then consumed by UI, public API, adapters and analytics.
 
 ## Data Rules
 
-- Store raw payload before normalization.
+- Persist a secret-stripped, classified restricted raw payload/evidence object
+  before normalization; reject/quarantine undeclared fields, and purge payload
+  independently under ADR 0015 without losing the occurrence outcome.
 - Store provider timestamps separately from received timestamps.
+- A webhook/poll/history provider watermark advances only after the raw
+  occurrence and resumable processing state are durable. Normalization or
+  materialization failure must remain replayable and cannot be skipped by an
+  adapter cursor.
+- Provider timestamps and adapter receive/history cursors never define Inbox
+  timeline order, entity freshness, projector checkpoints or client realtime
+  cursors. Canonical materialization uses ADR 0012 timeline sequence, revision
+  and atomic tenant commit rules.
+- Initial history is deterministically ordered before a binding becomes live
+  where possible. Late history is append-only with import provenance and cannot
+  create unread, notification, SLA or normal head-activity side effects.
 - Deduplicate with tenant-scoped source idempotency keys. The canonical key
   format is `source:v1:{raw|normalized}:{webhook|polling|email|api}:...`.
 - Include source connection and source account scope in idempotency keys so the
   same external id from different connected accounts does not collide.
+- Treat this account-scoped raw/normalized idempotency separately from canonical
+  cross-account Message dedupe; retain every SourceOccurrence.
 - For webhook, polling and email sources, prefer provider external event ids,
   then provider signatures, then explicit client keys, then stable
   fingerprints.
@@ -236,10 +319,25 @@ then consumed by UI, public API, adapters and analytics.
   than one normalized event when needed.
 - When external ids are missing, use a stable fingerprint of source, thread,
   user, timestamp, body and attachment hashes.
+- Do not use a weak content/time fingerprint to merge direct-messenger Messages
+  across accounts without an adapter-declared exact message scope.
+- Fingerprint/HMAC dedupe is guaranteed only through its declared finite
+  skeleton/key window. After expiry, diagnostics expose that historical dedupe
+  is unavailable; no adapter may silently fall back to an unkeyed, low-entropy
+  content/time hash or claim indefinite replay protection.
 - Keep source context separate from core message text so marketplaces, calls,
   reviews and lead forms do not become messenger-specific JSON fragments.
-- Retention policy must cover messages, attachments, raw payloads, transcripts,
-  embeddings and audit records separately.
+- ADR 0015 retention policy covers raw envelope/payload, normalized envelope/
+  payload, canonical Messages/items, source occurrences/refs, attachments,
+  recordings/transcripts, embeddings, diagnostics and audit independently.
+- Raw payload/headers are restricted purgeable evidence. Generic events,
+  outbox, diagnostics and audit reference them and never copy cookies, auth,
+  secrets, contact/message content or arbitrary provider JSON.
+- Payload expiry may retain only a finite tenant-keyed HMAC/idempotency outcome
+  skeleton; replayability and the dedupe-guarantee end become explicit terminal
+  diagnostics rather than a reason for indefinite storage.
+- Every provider surface declares external disclosure/residency/delete
+  capability and records remote deletion residuals honestly.
 
 ## Relationship To Channel Connectors
 

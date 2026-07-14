@@ -1,5 +1,5 @@
 import type { EmployeeId, EventId, TenantId } from "@hulee/contracts";
-import type { Employee } from "@hulee/core";
+import { CoreError, type Employee } from "@hulee/core";
 import type { SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
@@ -14,6 +14,7 @@ import {
 } from "./sql-employee-directory-repository";
 
 const tenantId = "tenant_directory" as TenantId;
+const otherTenantId = "tenant_other" as TenantId;
 const employeeId = "employee_directory" as EmployeeId;
 
 describe("SQL employee directory repository", () => {
@@ -87,6 +88,110 @@ describe("SQL employee directory repository", () => {
     expect(renderQuery(executor.queries[0]).sql).not.toContain(
       "employee_roles"
     );
+  });
+
+  it("lists only exact org and team memberships with a deterministic tenant-scoped SQL shape", async () => {
+    const executor = new RecordingSqlExecutor([
+      employeeRow({
+        team_ids: ["team-a"],
+        org_unit_ids: ["org-a"]
+      })
+    ]);
+    const repository = createSqlEmployeeDirectoryRepository(executor);
+
+    await expect(
+      repository.listEmployeesByMembershipScopes({
+        tenantId,
+        orgUnitIds: ["org-z", "org-a", "org-z"],
+        teamIds: ["team-b", "team-a"]
+      })
+    ).resolves.toEqual([
+      expect.objectContaining({
+        tenantId,
+        employeeId,
+        email: "agent@example.test",
+        orgUnitIds: ["org-a"],
+        teamIds: ["team-a"]
+      })
+    ]);
+
+    const query = renderQuery(executor.queries[0]);
+
+    expect(query.sql).toMatch(/where\s+employees\.tenant_id = \$1/);
+    expect(query.sql).toContain(
+      "scoped_org_unit_memberships.tenant_id = employees.tenant_id"
+    );
+    expect(query.sql).toContain(
+      "scoped_org_unit_memberships.employee_id = employees.id"
+    );
+    expect(query.sql).toContain(
+      "scoped_team_memberships.tenant_id = employees.tenant_id"
+    );
+    expect(query.sql).toContain(
+      "scoped_team_memberships.employee_id = employees.id"
+    );
+    expect(query.sql).toContain("scoped_team_memberships.status = 'active'");
+    expect(query.sql).toMatch(
+      /order by employees\.created_at asc,\s+employees\.id asc/
+    );
+    expect(query.params).toEqual([
+      tenantId,
+      "org-a",
+      "org-z",
+      "team-a",
+      "team-b"
+    ]);
+  });
+
+  it("returns no rows and executes no SQL for an empty scoped directory", async () => {
+    const executor = new RecordingSqlExecutor([]);
+    const repository = createSqlEmployeeDirectoryRepository(executor);
+
+    await expect(
+      repository.listEmployeesByMembershipScopes({
+        tenantId,
+        orgUnitIds: [],
+        teamIds: []
+      })
+    ).resolves.toEqual([]);
+    expect(executor.queries).toEqual([]);
+  });
+
+  it("rejects cross-tenant scoped rows returned by the SQL executor", async () => {
+    const repository = createSqlEmployeeDirectoryRepository(
+      new RecordingSqlExecutor([
+        employeeRow({
+          tenant_id: otherTenantId,
+          email: "other-tenant@example.test"
+        })
+      ])
+    );
+
+    await expect(
+      repository.listEmployeesByMembershipScopes({
+        tenantId,
+        orgUnitIds: ["org-sales"],
+        teamIds: []
+      })
+    ).rejects.toThrow(new CoreError("tenant.boundary_violation"));
+  });
+
+  it("parameterizes adversarial membership scope identifiers", async () => {
+    const maliciousScopeId = "org-sales') or true --";
+    const executor = new RecordingSqlExecutor([]);
+    const repository = createSqlEmployeeDirectoryRepository(executor);
+
+    await repository.listEmployeesByMembershipScopes({
+      tenantId,
+      orgUnitIds: [maliciousScopeId],
+      teamIds: []
+    });
+
+    const query = renderQuery(executor.queries[0]);
+
+    expect(query.sql).not.toContain(maliciousScopeId);
+    expect(query.params).toContain(maliciousScopeId);
+    expect(query.sql).toContain("exists (");
   });
 
   it("maps invitation preview without requiring tenant input", async () => {
@@ -364,6 +469,26 @@ describe("SQL employee directory repository", () => {
     ).toBe(true);
   });
 });
+
+function employeeRow(
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    tenant_id: tenantId,
+    employee_id: employeeId,
+    account_id: "account-1",
+    email: "agent@example.test",
+    display_name: "Agent",
+    profile: {},
+    system_role_template_ids: [],
+    team_ids: [],
+    org_unit_ids: [],
+    queue_ids: [],
+    created_at: "2026-06-23T10:00:00.000Z",
+    deactivated_at: null,
+    ...overrides
+  };
+}
 
 class RecordingSqlExecutor implements RawSqlExecutor {
   readonly queries: SQL[] = [];
