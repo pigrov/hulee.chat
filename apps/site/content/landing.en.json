@@ -178,26 +178,32 @@
   },
   "audiences": {
     "kicker": "Audience",
-    "title": "The model is strongest for teams that grow by channels and headcount.",
+    "title": "For teams whose inbound requests already live in several places.",
+    "summary": "When requests live across several places, teams lose context, response speed, and history control. {product} brings channels, roles, and data into one working layer for sales, support, and branches.",
     "items": [
       {
-        "title": "Messenger sales",
-        "description": "Many managers, several accounts, customers from multiple sources, and a real pain around lost conversations.",
+        "title": "Sales and lead response",
+        "description": "Leads arrive through messengers, forms, email, and chats. {product} brings them into one workspace so teams do not lose requests and respond faster.",
         "icon": "barChart"
       },
       {
         "title": "Support and service",
-        "description": "Queues, SLA, handoffs, file history, and quality control matter more than the specific messenger.",
+        "description": "Requests, history, attachments, and statuses live in one window. Answer faster and resolve more.",
         "icon": "gauge"
       },
       {
-        "title": "Branch networks",
+        "title": "E-commerce and marketplaces",
+        "description": "Orders and messages from different platforms land in one feed without losing context or deadlines.",
+        "icon": "shoppingBag"
+      },
+      {
+        "title": "Branches and networks",
         "description": "Many locations, local channels, and shifts need one access and storage policy.",
         "icon": "building"
       },
       {
         "title": "Enterprise and on-prem",
-        "description": "Private deployment, audit, SSO, export, data control, and company-layer extensions without forking core.",
+        "description": "Private environments, audit, export, and data control without forking core. {product} gives you that.",
         "icon": "lock"
       }
     ]
@@ -211,36 +217,93 @@
       {
         "label": "Channels",
         "usual": "Each WhatsApp, Telegram, Avito, or other account can become a separate monthly fee.",
-        "hulee": "Channel connection is not a separate {product} subscription line."
+        "hulee": "Channel connection is not a separate {product} subscription line.",
+        "badge": "$0 per channel"
       },
       {
         "label": "Agents",
         "usual": "Adding teammates often increases the subscription price.",
-        "hulee": "The team can grow without paying for every operator account."
+        "hulee": "The team can grow without paying for every operator account.",
+        "badge": "$0 per agent"
       },
       {
         "label": "Conversations",
         "usual": "Plans can cap monthly dialogues or leads.",
-        "hulee": "History is company data, not an artificial limit on conversations."
+        "hulee": "History is company data, not an artificial limit on conversations.",
+        "badge": "GB for storage"
       },
       {
         "label": "Control",
         "usual": "Costs become hard to predict as channels and branches grow.",
-        "hulee": "The bill is explained by storage, retention, AI, transcription, and external provider costs."
+        "hulee": "The bill is explained by storage, retention, AI, transcription, and external provider costs.",
+        "badge": "Transparent model"
       }
     ]
   },
   "calculator": {
     "kicker": "Calculator",
-    "title": "Pricing should be explainable before setup.",
-    "summary": "The landing page needs a calculator: a company enters channels, teammates, file volume, and retention, then sees expected usage and cost logic.",
-    "inputs": [
-      "How many channels and branches to connect",
-      "How many teammates will work in the inbox",
-      "How many files, voice notes, and attachments arrive monthly",
-      "How many months or years the history must be retained"
-    ],
-    "result": "Result: not a bill for channel icons, but a forecast for storage and transparent extra resources."
+    "title": "Estimate the cost before connecting.",
+    "summary": "Choose channels, team size, conversation volume, and history retention. {product} shows the expected load and splits cost into clear parts: data storage, extra services, and external provider costs.",
+    "form": {
+      "channelsTitle": "1. Channels",
+      "freeChannelLabel": "$0 per channel in {product}",
+      "teamTitle": "2. Team",
+      "teamUnit": "{count} teammates",
+      "freeAgentLabel": "$0 per agent",
+      "loadTitle": "3. Load",
+      "conversationsLabel": "Conversations / month",
+      "filesLabel": "Files and attachments",
+      "audioLabel": "Audio / calls",
+      "audioUnit": "min",
+      "storageTitle": "4. Storage",
+      "servicesTitle": "Extra services",
+      "noServicesLabel": "No extra services",
+      "primaryAction": "Calculate forecast",
+      "secondaryAction": "Get estimate",
+      "channels": [
+        "Telegram",
+        "WhatsApp",
+        "VK",
+        "Avito",
+        "Website",
+        "Email",
+        "API",
+        "Marketplaces"
+      ],
+      "retentionOptions": ["3 mo", "6 mo", "12 mo", "24 mo"],
+      "services": ["AI", "Transcription", "WABA", "SMS"]
+    },
+    "forecast": {
+      "title": "Your forecast",
+      "rows": {
+        "channels": "Channels",
+        "operators": "Operators",
+        "storage": "Storage",
+        "retention": "Retention",
+        "services": "Extra services"
+      },
+      "storageTitle": "Storage volume forecast",
+      "storageCapacity": "of forecast {capacity} GB / year",
+      "noteLead": "You see a resource forecast, not channel pricing:",
+      "note": "how much data must be stored and which extra services are used."
+    },
+    "metrics": [
+      {
+        "title": "Channels — $0 in {product}",
+        "description": "Connect any channels without a subscription fee.",
+        "icon": "plug"
+      },
+      {
+        "title": "Agents — $0 in {product}",
+        "description": "The team grows, the price does not.",
+        "icon": "users"
+      },
+      {
+        "title": "GB is the basis",
+        "description": "Pay only for storage volume and services.",
+        "icon": "database"
+      }
+    ]
   },
   "trust": {
     "kicker": "Data control",

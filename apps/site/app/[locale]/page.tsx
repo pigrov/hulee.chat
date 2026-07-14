@@ -4,6 +4,7 @@ import {
   BarChart3,
   Building2,
   Check,
+  CircleAlert,
   Code2,
   Cloud,
   Database,
@@ -34,6 +35,7 @@ import { notFound } from "next/navigation";
 import en from "../../content/landing.en.json";
 import kk from "../../content/landing.kk.json";
 import ru from "../../content/landing.ru.json";
+import { CalculatorSection } from "./calculator-section";
 import { ThemeToggle } from "./theme-toggle";
 import { ThemeImage } from "./theme-image";
 
@@ -92,10 +94,19 @@ type ChannelGroup = {
   sources: string[];
 };
 
+type CalculatorRows = {
+  channels: string;
+  operators: string;
+  storage: string;
+  retention: string;
+  services: string;
+};
+
 type ComparisonRow = {
   label: string;
   usual: string;
   hulee: string;
+  badge: string;
 };
 
 type Plan = {
@@ -172,6 +183,7 @@ type LandingContent = {
   audiences: {
     kicker: string;
     title: string;
+    summary: string;
     items: ContentItem[];
   };
   comparison: {
@@ -185,8 +197,35 @@ type LandingContent = {
     kicker: string;
     title: string;
     summary: string;
-    inputs: string[];
-    result: string;
+    form: {
+      channelsTitle: string;
+      freeChannelLabel: string;
+      teamTitle: string;
+      teamUnit: string;
+      freeAgentLabel: string;
+      loadTitle: string;
+      conversationsLabel: string;
+      filesLabel: string;
+      audioLabel: string;
+      audioUnit: string;
+      storageTitle: string;
+      servicesTitle: string;
+      noServicesLabel: string;
+      primaryAction: string;
+      secondaryAction: string;
+      channels: string[];
+      retentionOptions: string[];
+      services: string[];
+    };
+    forecast: {
+      title: string;
+      rows: CalculatorRows;
+      storageTitle: string;
+      storageCapacity: string;
+      noteLead: string;
+      note: string;
+    };
+    metrics: ContentItem[];
   };
   trust: {
     kicker: string;
@@ -270,6 +309,44 @@ const workflowDashboardImage = {
   src: "/marketing/workflow-dashboard-light.png",
   darkSrc: "/marketing/workflow-dashboard-dark.png"
 } satisfies ThemeImageAsset;
+const workflowCardImages = [
+  {
+    src: "/marketing/data-workflow-card-1-light.png",
+    darkSrc: "/marketing/data-workflow-card-1-dark.png"
+  },
+  {
+    src: "/marketing/data-workflow-card-2-light.png",
+    darkSrc: "/marketing/data-workflow-card-2-dark.png"
+  },
+  {
+    src: "/marketing/data-workflow-card-3-light.png",
+    darkSrc: "/marketing/data-workflow-card-3-dark.png"
+  },
+  {
+    src: "/marketing/data-workflow-card-4-light.png",
+    darkSrc: "/marketing/data-workflow-card-4-dark.png"
+  },
+  {
+    src: "/marketing/data-workflow-card-5-light.png",
+    darkSrc: "/marketing/data-workflow-card-5-dark.png"
+  },
+  {
+    src: "/marketing/data-workflow-card-6-light.png",
+    darkSrc: "/marketing/data-workflow-card-6-dark.png"
+  }
+] as const satisfies readonly ThemeImageAsset[];
+const comparisonMarketIconNames = [
+  "network",
+  "users",
+  "message",
+  "gauge"
+] as const satisfies readonly IconName[];
+const comparisonHuleeIconNames = [
+  "network",
+  "users",
+  "message",
+  "shield"
+] as const satisfies readonly IconName[];
 const heroMetricIcons = [
   {
     src: "/marketing/hero-metric-channel-light.png",
@@ -354,6 +431,20 @@ function getContent(locale: string): LandingContent {
 
 function copy(text: string): string {
   return text.replaceAll("{product}", productName);
+}
+
+function splitSummary(text: string): { lead: string; body?: string } {
+  const normalized = text.trim();
+  const sentence = normalized.match(/^(.+?[.!?])(?:\s+(.+))?$/u);
+
+  if (!sentence) {
+    return { lead: normalized };
+  }
+
+  return {
+    lead: sentence[1],
+    body: sentence[2]
+  };
 }
 
 function localizedHref(locale: Locale, href: string): string {
@@ -548,9 +639,7 @@ export default async function LandingPage({
             <p className="section-kicker">{content.pricingModel.kicker}</p>
             <h2>{copy(content.pricingModel.title)}</h2>
           </div>
-          <p className="section__summary">
-            {copy(content.pricingModel.summary)}
-          </p>
+          <SectionSummary text={copy(content.pricingModel.summary)} />
         </div>
         <div className="section__inner model-steps">
           {content.pricingModel.steps.map((step, index) => (
@@ -583,7 +672,7 @@ export default async function LandingPage({
             <p className="section-kicker">{content.channels.kicker}</p>
             <h2>{copy(content.channels.title)}</h2>
           </div>
-          <p className="section__summary">{copy(content.channels.summary)}</p>
+          <SectionSummary text={copy(content.channels.summary)} />
         </div>
 
         <div className="channels-card">
@@ -669,57 +758,15 @@ export default async function LandingPage({
 
       <WorkflowSection content={content.workflow} />
 
-      <section className="section section--audiences" id="audiences">
-        <div className="section__inner">
-          <p className="section-kicker">{content.audiences.kicker}</p>
-          <h2>{copy(content.audiences.title)}</h2>
-          <div className="audience-grid">
-            {content.audiences.items.map((item) => (
-              <FeatureCard item={item} key={item.title} />
-            ))}
-          </div>
-        </div>
-      </section>
+      <AudienceSection content={content.audiences} />
 
-      <section className="section section--comparison" id="comparison">
-        <div className="section__inner">
-          <p className="section-kicker">{content.comparison.kicker}</p>
-          <h2>{copy(content.comparison.title)}</h2>
-          <div className="comparison-table">
-            <div className="comparison-table__head" aria-hidden="true">
-              <span />
-              <strong>{content.comparison.usualLabel}</strong>
-              <strong>{productName}</strong>
-            </div>
-            {content.comparison.rows.map((row) => (
-              <div className="comparison-row" key={row.label}>
-                <span>{row.label}</span>
-                <p>{copy(row.usual)}</p>
-                <p>{copy(row.hulee)}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
+      <ComparisonSection content={content.comparison} />
 
-      <section className="section section--calculator" id="calculator">
-        <div className="section__inner calculator">
-          <div>
-            <p className="section-kicker">{content.calculator.kicker}</p>
-            <h2>{copy(content.calculator.title)}</h2>
-            <p>{copy(content.calculator.summary)}</p>
-          </div>
-          <div className="calculator-panel">
-            {content.calculator.inputs.map((input) => (
-              <div className="calculator-line" key={input}>
-                <Check aria-hidden="true" />
-                <span>{input}</span>
-              </div>
-            ))}
-            <strong>{copy(content.calculator.result)}</strong>
-          </div>
-        </div>
-      </section>
+      <CalculatorSection
+        content={content.calculator}
+        locale={typedLocale}
+        productName={productName}
+      />
 
       <StorySection
         id="trust"
@@ -737,7 +784,7 @@ export default async function LandingPage({
             <p className="section-kicker">{content.plans.kicker}</p>
             <h2>{copy(content.plans.title)}</h2>
           </div>
-          <p className="section__summary">{copy(content.plans.summary)}</p>
+          <SectionSummary text={copy(content.plans.summary)} />
         </div>
         <div className="section__inner plan-grid">
           {content.plans.items.map((plan) => (
@@ -838,11 +885,14 @@ function WorkflowSection({ content }: { content: LandingContent["workflow"] }) {
           <p className="section-kicker">{content.kicker}</p>
           <h2>{copy(content.title)}</h2>
         </div>
-        <p className="workflow-summary">{copy(content.summary)}</p>
+        <SectionSummary
+          className="workflow-summary"
+          text={copy(content.summary)}
+        />
 
         <div className="workflow-grid">
           {content.items.map((item, index) => {
-            const Icon = iconMap[item.icon];
+            const image = workflowCardImages[index] ?? workflowCardImages[0];
 
             return (
               <article
@@ -850,10 +900,20 @@ function WorkflowSection({ content }: { content: LandingContent["workflow"] }) {
                 data-workflow-card={index + 1}
                 key={item.title}
               >
-                <span className="workflow-card__icon" aria-hidden="true">
-                  <Icon />
-                </span>
-                <h3>{copy(item.title)}</h3>
+                <div className="workflow-card__head">
+                  <span className="workflow-card__icon" aria-hidden="true">
+                    <ThemeImage
+                      className="workflow-card__icon-image"
+                      src={image.src}
+                      darkSrc={image.darkSrc}
+                      alt=""
+                      width={256}
+                      height={256}
+                      sizes="76px"
+                    />
+                  </span>
+                  <h3>{copy(item.title)}</h3>
+                </div>
                 <p>{copy(item.description)}</p>
               </article>
             );
@@ -884,6 +944,148 @@ function WorkflowSection({ content }: { content: LandingContent["workflow"] }) {
   );
 }
 
+function SectionSummary({
+  text,
+  className
+}: {
+  text: string;
+  className?: string;
+}) {
+  const { lead, body } = splitSummary(text);
+  const classNames = ["section__summary", className].filter(Boolean).join(" ");
+
+  return (
+    <aside className={classNames}>
+      <strong>{lead}</strong>
+      {body ? <span>{body}</span> : null}
+    </aside>
+  );
+}
+
+function AudienceSection({
+  content
+}: {
+  content: LandingContent["audiences"];
+}) {
+  return (
+    <section className="section section--audiences" id="audiences">
+      <div className="section__inner split audience-head">
+        <div>
+          <p className="section-kicker">{content.kicker}</p>
+          <h2>{copy(content.title)}</h2>
+        </div>
+        <SectionSummary text={copy(content.summary)} />
+      </div>
+
+      <div className="section__inner audience-layout">
+        {content.items.map((item, index) => {
+          const Icon = iconMap[item.icon];
+
+          return (
+            <article
+              className={`audience-card ${
+                index === 0
+                  ? "audience-card--featured"
+                  : "audience-card--compact"
+              }`}
+              key={item.title}
+            >
+              <span className="audience-card__marker">
+                {String(index + 1).padStart(2, "0")}
+              </span>
+              <div className="audience-card__visual" aria-hidden="true">
+                <Icon />
+              </div>
+              <div className="audience-card__content">
+                <h3>{copy(item.title)}</h3>
+                <p>{copy(item.description)}</p>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function ComparisonSection({
+  content
+}: {
+  content: LandingContent["comparison"];
+}) {
+  return (
+    <section className="section section--comparison" id="comparison">
+      <div className="section__inner comparison-head">
+        <p className="section-kicker">{content.kicker}</p>
+        <h2>{copy(content.title)}</h2>
+      </div>
+
+      <div className="section__inner comparison-shell">
+        <div className="comparison-market">
+          <p className="comparison-column-label">{copy(content.usualLabel)}</p>
+          <div className="comparison-market__list">
+            {content.rows.map((row, index) => {
+              const Icon =
+                iconMap[comparisonMarketIconNames[index]] ?? MessageSquare;
+
+              return (
+                <article className="comparison-market-card" key={row.label}>
+                  <span className="comparison-card-icon" aria-hidden="true">
+                    <Icon />
+                  </span>
+                  <div className="comparison-market-card__body">
+                    <h3>{copy(row.label)}</h3>
+                    <p>{copy(row.usual)}</p>
+                  </div>
+                  <CircleAlert
+                    className="comparison-market-card__alert"
+                    aria-hidden="true"
+                  />
+                  <span
+                    className="comparison-market-card__arrow"
+                    aria-hidden="true"
+                  >
+                    <span />
+                    <ArrowRight />
+                  </span>
+                </article>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="comparison-hulee-column">
+          <p className="comparison-hulee__label">
+            {copy(content.huleeLabel)}
+            <Sparkles aria-hidden="true" />
+          </p>
+          <div className="comparison-hulee">
+            <div className="comparison-hulee__list">
+              {content.rows.map((row, index) => {
+                const Icon =
+                  iconMap[comparisonHuleeIconNames[index]] ?? ShieldCheck;
+
+                return (
+                  <article className="comparison-row" key={row.label}>
+                    <span className="comparison-row__icon" aria-hidden="true">
+                      <Icon />
+                    </span>
+                    <p>{copy(row.hulee)}</p>
+                    <span className="comparison-row__badge">
+                      <Sparkles aria-hidden="true" />
+                      {copy(row.badge)}
+                    </span>
+                  </article>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function StorySection({
   id,
   className,
@@ -910,7 +1112,7 @@ function StorySection({
           <p className="section-kicker">{kicker}</p>
           <h2>{title}</h2>
         </div>
-        <p className="section__summary">{summary}</p>
+        <SectionSummary text={summary} />
       </div>
 
       <div
