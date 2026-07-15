@@ -2266,7 +2266,7 @@ describe("Inbox V2 authorization policy", () => {
 
     expect(decision).toMatchObject({
       outcome: "denied",
-      publicErrorCode: "identity.self_claim_forbidden",
+      publicErrorCode: "identity.claim_self_forbidden",
       diagnostics: { reason: "separation_of_duties_denied" }
     });
   });

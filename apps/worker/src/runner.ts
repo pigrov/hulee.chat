@@ -9,6 +9,9 @@ import {
   createWorkerEgressMonitor,
   createWorkerDirectAccountAuthSweeper,
   createWorkerDirectAccountSessionMonitor,
+  createWorkerSecurityDenialRetentionSweeper,
+  createSecurityDenialRetentionBackgroundRunner,
+  createSecurityDenialRetentionDatabaseConfig,
   createWorkerTelegramAttachmentTransferSweeper,
   createWorkerOutboxHandler,
   createWorkerTelegramPollingSweeper,
@@ -20,6 +23,12 @@ const runtime = createWorkerRuntime();
 const database = createHuleeDatabase({
   connectionString: runtime.config.databaseUrl
 });
+const coreWorkerEnabled = runtime.config.workerFeatures.includes("core");
+const securityDenialRetentionDatabase = coreWorkerEnabled
+  ? createHuleeDatabase(
+      createSecurityDenialRetentionDatabaseConfig(runtime.config.databaseUrl)
+    )
+  : undefined;
 const telegramBotServices = runtime.config.workerFeatures.includes(
   "telegram_bot"
 )
@@ -88,6 +97,41 @@ const egressMonitor = createWorkerEgressMonitor({
   repository: createSqlDeploymentEgressStatusRepository(database),
   logger: runtime.logger
 });
+const securityDenialRetentionSweeper = securityDenialRetentionDatabase
+  ? createWorkerSecurityDenialRetentionSweeper({
+      database: securityDenialRetentionDatabase,
+      logger: runtime.logger
+    })
+  : undefined;
+const securityDenialRetentionRunner = securityDenialRetentionSweeper
+  ? createSecurityDenialRetentionBackgroundRunner({
+      sweeper: securityDenialRetentionSweeper,
+      onResult(result) {
+        if (
+          result.throttled ||
+          (result.failedTenants === 0 && result.deletedWindowCount === "0")
+        ) {
+          return;
+        }
+        runtime.logger.info("worker.security_denial_retention_processed", {
+          scannedTenants: result.scannedTenants,
+          prunedTenants: result.prunedTenants,
+          failedTenants: result.failedTenants,
+          saturatedPruneTenants: result.saturatedPruneTenants,
+          deletedWindowCount: result.deletedWindowCount,
+          checkpointTenantId: result.checkpointTenantId,
+          cycleCompleted: result.cycleCompleted
+        });
+      },
+      onFailure(error) {
+        runtime.logger.error(
+          "worker.security_denial_retention_failed",
+          undefined,
+          error
+        );
+      }
+    })
+  : undefined;
 
 let stopping = false;
 let processing = false;
@@ -103,6 +147,7 @@ runtime.logger.info("worker.started", {
 });
 
 egressMonitor.start();
+securityDenialRetentionRunner?.schedule();
 void runLoop();
 
 async function runLoop(): Promise<void> {
@@ -120,7 +165,8 @@ async function processNextBatch(): Promise<void> {
   if (
     telegramBotServices === undefined &&
     directAccountAuthSweeper === undefined &&
-    directAccountSessionMonitor === undefined
+    directAccountSessionMonitor === undefined &&
+    securityDenialRetentionSweeper === undefined
   ) {
     return;
   }
@@ -235,6 +281,10 @@ function sleep(ms: number): Promise<void> {
 async function shutdown(): Promise<void> {
   stopping = true;
   egressMonitor.stop();
+  await securityDenialRetentionRunner?.stop();
+  if (securityDenialRetentionDatabase !== undefined) {
+    await closeHuleeDatabase(securityDenialRetentionDatabase);
+  }
   await closeHuleeDatabase(database);
 }
 

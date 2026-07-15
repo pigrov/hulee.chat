@@ -69,6 +69,12 @@ const inboxV2AuthorizationRelationsInvariantNames = new Set([
   "INBOX_V2_AUTHORIZATION_RELATIONS_INTEGRITY_SQL",
   "INBOX_V2_AUTHORIZATION_WORK_ITEM_BRIDGE_INTEGRITY_SQL"
 ]);
+const inboxV2SecurityDenialMarker =
+  "-- INBOX_V2_SECURITY_DENIAL_MIGRATION_FINALIZED_V1";
+const inboxV2SecurityDenialPreflightMarker =
+  "-- INBOX_V2_SECURITY_DENIAL_PREFLIGHT_V1";
+const inboxV2SecurityDenialInvariantName =
+  "INBOX_V2_SECURITY_DENIAL_INTEGRITY_SQL";
 const inboxV2FoundationInvariantNames = new Set([
   "INBOX_V2_CLIENT_MERGE_INTEGRITY_SQL",
   "INBOX_V2_CONVERSATION_CLIENT_LINK_INTEGRITY_SQL",
@@ -99,6 +105,9 @@ const inboxV2DataGovernancePrivacyMigrations = migrationFiles.filter(
 );
 const inboxV2AuthorizationRelationsMigrations = migrationFiles.filter(
   ({ sql }) => sql.includes(inboxV2AuthorizationRelationsMarker)
+);
+const inboxV2SecurityDenialMigrations = migrationFiles.filter(({ sql }) =>
+  sql.includes(inboxV2SecurityDenialMarker)
 );
 const inboxV2InvariantBlocks = (
   await Promise.all(
@@ -145,6 +154,9 @@ const inboxV2AuthorizationRelationsInvariantBlocks =
   inboxV2InvariantBlocks.filter(({ name }) =>
     inboxV2AuthorizationRelationsInvariantNames.has(name)
   );
+const inboxV2SecurityDenialInvariantBlocks = inboxV2InvariantBlocks.filter(
+  ({ name }) => name === inboxV2SecurityDenialInvariantName
+);
 if (
   inboxV2FoundationInvariantBlocks.length !==
   inboxV2FoundationInvariantNames.size
@@ -193,6 +205,12 @@ if (
   );
   process.exit(1);
 }
+if (inboxV2SecurityDenialInvariantBlocks.length !== 1) {
+  console.error(
+    `Expected exactly one ${inboxV2SecurityDenialInvariantName} schema block, found ${inboxV2SecurityDenialInvariantBlocks.length}.`
+  );
+  process.exit(1);
+}
 const unownedInvariantBlocks = inboxV2InvariantBlocks.filter(
   ({ name }) =>
     !inboxV2FoundationInvariantNames.has(name) &&
@@ -200,7 +218,8 @@ const unownedInvariantBlocks = inboxV2InvariantBlocks.filter(
     !inboxV2TimelineMessageInvariantNames.has(name) &&
     name !== inboxV2EmployeeConversationStateInvariantName &&
     !inboxV2DataGovernancePrivacyInvariantNames.has(name) &&
-    !inboxV2AuthorizationRelationsInvariantNames.has(name)
+    !inboxV2AuthorizationRelationsInvariantNames.has(name) &&
+    name !== inboxV2SecurityDenialInvariantName
 );
 if (unownedInvariantBlocks.length > 0) {
   console.error(
@@ -287,6 +306,12 @@ if (inboxV2AuthorizationRelationsMigrations.length !== 1) {
   );
   process.exit(1);
 }
+if (inboxV2SecurityDenialMigrations.length !== 1) {
+  console.error(
+    `Expected exactly one finalized Inbox V2 security-denial migration, found ${inboxV2SecurityDenialMigrations.length}.`
+  );
+  process.exit(1);
+}
 
 try {
   assertMigrationJournalArtifactParity({
@@ -294,6 +319,15 @@ try {
     targetIndex: 34,
     finalizedMigrationFileName:
       inboxV2AuthorizationRelationsMigrations[0].fileName,
+    migrationFileNames,
+    snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
+      fileName.endsWith("_snapshot.json")
+    )
+  });
+  assertMigrationJournalArtifactParity({
+    journal: drizzleJournal,
+    targetIndex: 35,
+    finalizedMigrationFileName: inboxV2SecurityDenialMigrations[0].fileName,
     migrationFileNames,
     snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
       fileName.endsWith("_snapshot.json")
@@ -316,13 +350,14 @@ assertInboxV2DataGovernancePrivacyMigration(
 assertInboxV2AuthorizationRelationsMigration(
   inboxV2AuthorizationRelationsMigrations[0]
 );
+assertInboxV2SecurityDenialMigration(inboxV2SecurityDenialMigrations[0]);
 try {
   // A historical migration cannot be regenerated from the current Drizzle
   // schema after a later slice changes that schema. Keep validating historical
   // finalized structures above and through PostgreSQL upgrade lifecycles,
   // while generated-schema parity follows the latest migration.
-  await assertInboxV2AuthorizationRelationsGeneratedSchemaParity(
-    inboxV2AuthorizationRelationsMigrations[0]
+  await assertInboxV2SecurityDenialGeneratedSchemaParity(
+    inboxV2SecurityDenialMigrations[0]
   );
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
@@ -331,19 +366,17 @@ try {
 
 console.log("db:check passed");
 
-async function assertInboxV2AuthorizationRelationsGeneratedSchemaParity(
-  migration
-) {
-  const snapshotPath = "packages/db/drizzle/meta/0034_snapshot.json";
+async function assertInboxV2SecurityDenialGeneratedSchemaParity(migration) {
+  const snapshotPath = "packages/db/drizzle/meta/0035_snapshot.json";
   const generated = await generateExpectedDrizzleMigration({
     workspaceRoot: process.cwd(),
     migrationDirectory,
-    baseIndex: 33,
-    targetIndex: 34
+    baseIndex: 34,
+    targetIndex: 35
   });
   assertAdditiveMigrationStatements(
     generated.statements,
-    "Inbox V2 RBAC-003 generated migration"
+    "Inbox V2 RBAC-007 generated migration"
   );
   const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
   assertDrizzleSnapshotParity(
@@ -354,13 +387,13 @@ async function assertInboxV2AuthorizationRelationsGeneratedSchemaParity(
 
   const checkedInDdl = collectFinalizedMigrationDdlStatements({
     migrationSql: migration.sql,
-    finalizedMarker: inboxV2AuthorizationRelationsMarker,
-    preflightMarker: inboxV2AuthorizationRelationsPreflightMarker,
-    invariantBlocks: inboxV2AuthorizationRelationsInvariantBlocks
+    finalizedMarker: inboxV2SecurityDenialMarker,
+    preflightMarker: inboxV2SecurityDenialPreflightMarker,
+    invariantBlocks: inboxV2SecurityDenialInvariantBlocks
   });
   assertAdditiveMigrationStatements(
     checkedInDdl,
-    "Inbox V2 RBAC-003 checked-in migration"
+    "Inbox V2 RBAC-007 checked-in migration"
   );
   assertSqlStatementParity(generated.statements, checkedInDdl);
 }
@@ -819,6 +852,55 @@ function assertInboxV2AuthorizationRelationsMigration(migration) {
     }
   }
   assertInboxV2AuthorizationFoundationTriggerInventory(migration);
+}
+
+function assertInboxV2SecurityDenialMigration(migration) {
+  if (!migration.fileName.startsWith("0035_")) {
+    console.error(
+      `${migration.fileName} must be the finalized Inbox V2 security-denial migration at index 0035.`
+    );
+    process.exit(1);
+  }
+  assertInboxV2InvariantMigration({
+    migration,
+    finalizedMarker: inboxV2SecurityDenialMarker,
+    preflightMarker: inboxV2SecurityDenialPreflightMarker,
+    invariantBlocks: inboxV2SecurityDenialInvariantBlocks,
+    preflightDescription: "security-denial"
+  });
+
+  for (const fragment of [
+    "inbox_v2.security_denial_foundation_missing",
+    "inbox_v2.security_denial_partial_schema_detected",
+    'CREATE TYPE "public"."inbox_v2_security_denial_action"',
+    'CREATE TYPE "public"."inbox_v2_security_denial_review_type"',
+    'CREATE TABLE "inbox_v2_security_denial_window_shards"',
+    'CREATE TABLE "inbox_v2_security_denial_buckets"',
+    'CREATE TABLE "inbox_v2_security_denial_review_signals"',
+    "create or replace function public.inbox_v2_security_denial_record(",
+    "create or replace function public.inbox_v2_security_denial_prune("
+  ]) {
+    if (!migration.sql.includes(fragment)) {
+      console.error(
+        `${migration.fileName} is missing required security-denial SQL: ${fragment}`
+      );
+      process.exit(1);
+    }
+  }
+  for (const forbidden of [
+    "insert into public.inbox_v2_tenant_stream_commits",
+    "insert into public.inbox_v2_domain_events",
+    "insert into public.inbox_v2_outbox_intents",
+    " json ",
+    " jsonb "
+  ]) {
+    if (migration.sql.toLowerCase().includes(forbidden)) {
+      console.error(
+        `${migration.fileName} security-denial sink contains forbidden stream/outbox/JSON SQL: ${forbidden.trim()}`
+      );
+      process.exit(1);
+    }
+  }
 }
 
 function assertInboxV2AuthorizationFoundationTriggerInventory(migration) {

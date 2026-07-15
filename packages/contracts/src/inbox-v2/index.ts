@@ -28,6 +28,7 @@ export * from "./provider-roster-materialization";
 export * from "./recipient-sync";
 export * from "./schema-version";
 export * from "./schema-safety";
+export * from "./security-denial-audit";
 export * from "./source-account-identity";
 export * from "./source-occurrence-materialization";
 export * from "./source-routing-primitives";

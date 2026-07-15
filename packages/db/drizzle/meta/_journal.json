@@ -246,6 +246,13 @@
       "when": 1784118691728,
       "tag": "0034_inbox_v2_authorization_relations",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1784124269234,
+      "tag": "0035_inbox_v2_security_denial_sink",
+      "breakpoints": true
     }
   ]
 }

@@ -17,6 +17,7 @@ import {
   createSqlChannelSessionRepository,
   createSqlChannelProviderValidationJobRepository,
   createSqlDeploymentEgressProviderPolicyRepository,
+  createSqlInboxV2SecurityDenialRetentionRepository,
   createDrizzlePersistenceExecutor,
   createExternalMessageRepository,
   createSqlOutboundDispatchRepository,
@@ -73,6 +74,11 @@ import { createWhatsAppDirectAuthHandler } from "./whatsapp-direct-auth-handler"
 import { createWhatsAppDirectSessionProbeHandler } from "./whatsapp-direct-session-probe";
 import { createMaxDirectAuthHandler } from "./max-direct-auth-handler";
 import { createMaxDirectSessionProbeHandler } from "./max-direct-session-probe";
+import {
+  createSecurityDenialRetentionSweeper,
+  type SecurityDenialRetentionSweepResult,
+  type SecurityDenialRetentionSweeper
+} from "./security-denial-retention-sweeper";
 
 export type WorkerBoundary = {
   processesOutbox: true;
@@ -254,6 +260,15 @@ export type WorkerDirectAccountSessionMonitor = {
   sweep(): Promise<DirectAccountSessionMonitorResult>;
 };
 
+export type WorkerSecurityDenialRetentionSweeperOptions = {
+  database: HuleeDatabase;
+  logger?: Pick<Logger, "warn">;
+};
+
+export type WorkerSecurityDenialRetentionSweeper = {
+  sweep(): Promise<SecurityDenialRetentionSweepResult>;
+};
+
 export function createWorkerTelegramPollingSweeper(
   options: WorkerTelegramPollingSweeperOptions
 ): WorkerTelegramPollingSweeper {
@@ -432,6 +447,23 @@ export function createWorkerDirectAccountSessionMonitor(
   });
 }
 
+export function createWorkerSecurityDenialRetentionSweeper(
+  options: WorkerSecurityDenialRetentionSweeperOptions
+): SecurityDenialRetentionSweeper {
+  return createSecurityDenialRetentionSweeper({
+    repository: createSqlInboxV2SecurityDenialRetentionRepository(
+      options.database
+    ),
+    onTenantFailure: ({ tenantId, error }) => {
+      options.logger?.warn(
+        "worker.security_denial_retention_tenant_failed",
+        { tenantId },
+        error
+      );
+    }
+  });
+}
+
 function createWorkerDeploymentEgressRuntime(input: {
   database: HuleeDatabase;
   egressProfile?: WorkerConfig["egressProfile"];
@@ -476,6 +508,14 @@ export {
   defaultEgressProbes,
   shouldRunEgressMonitor
 } from "./egress-monitor";
+export {
+  createSecurityDenialRetentionBackgroundRunner,
+  createSecurityDenialRetentionSweeper
+} from "./security-denial-retention-sweeper";
+export {
+  createSecurityDenialRetentionDatabaseConfig,
+  sanitizeSecurityDenialRetentionDatabaseUrl
+} from "./security-denial-retention-database-config";
 export type {
   ClaimPendingOutboxInput,
   MarkOutboxFailedInput,
@@ -547,3 +587,11 @@ export type {
   EgressProbeKind,
   WorkerEgressMonitor
 } from "./egress-monitor";
+export type {
+  SecurityDenialRetentionBackgroundRunner,
+  SecurityDenialRetentionBackgroundRunnerOptions,
+  SecurityDenialRetentionRepository,
+  SecurityDenialRetentionSweepResult,
+  SecurityDenialRetentionSweeper,
+  SecurityDenialRetentionSweeperOptions
+} from "./security-denial-retention-sweeper";

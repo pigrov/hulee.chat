@@ -10,6 +10,7 @@ import type {
   InboxV2EntityRevision,
   InboxV2OrgUnitId,
   InboxV2SourceAccountId,
+  InboxV2SecurityDenialAction,
   InboxV2TeamId,
   InboxV2TenantId,
   InboxV2TrustedServiceId,
@@ -2266,7 +2267,7 @@ export type InboxV2AuthorizationPublicErrorCode =
   | "work.state_changed"
   | "file.parent_forbidden"
   | "identity.evidence_required"
-  | "identity.self_claim_forbidden"
+  | "identity.claim_self_forbidden"
   | "report.scope_forbidden"
   | "privacy.scope_ambiguous"
   | "privacy.approval_required"
@@ -2314,6 +2315,14 @@ export type InboxV2AuthorizationDecision =
       outcome: "denied";
       tenantId: InboxV2TenantId;
       evaluatedAt: InboxV2PolicyTimestamp;
+      /** Server-derived from the evaluated permission plan, never a request hint. */
+      securityDenialAction: InboxV2SecurityDenialAction;
+      /** Authenticated attribution; null means use a configured deployment bucket. */
+      securityDenialTenantId: InboxV2TenantId | null;
+      securityDenialPrincipalClass:
+        | "employee"
+        | "trusted_service"
+        | "invalid_or_anonymous";
       publicErrorCode: InboxV2AuthorizationPublicErrorCode;
       diagnostics: Readonly<{
         reason: InboxV2AuthorizationInternalReason;
@@ -6656,7 +6665,7 @@ function evaluateGuard(
         ) {
           return guardDeny(
             "separation_of_duties_denied",
-            "identity.self_claim_forbidden"
+            "identity.claim_self_forbidden"
           );
         }
         return guardAllow([
@@ -13287,9 +13296,127 @@ function denyPlan(
     outcome: "denied",
     tenantId: input.tenantId,
     evaluatedAt: input.evaluatedAt,
+    securityDenialAction: deriveSecurityDenialAction(
+      input,
+      publicErrorCode,
+      failedRequirementId
+    ),
+    ...deriveSecurityDenialAttribution(input.principal),
     publicErrorCode,
     diagnostics: Object.freeze({ reason, failedRequirementId })
   });
+}
+
+function deriveSecurityDenialAttribution(
+  principal: InboxV2PolicyPrincipal
+): Readonly<{
+  securityDenialTenantId: InboxV2TenantId | null;
+  securityDenialPrincipalClass:
+    | "employee"
+    | "trusted_service"
+    | "invalid_or_anonymous";
+}> {
+  if (principal.kind === "employee") {
+    return {
+      securityDenialTenantId: principal.employee.tenantId,
+      securityDenialPrincipalClass: "employee"
+    };
+  }
+  if (principal.kind === "trusted_service") {
+    return {
+      securityDenialTenantId: principal.tenantId,
+      securityDenialPrincipalClass: "trusted_service"
+    };
+  }
+  return {
+    securityDenialTenantId: null,
+    securityDenialPrincipalClass: "invalid_or_anonymous"
+  };
+}
+
+const SECURITY_DENIAL_ACTION_BY_PERMISSION = Object.freeze({
+  "core:privacy.hold.issue": "privacy.hold.issue",
+  "core:privacy.hold.release": "privacy.hold.release",
+  "core:privacy.subject_evidence.view": "privacy.subject_evidence.view",
+  "core:privacy.tenant_export": "privacy.tenant_export",
+  "core:privacy.deletion.preview": "privacy.deletion.preview",
+  "core:privacy.deletion.approve": "privacy.deletion.approve",
+  "core:privacy.deletion.execute": "privacy.deletion.execute"
+} satisfies Readonly<Record<string, InboxV2SecurityDenialAction>>);
+
+const PRIVILEGED_SECURITY_DENIAL_PERMISSIONS = new Set<string>([
+  "core:tenant.manage",
+  "core:employee.invite",
+  "core:employee.profile.manage",
+  "core:employee.deactivate",
+  "core:roles.define",
+  "core:roles.bind",
+  "core:direct_grants.manage",
+  "core:org_unit.manage",
+  "core:team.manage",
+  "core:queue.manage",
+  "core:conversation.internal.break_glass.issue",
+  "core:conversation.internal.break_glass_read"
+]);
+
+function deriveSecurityDenialAction(
+  input: InboxV2AuthorizationPlanInput,
+  publicErrorCode: InboxV2AuthorizationPublicErrorCode,
+  failedRequirementId: string | null
+): InboxV2SecurityDenialAction {
+  if (publicErrorCode === "identity.claim_self_forbidden") {
+    return "identity.claim";
+  }
+
+  const failedRequirement =
+    failedRequirementId === null
+      ? undefined
+      : input.requirements.find(
+          (requirement) => requirement.id === failedRequirementId
+        );
+  const failedAction =
+    failedRequirement === undefined
+      ? undefined
+      : SECURITY_DENIAL_ACTION_BY_PERMISSION[
+          failedRequirement.permissionId as keyof typeof SECURITY_DENIAL_ACTION_BY_PERMISSION
+        ];
+  if (failedAction !== undefined) return failedAction;
+
+  // Early principal/tenant failures happen before a requirement is evaluated.
+  // Preserve an unambiguous sensitive operation, but never let a malformed
+  // mixed plan choose a lower-risk lifecycle action.
+  const sensitiveActions = new Set(
+    input.requirements
+      .map(
+        (requirement) =>
+          SECURITY_DENIAL_ACTION_BY_PERMISSION[
+            requirement.permissionId as keyof typeof SECURITY_DENIAL_ACTION_BY_PERMISSION
+          ]
+      )
+      .filter(
+        (action): action is NonNullable<typeof action> => action !== undefined
+      )
+  );
+  if (sensitiveActions.size === 1) return [...sensitiveActions][0]!;
+  if (sensitiveActions.size > 1) return "authorization.privileged_mutation";
+
+  const representative =
+    failedRequirement ??
+    input.requirements.find(
+      (requirement) => requirement.visibility === "primary"
+    );
+  const permissionId = representative?.permissionId ?? "";
+  if (permissionId.startsWith("core:identity.")) return "identity.claim";
+  if (
+    /(?:^|\.)(?:view|read|list)$/u.test(permissionId) ||
+    permissionId.includes(".view_")
+  ) {
+    return "resource.read";
+  }
+  if (PRIVILEGED_SECURITY_DENIAL_PERMISSIONS.has(permissionId)) {
+    return "authorization.privileged_mutation";
+  }
+  return input.requirements.length === 0 ? "resource.read" : "resource.mutate";
 }
 
 function deny(

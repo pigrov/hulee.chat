@@ -495,6 +495,14 @@ export const initialTables = [
   { name: "inbox_v2_auth_revision_effects", scope: "tenant", requiresTenantId: true },
   // prettier-ignore
   { name: "inbox_v2_auth_relation_writes", scope: "tenant", requiresTenantId: true },
+  // Inbox V2 RBAC-007 denial evidence is a separate bounded tenant-local sink;
+  // it never participates in the tenant stream or domain/provider outbox.
+  // prettier-ignore
+  { name: "inbox_v2_security_denial_window_shards", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_security_denial_buckets", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_security_denial_review_signals", scope: "tenant", requiresTenantId: true },
   { name: "conversations", scope: "tenant", requiresTenantId: true },
   {
     name: "conversation_participants",

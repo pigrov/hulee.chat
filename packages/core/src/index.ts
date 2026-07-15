@@ -160,6 +160,22 @@ export type {
   InboxV2RoleRevisionPlanDecision
 } from "./inbox-v2-authorization-revision-plan";
 export {
+  createInboxV2DeploymentSecurityTenantScope,
+  createInboxV2SecurityDenialFingerprintProof,
+  createInboxV2VerifiedSecurityTenantScope,
+  executeInboxV2AuthorizationGate
+} from "./inbox-v2-security-denial";
+export type {
+  InboxV2AuthorizationGateResult,
+  InboxV2SecurityDenialContext,
+  InboxV2SecurityDenialFingerprintProof,
+  InboxV2SecurityDenialHealthSignal,
+  InboxV2SecurityDenialObservation,
+  InboxV2SecurityDenialRecordOptions,
+  InboxV2SecurityDenialSink,
+  InboxV2SecurityDenialTenantScope
+} from "./inbox-v2-security-denial";
+export {
   canonicalInternalApiSignaturePayload,
   createInternalApiSignature,
   internalApiSignatureHeader,

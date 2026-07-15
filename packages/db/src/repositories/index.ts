@@ -5,6 +5,8 @@ export {
 } from "../client";
 export type { HuleeDatabase, HuleeDatabaseConfig } from "../client";
 export * from "./sql-inbox-v2-data-governance-privacy-repository";
+export * from "./sql-inbox-v2-security-denial-repository";
+export * from "./sql-inbox-v2-security-denial-retention-repository";
 export * from "./sql-inbox-v2-privacy-export-lifecycle-repository";
 export * from "./sql-inbox-v2-destructive-checkpoint-guard-repository";
 export * from "./sql-inbox-v2-deletion-run-state-repository";

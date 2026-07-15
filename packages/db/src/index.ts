@@ -2,6 +2,8 @@ export type { TableDefinition, TableScope } from "./schema";
 export { initialTables } from "./schema";
 export * from "./repositories/sql-inbox-v2-authorization-repository";
 export * from "./repositories/sql-inbox-v2-data-governance-privacy-repository";
+export * from "./repositories/sql-inbox-v2-security-denial-repository";
+export * from "./repositories/sql-inbox-v2-security-denial-retention-repository";
 export * from "./repositories/sql-inbox-v2-privacy-export-lifecycle-repository";
 export * from "./repositories/sql-inbox-v2-destructive-checkpoint-guard-repository";
 export * from "./repositories/sql-inbox-v2-deletion-run-state-repository";

@@ -1121,8 +1121,9 @@ PostgreSQL gate passes. `INB2-DB-005` cannot start before both are complete.
     passed with bounded local parallelism at `277` files / `2782` tests plus
     `23` files / `219` tests intentionally skipped on `2026-07-15`.
 
-- [ ] `INB2-RBAC-007` Implement bounded security-denial audit and review.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-RBAC-003`.
+- [x] `INB2-RBAC-007` Implement bounded security-denial audit and review.
+  - State: `done`; Priority: `P0`; Started: `2026-07-15`; Completed:
+    `2026-07-15`; Owner: `Codex`; Depends on: `INB2-RBAC-003`.
   - Acceptance: denied/guessed-ID attempts use a redacted sink with stable
     dedupe window, counters, rate/volume bounds and high-risk review/alert types;
     they allocate no Inbox stream position, stream-head lock, domain/provider
@@ -1132,7 +1133,30 @@ PostgreSQL gate passes. `INB2-DB-005` cannot start before both are complete.
   - Verification: guessed-ID flood, repeated self-claim, lifecycle scope-matrix
     denial, cross-tenant and sink failure tests preserve bounded storage/work,
     required alerts and normal API availability without leaking resource existence.
-    Evidence: -
+    Evidence: strict versioned attempt/result/review contracts and a core-owned
+    authorization gate derive tenant/action/principal attribution, purpose-
+    separated tenant HMACs, one random observation receipt, stable denial/public
+    classes and action-specific lifecycle review signals without exposing sink
+    outcomes through the public decision. Process-wide in-flight, telemetry and
+    circuit caps keep rejected/hung/mutating sinks best-effort while deny remains
+    fail-closed. Finalized migration `0035_inbox_v2_security_denial_sink.sql`
+    installs three tenant-local tables plus DB-clock record/prune functions,
+    exact counters, 16 shards, finite detail/review admission, overflow/rate
+    aggregation, coherence guards and snapshot-high-water keyset review pages;
+    no tenant stream, stream-head lock or outbox is touched. The autonomous
+    worker keyset-pages the canonical tenant registry and prunes through a
+    separate sanitized two-connection pool with `100ms` lock and `500ms`
+    statement limits, bounded concurrency/batches and tracked retry/idle/shutdown;
+    hostile URL options cannot override those controls. The common request
+    repository exposes only `record/listReviews`; lifecycle `prune` is isolated
+    in its dedicated repository. Focused contract/core/schema/repository/worker
+    tests passed `9` files / `480` tests; fresh PostgreSQL migration lifecycle
+    passed `5/5` and live sink/review/retention scenarios passed `14/14`, including
+    floods, dedupe, self-claim, all lifecycle actions, cross-tenant/direct-DML,
+    pagination, cap/coherence tampering and locked-prune timeout. Full
+    `pnpm check` passed `286` files / `2850` tests plus formatting, repository-
+    wide ESLint, TypeScript, DB, i18n, encoding, branding and native gates, with
+    `25` files / `238` integration tests intentionally skipped on `2026-07-15`.
 
 - [ ] `INB2-DB-007` Add V2 repository ports, mappers and access-plan indexes.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-DB-001` through
@@ -1561,6 +1585,9 @@ and revision model.
     versioned schemas, expected entity/authorization revisions, independently checked
     secondary resources, stable `clientMutationId`, commit/position/entity
     result and stable errors; an HTTP result never skips the applied cursor.
+    Denial observation uses a separately constructed bounded DB pool/executor,
+    never the primary request/data pool, and retains the RBAC-007 timeout and
+    circuit behavior under sink saturation or failure.
   - Verification: response-loss retries return the same canonical result,
     simultaneous same-ID requests create one sequence/commit/outbox result,
     same-ID/different-request conflicts, claim-and-reply atomicity, permission
@@ -2156,6 +2183,9 @@ SaaS, isolated SaaS and on-prem data planes.
     policy preview, fenced purge batches, object versions/shared-parent graphs,
     one hot prospective hold and pruned-prefix snapshot-plus-tail rebuild with
     bounded locks, memory, queue growth and per-tenant failure isolation.
+    Denial-retention load includes a very large tenant catalog, repeated worker
+    restarts, slow/locked oldest batches and multiple replicas so checkpoint
+    fairness, tail progress, duplicate work and bounded-pool isolation are measured.
   - Verification: agreed latency/error/lag/retention-throughput and maximum lock/
     batch budgets are asserted under normal, hot-hold and crash/retry load; results
     and representative query plans are saved. Evidence: -
@@ -2244,6 +2274,10 @@ SaaS, isolated SaaS and on-prem data planes.
     atomically advances its tenant/generation retained minimum, never a provider/
     server timestamp. Tenant/class batching remains bounded under millions of
     eligible rows and hot hold scopes without cross-tenant scans or long locks.
+    Production runners persist or lease partitioned checkpoints, add bounded
+    jitter between replicas, retry retryable SQLSTATEs with batch downshift and
+    expose lag/saturation/repeated-failure metrics; lifecycle executors are typed
+    and cannot be constructed from an unbounded primary application pool.
   - Verification: mixed old/new timestamp-position, hot hold scope, stale lease/
     newer revision, handler crash/reorder and crash around prefix/minimum update
     plus terminal credential rows with held source history remain idempotent and
