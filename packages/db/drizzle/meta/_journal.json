@@ -260,6 +260,13 @@
       "when": 1784134738593,
       "tag": "0036_inbox_v2_repository_foundation",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1784146744823,
+      "tag": "0037_inbox_v2_database_reset_receipt",
+      "breakpoints": true
     }
   ]
 }

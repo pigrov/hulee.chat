@@ -1210,8 +1210,9 @@ PostgreSQL gate passes. `INB2-DB-005` cannot start before both are complete.
     encoding, branding and native gates on `2026-07-15`.
 
 - [ ] `INB2-DB-008` Add repeatable clean V2 install and guarded reset migrations.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-DB-007`,
-    `INB2-DB-009`, `INB2-ARCH-009`, `INB2-MIG-001`.
+  - State: `in_progress`; Priority: `P0`; Started: `2026-07-15`; Owner:
+    `Codex`; Closure blocked by planned `INB2-MIG-001`; Depends on:
+    `INB2-DB-007`, `INB2-DB-009`, `INB2-ARCH-009`, `INB2-MIG-001`.
   - Acceptance: owns clean V2 DDL/seed/bootstrap and an explicitly guarded
     disposable reset path; it never infers reset authority from environment or
     row count. A V1 snapshot/additive upgrade harness, compatibility preservation
@@ -1220,7 +1221,25 @@ PostgreSQL gate passes. `INB2-DB-005` cannot start before both are complete.
   - Verification: empty/current DB install, idempotent seed/reset and projection/
     stream bootstrap pass; when preserve is activated, representative V1 upgrade,
     N-1 smoke and rollback evidence become mandatory. `pnpm db:check` and
-    `pnpm check` pass. Evidence: -
+    `pnpm check` pass. Evidence: clean/current install, exact journal/bundle/
+    bootstrap/MIG-001/object evidence binding, fenced atomic disposable reset,
+    rollback after post-drop failure, content/catalog/sequence/ACL inventory,
+    live semantic and prepared-transaction refusal, recoverable connection
+    fence, reset-surviving database-wide immutable receipt ledger/idempotent
+    `reset_noop` (including an expired exact retry), different-tenant and old
+    generation replay refusal, bounded fresh destructive authority, exact
+    critical schema/SECURITY DEFINER/ACL audit and synthetic repair are
+    implemented in
+    `scripts/db/inbox-v2-database-lifecycle.mjs`, migration `0037` and
+    `docs/product/inbox-v2-db-008-install-and-reset.md`. Focused contract/schema/
+    PostgreSQL 16 lifecycle suites passed `3` files / `15` tests with
+    `max_prepared_transactions=10`; teardown left `0` `hulee_db008_*` databases.
+    Full `pnpm check` passed `298` files / `2968`
+    tests, with `29` files / `248` integration tests intentionally skipped, plus
+    formatting, ESLint, TypeScript, DB, i18n, encoding, branding and native gates
+    on `2026-07-15`. The checkbox remains open: no real reset authority exists
+    until `INB2-MIG-001` is completed, and preserve-path evidence becomes
+    mandatory if that task selects `preserve`.
 
 - [ ] `INB2-EPIC-2-GATE` Verify Epic 2 exit gate.
   - State: `planned`; Priority: `P0`; Depends on: all Epic 2 tasks.

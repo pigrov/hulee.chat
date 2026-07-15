@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 
 import {
@@ -6,7 +7,8 @@ import {
   assertParentUniqueConstraintsBeforeForeignKeys,
   assertSqlStatementParity,
   collectFinalizedMigrationDdlStatements,
-  generateExpectedDrizzleMigration
+  generateExpectedDrizzleMigration,
+  splitMigrationStatements
 } from "./db-check-lib.mjs";
 
 const metadata = await readFile("packages/db/src/schema/metadata.ts", "utf8");
@@ -84,8 +86,20 @@ const inboxV2RepositoryFoundationPreflightSql = (
     "utf8"
   )
 ).trim();
+const inboxV2RepositoryFoundationBackfillStatements = splitMigrationStatements(
+  await readFile(
+    "scripts/db/inbox-v2-repository-foundation-backfills.sql",
+    "utf8"
+  )
+);
 const inboxV2RepositoryFoundationInvariantName =
   "INBOX_V2_REPOSITORY_FOUNDATION_INTEGRITY_SQL";
+const inboxV2RepositoryFoundationOrderedTailSha256 =
+  "sha256:74bb3479a7ea6d60efaca686dbe732cc9c261bfc7b9668002e49e494375e92d7";
+const inboxV2DatabaseResetReceiptInvariantName =
+  "INBOX_V2_DATABASE_RESET_RECEIPT_INVARIANT_SQL";
+const inboxV2DatabaseResetReceiptFileName =
+  "0037_inbox_v2_database_reset_receipt.sql";
 const inboxV2MembershipPrivilegeBoundaryName =
   "INBOX_V2_MEMBERSHIP_PRIVILEGE_BOUNDARY_SQL";
 const inboxV2FoundationInvariantNames = new Set([
@@ -125,19 +139,31 @@ const inboxV2SecurityDenialMigrations = migrationFiles.filter(({ sql }) =>
 const inboxV2RepositoryFoundationMigrations = migrationFiles.filter(({ sql }) =>
   sql.includes(inboxV2RepositoryFoundationMarker)
 );
+const inboxV2DatabaseResetReceiptMigrations = migrationFiles.filter(
+  ({ fileName }) => fileName === inboxV2DatabaseResetReceiptFileName
+);
+const inboxV2SchemaFileNames = (await readdir(inboxV2SchemaDirectory))
+  .filter((fileName) => fileName.endsWith(".ts"))
+  .sort();
 const inboxV2InvariantBlocks = (
   await Promise.all(
-    (await readdir(inboxV2SchemaDirectory))
-      .filter((fileName) => fileName.endsWith(".ts"))
-      .sort()
-      .map(async (fileName) =>
-        extractInboxV2InvariantBlocks(
-          fileName,
-          await readFile(`${inboxV2SchemaDirectory}/${fileName}`, "utf8")
-        )
+    inboxV2SchemaFileNames.map(async (fileName) =>
+      extractInboxV2InvariantBlocks(
+        fileName,
+        await readFile(`${inboxV2SchemaDirectory}/${fileName}`, "utf8")
       )
+    )
   )
 ).flat();
+const inboxV2DatabaseResetReceiptInvariantBlock =
+  extractInboxV2BareTemplateSqlBlock(
+    "database-reset-receipt.ts",
+    await readFile(
+      `${inboxV2SchemaDirectory}/database-reset-receipt.ts`,
+      "utf8"
+    ),
+    inboxV2DatabaseResetReceiptInvariantName
+  );
 
 if (inboxV2InvariantBlocks.length === 0) {
   console.error("DB schema has no Inbox V2 invariant SQL blocks.");
@@ -357,13 +383,36 @@ if (inboxV2RepositoryFoundationMigrations.length !== 1) {
   );
   process.exit(1);
 }
+if (inboxV2DatabaseResetReceiptMigrations.length !== 1) {
+  console.error(
+    `Expected exactly one Inbox V2 database-reset receipt migration, found ${inboxV2DatabaseResetReceiptMigrations.length}.`
+  );
+  process.exit(1);
+}
 
 try {
+  assertGlobalMigrationArtifactBijection({
+    journal: drizzleJournal,
+    migrationFileNames,
+    snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
+      fileName.endsWith("_snapshot.json")
+    )
+  });
   assertMigrationJournalArtifactParity({
     journal: drizzleJournal,
     targetIndex: 34,
     finalizedMigrationFileName:
       inboxV2AuthorizationRelationsMigrations[0].fileName,
+    migrationFileNames,
+    snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
+      fileName.endsWith("_snapshot.json")
+    )
+  });
+  assertMigrationJournalArtifactParity({
+    journal: drizzleJournal,
+    targetIndex: 37,
+    finalizedMigrationFileName:
+      inboxV2DatabaseResetReceiptMigrations[0].fileName,
     migrationFileNames,
     snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
       fileName.endsWith("_snapshot.json")
@@ -410,12 +459,12 @@ assertInboxV2RepositoryFoundationMigration(
   inboxV2RepositoryFoundationMigrations[0]
 );
 try {
-  // A historical migration cannot be regenerated from the current Drizzle
-  // schema after a later slice changes that schema. Keep validating historical
-  // finalized structures above and through PostgreSQL upgrade lifecycles,
-  // while generated-schema parity follows the latest migration.
   await assertInboxV2RepositoryFoundationGeneratedSchemaParity(
     inboxV2RepositoryFoundationMigrations[0]
+  );
+  await assertInboxV2LatestGeneratedSchemaParity(
+    inboxV2DatabaseResetReceiptMigrations[0],
+    inboxV2DatabaseResetReceiptInvariantBlock
   );
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
@@ -423,6 +472,57 @@ try {
 }
 
 console.log("db:check passed");
+
+function assertGlobalMigrationArtifactBijection({
+  journal,
+  migrationFileNames: sqlFiles,
+  snapshotFileNames
+}) {
+  if (!Array.isArray(journal.entries) || journal.entries.length === 0) {
+    throw new Error("Drizzle journal must contain a non-empty entries array.");
+  }
+  if (
+    sqlFiles.length !== journal.entries.length ||
+    snapshotFileNames.length !== journal.entries.length
+  ) {
+    throw new Error(
+      `Drizzle journal/SQL/snapshot artifact counts differ: ${journal.entries.length}/${sqlFiles.length}/${snapshotFileNames.length}.`
+    );
+  }
+  let previousWhen = -1;
+  const expectedSqlFiles = [];
+  const expectedSnapshotFiles = [];
+  for (let index = 0; index < journal.entries.length; index += 1) {
+    const entry = journal.entries[index];
+    const prefix = String(index).padStart(4, "0");
+    if (
+      entry.idx !== index ||
+      entry.version !== journal.version ||
+      entry.breakpoints !== true ||
+      !Number.isSafeInteger(entry.when) ||
+      entry.when <= previousWhen ||
+      typeof entry.tag !== "string" ||
+      !entry.tag.startsWith(`${prefix}_`)
+    ) {
+      throw new Error(
+        `Drizzle journal entry ${index} is not a contiguous, ordered migration contract.`
+      );
+    }
+    previousWhen = entry.when;
+    expectedSqlFiles.push(`${entry.tag}.sql`);
+    expectedSnapshotFiles.push(`${prefix}_snapshot.json`);
+  }
+  assertExactStringSequence(
+    expectedSqlFiles,
+    [...sqlFiles].sort(),
+    "Drizzle journal to SQL artifact mapping"
+  );
+  assertExactStringSequence(
+    expectedSnapshotFiles,
+    [...snapshotFileNames].sort(),
+    "Drizzle journal to snapshot artifact mapping"
+  );
+}
 
 async function assertInboxV2RepositoryFoundationGeneratedSchemaParity(
   migration
@@ -432,7 +532,13 @@ async function assertInboxV2RepositoryFoundationGeneratedSchemaParity(
     workspaceRoot: process.cwd(),
     migrationDirectory,
     baseIndex: 35,
-    targetIndex: 36
+    targetIndex: 36,
+    schemaPaths: [
+      "packages/db/src/schema/tables.ts",
+      ...inboxV2SchemaFileNames
+        .filter((fileName) => fileName !== "database-reset-receipt.ts")
+        .map((fileName) => `${inboxV2SchemaDirectory}/${fileName}`)
+    ]
   });
   const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
   assertDrizzleSnapshotParity(
@@ -441,25 +547,73 @@ async function assertInboxV2RepositoryFoundationGeneratedSchemaParity(
     snapshotPath
   );
 
+  if (inboxV2RepositoryFoundationBackfillStatements.length !== 4) {
+    throw new Error(
+      `Inbox V2 DB-007 reviewed backfill artifact must contain exactly two backfills plus the immutable-trigger envelope; found ${inboxV2RepositoryFoundationBackfillStatements.length} statements.`
+    );
+  }
+  const migrationTail = splitMigrationStatements(migration.sql).slice(1);
+  const orderedTailSha256 = digestOrderedSqlStatements(migrationTail);
+  if (orderedTailSha256 !== inboxV2RepositoryFoundationOrderedTailSha256) {
+    throw new Error(
+      "Inbox V2 DB-007 ordered migration tail differs from the reviewed sequence contract."
+    );
+  }
   const checkedInDdl = collectFinalizedMigrationDdlStatements({
     migrationSql: migration.sql,
     finalizedMarker: inboxV2RepositoryFoundationMarker,
     preflightMarker: inboxV2RepositoryFoundationPreflightMarker,
     invariantBlocks: inboxV2RepositoryFoundationOwnedBlocks
   });
-  const backfillStatements = checkedInDdl.filter(
-    isInboxV2RepositoryFoundationBackfill
+  const generatedDdl = removeExactSqlStatements(
+    checkedInDdl,
+    inboxV2RepositoryFoundationBackfillStatements,
+    "Inbox V2 DB-007 reviewed backfills"
   );
-  if (backfillStatements.length !== 4) {
+  assertSqlStatementParity(generated.statements, generatedDdl);
+}
+
+async function assertInboxV2LatestGeneratedSchemaParity(
+  migration,
+  invariantBlock
+) {
+  const snapshotPath = "packages/db/drizzle/meta/0037_snapshot.json";
+  const generated = await generateExpectedDrizzleMigration({
+    workspaceRoot: process.cwd(),
+    migrationDirectory,
+    baseIndex: 36,
+    targetIndex: 37
+  });
+  const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
+  assertDrizzleSnapshotParity(
+    generated.snapshot,
+    checkedInSnapshot,
+    snapshotPath
+  );
+
+  const checkedInStatements = splitMigrationStatements(migration.sql);
+  const expectedInvariantStatements = splitMigrationStatements(
+    invariantBlock.sql
+  );
+  if (expectedInvariantStatements.length !== 3) {
     throw new Error(
-      `Inbox V2 DB-007 migration must contain exactly two reviewed backfills plus the exact immutable-trigger envelope; found ${backfillStatements.length} statements.`
+      `Inbox V2 DB-008 schema invariant must contain exactly one immutable function plus row and truncate triggers; found ${expectedInvariantStatements.length} statements.`
     );
   }
-  assertSqlStatementParity(
+  if (checkedInStatements.length < expectedInvariantStatements.length) {
+    throw new Error("Inbox V2 DB-008 migration is missing its invariant tail.");
+  }
+  const invariantStart =
+    checkedInStatements.length - expectedInvariantStatements.length;
+  assertExactSqlSequence(
+    expectedInvariantStatements,
+    checkedInStatements.slice(invariantStart),
+    "Inbox V2 DB-008 invariant tail"
+  );
+  assertExactSqlSequence(
     generated.statements,
-    checkedInDdl.filter(
-      (statement) => !isInboxV2RepositoryFoundationBackfill(statement)
-    )
+    checkedInStatements.slice(0, invariantStart),
+    "Inbox V2 DB-008 ordered generated migration prefix"
   );
 }
 
@@ -1061,22 +1215,6 @@ function assertInboxV2RepositoryFoundationMigration(migration) {
   }
 }
 
-function isInboxV2RepositoryFoundationBackfill(statement) {
-  const normalized = statement.trim().toLowerCase();
-  return (
-    normalized ===
-      "alter table public.inbox_v2_tenant_stream_changes disable trigger inbox_v2_auth_immutable_dbcc9ea93cbd94ba;" ||
-    normalized.startsWith(
-      "update public.inbox_v2_tenant_stream_changes\nset state_reason_id = 'core:retention-tombstone'"
-    ) ||
-    normalized ===
-      "alter table public.inbox_v2_tenant_stream_changes enable trigger inbox_v2_auth_immutable_dbcc9ea93cbd94ba;" ||
-    normalized.startsWith(
-      "insert into public.inbox_v2_outbox_work_items (\n  tenant_id,"
-    )
-  );
-}
-
 function assertInboxV2AuthorizationFoundationTriggerInventory(migration) {
   const expected = [
     [
@@ -1244,6 +1382,73 @@ function extractInboxV2InvariantBlocks(fileName, source) {
     name: match[1],
     sql: match[2].trim()
   }));
+}
+
+function extractInboxV2BareTemplateSqlBlock(fileName, source, exportName) {
+  const pattern = new RegExp(
+    `export const ${escapeRegExp(exportName)} = ` +
+      "`([\\s\\S]*?)`\\.trim\\(\\);"
+  );
+  const match = source.match(pattern);
+  if (!match?.[1]) {
+    throw new Error(`${fileName} is missing SQL block ${exportName}.`);
+  }
+  return {
+    fileName,
+    name: exportName,
+    sql: match[1].trim()
+  };
+}
+
+function assertExactSqlSequence(expected, actual, label) {
+  const normalizedExpected = expected.map(normalizeSqlStatement);
+  const normalizedActual = actual.map(normalizeSqlStatement);
+  if (
+    normalizedExpected.length !== normalizedActual.length ||
+    normalizedExpected.some(
+      (statement, index) => statement !== normalizedActual[index]
+    )
+  ) {
+    throw new Error(`${label} does not match the schema-owned SQL exactly.`);
+  }
+}
+
+function digestOrderedSqlStatements(statements) {
+  return `sha256:${createHash("sha256")
+    .update(JSON.stringify(statements.map(normalizeSqlStatement)))
+    .digest("hex")}`;
+}
+
+function removeExactSqlStatements(statements, exclusions, label) {
+  const remaining = [...statements];
+  for (const exclusion of exclusions) {
+    const normalizedExclusion = normalizeSqlStatement(exclusion);
+    const matches = remaining
+      .map((statement, index) =>
+        normalizeSqlStatement(statement) === normalizedExclusion ? index : -1
+      )
+      .filter((index) => index >= 0);
+    if (matches.length !== 1) {
+      throw new Error(
+        `${label} must contain every exact statement once; found ${matches.length}.`
+      );
+    }
+    remaining.splice(matches[0], 1);
+  }
+  return remaining;
+}
+
+function assertExactStringSequence(expected, actual, label) {
+  if (
+    expected.length !== actual.length ||
+    expected.some((value, index) => value !== actual[index])
+  ) {
+    throw new Error(`${label} is not an exact ordered bijection.`);
+  }
+}
+
+function normalizeSqlStatement(value) {
+  return value.replaceAll("\r\n", "\n").trim();
 }
 
 function extractInboxV2NamedSqlBlock(fileName, source, exportName) {

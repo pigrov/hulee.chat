@@ -1,8 +1,4 @@
-import { resolve } from "node:path";
-
-import { drizzle } from "drizzle-orm/node-postgres";
-import { migrate } from "drizzle-orm/node-postgres/migrator";
-import pg from "pg";
+import { installInboxV2Database } from "./inbox-v2-database-lifecycle.mjs";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
@@ -11,14 +7,10 @@ if (!databaseUrl) {
   );
 }
 
-const migrationsFolder = resolve(
-  process.env.HULEE_MIGRATIONS_FOLDER ?? "packages/db/drizzle"
+const result = await installInboxV2Database({
+  databaseUrl,
+  migrationsFolder: process.env.HULEE_MIGRATIONS_FOLDER
+});
+console.log(
+  `Verified ${result.migrationCount} migration(s) from ${result.migrationsFolder}; contract ${result.migrationContractSha256}.`
 );
-const pool = new pg.Pool({ connectionString: databaseUrl });
-
-try {
-  await migrate(drizzle(pool), { migrationsFolder });
-  console.log(`Applied migrations from ${migrationsFolder}.`);
-} finally {
-  await pool.end();
-}

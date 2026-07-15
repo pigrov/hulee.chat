@@ -503,6 +503,10 @@ export const initialTables = [
   { name: "inbox_v2_security_denial_buckets", scope: "tenant", requiresTenantId: true },
   // prettier-ignore
   { name: "inbox_v2_security_denial_review_signals", scope: "tenant", requiresTenantId: true },
+  // Immutable DB-008 reset completion evidence is tenant-owned and excluded
+  // from the reset inventory digest only to avoid hashing its own receipt row.
+  // prettier-ignore
+  { name: "inbox_v2_database_reset_receipts", scope: "tenant", requiresTenantId: true },
   { name: "conversations", scope: "tenant", requiresTenantId: true },
   {
     name: "conversation_participants",
