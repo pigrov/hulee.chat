@@ -17,7 +17,6 @@ import {
   type InboxV2ConversationParticipant,
   type InboxV2ConversationParticipantId,
   type InboxV2ConversationParticipantSubject,
-  type InboxV2EmployeeId,
   type InboxV2EntityRevision,
   type InboxV2ParticipantMembershipEpisode,
   type InboxV2ParticipantMembershipEpisodeId,
@@ -32,6 +31,15 @@ import { CoreError } from "@hulee/core";
 import { sql, type SQL } from "drizzle-orm";
 
 import type { HuleeDatabase } from "../client";
+import {
+  buildApplyInboxV2ParticipantMembershipMutationSql,
+  type ApplyInboxV2ParticipantMembershipMutationInput,
+  type InboxV2MembershipMutationEntrypointRow
+} from "./sql-inbox-v2-membership-mutation-entrypoint";
+import {
+  runInboxV2MembershipTransaction,
+  type InboxV2MembershipTransactionExecutor
+} from "./sql-inbox-v2-membership-transaction-policy";
 import { InboxV2PersistenceInvariantError } from "./sql-inbox-v2-conversation-repository";
 import type {
   RawSqlExecutor,
@@ -39,11 +47,6 @@ import type {
 } from "./sql-outbox-repository";
 
 const POSTGRES_BIGINT_MAX = 9_223_372_036_854_775_807n;
-const PARTICIPANT_MEMBERSHIP_TRANSACTION_CONFIG = {
-  isolationLevel: "read committed"
-} as const;
-const PARTICIPANT_MEMBERSHIP_TRANSACTION_ATTEMPTS = 3;
-const RETRYABLE_PARTICIPANT_MEMBERSHIP_SQLSTATES = new Set(["40001", "40P01"]);
 const PARTICIPANT_CREATE_KEYS = new Set([
   "tenantId",
   "id",
@@ -194,12 +197,8 @@ export type WithTransitionInboxV2ParticipantMembershipEpisodeResult<TResult> =
       Readonly<{ kind: "updated" }>
     >;
 
-export type InboxV2ParticipantMembershipTransactionExecutor = RawSqlExecutor & {
-  transaction<TResult>(
-    work: (transaction: RawSqlExecutor) => Promise<TResult>,
-    config: Readonly<{ isolationLevel: "read committed" }>
-  ): Promise<TResult>;
-};
+export type InboxV2ParticipantMembershipTransactionExecutor =
+  InboxV2MembershipTransactionExecutor;
 
 export type InboxV2ParticipantMembershipRepository = Readonly<{
   createParticipant(
@@ -313,8 +312,7 @@ export function createSqlInboxV2ParticipantMembershipRepository(
           if (insertResult.rows.length === 1) {
             const created = await loadParticipantById(transaction, {
               tenantId: participant.tenantId,
-              participantId: participant.id,
-              lock: true
+              participantId: participant.id
             });
             if (created === null) {
               throw invariantError(
@@ -326,8 +324,7 @@ export function createSqlInboxV2ParticipantMembershipRepository(
 
           const existingById = await loadParticipantById(transaction, {
             tenantId: participant.tenantId,
-            participantId: participant.id,
-            lock: true
+            participantId: participant.id
           });
           if (existingById !== null) {
             return {
@@ -360,8 +357,7 @@ export function createSqlInboxV2ParticipantMembershipRepository(
 
       return loadParticipantById(transactionExecutor, {
         tenantId,
-        participantId,
-        lock: false
+        participantId
       });
     },
 
@@ -373,8 +369,7 @@ export function createSqlInboxV2ParticipantMembershipRepository(
 
       return loadEpisodeById(transactionExecutor, {
         tenantId,
-        episodeId,
-        lock: false
+        episodeId
       });
     },
 
@@ -439,21 +434,9 @@ async function persistStartEpisode<TResult>(
         } as const;
       }
 
-      if (
-        normalized.episode.origin.kind === "hulee_internal_command" &&
-        !(await lockActiveInternalEmployeeForParticipant(transaction, {
-          tenantId: normalized.episode.tenantId,
-          conversationId: normalized.conversationId,
-          participantId: normalized.episode.participant.id
-        }))
-      ) {
-        return { kind: "participant_not_found" } as const;
-      }
-
       const participant = await loadParticipantById(transaction, {
         tenantId: normalized.episode.tenantId,
-        participantId: normalized.episode.participant.id,
-        lock: true
+        participantId: normalized.episode.participant.id
       });
       if (
         participant === null ||
@@ -464,8 +447,7 @@ async function persistStartEpisode<TResult>(
 
       const episodeById = await loadEpisodeById(transaction, {
         tenantId: normalized.episode.tenantId,
-        episodeId: normalized.episode.id,
-        lock: true
+        episodeId: normalized.episode.id
       });
       if (episodeById !== null) {
         return { kind: "episode_id_conflict" } as const;
@@ -482,46 +464,16 @@ async function persistStartEpisode<TResult>(
         } as const;
       }
 
-      await expectOneReturnedRow(
-        transaction,
-        buildInsertInboxV2ConversationMembershipCommitSql({
-          tenantId: normalized.episode.tenantId,
-          conversationId: normalized.conversationId,
-          expectedMembershipRevision: normalized.expectedMembershipRevision,
-          resultingMembershipRevision: normalized.resultingMembershipRevision,
-          occurredAt: normalized.episode.validFrom
-        }),
-        "Conversation membership commit insert"
-      );
-      await expectOneReturnedRow(
-        transaction,
-        buildInsertInboxV2ParticipantMembershipEpisodeSql({
-          episode: normalized.episode,
-          conversationId: normalized.conversationId
-        }),
-        "Participant membership episode insert"
-      );
-      await expectOneReturnedRow(
-        transaction,
-        buildInsertInboxV2ParticipantMembershipTransitionSql({
-          transition: normalized.transition,
-          conversationId: normalized.conversationId,
-          participantId: normalized.episode.participant.id,
-          membershipRevision: normalized.resultingMembershipRevision
-        }),
-        "Participant membership transition insert"
-      );
-      await expectOneReturnedRow(
-        transaction,
-        buildAdvanceInboxV2ConversationMembershipHeadSql({
-          tenantId: normalized.episode.tenantId,
-          conversationId: normalized.conversationId,
-          expectedMembershipRevision: normalized.expectedMembershipRevision,
-          resultingMembershipRevision: normalized.resultingMembershipRevision,
-          changedAt: normalized.episode.validFrom
-        }),
-        "Conversation membership head advance"
-      );
+      await applyMembershipMutation(transaction, {
+        operation: "start",
+        conversationId: normalized.conversationId,
+        participantId: normalized.episode.participant.id,
+        expectedMembershipRevision: normalized.expectedMembershipRevision,
+        resultingMembershipRevision: normalized.resultingMembershipRevision,
+        episode: normalized.episode,
+        transition: normalized.transition,
+        provider: null
+      });
 
       const record = {
         conversationMembershipRevision: normalized.resultingMembershipRevision,
@@ -534,7 +486,7 @@ async function persistStartEpisode<TResult>(
       const result = await persist({ executor: transaction, record });
       return { kind: "created", record, result } as const;
     },
-    persist === undefined ? PARTICIPANT_MEMBERSHIP_TRANSACTION_ATTEMPTS : 1
+    persist === undefined ? "retry_safe" : "single_attempt"
   );
 }
 
@@ -574,24 +526,10 @@ async function persistTransitionEpisode<TResult>(
         } as const;
       }
 
-      if (
-        normalized.cause.kind === "hulee_internal_command" &&
-        (normalized.intent === "activate" ||
-          normalized.intent === "change_role") &&
-        !(await lockActiveInternalEmployeeForEpisode(transaction, {
-          tenantId: normalized.tenantId,
-          conversationId: normalized.conversationId,
-          episodeId: normalized.episodeId
-        }))
-      ) {
-        return { kind: "episode_not_found" } as const;
-      }
-
       const currentEpisode = await loadEpisodeById(transaction, {
         tenantId: normalized.tenantId,
         episodeId: normalized.episodeId,
-        conversationId: normalized.conversationId,
-        lock: true
+        conversationId: normalized.conversationId
       });
       if (
         currentEpisode === null ||
@@ -619,46 +557,16 @@ async function persistTransitionEpisode<TResult>(
         input: normalized
       });
 
-      await expectOneReturnedRow(
-        transaction,
-        buildInsertInboxV2ConversationMembershipCommitSql({
-          tenantId: normalized.tenantId,
-          conversationId: normalized.conversationId,
-          expectedMembershipRevision: normalized.expectedMembershipRevision,
-          resultingMembershipRevision: mutation.conversationMembershipRevision,
-          occurredAt: normalized.occurredAt
-        }),
-        "Conversation membership commit insert"
-      );
-      await expectOneReturnedRow(
-        transaction,
-        buildInsertInboxV2ParticipantMembershipTransitionSql({
-          transition: mutation.transition,
-          conversationId: normalized.conversationId,
-          participantId: currentEpisode.participant.id,
-          membershipRevision: mutation.conversationMembershipRevision
-        }),
-        "Participant membership transition insert"
-      );
-      await expectOneReturnedRow(
-        transaction,
-        buildUpdateInboxV2ParticipantMembershipEpisodeSql({
-          before: currentEpisode,
-          after: mutation.episode
-        }),
-        "Participant membership episode projection update"
-      );
-      await expectOneReturnedRow(
-        transaction,
-        buildAdvanceInboxV2ConversationMembershipHeadSql({
-          tenantId: normalized.tenantId,
-          conversationId: normalized.conversationId,
-          expectedMembershipRevision: normalized.expectedMembershipRevision,
-          resultingMembershipRevision: mutation.conversationMembershipRevision,
-          changedAt: normalized.occurredAt
-        }),
-        "Conversation membership head advance"
-      );
+      await applyMembershipMutation(transaction, {
+        operation: "transition",
+        conversationId: normalized.conversationId,
+        participantId: currentEpisode.participant.id,
+        expectedMembershipRevision: normalized.expectedMembershipRevision,
+        resultingMembershipRevision: mutation.conversationMembershipRevision,
+        episode: mutation.episode,
+        transition: mutation.transition,
+        provider: null
+      });
 
       const record = {
         conversationMembershipRevision: mutation.conversationMembershipRevision,
@@ -671,61 +579,16 @@ async function persistTransitionEpisode<TResult>(
       const result = await persist({ executor: transaction, record });
       return { kind: "updated", record, result } as const;
     },
-    persist === undefined ? PARTICIPANT_MEMBERSHIP_TRANSACTION_ATTEMPTS : 1
+    persist === undefined ? "retry_safe" : "single_attempt"
   );
 }
 
 async function runParticipantMembershipTransaction<TResult>(
   executor: InboxV2ParticipantMembershipTransactionExecutor,
   work: (transaction: RawSqlExecutor) => Promise<TResult>,
-  attempts = PARTICIPANT_MEMBERSHIP_TRANSACTION_ATTEMPTS
+  mode: "retry_safe" | "single_attempt" = "retry_safe"
 ): Promise<TResult> {
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      return await executor.transaction(
-        work,
-        PARTICIPANT_MEMBERSHIP_TRANSACTION_CONFIG
-      );
-    } catch (error) {
-      if (
-        attempt === attempts ||
-        !isRetryableParticipantMembershipTransactionError(error)
-      ) {
-        throw error;
-      }
-    }
-  }
-
-  throw invariantError("Participant membership transaction retry exhausted.");
-}
-
-function isRetryableParticipantMembershipTransactionError(
-  error: unknown
-): boolean {
-  let current = error;
-  const seen = new Set<unknown>();
-
-  for (let depth = 0; depth < 8; depth += 1) {
-    if (
-      (typeof current !== "object" || current === null) &&
-      typeof current !== "function"
-    ) {
-      return false;
-    }
-    if (seen.has(current)) return false;
-    seen.add(current);
-
-    const code = Reflect.get(current, "code");
-    if (
-      typeof code === "string" &&
-      RETRYABLE_PARTICIPANT_MEMBERSHIP_SQLSTATES.has(code)
-    ) {
-      return true;
-    }
-    current = Reflect.get(current, "cause");
-  }
-
-  return false;
+  return runInboxV2MembershipTransaction(executor, work, mode);
 }
 
 export function buildInsertInboxV2ConversationParticipantSql(
@@ -771,10 +634,7 @@ export function buildInsertInboxV2ConversationParticipantSql(
 export function buildFindInboxV2ConversationParticipantByIdSql(input: {
   tenantId: InboxV2TenantId;
   participantId: InboxV2ConversationParticipantId;
-  lock?: boolean;
 }): SQL {
-  const lock = input.lock ? sql`for update` : sql``;
-
   return sql`
     select
       tenant_id,
@@ -793,7 +653,6 @@ export function buildFindInboxV2ConversationParticipantByIdSql(input: {
     from inbox_v2_conversation_participants
     where tenant_id = ${input.tenantId}
       and id = ${input.participantId}
-    ${lock}
   `;
 }
 
@@ -821,7 +680,6 @@ export function buildFindInboxV2ConversationParticipantBySubjectSql(
     where tenant_id = ${participant.tenantId}
       and conversation_id = ${participant.conversation.id}
       and ${predicate}
-    for update
   `;
 }
 
@@ -830,207 +688,10 @@ export function buildLockInboxV2ConversationMembershipHeadSql(input: {
   conversationId: InboxV2ConversationId;
 }): SQL {
   return sql`
-    select membership_revision
-    from inbox_v2_conversation_membership_heads
-    where tenant_id = ${input.tenantId}
-      and conversation_id = ${input.conversationId}
-    for update
-  `;
-}
-
-export function buildLockActiveInboxV2InternalEmployeeForParticipantSql(input: {
-  tenantId: InboxV2TenantId;
-  conversationId: InboxV2ConversationId;
-  participantId: InboxV2ConversationParticipantId;
-}): SQL {
-  return sql`
-    select employee_row.id
-    from inbox_v2_conversation_participants participant_row
-    join employees employee_row
-      on employee_row.tenant_id = participant_row.tenant_id
-     and employee_row.id = participant_row.subject_employee_id
-    join inbox_v2_conversations conversation_row
-      on conversation_row.tenant_id = participant_row.tenant_id
-     and conversation_row.id = participant_row.conversation_id
-    where participant_row.tenant_id = ${input.tenantId}
-      and participant_row.id = ${input.participantId}
-      and participant_row.conversation_id = ${input.conversationId}
-      and participant_row.subject_kind = 'employee'
-      and employee_row.deactivated_at is null
-      and conversation_row.transport = 'internal'
-    for no key update of employee_row
-  `;
-}
-
-export function buildLockActiveInboxV2InternalEmployeeForEpisodeSql(input: {
-  tenantId: InboxV2TenantId;
-  conversationId: InboxV2ConversationId;
-  episodeId: InboxV2ParticipantMembershipEpisodeId;
-}): SQL {
-  return sql`
-    select employee_row.id
-    from inbox_v2_participant_membership_episodes episode_row
-    join inbox_v2_conversation_participants participant_row
-      on participant_row.tenant_id = episode_row.tenant_id
-     and participant_row.id = episode_row.participant_id
-     and participant_row.conversation_id = episode_row.conversation_id
-    join employees employee_row
-      on employee_row.tenant_id = participant_row.tenant_id
-     and employee_row.id = participant_row.subject_employee_id
-    join inbox_v2_conversations conversation_row
-      on conversation_row.tenant_id = episode_row.tenant_id
-     and conversation_row.id = episode_row.conversation_id
-    where episode_row.tenant_id = ${input.tenantId}
-      and episode_row.id = ${input.episodeId}
-      and episode_row.conversation_id = ${input.conversationId}
-      and episode_row.origin_kind = 'hulee_internal_command'
-      and episode_row.state in ('pending', 'active')
-      and participant_row.subject_kind = 'employee'
-      and employee_row.deactivated_at is null
-      and conversation_row.transport = 'internal'
-    for no key update of employee_row
-  `;
-}
-
-export function buildInsertInboxV2ConversationMembershipCommitSql(input: {
-  tenantId: InboxV2TenantId;
-  conversationId: InboxV2ConversationId;
-  expectedMembershipRevision: InboxV2BigintCounter;
-  resultingMembershipRevision: InboxV2BigintCounter;
-  occurredAt: string;
-}): SQL {
-  return sql`
-    insert into inbox_v2_conversation_membership_commits (
-      tenant_id,
-      conversation_id,
-      expected_membership_revision,
-      resulting_membership_revision,
-      occurred_at
-    ) values (
+    select public.inbox_v2_lock_conversation_membership_head_v1(
       ${input.tenantId},
-      ${input.conversationId},
-      ${input.expectedMembershipRevision},
-      ${input.resultingMembershipRevision},
-      ${input.occurredAt}
-    )
-    returning resulting_membership_revision as id
-  `;
-}
-
-export function buildInsertInboxV2ParticipantMembershipEpisodeSql(input: {
-  episode: InboxV2ParticipantMembershipEpisode;
-  conversationId: InboxV2ConversationId;
-}): SQL {
-  const { episode } = input;
-  const origin = membershipOriginColumns(episode.origin);
-
-  return sql`
-    insert into inbox_v2_participant_membership_episodes (
-      tenant_id,
-      id,
-      participant_id,
-      conversation_id,
-      origin_kind,
-      origin_migration_provenance_id,
-      origin_system_policy_id,
-      state,
-      role,
-      evidence_classification,
-      valid_from,
-      valid_to,
-      revision
-    ) values (
-      ${episode.tenantId},
-      ${episode.id},
-      ${episode.participant.id},
-      ${input.conversationId},
-      ${episode.origin.kind},
-      ${origin.migrationProvenanceId},
-      ${origin.systemPolicyId},
-      ${episode.state},
-      ${episode.role},
-      ${episode.evidenceClassification},
-      ${episode.validFrom},
-      ${episode.validTo},
-      ${episode.revision}
-    )
-    returning id
-  `;
-}
-
-export function buildInsertInboxV2ParticipantMembershipTransitionSql(input: {
-  transition: InboxV2ParticipantMembershipTransition;
-  participantId: InboxV2ConversationParticipantId;
-  conversationId: InboxV2ConversationId;
-  membershipRevision: InboxV2BigintCounter;
-}): SQL {
-  const cause = membershipCauseColumns(input.transition.cause);
-
-  return sql`
-    insert into inbox_v2_participant_membership_transitions (
-      tenant_id,
-      id,
-      episode_id,
-      participant_id,
-      conversation_id,
-      membership_revision,
-      intent,
-      from_state,
-      to_state,
-      from_role,
-      to_role,
-      cause_kind,
-      cause_actor_employee_id,
-      cause_trusted_service_id,
-      cause_migration_provenance_id,
-      cause_system_policy_id,
-      reason_code_id,
-      expected_revision,
-      current_revision,
-      resulting_revision,
-      occurred_at
-    ) values (
-      ${input.transition.tenantId},
-      ${input.transition.id},
-      ${input.transition.episode.id},
-      ${input.participantId},
-      ${input.conversationId},
-      ${input.membershipRevision},
-      ${input.transition.intent},
-      ${input.transition.fromState},
-      ${input.transition.toState},
-      ${input.transition.fromRole},
-      ${input.transition.toRole},
-      ${input.transition.cause.kind},
-      ${cause.actorEmployeeId},
-      ${cause.trustedServiceId},
-      ${cause.migrationProvenanceId},
-      ${cause.systemPolicyId},
-      ${input.transition.reasonCodeId},
-      ${input.transition.expectedRevision},
-      ${input.transition.currentRevision},
-      ${input.transition.resultingRevision},
-      ${input.transition.occurredAt}
-    )
-    returning id
-  `;
-}
-
-export function buildAdvanceInboxV2ConversationMembershipHeadSql(input: {
-  tenantId: InboxV2TenantId;
-  conversationId: InboxV2ConversationId;
-  expectedMembershipRevision: InboxV2BigintCounter;
-  resultingMembershipRevision: InboxV2BigintCounter;
-  changedAt: string;
-}): SQL {
-  return sql`
-    update inbox_v2_conversation_membership_heads
-    set membership_revision = ${input.resultingMembershipRevision},
-        updated_at = ${input.changedAt}
-    where tenant_id = ${input.tenantId}
-      and conversation_id = ${input.conversationId}
-      and membership_revision = ${input.expectedMembershipRevision}
-    returning conversation_id as id
+      ${input.conversationId}
+    ) as membership_revision
   `;
 }
 
@@ -1038,9 +699,7 @@ export function buildFindInboxV2ParticipantMembershipEpisodeByIdSql(input: {
   tenantId: InboxV2TenantId;
   episodeId: InboxV2ParticipantMembershipEpisodeId;
   conversationId?: InboxV2ConversationId;
-  lock?: boolean;
 }): SQL {
-  const lock = input.lock ? sql`for update` : sql``;
   const conversationPredicate = input.conversationId
     ? sql`and conversation_id = ${input.conversationId}`
     : sql``;
@@ -1064,7 +723,6 @@ export function buildFindInboxV2ParticipantMembershipEpisodeByIdSql(input: {
     where tenant_id = ${input.tenantId}
       and id = ${input.episodeId}
       ${conversationPredicate}
-    ${lock}
   `;
 }
 
@@ -1093,24 +751,6 @@ export function buildFindCurrentInboxV2ParticipantMembershipEpisodeSql(
       and participant_id = ${episode.participant.id}
       and ${originPredicate}
       and state in ('pending', 'active')
-    for update
-  `;
-}
-
-export function buildUpdateInboxV2ParticipantMembershipEpisodeSql(input: {
-  before: InboxV2ParticipantMembershipEpisode;
-  after: InboxV2ParticipantMembershipEpisode;
-}): SQL {
-  return sql`
-    update inbox_v2_participant_membership_episodes
-    set state = ${input.after.state},
-        role = ${input.after.role},
-        valid_to = ${input.after.validTo},
-        revision = ${input.after.revision}
-    where tenant_id = ${input.before.tenantId}
-      and id = ${input.before.id}
-      and revision = ${input.before.revision}
-    returning id
   `;
 }
 
@@ -1130,51 +770,11 @@ async function lockMembershipHead(
       "Conversation membership head lookup returned more than one row."
     );
   }
+  if (result.rows[0]?.membership_revision == null) return null;
   return parseDatabaseCounter(
     result.rows[0]?.membership_revision,
     "Conversation membership revision"
   );
-}
-
-async function lockActiveInternalEmployeeForParticipant(
-  executor: RawSqlExecutor,
-  input: {
-    tenantId: InboxV2TenantId;
-    conversationId: InboxV2ConversationId;
-    participantId: InboxV2ConversationParticipantId;
-  }
-): Promise<boolean> {
-  return hasExactlyOneEmployeeLockRow(
-    await executor.execute<InsertedIdRow>(
-      buildLockActiveInboxV2InternalEmployeeForParticipantSql(input)
-    )
-  );
-}
-
-async function lockActiveInternalEmployeeForEpisode(
-  executor: RawSqlExecutor,
-  input: {
-    tenantId: InboxV2TenantId;
-    conversationId: InboxV2ConversationId;
-    episodeId: InboxV2ParticipantMembershipEpisodeId;
-  }
-): Promise<boolean> {
-  return hasExactlyOneEmployeeLockRow(
-    await executor.execute<InsertedIdRow>(
-      buildLockActiveInboxV2InternalEmployeeForEpisodeSql(input)
-    )
-  );
-}
-
-function hasExactlyOneEmployeeLockRow(
-  result: RawSqlQueryResult<InsertedIdRow>
-): boolean {
-  if (result.rows.length > 1) {
-    throw invariantError(
-      "Internal membership Employee lock returned more than one row."
-    );
-  }
-  return result.rows.length === 1;
 }
 
 async function loadParticipantById(
@@ -1182,7 +782,6 @@ async function loadParticipantById(
   input: {
     tenantId: InboxV2TenantId;
     participantId: InboxV2ConversationParticipantId;
-    lock: boolean;
   }
 ): Promise<InboxV2ConversationParticipant | null> {
   const result = await executor.execute<ParticipantRow>(
@@ -1207,7 +806,6 @@ async function loadEpisodeById(
     tenantId: InboxV2TenantId;
     episodeId: InboxV2ParticipantMembershipEpisodeId;
     conversationId?: InboxV2ConversationId;
-    lock: boolean;
   }
 ): Promise<InboxV2ParticipantMembershipEpisode | null> {
   const result = await executor.execute<EpisodeRow>(
@@ -1226,14 +824,26 @@ async function loadCurrentEpisodeByOrigin(
   return mapSingleEpisodeResult(result, episode.tenantId);
 }
 
-async function expectOneReturnedRow(
+async function applyMembershipMutation(
   executor: RawSqlExecutor,
-  query: SQL,
-  label: string
+  input: ApplyInboxV2ParticipantMembershipMutationInput
 ): Promise<void> {
-  const result = await executor.execute<InsertedIdRow>(query);
+  const result = await executor.execute<InboxV2MembershipMutationEntrypointRow>(
+    buildApplyInboxV2ParticipantMembershipMutationSql(input)
+  );
   if (result.rows.length !== 1) {
-    throw invariantError(`${label} did not affect exactly one row.`);
+    throw invariantError(
+      "Membership mutation entrypoint did not return exactly one row."
+    );
+  }
+  const resultingRevision = parseDatabaseCounter(
+    result.rows[0]?.resulting_membership_revision,
+    "Membership mutation resulting revision"
+  );
+  if (resultingRevision !== input.resultingMembershipRevision) {
+    throw invariantError(
+      "Membership mutation entrypoint returned a different revision."
+    );
   }
 }
 
@@ -1765,25 +1375,6 @@ function participantSubjectPredicate(
   }
 }
 
-function membershipOriginColumns(
-  origin: InboxV2ParticipantMembershipOrigin
-): Readonly<{
-  migrationProvenanceId: string | null;
-  systemPolicyId: string | null;
-}> {
-  if (origin.kind === "provider_roster") {
-    throw new CoreError(
-      "validation.failed",
-      "Provider roster origin is not available in the foundation repository."
-    );
-  }
-  return {
-    migrationProvenanceId:
-      origin.kind === "migration" ? origin.provenanceId : null,
-    systemPolicyId: origin.kind === "system_policy" ? origin.policyId : null
-  };
-}
-
 function membershipOriginPredicate(
   origin: InboxV2ParticipantMembershipOrigin
 ): SQL {
@@ -1806,44 +1397,6 @@ function membershipOriginPredicate(
     "validation.failed",
     "Provider roster origin is not available in the foundation repository."
   );
-}
-
-function membershipCauseColumns(
-  cause: InboxV2ParticipantMembershipTransition["cause"]
-): Readonly<{
-  actorEmployeeId: InboxV2EmployeeId | null;
-  trustedServiceId: string | null;
-  migrationProvenanceId: string | null;
-  systemPolicyId: string | null;
-}> {
-  switch (cause.kind) {
-    case "hulee_internal_command":
-      return {
-        actorEmployeeId: cause.actorEmployee.id,
-        trustedServiceId: null,
-        migrationProvenanceId: null,
-        systemPolicyId: null
-      };
-    case "migration":
-      return {
-        actorEmployeeId: null,
-        trustedServiceId: cause.trustedServiceId,
-        migrationProvenanceId: cause.provenanceId,
-        systemPolicyId: null
-      };
-    case "system_policy":
-      return {
-        actorEmployeeId: null,
-        trustedServiceId: cause.trustedServiceId,
-        migrationProvenanceId: null,
-        systemPolicyId: cause.policyId
-      };
-    case "provider_roster":
-      throw new CoreError(
-        "validation.failed",
-        "Provider roster cause is not available in the foundation repository."
-      );
-  }
 }
 
 function membershipCauseMatchesOrigin(

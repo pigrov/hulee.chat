@@ -12,8 +12,8 @@ export * from "./repositories/sql-inbox-v2-outbound-transport-repository";
 export * from "./repositories/sql-inbox-v2-timeline-message-repository";
 export {
   assertTenantScopedRows,
+  buildApplyInboxV2ParticipantMembershipMutationSql,
   buildAppendTenantEventsSql,
-  buildAdvanceInboxV2ConversationMembershipHeadSql,
   buildAdvanceClientMergeHeadSql,
   buildAdvanceInboxV2ConversationClientLinkHeadSql,
   buildAdvanceInboxV2SourceExternalIdentityRevisionSql,
@@ -86,11 +86,8 @@ export {
   buildInsertInboxV2ConversationClientLinkRoleSql,
   buildInsertInboxV2ConversationClientLinkSql,
   buildInsertInboxV2ConversationClientLinkTransitionSql,
-  buildInsertInboxV2ConversationMembershipCommitSql,
   buildInsertInboxV2ConversationParticipantSql,
   buildInsertInboxV2ConversationSql,
-  buildInsertInboxV2ParticipantMembershipEpisodeSql,
-  buildInsertInboxV2ParticipantMembershipTransitionSql,
   buildAdvanceInboxV2TenantPolicyActivationHeadSql,
   buildInsertInboxV2TenantPolicyActivationHeadSql,
   buildInsertInboxV2TenantPolicyActivationTransitionSql,
@@ -100,8 +97,6 @@ export {
   buildLockInboxV2TenantPolicyEmployeeSql,
   buildLockInboxV2TenantPolicyVersionSql,
   buildRevokeInboxV2TenantPolicyActivationHeadSql,
-  buildInsertInboxV2ProviderMembershipEpisodeSql,
-  buildInsertInboxV2ProviderMembershipTransitionSql,
   buildFindInboxV2SourceExternalIdentityByIdSql,
   buildFindInboxV2SourceExternalIdentityIdByScopedKeySql,
   buildFindInboxV2SourceIdentityClaimByIdSql,
@@ -157,8 +152,6 @@ export {
   buildLockInboxV2ConversationClientLinkClientsSql,
   buildLockInboxV2ConversationClientLinkConversationSql,
   buildLockInboxV2ConversationClientLinkHeadSql,
-  buildLockActiveInboxV2InternalEmployeeForEpisodeSql,
-  buildLockActiveInboxV2InternalEmployeeForParticipantSql,
   buildLockInboxV2ConversationMembershipHeadSql,
   buildLockInboxV2SourceExternalIdentityHeadSql,
   buildLockInboxV2SourceExternalIdentitySql,
@@ -301,8 +294,6 @@ export {
   buildListTenantRoleDefinitionsSql,
   buildRevokeDirectPermissionGrantSql,
   buildRevokeTenantRoleBindingSql,
-  buildUpdateInboxV2ParticipantMembershipEpisodeSql,
-  buildUpdateInboxV2ProviderMembershipEpisodeSql,
   buildLockInboxV2ProviderParticipantSql,
   buildLockInboxV2ProviderRosterMemberEvidenceSql,
   buildLockInboxV2ProviderRosterOmissionEvidenceSql,
@@ -337,6 +328,7 @@ export type {
   AuthSessionPrincipal,
   AllocateInboxV2TimelineRangeInput,
   AllocateInboxV2TimelineRangeResult,
+  ApplyInboxV2ParticipantMembershipMutationInput,
   ClaimPendingOutboxInput,
   CompareAndSetInboxV2ConversationInput,
   CompareAndSetInboxV2ConversationResult,
@@ -369,6 +361,8 @@ export type {
   InboxV2ParticipantMembershipMutationRecord,
   InboxV2ParticipantMembershipRepository,
   InboxV2ParticipantMembershipTransactionExecutor,
+  InboxV2MembershipMutationEntrypointRow,
+  InboxV2ProviderMembershipMutationAnchor,
   InboxV2ProviderMembershipTransitionEvidence,
   InboxV2ProviderParticipantMembershipRepository,
   MergeInboxV2ClientRootsInput,
@@ -622,3 +616,9 @@ export type {
 } from "./repositories";
 export * from "./repositories/sql-inbox-v2-work-item-repository";
 export * from "./repositories/sql-inbox-v2-employee-conversation-state-repository";
+export * from "./repositories/sql-inbox-v2-access-plan-repository";
+export * from "./repositories/sql-inbox-v2-membership-transaction-policy";
+export * from "./repositories/sql-inbox-v2-repository-outbox";
+export * from "./repositories/sql-inbox-v2-repository-projection";
+export * from "./repositories/sql-inbox-v2-repository-stream";
+export * from "./schema/inbox-v2/membership-privilege-boundary";

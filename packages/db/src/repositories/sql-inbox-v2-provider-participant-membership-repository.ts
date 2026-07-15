@@ -34,8 +34,14 @@ import { sql, type SQL } from "drizzle-orm";
 
 import type { HuleeDatabase } from "../client";
 import {
-  buildAdvanceInboxV2ConversationMembershipHeadSql,
-  buildInsertInboxV2ConversationMembershipCommitSql,
+  buildApplyInboxV2ParticipantMembershipMutationSql,
+  type InboxV2MembershipMutationEntrypointRow
+} from "./sql-inbox-v2-membership-mutation-entrypoint";
+import {
+  hasPostgresSqlState,
+  runInboxV2MembershipTransaction
+} from "./sql-inbox-v2-membership-transaction-policy";
+import {
   buildLockInboxV2ConversationMembershipHeadSql,
   type InboxV2ParticipantMembershipMutationRecord,
   type InboxV2ParticipantMembershipTransactionExecutor,
@@ -45,9 +51,6 @@ import {
 import { InboxV2PersistenceInvariantError } from "./sql-inbox-v2-conversation-repository";
 
 const POSTGRES_BIGINT_MAX = 9_223_372_036_854_775_807n;
-const TRANSACTION_CONFIG = { isolationLevel: "read committed" } as const;
-const TRANSACTION_ATTEMPTS = 3;
-const RETRYABLE_SQLSTATES = new Set(["40001", "40P01"]);
 const START_KEYS = new Set([
   "tenantId",
   "conversationId",
@@ -419,8 +422,7 @@ export function createSqlInboxV2ProviderParticipantMembershipRepository(
                 transaction,
                 buildFindInboxV2ProviderEpisodeByIdSql({
                   tenantId: normalized.tenantId,
-                  episodeId: normalized.episodeId,
-                  lock: true
+                  episodeId: normalized.episodeId
                 })
               )
             ) {
@@ -559,8 +561,7 @@ export function createSqlInboxV2ProviderParticipantMembershipRepository(
               buildFindInboxV2ProviderEpisodeByIdSql({
                 tenantId: normalized.tenantId,
                 episodeId: normalized.episodeId,
-                conversationId: normalized.conversationId,
-                lock: true
+                conversationId: normalized.conversationId
               })
             );
             if (episodeResult.rows.length !== 1) {
@@ -810,7 +811,6 @@ export function buildLockInboxV2ProviderParticipantSql(input: {
     where tenant_id = ${input.tenantId}
       and id = ${input.participantId}
       and conversation_id = ${input.conversationId}
-    for update
   `;
 }
 
@@ -840,7 +840,6 @@ export function buildLockInboxV2ProviderMembershipOrderingHeadSql(input: {
     where tenant_id = ${input.tenantId}
       and participant_id = ${input.participantId}
       and source_thread_binding_id = ${input.sourceThreadBindingId}
-    for update
   `;
 }
 
@@ -909,7 +908,6 @@ export function buildLockInboxV2ProviderRosterOmissionEvidenceSql(input: {
      and identity_row.id = ${input.sourceExternalIdentityId}
     where roster_row.tenant_id = ${input.tenantId}
       and roster_row.id = ${input.rosterEvidenceId}
-    for share of roster_row, binding_row, thread_row, identity_row
   `;
 }
 
@@ -961,7 +959,6 @@ function providerEvidenceSelectSql(predicate: SQL): SQL {
       on identity_row.tenant_id = member_row.tenant_id
      and identity_row.id = member_row.source_external_identity_id
     where ${predicate}
-    for share of member_row, roster_row, binding_row, thread_row, identity_row
   `;
 }
 
@@ -969,12 +966,10 @@ export function buildFindInboxV2ProviderEpisodeByIdSql(input: {
   tenantId: InboxV2TenantId;
   episodeId: InboxV2ParticipantMembershipEpisodeId;
   conversationId?: InboxV2ConversationId;
-  lock?: boolean;
 }): SQL {
   const conversation = input.conversationId
     ? sql`and conversation_id = ${input.conversationId}`
     : sql``;
-  const lock = input.lock ? sql`for update` : sql``;
   return sql`
     select
       tenant_id,
@@ -1002,7 +997,6 @@ export function buildFindInboxV2ProviderEpisodeByIdSql(input: {
       and id = ${input.episodeId}
       and origin_kind = 'provider_roster'
       ${conversation}
-    ${lock}
   `;
 }
 
@@ -1019,7 +1013,6 @@ export function buildFindCurrentInboxV2ProviderEpisodeSql(input: {
       and origin_kind = 'provider_roster'
       and origin_source_thread_binding_id = ${input.sourceThreadBindingId}
       and state in ('pending', 'active')
-    for update
   `;
 }
 
@@ -1035,7 +1028,6 @@ export function buildFindUsedInboxV2ProviderMembershipEvidenceSql(input: {
           and cause_kind = 'provider_roster'
           and cause_provider_evidence_kind = 'member'
           and cause_provider_roster_member_evidence_id = ${input.evidence.memberEvidenceId}
-        for update
       `
     : sql`
         select id
@@ -1045,7 +1037,6 @@ export function buildFindUsedInboxV2ProviderMembershipEvidenceSql(input: {
           and cause_provider_evidence_kind = 'roster_omission'
           and cause_provider_roster_evidence_id = ${input.evidence.rosterEvidenceId}
           and cause_source_external_identity_id = ${input.evidence.sourceExternalIdentityId}
-        for update
       `;
 }
 
@@ -1079,113 +1070,6 @@ type ProviderOrderingHead = Readonly<{
   createdAt: string;
   updatedAt: string;
 }>;
-
-export function buildInsertInboxV2ProviderMembershipEpisodeSql(input: {
-  episode: InboxV2ParticipantMembershipEpisode;
-  conversationId: InboxV2ConversationId;
-  provider: ProviderWriteAnchor;
-}): SQL {
-  return sql`
-    insert into inbox_v2_participant_membership_episodes (
-      tenant_id, id, participant_id, conversation_id, origin_kind,
-      origin_provider_roster_member_evidence_id,
-      origin_provider_roster_evidence_id,
-      origin_source_thread_binding_id,
-      origin_source_external_identity_id,
-      origin_ordering_kind,
-      origin_ordering_scope_token,
-      origin_ordering_comparator_id,
-      origin_ordering_comparator_revision,
-      origin_ordering_position,
-      provider_ordering_head_position,
-      origin_migration_provenance_id,
-      origin_system_policy_id,
-      state, role, evidence_classification, valid_from, valid_to, revision
-    ) values (
-      ${input.episode.tenantId}, ${input.episode.id},
-      ${input.episode.participant.id}, ${input.conversationId}, 'provider_roster',
-      ${input.provider.memberEvidenceId}, ${input.provider.rosterEvidenceId},
-      ${input.provider.sourceThreadBindingId},
-      ${input.provider.sourceExternalIdentityId},
-      ${input.provider.ordering.kind}, ${input.provider.ordering.scopeToken},
-      ${input.provider.ordering.comparatorId},
-      ${input.provider.ordering.comparatorRevision},
-      ${input.provider.ordering.position}, ${input.provider.ordering.position},
-      null, null,
-      ${input.episode.state}, ${input.episode.role},
-      ${input.episode.evidenceClassification}, ${input.episode.validFrom},
-      ${input.episode.validTo}, ${input.episode.revision}
-    )
-    returning id
-  `;
-}
-
-export function buildInsertInboxV2ProviderMembershipTransitionSql(input: {
-  transition: InboxV2ParticipantMembershipMutationRecord["transition"];
-  participantId: InboxV2ConversationParticipantId;
-  conversationId: InboxV2ConversationId;
-  membershipRevision: InboxV2BigintCounter;
-  provider: ProviderWriteAnchor;
-}): SQL {
-  return sql`
-    insert into inbox_v2_participant_membership_transitions (
-      tenant_id, id, episode_id, participant_id, conversation_id,
-      membership_revision, intent, from_state, to_state, from_role, to_role,
-      cause_kind, cause_provider_evidence_kind,
-      cause_provider_roster_member_evidence_id,
-      cause_provider_roster_evidence_id,
-      cause_source_thread_binding_id,
-      cause_source_external_identity_id,
-      cause_ordering_kind, cause_ordering_scope_token,
-      cause_ordering_comparator_id, cause_ordering_comparator_revision,
-      cause_ordering_position,
-      cause_actor_employee_id, cause_trusted_service_id,
-      cause_migration_provenance_id, cause_system_policy_id,
-      reason_code_id, expected_revision, current_revision,
-      resulting_revision, occurred_at
-    ) values (
-      ${input.transition.tenantId}, ${input.transition.id},
-      ${input.transition.episode.id}, ${input.participantId},
-      ${input.conversationId}, ${input.membershipRevision},
-      ${input.transition.intent}, ${input.transition.fromState},
-      ${input.transition.toState}, ${input.transition.fromRole},
-      ${input.transition.toRole}, 'provider_roster',
-      ${input.provider.evidenceKind}, ${input.provider.memberEvidenceId},
-      ${input.provider.rosterEvidenceId},
-      ${input.provider.sourceThreadBindingId},
-      ${input.provider.sourceExternalIdentityId},
-      ${input.provider.ordering.kind}, ${input.provider.ordering.scopeToken},
-      ${input.provider.ordering.comparatorId},
-      ${input.provider.ordering.comparatorRevision},
-      ${input.provider.ordering.position},
-      null, null, null, null,
-      ${input.transition.reasonCodeId}, ${input.transition.expectedRevision},
-      ${input.transition.currentRevision}, ${input.transition.resultingRevision},
-      ${input.transition.occurredAt}
-    )
-    returning id
-  `;
-}
-
-export function buildUpdateInboxV2ProviderMembershipEpisodeSql(input: {
-  beforeRevision: InboxV2EntityRevision;
-  after: InboxV2ParticipantMembershipEpisode;
-  orderingPosition: bigint;
-}): SQL {
-  return sql`
-    update inbox_v2_participant_membership_episodes
-    set state = ${input.after.state},
-        role = ${input.after.role},
-        valid_to = ${input.after.validTo},
-        revision = ${input.after.revision},
-        provider_ordering_head_position = ${input.orderingPosition}
-    where tenant_id = ${input.after.tenantId}
-      and id = ${input.after.id}
-      and origin_kind = 'provider_roster'
-      and revision = ${input.beforeRevision}
-    returning id
-  `;
-}
 
 export function buildInsertInboxV2ProviderMembershipOrderingHeadSql(input: {
   tenantId: InboxV2TenantId;
@@ -1269,48 +1153,33 @@ async function writeProviderMutation(
     previousProviderOrderingHead: ProviderOrderingHead | null;
   }>
 ): Promise<void> {
-  await expectOne(
-    transaction,
-    buildInsertInboxV2ConversationMembershipCommitSql({
-      tenantId: input.tenantId,
-      conversationId: input.conversationId,
-      expectedMembershipRevision: input.expectedMembershipRevision,
-      resultingMembershipRevision: input.resultingMembershipRevision,
-      occurredAt: input.transition.occurredAt
-    }),
-    "Provider membership commit insert"
-  );
-  if (input.previousEpisodeRevision === null) {
-    await expectOne(
-      transaction,
-      buildInsertInboxV2ProviderMembershipEpisodeSql({
-        episode: input.episode,
+  const mutationResult =
+    await transaction.execute<InboxV2MembershipMutationEntrypointRow>(
+      buildApplyInboxV2ParticipantMembershipMutationSql({
+        operation:
+          input.previousEpisodeRevision === null ? "start" : "transition",
         conversationId: input.conversationId,
+        participantId: input.participantId,
+        expectedMembershipRevision: input.expectedMembershipRevision,
+        resultingMembershipRevision: input.resultingMembershipRevision,
+        episode: input.episode,
+        transition: input.transition,
         provider: input.provider
-      }),
-      "Provider membership episode insert"
+      })
     );
-  }
-  await expectOne(
-    transaction,
-    buildInsertInboxV2ProviderMembershipTransitionSql({
-      transition: input.transition,
-      participantId: input.participantId,
-      conversationId: input.conversationId,
-      membershipRevision: input.resultingMembershipRevision,
-      provider: input.provider
-    }),
-    "Provider membership transition insert"
+  const mutationRow = singleRow(
+    mutationResult,
+    "Provider membership mutation entrypoint"
   );
-  if (input.previousEpisodeRevision !== null) {
-    await expectOne(
-      transaction,
-      buildUpdateInboxV2ProviderMembershipEpisodeSql({
-        beforeRevision: input.previousEpisodeRevision,
-        after: input.episode,
-        orderingPosition: input.provider.ordering.position
-      }),
-      "Provider membership episode update"
+  if (
+    mutationRow === null ||
+    parseBigint(
+      mutationRow.resulting_membership_revision,
+      "Provider membership mutation resulting revision"
+    ) !== BigInt(input.resultingMembershipRevision)
+  ) {
+    throw invariant(
+      "Provider membership mutation entrypoint revision mismatch."
     );
   }
   await expectOne(
@@ -1336,17 +1205,6 @@ async function writeProviderMutation(
           provider: input.provider
         }),
     "Provider membership ordering head advance"
-  );
-  await expectOne(
-    transaction,
-    buildAdvanceInboxV2ConversationMembershipHeadSql({
-      tenantId: input.tenantId,
-      conversationId: input.conversationId,
-      expectedMembershipRevision: input.expectedMembershipRevision,
-      resultingMembershipRevision: input.resultingMembershipRevision,
-      changedAt: input.transition.occurredAt
-    }),
-    "Provider membership head advance"
   );
 }
 
@@ -1771,7 +1629,7 @@ async function lockMembershipHead(
     ),
     "Conversation membership head"
   );
-  return row === null
+  return row === null || row.membership_revision == null
     ? null
     : inboxV2BigintCounterSchema.parse(String(row.membership_revision));
 }
@@ -1808,19 +1666,7 @@ async function runTransaction<TResult>(
   executor: InboxV2ParticipantMembershipTransactionExecutor,
   work: (transaction: RawSqlExecutor) => Promise<TResult>
 ): Promise<TResult> {
-  for (let attempt = 1; attempt <= TRANSACTION_ATTEMPTS; attempt += 1) {
-    try {
-      return await executor.transaction(work, TRANSACTION_CONFIG);
-    } catch (error) {
-      if (
-        attempt === TRANSACTION_ATTEMPTS ||
-        !hasSqlState(error, RETRYABLE_SQLSTATES)
-      ) {
-        throw error;
-      }
-    }
-  }
-  throw invariant("Provider membership transaction retry exhausted.");
+  return runInboxV2MembershipTransaction(executor, work);
 }
 
 function incrementCounter(
@@ -1902,27 +1748,8 @@ function assertStrictInput(
   }
 }
 
-function hasSqlState(error: unknown, states: ReadonlySet<string>): boolean {
-  let current = error;
-  const seen = new Set<unknown>();
-  for (let depth = 0; depth < 8; depth += 1) {
-    if (
-      (typeof current !== "object" || current === null) &&
-      typeof current !== "function"
-    ) {
-      return false;
-    }
-    if (seen.has(current)) return false;
-    seen.add(current);
-    const code = Reflect.get(current, "code");
-    if (typeof code === "string" && states.has(code)) return true;
-    current = Reflect.get(current, "cause");
-  }
-  return false;
-}
-
 function isProviderEvidenceReuseError(error: unknown): boolean {
-  if (!hasSqlState(error, new Set(["23505"]))) return false;
+  if (!hasPostgresSqlState(error, new Set(["23505"]))) return false;
   let current = error;
   const seen = new Set<unknown>();
   for (let depth = 0; depth < 8; depth += 1) {

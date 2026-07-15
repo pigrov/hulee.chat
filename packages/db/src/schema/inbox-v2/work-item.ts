@@ -1342,6 +1342,9 @@ export const inboxV2WorkItemPrimaryAssignments = pgTable(
       table.startedAt,
       table.id
     ),
+    index("inbox_v2_work_item_primary_assignment_employee_active_idx")
+      .on(table.tenantId, table.employeeId, table.workItemId, table.id)
+      .where(sql`${table.state} = 'active'`),
     index("inbox_v2_work_item_primary_assignment_employee_idx").on(
       table.tenantId,
       table.employeeId,

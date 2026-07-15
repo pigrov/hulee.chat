@@ -1320,7 +1320,8 @@ export const inboxV2DataGovernanceLifecyclePurposeInstances = pgTable(
       table.tenantId,
       table.purposeId,
       table.anchorAt,
-      table.purposeSetId
+      table.purposeSetId,
+      table.purposeSetRevision
     )
   ]
 );
@@ -1393,8 +1394,8 @@ export const inboxV2DataGovernanceSubjectLinks = pgTable(
     }),
     foreignKey({
       name: "inbox_v2_dg_subject_link_account_fk",
-      columns: [table.accountId],
-      foreignColumns: [accounts.id]
+      columns: [table.tenantId, table.accountId],
+      foreignColumns: [accounts.tenantId, accounts.id]
     }),
     check(
       "inbox_v2_dg_subject_link_values_check",
@@ -1804,7 +1805,8 @@ export const inboxV2DataGovernanceLegalHoldDataClasses = pgTable(
     index("inbox_v2_dg_hold_data_class_tenant_idx").on(
       table.tenantId,
       table.dataClassId,
-      table.holdId
+      table.holdId,
+      table.holdRevision
     )
   ]
 );
@@ -1880,7 +1882,16 @@ export const inboxV2DataGovernanceLegalHoldTargets = pgTable(
       table.entityId,
       table.state,
       table.holdId
-    )
+    ),
+    index("inbox_v2_dg_hold_active_root_lookup_idx")
+      .on(
+        table.tenantId,
+        table.storageRootId,
+        table.rootRecordId,
+        table.holdId,
+        table.holdRevision
+      )
+      .where(sql`${table.state} = 'active'`)
   ]
 );
 

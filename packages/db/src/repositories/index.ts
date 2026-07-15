@@ -89,21 +89,20 @@ export type {
   InboxV2ConversationClientLinkTransactionExecutor
 } from "./sql-inbox-v2-conversation-client-link-repository";
 export {
-  buildAdvanceInboxV2ConversationMembershipHeadSql,
   buildFindCurrentInboxV2ParticipantMembershipEpisodeSql,
   buildFindInboxV2ConversationParticipantByIdSql,
   buildFindInboxV2ConversationParticipantBySubjectSql,
   buildFindInboxV2ParticipantMembershipEpisodeByIdSql,
-  buildLockActiveInboxV2InternalEmployeeForEpisodeSql,
-  buildLockActiveInboxV2InternalEmployeeForParticipantSql,
-  buildInsertInboxV2ConversationMembershipCommitSql,
   buildInsertInboxV2ConversationParticipantSql,
-  buildInsertInboxV2ParticipantMembershipEpisodeSql,
-  buildInsertInboxV2ParticipantMembershipTransitionSql,
   buildLockInboxV2ConversationMembershipHeadSql,
-  buildUpdateInboxV2ParticipantMembershipEpisodeSql,
   createSqlInboxV2ParticipantMembershipRepository
 } from "./sql-inbox-v2-participant-membership-repository";
+export { buildApplyInboxV2ParticipantMembershipMutationSql } from "./sql-inbox-v2-membership-mutation-entrypoint";
+export type {
+  ApplyInboxV2ParticipantMembershipMutationInput,
+  InboxV2MembershipMutationEntrypointRow,
+  InboxV2ProviderMembershipMutationAnchor
+} from "./sql-inbox-v2-membership-mutation-entrypoint";
 export type {
   CreateInboxV2ConversationParticipantInput,
   CreateInboxV2ConversationParticipantResult,
@@ -145,12 +144,9 @@ export {
   buildFindCurrentInboxV2ProviderEpisodeSql,
   buildFindInboxV2ProviderEpisodeByIdSql,
   buildFindUsedInboxV2ProviderMembershipEvidenceSql,
-  buildInsertInboxV2ProviderMembershipEpisodeSql,
-  buildInsertInboxV2ProviderMembershipTransitionSql,
   buildLockInboxV2ProviderParticipantSql,
   buildLockInboxV2ProviderRosterMemberEvidenceSql,
   buildLockInboxV2ProviderRosterOmissionEvidenceSql,
-  buildUpdateInboxV2ProviderMembershipEpisodeSql,
   createSqlInboxV2ProviderParticipantMembershipRepository
 } from "./sql-inbox-v2-provider-participant-membership-repository";
 export type {
@@ -821,3 +817,8 @@ export type {
   TenantRegistrationPersistenceRows,
   WorkspacePersistenceRows
 } from "./vertical-slice-mapper";
+export * from "./sql-inbox-v2-access-plan-repository";
+export * from "./sql-inbox-v2-membership-transaction-policy";
+export * from "./sql-inbox-v2-repository-outbox";
+export * from "./sql-inbox-v2-repository-projection";
+export * from "./sql-inbox-v2-repository-stream";

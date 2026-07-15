@@ -19,15 +19,13 @@ import type {
   RawSqlExecutor,
   RawSqlQueryResult
 } from "./sql-inbox-v2-participant-membership-repository";
+import { buildApplyInboxV2ParticipantMembershipMutationSql } from "./sql-inbox-v2-membership-mutation-entrypoint";
 import {
   buildFindUsedInboxV2ProviderMembershipEvidenceSql,
-  buildInsertInboxV2ProviderMembershipEpisodeSql,
   buildInsertInboxV2ProviderMembershipOrderingHeadSql,
-  buildInsertInboxV2ProviderMembershipTransitionSql,
   buildLockInboxV2ProviderMembershipOrderingHeadSql,
   buildLockInboxV2ProviderRosterMemberEvidenceSql,
   buildLockInboxV2ProviderRosterOmissionEvidenceSql,
-  buildUpdateInboxV2ProviderMembershipEpisodeSql,
   createSqlInboxV2ProviderParticipantMembershipRepository,
   type StartInboxV2ProviderMembershipEpisodeInput,
   type TransitionInboxV2ProviderMembershipEpisodeInput
@@ -77,27 +75,16 @@ describe("SQL Inbox V2 provider participant membership repository", () => {
     };
     const episode = providerEpisodeRecord();
     const transition = providerInitialTransitionRecord();
-    const episodeInsert = renderQuery(
-      buildInsertInboxV2ProviderMembershipEpisodeSql({
+    const mutation = renderQuery(
+      buildApplyInboxV2ParticipantMembershipMutationSql({
+        operation: "start",
+        expectedMembershipRevision: "0" as InboxV2BigintCounter,
+        resultingMembershipRevision: "1" as InboxV2BigintCounter,
         episode,
         conversationId,
-        provider
-      })
-    );
-    const transitionInsert = renderQuery(
-      buildInsertInboxV2ProviderMembershipTransitionSql({
         transition,
         participantId,
-        conversationId,
-        membershipRevision: "1" as InboxV2BigintCounter,
         provider
-      })
-    );
-    const update = renderQuery(
-      buildUpdateInboxV2ProviderMembershipEpisodeSql({
-        beforeRevision: "1" as never,
-        after: { ...episode, role: "member", revision: "2" as never },
-        orderingPosition: 8n
       })
     );
     const orderingHeadInsert = renderQuery(
@@ -113,38 +100,19 @@ describe("SQL Inbox V2 provider participant membership repository", () => {
       })
     );
 
-    expect(normalizeSql(episodeInsert.sql)).toContain(
-      "origin_provider_roster_member_evidence_id"
+    expect(normalizeSql(mutation.sql)).toContain(
+      "public.inbox_v2_apply_participant_membership_mutation_v1"
     );
-    expect(normalizeSql(episodeInsert.sql)).toContain(
-      "origin_source_thread_binding_id"
+    expect(mutation.params).toHaveLength(1);
+    expect(String(mutation.params[0])).toContain(
+      '"transitionCauseProviderEvidenceKind":"member"'
     );
-    expect(normalizeSql(episodeInsert.sql)).toContain(
-      "origin_ordering_comparator_revision"
+    expect(String(mutation.params[0])).toContain(
+      `"episodeOriginSourceThreadBindingId":"${sourceThreadBindingId}"`
     );
-    expect(normalizeSql(episodeInsert.sql)).toContain(
-      "provider_ordering_head_position"
+    expect(String(mutation.params[0])).toContain(
+      '"episodeProviderOrderingHeadPosition":"7"'
     );
-    expect(episodeInsert.params).toEqual(
-      expect.arrayContaining([
-        tenantId,
-        rosterEvidenceId,
-        memberEvidenceId,
-        sourceThreadBindingId,
-        sourceExternalIdentityId,
-        7n
-      ])
-    );
-    expect(normalizeSql(transitionInsert.sql)).toContain(
-      "cause_provider_evidence_kind"
-    );
-    expect(normalizeSql(transitionInsert.sql)).toContain(
-      "cause_ordering_position"
-    );
-    expect(normalizeSql(update.sql)).toContain(
-      "provider_ordering_head_position ="
-    );
-    expect(update.params).toContain(8n);
     expect(normalizeSql(orderingHeadInsert.sql)).toContain(
       "inbox_v2_provider_membership_ordering_heads"
     );
@@ -191,15 +159,14 @@ describe("SQL Inbox V2 provider participant membership repository", () => {
     expect(normalizeSql(omission.sql)).toContain(
       "present_member.source_external_identity_id ="
     );
-    expect(normalizeSql(omission.sql)).toContain(
-      "for share of roster_row, binding_row, thread_row, identity_row"
-    );
+    expect(normalizeSql(omission.sql)).not.toMatch(/for (?:update|share)/u);
     expect(normalizeSql(usedMember.sql)).toContain(
       "cause_provider_roster_member_evidence_id ="
     );
     expect(normalizeSql(orderingHead.sql)).toContain(
-      "where tenant_id = $1 and participant_id = $2 and source_thread_binding_id = $3 for update"
+      "where tenant_id = $1 and participant_id = $2 and source_thread_binding_id = $3"
     );
+    expect(normalizeSql(orderingHead.sql)).not.toContain("for update");
     expect(orderingHead.params).toEqual([
       tenantId,
       participantId,
@@ -354,11 +321,8 @@ describe("SQL Inbox V2 provider participant membership repository", () => {
         })
       ],
       [],
-      [{ id: "2" }],
-      [{ id: nextTransitionId }],
-      [{ id: episodeId }],
-      [{ id: nextTransitionId }],
-      [{ id: conversationId }]
+      [{ resulting_membership_revision: "2" }],
+      [{ id: nextTransitionId }]
     ]);
     const result =
       await createSqlInboxV2ProviderParticipantMembershipRepository(
@@ -373,12 +337,20 @@ describe("SQL Inbox V2 provider participant membership repository", () => {
       record: { transition: { occurredAt: nextObservedAt } }
     });
     const statements = executor.normalizedStatements();
-    expect(statements.filter((item) => item.startsWith("insert"))).toHaveLength(
-      2
-    );
-    expect(statements.filter((item) => item.startsWith("update"))).toHaveLength(
-      3
-    );
+    expect(
+      statements.filter(
+        (item) => item.startsWith("insert") || item.startsWith("update")
+      )
+    ).toEqual([
+      expect.stringContaining("inbox_v2_provider_membership_ordering_heads")
+    ]);
+    expect(
+      statements.filter((item) =>
+        item.includes(
+          "public.inbox_v2_apply_participant_membership_mutation_v1"
+        )
+      )
+    ).toHaveLength(1);
     expect(statements.join(" ")).not.toMatch(
       /work_item|notification|client_link|rbac|responsib/u
     );

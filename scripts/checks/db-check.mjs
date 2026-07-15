@@ -1,7 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 
 import {
-  assertAdditiveMigrationStatements,
   assertDrizzleSnapshotParity,
   assertMigrationJournalArtifactParity,
   assertParentUniqueConstraintsBeforeForeignKeys,
@@ -75,6 +74,20 @@ const inboxV2SecurityDenialPreflightMarker =
   "-- INBOX_V2_SECURITY_DENIAL_PREFLIGHT_V1";
 const inboxV2SecurityDenialInvariantName =
   "INBOX_V2_SECURITY_DENIAL_INTEGRITY_SQL";
+const inboxV2RepositoryFoundationMarker =
+  "-- INBOX_V2_REPOSITORY_FOUNDATION_MIGRATION_FINALIZED_V1";
+const inboxV2RepositoryFoundationPreflightMarker =
+  "-- INBOX_V2_REPOSITORY_FOUNDATION_PREFLIGHT_V1";
+const inboxV2RepositoryFoundationPreflightSql = (
+  await readFile(
+    "scripts/db/inbox-v2-repository-foundation-preflight.sql",
+    "utf8"
+  )
+).trim();
+const inboxV2RepositoryFoundationInvariantName =
+  "INBOX_V2_REPOSITORY_FOUNDATION_INTEGRITY_SQL";
+const inboxV2MembershipPrivilegeBoundaryName =
+  "INBOX_V2_MEMBERSHIP_PRIVILEGE_BOUNDARY_SQL";
 const inboxV2FoundationInvariantNames = new Set([
   "INBOX_V2_CLIENT_MERGE_INTEGRITY_SQL",
   "INBOX_V2_CONVERSATION_CLIENT_LINK_INTEGRITY_SQL",
@@ -108,6 +121,9 @@ const inboxV2AuthorizationRelationsMigrations = migrationFiles.filter(
 );
 const inboxV2SecurityDenialMigrations = migrationFiles.filter(({ sql }) =>
   sql.includes(inboxV2SecurityDenialMarker)
+);
+const inboxV2RepositoryFoundationMigrations = migrationFiles.filter(({ sql }) =>
+  sql.includes(inboxV2RepositoryFoundationMarker)
 );
 const inboxV2InvariantBlocks = (
   await Promise.all(
@@ -157,6 +173,22 @@ const inboxV2AuthorizationRelationsInvariantBlocks =
 const inboxV2SecurityDenialInvariantBlocks = inboxV2InvariantBlocks.filter(
   ({ name }) => name === inboxV2SecurityDenialInvariantName
 );
+const inboxV2RepositoryFoundationInvariantBlocks =
+  inboxV2InvariantBlocks.filter(
+    ({ name }) => name === inboxV2RepositoryFoundationInvariantName
+  );
+const inboxV2MembershipPrivilegeBoundaryBlock = extractInboxV2NamedSqlBlock(
+  "membership-privilege-boundary.ts",
+  await readFile(
+    `${inboxV2SchemaDirectory}/membership-privilege-boundary.ts`,
+    "utf8"
+  ),
+  inboxV2MembershipPrivilegeBoundaryName
+);
+const inboxV2RepositoryFoundationOwnedBlocks = [
+  ...inboxV2RepositoryFoundationInvariantBlocks,
+  inboxV2MembershipPrivilegeBoundaryBlock
+];
 if (
   inboxV2FoundationInvariantBlocks.length !==
   inboxV2FoundationInvariantNames.size
@@ -211,6 +243,12 @@ if (inboxV2SecurityDenialInvariantBlocks.length !== 1) {
   );
   process.exit(1);
 }
+if (inboxV2RepositoryFoundationInvariantBlocks.length !== 1) {
+  console.error(
+    `Expected exactly one ${inboxV2RepositoryFoundationInvariantName} schema block, found ${inboxV2RepositoryFoundationInvariantBlocks.length}.`
+  );
+  process.exit(1);
+}
 const unownedInvariantBlocks = inboxV2InvariantBlocks.filter(
   ({ name }) =>
     !inboxV2FoundationInvariantNames.has(name) &&
@@ -219,7 +257,8 @@ const unownedInvariantBlocks = inboxV2InvariantBlocks.filter(
     name !== inboxV2EmployeeConversationStateInvariantName &&
     !inboxV2DataGovernancePrivacyInvariantNames.has(name) &&
     !inboxV2AuthorizationRelationsInvariantNames.has(name) &&
-    name !== inboxV2SecurityDenialInvariantName
+    name !== inboxV2SecurityDenialInvariantName &&
+    name !== inboxV2RepositoryFoundationInvariantName
 );
 if (unownedInvariantBlocks.length > 0) {
   console.error(
@@ -312,6 +351,12 @@ if (inboxV2SecurityDenialMigrations.length !== 1) {
   );
   process.exit(1);
 }
+if (inboxV2RepositoryFoundationMigrations.length !== 1) {
+  console.error(
+    `Expected exactly one finalized Inbox V2 repository-foundation migration, found ${inboxV2RepositoryFoundationMigrations.length}.`
+  );
+  process.exit(1);
+}
 
 try {
   assertMigrationJournalArtifactParity({
@@ -319,6 +364,16 @@ try {
     targetIndex: 34,
     finalizedMigrationFileName:
       inboxV2AuthorizationRelationsMigrations[0].fileName,
+    migrationFileNames,
+    snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
+      fileName.endsWith("_snapshot.json")
+    )
+  });
+  assertMigrationJournalArtifactParity({
+    journal: drizzleJournal,
+    targetIndex: 36,
+    finalizedMigrationFileName:
+      inboxV2RepositoryFoundationMigrations[0].fileName,
     migrationFileNames,
     snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
       fileName.endsWith("_snapshot.json")
@@ -351,13 +406,16 @@ assertInboxV2AuthorizationRelationsMigration(
   inboxV2AuthorizationRelationsMigrations[0]
 );
 assertInboxV2SecurityDenialMigration(inboxV2SecurityDenialMigrations[0]);
+assertInboxV2RepositoryFoundationMigration(
+  inboxV2RepositoryFoundationMigrations[0]
+);
 try {
   // A historical migration cannot be regenerated from the current Drizzle
   // schema after a later slice changes that schema. Keep validating historical
   // finalized structures above and through PostgreSQL upgrade lifecycles,
   // while generated-schema parity follows the latest migration.
-  await assertInboxV2SecurityDenialGeneratedSchemaParity(
-    inboxV2SecurityDenialMigrations[0]
+  await assertInboxV2RepositoryFoundationGeneratedSchemaParity(
+    inboxV2RepositoryFoundationMigrations[0]
   );
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
@@ -366,18 +424,16 @@ try {
 
 console.log("db:check passed");
 
-async function assertInboxV2SecurityDenialGeneratedSchemaParity(migration) {
-  const snapshotPath = "packages/db/drizzle/meta/0035_snapshot.json";
+async function assertInboxV2RepositoryFoundationGeneratedSchemaParity(
+  migration
+) {
+  const snapshotPath = "packages/db/drizzle/meta/0036_snapshot.json";
   const generated = await generateExpectedDrizzleMigration({
     workspaceRoot: process.cwd(),
     migrationDirectory,
-    baseIndex: 34,
-    targetIndex: 35
+    baseIndex: 35,
+    targetIndex: 36
   });
-  assertAdditiveMigrationStatements(
-    generated.statements,
-    "Inbox V2 RBAC-007 generated migration"
-  );
   const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
   assertDrizzleSnapshotParity(
     generated.snapshot,
@@ -387,15 +443,24 @@ async function assertInboxV2SecurityDenialGeneratedSchemaParity(migration) {
 
   const checkedInDdl = collectFinalizedMigrationDdlStatements({
     migrationSql: migration.sql,
-    finalizedMarker: inboxV2SecurityDenialMarker,
-    preflightMarker: inboxV2SecurityDenialPreflightMarker,
-    invariantBlocks: inboxV2SecurityDenialInvariantBlocks
+    finalizedMarker: inboxV2RepositoryFoundationMarker,
+    preflightMarker: inboxV2RepositoryFoundationPreflightMarker,
+    invariantBlocks: inboxV2RepositoryFoundationOwnedBlocks
   });
-  assertAdditiveMigrationStatements(
-    checkedInDdl,
-    "Inbox V2 RBAC-007 checked-in migration"
+  const backfillStatements = checkedInDdl.filter(
+    isInboxV2RepositoryFoundationBackfill
   );
-  assertSqlStatementParity(generated.statements, checkedInDdl);
+  if (backfillStatements.length !== 4) {
+    throw new Error(
+      `Inbox V2 DB-007 migration must contain exactly two reviewed backfills plus the exact immutable-trigger envelope; found ${backfillStatements.length} statements.`
+    );
+  }
+  assertSqlStatementParity(
+    generated.statements,
+    checkedInDdl.filter(
+      (statement) => !isInboxV2RepositoryFoundationBackfill(statement)
+    )
+  );
 }
 
 function assertInboxV2FoundationMigration(migration) {
@@ -903,6 +968,115 @@ function assertInboxV2SecurityDenialMigration(migration) {
   }
 }
 
+function assertInboxV2RepositoryFoundationMigration(migration) {
+  if (!migration.fileName.startsWith("0036_")) {
+    console.error(
+      `${migration.fileName} must be the finalized Inbox V2 repository-foundation migration at index 0036.`
+    );
+    process.exit(1);
+  }
+  assertInboxV2InvariantMigration({
+    migration,
+    finalizedMarker: inboxV2RepositoryFoundationMarker,
+    preflightMarker: inboxV2RepositoryFoundationPreflightMarker,
+    invariantBlocks: inboxV2RepositoryFoundationOwnedBlocks,
+    preflightDescription: "repository-foundation"
+  });
+  if (
+    migration.sql.split(inboxV2RepositoryFoundationPreflightSql).length - 1 !==
+    1
+  ) {
+    console.error(
+      `${migration.fileName} must contain the exact current DB-007 preflight once.`
+    );
+    process.exit(1);
+  }
+
+  for (const fragment of [
+    "inbox_v2.repository_foundation_missing",
+    "inbox_v2.repository_foundation_partial_schema_detected",
+    "inbox_v2.repository_cross_tenant_account_link",
+    "inbox_v2.repository_stream_child_position_incoherent",
+    'CREATE TYPE "public"."inbox_v2_projection_generation_state"',
+    'CREATE TYPE "public"."inbox_v2_outbox_work_state"',
+    'CREATE TYPE "public"."inbox_v2_outbox_outcome_kind"',
+    'CREATE TABLE "inbox_v2_projection_generations"',
+    'CREATE TABLE "inbox_v2_projection_heads"',
+    'CREATE TABLE "inbox_v2_projection_checkpoints"',
+    'CREATE TABLE "inbox_v2_outbox_work_items"',
+    'CREATE TABLE "inbox_v2_outbox_outcomes"',
+    'CREATE TABLE "inbox_v2_tenant_stream_retention_advances"',
+    'CONSTRAINT "inbox_v2_dg_subject_link_account_fk" FOREIGN KEY ("tenant_id","account_id")',
+    'CONSTRAINT "inbox_v2_domain_events_commit_fk" FOREIGN KEY ("tenant_id","stream_commit_id","mutation_id","stream_position")',
+    'CONSTRAINT "inbox_v2_outbox_intents_commit_fk" FOREIGN KEY ("tenant_id","stream_commit_id","mutation_id","stream_position")',
+    'CONSTRAINT "inbox_v2_tenant_stream_changes_commit_fk" FOREIGN KEY ("tenant_id","stream_commit_id","mutation_id","stream_position")',
+    "disable trigger inbox_v2_auth_immutable_dbcc9ea93cbd94ba",
+    "set state_reason_id = 'core:retention-tombstone'",
+    "enable trigger inbox_v2_auth_immutable_dbcc9ea93cbd94ba",
+    "insert into public.inbox_v2_outbox_work_items (",
+    "create or replace function public.inbox_v2_auth_reject_immutable()",
+    "create or replace function public.inbox_v2_advance_tenant_stream_retained_prefix_v1(",
+    "security definer",
+    "owner to hulee_inbox_v2_retention_owner",
+    "revoke all privileges on function",
+    "do $retention_boundary_audit$",
+    "create or replace function public.inbox_v2_repository_projection_checkpoint_guard()",
+    "create or replace function public.inbox_v2_repository_projection_head_coherence()",
+    "create constraint trigger inbox_v2_projection_generation_head_coherence_trigger",
+    "create constraint trigger inbox_v2_projection_head_generation_coherence_trigger",
+    "create constraint trigger inbox_v2_projection_checkpoint_generation_coherence_trigger",
+    "create or replace function public.inbox_v2_repository_outbox_work_guard()",
+    "create or replace function public.inbox_v2_repository_outbox_finalize_coherence()",
+    "create or replace function public.inbox_v2_repository_retention_advance_immutable()",
+    "create trigger inbox_v2_tenant_stream_retention_advance_immutable_trigger",
+    "create or replace function public.inbox_v2_lock_conversation_membership_head_v1(",
+    "create or replace function public.inbox_v2_lock_participant_membership_mutation_v1(",
+    "create or replace function public.inbox_v2_apply_participant_membership_mutation_v1(",
+    "revoke all privileges on table",
+    "hulee_inbox_v2_runtime",
+    "hulee_inbox_v2_membership_repair"
+  ]) {
+    if (!migration.sql.includes(fragment)) {
+      console.error(
+        `${migration.fileName} is missing required repository-foundation SQL: ${fragment}`
+      );
+      process.exit(1);
+    }
+  }
+
+  try {
+    assertParentUniqueConstraintsBeforeForeignKeys({
+      migrationSql: migration.sql,
+      constraintNames: [
+        "accounts_tenant_id_unique",
+        "inbox_v2_tenant_stream_commits_checkpoint_unique",
+        "inbox_v2_tenant_stream_commits_identity_position_unique"
+      ]
+    });
+  } catch (error) {
+    console.error(
+      `${migration.fileName}: ${error instanceof Error ? error.message : String(error)}`
+    );
+    process.exit(1);
+  }
+}
+
+function isInboxV2RepositoryFoundationBackfill(statement) {
+  const normalized = statement.trim().toLowerCase();
+  return (
+    normalized ===
+      "alter table public.inbox_v2_tenant_stream_changes disable trigger inbox_v2_auth_immutable_dbcc9ea93cbd94ba;" ||
+    normalized.startsWith(
+      "update public.inbox_v2_tenant_stream_changes\nset state_reason_id = 'core:retention-tombstone'"
+    ) ||
+    normalized ===
+      "alter table public.inbox_v2_tenant_stream_changes enable trigger inbox_v2_auth_immutable_dbcc9ea93cbd94ba;" ||
+    normalized.startsWith(
+      "insert into public.inbox_v2_outbox_work_items (\n  tenant_id,"
+    )
+  );
+}
+
 function assertInboxV2AuthorizationFoundationTriggerInventory(migration) {
   const expected = [
     [
@@ -1070,6 +1244,22 @@ function extractInboxV2InvariantBlocks(fileName, source) {
     name: match[1],
     sql: match[2].trim()
   }));
+}
+
+function extractInboxV2NamedSqlBlock(fileName, source, exportName) {
+  const pattern = new RegExp(
+    `export const ${escapeRegExp(exportName)} = String\\.raw` +
+      "`([\\s\\S]*?)`;"
+  );
+  const match = source.match(pattern);
+  if (!match?.[1]) {
+    throw new Error(`${fileName} is missing SQL block ${exportName}.`);
+  }
+  return {
+    fileName,
+    name: exportName,
+    sql: match[1].trim()
+  };
 }
 
 function extractInboxV2InvariantFunctionNames(sql) {

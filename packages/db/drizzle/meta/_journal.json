@@ -253,6 +253,13 @@
       "when": 1784124269234,
       "tag": "0035_inbox_v2_security_denial_sink",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1784134738593,
+      "tag": "0036_inbox_v2_repository_foundation",
+      "breakpoints": true
     }
   ]
 }

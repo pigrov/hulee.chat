@@ -75,6 +75,26 @@ describe("Inbox V2 timeline and Message schema", () => {
     }
   });
 
+  it("indexes only retention-eligible content by tenant, class and anchor", () => {
+    const tableIndex = getTableConfig(inboxV2TimelineContents).indexes.find(
+      (candidate) =>
+        candidate.config.name ===
+        "inbox_v2_timeline_contents_retention_eligible_idx"
+    );
+    expect(tableIndex?.config.columns.map(indexColumnName)).toEqual([
+      "tenant_id",
+      "data_class_id",
+      "retention_anchor_at",
+      "id"
+    ]);
+    if (!tableIndex?.config.where) {
+      throw new Error("Missing retention-eligible index predicate.");
+    }
+    expect(new PgDialect().sqlToQuery(tableIndex.config.where).sql).toContain(
+      `"state" = 'available'`
+    );
+  });
+
   it("keeps ordered TimelineItem and immutable Message authorship canonical", () => {
     expect(
       uniqueColumns(

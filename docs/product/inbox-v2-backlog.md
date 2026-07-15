@@ -1158,8 +1158,9 @@ PostgreSQL gate passes. `INB2-DB-005` cannot start before both are complete.
     wide ESLint, TypeScript, DB, i18n, encoding, branding and native gates, with
     `25` files / `238` integration tests intentionally skipped on `2026-07-15`.
 
-- [ ] `INB2-DB-007` Add V2 repository ports, mappers and access-plan indexes.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-DB-001` through
+- [x] `INB2-DB-007` Add V2 repository ports, mappers and access-plan indexes.
+  - State: `done`; Priority: `P0`; Started: `2026-07-15`; Completed:
+    `2026-07-15`; Owner: `Codex`; Depends on: `INB2-DB-001` through
     `INB2-DB-006`, `INB2-DB-009`, `INB2-RBAC-003`.
   - Acceptance: all repositories require tenant context; commit-safe tenant
     stream head/commits/changes, projection checkpoints/generations and retained
@@ -1178,7 +1179,35 @@ PostgreSQL gate passes. `INB2-DB-005` cannot start before both are complete.
     mutate/finalize and cross-tenant denial; schema introspection and destructive
     retention tests reject cross-tenant child links; privilege introspection
     proves runtime direct DML is denied; saved representative `EXPLAIN` plans
-    pass. Evidence: -
+    pass. Evidence: versioned tenant-explicit ports and SQL repositories now
+    persist repeatable-read stream snapshots/replay, contiguous projection
+    generations/checkpoints/cutover, atomic retained-prefix pruning and
+    token-fenced outbox claim/renew/reclaim/finalize/dead outcomes. The
+    actor-visible access-plan repository binds a server-resolved tenant/Employee
+    snapshot before keyset pagination or counting, and reviewed tenant-leading
+    indexes cover structural access, active responsibility, retention, holds
+    and exact external-thread lookup without per-row grant reload. Finalized
+    migration `0036_inbox_v2_repository_foundation.sql` adds six tables, three
+    enums, exact checkpoint/stream child composite keys, guarded backfills and
+    fixed-search-path retention/membership entrypoints. NOLOGIN owner/runtime/
+    repair roles deny runtime and repair direct DML to all four revision-owned
+    membership tables; actual runtime repository create/start/transition and
+    repair-runner paths use the canonical `READ COMMITTED` head -> Employee ->
+    participant/episode lock order with three-attempt `40001`/`40P01` retry.
+    Same-lease terminal replay is explicitly reserved for `INB2-SRC-009`;
+    DB-007 returns terminal `not_leased` state rather than authenticating from a
+    cleared lease. A rare concurrent inactive-Employee rejection remains
+    fail-closed as SQLSTATE `23514`; translating it back to the earlier typed
+    not-found result is a non-blocking API follow-up before public exposure.
+    Focused contract/schema/repository/finalizer tests passed `18` files / `228`
+    tests; fresh/populated/partial/incoherent migration lifecycle passed `4/4`,
+    including eight runtime/repair direct-DML denials; clean PostgreSQL
+    repository concurrency/retention scenarios passed `4/4`. Nine saved
+    `EXPLAIN (ANALYZE, BUFFERS)` access paths passed `1/1`; independent final
+    audit returned `READY` with no P0/P1 findings. Full `pnpm check` passed `296`
+    files / `2954` tests, with `28` files / `247` integration tests intentionally
+    skipped, plus formatting, repository-wide ESLint, TypeScript, DB, i18n,
+    encoding, branding and native gates on `2026-07-15`.
 
 - [ ] `INB2-DB-008` Add repeatable clean V2 install and guarded reset migrations.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-DB-007`,
@@ -2722,3 +2751,4 @@ the task state, checkbox and evidence above.
 | 2026-07-14 | `INB2-DB-005`      | Timeline/message DB; PG 18/18; DB 73/666; full 254/2577               | working tree | Codex + two reviewers           |
 | 2026-07-15 | `INB2-DB-006`      | Employee state/read DB; PG 4/4; migration 3/3; full 258/2605          | working tree | Codex + three reviewers         |
 | 2026-07-15 | `INB2-DB-009`      | Governance/privacy DB; PG 22/22; migration 8/8; full 271/2718         | working tree | Codex + three reviewers         |
+| 2026-07-15 | `INB2-DB-007`      | Repository foundation; PG 4/4; migration 4/4; full 296/2954           | working tree | Codex + three reviewers         |

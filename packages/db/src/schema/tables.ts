@@ -924,6 +924,7 @@ export const accounts = pgTable(
     ...timestamps
   },
   (table) => [
+    unique("accounts_tenant_id_unique").on(table.tenantId, table.id),
     uniqueIndex("accounts_tenant_email_unique").on(table.tenantId, table.email),
     index("accounts_tenant_idx").on(table.tenantId)
   ]

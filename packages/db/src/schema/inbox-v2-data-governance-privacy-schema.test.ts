@@ -26,8 +26,10 @@ import {
   inboxV2DataGovernanceExportManifests,
   inboxV2DataGovernanceExportReceiptCas,
   inboxV2DataGovernanceLedgerKind,
+  inboxV2DataGovernanceLegalHoldDataClasses,
   inboxV2DataGovernanceLegalHoldTargets,
   inboxV2DataGovernanceLifecycleHandlers,
+  inboxV2DataGovernanceLifecyclePurposeInstances,
   inboxV2DataGovernancePolicyActivations,
   inboxV2DataGovernancePolicyTemplates,
   inboxV2DataGovernancePrivacyRequestAliases,
@@ -35,8 +37,10 @@ import {
   inboxV2DataGovernanceRestoreLeases,
   inboxV2DataGovernanceRestoreRequiredControls,
   inboxV2DataGovernanceStorageRoots,
+  inboxV2DataGovernanceSubjectLinks,
   inboxV2DataGovernanceTenantTerminationScopeAuthorities
 } from "./inbox-v2/data-governance-privacy";
+import { accounts } from "./tables";
 
 const globalTableNames = [
   "inbox_v2_data_governance_registry_versions",
@@ -119,6 +123,45 @@ describe("Inbox V2 data-governance/privacy persistence schema", () => {
     ).toEqual(tenantTableNames);
   });
 
+  it("indexes retention purpose revisions and active exact-hold lookups", () => {
+    expectIndex(
+      inboxV2DataGovernanceLifecyclePurposeInstances,
+      "inbox_v2_dg_purpose_instance_tenant_idx",
+      [
+        "tenant_id",
+        "purpose_id",
+        "anchor_at",
+        "purpose_set_id",
+        "purpose_set_revision"
+      ]
+    );
+    expectIndex(
+      inboxV2DataGovernanceLegalHoldDataClasses,
+      "inbox_v2_dg_hold_data_class_tenant_idx",
+      ["tenant_id", "data_class_id", "hold_id", "hold_revision"]
+    );
+
+    const activeRootLookup = getTableConfig(
+      inboxV2DataGovernanceLegalHoldTargets
+    ).indexes.find(
+      (candidate) =>
+        candidate.config.name === "inbox_v2_dg_hold_active_root_lookup_idx"
+    );
+    expect(activeRootLookup?.config.columns.map(indexColumnName)).toEqual([
+      "tenant_id",
+      "storage_root_id",
+      "root_record_id",
+      "hold_id",
+      "hold_revision"
+    ]);
+    if (!activeRootLookup?.config.where) {
+      throw new Error("Missing active legal-hold lookup predicate.");
+    }
+    expect(
+      new PgDialect().sqlToQuery(activeRootLookup.config.where).sql
+    ).toContain(`"state" = 'active'`);
+  });
+
   it("keeps global registries/templates tenant-free and tenant tables fenced", () => {
     for (const table of INBOX_V2_DATA_GOVERNANCE_PRIVACY_GLOBAL_TABLES) {
       expect(columnNames(table)).not.toContain("tenant_id");
@@ -176,6 +219,35 @@ describe("Inbox V2 data-governance/privacy persistence schema", () => {
       inboxV2DataGovernanceExportClaims,
       ["tenant_id", "artifact_claim_key"]
     );
+  });
+
+  it("requires the Account discovery edge to stay inside the subject-link tenant", () => {
+    const accountTenantKey = getTableConfig(accounts).uniqueConstraints.find(
+      ({ name }) => name === "accounts_tenant_id_unique"
+    );
+    expect(accountTenantKey).toBeDefined();
+    expect(accountTenantKey?.columns.map((column) => column.name)).toEqual([
+      "tenant_id",
+      "id"
+    ]);
+
+    const accountForeignKey = getTableConfig(
+      inboxV2DataGovernanceSubjectLinks
+    ).foreignKeys.find(
+      (candidate) =>
+        candidate.getName() === "inbox_v2_dg_subject_link_account_fk"
+    );
+    expect(accountForeignKey).toBeDefined();
+    const reference = accountForeignKey?.reference();
+    expect(reference?.foreignTable).toBe(accounts);
+    expect(reference?.columns.map((column) => column.name)).toEqual([
+      "tenant_id",
+      "account_id"
+    ]);
+    expect(reference?.foreignColumns.map((column) => column.name)).toEqual([
+      "tenant_id",
+      "id"
+    ]);
   });
 
   it("makes residual deletion results truthful in DDL", () => {

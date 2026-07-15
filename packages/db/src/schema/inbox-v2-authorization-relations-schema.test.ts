@@ -79,6 +79,21 @@ const authorizationTables = [
 ] as const;
 
 describe("Inbox V2 authorization relation schema", () => {
+  it("exposes an exact tenant/epoch/position commit identity for checkpoints", () => {
+    const checkpointIdentity = getTableConfig(
+      inboxV2TenantStreamCommits
+    ).uniqueConstraints.find(
+      (candidate) =>
+        candidate.name === "inbox_v2_tenant_stream_commits_checkpoint_unique"
+    );
+    expect(checkpointIdentity?.columns.map((column) => column.name)).toEqual([
+      "tenant_id",
+      "id",
+      "stream_epoch",
+      "position"
+    ]);
+  });
+
   it("declares the bounded tenant-owned relation and total-order stream slice", () => {
     expect(authorizationTables).toHaveLength(27);
     expect(
@@ -299,6 +314,41 @@ describe("Inbox V2 authorization relation schema", () => {
     ]);
     expect(roleLookupIndex && indexPredicateSql(roleLookupIndex)).toContain(
       `"state" = 'active'`
+    );
+  });
+
+  it("indexes actor-first active structural and collaborator visibility edges", () => {
+    expectPartialLookupIndex(
+      inboxV2AuthorizationStructuralAccessHeads,
+      "inbox_v2_auth_structural_heads_conversation_org_actor_idx",
+      ["tenant_id", "target_org_unit_id", "conversation_id"],
+      [
+        `"resource_kind" = 'conversation'`,
+        `"target_kind" = 'org_unit'`,
+        `"current_state" = 'active'`
+      ]
+    );
+    expectPartialLookupIndex(
+      inboxV2AuthorizationStructuralAccessHeads,
+      "inbox_v2_auth_structural_heads_conversation_team_actor_idx",
+      ["tenant_id", "target_team_id", "conversation_id"],
+      [
+        `"resource_kind" = 'conversation'`,
+        `"target_kind" = 'team'`,
+        `"current_state" = 'active'`
+      ]
+    );
+    expectPartialLookupIndex(
+      inboxV2AuthorizationCollaboratorHeads,
+      "inbox_v2_auth_collaborator_employee_conversation_idx",
+      ["tenant_id", "employee_id", "conversation_id"],
+      [`"resource_kind" = 'conversation'`, `"current_state" = 'active'`]
+    );
+    expectPartialLookupIndex(
+      inboxV2AuthorizationCollaboratorHeads,
+      "inbox_v2_auth_collaborator_employee_work_item_idx",
+      ["tenant_id", "employee_id", "work_item_id", "work_item_cycle"],
+      [`"resource_kind" = 'work_item'`, `"current_state" = 'active'`]
     );
   });
 
@@ -784,4 +834,22 @@ function indexPredicateSql(
     throw new Error(`Missing index predicate: ${tableIndex.config.name}`);
   }
   return new PgDialect().sqlToQuery(predicate).sql;
+}
+
+function expectPartialLookupIndex(
+  table: Parameters<typeof getTableConfig>[0],
+  name: string,
+  columns: string[],
+  predicateFragments: string[]
+): void {
+  const tableIndex = getTableConfig(table).indexes.find(
+    (candidate) => candidate.config.name === name
+  );
+  expect(tableIndex?.config.unique).toBe(false);
+  expect(tableIndex?.config.columns.map(indexColumnName)).toEqual(columns);
+  if (!tableIndex) throw new Error(`Missing expected index: ${name}`);
+  const predicate = indexPredicateSql(tableIndex);
+  for (const fragment of predicateFragments) {
+    expect(predicate).toContain(fragment);
+  }
 }

@@ -4268,6 +4268,8 @@ export function buildInsertInboxV2TenantStreamChangesSql(input: {
         change.state.kind === "upsert" ? change.state.stateSchemaId : null,
       state_schema_version:
         change.state.kind === "upsert" ? change.state.stateSchemaVersion : null,
+      state_reason_id:
+        change.state.kind === "tombstone" ? change.state.reasonId : null,
       state_hash: change.state.stateHash,
       payload_reference:
         change.state.kind === "upsert" ? change.state.payloadReference : null,
@@ -4289,6 +4291,7 @@ export function buildInsertInboxV2TenantStreamChangesSql(input: {
           state_kind text,
           state_schema_id text,
           state_schema_version text,
+          state_reason_id text,
           state_hash text,
           payload_reference jsonb,
           domain_commit_reference jsonb
@@ -4309,6 +4312,7 @@ export function buildInsertInboxV2TenantStreamChangesSql(input: {
       state_kind,
       state_schema_id,
       state_schema_version,
+      state_reason_id,
       state_hash,
       payload_reference,
       domain_commit_reference,
@@ -4328,6 +4332,7 @@ export function buildInsertInboxV2TenantStreamChangesSql(input: {
            change_rows.state_kind,
            change_rows.state_schema_id,
            change_rows.state_schema_version,
+           change_rows.state_reason_id,
            change_rows.state_hash,
            change_rows.payload_reference,
            change_rows.domain_commit_reference,

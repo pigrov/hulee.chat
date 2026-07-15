@@ -26,6 +26,7 @@ export * from "./provider-semantic-proof";
 export * from "./projection-protocol";
 export * from "./provider-roster-materialization";
 export * from "./recipient-sync";
+export * from "./repository-foundation";
 export * from "./schema-version";
 export * from "./schema-safety";
 export * from "./security-denial-audit";

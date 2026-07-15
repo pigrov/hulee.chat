@@ -156,6 +156,30 @@ describe("Inbox V2 WorkItem persistence schema", () => {
     );
   });
 
+  it("indexes active primary assignments from the responsible employee", () => {
+    const tableIndex = getTableConfig(
+      inboxV2WorkItemPrimaryAssignments
+    ).indexes.find(
+      (candidate) =>
+        candidate.config.name ===
+        "inbox_v2_work_item_primary_assignment_employee_active_idx"
+    );
+
+    expect(tableIndex?.config.unique).toBe(false);
+    expect(tableIndex?.config.columns.map(indexColumnName)).toEqual([
+      "tenant_id",
+      "employee_id",
+      "work_item_id",
+      "id"
+    ]);
+    if (!tableIndex?.config.where) {
+      throw new Error("Missing active employee assignment index predicate");
+    }
+    expect(new PgDialect().sqlToQuery(tableIndex.config.where).sql).toContain(
+      `"state" = 'active'`
+    );
+  });
+
   it("stores immutable canonical commits for exact idempotent replay", () => {
     for (const table of [
       inboxV2WorkItemCreationDecisions,

@@ -722,6 +722,12 @@ export const inboxV2ParticipantMembershipEpisodes = pgTable(
         table.id
       )
       .where(sql`${table.state} in ('pending', 'active')`),
+    index("inbox_v2_participant_membership_internal_actor_idx")
+      .on(table.tenantId, table.participantId, table.conversationId, table.id)
+      .where(
+        sql`${table.originKind} = 'hulee_internal_command'
+          and ${table.state} = 'active'`
+      ),
     index("inbox_v2_participant_membership_episodes_tenant_history_idx").on(
       table.tenantId,
       table.participantId,

@@ -321,6 +321,24 @@ describe("Inbox V2 participant membership schema", () => {
     ]);
   });
 
+  it("indexes active internal membership from the actor before conversation lookup", () => {
+    const internalActor = indexByName(
+      inboxV2ParticipantMembershipEpisodes,
+      "inbox_v2_participant_membership_internal_actor_idx"
+    );
+
+    expect(internalActor.config.unique).toBe(false);
+    expect(internalActor.config.columns.map(indexColumnName)).toEqual([
+      "tenant_id",
+      "participant_id",
+      "conversation_id",
+      "id"
+    ]);
+    const predicate = indexSql(internalActor.config.where);
+    expect(predicate).toContain(`"origin_kind" = 'hulee_internal_command'`);
+    expect(predicate).toContain(`"state" = 'active'`);
+  });
+
   it("links each transition to one exact episode edge and aggregate commit", () => {
     expectForeignKey(
       inboxV2ParticipantMembershipTransitions,

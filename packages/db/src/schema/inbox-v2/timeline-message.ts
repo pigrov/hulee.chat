@@ -653,7 +653,10 @@ export const inboxV2TimelineContents = pgTable(
       table.state,
       table.retentionAnchorAt,
       table.id
-    )
+    ),
+    index("inbox_v2_timeline_contents_retention_eligible_idx")
+      .on(table.tenantId, table.dataClassId, table.retentionAnchorAt, table.id)
+      .where(sql`${table.state} = 'available'`)
   ]
 );
 

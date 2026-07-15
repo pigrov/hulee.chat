@@ -1458,6 +1458,20 @@ export const inboxV2AuthorizationStructuralAccessHeads = pgTable(
           and ${table.targetKind} = 'org_unit'
           and ${table.currentState} = 'active'`
       ),
+    index("inbox_v2_auth_structural_heads_conversation_org_actor_idx")
+      .on(table.tenantId, table.targetOrgUnitId, table.conversationId)
+      .where(
+        sql`${table.resourceKind} = 'conversation'
+          and ${table.targetKind} = 'org_unit'
+          and ${table.currentState} = 'active'`
+      ),
+    index("inbox_v2_auth_structural_heads_conversation_team_actor_idx")
+      .on(table.tenantId, table.targetTeamId, table.conversationId)
+      .where(
+        sql`${table.resourceKind} = 'conversation'
+          and ${table.targetKind} = 'team'
+          and ${table.currentState} = 'active'`
+      ),
     index("inbox_v2_auth_structural_heads_resource_idx").on(
       table.tenantId,
       table.resourceHeadId,
@@ -1661,6 +1675,23 @@ export const inboxV2AuthorizationCollaboratorHeads = pgTable(
         table.workItemId,
         table.workItemCycle,
         table.employeeId
+      )
+      .where(
+        sql`${table.resourceKind} = 'work_item'
+          and ${table.currentState} = 'active'`
+      ),
+    index("inbox_v2_auth_collaborator_employee_conversation_idx")
+      .on(table.tenantId, table.employeeId, table.conversationId)
+      .where(
+        sql`${table.resourceKind} = 'conversation'
+          and ${table.currentState} = 'active'`
+      ),
+    index("inbox_v2_auth_collaborator_employee_work_item_idx")
+      .on(
+        table.tenantId,
+        table.employeeId,
+        table.workItemId,
+        table.workItemCycle
       )
       .where(
         sql`${table.resourceKind} = 'work_item'
@@ -1912,8 +1943,20 @@ export const inboxV2TenantStreamCommits = pgTable(
       table.id,
       table.mutationId
     ),
+    unique("inbox_v2_tenant_stream_commits_identity_position_unique").on(
+      table.tenantId,
+      table.id,
+      table.mutationId,
+      table.position
+    ),
     unique("inbox_v2_tenant_stream_commits_position_unique").on(
       table.tenantId,
+      table.streamEpoch,
+      table.position
+    ),
+    unique("inbox_v2_tenant_stream_commits_checkpoint_unique").on(
+      table.tenantId,
+      table.id,
       table.streamEpoch,
       table.position
     ),
@@ -1992,6 +2035,7 @@ export const inboxV2TenantStreamChanges = pgTable(
     stateKind: text("state_kind").notNull(),
     stateSchemaId: text("state_schema_id"),
     stateSchemaVersion: text("state_schema_version"),
+    stateReasonId: text("state_reason_id"),
     stateHash: text("state_hash").notNull(),
     payloadReference:
       jsonb("payload_reference").$type<Readonly<Record<string, unknown>>>(),
@@ -2015,11 +2059,17 @@ export const inboxV2TenantStreamChanges = pgTable(
     ),
     foreignKey({
       name: "inbox_v2_tenant_stream_changes_commit_fk",
-      columns: [table.tenantId, table.streamCommitId, table.mutationId],
+      columns: [
+        table.tenantId,
+        table.streamCommitId,
+        table.mutationId,
+        table.streamPosition
+      ],
       foreignColumns: [
         inboxV2TenantStreamCommits.tenantId,
         inboxV2TenantStreamCommits.id,
-        inboxV2TenantStreamCommits.mutationId
+        inboxV2TenantStreamCommits.mutationId,
+        inboxV2TenantStreamCommits.position
       ]
     }).onDelete("cascade"),
     check(
@@ -2031,6 +2081,8 @@ export const inboxV2TenantStreamChanges = pgTable(
         and char_length(${table.entityId}) between 1 and 256
         and ${table.stateKind} in ('upsert', 'tombstone')
         and ${sha256Sql(table.stateHash)}
+        and (${table.stateReasonId} is null
+          or ${catalogIdSql(table.stateReasonId)})
         and (${table.timeline} is null
           or jsonb_typeof(${table.timeline}) = 'object')
         and jsonb_typeof(${table.domainCommitReference}) = 'object'
@@ -2039,10 +2091,12 @@ export const inboxV2TenantStreamChanges = pgTable(
         and ((${table.stateKind} = 'upsert'
           and ${table.stateSchemaId} is not null
           and ${table.stateSchemaVersion} is not null
+          and ${table.stateReasonId} is null
           and ${table.payloadReference} is not null)
           or (${table.stateKind} = 'tombstone'
             and ${table.stateSchemaId} is null
             and ${table.stateSchemaVersion} is null
+            and ${table.stateReasonId} is not null
             and ${table.payloadReference} is null))
         and isfinite(${table.createdAt})`
     ),
@@ -2107,11 +2161,17 @@ export const inboxV2DomainEvents = pgTable(
     ),
     foreignKey({
       name: "inbox_v2_domain_events_commit_fk",
-      columns: [table.tenantId, table.streamCommitId, table.mutationId],
+      columns: [
+        table.tenantId,
+        table.streamCommitId,
+        table.mutationId,
+        table.streamPosition
+      ],
       foreignColumns: [
         inboxV2TenantStreamCommits.tenantId,
         inboxV2TenantStreamCommits.id,
-        inboxV2TenantStreamCommits.mutationId
+        inboxV2TenantStreamCommits.mutationId,
+        inboxV2TenantStreamCommits.position
       ]
     }).onDelete("cascade"),
     check(
@@ -2199,11 +2259,17 @@ export const inboxV2OutboxIntents = pgTable(
     ),
     foreignKey({
       name: "inbox_v2_outbox_intents_commit_fk",
-      columns: [table.tenantId, table.streamCommitId, table.mutationId],
+      columns: [
+        table.tenantId,
+        table.streamCommitId,
+        table.mutationId,
+        table.streamPosition
+      ],
       foreignColumns: [
         inboxV2TenantStreamCommits.tenantId,
         inboxV2TenantStreamCommits.id,
-        inboxV2TenantStreamCommits.mutationId
+        inboxV2TenantStreamCommits.mutationId,
+        inboxV2TenantStreamCommits.position
       ]
     }).onDelete("cascade"),
     foreignKey({
