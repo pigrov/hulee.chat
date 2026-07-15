@@ -61,6 +61,14 @@ const inboxV2DataGovernancePrivacyInvariantNames = new Set([
   "INBOX_V2_DATA_GOVERNANCE_PRIVACY_LEDGER_INVARIANTS_SQL",
   "INBOX_V2_DATA_GOVERNANCE_PRIVACY_CAS_INVARIANTS_SQL"
 ]);
+const inboxV2AuthorizationRelationsMarker =
+  "-- INBOX_V2_AUTHORIZATION_RELATIONS_MIGRATION_FINALIZED_V1";
+const inboxV2AuthorizationRelationsPreflightMarker =
+  "-- INBOX_V2_AUTHORIZATION_RELATIONS_PREFLIGHT_V1";
+const inboxV2AuthorizationRelationsInvariantNames = new Set([
+  "INBOX_V2_AUTHORIZATION_RELATIONS_INTEGRITY_SQL",
+  "INBOX_V2_AUTHORIZATION_WORK_ITEM_BRIDGE_INTEGRITY_SQL"
+]);
 const inboxV2FoundationInvariantNames = new Set([
   "INBOX_V2_CLIENT_MERGE_INTEGRITY_SQL",
   "INBOX_V2_CONVERSATION_CLIENT_LINK_INTEGRITY_SQL",
@@ -88,6 +96,9 @@ const inboxV2EmployeeConversationStateMigrations = migrationFiles.filter(
 );
 const inboxV2DataGovernancePrivacyMigrations = migrationFiles.filter(
   ({ sql }) => sql.includes(inboxV2DataGovernancePrivacyMarker)
+);
+const inboxV2AuthorizationRelationsMigrations = migrationFiles.filter(
+  ({ sql }) => sql.includes(inboxV2AuthorizationRelationsMarker)
 );
 const inboxV2InvariantBlocks = (
   await Promise.all(
@@ -130,6 +141,10 @@ const inboxV2DataGovernancePrivacyInvariantBlocks =
   inboxV2InvariantBlocks.filter(({ name }) =>
     inboxV2DataGovernancePrivacyInvariantNames.has(name)
   );
+const inboxV2AuthorizationRelationsInvariantBlocks =
+  inboxV2InvariantBlocks.filter(({ name }) =>
+    inboxV2AuthorizationRelationsInvariantNames.has(name)
+  );
 if (
   inboxV2FoundationInvariantBlocks.length !==
   inboxV2FoundationInvariantNames.size
@@ -169,13 +184,23 @@ if (
   );
   process.exit(1);
 }
+if (
+  inboxV2AuthorizationRelationsInvariantBlocks.length !==
+  inboxV2AuthorizationRelationsInvariantNames.size
+) {
+  console.error(
+    `Expected ${inboxV2AuthorizationRelationsInvariantNames.size} Inbox V2 authorization-relations invariant SQL blocks, found ${inboxV2AuthorizationRelationsInvariantBlocks.length}.`
+  );
+  process.exit(1);
+}
 const unownedInvariantBlocks = inboxV2InvariantBlocks.filter(
   ({ name }) =>
     !inboxV2FoundationInvariantNames.has(name) &&
     name !== inboxV2WorkItemInvariantName &&
     !inboxV2TimelineMessageInvariantNames.has(name) &&
     name !== inboxV2EmployeeConversationStateInvariantName &&
-    !inboxV2DataGovernancePrivacyInvariantNames.has(name)
+    !inboxV2DataGovernancePrivacyInvariantNames.has(name) &&
+    !inboxV2AuthorizationRelationsInvariantNames.has(name)
 );
 if (unownedInvariantBlocks.length > 0) {
   console.error(
@@ -256,13 +281,19 @@ if (inboxV2DataGovernancePrivacyMigrations.length !== 1) {
   );
   process.exit(1);
 }
+if (inboxV2AuthorizationRelationsMigrations.length !== 1) {
+  console.error(
+    `Expected exactly one finalized Inbox V2 authorization-relations migration, found ${inboxV2AuthorizationRelationsMigrations.length}.`
+  );
+  process.exit(1);
+}
 
 try {
   assertMigrationJournalArtifactParity({
     journal: drizzleJournal,
-    targetIndex: 33,
+    targetIndex: 34,
     finalizedMigrationFileName:
-      inboxV2DataGovernancePrivacyMigrations[0].fileName,
+      inboxV2AuthorizationRelationsMigrations[0].fileName,
     migrationFileNames,
     snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
       fileName.endsWith("_snapshot.json")
@@ -282,13 +313,16 @@ assertInboxV2EmployeeConversationStateMigration(
 assertInboxV2DataGovernancePrivacyMigration(
   inboxV2DataGovernancePrivacyMigrations[0]
 );
+assertInboxV2AuthorizationRelationsMigration(
+  inboxV2AuthorizationRelationsMigrations[0]
+);
 try {
   // A historical migration cannot be regenerated from the current Drizzle
   // schema after a later slice changes that schema. Keep validating historical
   // finalized structures above and through PostgreSQL upgrade lifecycles,
   // while generated-schema parity follows the latest migration.
-  await assertInboxV2DataGovernancePrivacyGeneratedSchemaParity(
-    inboxV2DataGovernancePrivacyMigrations[0]
+  await assertInboxV2AuthorizationRelationsGeneratedSchemaParity(
+    inboxV2AuthorizationRelationsMigrations[0]
   );
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
@@ -297,19 +331,19 @@ try {
 
 console.log("db:check passed");
 
-async function assertInboxV2DataGovernancePrivacyGeneratedSchemaParity(
+async function assertInboxV2AuthorizationRelationsGeneratedSchemaParity(
   migration
 ) {
-  const snapshotPath = "packages/db/drizzle/meta/0033_snapshot.json";
+  const snapshotPath = "packages/db/drizzle/meta/0034_snapshot.json";
   const generated = await generateExpectedDrizzleMigration({
     workspaceRoot: process.cwd(),
     migrationDirectory,
-    baseIndex: 32,
-    targetIndex: 33
+    baseIndex: 33,
+    targetIndex: 34
   });
   assertAdditiveMigrationStatements(
     generated.statements,
-    "Inbox V2 DB-009 generated migration"
+    "Inbox V2 RBAC-003 generated migration"
   );
   const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
   assertDrizzleSnapshotParity(
@@ -320,13 +354,13 @@ async function assertInboxV2DataGovernancePrivacyGeneratedSchemaParity(
 
   const checkedInDdl = collectFinalizedMigrationDdlStatements({
     migrationSql: migration.sql,
-    finalizedMarker: inboxV2DataGovernancePrivacyMarker,
-    preflightMarker: inboxV2DataGovernancePrivacyPreflightMarker,
-    invariantBlocks: inboxV2DataGovernancePrivacyInvariantBlocks
+    finalizedMarker: inboxV2AuthorizationRelationsMarker,
+    preflightMarker: inboxV2AuthorizationRelationsPreflightMarker,
+    invariantBlocks: inboxV2AuthorizationRelationsInvariantBlocks
   });
   assertAdditiveMigrationStatements(
     checkedInDdl,
-    "Inbox V2 DB-009 checked-in migration"
+    "Inbox V2 RBAC-003 checked-in migration"
   );
   assertSqlStatementParity(generated.statements, checkedInDdl);
 }
@@ -729,6 +763,142 @@ function assertInboxV2DataGovernancePrivacyMigration(migration) {
       );
       process.exit(1);
     }
+  }
+}
+
+function assertInboxV2AuthorizationRelationsMigration(migration) {
+  if (!migration.fileName.startsWith("0034_")) {
+    console.error(
+      `${migration.fileName} must be the finalized Inbox V2 authorization-relations migration at index 0034.`
+    );
+    process.exit(1);
+  }
+  assertInboxV2InvariantMigration({
+    migration,
+    finalizedMarker: inboxV2AuthorizationRelationsMarker,
+    preflightMarker: inboxV2AuthorizationRelationsPreflightMarker,
+    invariantBlocks: inboxV2AuthorizationRelationsInvariantBlocks,
+    preflightDescription: "authorization-relations"
+  });
+
+  for (const fragment of [
+    "inbox_v2.authorization_relations_foundation_missing",
+    "inbox_v2.authorization_relations_partial_schema_detected",
+    "function_definition.oid = trigger_definition.tgfoid",
+    "trigger_definition.tgtype is distinct from",
+    "trigger_definition.tgenabled is distinct from 'O'",
+    "trigger_definition.tgisinternal is distinct from false",
+    "trigger_definition.tgdeferrable is distinct from true",
+    "trigger_definition.tginitdeferred is distinct from true",
+    "function_definition.proname is distinct from",
+    "trigger_constraint.condeferrable is distinct from true",
+    "trigger_constraint.condeferred is distinct from true",
+    'CREATE TYPE "public"."inbox_v2_auth_actor_kind"',
+    'CREATE TYPE "public"."inbox_v2_audience_impact_kind"',
+    'CREATE TABLE "inbox_v2_auth_tenant_heads"',
+    'CREATE TABLE "inbox_v2_auth_employee_heads"',
+    'CREATE TABLE "inbox_v2_auth_role_versions"',
+    'CREATE TABLE "inbox_v2_auth_structural_access_versions"',
+    'CREATE TABLE "inbox_v2_tenant_stream_commits"',
+    'CREATE TABLE "inbox_v2_domain_events"',
+    'CREATE TABLE "inbox_v2_outbox_intents"',
+    'CREATE TABLE "inbox_v2_auth_audit_events"',
+    'CREATE TABLE "inbox_v2_auth_mutation_commits"',
+    'CREATE TABLE "inbox_v2_auth_relation_writes"',
+    "create or replace function public.inbox_v2_work_item_aggregate_coherence()",
+    "create or replace function public.inbox_v2_work_item_mutation_coherence()",
+    "create or replace function public.inbox_v2_auth_relation_version_guard()",
+    "create or replace function public.inbox_v2_auth_mutation_coherence()",
+    "create or replace function public.inbox_v2_auth_mutation_child_coherence()"
+  ]) {
+    if (!migration.sql.includes(fragment)) {
+      console.error(
+        `${migration.fileName} is missing required authorization-relations SQL: ${fragment}`
+      );
+      process.exit(1);
+    }
+  }
+  assertInboxV2AuthorizationFoundationTriggerInventory(migration);
+}
+
+function assertInboxV2AuthorizationFoundationTriggerInventory(migration) {
+  const expected = [
+    [
+      "inbox_v2_work_item_mutation_coherence_constraint",
+      "inbox_v2_work_items",
+      "inbox_v2_work_item_mutation_coherence",
+      17
+    ],
+    [
+      "inbox_v2_work_items_aggregate_constraint",
+      "inbox_v2_work_items",
+      "inbox_v2_work_item_aggregate_coherence",
+      21
+    ],
+    [
+      "inbox_v2_work_sla_aggregate_constraint",
+      "inbox_v2_work_item_sla_snapshots",
+      "inbox_v2_work_item_aggregate_coherence",
+      5
+    ],
+    [
+      "inbox_v2_work_creation_aggregate_constraint",
+      "inbox_v2_work_item_creation_decisions",
+      "inbox_v2_work_item_aggregate_coherence",
+      5
+    ],
+    [
+      "inbox_v2_work_assignment_aggregate_constraint",
+      "inbox_v2_work_item_primary_assignments",
+      "inbox_v2_work_item_aggregate_coherence",
+      21
+    ],
+    [
+      "inbox_v2_work_transition_aggregate_constraint",
+      "inbox_v2_work_item_transitions",
+      "inbox_v2_work_item_aggregate_coherence",
+      5
+    ],
+    [
+      "inbox_v2_work_team_episode_aggregate_constraint",
+      "inbox_v2_work_item_servicing_team_episodes",
+      "inbox_v2_work_item_aggregate_coherence",
+      21
+    ],
+    [
+      "inbox_v2_work_relation_transition_aggregate_constraint",
+      "inbox_v2_work_item_relation_transitions",
+      "inbox_v2_work_item_aggregate_coherence",
+      5
+    ]
+  ];
+  const beginMarker = "-- RBAC003_FOUNDATION_TRIGGERS_BEGIN";
+  const endMarker = "-- RBAC003_FOUNDATION_TRIGGERS_END";
+  const beginCount = migration.sql.split(beginMarker).length - 1;
+  const endCount = migration.sql.split(endMarker).length - 1;
+  if (beginCount !== 1 || endCount !== 1) {
+    console.error(
+      `${migration.fileName} must contain one exact WorkItem foundation trigger inventory boundary.`
+    );
+    process.exit(1);
+  }
+  const start = migration.sql.indexOf(beginMarker) + beginMarker.length;
+  const end = migration.sql.indexOf(endMarker, start);
+  const actual = [
+    ...migration.sql
+      .slice(start, end)
+      .matchAll(
+        /\(\s*'([^']+)'\s*,\s*'([^']+)'\s*,\s*'([^']+)'\s*,\s*(\d+)\s*\)/g
+      )
+  ]
+    .map((match) => [match[1], match[2], match[3], Number(match[4])])
+    .sort(([left], [right]) => left.localeCompare(right));
+  expected.sort(([left], [right]) => left.localeCompare(right));
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    console.error(
+      `${migration.fileName} has a stale WorkItem foundation trigger fingerprint inventory.`
+    );
+    process.exit(1);
   }
 }
 

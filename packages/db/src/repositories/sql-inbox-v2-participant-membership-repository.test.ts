@@ -350,6 +350,90 @@ describe("SQL Inbox V2 participant membership repository", () => {
     ]);
     expect(executor.commitCount).toBe(1);
     expect(executor.transactionIsolationLevels).toEqual(["read committed"]);
+    expect(result).not.toHaveProperty("result");
+    executor.expectExhausted();
+  });
+
+  it("commits start and transition callbacks with their mutation records", async () => {
+    const startExecutor = successfulStartExecutor();
+    const startRepository =
+      createSqlInboxV2ParticipantMembershipRepository(startExecutor);
+
+    const started = await startRepository.withStartEpisode(
+      startInput(),
+      async ({ executor, record }) => {
+        expect(executor).toBe(startExecutor);
+        expect(record).toMatchObject({
+          conversationMembershipRevision: "1",
+          transition: { intent: "initial_active" }
+        });
+        return { outboxId: "outbox:start" } as const;
+      }
+    );
+
+    expect(started).toMatchObject({
+      kind: "created",
+      record: { conversationMembershipRevision: "1" },
+      result: { outboxId: "outbox:start" }
+    });
+    expect(startExecutor.transactionCount).toBe(1);
+    expect(startExecutor.commitCount).toBe(1);
+    expect(startExecutor.rollbackCount).toBe(0);
+    startExecutor.expectExhausted();
+
+    const transitionExecutor = successfulTransitionExecutor(
+      "1",
+      episodeRecord(),
+      true
+    );
+    const transitionRepository =
+      createSqlInboxV2ParticipantMembershipRepository(transitionExecutor);
+
+    const transitioned = await transitionRepository.withTransitionEpisode(
+      transitionInput(),
+      async ({ executor, record }) => {
+        expect(executor).toBe(transitionExecutor);
+        expect(record).toMatchObject({
+          conversationMembershipRevision: "2",
+          episode: { role: "admin" },
+          transition: { intent: "change_role" }
+        });
+        return "outbox:transition" as const;
+      }
+    );
+
+    expect(transitioned).toMatchObject({
+      kind: "updated",
+      record: { conversationMembershipRevision: "2" },
+      result: "outbox:transition"
+    });
+    expect(transitionExecutor.transactionCount).toBe(1);
+    expect(transitionExecutor.commitCount).toBe(1);
+    expect(transitionExecutor.rollbackCount).toBe(0);
+    transitionExecutor.expectExhausted();
+  });
+
+  it("rolls back a callback failure and never retries the callback", async () => {
+    const retryableCallbackError = Object.assign(
+      new Error("callback serialization failure"),
+      { code: "40001" }
+    );
+    const executor = successfulStartExecutor();
+    const repository =
+      createSqlInboxV2ParticipantMembershipRepository(executor);
+    let callbackCalls = 0;
+
+    await expect(
+      repository.withStartEpisode(startInput(), async () => {
+        callbackCalls += 1;
+        throw retryableCallbackError;
+      })
+    ).rejects.toBe(retryableCallbackError);
+
+    expect(callbackCalls).toBe(1);
+    expect(executor.transactionCount).toBe(1);
+    expect(executor.commitCount).toBe(0);
+    expect(executor.rollbackCount).toBe(1);
     executor.expectExhausted();
   });
 

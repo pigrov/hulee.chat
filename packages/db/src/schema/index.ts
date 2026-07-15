@@ -1,5 +1,6 @@
 export type { TableDefinition, TableScope } from "./metadata";
 export { initialTables } from "./metadata";
+export * from "./inbox-v2/authorization-relations";
 export * from "./inbox-v2/client-merge";
 export * from "./inbox-v2/conversation-client-link";
 export * from "./inbox-v2/data-governance-privacy";

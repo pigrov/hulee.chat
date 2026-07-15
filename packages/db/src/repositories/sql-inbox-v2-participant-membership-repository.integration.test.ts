@@ -180,6 +180,140 @@ describePostgres(
       });
     });
 
+    it("commits start and transition callbacks in their membership transactions", async () => {
+      const fixture = await seedInternalParticipant(db, "callback-commit");
+      const repository = createSqlInboxV2ParticipantMembershipRepository(db);
+      const episodeId = episode("callback-commit");
+
+      const started = await repository.withStartEpisode(
+        internalStartInput(
+          fixture,
+          episodeId,
+          transition("callback-start"),
+          t1
+        ),
+        async ({ executor, record }) => {
+          const updated = await executor.execute<{ id: unknown }>(sql`
+            update employees
+            set display_name = 'DB002 callback start committed'
+            where tenant_id = ${tenantId}
+              and id = ${fixture.employeeId}
+            returning id
+          `);
+          expect(updated.rows).toHaveLength(1);
+          return record.conversationMembershipRevision;
+        }
+      );
+      expect(started).toMatchObject({
+        kind: "created",
+        record: { conversationMembershipRevision: "1" },
+        result: "1"
+      });
+
+      const transitioned = await repository.withTransitionEpisode(
+        internalTransitionInput(
+          fixture,
+          episodeId,
+          transition("callback-role"),
+          "change_role",
+          "admin",
+          counter("1"),
+          revision("1"),
+          t2
+        ),
+        async ({ executor, record }) => {
+          const updated = await executor.execute<{ id: unknown }>(sql`
+            update employees
+            set display_name = 'DB002 callback transition committed'
+            where tenant_id = ${tenantId}
+              and id = ${fixture.employeeId}
+            returning id
+          `);
+          expect(updated.rows).toHaveLength(1);
+          return record.transition.id;
+        }
+      );
+      expect(transitioned).toMatchObject({
+        kind: "updated",
+        record: {
+          conversationMembershipRevision: "2",
+          episode: { role: "admin", revision: "2" }
+        },
+        result: transition("callback-role")
+      });
+
+      expect(await loadEmployeeDisplayName(db, fixture.employeeId)).toBe(
+        "DB002 callback transition committed"
+      );
+      expect(await loadMembershipSnapshot(db, fixture.conversationId)).toEqual({
+        commits: "2",
+        currentEpisodes: "1",
+        episodes: "1",
+        membershipRevision: "2",
+        transitions: "2"
+      });
+    });
+
+    it("rolls back a failed transition callback without retrying it", async () => {
+      const fixture = await seedInternalParticipant(db, "callback-rollback");
+      const repository = createSqlInboxV2ParticipantMembershipRepository(db);
+      const episodeId = episode("callback-rollback");
+      const started = await repository.startEpisode(
+        internalStartInput(
+          fixture,
+          episodeId,
+          transition("callback-rollback-start"),
+          t1
+        )
+      );
+      expect(started.kind).toBe("created");
+
+      const callbackError = Object.assign(
+        new Error("retryable callback failure"),
+        { code: "40001" }
+      );
+      let callbackCalls = 0;
+      await expect(
+        repository.withTransitionEpisode(
+          internalTransitionInput(
+            fixture,
+            episodeId,
+            transition("callback-rollback-role"),
+            "change_role",
+            "admin",
+            counter("1"),
+            revision("1"),
+            t2
+          ),
+          async ({ executor }) => {
+            callbackCalls += 1;
+            await executor.execute(sql`
+              update employees
+              set display_name = 'DB002 callback must roll back'
+              where tenant_id = ${tenantId}
+                and id = ${fixture.employeeId}
+            `);
+            throw callbackError;
+          }
+        )
+      ).rejects.toBe(callbackError);
+
+      expect(callbackCalls).toBe(1);
+      expect(await loadEmployeeDisplayName(db, fixture.employeeId)).toBe(
+        "DB002 callback-rollback"
+      );
+      await expect(
+        repository.findEpisodeById({ tenantId, episodeId })
+      ).resolves.toMatchObject({ role: "member", revision: "1" });
+      expect(await loadMembershipSnapshot(db, fixture.conversationId)).toEqual({
+        commits: "1",
+        currentEpisodes: "1",
+        episodes: "1",
+        membershipRevision: "1",
+        transitions: "1"
+      });
+    });
+
     it("serializes concurrent same-origin starts to one CAS winner", async () => {
       const fixture = await seedInternalParticipant(db, "start-race");
       const repository = createSqlInboxV2ParticipantMembershipRepository(db);
@@ -983,6 +1117,21 @@ async function advanceRawMembershipHead(
       and conversation_id = ${conversationId}
       and membership_revision = ${expectedMembershipRevision}
   `);
+}
+
+async function loadEmployeeDisplayName(
+  db: HuleeDatabase,
+  employeeId: InboxV2EmployeeId
+): Promise<string> {
+  const result = await db.execute<{ displayName: string }>(sql`
+    select display_name as "displayName"
+    from employees
+    where tenant_id = ${tenantId}
+      and id = ${employeeId}
+  `);
+  const row = result.rows[0];
+  if (!row) throw new Error("Expected seeded Employee display name row.");
+  return row.displayName;
 }
 
 async function loadMembershipSnapshot(

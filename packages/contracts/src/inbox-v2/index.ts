@@ -1,4 +1,5 @@
 export * from "./authorization-epoch";
+export * from "./authorization-persistence";
 export * from "./catalog";
 export * from "./client-merge-redirect";
 export * from "./command-protocol";

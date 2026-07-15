@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   inboxV2AppAuthorizationEpochSchema,
+  inboxV2AuthorizationDecisionReferenceSchema,
   inboxV2AuthorizationDependencyVectorSchema,
   inboxV2AuthorizationEpochSchema,
   inboxV2ProjectionCheckpointSchema,
@@ -84,6 +85,12 @@ describe("Inbox V2 sync primitives", () => {
     expect(
       inboxV2AuthorizationDependencyVectorSchema.safeParse({
         ...vector,
+        tenantRbacRevision: "0"
+      }).success
+    ).toBe(false);
+    expect(
+      inboxV2AuthorizationDependencyVectorSchema.safeParse({
+        ...vector,
         resourceDependencies: [...vector.resourceDependencies].reverse()
       }).success
     ).toBe(false);
@@ -94,6 +101,45 @@ describe("Inbox V2 sync primitives", () => {
           vector.resourceDependencies[0],
           vector.resourceDependencies[0]
         ]
+      }).success
+    ).toBe(false);
+  });
+
+  it("keeps authorization decision resource revisions on the same baseline", () => {
+    const decision = {
+      tenantId,
+      id: "authorization_decision:decision-1",
+      authorizationEpoch: "authorization:epoch-0001",
+      principal: {
+        kind: "employee" as const,
+        employee: {
+          tenantId,
+          kind: "employee" as const,
+          id: "employee:employee-1"
+        }
+      },
+      permissionId: "core:inbox.read",
+      resourceScopeId: "core:conversation",
+      resource: {
+        tenantId,
+        entityTypeId: "core:conversation",
+        entityId: "conversation:conversation-1"
+      },
+      resourceAccessRevision: "1",
+      decisionRevision: "1",
+      decisionHash: digest,
+      outcome: "allowed" as const,
+      decidedAt: "2026-07-15T09:00:00.000Z",
+      notAfter: "2026-07-15T09:05:00.000Z"
+    };
+
+    expect(
+      inboxV2AuthorizationDecisionReferenceSchema.safeParse(decision).success
+    ).toBe(true);
+    expect(
+      inboxV2AuthorizationDecisionReferenceSchema.safeParse({
+        ...decision,
+        resourceAccessRevision: "0"
       }).success
     ).toBe(false);
   });

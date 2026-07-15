@@ -2,7 +2,6 @@ import {
   inboxV2AuthorizationDependencyVectorSchema,
   inboxV2AuthorizationEpochSchema,
   inboxV2AuthorizationEpochSnapshotSchema,
-  inboxV2BigintCounterSchema,
   inboxV2ClientIdSchema,
   inboxV2ConversationIdSchema,
   inboxV2EmployeeIdSchema,
@@ -7030,7 +7029,7 @@ describe("Inbox V2 authorization policy", () => {
           dependencies: {
             ...noGrant.currentAuthorization.dependencies,
             employeeInboxRelationRevision:
-              inboxV2BigintCounterSchema.parse("999")
+              inboxV2EntityRevisionSchema.parse("999")
           }
         }
       };
@@ -8923,7 +8922,7 @@ type MatrixRelationState = "current" | "stale";
 function generatedRequiredFamilyMatrix(): readonly RequiredFamilyMatrixRow[] {
   return requiredGeneratedAuthorizationFamilies.flatMap((family) => {
     const semantic = requiredFamilyMatrixRow(family);
-    const relationRevision = inboxV2BigintCounterSchema.parse("999");
+    const relationRevision = inboxV2EntityRevisionSchema.parse("999");
     const primaryIndex = semantic.input.requirements.findIndex(
       ({ permissionId }) => permissionId === semantic.permissionId
     );

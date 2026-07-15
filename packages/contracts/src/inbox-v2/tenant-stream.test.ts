@@ -8,6 +8,7 @@ import {
   inboxV2AtomicMutationCommitSchema,
   inboxV2DomainEventSchema,
   inboxV2OutboxIntentSchema,
+  inboxV2TenantRbacAudienceImpactSchema,
   inboxV2TenantStreamChangeSchema,
   inboxV2TenantStreamCommitSchema,
   parseInboxV2AtomicMutationCommitEnvelope
@@ -693,5 +694,77 @@ describe("Inbox V2 tenant stream", () => {
       inboxV2AtomicMutationCommitSchema.safeParse(workRelationWithoutImpact)
         .success
     ).toBe(false);
+  });
+
+  it("keeps tenant-RBAC invalidation +1, tenant-safe and free of Employee fan-out", () => {
+    const candidate = bundle();
+    candidate.events[0]!.typeId = "core:authorization.changed";
+    candidate.events[0]!.accessEffect = {
+      kind: "may_change_access",
+      causes: ["rbac_or_direct_grant"]
+    };
+    candidate.commit.audienceImpact = {
+      kind: "tenant_rbac",
+      impactId: "audience-impact:tenant-rbac-1",
+      deliveryFence: "invalidate_before_payload",
+      previousTenantRbacRevision: "7",
+      resultingTenantRbacRevision: "8",
+      invalidations: [
+        { kind: "projection", projectionId: "core:authorization" }
+      ],
+      indexedFanoutPlanId: "audience-impact:tenant-rbac-plan-1"
+    };
+
+    expect(
+      inboxV2TenantRbacAudienceImpactSchema.safeParse(
+        candidate.commit.audienceImpact
+      ).success
+    ).toBe(true);
+    expect(inboxV2AtomicMutationCommitSchema.safeParse(candidate).success).toBe(
+      true
+    );
+    expect(
+      inboxV2TenantRbacAudienceImpactSchema.safeParse({
+        ...candidate.commit.audienceImpact,
+        previousTenantRbacRevision: "0",
+        resultingTenantRbacRevision: "1"
+      }).success
+    ).toBe(false);
+    expect(
+      inboxV2TenantRbacAudienceImpactSchema.safeParse({
+        ...candidate.commit.audienceImpact,
+        resultingTenantRbacRevision: "9"
+      }).success
+    ).toBe(false);
+    expect(
+      inboxV2TenantRbacAudienceImpactSchema.safeParse({
+        ...candidate.commit.audienceImpact,
+        affectedRecipients: [
+          {
+            employee: {
+              tenantId,
+              kind: "employee",
+              id: "employee:employee-1"
+            }
+          }
+        ]
+      }).success
+    ).toBe(false);
+
+    if (candidate.commit.audienceImpact.kind === "tenant_rbac") {
+      candidate.commit.audienceImpact.invalidations = [
+        {
+          kind: "entity",
+          entity: {
+            tenantId: "tenant:tenant-2",
+            entityTypeId: "core:role",
+            entityId: "role:role-1"
+          }
+        }
+      ];
+    }
+    expect(inboxV2AtomicMutationCommitSchema.safeParse(candidate).success).toBe(
+      false
+    );
   });
 });

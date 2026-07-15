@@ -1078,8 +1078,9 @@ PostgreSQL gate passes. `INB2-DB-005` cannot start before both are complete.
     repository-wide ESLint, TypeScript, DB, i18n, encoding, branding and native
     gates on `2026-07-15`.
 
-- [ ] `INB2-RBAC-003` Persist authorization relations and revision fences.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-RBAC-002`,
+- [x] `INB2-RBAC-003` Persist authorization relations and revision fences.
+  - State: `done`; Priority: `P0`; Started: `2026-07-15`; Completed:
+    `2026-07-15`; Owner: `Codex`; Depends on: `INB2-RBAC-002`,
     `INB2-DB-002`, `INB2-DB-004`, `INB2-DB-006`.
   - Acceptance: composite-tenant role/grant/membership/resource edges,
     SourceAccount/Conversation/Client structural access, WorkItem servicing-team,
@@ -1090,7 +1091,35 @@ PostgreSQL gate passes. `INB2-DB-005` cannot start before both are complete.
   - Verification: cross-tenant constraints, incompatible role update, revoke
     versus command/replay/idempotent result, mass-binding revision, relation
     history and transaction-failure tests pass with no access change missing
-    audit/invalidation and no unbounded Employee fan-out. Evidence: -
+    audit/invalidation and no unbounded Employee fan-out. Evidence: versioned
+    authorization persistence contracts, pure revision planners and one SQL
+    transaction boundary now persist tenant-safe role definitions/bindings,
+    direct grants, workforce membership, Conversation/Client/SourceAccount
+    structural access and Conversation/WorkItem collaborators while composing
+    DB-002 internal membership and DB-004 responsibility/servicing-team writes.
+    Bounded tenant, Employee, resource and direct-recipient revision effects,
+    a total-order tenant stream, immutable audit/event/outbox manifests and six
+    deferred post-seal child guards close every successful privileged mutation
+    without broad Employee fan-out. Mandatory transaction-local role legality
+    rejects incompatible active or future-scheduled bindings even when a raw
+    persistence callback omits planning; indexed active-role lookup preserves
+    mass-binding behavior. Terminal workforce/structural/collaborator episodes
+    keep history while a new relation ID can re-add the same logical edge, and
+    old-ID resurrection remains forbidden. Finalized migration
+    `0034_inbox_v2_authorization_relations.sql` installs `27` tables, `17`
+    enums, `19` fixed-search-path functions (`17` authorization plus `2`
+    replaced WorkItem functions), `59` authorization triggers and verifies `8`
+    foundation caller fingerprints behind an exact preflight. Fresh install,
+    populated `0033 -> 0034`, partial/damaged foundation, wrong WorkItem binding
+    and late-rollback lifecycle scenarios passed `7/7`; finalizer tests passed
+    `6/6`; focused tests passed `9` files / `522` tests; a fresh unpatched
+    PostgreSQL database passed `22/22` live scenarios (`23/23` with shape
+    normalization), including cross-tenant, replay, revoke/command races,
+    role-legality/CAS races, retry rollback, re-add history and all six late
+    child tamper paths. Repository-wide formatting, ESLint, TypeScript, DB,
+    i18n, encoding, branding and native gates passed; the full Vitest suite
+    passed with bounded local parallelism at `277` files / `2782` tests plus
+    `23` files / `219` tests intentionally skipped on `2026-07-15`.
 
 - [ ] `INB2-RBAC-007` Implement bounded security-denial audit and review.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-RBAC-003`.

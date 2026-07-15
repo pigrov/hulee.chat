@@ -4,7 +4,6 @@ import { inboxV2AuthorizationEpochSchema } from "./authorization-epoch";
 import { inboxV2CatalogIdSchema } from "./catalog";
 import { inboxV2CommandIdempotencyRecordSchema } from "./command-protocol";
 import {
-  inboxV2BigintCounterSchema,
   inboxV2EntityRevisionSchema,
   inboxV2TimestampSchema,
   isInboxV2TimestampOrderValid
@@ -248,8 +247,8 @@ export const inboxV2StructuralAudienceImpactSchema = z
     kind: z.literal("structural"),
     impactId: inboxV2AudienceImpactIdSchema,
     deliveryFence: z.literal("invalidate_before_payload"),
-    previousSharedAccessRevision: inboxV2BigintCounterSchema,
-    resultingSharedAccessRevision: inboxV2BigintCounterSchema,
+    previousSharedAccessRevision: inboxV2EntityRevisionSchema,
+    resultingSharedAccessRevision: inboxV2EntityRevisionSchema,
     invalidations: z.array(inboxV2InvalidationScopeSchema).min(1).max(1_000),
     indexedFanoutPlanId: inboxV2AudienceImpactIdSchema
   })
@@ -268,10 +267,39 @@ export const inboxV2StructuralAudienceImpactSchema = z
     }
   });
 
+/**
+ * Tenant-wide RBAC invalidation advances only tenantRbacRevision. It remains a
+ * structural/indexed fan-out plan and never enumerates every affected Employee.
+ */
+export const inboxV2TenantRbacAudienceImpactSchema = z
+  .object({
+    kind: z.literal("tenant_rbac"),
+    impactId: inboxV2AudienceImpactIdSchema,
+    deliveryFence: z.literal("invalidate_before_payload"),
+    previousTenantRbacRevision: inboxV2EntityRevisionSchema,
+    resultingTenantRbacRevision: inboxV2EntityRevisionSchema,
+    invalidations: z.array(inboxV2InvalidationScopeSchema).min(1).max(1_000),
+    indexedFanoutPlanId: inboxV2AudienceImpactIdSchema
+  })
+  .strict()
+  .superRefine((impact, context) => {
+    if (
+      BigInt(impact.resultingTenantRbacRevision) !==
+      BigInt(impact.previousTenantRbacRevision) + 1n
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["resultingTenantRbacRevision"],
+        message: "Tenant RBAC impact must advance tenantRbacRevision once."
+      });
+    }
+  });
+
 export const inboxV2AudienceImpactSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("none") }).strict(),
   inboxV2DirectAudienceImpactSchema,
-  inboxV2StructuralAudienceImpactSchema
+  inboxV2StructuralAudienceImpactSchema,
+  inboxV2TenantRbacAudienceImpactSchema
 ]);
 
 export const inboxV2TenantStreamCommitSchema = z
@@ -870,7 +898,7 @@ function validateAudienceImpact(
   if (impact.kind === "none") {
     return;
   }
-  if (impact.kind === "structural") {
+  if (impact.kind === "structural" || impact.kind === "tenant_rbac") {
     if (
       impact.invalidations.some(
         (scope) =>

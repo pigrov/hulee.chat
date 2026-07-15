@@ -1,6 +1,7 @@
 import { getTableConfig, PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
+import { INBOX_V2_AUTHORIZATION_WORK_ITEM_BRIDGE_INTEGRITY_SQL } from "./inbox-v2/authorization-relations";
 import {
   INBOX_V2_WORK_ITEM_INVARIANTS_SQL,
   inboxV2ConversationWorkItemSlots,
@@ -481,6 +482,41 @@ describe("Inbox V2 WorkItem persistence schema", () => {
     );
     expect(invariantSql).toContain(
       "after update on public.inbox_v2_work_items\ndeferrable initially deferred"
+    );
+  });
+
+  it("accepts only an exact authorization collaborator-set proof override", () => {
+    const bridgeSql = INBOX_V2_AUTHORIZATION_WORK_ITEM_BRIDGE_INTEGRITY_SQL;
+    expect(
+      bridgeSql.match(/create or replace function public\./g)?.length
+    ).toBe(2);
+    expect(
+      bridgeSql.match(/set search_path = pg_catalog, public, pg_temp/g)?.length
+    ).toBe(2);
+    expect(bridgeSql).not.toContain("create trigger");
+    expect(bridgeSql).not.toContain("create constraint trigger");
+    expect(bridgeSql).toContain(
+      "create or replace function public.inbox_v2_work_item_aggregate_coherence()"
+    );
+    expect(bridgeSql).toContain(
+      "create or replace function public.inbox_v2_work_item_mutation_coherence()"
+    );
+    expect(bridgeSql).toContain("effect_row.effect_kind = 'collaborator_set'");
+    expect(bridgeSql).toContain("effect_row.resulting_work_item_revision");
+    expect(bridgeSql).toContain(
+      "v_collaborator_effect.work_item_cycle <> new.reopen_cycle"
+    );
+    expect(bridgeSql).toContain(
+      "v_collaborator_effect.expected_work_item_revision <> old.revision"
+    );
+    expect(bridgeSql).toContain(
+      "new.collaborator_set_revision <>\n         old.collaborator_set_revision + 1"
+    );
+    expect(bridgeSql).toContain(
+      "to_jsonb(new) - array[\n         'revision', 'updated_at', 'collaborator_set_revision'"
+    );
+    expect(bridgeSql).toContain(
+      "exactly one lifecycle XOR servicing-team XOR collaborator-set proof"
     );
   });
 

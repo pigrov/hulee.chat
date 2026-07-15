@@ -172,6 +172,28 @@ export type TransitionInboxV2ParticipantMembershipEpisodeResult =
     }>
   | Readonly<{ kind: "conversation_not_found" | "episode_not_found" }>;
 
+export type WithStartInboxV2ParticipantMembershipEpisodeResult<TResult> =
+  | Readonly<{
+      kind: "created";
+      record: InboxV2ParticipantMembershipMutationRecord;
+      result: TResult;
+    }>
+  | Exclude<
+      StartInboxV2ParticipantMembershipEpisodeResult,
+      Readonly<{ kind: "created" }>
+    >;
+
+export type WithTransitionInboxV2ParticipantMembershipEpisodeResult<TResult> =
+  | Readonly<{
+      kind: "updated";
+      record: InboxV2ParticipantMembershipMutationRecord;
+      result: TResult;
+    }>
+  | Exclude<
+      TransitionInboxV2ParticipantMembershipEpisodeResult,
+      Readonly<{ kind: "updated" }>
+    >;
+
 export type InboxV2ParticipantMembershipTransactionExecutor = RawSqlExecutor & {
   transaction<TResult>(
     work: (transaction: RawSqlExecutor) => Promise<TResult>,
@@ -194,9 +216,41 @@ export type InboxV2ParticipantMembershipRepository = Readonly<{
   startEpisode(
     input: StartInboxV2ParticipantMembershipEpisodeInput
   ): Promise<StartInboxV2ParticipantMembershipEpisodeResult>;
+  /**
+   * Persists the episode and invokes `persist` in the same transaction.
+   *
+   * This variant makes exactly one outer transaction attempt. The callback
+   * must therefore keep side effects transaction-local (for example, by
+   * appending an outbox record through the supplied executor).
+   */
+  withStartEpisode<TResult>(
+    input: StartInboxV2ParticipantMembershipEpisodeInput,
+    persist: (
+      context: Readonly<{
+        executor: RawSqlExecutor;
+        record: InboxV2ParticipantMembershipMutationRecord;
+      }>
+    ) => Promise<TResult>
+  ): Promise<WithStartInboxV2ParticipantMembershipEpisodeResult<TResult>>;
   transitionEpisode(
     input: TransitionInboxV2ParticipantMembershipEpisodeInput
   ): Promise<TransitionInboxV2ParticipantMembershipEpisodeResult>;
+  /**
+   * Persists the transition and invokes `persist` in the same transaction.
+   *
+   * This variant makes exactly one outer transaction attempt. The callback
+   * must therefore keep side effects transaction-local (for example, by
+   * appending an outbox record through the supplied executor).
+   */
+  withTransitionEpisode<TResult>(
+    input: TransitionInboxV2ParticipantMembershipEpisodeInput,
+    persist: (
+      context: Readonly<{
+        executor: RawSqlExecutor;
+        record: InboxV2ParticipantMembershipMutationRecord;
+      }>
+    ) => Promise<TResult>
+  ): Promise<WithTransitionInboxV2ParticipantMembershipEpisodeResult<TResult>>;
 }>;
 
 type ParticipantRow = {
@@ -325,259 +379,308 @@ export function createSqlInboxV2ParticipantMembershipRepository(
     },
 
     async startEpisode(input) {
-      const normalized = normalizeStartEpisodeInput(input);
+      return persistStartEpisode(transactionExecutor, input);
+    },
 
-      return runParticipantMembershipTransaction(
-        transactionExecutor,
-        async (transaction) => {
-          const headRevision = await lockMembershipHead(transaction, {
-            tenantId: normalized.episode.tenantId,
-            conversationId: normalized.conversationId
-          });
-          if (headRevision === null) {
-            return { kind: "conversation_not_found" } as const;
-          }
-          if (headRevision !== normalized.expectedMembershipRevision) {
-            return {
-              kind: "membership_revision_conflict",
-              currentMembershipRevision: headRevision
-            } as const;
-          }
-
-          if (
-            normalized.episode.origin.kind === "hulee_internal_command" &&
-            !(await lockActiveInternalEmployeeForParticipant(transaction, {
-              tenantId: normalized.episode.tenantId,
-              conversationId: normalized.conversationId,
-              participantId: normalized.episode.participant.id
-            }))
-          ) {
-            return { kind: "participant_not_found" } as const;
-          }
-
-          const participant = await loadParticipantById(transaction, {
-            tenantId: normalized.episode.tenantId,
-            participantId: normalized.episode.participant.id,
-            lock: true
-          });
-          if (
-            participant === null ||
-            participant.conversation.id !== normalized.conversationId
-          ) {
-            return { kind: "participant_not_found" } as const;
-          }
-
-          const episodeById = await loadEpisodeById(transaction, {
-            tenantId: normalized.episode.tenantId,
-            episodeId: normalized.episode.id,
-            lock: true
-          });
-          if (episodeById !== null) {
-            return { kind: "episode_id_conflict" } as const;
-          }
-
-          const currentOrigin = await loadCurrentEpisodeByOrigin(
-            transaction,
-            normalized.episode
-          );
-          if (currentOrigin !== null) {
-            return {
-              kind: "current_origin_conflict",
-              currentEpisode: currentOrigin
-            } as const;
-          }
-
-          await expectOneReturnedRow(
-            transaction,
-            buildInsertInboxV2ConversationMembershipCommitSql({
-              tenantId: normalized.episode.tenantId,
-              conversationId: normalized.conversationId,
-              expectedMembershipRevision: normalized.expectedMembershipRevision,
-              resultingMembershipRevision:
-                normalized.resultingMembershipRevision,
-              occurredAt: normalized.episode.validFrom
-            }),
-            "Conversation membership commit insert"
-          );
-          await expectOneReturnedRow(
-            transaction,
-            buildInsertInboxV2ParticipantMembershipEpisodeSql({
-              episode: normalized.episode,
-              conversationId: normalized.conversationId
-            }),
-            "Participant membership episode insert"
-          );
-          await expectOneReturnedRow(
-            transaction,
-            buildInsertInboxV2ParticipantMembershipTransitionSql({
-              transition: normalized.transition,
-              conversationId: normalized.conversationId,
-              participantId: normalized.episode.participant.id,
-              membershipRevision: normalized.resultingMembershipRevision
-            }),
-            "Participant membership transition insert"
-          );
-          await expectOneReturnedRow(
-            transaction,
-            buildAdvanceInboxV2ConversationMembershipHeadSql({
-              tenantId: normalized.episode.tenantId,
-              conversationId: normalized.conversationId,
-              expectedMembershipRevision: normalized.expectedMembershipRevision,
-              resultingMembershipRevision:
-                normalized.resultingMembershipRevision,
-              changedAt: normalized.episode.validFrom
-            }),
-            "Conversation membership head advance"
-          );
-
-          return {
-            kind: "created",
-            record: {
-              conversationMembershipRevision:
-                normalized.resultingMembershipRevision,
-              episode: normalized.episode,
-              transition: normalized.transition
-            }
-          } as const;
-        }
-      );
+    async withStartEpisode(input, persist) {
+      return persistStartEpisode(transactionExecutor, input, persist);
     },
 
     async transitionEpisode(input) {
-      const normalized = normalizeTransitionEpisodeInput(input);
+      return persistTransitionEpisode(transactionExecutor, input);
+    },
 
-      return runParticipantMembershipTransaction(
-        transactionExecutor,
-        async (transaction) => {
-          const headRevision = await lockMembershipHead(transaction, {
-            tenantId: normalized.tenantId,
-            conversationId: normalized.conversationId
-          });
-          if (headRevision === null) {
-            return { kind: "conversation_not_found" } as const;
-          }
-          if (headRevision !== normalized.expectedMembershipRevision) {
-            return {
-              kind: "membership_revision_conflict",
-              currentMembershipRevision: headRevision
-            } as const;
-          }
-
-          if (
-            normalized.cause.kind === "hulee_internal_command" &&
-            (normalized.intent === "activate" ||
-              normalized.intent === "change_role") &&
-            !(await lockActiveInternalEmployeeForEpisode(transaction, {
-              tenantId: normalized.tenantId,
-              conversationId: normalized.conversationId,
-              episodeId: normalized.episodeId
-            }))
-          ) {
-            return { kind: "episode_not_found" } as const;
-          }
-
-          const currentEpisode = await loadEpisodeById(transaction, {
-            tenantId: normalized.tenantId,
-            episodeId: normalized.episodeId,
-            conversationId: normalized.conversationId,
-            lock: true
-          });
-          if (
-            currentEpisode === null ||
-            currentEpisode.participant.tenantId !== normalized.tenantId
-          ) {
-            return { kind: "episode_not_found" } as const;
-          }
-          if (currentEpisode.revision !== normalized.expectedEpisodeRevision) {
-            return {
-              kind: "episode_revision_conflict",
-              currentEpisode
-            } as const;
-          }
-          if (
-            !membershipCauseMatchesOrigin(
-              currentEpisode.origin,
-              normalized.cause
-            )
-          ) {
-            throw new CoreError(
-              "validation.failed",
-              "Membership transition cause must match the episode origin."
-            );
-          }
-
-          const mutation = buildEpisodeTransitionMutation({
-            currentEpisode,
-            input: normalized
-          });
-
-          await expectOneReturnedRow(
-            transaction,
-            buildInsertInboxV2ConversationMembershipCommitSql({
-              tenantId: normalized.tenantId,
-              conversationId: normalized.conversationId,
-              expectedMembershipRevision: normalized.expectedMembershipRevision,
-              resultingMembershipRevision:
-                mutation.conversationMembershipRevision,
-              occurredAt: normalized.occurredAt
-            }),
-            "Conversation membership commit insert"
-          );
-          await expectOneReturnedRow(
-            transaction,
-            buildInsertInboxV2ParticipantMembershipTransitionSql({
-              transition: mutation.transition,
-              conversationId: normalized.conversationId,
-              participantId: currentEpisode.participant.id,
-              membershipRevision: mutation.conversationMembershipRevision
-            }),
-            "Participant membership transition insert"
-          );
-          await expectOneReturnedRow(
-            transaction,
-            buildUpdateInboxV2ParticipantMembershipEpisodeSql({
-              before: currentEpisode,
-              after: mutation.episode
-            }),
-            "Participant membership episode projection update"
-          );
-          await expectOneReturnedRow(
-            transaction,
-            buildAdvanceInboxV2ConversationMembershipHeadSql({
-              tenantId: normalized.tenantId,
-              conversationId: normalized.conversationId,
-              expectedMembershipRevision: normalized.expectedMembershipRevision,
-              resultingMembershipRevision:
-                mutation.conversationMembershipRevision,
-              changedAt: normalized.occurredAt
-            }),
-            "Conversation membership head advance"
-          );
-
-          return {
-            kind: "updated",
-            record: {
-              conversationMembershipRevision:
-                mutation.conversationMembershipRevision,
-              episode: mutation.episode,
-              transition: mutation.transition
-            }
-          } as const;
-        }
-      );
+    async withTransitionEpisode(input, persist) {
+      return persistTransitionEpisode(transactionExecutor, input, persist);
     }
   };
 }
 
+type ParticipantMembershipPersist<TResult> = (
+  context: Readonly<{
+    executor: RawSqlExecutor;
+    record: InboxV2ParticipantMembershipMutationRecord;
+  }>
+) => Promise<TResult>;
+
+async function persistStartEpisode(
+  transactionExecutor: InboxV2ParticipantMembershipTransactionExecutor,
+  input: StartInboxV2ParticipantMembershipEpisodeInput
+): Promise<StartInboxV2ParticipantMembershipEpisodeResult>;
+async function persistStartEpisode<TResult>(
+  transactionExecutor: InboxV2ParticipantMembershipTransactionExecutor,
+  input: StartInboxV2ParticipantMembershipEpisodeInput,
+  persist: ParticipantMembershipPersist<TResult>
+): Promise<WithStartInboxV2ParticipantMembershipEpisodeResult<TResult>>;
+async function persistStartEpisode<TResult>(
+  transactionExecutor: InboxV2ParticipantMembershipTransactionExecutor,
+  input: StartInboxV2ParticipantMembershipEpisodeInput,
+  persist?: ParticipantMembershipPersist<TResult>
+): Promise<
+  | StartInboxV2ParticipantMembershipEpisodeResult
+  | WithStartInboxV2ParticipantMembershipEpisodeResult<TResult>
+> {
+  const normalized = normalizeStartEpisodeInput(input);
+
+  return runParticipantMembershipTransaction(
+    transactionExecutor,
+    async (transaction) => {
+      const headRevision = await lockMembershipHead(transaction, {
+        tenantId: normalized.episode.tenantId,
+        conversationId: normalized.conversationId
+      });
+      if (headRevision === null) {
+        return { kind: "conversation_not_found" } as const;
+      }
+      if (headRevision !== normalized.expectedMembershipRevision) {
+        return {
+          kind: "membership_revision_conflict",
+          currentMembershipRevision: headRevision
+        } as const;
+      }
+
+      if (
+        normalized.episode.origin.kind === "hulee_internal_command" &&
+        !(await lockActiveInternalEmployeeForParticipant(transaction, {
+          tenantId: normalized.episode.tenantId,
+          conversationId: normalized.conversationId,
+          participantId: normalized.episode.participant.id
+        }))
+      ) {
+        return { kind: "participant_not_found" } as const;
+      }
+
+      const participant = await loadParticipantById(transaction, {
+        tenantId: normalized.episode.tenantId,
+        participantId: normalized.episode.participant.id,
+        lock: true
+      });
+      if (
+        participant === null ||
+        participant.conversation.id !== normalized.conversationId
+      ) {
+        return { kind: "participant_not_found" } as const;
+      }
+
+      const episodeById = await loadEpisodeById(transaction, {
+        tenantId: normalized.episode.tenantId,
+        episodeId: normalized.episode.id,
+        lock: true
+      });
+      if (episodeById !== null) {
+        return { kind: "episode_id_conflict" } as const;
+      }
+
+      const currentOrigin = await loadCurrentEpisodeByOrigin(
+        transaction,
+        normalized.episode
+      );
+      if (currentOrigin !== null) {
+        return {
+          kind: "current_origin_conflict",
+          currentEpisode: currentOrigin
+        } as const;
+      }
+
+      await expectOneReturnedRow(
+        transaction,
+        buildInsertInboxV2ConversationMembershipCommitSql({
+          tenantId: normalized.episode.tenantId,
+          conversationId: normalized.conversationId,
+          expectedMembershipRevision: normalized.expectedMembershipRevision,
+          resultingMembershipRevision: normalized.resultingMembershipRevision,
+          occurredAt: normalized.episode.validFrom
+        }),
+        "Conversation membership commit insert"
+      );
+      await expectOneReturnedRow(
+        transaction,
+        buildInsertInboxV2ParticipantMembershipEpisodeSql({
+          episode: normalized.episode,
+          conversationId: normalized.conversationId
+        }),
+        "Participant membership episode insert"
+      );
+      await expectOneReturnedRow(
+        transaction,
+        buildInsertInboxV2ParticipantMembershipTransitionSql({
+          transition: normalized.transition,
+          conversationId: normalized.conversationId,
+          participantId: normalized.episode.participant.id,
+          membershipRevision: normalized.resultingMembershipRevision
+        }),
+        "Participant membership transition insert"
+      );
+      await expectOneReturnedRow(
+        transaction,
+        buildAdvanceInboxV2ConversationMembershipHeadSql({
+          tenantId: normalized.episode.tenantId,
+          conversationId: normalized.conversationId,
+          expectedMembershipRevision: normalized.expectedMembershipRevision,
+          resultingMembershipRevision: normalized.resultingMembershipRevision,
+          changedAt: normalized.episode.validFrom
+        }),
+        "Conversation membership head advance"
+      );
+
+      const record = {
+        conversationMembershipRevision: normalized.resultingMembershipRevision,
+        episode: normalized.episode,
+        transition: normalized.transition
+      } as const;
+      if (persist === undefined) {
+        return { kind: "created", record } as const;
+      }
+      const result = await persist({ executor: transaction, record });
+      return { kind: "created", record, result } as const;
+    },
+    persist === undefined ? PARTICIPANT_MEMBERSHIP_TRANSACTION_ATTEMPTS : 1
+  );
+}
+
+async function persistTransitionEpisode(
+  transactionExecutor: InboxV2ParticipantMembershipTransactionExecutor,
+  input: TransitionInboxV2ParticipantMembershipEpisodeInput
+): Promise<TransitionInboxV2ParticipantMembershipEpisodeResult>;
+async function persistTransitionEpisode<TResult>(
+  transactionExecutor: InboxV2ParticipantMembershipTransactionExecutor,
+  input: TransitionInboxV2ParticipantMembershipEpisodeInput,
+  persist: ParticipantMembershipPersist<TResult>
+): Promise<WithTransitionInboxV2ParticipantMembershipEpisodeResult<TResult>>;
+async function persistTransitionEpisode<TResult>(
+  transactionExecutor: InboxV2ParticipantMembershipTransactionExecutor,
+  input: TransitionInboxV2ParticipantMembershipEpisodeInput,
+  persist?: ParticipantMembershipPersist<TResult>
+): Promise<
+  | TransitionInboxV2ParticipantMembershipEpisodeResult
+  | WithTransitionInboxV2ParticipantMembershipEpisodeResult<TResult>
+> {
+  const normalized = normalizeTransitionEpisodeInput(input);
+
+  return runParticipantMembershipTransaction(
+    transactionExecutor,
+    async (transaction) => {
+      const headRevision = await lockMembershipHead(transaction, {
+        tenantId: normalized.tenantId,
+        conversationId: normalized.conversationId
+      });
+      if (headRevision === null) {
+        return { kind: "conversation_not_found" } as const;
+      }
+      if (headRevision !== normalized.expectedMembershipRevision) {
+        return {
+          kind: "membership_revision_conflict",
+          currentMembershipRevision: headRevision
+        } as const;
+      }
+
+      if (
+        normalized.cause.kind === "hulee_internal_command" &&
+        (normalized.intent === "activate" ||
+          normalized.intent === "change_role") &&
+        !(await lockActiveInternalEmployeeForEpisode(transaction, {
+          tenantId: normalized.tenantId,
+          conversationId: normalized.conversationId,
+          episodeId: normalized.episodeId
+        }))
+      ) {
+        return { kind: "episode_not_found" } as const;
+      }
+
+      const currentEpisode = await loadEpisodeById(transaction, {
+        tenantId: normalized.tenantId,
+        episodeId: normalized.episodeId,
+        conversationId: normalized.conversationId,
+        lock: true
+      });
+      if (
+        currentEpisode === null ||
+        currentEpisode.participant.tenantId !== normalized.tenantId
+      ) {
+        return { kind: "episode_not_found" } as const;
+      }
+      if (currentEpisode.revision !== normalized.expectedEpisodeRevision) {
+        return {
+          kind: "episode_revision_conflict",
+          currentEpisode
+        } as const;
+      }
+      if (
+        !membershipCauseMatchesOrigin(currentEpisode.origin, normalized.cause)
+      ) {
+        throw new CoreError(
+          "validation.failed",
+          "Membership transition cause must match the episode origin."
+        );
+      }
+
+      const mutation = buildEpisodeTransitionMutation({
+        currentEpisode,
+        input: normalized
+      });
+
+      await expectOneReturnedRow(
+        transaction,
+        buildInsertInboxV2ConversationMembershipCommitSql({
+          tenantId: normalized.tenantId,
+          conversationId: normalized.conversationId,
+          expectedMembershipRevision: normalized.expectedMembershipRevision,
+          resultingMembershipRevision: mutation.conversationMembershipRevision,
+          occurredAt: normalized.occurredAt
+        }),
+        "Conversation membership commit insert"
+      );
+      await expectOneReturnedRow(
+        transaction,
+        buildInsertInboxV2ParticipantMembershipTransitionSql({
+          transition: mutation.transition,
+          conversationId: normalized.conversationId,
+          participantId: currentEpisode.participant.id,
+          membershipRevision: mutation.conversationMembershipRevision
+        }),
+        "Participant membership transition insert"
+      );
+      await expectOneReturnedRow(
+        transaction,
+        buildUpdateInboxV2ParticipantMembershipEpisodeSql({
+          before: currentEpisode,
+          after: mutation.episode
+        }),
+        "Participant membership episode projection update"
+      );
+      await expectOneReturnedRow(
+        transaction,
+        buildAdvanceInboxV2ConversationMembershipHeadSql({
+          tenantId: normalized.tenantId,
+          conversationId: normalized.conversationId,
+          expectedMembershipRevision: normalized.expectedMembershipRevision,
+          resultingMembershipRevision: mutation.conversationMembershipRevision,
+          changedAt: normalized.occurredAt
+        }),
+        "Conversation membership head advance"
+      );
+
+      const record = {
+        conversationMembershipRevision: mutation.conversationMembershipRevision,
+        episode: mutation.episode,
+        transition: mutation.transition
+      } as const;
+      if (persist === undefined) {
+        return { kind: "updated", record } as const;
+      }
+      const result = await persist({ executor: transaction, record });
+      return { kind: "updated", record, result } as const;
+    },
+    persist === undefined ? PARTICIPANT_MEMBERSHIP_TRANSACTION_ATTEMPTS : 1
+  );
+}
+
 async function runParticipantMembershipTransaction<TResult>(
   executor: InboxV2ParticipantMembershipTransactionExecutor,
-  work: (transaction: RawSqlExecutor) => Promise<TResult>
+  work: (transaction: RawSqlExecutor) => Promise<TResult>,
+  attempts = PARTICIPANT_MEMBERSHIP_TRANSACTION_ATTEMPTS
 ): Promise<TResult> {
-  for (
-    let attempt = 1;
-    attempt <= PARTICIPANT_MEMBERSHIP_TRANSACTION_ATTEMPTS;
-    attempt += 1
-  ) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       return await executor.transaction(
         work,
@@ -585,7 +688,7 @@ async function runParticipantMembershipTransaction<TResult>(
       );
     } catch (error) {
       if (
-        attempt === PARTICIPANT_MEMBERSHIP_TRANSACTION_ATTEMPTS ||
+        attempt === attempts ||
         !isRetryableParticipantMembershipTransactionError(error)
       ) {
         throw error;

@@ -207,16 +207,16 @@ export const inboxV2InternalEntityReferenceSchema = z
 
 export const inboxV2AuthorizationDependencyVectorSchema = z
   .object({
-    tenantRbacRevision: inboxV2BigintCounterSchema,
-    employeeAccessRevision: inboxV2BigintCounterSchema,
-    employeeInboxRelationRevision: inboxV2BigintCounterSchema,
-    sharedAccessRevision: inboxV2BigintCounterSchema,
+    tenantRbacRevision: inboxV2EntityRevisionSchema,
+    employeeAccessRevision: inboxV2EntityRevisionSchema,
+    employeeInboxRelationRevision: inboxV2EntityRevisionSchema,
+    sharedAccessRevision: inboxV2EntityRevisionSchema,
     resourceDependencies: z
       .array(
         z
           .object({
             resource: inboxV2EntityKeySchema,
-            accessRevision: inboxV2BigintCounterSchema
+            accessRevision: inboxV2EntityRevisionSchema
           })
           .strict()
       )
@@ -301,7 +301,7 @@ export const inboxV2AuthorizationDecisionReferenceSchema = z
     permissionId: inboxV2CatalogIdSchema,
     resourceScopeId: inboxV2CatalogIdSchema,
     resource: inboxV2EntityKeySchema,
-    resourceAccessRevision: inboxV2BigintCounterSchema,
+    resourceAccessRevision: inboxV2EntityRevisionSchema,
     decisionRevision: inboxV2EntityRevisionSchema,
     decisionHash: inboxV2Sha256DigestSchema,
     outcome: z.enum(["allowed", "denied"]),

@@ -12,7 +12,6 @@ import {
   inboxV2AtomicMutationCommitSchema,
   inboxV2AudienceImpactIdSchema,
   inboxV2AuthorizationDecisionReferenceSchema,
-  inboxV2BigintCounterSchema,
   inboxV2CatalogIdSchema,
   inboxV2CommandIdSchema,
   inboxV2CorrelationIdSchema,
@@ -809,7 +808,7 @@ function inferScenarioEventMetadata(
   const previousSharedAccessRevision =
     previousImpact?.kind === "structural"
       ? previousImpact.resultingSharedAccessRevision
-      : inboxV2BigintCounterSchema.parse("0");
+      : inboxV2EntityRevisionSchema.parse("1");
   return {
     typeId,
     accessEffect: {
@@ -823,7 +822,7 @@ function inferScenarioEventMetadata(
       ),
       deliveryFence: "invalidate_before_payload",
       previousSharedAccessRevision,
-      resultingSharedAccessRevision: inboxV2BigintCounterSchema.parse(
+      resultingSharedAccessRevision: inboxV2EntityRevisionSchema.parse(
         (BigInt(previousSharedAccessRevision) + 1n).toString()
       ),
       invalidations: changes.map((change) => ({

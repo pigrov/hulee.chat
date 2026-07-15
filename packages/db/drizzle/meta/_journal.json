@@ -239,6 +239,13 @@
       "when": 1784099666851,
       "tag": "0033_inbox_v2_data_governance_privacy",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1784118691728,
+      "tag": "0034_inbox_v2_authorization_relations",
+      "breakpoints": true
     }
   ]
 }

@@ -148,6 +148,18 @@ export type {
   InboxV2RequirementDecision
 } from "./inbox-v2-authorization-policy";
 export {
+  planInboxV2DirectGrantRevision,
+  planInboxV2RoleBindingRevision,
+  planInboxV2RoleDefinitionRevision
+} from "./inbox-v2-authorization-revision-plan";
+export type {
+  InboxV2AuthorizationRevisionPlan,
+  InboxV2GrantRevisionPlanDecision,
+  InboxV2RoleBindingLegalityFact,
+  InboxV2RoleLegalityConflict,
+  InboxV2RoleRevisionPlanDecision
+} from "./inbox-v2-authorization-revision-plan";
+export {
   canonicalInternalApiSignaturePayload,
   createInternalApiSignature,
   internalApiSignatureHeader,

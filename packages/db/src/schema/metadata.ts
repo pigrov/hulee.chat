@@ -439,6 +439,62 @@ export const initialTables = [
   { name: "inbox_v2_work_item_servicing_team_episodes", scope: "tenant", requiresTenantId: true },
   // prettier-ignore
   { name: "inbox_v2_work_item_relation_transitions", scope: "tenant", requiresTenantId: true },
+  // Inbox V2 RBAC-003 authorization relations, bounded revision fences and
+  // reference-only tenant stream/audit commit manifests are tenant-local.
+  // prettier-ignore
+  { name: "inbox_v2_auth_tenant_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_auth_employee_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_auth_role_versions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_auth_role_version_permissions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_auth_role_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_auth_role_binding_versions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_auth_role_binding_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_auth_direct_grant_versions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_auth_direct_grant_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_auth_workforce_membership_versions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_auth_workforce_membership_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_auth_resource_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_auth_structural_access_versions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_auth_structural_access_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_auth_collaborator_versions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_auth_collaborator_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_auth_command_records", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_tenant_stream_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_tenant_stream_commits", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_tenant_stream_changes", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_domain_events", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_outbox_intents", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_auth_audit_events", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_auth_audit_facets", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_auth_mutation_commits", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_auth_revision_effects", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_auth_relation_writes", scope: "tenant", requiresTenantId: true },
   { name: "conversations", scope: "tenant", requiresTenantId: true },
   {
     name: "conversation_participants",

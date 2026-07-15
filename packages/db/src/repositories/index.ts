@@ -113,7 +113,9 @@ export type {
   StartInboxV2ParticipantMembershipEpisodeInput,
   StartInboxV2ParticipantMembershipEpisodeResult,
   TransitionInboxV2ParticipantMembershipEpisodeInput,
-  TransitionInboxV2ParticipantMembershipEpisodeResult
+  TransitionInboxV2ParticipantMembershipEpisodeResult,
+  WithStartInboxV2ParticipantMembershipEpisodeResult,
+  WithTransitionInboxV2ParticipantMembershipEpisodeResult
 } from "./sql-inbox-v2-participant-membership-repository";
 export {
   buildAdvanceInboxV2TenantPolicyActivationHeadSql,
