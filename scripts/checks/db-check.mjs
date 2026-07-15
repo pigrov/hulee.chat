@@ -34,6 +34,12 @@ const inboxV2TimelineMessageInvariantNames = new Set([
   "INBOX_V2_TIMELINE_MESSAGE_INVARIANTS_SQL",
   "INBOX_V2_PROVIDER_SEMANTIC_ORDERING_INVARIANTS_SQL"
 ]);
+const inboxV2EmployeeConversationStateMarker =
+  "-- INBOX_V2_EMPLOYEE_CONVERSATION_STATE_MIGRATION_FINALIZED_V1";
+const inboxV2EmployeeConversationStatePreflightMarker =
+  "-- INBOX_V2_EMPLOYEE_CONVERSATION_STATE_PREFLIGHT_V1";
+const inboxV2EmployeeConversationStateInvariantName =
+  "INBOX_V2_EMPLOYEE_CONVERSATION_STATE_INVARIANTS_SQL";
 const inboxV2FoundationInvariantNames = new Set([
   "INBOX_V2_CLIENT_MERGE_INTEGRITY_SQL",
   "INBOX_V2_CONVERSATION_CLIENT_LINK_INTEGRITY_SQL",
@@ -55,6 +61,9 @@ const inboxV2WorkItemMigrations = migrationFiles.filter(({ sql }) =>
 );
 const inboxV2TimelineMessageMigrations = migrationFiles.filter(({ sql }) =>
   sql.includes(inboxV2TimelineMessageMarker)
+);
+const inboxV2EmployeeConversationStateMigrations = migrationFiles.filter(
+  ({ sql }) => sql.includes(inboxV2EmployeeConversationStateMarker)
 );
 const inboxV2InvariantBlocks = (
   await Promise.all(
@@ -89,6 +98,10 @@ const inboxV2WorkItemInvariantBlocks = inboxV2InvariantBlocks.filter(
 const inboxV2TimelineMessageInvariantBlocks = inboxV2InvariantBlocks.filter(
   ({ name }) => inboxV2TimelineMessageInvariantNames.has(name)
 );
+const inboxV2EmployeeConversationStateInvariantBlocks =
+  inboxV2InvariantBlocks.filter(
+    ({ name }) => name === inboxV2EmployeeConversationStateInvariantName
+  );
 if (
   inboxV2FoundationInvariantBlocks.length !==
   inboxV2FoundationInvariantNames.size
@@ -113,11 +126,18 @@ if (
   );
   process.exit(1);
 }
+if (inboxV2EmployeeConversationStateInvariantBlocks.length !== 1) {
+  console.error(
+    `Expected exactly one ${inboxV2EmployeeConversationStateInvariantName} schema block, found ${inboxV2EmployeeConversationStateInvariantBlocks.length}.`
+  );
+  process.exit(1);
+}
 const unownedInvariantBlocks = inboxV2InvariantBlocks.filter(
   ({ name }) =>
     !inboxV2FoundationInvariantNames.has(name) &&
     name !== inboxV2WorkItemInvariantName &&
-    !inboxV2TimelineMessageInvariantNames.has(name)
+    !inboxV2TimelineMessageInvariantNames.has(name) &&
+    name !== inboxV2EmployeeConversationStateInvariantName
 );
 if (unownedInvariantBlocks.length > 0) {
   console.error(
@@ -186,17 +206,26 @@ if (inboxV2TimelineMessageMigrations.length !== 1) {
   );
   process.exit(1);
 }
+if (inboxV2EmployeeConversationStateMigrations.length !== 1) {
+  console.error(
+    `Expected exactly one finalized Inbox V2 EmployeeConversationState migration, found ${inboxV2EmployeeConversationStateMigrations.length}.`
+  );
+  process.exit(1);
+}
 
 assertInboxV2FoundationMigration(inboxV2FoundationMigrations[0]);
 assertInboxV2WorkItemMigration(inboxV2WorkItemMigrations[0]);
 assertInboxV2TimelineMessageMigration(inboxV2TimelineMessageMigrations[0]);
+assertInboxV2EmployeeConversationStateMigration(
+  inboxV2EmployeeConversationStateMigrations[0]
+);
 try {
   // A historical migration cannot be regenerated from the current Drizzle
-  // schema after a later slice changes that schema. Keep validating 0030's
-  // finalized structure above and through the PostgreSQL upgrade lifecycle,
-  // while generated-schema parity follows the latest migration only.
-  await assertInboxV2TimelineMessageGeneratedSchemaParity(
-    inboxV2TimelineMessageMigrations[0]
+  // schema after a later slice changes that schema. Keep validating historical
+  // finalized structures above and through PostgreSQL upgrade lifecycles,
+  // while generated-schema parity follows the latest migration.
+  await assertInboxV2EmployeeConversationStateGeneratedSchemaParity(
+    inboxV2EmployeeConversationStateMigrations[0]
   );
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
@@ -205,13 +234,15 @@ try {
 
 console.log("db:check passed");
 
-async function assertInboxV2TimelineMessageGeneratedSchemaParity(migration) {
-  const snapshotPath = "packages/db/drizzle/meta/0031_snapshot.json";
+async function assertInboxV2EmployeeConversationStateGeneratedSchemaParity(
+  migration
+) {
+  const snapshotPath = "packages/db/drizzle/meta/0032_snapshot.json";
   const generated = await generateExpectedDrizzleMigration({
     workspaceRoot: process.cwd(),
     migrationDirectory,
-    baseIndex: 30,
-    targetIndex: 31
+    baseIndex: 31,
+    targetIndex: 32
   });
   const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
   assertDrizzleSnapshotParity(
@@ -222,9 +253,9 @@ async function assertInboxV2TimelineMessageGeneratedSchemaParity(migration) {
 
   const checkedInDdl = collectFinalizedMigrationDdlStatements({
     migrationSql: migration.sql,
-    finalizedMarker: inboxV2TimelineMessageMarker,
-    preflightMarker: inboxV2TimelineMessagePreflightMarker,
-    invariantBlocks: inboxV2TimelineMessageInvariantBlocks
+    finalizedMarker: inboxV2EmployeeConversationStateMarker,
+    preflightMarker: inboxV2EmployeeConversationStatePreflightMarker,
+    invariantBlocks: inboxV2EmployeeConversationStateInvariantBlocks
   });
   assertSqlStatementParity(generated.statements, checkedInDdl);
 }
@@ -532,6 +563,49 @@ function assertInboxV2TimelineMessageMigration(migration) {
   } catch (error) {
     console.error(
       `${migration.fileName}: ${error instanceof Error ? error.message : String(error)}`
+    );
+    process.exit(1);
+  }
+}
+
+function assertInboxV2EmployeeConversationStateMigration(migration) {
+  if (!migration.fileName.startsWith("0032_")) {
+    console.error(
+      `${migration.fileName} must be the finalized Inbox V2 EmployeeConversationState migration at index 0032.`
+    );
+    process.exit(1);
+  }
+  assertInboxV2InvariantMigration({
+    migration,
+    finalizedMarker: inboxV2EmployeeConversationStateMarker,
+    preflightMarker: inboxV2EmployeeConversationStatePreflightMarker,
+    invariantBlocks: inboxV2EmployeeConversationStateInvariantBlocks,
+    preflightDescription: "EmployeeConversationState"
+  });
+
+  for (const fragment of [
+    'CREATE TYPE "public"."inbox_v2_employee_conversation_notification_level"',
+    'CREATE TABLE "inbox_v2_employee_conversation_states"',
+    'CONSTRAINT "inbox_v2_employee_conversation_states_employee_fk" FOREIGN KEY ("tenant_id","employee_id")',
+    'CONSTRAINT "inbox_v2_employee_conversation_states_conversation_fk" FOREIGN KEY ("tenant_id","conversation_id")',
+    "create or replace function public.inbox_v2_ecs_state_guard()",
+    "create or replace function public.inbox_v2_ecs_read_cursor_guard()",
+    "create trigger inbox_v2_ecs_state_guard_trigger"
+  ]) {
+    if (!migration.sql.includes(fragment)) {
+      console.error(
+        `${migration.fileName} is missing required EmployeeConversationState SQL: ${fragment}`
+      );
+      process.exit(1);
+    }
+  }
+  if (
+    !/create constraint trigger inbox_v2_ecs_read_cursor_constraint[\s\S]*?deferrable initially deferred[\s\S]*?execute function public\.inbox_v2_ecs_read_cursor_guard\(\)/i.test(
+      migration.sql
+    )
+  ) {
+    console.error(
+      `${migration.fileName} must keep the exact read-cursor guard deferrable and initially deferred.`
     );
     process.exit(1);
   }

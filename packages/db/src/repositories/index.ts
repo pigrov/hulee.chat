@@ -5,6 +5,7 @@ export {
 } from "../client";
 export type { HuleeDatabase, HuleeDatabaseConfig } from "../client";
 export * from "./sql-inbox-v2-timeline-message-repository";
+export * from "./sql-inbox-v2-employee-conversation-state-repository";
 export * from "./sql-inbox-v2-work-item-repository";
 export { createDrizzlePersistenceExecutor } from "./drizzle-persistence-executor";
 export {

@@ -1010,14 +1010,30 @@ PostgreSQL gate passes. `INB2-DB-005` cannot start before both are complete.
     TypeScript, DB, i18n, encoding, branding and native gates on `2026-07-14`.
     Independent acceptance and migration reviews returned `READY`.
 
-- [ ] `INB2-DB-006` Add employee conversation/read state persistence.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-DB-001`.
+- [x] `INB2-DB-006` Add employee conversation/read state persistence.
+  - State: `done`; Priority: `P0`; Started: `2026-07-15`; Completed:
+    `2026-07-15`; Owner: `Codex`; Depends on: `INB2-DB-001`,
+    `INB2-DB-005`.
   - Acceptance: monotonic `greatest` last-read sequence, separate manual unread
     marker, revision/stream provenance, mute, notification level, pin/archive
     and timestamps are per employee.
   - Verification: lower multi-device read cursors cannot overwrite higher
     values; provider receipts/manual unread remain independent and tenant
-    isolation tests pass. Evidence: -
+    isolation tests pass. Evidence: the versioned contract, tenant-scoped sparse
+    state table and SQL repository persist an exact Employee/Conversation read
+    cursor plus independent manual-unread, mute, notification, pin and archive
+    preferences with revision/stream provenance. Advisory state-key locking,
+    exact TimelineItem validation, `GREATEST` cursor updates and idempotent CAS
+    no-ops prevent lower/equal device cursors from allocating a commit or
+    regressing state; callback writes and state mutations share one transaction.
+    Finalized migration `0032_inbox_v2_employee_conversation_state` has guarded
+    preflight/invariants and fresh/populated-upgrade/partial-schema lifecycle
+    coverage. Focused contract/schema/repository/finalizer tests passed `4/28`;
+    live PostgreSQL repository scenarios passed `4/4` for concurrent `80/100`
+    reads, wrong-conversation sequence, tenant isolation, manual-unread/receipt
+    independence and callback rollback; migration lifecycle passed `3/3`; full
+    `pnpm check` passed `258/2605` plus formatting, repository-wide ESLint,
+    TypeScript, DB, i18n, encoding, branding and native gates on `2026-07-15`.
 
 - [ ] `INB2-DB-009` Persist data lifecycle policy, holds, requests and operation ledgers.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-DB-001`,
@@ -2620,3 +2636,4 @@ the task state, checkbox and evidence above.
 | 2026-07-14 | `INB2-DB-003`      | Thread/binding/outbound; PG 13/124; outbound 6/6; full 247/2511       | working tree | Codex + two reviewers           |
 | 2026-07-14 | `INB2-DB-004`      | WorkItem/assignment DB; PG 14 files; DB 70/617; full 250/2540         | working tree | Codex + two reviewers           |
 | 2026-07-14 | `INB2-DB-005`      | Timeline/message DB; PG 18/18; DB 73/666; full 254/2577               | working tree | Codex + two reviewers           |
+| 2026-07-15 | `INB2-DB-006`      | Employee state/read DB; PG 4/4; migration 3/3; full 258/2605          | working tree | Codex + three reviewers         |

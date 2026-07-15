@@ -6,6 +6,7 @@ export * from "./conversation";
 export * from "./conversation-client-link";
 export * from "./data-lifecycle";
 export * from "./entity-metadata";
+export * from "./employee-conversation-state";
 export * from "./external-message-reference";
 export * from "./external-thread";
 export * from "./ids";

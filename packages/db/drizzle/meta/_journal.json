@@ -225,6 +225,13 @@
       "when": 1784057973557,
       "tag": "0031_inbox_v2_timeline_message_foundation",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1784064459257,
+      "tag": "0032_inbox_v2_employee_conversation_state",
+      "breakpoints": true
     }
   ]
 }

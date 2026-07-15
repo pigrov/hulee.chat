@@ -613,3 +613,4 @@ export type {
   WorkspacePersistenceRows
 } from "./repositories";
 export * from "./repositories/sql-inbox-v2-work-item-repository";
+export * from "./repositories/sql-inbox-v2-employee-conversation-state-repository";
