@@ -26,8 +26,8 @@ V1 data therefore cannot be copied mechanically into V2 without inventing
 identity, authorship, provider route, roster, responsibility or delivery facts.
 At the time of the original preserve-path decision, Public API v1, Telegram Bot,
 web inbox, workers and potentially existing deployments had to continue working
-during implementation. The amendment below replaces that assumption for the
-current checkout only after inventory proves fast-path eligibility.
+during implementation. The amendment below made direct replacement conditional
+on inventory; the completed inventory rejected that fast path.
 
 The current production workflow applies database migrations before replacing
 application containers. It has no complete Inbox V2 backup/restore gate. Normal
@@ -37,16 +37,17 @@ application release until a separate contract/removal release.
 Hulee uses one core for shared SaaS, isolated SaaS and on-prem. On-prem data
 plane migration cannot depend on permanent SaaS control-plane connectivity.
 
-## Pre-Production Disposition Amendment
+## Conditional Pre-Production Fast Path (Historical Proposal)
 
-On `2026-07-11` the product owner confirmed that Hulee has not entered
-production and does not need two long-lived internal Inbox implementations.
-The current target is therefore a **pre-production direct replacement**: build
-one complete V2 vertical slice, switch every internal Inbox producer/consumer
-to it, then remove V1 before expanding WhatsApp/MAX, notifications, CRM and
-reporting.
+On `2026-07-11` the product owner confirmed that Hulee had not entered
+production and did not need two long-lived internal Inbox implementations. The
+proposed target was therefore a **conditional pre-production direct
+replacement**: build one complete V2 vertical slice, switch every internal
+Inbox producer/consumer to it, then remove V1 before expanding WhatsApp/MAX,
+notifications, CRM and reporting. This proposal is retained as decision history;
+it is not the current disposition.
 
-This fast path is conditional. `INB2-MIG-001` must first prove all of the
+This fast path was conditional. `INB2-MIG-001` had to prove all of the
 following:
 
 - no supported production, isolated SaaS or on-prem installation exists;
@@ -67,15 +68,31 @@ work package without a soak clock. If any condition fails or a real deployment/
 consumer appears before deletion, the full preserve path in this ADR becomes
 mandatory automatically.
 
+### INB2-MIG-001 outcome
+
+Read-only repository, runtime, PostgreSQL, MinIO and backup inventory completed
+on `2026-07-16` found a live shared SaaS deployment, non-empty V1, API/session/
+provider, object and backup state, and no authoritative fleet/external-consumer/
+off-host-backup registry. The current local database also has pending outbox
+work and governance/hold fixtures.
+
+The conditional fast path therefore failed and the additive `preserve` path in
+this ADR is active. The earlier product intent to avoid a permanent V1/V2
+platform remains valid: compatibility exists only until the preserving backfill,
+cutover, observation and removal gates pass. It is not disposal authority.
+Detailed evidence and downstream ownership are recorded in
+`docs/product/inbox-v2-mig-001-inventory-and-disposition.md`.
+
 Contract versioning is not removed by this decision. Persisted events, module/
 adapter APIs, realtime envelopes and public APIs remain versioned. Public API
 `/v1` means the first public contract and is independent of the obsolete Inbox
 V1 implementation; while unpublished it may be remapped directly to V2 or
-changed without a compatibility facade. After V1 deletion, internal `InboxV2`
-naming may be collapsed to neutral `Inbox` naming in one pre-release change
-without compatibility aliases only while the fast-path disposition remains
-current. Preserve keeps persisted/published IDs and migration history stable or
-changes them through an explicit versioned compatibility migration.
+changed without a compatibility facade. Only a future separately approved
+disposable deployment whose fast-path evidence remains current may collapse
+internal `InboxV2` naming to neutral `Inbox` naming without compatibility
+aliases. The selected preserve path keeps persisted/published IDs and migration
+history stable or changes them through an explicit versioned compatibility
+migration.
 
 ## Decision
 
@@ -109,11 +126,11 @@ Missing or uncertain classification means `preserve`. `NODE_ENV`, deployment
 type, low row count or seed-looking data never authorizes reset.
 
 - fresh empty installs initialize V2 as canonical;
-- ephemeral CI may reset; it keeps a representative V1 upgrade lane only when
-  inventory activates the preserve path;
-- the current local development database may be explicitly classified
-  `disposable` after `INB2-MIG-001`; it becomes an upgrade/reconciliation
-  fixture only when inventory selects preserve;
+- ephemeral CI may reset, but now also keeps the representative V1 upgrade lane
+  required by the selected preserve path;
+- `INB2-MIG-001` classified the current local development database as
+  `preserve`; it is the upgrade/reconciliation fixture. A different personal
+  local target may be `disposable` only through fresh exact evidence;
 - shared/isolated SaaS and existing on-prem are always preserved;
 - unknown on-prem versions require inventory and possibly an intermediate bridge
   release, never best-effort direct upgrade.
@@ -282,9 +299,15 @@ group inbound/outbound, attachment, reconnect, retry/uncertain and stream gap
 cases for every required release surface.
 
 Incidents, unexplained differences, rollback or fallback reset the affected
-clock. On the preserve path, physical V1 removal is a separate release after release gates,
-`INB2-ARCH-007`, deployment inventory, backup/restore drill, clean install and
-representative upgrade evidence pass.
+clock. On the preserve path, physical V1 removal is a separate release after
+release gates, `INB2-ARCH-007`, deployment inventory, backup/restore drill, clean
+install and representative upgrade evidence pass.
+
+`INB2-MIG-006` owns one signed early V1-applicable removal dossier covering those
+lifecycle, fleet, consumer, supported-upgrade, backup/restore and observation
+criteria. `INB2-MIG-007` depends on that current dossier. Later operational tasks
+productize the same capabilities but do not create a circular prerequisite for
+removing the obsolete implementation.
 
 ## Consequences
 
@@ -352,18 +375,20 @@ Rejected because V2-only data cannot be represented safely in V1 schema.
 
 ## Implementation Ownership
 
-- `INB2-DB-008`: clean V2 install/guarded reset, plus an additive V1-upgrade
-  harness only when preserve is selected;
-- `INB2-MIG-001`: exhaustive repository/runtime/deployment inventory;
-- `INB2-MIG-002/003`: deferred compatibility materialization/backfill, activated
-  only for preserve;
-- `INB2-MIG-004`: record revisioned fast/preserve disposition or build preserve
-  shadow/rollout controls;
-- `INB2-MIG-005`: atomically revalidate disposition before direct internal/
-  Telegram cutover or fenced preserve cutover;
-- `INB2-MIG-006`: pre-removal acceptance and required rollback drills;
+- `INB2-DB-008`: clean V2 install/guarded reset plus the now-required additive
+  V1-upgrade harness;
+- `INB2-MIG-001`: completed repository/runtime/deployment inventory and preserve
+  disposition;
+- `INB2-MIG-002/003`: activated compatibility materialization/backfill;
+- `INB2-MIG-004`: finalize the revisioned preserve disposition and build its
+  shadow/rollout/authority controls;
+- `INB2-MIG-005`: atomically revalidate that disposition and every applicable
+  control before internal/Telegram cutover;
+- `INB2-MIG-006`: pre-removal acceptance, required rollback drills and the signed
+  early V1-applicable lifecycle/fleet/backup removal subgate;
 - `INB2-MIG-007`: V1 implementation contraction/removal;
-- `INB2-OPS-007`/`009`: packaged migration and backup/restore proof.
+- `INB2-OPS-007`/`009`: later productization of packaged migration and
+  backup/restore proof, reusing the MIG-006 dossier.
 
 Completing this ADR makes the strategy reviewable; it does not mark any runtime,
 database, provider or release gate complete.

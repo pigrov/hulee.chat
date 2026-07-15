@@ -35,8 +35,10 @@ Inbox V2 should be added as a new versioned domain/read-model slice. Existing
 source, authentication, RBAC, event/outbox, storage and client-platform
 foundations should be reused. The `2026-07-11` ADR 0014 amendment selects a
 pre-production direct replacement after inventory proves there is no supported
-deployment/consumer/valuable-data obligation; V1 remains temporarily runnable
-only until the complete V2/Telegram vertical slice replaces it.
+deployment/consumer/valuable-data obligation. `INB2-MIG-001` subsequently found
+such deployment/data/provider/backup obligations on `2026-07-16`, so the
+additive preserve path is now active. V1 remains temporarily runnable only until
+the preserving V2/Telegram cutover and removal gates pass.
 
 ## Verified Current Slices
 
@@ -250,7 +252,8 @@ The V1 message event name is also semantically overloaded: a queued outbound
 Message emits `message.sent`, and the worker consumes that factual-looking event
 as a dispatch command. Inbox V2 must keep dispatch intent and confirmed
 sent/delivery facts distinct while V1 remains the temporary runtime, then remove
-the overloaded V1 event during direct replacement.
+the overloaded V1 event only after preserve cutover, observation and removal
+gates pass.
 
 ## Correctness And Compatibility Risks
 
@@ -356,12 +359,12 @@ The baseline does not yet include tests for:
 
 ## Temporary V1 Boundary And Removal Requirements
 
-The current target follows `build V2 -> prove one complete vertical slice ->
-direct cutover -> remove V1`. The full additive materialize/backfill/shadow path
-is activated only when `INB2-MIG-001` finds state or consumers that must be
-preserved.
+`INB2-MIG-001` found state, provider sessions, backups and unknown consumers/
+deployments that must be preserved. The current target therefore follows
+`expand -> one-command materialize -> diagnostic backfill -> shadow/canary ->
+V2 only -> observe -> remove V1`.
 
-Until direct cutover is complete:
+Until the preserving cutover is complete:
 
 - do not break existing Public API v1 or `internal-api-v1` schemas;
 - keep current Telegram Bot/Public API flows and seed/test scenarios working;
@@ -372,15 +375,15 @@ Until direct cutover is complete:
 - prefer explicit V2 source binding for outbound and measure any temporary
   legacy external-handle fallback;
 - preserve current IDs where deterministic backfill is possible;
-- delete V1 columns/routes only after fast-path eligibility and V2 replacement
-  tests pass; no calendar window is required while the product remains
-  pre-production and all scoped state is disposable.
+- delete V1 columns/routes only after preserve-path reconciliation, rollback,
+  zero-use observation and V2 replacement tests pass.
 
-Only when `INB2-MIG-001` selects preserve are expected legacy backfill rules
-activated in `INB2-DB-008` and the cutover epic. The proven fast path has no
-legacy backfill. On preserve, a legacy outbound author or provider group roster
-cannot always be reconstructed safely; ambiguous data must produce a migration
-diagnostic instead of invented identity/route data.
+The representative V1 snapshot/additive-upgrade harness is now required in
+`INB2-DB-008`; operational backfill and its legacy mapping rules belong to
+`INB2-MIG-003`. A legacy outbound author or provider group roster cannot always
+be reconstructed safely; ambiguous data must produce a migration diagnostic
+instead of invented identity/route data. The exact inventory and disposition are
+in `docs/product/inbox-v2-mig-001-inventory-and-disposition.md`.
 
 The approved environment classification, one-command materialization, backfill,
 shadow, rollout, rollback and V1 removal policy is defined by ADR 0014 and

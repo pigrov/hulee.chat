@@ -28,6 +28,7 @@
 - `docs/product/inbox-v2-direct-messenger-cells.csv`
 - `docs/product/inbox-v2-data-lifecycle-and-privacy.md`
 - `docs/product/inbox-v2-migration-and-cutover.md`
+- `docs/product/inbox-v2-mig-001-inventory-and-disposition.md`
 - `docs/product/inbox-v2-scenarios-and-glossary.md`
 - `docs/adr/0009-inbox-v2-domain-boundaries.md`
 - `docs/adr/0010-inbox-v2-participants-identity-and-authorship.md`

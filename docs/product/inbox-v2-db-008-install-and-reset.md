@@ -1,10 +1,10 @@
 # Inbox V2 Clean Install And Guarded Reset
 
-Status: `implementation verified on disposable fixtures; closure awaits INB2-MIG-001`
+Status: `disposable fixture implementation verified; preserve upgrade lane required`
 
 Owner task: `INB2-DB-008`
 
-Last verified: `2026-07-15`
+Last verified: `2026-07-16`
 
 ## Scope And Current Gate
 
@@ -23,15 +23,17 @@ disposition:
   `reset_noop`;
 - stream-epoch rotation after every successful reset.
 
-`INB2-MIG-001` is still planned. Therefore this implementation may be exercised
-only against synthetic disposable databases and DB-008 cannot yet be marked
-`done`. The current development database remains `preserve` by default and must
-not be reset. No usable local disposable manifest is committed to the
-repository.
+`INB2-MIG-001` completed on `2026-07-16` and selected `preserve`. Therefore the
+reset implementation may still be exercised only against synthetic disposable
+databases, the current development and known shared SaaS databases must not be
+reset, and DB-008 cannot yet be marked `done`. No usable local disposable
+manifest is committed to the repository.
 
-A V1 snapshot/upgrade, compatibility projection, RBAC dry-run, N-1 smoke and
-rollback harness remains inactive. It becomes required only if `INB2-MIG-001`
-selects `preserve`.
+A representative V1 snapshot/additive-schema upgrade harness, RBAC dry-run,
+migrate-before-restart N-1 API/web/worker smoke and rollback harness are now
+mandatory. Runtime dual materialization belongs to `INB2-MIG-002`, and data
+backfill belongs to `INB2-MIG-003`; neither is implemented by DB-008. The four
+harness/evidence items above are the remaining DB-008 preserve lane.
 
 ## Non-Destructive Install
 
@@ -237,8 +239,8 @@ Verified scenarios:
   repair it by reset/reinstall;
 - the repaired current database reruns without changes.
 
-Repository completion still requires `INB2-MIG-001`, then a refreshed manifest
-for the chosen fast/preserve disposition, `pnpm db:check` and full `pnpm check`.
+Repository completion now requires the preserve V1-upgrade/N-1/RBAC/rollback
+lane activated by `INB2-MIG-001`, then `pnpm db:check` and full `pnpm check`.
 
 The disposable inventory deliberately performs a complete deterministic scan
 and sort of managed relation contents. It is a pre-production disposition gate,

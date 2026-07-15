@@ -1,48 +1,41 @@
 # Inbox V2 Migration And Cutover Strategy
 
-Status: `approved architecture baseline`  
-Owner task: `INB2-ARCH-009`  
-Last verified: `2026-07-11`  
-Applies to: fresh installs, disposable and preserved development data, shared
-SaaS, isolated SaaS and on-prem/private deployments.
+- Status: `approved architecture baseline; preserve path activated`
+- Owner tasks: `INB2-ARCH-009`, `INB2-MIG-001`
+- Last verified: `2026-07-16`
+- Applies to: fresh installs, disposable and preserved development data, shared
+  SaaS, isolated SaaS and on-prem/private deployments.
 
-## Current Disposition: Pre-Production Direct Replacement
+## Current Disposition: Preserve
 
 The product owner confirmed on `2026-07-11` that Hulee is not in production.
-The current target is one V2 implementation, not a permanent V1/V2 compatibility
-platform. `INB2-MIG-001` must still prove there is no supported deployment,
-promised Public API consumer, valuable database/object/backup, real customer
-data, hold/audit obligation or unresolved provider side effect.
+The target remains one V2 implementation, not a permanent V1/V2 compatibility
+platform. However, `INB2-MIG-001` completed on `2026-07-16` and found a live
+shared SaaS deployment, V1 data, active API/provider/session state, object and
+backup copies, plus unknown fleet/external-consumer/off-host roots. The
+conditional direct-replacement fast path therefore failed and the additive
+preserve strategy below applies automatically.
 
-When that inventory passes, the selected path is:
-
-```text
-complete V2 contracts/persistence/source/projection/API/realtime/UI
-  -> prove Telegram private/group V2 vertical slice
-  -> switch all internal Inbox producers and consumers directly to V2
-  -> remove V1 code, tables, routes, workers, seeds and tests
-  -> run clean V2 install/reset/rebuild and full repository gates
-  -> continue WA/MAX, notifications, CRM and reporting on V2 only
-```
-
-This path has no dual materialization, compatibility projection, V1 backfill,
-shadow-read state machine, V1 rollback or `7/14/30/90`-day wait. If inventory
-finds any preserve condition, the full strategy below applies automatically.
+The evidence revision is
+`docs/product/inbox-v2-mig-001-inventory-and-disposition.md`. It reactivates
+`INB2-MIG-002/003`, expands the required `INB2-DB-008` verification and forbids
+using guarded reset against the known shared SaaS or current local database.
+Compatibility remains temporary and is removed after preserving cutover and
+acceptance, not skipped through a destructive reset.
 
 `schemaVersion`, event/realtime/module API versions and the first public `/v1`
 contract remain. They protect persisted/replayed data and independent clients;
-they do not require retaining the old Inbox implementation. After removal, only
-while the fast-path disposition remains current may a single pre-release cleanup
-rename internal `InboxV2` symbols/schema IDs to neutral `Inbox` names and squash
-unpublished migrations without aliases. Preserve keeps persisted/published IDs
-and migration history stable or changes them through an explicit versioned
-compatibility migration.
+they do not require retaining the old Inbox implementation. Only a future,
+separately approved disposable target whose fast-path evidence remains current
+may use a single pre-release cleanup to rename internal `InboxV2` symbols/schema
+IDs to neutral `Inbox` names and squash unpublished migrations without aliases.
+The selected preserve path keeps persisted/published IDs and migration history
+stable or changes them through an explicit versioned compatibility migration.
 
 ## Decision
 
-Inbox V2 has two explicit paths. The current path is the pre-production direct
-replacement above. A deployment that fails its eligibility inventory uses the
-following additive preserve path:
+Inbox V2 has two explicit paths. The current path is the following additive
+preserve path because the eligibility inventory failed:
 
 ```text
 classify deployment
@@ -110,17 +103,20 @@ removal criteria. It does not implement migrations or create V2 tables.
 
 Implementation belongs to:
 
-- `INB2-DB-008`: clean V2 install/guarded reset and conditional V1 upgrade;
-- `INB2-MIG-001`: exhaustive producer/consumer/runtime inventory;
-- `INB2-MIG-002/003`: deferred compatibility/backfill activated only for
-  preserve;
-- `INB2-MIG-004`: revisioned fast/preserve disposition or preserve shadow/rollout
-  controls;
-- `INB2-MIG-005`: atomic disposition revalidation followed by direct internal/
-  Telegram or fenced preserve cutover;
-- `INB2-MIG-006`: pre-removal acceptance and required rollback drill;
+- `INB2-DB-008`: clean V2 install/guarded reset and the now-required V1 upgrade
+  harness;
+- `INB2-MIG-001`: completed producer/consumer/runtime inventory and preserve
+  disposition;
+- `INB2-MIG-002/003`: activated compatibility/backfill for preserve;
+- `INB2-MIG-004`: final revisioned preserve disposition plus shadow/rollout/
+  authority controls;
+- `INB2-MIG-005`: atomic preserve-disposition/control revalidation followed by
+  the fenced internal/Telegram cutover;
+- `INB2-MIG-006`: pre-removal acceptance, rollback drill and signed early
+  V1-applicable lifecycle/fleet/backup removal subgate;
 - `INB2-MIG-007`: V1 implementation removal;
-- `INB2-OPS-007` and `INB2-OPS-009`: restore and packaged deployment proof.
+- `INB2-OPS-007` and `INB2-OPS-009`: later productization of restore and packaged
+  deployment proof, reusing the MIG-006 removal dossier.
 
 Exact retention, subject export/delete, legal-hold, audit and restore-erasure
 behavior is fixed by ADR 0015 and
@@ -151,25 +147,43 @@ infer.
   authoritative fleet/on-prem installation registry exists. Missing telemetry
   is not evidence that no other installation exists.
 
+### Known shared SaaS data
+
+Read-only verification on `2026-07-16` found a known live `saas_shared` data
+plane with non-empty V1 business/event state, active API/application access,
+active bot/direct provider and encrypted-session state, a non-empty object store
+whose inventory does not reconcile one-to-one with DB file rows, and historical
+database/configuration backup roots.
+
+This deployment is `preserve`. The public disposition, copy categories and
+cutover/delete ownership are in
+`docs/product/inbox-v2-mig-001-inventory-and-disposition.md`. Exact operational
+topology, counts, paths and digests are retained in restricted operator evidence.
+
 ### Current workspace development data
 
-Read-only verification on `2026-07-10` found:
+Read-only re-verification on `2026-07-16` found:
 
 | Entity                       |      Rows |
 | ---------------------------- | --------: |
-| tenants                      |         3 |
+| tenants                      |        42 |
 | clients                      |         3 |
 | conversations                |         3 |
 | messages                     |         7 |
 | conversation participants    |         1 |
 | source connections/accounts  |         0 |
 | raw/normalized source events |         0 |
-| event store / outbox         | 267 / 267 |
+| event store / outbox         | 285 / 267 |
 | pending / processed outbox   |  252 / 15 |
 | message delivery attempts    |         1 |
+| V2 conversations/items       |   10 / 12 |
+| deletion runs / hold heads   |    55 / 8 |
+| restore-ledger rows          |        19 |
 
-All Client/Conversation/Message rows belong to the `local` seed tenant, but the
-large pending outbox set makes this database useful for reconciliation tests.
+All legacy Client/Conversation/Message rows belong to the `local` seed tenant,
+but the large pending outbox set makes this database useful for reconciliation
+tests. Additional tenants and V2 governance rows are test fixtures, not proof
+that the whole database is disposable.
 The seven Messages are `4 inbound/received`, `2 outbound/queued` and
 `1 outbound/sent`; all three `message.sent` outbox rows are `processed`, so two
 queued Messages already prove that processed V1 outbox is not delivery evidence
@@ -759,17 +773,15 @@ Fresh-install CI must verify:
 
 ## Current Development Policy
 
-For this checkout, `INB2-MIG-001` first records the repository/deployment and
-local data disposition. If the verified local data is explicitly disposable,
-reset becomes the normal V2 development path without first building a V1
-upgrade/backfill product. The reset command must still require a disposable
-manifest/confirmation, reject an unknown/shared/production database, coordinate
-PostgreSQL and object storage and rotate stream epoch if a V2 cursor was ever
-published.
+`INB2-MIG-001` classified the current local database as `preserve`; it remains
+the representative upgrade/reconciliation fixture. It must not be reset merely
+because its data is test-shaped. A separate fresh personal/ephemeral target may
+exercise guarded reset only with a disposable manifest/confirmation, exact
+PostgreSQL/object evidence and stream-epoch rotation when required.
 
-Fast-path CI and release evidence require an empty/current database -> clean V2
-schema/seed/bootstrap plus projection/realtime rebuild. A representative V1
-upgrade fixture is required only if inventory activates the preserve path.
+CI and release evidence now require both lanes: empty database -> clean V2
+schema/seed/bootstrap/rebuild and representative V1 snapshot -> additive
+upgrade/N-1 smoke/reconciliation/rollback.
 
 ## SaaS Shared And Isolated Policy
 
@@ -826,11 +838,13 @@ Automatic generic deploys must not execute `INB2-MIG-007` destructive SQL.
 
 ## V1 Disable And Deletion Criteria
 
-For the current pre-production fast path, internal V1 may be disabled and
-removed after `INB2-MIG-001` proves eligibility, the required V2 vertical slice
-and Telegram private/group scenarios pass, all internal producers/consumers are
-switched, provider-side effects are reconciled and clean V2 install/reset/
-rebuild plus full checks pass. No calendar observation window is required.
+For a future newly proven disposable fast-path target, internal V1 may be
+disabled and removed after its fresh eligibility evidence, the required V2
+vertical slice and Telegram private/group scenarios pass, all internal
+producers/consumers are switched, provider-side effects are reconciled and clean
+V2 install/reset/rebuild plus full checks pass. No calendar observation window
+is required for that isolated target. This paragraph does not apply to the
+current preserve disposition.
 
 The remaining criteria in this section apply to preserve deployments:
 
@@ -861,6 +875,12 @@ V1 code/schema is removed only when, in addition:
   independent `90`-day minimum deprecation policy;
 - repository, runtime image and deployment searches show no accidental V1
   implementation dependency.
+
+These bullets are one early V1-applicable removal subgate owned and signed by
+`INB2-MIG-006`; `INB2-MIG-007` cannot start from an older or incomplete dossier.
+Later `INB2-OPS-007/009` productize the backup/fleet capabilities and reuse this
+evidence for production-readiness gates. They are deliberately not prerequisites
+of MIG-006/MIG-007, which avoids a dependency cycle through post-removal epics.
 
 Removing V1 implementation does not authorize deleting held or still-required
 audit/history, nor retaining expired payload copies. Physical cleanup runs
@@ -898,8 +918,9 @@ The preserve path must additionally verify:
 ## Approval Checklist
 
 - [x] Fresh install uses V2 canonical state and no fake backfill.
-- [x] Current pre-production direct replacement requires explicit disposable/
-      no-consumer inventory; reset is never inferred from environment or rows.
+- [x] The conditional direct replacement required explicit disposable/
+      no-consumer inventory; MIG-001 rejected it and recorded preserve. Reset is
+      never inferred from environment or rows.
 - [x] Shared/isolated SaaS and on-prem preserve data by default.
 - [x] Compatibility separates external API versions from internal V1 code.
 - [x] An eligible pre-production path skips compatibility infrastructure and

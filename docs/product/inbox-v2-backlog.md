@@ -2,7 +2,7 @@
 
 Status: `active`  
 Canonical task tracker: this file  
-Last updated: `2026-07-14`
+Last updated: `2026-07-16`
 
 ## Purpose
 
@@ -178,11 +178,11 @@ requires an ADR update and backlog impact review.
   RBAC, provider delete and privacy erasure are distinct.
 - Data-storing modules declare typed lifecycle/lineage/export/delete handlers and
   fail closed when a storage root or compatible handler is missing.
-- V1 disposition is explicit: the current pre-production fast path removes the
-  internal V1 implementation after a complete V2/Telegram vertical slice and a
-  proven disposable/no-consumer inventory; any preserve finding automatically
-  activates additive backfill, shadow, rollback and observation gates. Contract
-  versioning remains independent of legacy implementation compatibility.
+- V1 disposition is explicit: `INB2-MIG-001` rejected the conditional
+  pre-production fast path and selected preserve. Additive backfill, shadow,
+  rollback and observation gates are active before the internal V1
+  implementation can be removed. Contract versioning remains independent of
+  legacy implementation compatibility.
 - Provider access models and capability/evidence are surface-specific. Consumer
   QR/web/desktop access is never treated as a supported programmable connector
   without approved transport and current evidence.
@@ -220,7 +220,7 @@ architecture
   -> projections/API/realtime
   -> normalized app-shell/UI
   -> Telegram V2 vertical slice
-  -> pre-production V1 removal
+  -> preserve upgrade/backfill + fenced V2 cutover
   -> WA/MAX provider parity + notifications + CRM
   -> reporting + operational hardening
   -> V2-only production release / G7
@@ -370,7 +370,10 @@ expanding Inbox V1.
     (`145/724`) and all repository gates. Amended `2026-07-11` after the product
     owner confirmed pre-production status: direct replacement is selected only
     after `INB2-MIG-001` proves no deployment/consumer/valuable-data obligation;
-    otherwise the original preserve path remains mandatory.
+    otherwise the original preserve path remains mandatory. `INB2-MIG-001`
+    completed on `2026-07-16` and selected preserve after finding a live shared
+    SaaS deployment, V1/provider/object/backup state and unknown fleet/consumer
+    roots.
 
 - [x] `INB2-ARCH-010` Record messenger access models and provider evidence policy.
   - State: `done`; Priority: `P1`; Depends on:
@@ -1211,13 +1214,15 @@ PostgreSQL gate passes. `INB2-DB-005` cannot start before both are complete.
 
 - [ ] `INB2-DB-008` Add repeatable clean V2 install and guarded reset migrations.
   - State: `in_progress`; Priority: `P0`; Started: `2026-07-15`; Owner:
-    `Codex`; Closure blocked by planned `INB2-MIG-001`; Depends on:
+    `Codex`; Preserve lane activated by completed `INB2-MIG-001`; Depends on:
     `INB2-DB-007`, `INB2-DB-009`, `INB2-ARCH-009`, `INB2-MIG-001`.
   - Acceptance: owns clean V2 DDL/seed/bootstrap and an explicitly guarded
     disposable reset path; it never infers reset authority from environment or
-    row count. A V1 snapshot/additive upgrade harness, compatibility preservation
-    and RBAC dry-run mapping are activated only if `INB2-MIG-001` fails the
-    pre-production fast-path eligibility gate and selects `preserve`.
+    row count. A representative V1 snapshot/additive-schema upgrade harness,
+    migrate-before-restart N-1 API/web/worker smoke, RBAC dry-run mapping and
+    rollback harness are mandatory because `INB2-MIG-001` selected `preserve`.
+    Runtime dual materialization belongs to `INB2-MIG-002`; operational data
+    backfill belongs to `INB2-MIG-003` and is outside DB-008.
   - Verification: empty/current DB install, idempotent seed/reset and projection/
     stream bootstrap pass; when preserve is activated, representative V1 upgrade,
     N-1 smoke and rollback evidence become mandatory. `pnpm db:check` and
@@ -1237,15 +1242,19 @@ PostgreSQL gate passes. `INB2-DB-005` cannot start before both are complete.
     Full `pnpm check` passed `298` files / `2968`
     tests, with `29` files / `248` integration tests intentionally skipped, plus
     formatting, ESLint, TypeScript, DB, i18n, encoding, branding and native gates
-    on `2026-07-15`. The checkbox remains open: no real reset authority exists
-    until `INB2-MIG-001` is completed, and preserve-path evidence becomes
-    mandatory if that task selects `preserve`.
+    on `2026-07-15`. The checkbox remains open: `INB2-MIG-001` completed on
+    `2026-07-16` with preserve disposition, so a representative V1 snapshot
+    upgrade, migrate-before-restart N-1 API/web/worker smoke, RBAC dry-run and
+    rollback evidence are now mandatory before this task can close. The guarded
+    reset remains available only to a different explicitly disposable personal/
+    ephemeral target.
 
 - [ ] `INB2-EPIC-2-GATE` Verify Epic 2 exit gate.
   - State: `planned`; Priority: `P0`; Depends on: all Epic 2 tasks.
   - Acceptance: fresh/current V2 databases enforce tenant, thread, assignment
-    and sequence invariants without application-only assumptions; a V1-upgraded
-    database is required only when `INB2-MIG-001` selects preserve.
+    and sequence invariants without application-only assumptions; a
+    representative V1-upgraded database is required by the selected preserve
+    path.
   - Verification: schema/repository/migration evidence is complete. Evidence: -
 
 ## Epic 3. Source Pipeline, Identity And Conversation Resolution
@@ -2449,31 +2458,42 @@ SaaS, isolated SaaS and on-prem data planes.
 
 ## Epic 14. V1 Compatibility, Cutover And Removal
 
-Goal: prove the current pre-production direct-replacement eligibility, move all
-internal clients/source flows to V2 and remove V1 before WA/MAX/CRM/reporting.
-If inventory finds a supported deployment, external consumer or data that must
-be preserved, reactivate the deferred compatibility/backfill/shadow tasks and
-use the full ADR 0014 preserve path.
+Goal: preserve and reconcile the discovered live V1/provider/object/backup state,
+move all internal clients/source flows to V2 and remove the obsolete V1
+implementation before WA/MAX/CRM/reporting expansion. `INB2-MIG-001` failed the
+conditional pre-production fast-path gate, so compatibility/backfill/shadow and
+the full ADR 0014 preserve path are active.
 
-- [ ] `INB2-MIG-001` Inventory every Inbox V1 producer, consumer and stored row.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-EPIC-0-GATE`,
+- [x] `INB2-MIG-001` Inventory every Inbox V1 producer, consumer and stored row.
+  - State: `done`; Priority: `P0`; Started: `2026-07-16`; Completed:
+    `2026-07-16`; Owner: `Codex`; Depends on: `INB2-EPIC-0-GATE`,
     `INB2-ARCH-007`, `INB2-ARCH-009`, `INB2-BASE-001`.
   - Acceptance: Public API, Telegram Bot/direct runtime, web actions, seed/tests,
     outbox/dispatch, silent delivery/attachment lifecycle writes, file-content
     reads, routing event plus separate audit, `saveReply` compatibility paths,
-    raw/normalized/provider/auth/notification/audit JSON copies, object metadata/
-    versions/source URLs, caches/indexes/logs/backups, reports and every known
-    SaaS/isolated/on-prem deployment are dated, classified under ADR 0015 and
-    mapped to cutover/delete steps; missing inventory is not proof that no copy
-    or deployment exists.
+    raw/normalized/provider/auth/notification/tenant+platform-audit JSON copies,
+    shared account/employee/RBAC/org/session and deployment-egress roots, object
+    metadata/versions/source URLs, caches/indexes/logs/backups, reports and every
+    known SaaS/isolated/on-prem deployment are dated, classified under ADR 0015
+    or recorded as an explicit fail-closed catalog gap, and mapped to cutover/
+    delete steps; missing inventory is not proof that no copy or deployment exists.
   - Verification: repository-wide search and runtime/deployment inventory have no
-    unexplained V1 dependency. Evidence: -
+    unexplained V1 dependency. Evidence: preserve revision
+    `mig-001-preserve-2026-07-16-r1` in
+    `docs/product/inbox-v2-mig-001-inventory-and-disposition.md`; three
+    independent code/data/deployment reviews; read-only local and known shared
+    SaaS PostgreSQL, object storage, GitHub/deploy and backup inspection. The
+    live data plane, non-empty provider/API/session/object/backup state and
+    unknown fleet/consumer roots select `preserve`; unknown external roots are
+    fail-closed and assigned to downstream tasks. Exact operational evidence is
+    retained outside the public repository.
 
 - [ ] `INB2-MIG-002` Implement additive compatibility and dual materialization.
-  - State: `deferred`; Priority: `P0`; Depends on: `INB2-EPIC-2-GATE`,
+  - State: `planned`; Priority: `P0`; Reactivated: `2026-07-16` by the
+    `INB2-MIG-001` preserve disposition; Depends on: `INB2-EPIC-2-GATE`,
     `INB2-EPIC-5-GATE`, `INB2-MIG-001`.
-  - Deferred reason: not required for the pre-production fast path; reactivate
-    immediately if `INB2-MIG-001` selects any `preserve` deployment/consumer.
+  - Activation reason: the known shared SaaS deployment and current local
+    upgrade fixture must be preserved; provider I/O cannot be duplicated.
   - Acceptance: existing v1 contracts remain stable while current inbound flows
     materialize V2 through one canonical command; a minimum audited
     materialization phase/kill switch exists here, provider I/O has one owner,
@@ -2482,9 +2502,11 @@ use the full ADR 0014 preserve path.
     rows/events are correct. Evidence: -
 
 - [ ] `INB2-MIG-003` Implement repeatable backfill and diagnostic report.
-  - State: `deferred`; Priority: `P0`; Depends on: `INB2-MIG-002`, `INB2-DB-008`.
-  - Deferred reason: no backfill product is built for proven disposable state;
-    reactivate with `INB2-MIG-002` when the preserve path is selected.
+  - State: `planned`; Priority: `P0`; Reactivated: `2026-07-16` by the
+    `INB2-MIG-001` preserve disposition; Depends on: `INB2-MIG-002`,
+    `INB2-DB-008`.
+  - Activation reason: legacy business/provider/object/backup state must be
+    reconciled without inventing author, route, roster or delivery facts.
   - Acceptance: owns the operational, bounded and resumable MigrationRun/entity
     mapping ledger and data backfill; legacy client/participants/assignment/
     messages become V2 links, WorkItems, sequence and authors where recoverable;
@@ -2498,15 +2520,15 @@ use the full ADR 0014 preserve path.
 
 - [ ] `INB2-MIG-004` Finalize migration disposition and required cutover controls.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-MIG-001`,
-    `INB2-EPIC-6-GATE`.
-  - Acceptance: records a revisioned disposition and every eligibility condition.
-    If preserve is selected, `INB2-MIG-002/003` are reactivated/completed and this
-    task implements one validated server-owned phase, semantic shadow,
-    tenant/Conversation-sticky command authority, SourceAccount/binding-fenced
-    dispatch and `v1Representable` rollback fence.
-  - Verification: fast-path evidence has no unexplained deployment/consumer/data
-    dependency; preserve evidence additionally has zero unexplained semantic diff
-    and proves legal canary/rollback transitions. Evidence: -
+    `INB2-MIG-002`, `INB2-MIG-003`, `INB2-EPIC-6-GATE`.
+  - Acceptance: records the revisioned preserve disposition and every eligibility
+    condition; `INB2-MIG-002/003` are completed, and this task implements one
+    validated server-owned phase, semantic shadow, tenant/Conversation-sticky
+    command authority, SourceAccount/binding-fenced dispatch and
+    `v1Representable` rollback fence.
+  - Verification: disposition evidence has no unexplained deployment/consumer/
+    data dependency; preserve evidence additionally has zero unexplained semantic
+    diff and proves legal canary/rollback transitions. Evidence: -
 
 - [ ] `INB2-MIG-005` Cut over all internal Inbox and Telegram paths directly to V2.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-MIG-004`,
@@ -2516,43 +2538,60 @@ use the full ADR 0014 preserve path.
     provider I/O remains exactly-once-authoritative and no V2 handler calls V1
     domain/repository/routing/authorization helpers. Immediately before the first
     authority-switch CAS, the command atomically reloads and revalidates the
-    `INB2-MIG-004` disposition revision and every fast-path condition. Stale or
-    changed disposition fails closed to preserve before any V1 read/write,
-    listener or dispatch authority changes. On preserve, `INB2-MIG-004` includes
-    completed reactivated `INB2-MIG-002/003` and this task follows the fenced ADR
-    0014 handoff.
+    `INB2-MIG-004` disposition revision and every applicable preserve gate/control
+    artifact. Stale or changed disposition fails closed before any V1 read/write,
+    listener or dispatch authority changes. The selected preserve path requires
+    completed `INB2-MIG-002/003` and the fenced ADR 0014 handoff. Only a future,
+    separately approved disposable target rechecks every fast-path condition and
+    may omit preserve controls.
   - Verification: repository/runtime inventory plus private/group Telegram,
     rebuild/reconnect and provider failure/uncertain-outcome tests show one V2
     path and zero legacy fallback. Evidence: -
 
 - [ ] `INB2-MIG-006` Complete pre-removal V2 acceptance and rollback drill.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-MIG-005`,
-    `INB2-EPIC-0-GATE`,
+    `INB2-MIG-001`, `INB2-ARCH-007`, `INB2-EPIC-0-GATE`,
     `INB2-EPIC-1-GATE`, `INB2-EPIC-2-GATE`, `INB2-EPIC-3-GATE`,
     `INB2-EPIC-4-GATE`, `INB2-EPIC-5-GATE`, `INB2-EPIC-6-GATE`,
     `INB2-EPIC-7-GATE`.
   - Acceptance: the V2 domain/source/message/work/projection/API/realtime/UI and
-    Telegram private/group slice pass together; fast-path recovery uses a prior
-    V2-compatible build/forward fix, while preserve additionally rehearses its
-    allowed V1 authority rollback before the irreversible boundary.
-  - Verification: signed pre-removal checklist, failure/reconnect/provider-side-
-    effect reconciliation and applicable rollback drill are recorded. Evidence: -
+    Telegram private/group slice pass together. For the selected preserve path,
+    this task owns the early V1-applicable removal subgate required by
+    `INB2-MIG-007`: it freezes the C01-C24/D01-D31 root/class/handler graph and
+    retained-shared-root exclusions; proves no unknown supported deployment,
+    image, Public API consumer or V1-bearing copy; covers supported N-1,
+    isolated/on-prem upgrades; rehearses DB+object backup/restore, stream reset
+    and allowed V1 authority rollback; records a V2 facade or completed
+    deprecation for Public API `/v1`; and observes zero internal V1 read/write/
+    dispatch/fallback for `30` consecutive days. Later `INB2-OPS-007/009`
+    productize and reuse this scoped evidence; they are not prerequisites that
+    would create a post-MIG-007 dependency cycle.
+  - Verification: a signed, current V1-removal dossier contains applicable ADR
+    0015 lifecycle/hold/delete/audit handler coverage, fleet/consumer/copy/image
+    inventory, clean plus representative upgrade results, supported deployment
+    upgrade matrix, backup/restore and epoch/generation drill, provider-side-
+    effect reconciliation, rollback boundaries and the uninterrupted `30`-day
+    zero-use window. Any unexplained V1-bearing copy, missing handler in the
+    applicable V1-removal graph, fallback or incident resets or blocks this
+    subgate. Declared retained-shared exclusions remain recorded and block their
+    later privacy/operations gate rather than scoped V1 removal. Evidence: -
 
 - [ ] `INB2-MIG-007` Remove V1 reads, writes, fallback routes and obsolete schema.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-MIG-001`,
     `INB2-MIG-005`, `INB2-MIG-006`, `INB2-ARCH-007`.
-  - Acceptance: the pre-production eligibility record is still true; Inbox V1
-    core/contracts, DB tables/repositories, internal Inbox route/client/actions,
-    Public API/Telegram composition, worker dispatch, legacy `message.sent`
-    intent, seed/fixtures/tests and unpublished migrations are removed or
-    replaced by V2. Only while the fast-path disposition remains current may
-    internal `InboxV2` packages/types/schema IDs be collapsed to neutral `Inbox`
-    naming and unpublished migrations be squashed without compatibility aliases.
-    Generic `/internal/v1` surfaces unrelated to Inbox are not deleted by prefix.
-    If preserve was selected, persisted/published schema IDs and migration history
-    remain stable or change only through an explicit versioned compatibility
-    migration; alias-free rename/squash is forbidden, and the original observation,
-    backup/rollback, hold/evidence and supported-version criteria apply.
+  - Acceptance: the signed `INB2-MIG-006` early-removal dossier is current and
+    every selected preserve-path backfill, shadow, observation, backup/rollback,
+    hold/evidence, fleet/consumer and supported-version removal gate still passes;
+    Inbox V1 core/contracts, DB tables/repositories, internal Inbox route/client/
+    actions, Public API/Telegram composition, worker dispatch, legacy
+    `message.sent` intent and obsolete seed/fixtures/tests are removed or replaced
+    by V2. Persisted/published schema IDs and migration history remain stable or
+    change only through an explicit versioned compatibility migration; alias-free
+    rename/squash is forbidden. Only a future separately approved disposable
+    target whose fast-path evidence remains current may collapse internal
+    `InboxV2` names and squash unpublished migrations without compatibility
+    aliases. Generic `/internal/v1` surfaces unrelated to Inbox are not deleted by
+    prefix.
   - Verification: repository/object/index/cache/deployment search, clean V2
     install/reset/seed, projection/realtime rebuild, Telegram smoke and full
     check show zero V1 Inbox runtime, fallback or undeclared retained copy;
@@ -2568,12 +2607,12 @@ use the full ADR 0014 preserve path.
     and on-prem package. Evidence: -
 
 - [ ] `INB2-EPIC-14-GATE` Verify Epic 14 and release gate `G7`.
-  - State: `planned`; Priority: `P0`; Depends on: all non-deferred Epic 14 tasks,
+  - State: `planned`; Priority: `P0`; Depends on: all Epic 14 tasks,
     `INB2-EPIC-8-GATE`, `INB2-EPIC-9-GATE`, `INB2-EPIC-10-GATE`,
-    `INB2-EPIC-11-GATE`, `INB2-EPIC-12-GATE`, `INB2-EPIC-13-GATE`; deferred
-    tasks become required automatically when preserve is selected.
+    `INB2-EPIC-11-GATE`, `INB2-EPIC-12-GATE`, `INB2-EPIC-13-GATE`.
   - Acceptance: V2 is the only supported production path and V1 removal is
-    complete, reversible according to the approved release policy and documented.
+    complete after the selected preserve backfill, observation and release gates;
+    rollback remains possible up to the documented irreversible boundary.
   - Verification: final release evidence and verification log are complete. Evidence: -
 
 ## Cross-Epic Acceptance Scenarios
@@ -2771,3 +2810,4 @@ the task state, checkbox and evidence above.
 | 2026-07-15 | `INB2-DB-006`      | Employee state/read DB; PG 4/4; migration 3/3; full 258/2605          | working tree | Codex + three reviewers         |
 | 2026-07-15 | `INB2-DB-009`      | Governance/privacy DB; PG 22/22; migration 8/8; full 271/2718         | working tree | Codex + three reviewers         |
 | 2026-07-15 | `INB2-DB-007`      | Repository foundation; PG 4/4; migration 4/4; full 296/2954           | working tree | Codex + three reviewers         |
+| 2026-07-16 | `INB2-MIG-001`     | C01-C24/D01-D31 inventory; preserve; full 298/2968 and all gates      | working tree | Codex + independent reviews     |
