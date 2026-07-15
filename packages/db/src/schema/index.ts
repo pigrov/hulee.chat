@@ -2,6 +2,7 @@ export type { TableDefinition, TableScope } from "./metadata";
 export { initialTables } from "./metadata";
 export * from "./inbox-v2/client-merge";
 export * from "./inbox-v2/conversation-client-link";
+export * from "./inbox-v2/data-governance-privacy";
 export * from "./inbox-v2/employee-conversation-state";
 export * from "./inbox-v2/external-thread";
 export * from "./inbox-v2/identity-foundation";

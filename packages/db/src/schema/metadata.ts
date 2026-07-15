@@ -114,6 +114,112 @@ export const initialTables = [
   { name: "inbox_v2_conversation_heads", scope: "tenant", requiresTenantId: true },
   // prettier-ignore
   { name: "inbox_v2_employee_conversation_states", scope: "tenant", requiresTenantId: true },
+  // Inbox V2 data-governance registry/template catalogs are deployment-global;
+  // all effective policy, privacy and operation state below is tenant-local.
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_registry_versions", scope: "global", requiresTenantId: false },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_storage_roots", scope: "global", requiresTenantId: false },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_lifecycle_handlers", scope: "global", requiresTenantId: false },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_data_use_lineages", scope: "global", requiresTenantId: false },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_policy_templates", scope: "global", requiresTenantId: false },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_policy_template_rules", scope: "global", requiresTenantId: false },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_contexts", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_context_purpose_roles", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_effective_policies", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_effective_policy_rules", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_policy_activations", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_policy_activation_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_lifecycle_purpose_sets", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_lifecycle_purpose_instances", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_subject_links", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_scope_manifests", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_tenant_termination_scope_authorities", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_scope_manifest_roots", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_legal_hold_revisions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_legal_hold_data_classes", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_legal_hold_targets", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_legal_hold_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_restriction_revisions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_restriction_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_control_set_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_privacy_request_revisions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_privacy_request_aliases", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_privacy_request_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_export_jobs", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_export_manifests", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_export_artifacts", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_export_artifact_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_export_claims", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_export_receipt_cas", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_deletion_plans", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_deletion_checkpoint_requirements", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_deletion_runs", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_deletion_run_terminal_exports", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_deletion_stage_one_targets", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_destructive_checkpoint_leases", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_operated_checkpoint_attempts", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_operated_checkpoint_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_backup_checkpoint_attempts", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_backup_checkpoint_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_external_checkpoint_attempts", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_external_checkpoint_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_erasure_restore_ledger", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_erasure_restore_ledger_evidence", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_erasure_restore_ledger_controls", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_restore_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_restore_required_controls", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_data_governance_restore_leases", scope: "tenant", requiresTenantId: true },
   // prettier-ignore
   { name: "inbox_v2_conversation_client_link_evidence_references", scope: "tenant", requiresTenantId: true },
   {

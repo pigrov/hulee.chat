@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  assertAdditiveMigrationStatements,
   assertDrizzleSnapshotParity,
+  assertMigrationJournalArtifactParity,
   assertParentUniqueConstraintsBeforeForeignKeys,
   assertSqlStatementParity,
   collectFinalizedMigrationDdlStatements,
@@ -17,6 +19,28 @@ describe("DB check generated-schema parity helpers", () => {
         "  create table one ();\r\n--> statement-breakpoint\r\ncreate table two ();\r\n"
       )
     ).toEqual(["create table one ();", "create table two ();"]);
+  });
+
+  it("allows additive schema DDL and rejects destructive or data-mutating statements", () => {
+    expect(() =>
+      assertAdditiveMigrationStatements([
+        'CREATE TYPE "public"."state" AS ENUM (\'open\');',
+        'CREATE TABLE "records" ("id" text);',
+        'ALTER TABLE "records" ADD CONSTRAINT "records_pk" PRIMARY KEY("id");',
+        'CREATE UNIQUE INDEX "records_id_idx" ON "records" ("id");'
+      ])
+    ).not.toThrow();
+    for (const statement of [
+      'DROP TABLE "records";',
+      'ALTER TABLE "records" DROP COLUMN "id";',
+      "INSERT INTO \"records\" VALUES ('one');",
+      'UPDATE "records" SET "id" = \'two\';',
+      'TRUNCATE TABLE "records";'
+    ]) {
+      expect(() => assertAdditiveMigrationStatements([statement])).toThrow(
+        /additive-only/u
+      );
+    }
   });
 
   it("removes the preflight and any discovered invariant-block count", () => {
@@ -144,6 +168,16 @@ describe("DB check generated-schema parity helpers", () => {
         constraintNames
       })
     ).toThrow(/teams_tenant_id_unique.*precede the first foreign key/u);
+
+    expect(() =>
+      assertParentUniqueConstraintsBeforeForeignKeys({
+        migrationSql: [
+          'CREATE TABLE "parent" ("tenant_id" uuid, "id" uuid, CONSTRAINT "org_units_tenant_id_unique" UNIQUE("tenant_id", "id"), CONSTRAINT "teams_tenant_id_unique" UNIQUE("tenant_id", "id"), CONSTRAINT "work_queues_tenant_id_unique" UNIQUE("tenant_id", "id"));',
+          foreignKey
+        ].join("\n"),
+        constraintNames
+      })
+    ).not.toThrow();
   });
 
   it("compares generated DDL as a duplicate-aware statement multiset", () => {
@@ -205,5 +239,47 @@ describe("DB check generated-schema parity helpers", () => {
     expect(() => migrationJournal(journal, 26)).toThrow(
       /no base migration index 26/u
     );
+  });
+
+  it("binds a finalized migration to one exact journal index and snapshot", () => {
+    const input = {
+      journal: {
+        version: "7",
+        entries: [
+          { idx: 32, tag: "0032_foundation" },
+          { idx: 33, tag: "0033_data_governance_privacy" }
+        ]
+      },
+      targetIndex: 33,
+      finalizedMigrationFileName: "0033_data_governance_privacy.sql",
+      migrationFileNames: [
+        "0032_foundation.sql",
+        "0033_data_governance_privacy.sql"
+      ],
+      snapshotFileNames: ["0032_snapshot.json", "0033_snapshot.json"]
+    };
+    expect(() => assertMigrationJournalArtifactParity(input)).not.toThrow();
+    expect(() =>
+      assertMigrationJournalArtifactParity({
+        ...input,
+        journal: {
+          ...input.journal,
+          entries: input.journal.entries.slice(0, 1)
+        }
+      })
+    ).toThrow(/exactly one migration index 33/u);
+    expect(() =>
+      assertMigrationJournalArtifactParity({
+        ...input,
+        finalizedMigrationFileName: "0033_orphan.sql",
+        migrationFileNames: ["0033_orphan.sql"]
+      })
+    ).toThrow(/not owned by Drizzle journal index 33/u);
+    expect(() =>
+      assertMigrationJournalArtifactParity({
+        ...input,
+        snapshotFileNames: ["0033_wrong_snapshot.json"]
+      })
+    ).toThrow(/exact snapshot 0033_snapshot\.json/u);
   });
 });

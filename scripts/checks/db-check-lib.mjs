@@ -77,7 +77,7 @@ export function assertParentUniqueConstraintsBeforeForeignKeys({
 
   for (const constraintName of constraintNames) {
     const constraintPattern = new RegExp(
-      `ADD\\s+CONSTRAINT\\s+"${escapeRegExp(constraintName)}"\\s+UNIQUE\\b`,
+      `(?:ADD\\s+)?CONSTRAINT\\s+"${escapeRegExp(constraintName)}"\\s+UNIQUE\\b`,
       "gi"
     );
     const matches = [...migrationSql.matchAll(constraintPattern)];
@@ -134,6 +134,28 @@ export function assertDrizzleSnapshotParity(
   );
 }
 
+export function assertAdditiveMigrationStatements(
+  statements,
+  label = "Migration"
+) {
+  const allowed = [
+    /^CREATE TYPE\b/iu,
+    /^CREATE TABLE\b/iu,
+    /^CREATE (?:UNIQUE )?INDEX\b/iu,
+    /^ALTER TABLE\b[\s\S]*\bADD CONSTRAINT\b/iu
+  ];
+  for (const statement of statements) {
+    const normalized = statement.trim();
+    if (!allowed.some((pattern) => pattern.test(normalized))) {
+      throw new Error(
+        `${label} must be additive-only; rejected generated statement: ${normalized
+          .replace(/\s+/gu, " ")
+          .slice(0, 180)}`
+      );
+    }
+  }
+}
+
 export function normalizeDrizzleSnapshot(snapshot) {
   if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
     throw new Error("Drizzle snapshot must be a JSON object.");
@@ -157,6 +179,74 @@ export function migrationJournal(journal, baseIndex) {
     );
   }
   return { ...journal, entries };
+}
+
+export function assertMigrationJournalArtifactParity({
+  journal,
+  targetIndex,
+  finalizedMigrationFileName,
+  migrationFileNames,
+  snapshotFileNames
+}) {
+  if (!journal || !Array.isArray(journal.entries)) {
+    throw new Error("Drizzle journal must contain an entries array.");
+  }
+  const duplicateIndexes = journal.entries
+    .map(({ idx }) => idx)
+    .filter((idx, position, values) => values.indexOf(idx) !== position);
+  if (duplicateIndexes.length > 0) {
+    throw new Error(
+      `Drizzle journal contains duplicate migration indexes: ${[
+        ...new Set(duplicateIndexes)
+      ].join(", ")}.`
+    );
+  }
+  const targetEntries = journal.entries.filter(
+    ({ idx }) => idx === targetIndex
+  );
+  if (targetEntries.length !== 1) {
+    throw new Error(
+      `Drizzle journal must own exactly one migration index ${targetIndex}; found ${targetEntries.length}.`
+    );
+  }
+  const prefix = `${String(targetIndex).padStart(4, "0")}_`;
+  const target = targetEntries[0];
+  const expectedMigrationFileName = `${target.tag}.sql`;
+  if (
+    typeof target.tag !== "string" ||
+    !target.tag.startsWith(prefix) ||
+    finalizedMigrationFileName !== expectedMigrationFileName
+  ) {
+    throw new Error(
+      `Finalized migration ${finalizedMigrationFileName} is not owned by Drizzle journal index ${targetIndex} (${String(target.tag)}).`
+    );
+  }
+  const targetMigrations = migrationFileNames.filter(
+    (fileName) => fileName.startsWith(prefix) && fileName.endsWith(".sql")
+  );
+  if (
+    targetMigrations.length !== 1 ||
+    targetMigrations[0] !== expectedMigrationFileName
+  ) {
+    throw new Error(
+      `Migration index ${targetIndex} must have one journal-owned SQL artifact; found ${targetMigrations.join(", ") || "none"}.`
+    );
+  }
+  const expectedSnapshotFileName = `${String(targetIndex).padStart(
+    4,
+    "0"
+  )}_snapshot.json`;
+  const targetSnapshots = snapshotFileNames.filter((fileName) =>
+    fileName.startsWith(String(targetIndex).padStart(4, "0"))
+  );
+  if (
+    targetSnapshots.length !== 1 ||
+    targetSnapshots[0] !== expectedSnapshotFileName
+  ) {
+    throw new Error(
+      `Migration index ${targetIndex} must have the exact snapshot ${expectedSnapshotFileName}; found ${targetSnapshots.join(", ") || "none"}.`
+    );
+  }
 }
 
 export async function generateExpectedDrizzleMigration({

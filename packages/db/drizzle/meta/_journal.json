@@ -232,6 +232,13 @@
       "when": 1784064459257,
       "tag": "0032_inbox_v2_employee_conversation_state",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1784099666851,
+      "tag": "0033_inbox_v2_data_governance_privacy",
+      "breakpoints": true
     }
   ]
 }

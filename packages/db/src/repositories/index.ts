@@ -4,6 +4,11 @@ export {
   createHuleePgPool
 } from "../client";
 export type { HuleeDatabase, HuleeDatabaseConfig } from "../client";
+export * from "./sql-inbox-v2-data-governance-privacy-repository";
+export * from "./sql-inbox-v2-privacy-export-lifecycle-repository";
+export * from "./sql-inbox-v2-destructive-checkpoint-guard-repository";
+export * from "./sql-inbox-v2-deletion-run-state-repository";
+export * from "./sql-inbox-v2-erasure-restore-ledger-repository";
 export * from "./sql-inbox-v2-timeline-message-repository";
 export * from "./sql-inbox-v2-employee-conversation-state-repository";
 export * from "./sql-inbox-v2-work-item-repository";

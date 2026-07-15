@@ -1,7 +1,9 @@
 import { readdir, readFile } from "node:fs/promises";
 
 import {
+  assertAdditiveMigrationStatements,
   assertDrizzleSnapshotParity,
+  assertMigrationJournalArtifactParity,
   assertParentUniqueConstraintsBeforeForeignKeys,
   assertSqlStatementParity,
   collectFinalizedMigrationDdlStatements,
@@ -10,6 +12,7 @@ import {
 
 const metadata = await readFile("packages/db/src/schema/metadata.ts", "utf8");
 const migrationDirectory = "packages/db/drizzle";
+const migrationMetadataDirectory = `${migrationDirectory}/meta`;
 const inboxV2SchemaDirectory = "packages/db/src/schema/inbox-v2";
 const migrationFileNames = (await readdir(migrationDirectory))
   .filter((fileName) => fileName.endsWith(".sql"))
@@ -19,6 +22,12 @@ const migrationFiles = await Promise.all(
     fileName,
     sql: await readFile(`${migrationDirectory}/${fileName}`, "utf8")
   }))
+);
+const migrationMetadataFileNames = (
+  await readdir(migrationMetadataDirectory)
+).sort();
+const drizzleJournal = JSON.parse(
+  await readFile(`${migrationMetadataDirectory}/_journal.json`, "utf8")
 );
 const migrationSql = migrationFiles.map(({ sql }) => sql).join("\n");
 const inboxV2FoundationMarker = "-- INBOX_V2_FOUNDATION_MIGRATION_FINALIZED_V1";
@@ -40,6 +49,18 @@ const inboxV2EmployeeConversationStatePreflightMarker =
   "-- INBOX_V2_EMPLOYEE_CONVERSATION_STATE_PREFLIGHT_V1";
 const inboxV2EmployeeConversationStateInvariantName =
   "INBOX_V2_EMPLOYEE_CONVERSATION_STATE_INVARIANTS_SQL";
+const inboxV2DataGovernancePrivacyMarker =
+  "-- INBOX_V2_DATA_GOVERNANCE_PRIVACY_MIGRATION_FINALIZED_V1";
+const inboxV2DataGovernancePrivacyPreflightMarker =
+  "-- INBOX_V2_DATA_GOVERNANCE_PRIVACY_PREFLIGHT_V1";
+const inboxV2DataGovernancePrivacyInvariantNames = new Set([
+  "INBOX_V2_DATA_GOVERNANCE_PRIVACY_IMMUTABILITY_INVARIANTS_SQL",
+  "INBOX_V2_DATA_GOVERNANCE_PRIVACY_CHECKPOINT_INVARIANTS_SQL",
+  "INBOX_V2_DATA_GOVERNANCE_PRIVACY_COHERENCE_INVARIANTS_SQL",
+  "INBOX_V2_DATA_GOVERNANCE_PRIVACY_TERMINAL_INVARIANTS_SQL",
+  "INBOX_V2_DATA_GOVERNANCE_PRIVACY_LEDGER_INVARIANTS_SQL",
+  "INBOX_V2_DATA_GOVERNANCE_PRIVACY_CAS_INVARIANTS_SQL"
+]);
 const inboxV2FoundationInvariantNames = new Set([
   "INBOX_V2_CLIENT_MERGE_INTEGRITY_SQL",
   "INBOX_V2_CONVERSATION_CLIENT_LINK_INTEGRITY_SQL",
@@ -64,6 +85,9 @@ const inboxV2TimelineMessageMigrations = migrationFiles.filter(({ sql }) =>
 );
 const inboxV2EmployeeConversationStateMigrations = migrationFiles.filter(
   ({ sql }) => sql.includes(inboxV2EmployeeConversationStateMarker)
+);
+const inboxV2DataGovernancePrivacyMigrations = migrationFiles.filter(
+  ({ sql }) => sql.includes(inboxV2DataGovernancePrivacyMarker)
 );
 const inboxV2InvariantBlocks = (
   await Promise.all(
@@ -102,6 +126,10 @@ const inboxV2EmployeeConversationStateInvariantBlocks =
   inboxV2InvariantBlocks.filter(
     ({ name }) => name === inboxV2EmployeeConversationStateInvariantName
   );
+const inboxV2DataGovernancePrivacyInvariantBlocks =
+  inboxV2InvariantBlocks.filter(({ name }) =>
+    inboxV2DataGovernancePrivacyInvariantNames.has(name)
+  );
 if (
   inboxV2FoundationInvariantBlocks.length !==
   inboxV2FoundationInvariantNames.size
@@ -132,12 +160,22 @@ if (inboxV2EmployeeConversationStateInvariantBlocks.length !== 1) {
   );
   process.exit(1);
 }
+if (
+  inboxV2DataGovernancePrivacyInvariantBlocks.length !==
+  inboxV2DataGovernancePrivacyInvariantNames.size
+) {
+  console.error(
+    `Expected ${inboxV2DataGovernancePrivacyInvariantNames.size} Inbox V2 data-governance/privacy invariant SQL blocks, found ${inboxV2DataGovernancePrivacyInvariantBlocks.length}.`
+  );
+  process.exit(1);
+}
 const unownedInvariantBlocks = inboxV2InvariantBlocks.filter(
   ({ name }) =>
     !inboxV2FoundationInvariantNames.has(name) &&
     name !== inboxV2WorkItemInvariantName &&
     !inboxV2TimelineMessageInvariantNames.has(name) &&
-    name !== inboxV2EmployeeConversationStateInvariantName
+    name !== inboxV2EmployeeConversationStateInvariantName &&
+    !inboxV2DataGovernancePrivacyInvariantNames.has(name)
 );
 if (unownedInvariantBlocks.length > 0) {
   console.error(
@@ -212,6 +250,28 @@ if (inboxV2EmployeeConversationStateMigrations.length !== 1) {
   );
   process.exit(1);
 }
+if (inboxV2DataGovernancePrivacyMigrations.length !== 1) {
+  console.error(
+    `Expected exactly one finalized Inbox V2 data-governance/privacy migration, found ${inboxV2DataGovernancePrivacyMigrations.length}.`
+  );
+  process.exit(1);
+}
+
+try {
+  assertMigrationJournalArtifactParity({
+    journal: drizzleJournal,
+    targetIndex: 33,
+    finalizedMigrationFileName:
+      inboxV2DataGovernancePrivacyMigrations[0].fileName,
+    migrationFileNames,
+    snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
+      fileName.endsWith("_snapshot.json")
+    )
+  });
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
 
 assertInboxV2FoundationMigration(inboxV2FoundationMigrations[0]);
 assertInboxV2WorkItemMigration(inboxV2WorkItemMigrations[0]);
@@ -219,13 +279,16 @@ assertInboxV2TimelineMessageMigration(inboxV2TimelineMessageMigrations[0]);
 assertInboxV2EmployeeConversationStateMigration(
   inboxV2EmployeeConversationStateMigrations[0]
 );
+assertInboxV2DataGovernancePrivacyMigration(
+  inboxV2DataGovernancePrivacyMigrations[0]
+);
 try {
   // A historical migration cannot be regenerated from the current Drizzle
   // schema after a later slice changes that schema. Keep validating historical
   // finalized structures above and through PostgreSQL upgrade lifecycles,
   // while generated-schema parity follows the latest migration.
-  await assertInboxV2EmployeeConversationStateGeneratedSchemaParity(
-    inboxV2EmployeeConversationStateMigrations[0]
+  await assertInboxV2DataGovernancePrivacyGeneratedSchemaParity(
+    inboxV2DataGovernancePrivacyMigrations[0]
   );
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
@@ -234,16 +297,20 @@ try {
 
 console.log("db:check passed");
 
-async function assertInboxV2EmployeeConversationStateGeneratedSchemaParity(
+async function assertInboxV2DataGovernancePrivacyGeneratedSchemaParity(
   migration
 ) {
-  const snapshotPath = "packages/db/drizzle/meta/0032_snapshot.json";
+  const snapshotPath = "packages/db/drizzle/meta/0033_snapshot.json";
   const generated = await generateExpectedDrizzleMigration({
     workspaceRoot: process.cwd(),
     migrationDirectory,
-    baseIndex: 31,
-    targetIndex: 32
+    baseIndex: 32,
+    targetIndex: 33
   });
+  assertAdditiveMigrationStatements(
+    generated.statements,
+    "Inbox V2 DB-009 generated migration"
+  );
   const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
   assertDrizzleSnapshotParity(
     generated.snapshot,
@@ -253,10 +320,14 @@ async function assertInboxV2EmployeeConversationStateGeneratedSchemaParity(
 
   const checkedInDdl = collectFinalizedMigrationDdlStatements({
     migrationSql: migration.sql,
-    finalizedMarker: inboxV2EmployeeConversationStateMarker,
-    preflightMarker: inboxV2EmployeeConversationStatePreflightMarker,
-    invariantBlocks: inboxV2EmployeeConversationStateInvariantBlocks
+    finalizedMarker: inboxV2DataGovernancePrivacyMarker,
+    preflightMarker: inboxV2DataGovernancePrivacyPreflightMarker,
+    invariantBlocks: inboxV2DataGovernancePrivacyInvariantBlocks
   });
+  assertAdditiveMigrationStatements(
+    checkedInDdl,
+    "Inbox V2 DB-009 checked-in migration"
+  );
   assertSqlStatementParity(generated.statements, checkedInDdl);
 }
 
@@ -608,6 +679,56 @@ function assertInboxV2EmployeeConversationStateMigration(migration) {
       `${migration.fileName} must keep the exact read-cursor guard deferrable and initially deferred.`
     );
     process.exit(1);
+  }
+}
+
+function assertInboxV2DataGovernancePrivacyMigration(migration) {
+  if (!migration.fileName.startsWith("0033_")) {
+    console.error(
+      `${migration.fileName} must be the finalized Inbox V2 data-governance/privacy migration at index 0033.`
+    );
+    process.exit(1);
+  }
+  assertInboxV2InvariantMigration({
+    migration,
+    finalizedMarker: inboxV2DataGovernancePrivacyMarker,
+    preflightMarker: inboxV2DataGovernancePrivacyPreflightMarker,
+    invariantBlocks: inboxV2DataGovernancePrivacyInvariantBlocks,
+    preflightDescription: "data-governance/privacy"
+  });
+  try {
+    assertParentUniqueConstraintsBeforeForeignKeys({
+      migrationSql: migration.sql,
+      constraintNames: [
+        "inbox_v2_dg_deletion_run_plan_anchor_unique",
+        "inbox_v2_dg_erasure_ledger_entry_anchor_unique",
+        "inbox_v2_dg_erasure_ledger_hash_unique"
+      ]
+    });
+  } catch (error) {
+    console.error(
+      `${migration.fileName}: ${error instanceof Error ? error.message : String(error)}`
+    );
+    process.exit(1);
+  }
+
+  for (const fragment of [
+    'CREATE TYPE "public"."inbox_v2_data_governance_deployment_profile"',
+    'CREATE TABLE "inbox_v2_data_governance_contexts"',
+    'CREATE TABLE "inbox_v2_data_governance_legal_hold_revisions"',
+    'CREATE TABLE "inbox_v2_data_governance_export_jobs"',
+    'CREATE TABLE "inbox_v2_data_governance_deletion_runs"',
+    'CREATE TABLE "inbox_v2_data_governance_deletion_stage_one_targets"',
+    'CREATE TABLE "inbox_v2_data_governance_erasure_restore_ledger"',
+    "create or replace function public.inbox_v2_dg_deletion_run_transition_guard()",
+    "create or replace function public.inbox_v2_dg_erasure_ledger_coherence()"
+  ]) {
+    if (!migration.sql.includes(fragment)) {
+      console.error(
+        `${migration.fileName} is missing required data-governance/privacy SQL: ${fragment}`
+      );
+      process.exit(1);
+    }
   }
 }
 

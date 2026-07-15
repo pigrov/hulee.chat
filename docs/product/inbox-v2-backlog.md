@@ -1035,9 +1035,10 @@ PostgreSQL gate passes. `INB2-DB-005` cannot start before both are complete.
     `pnpm check` passed `258/2605` plus formatting, repository-wide ESLint,
     TypeScript, DB, i18n, encoding, branding and native gates on `2026-07-15`.
 
-- [ ] `INB2-DB-009` Persist data lifecycle policy, holds, requests and operation ledgers.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-DB-001`,
-    `INB2-DB-002`, `INB2-DB-005`, `INB2-CON-010`.
+- [x] `INB2-DB-009` Persist data lifecycle policy, holds, requests and operation ledgers.
+  - State: `done`; Priority: `P0`; Started: `2026-07-15`; Completed:
+    `2026-07-15`; Owner: `Codex`; Depends on: `INB2-DB-001`, `INB2-DB-002`,
+    `INB2-DB-005`, `INB2-CON-010`.
   - Acceptance: versioned tenant-local `DataGovernanceContext`, a closed storage-
     root registry, tenant-safe effective policy/purpose/subject links, module
     lineage/handler registrations, hold/restriction, privacy request, export/
@@ -1055,7 +1056,27 @@ PostgreSQL gate passes. `INB2-DB-005` cannot start before both are complete.
     context destructive-run rejection, missing-root/handler rejection and cross-
     tenant destructive-operation integration tests pass without raw PII evidence.
     Invalid internal-as-external, unverified-primary-as-backup-pending and premature
-    completed status transitions fail constraints. Evidence: -
+    completed status transitions fail constraints. Evidence: versioned contracts,
+    a closed tenant-safe schema and SQL repositories persist governance contexts,
+    separately governed global templates, storage roots, lineage/handlers,
+    effective policies and activations, subject aliases, holds/restrictions,
+    privacy requests, export/deletion runs, fenced destructive checkpoints and
+    the append-only erasure/restore chain without raw PII evidence. Composite
+    tenant keys, revision/hash CAS, structurally encoded advisory locks,
+    authorization/lease fences, exact terminal-export binding and fail-closed
+    status/coherence triggers reject stale, cross-tenant, missing-authority and
+    invalid residual transitions. Finalized migration
+    `0033_inbox_v2_data_governance_privacy.sql` installs 52 tables, 37 enums, 11
+    fixed-`search_path` functions and 84 triggers behind an exact-inventory
+    preflight. Fresh install, populated `0032 -> 0033` upgrade, partial/damaged
+    foundation and late-failure rollback plus invariant scenarios passed `8/8`;
+    focused contract/schema/repository/finalizer/check tests passed `14` files /
+    `122` tests; live PostgreSQL activation/export/deletion/guard/restore
+    scenarios passed `4` files / `22` tests, including concurrency, exact retry,
+    hold lookup, terminal export expiry/revocation and restore lease/sequence
+    fencing. Full `pnpm check` passed `271` files / `2718` tests plus formatting,
+    repository-wide ESLint, TypeScript, DB, i18n, encoding, branding and native
+    gates on `2026-07-15`.
 
 - [ ] `INB2-RBAC-003` Persist authorization relations and revision fences.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-RBAC-002`,
@@ -2637,3 +2658,4 @@ the task state, checkbox and evidence above.
 | 2026-07-14 | `INB2-DB-004`      | WorkItem/assignment DB; PG 14 files; DB 70/617; full 250/2540         | working tree | Codex + two reviewers           |
 | 2026-07-14 | `INB2-DB-005`      | Timeline/message DB; PG 18/18; DB 73/666; full 254/2577               | working tree | Codex + two reviewers           |
 | 2026-07-15 | `INB2-DB-006`      | Employee state/read DB; PG 4/4; migration 3/3; full 258/2605          | working tree | Codex + three reviewers         |
+| 2026-07-15 | `INB2-DB-009`      | Governance/privacy DB; PG 22/22; migration 8/8; full 271/2718         | working tree | Codex + three reviewers         |
