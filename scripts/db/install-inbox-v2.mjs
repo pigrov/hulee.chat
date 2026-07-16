@@ -10,7 +10,8 @@ const result = await installInboxV2Database({
   statementTimeoutMs: optionalEnvironmentNumber(
     "HULEE_INBOX_V2_MIGRATION_STATEMENT_TIMEOUT_MS"
   ),
-  bootstrap: options.bootstrap
+  bootstrap: options.bootstrap,
+  allowReviewedOnlineBridge: options.allowReviewedOnlineBridge
 });
 console.log(JSON.stringify(result, null, 2));
 
@@ -20,6 +21,10 @@ function parseArguments(arguments_) {
     const argument = arguments_[index];
     if (argument === "--bootstrap") {
       parsed.bootstrap = requiredArgument(arguments_, ++index, argument);
+      continue;
+    }
+    if (argument === "--allow-reviewed-online-bridge") {
+      parsed.allowReviewedOnlineBridge = true;
       continue;
     }
     throw new Error(`Unknown install argument: ${argument}`);

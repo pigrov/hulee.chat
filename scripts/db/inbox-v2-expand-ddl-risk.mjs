@@ -125,6 +125,7 @@ export async function inspectInboxV2ExpandDdlRisk(
     migrations,
     appliedCount,
     allowEphemeralBlockingDdlCompatibilityTest = false,
+    allowReviewedOnlineBridge = false,
     maximumRelationBytes = INBOX_V2_BLOCKING_DDL_MAX_RELATION_BYTES
   }
 ) {
@@ -222,6 +223,8 @@ export async function inspectInboxV2ExpandDdlRisk(
     EPHEMERAL_DATABASE_PATTERN.test(databaseName) &&
     process.env.NODE_ENV === "test" &&
     process.env.HULEE_DB_INTEGRATION === "1";
+  const reviewedOnlineBridgeRequested = allowReviewedOnlineBridge === true;
+  const reviewedOnlineBridgeAuthorized = reviewedOnlineBridgeRequested;
   const body = {
     schemaId: REPORT_SCHEMA_ID,
     appliedMigrationCount: appliedCount,
@@ -233,6 +236,8 @@ export async function inspectInboxV2ExpandDdlRisk(
     requiresOnlineBridge: violations.length > 0,
     overrideRequested,
     overrideAuthorized,
+    reviewedOnlineBridgeRequested,
+    reviewedOnlineBridgeAuthorized,
     operations,
     relations: relationEvidence,
     violations

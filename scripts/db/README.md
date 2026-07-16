@@ -29,6 +29,18 @@ tenant prerequisite, tenant stream head and projection generation/checkpoint/
 head. Re-running it verifies and preserves the same epoch/revisions; it does not
 write legacy Client/Conversation/Message rows.
 
+Preserve upgrades from an already populated V1/V2-prefix database may contain
+expand DDL that the normal `db:migrate` runner refuses with
+`inbox_v2.expand_online_bridge_required`. The production compose migration
+service uses the explicitly reviewed install path:
+
+```bash
+pnpm db:inbox-v2:install -- --allow-reviewed-online-bridge
+```
+
+This keeps the default local/on-prem command conservative while making the
+deployment bridge decision visible in the returned expand-DDL risk evidence.
+
 The destructive command is deliberately separate:
 
 ```bash

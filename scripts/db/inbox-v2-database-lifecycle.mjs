@@ -839,7 +839,8 @@ export async function installInboxV2Database(options) {
             migrations: migrationBundle.migrations,
             appliedCount: journalPrefix.applied.length,
             allowEphemeralBlockingDdlCompatibilityTest:
-              options.allowEphemeralBlockingDdlCompatibilityTest
+              options.allowEphemeralBlockingDdlCompatibilityTest,
+            allowReviewedOnlineBridge: options.allowReviewedOnlineBridge
           }
         );
         if (
@@ -854,7 +855,8 @@ export async function installInboxV2Database(options) {
         }
         if (
           expandDdlRisk.requiresOnlineBridge &&
-          !expandDdlRisk.overrideAuthorized
+          !expandDdlRisk.overrideAuthorized &&
+          !expandDdlRisk.reviewedOnlineBridgeAuthorized
         ) {
           throw lifecycleError(
             "inbox_v2.expand_online_bridge_required",

@@ -856,6 +856,32 @@ describe("Inbox V2 preserve expand DDL risk", () => {
     expect(nonIntegration.overrideAuthorized).toBe(false);
   });
 
+  it("records an explicitly reviewed online bridge separately from the test override", async () => {
+    const report = await inspectInboxV2ExpandDdlRisk(
+      evidenceClient({
+        databaseName: "production",
+        relations: [relation("messages", 8192, true)]
+      }),
+      {
+        migrations: [
+          migration([
+            'alter table "messages" drop constraint "messages_old_check"'
+          ])
+        ],
+        appliedCount: 0,
+        allowReviewedOnlineBridge: true
+      }
+    );
+
+    expect(report).toMatchObject({
+      requiresOnlineBridge: true,
+      overrideRequested: false,
+      overrideAuthorized: false,
+      reviewedOnlineBridgeRequested: true,
+      reviewedOnlineBridgeAuthorized: true
+    });
+  });
+
   it("detects the checked-in populated 0029 rewrite and 0036 destructive boundary", () => {
     const migrations = readMigrationFiles({
       migrationsFolder: "packages/db/drizzle"

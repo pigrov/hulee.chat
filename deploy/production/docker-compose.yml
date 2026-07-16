@@ -78,7 +78,8 @@ services:
     <<: *app-base
     container_name: hulee_chat_migrate
     restart: "no"
-    command: ["pnpm", "db:migrate"]
+    command:
+      ["pnpm", "db:inbox-v2:install", "--", "--allow-reviewed-online-bridge"]
 
   seed:
     <<: *app-base

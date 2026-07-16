@@ -83,11 +83,11 @@ try {
   );
 
   const aliases = await workspaceAliases(worktree);
-  const esbuildExecutable = await resolveEsbuildExecutable(repositoryRoot);
+  const esbuildInvocation = await resolveEsbuildInvocation(repositoryRoot);
   execFileSync(
-    process.execPath,
+    esbuildInvocation.command,
     [
-      esbuildExecutable,
+      ...esbuildInvocation.arguments_,
       "scripts/db/fixtures/inbox-v2/db008-n1-runtime-probe.entry.ts",
       "--bundle",
       "--platform=node",
@@ -164,8 +164,8 @@ try {
     },
     build: {
       esbuildVersion: execFileSync(
-        process.execPath,
-        [esbuildExecutable, "--version"],
+        esbuildInvocation.command,
+        [...esbuildInvocation.arguments_, "--version"],
         {
           cwd: repositoryRoot,
           encoding: "utf8"
@@ -334,7 +334,7 @@ async function linkWorkspaceNodeModules(sourceRoot, targetRoot) {
   }
 }
 
-async function resolveEsbuildExecutable(root) {
+async function resolveEsbuildInvocation(root) {
   const executable = join(
     root,
     "node_modules/.pnpm",
@@ -349,7 +349,10 @@ async function resolveEsbuildExecutable(root) {
       `Expected esbuild ${esbuildVersion}, found ${String(manifest.version)}.`
     );
   }
-  return executable;
+  if (process.platform === "win32") {
+    return { command: process.execPath, arguments_: [executable] };
+  }
+  return { command: executable, arguments_: [] };
 }
 
 async function migrationJournalContract(root, journal) {

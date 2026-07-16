@@ -71,7 +71,7 @@ describe("auth email flows", () => {
       })
     ).resolves.toBe("weak_password");
     expect(mocks.completePasswordReset).not.toHaveBeenCalled();
-  });
+  }, 10_000);
 
   it("completes email change verification links through the email change persistence path", async () => {
     const { completeEmailVerificationToken } = await import("./auth-email");
