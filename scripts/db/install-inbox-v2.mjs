@@ -19,6 +19,9 @@ function parseArguments(arguments_) {
   const parsed = {};
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index];
+    if (argument === "--") {
+      continue;
+    }
     if (argument === "--bootstrap") {
       parsed.bootstrap = requiredArgument(arguments_, ++index, argument);
       continue;
