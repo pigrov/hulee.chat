@@ -357,3 +357,7 @@ for source connections, source accounts, raw inbound events and normalized
 inbound events. It should not migrate existing messenger connectors until the
 new pipeline is exercised by a simple source such as Public API, web forms or
 email.
+
+The completed skeleton is not Inbox V2 production authority. Its verified
+reuse/disposition, tenant/lifecycle gaps and downstream task ownership are
+recorded in `docs/product/inbox-v2-src-001-source-foundation-map.md`.

@@ -1320,38 +1320,90 @@ PostgreSQL gate passes. `INB2-DB-005` cannot start before both are complete.
 Goal: turn webhook/polling/session input into one idempotent canonical thread and
 participant set.
 
-- [ ] `INB2-SRC-001` Re-verify the existing source foundation for V2 use.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-EPIC-2-GATE`.
+- [x] `INB2-SRC-001` Re-verify the existing source foundation for V2 use.
+  - State: `done`; Priority: `P0`; Started: `2026-07-16`; Completed:
+    `2026-07-16`; Owner: `Codex`; Depends on: `INB2-EPIC-2-GATE`.
   - Acceptance: SOURCE-100..112 contracts/tables are mapped to V2 and every
     incompatibility becomes a task rather than an assumed completed dependency;
     raw/normalized arbitrary JSON, global-ID-only tenant FKs and absent lifecycle
     metadata are explicit migration gaps, not reusable V2 invariants.
-  - Verification: mapping document and focused existing source tests pass. Evidence: -
+  - Verification: mapping document and focused existing source tests pass.
+  - Evidence: `docs/product/inbox-v2-src-001-source-foundation-map.md` maps
+    `SOURCE-100..112`, current runtime/schema facts, twelve owned gaps and the
+    ADR 0015 lifecycle target. Focused foundation `12/71`, independent source
+    `8/45` and `12/89`, and connector/API/client `3/74` suites passed. Three
+    independent reviews found the source/connector registry gap and assigned it
+    to new P0 task `INB2-SRC-010`; no incompatibility remains ownerless. Full
+    `pnpm check` passed (`304/3041`, with `31/258` opt-in integration tests
+    intentionally skipped by the default process).
+
+- [ ] `INB2-SRC-010` Harden the reusable SourceConnection, SourceAccount and
+      channel-connector registry for V2.
+  - State: `planned`; Priority: `P0`; Depends on: `INB2-SRC-001`,
+    `INB2-DB-003`, `INB2-DB-009`, `INB2-CON-010`, `INB2-RBAC-003`.
+  - Acceptance: every SourceConnection, SourceAccount, creator/owner/access,
+    ChannelConnector, ChannelSession, session-event and auth-challenge edge is
+    enforced by same-tenant composite references; no repository or API path
+    relies on a global ID alone. Canonical/provisional SourceAccount identity
+    and re-auth history remain owned by the DB-003 authority. Persisted config,
+    capabilities, diagnostics and metadata accept only versioned typed
+    envelopes or classified content/evidence references; credentials are stored
+    only through revocable secret references. Standalone source onboarding is
+    atomic or compensating and exposes only a registered adapter handler.
+    Disable, delete, replacement and reconnect preserve bindings, occurrences
+    and historical identity while invalidating current route authority. Every
+    retained JSON, secret reference and catalog/module surface declares its data
+    class, purpose, storage root, subject-discovery path, parent and canonical
+    retention anchor, policy/rule/lineage revision, hold/restriction behavior
+    and compatible lifecycle/export/delete/absence-verification handlers. The
+    registry is fail-closed when any required root, lineage or handler is absent
+    or incompatible. This task owns the versioned capability-envelope storage
+    boundary; exact direct-surface capability schemas remain in `INB2-DMX-001`.
+  - Verification: fresh/current/N-1 PostgreSQL tests reject cross-tenant and
+    global-ID-only edges, repository bypass with unsafe JSON or inline secrets,
+    stale re-auth/replacement, orphaned onboarding secrets and invalid lifecycle
+    declarations. Reconnect, disable/delete and replacement fixtures preserve
+    historical evidence while preventing unauthorized route reuse. Registry
+    composition rejects missing subject/parent/anchor/hold/export/delete/
+    absence handlers and stale lineage revisions; hold/restriction and absence
+    verification fail closed. Focused legacy source/channel tests pass.
+    Evidence: -
 
 - [ ] `INB2-SRC-002` Add atomic raw-event claim, lease and stale reclaim.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-SRC-001`,
-    `INB2-CON-010`.
+    `INB2-SRC-010`, `INB2-CON-010`.
   - Acceptance: before the first durable raw-event write, an adapter-declared
     sanitizer strips authorization/cookie/password/token/session material,
     persists only allowlisted diagnostic/signature headers and classified
     restricted evidence, and quarantines an unknown unsafe shape; repository
-    callers cannot bypass this boundary. Multiple workers cannot process one
-    pending event concurrently; expired leases are diagnosable and safely reclaimable.
+    callers cannot bypass this boundary. The repository constructs the raw
+    idempotency key and, on conflict, compares immutable tenant/connection/
+    account/transport/event-identity scope plus a safe envelope digest; mismatch
+    produces stable `source.idempotency_collision` quarantine instead of
+    returning an unrelated row. Multiple workers cannot process one pending
+    event concurrently; expired leases are diagnosable and safely reclaimable.
   - Verification: signature/auth validation may use ephemeral request bytes, but
     persisted payload/header fixtures and repository-bypass attempts contain no
-    credential material; multi-worker tests cover winner, retry and crash recovery.
-    Evidence: -
+    credential material. Equal keys across connections/accounts and equal scope
+    with a different safe digest are rejected and quarantined; exact retries
+    return the original outcome. Multi-worker tests cover winner, retry and crash
+    recovery. Evidence: -
 
 - [ ] `INB2-SRC-003` Normalize message, membership and lifecycle events for V2.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-SRC-001`,
-    `INB2-CON-008`, `INB2-CON-010`.
+    `INB2-SRC-010`, `INB2-CON-008`, `INB2-CON-010`.
   - Acceptance: normalized input separates exact source/account/thread/sender
     IDs, supports zero-to-many identity/roster observations with completeness,
     and retains provider time, capabilities, payload version and classified
     purgeable evidence reference; generic core/event/audit payloads never copy
-    raw provider fragments, credentials or contact/message content.
+    raw provider fragments, credentials or contact/message content. The
+    normalized idempotency key is server-owned; a conflict must match its raw
+    event, connection/account, event type and safe normalized-envelope digest or
+    become a stable `source.idempotency_collision` quarantine outcome.
   - Verification: shared contract harness rejects missing scope, unsafe opaque-ID
-    canonicalization and raw provider fragments in core payloads. Evidence: -
+    canonicalization and raw provider fragments in core payloads. Same-key
+    fixtures across event types/raw events/accounts and mismatched safe digests
+    never return an unrelated normalized row. Evidence: -
 
 - [ ] `INB2-SRC-004` Implement external identity and participant resolution.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-SRC-003`, `INB2-DB-002`.
@@ -1379,10 +1431,12 @@ participant set.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-SRC-005`.
   - Acceptance: account-scoped raw observations stay distinct while exact
     adapter-scoped message refs dedupe webhook/polling/cross-account echoes;
-    late lifecycle and ambiguous weak correlation retain provenance.
+    server-owned canonical keys compare exact adapter realm/object/scope and
+    immutable message identity before reuse; late lifecycle and ambiguous weak
+    correlation retain provenance instead of silently merging.
   - Verification: fixtures cover cross-account duplicate create, equal-content
-    genuine messages, edit/delete-before-create, stale reaction/read and replay.
-    Evidence: -
+    genuine messages, same-key scope/digest collision, edit/delete-before-create,
+    stale reaction/read and replay. Evidence: -
 
 - [ ] `INB2-SRC-007` Materialize V2 state and outbox atomically.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-SRC-004` through `INB2-SRC-006`.
@@ -1400,11 +1454,16 @@ participant set.
     retryability, replay reason, rate-limit hints, classification/redaction before
     durable diagnostics and separate raw/normalized evidence deadlines work
     without leaking secrets/payloads; expiry ends replayability explicitly and
-    leaves only a finite tenant-keyed dedupe/outcome skeleton unless held.
+    leaves only a finite tenant/purpose-keyed HMAC dedupe/outcome skeleton unless
+    held. Durable dedupe identity pins its key generation and guarantee window
+    and contains no clear external event ID, signature, fingerprint or
+    low-entropy content/time fragment.
   - Verification: polling/materialization failure, provider outage and poisoned
     event do not skip input/block other accounts; replay stays idempotent, and
     payload expiry cannot be reversed from diagnostics/hash or block bounded
-    cleanup. Evidence: -
+    cleanup. Key rotation/retirement and guarantee-window expiry fixtures keep
+    old outcomes finite and diagnosable without silently extending replay or
+    falling back to clear/unkeyed weak identities. Evidence: -
 
 - [ ] `INB2-SRC-009` Implement fenced outbox lease and outcome lifecycle.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-SRC-007`, `INB2-DB-007`.
@@ -1840,7 +1899,8 @@ provider-specific architecture.
 
 - [ ] `INB2-DMX-001` Implement SourceCapabilities V2 and direct adapter contract harness.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-ARCH-008`,
-    `INB2-ARCH-010`, `INB2-CON-005`, `INB2-CON-007`, `INB2-CON-010`.
+    `INB2-ARCH-010`, `INB2-CON-005`, `INB2-CON-007`, `INB2-CON-010`,
+    `INB2-SRC-010`.
   - Acceptance: capability profiles belong to an exact provider surface and
     binding; they separately describe access model, private/group thread/message
     scope, opaque route token, roster fidelity/history, group read/write,
@@ -2889,3 +2949,4 @@ the task state, checkbox and evidence above.
 | 2026-07-16 | `INB2-DB-008`      | Preserve 3/17; reset 1/1; focused 5/72; full 302/3024 + gates              | working tree | Codex + independent reviews       |
 | 2026-07-16 | `INB2-DB-010`      | Coherence/TRUNCATE; lifecycle 6/6; preserve 3/17; reset 1/1; full 303/3031 | working tree | Codex + three independent reviews |
 | 2026-07-16 | `INB2-EPIC-2-GATE` | Fresh PG 23/219; preserve/reset/lifecycle; full 304/3041 and all gates     | working tree | Codex + independent reviews       |
+| 2026-07-16 | `INB2-SRC-001`     | Map; focused 12/71; independent 8/45, 12/89, 3/74; full 304/3041           | working tree | Codex + three independent reviews |
