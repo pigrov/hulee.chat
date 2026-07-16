@@ -289,6 +289,32 @@ function rawIngressSanitizerProfileInput() {
   };
 }
 
+function sourceNormalizerProfileInput() {
+  const sanitizerProfile = rawIngressSanitizerProfileInput();
+  return {
+    schemaId: "core:inbox-v2.source-normalizer-profile" as const,
+    schemaVersion: "v1" as const,
+    payload: {
+      adapterContract,
+      handlerId: "module:synthetic:normalize-webhook",
+      handlerVersion: "v1",
+      declarationRevision: "1",
+      rawIngressSanitizer: {
+        profileSchemaId: sanitizerProfile.schemaId,
+        profileSchemaVersion: sanitizerProfile.schemaVersion,
+        handlerId: sanitizerProfile.payload.handlerId,
+        handlerVersion: sanitizerProfile.payload.handlerVersion,
+        declarationRevision: sanitizerProfile.payload.declarationRevision,
+        restrictedPayloadSchema:
+          sanitizerProfile.payload.restrictedPayloadSchema
+      },
+      eventKinds: ["message_created" as const],
+      identityDeclarations: [],
+      evidenceSlots: []
+    }
+  };
+}
+
 function connectionStateInput(revision = "1", generation = "1") {
   return {
     schemaId: "core:inbox-v2.source-connection-registry-state" as const,
@@ -569,6 +595,10 @@ function adapterDeclarationInput(
         mode: "webhook" as const,
         handlerId: "module:synthetic:ingress",
         sanitizerProfile: rawIngressSanitizerProfileInput()
+      },
+      normalization: {
+        mode: "supported" as const,
+        normalizerProfile: sourceNormalizerProfileInput()
       }
     }
   };
@@ -865,7 +895,7 @@ describe("Inbox V2 source registry contracts", () => {
     );
   });
 
-  it("requires an exact sanitizer profile only for supported ingress", () => {
+  it("requires exact sanitizer and normalizer profiles for supported ingress", () => {
     const { binding } = lifecycleBinding();
     const missingProfile = structuredClone(adapterDeclarationInput(binding));
     Reflect.deleteProperty(missingProfile.payload.ingress, "sanitizerProfile");
@@ -890,6 +920,65 @@ describe("Inbox V2 source registry contracts", () => {
         .success
     ).toBe(false);
 
+    const missingNormalizerProfile = structuredClone(
+      adapterDeclarationInput(binding)
+    );
+    if (missingNormalizerProfile.payload.normalization.mode !== "supported") {
+      throw new Error("Expected supported normalization fixture.");
+    }
+    Reflect.deleteProperty(
+      missingNormalizerProfile.payload.normalization,
+      "normalizerProfile"
+    );
+    expect(
+      inboxV2SourceAdapterDeclarationSchema.safeParse(missingNormalizerProfile)
+        .success
+    ).toBe(false);
+
+    const mismatchedNormalizerContract = structuredClone(
+      adapterDeclarationInput(binding)
+    );
+    if (
+      mismatchedNormalizerContract.payload.normalization.mode !== "supported"
+    ) {
+      throw new Error("Expected supported normalization fixture.");
+    }
+    mismatchedNormalizerContract.payload.normalization.normalizerProfile.payload.adapterContract =
+      {
+        ...mismatchedNormalizerContract.payload.normalization.normalizerProfile
+          .payload.adapterContract,
+        contractId: "module:synthetic:different-adapter"
+      };
+    expect(
+      inboxV2SourceAdapterDeclarationSchema.safeParse(
+        mismatchedNormalizerContract
+      ).success
+    ).toBe(false);
+
+    const mismatchedRawPin = structuredClone(adapterDeclarationInput(binding));
+    if (mismatchedRawPin.payload.normalization.mode !== "supported") {
+      throw new Error("Expected supported normalization fixture.");
+    }
+    mismatchedRawPin.payload.normalization.normalizerProfile.payload.rawIngressSanitizer.handlerVersion =
+      "v2";
+    expect(
+      inboxV2SourceAdapterDeclarationSchema.safeParse(mismatchedRawPin).success
+    ).toBe(false);
+
+    const mismatchedRestrictedSchema = structuredClone(
+      adapterDeclarationInput(binding)
+    );
+    if (mismatchedRestrictedSchema.payload.normalization.mode !== "supported") {
+      throw new Error("Expected supported normalization fixture.");
+    }
+    mismatchedRestrictedSchema.payload.normalization.normalizerProfile.payload.rawIngressSanitizer.restrictedPayloadSchema.schemaVersion =
+      "v2";
+    expect(
+      inboxV2SourceAdapterDeclarationSchema.safeParse(
+        mismatchedRestrictedSchema
+      ).success
+    ).toBe(false);
+
     const unsupported = structuredClone(adapterDeclarationInput(binding));
     unsupported.payload.ingress = {
       mode: "not_supported",
@@ -897,6 +986,34 @@ describe("Inbox V2 source registry contracts", () => {
     } as unknown as typeof unsupported.payload.ingress;
     expect(
       inboxV2SourceAdapterDeclarationSchema.safeParse(unsupported).success
+    ).toBe(false);
+
+    const unsupportedPair = structuredClone(adapterDeclarationInput(binding));
+    unsupportedPair.payload.ingress = { mode: "not_supported" };
+    unsupportedPair.payload.normalization = { mode: "not_supported" };
+    expect(
+      inboxV2SourceAdapterDeclarationSchema.safeParse(unsupportedPair).success
+    ).toBe(true);
+
+    const unsupportedIngressOnly = structuredClone(
+      adapterDeclarationInput(binding)
+    );
+    unsupportedIngressOnly.payload.ingress = { mode: "not_supported" };
+    expect(
+      inboxV2SourceAdapterDeclarationSchema.safeParse(unsupportedIngressOnly)
+        .success
+    ).toBe(false);
+
+    const unsupportedNormalizationOnly = structuredClone(
+      adapterDeclarationInput(binding)
+    );
+    unsupportedNormalizationOnly.payload.normalization = {
+      mode: "not_supported"
+    };
+    expect(
+      inboxV2SourceAdapterDeclarationSchema.safeParse(
+        unsupportedNormalizationOnly
+      ).success
     ).toBe(false);
   });
 

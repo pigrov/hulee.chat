@@ -754,7 +754,9 @@ function cloneSafeJsonValue(
   ) {
     if (
       typeof value === "string" &&
-      (value.length > 4 * 1024 * 1024 || hasInvalidUnicode(value))
+      (value.length > 4 * 1024 * 1024 ||
+        hasInvalidUnicode(value) ||
+        value.includes("\u0000"))
     ) {
       throw new TypeError("Unsafe raw payload string.");
     }
@@ -775,8 +777,12 @@ function cloneSafeJsonValue(
   state.ancestors.add(value);
   try {
     if (Array.isArray(value)) {
+      if (Object.getPrototypeOf(value) !== Array.prototype) {
+        throw new TypeError("Unsafe raw payload array prototype.");
+      }
       const keys = Reflect.ownKeys(value);
       if (
+        keys.length !== value.length + 1 ||
         keys.some(
           (key) =>
             key !== "length" &&
@@ -806,7 +812,7 @@ function cloneSafeJsonValue(
     if (prototype !== Object.prototype && prototype !== null) {
       throw new TypeError("Unsafe raw payload object prototype.");
     }
-    const clone: Record<string, JsonValue> = {};
+    const clone = Object.create(null) as Record<string, JsonValue>;
     for (const key of Reflect.ownKeys(value)) {
       if (typeof key !== "string") {
         throw new TypeError("Unsafe raw payload symbol key.");
@@ -828,7 +834,12 @@ function cloneSafeJsonValue(
       ) {
         throw new TypeError("Unsafe raw payload descriptor.");
       }
-      clone[key] = cloneSafeJsonValue(descriptor.value, state, depth + 1);
+      Object.defineProperty(clone, key, {
+        value: cloneSafeJsonValue(descriptor.value, state, depth + 1),
+        enumerable: true,
+        configurable: false,
+        writable: false
+      });
     }
     return clone;
   } finally {
@@ -1025,11 +1036,55 @@ function cloneAndFreeze<TValue>(value: TValue): TValue {
     return value;
   }
   if (Array.isArray(value)) {
-    return Object.freeze(value.map((item) => cloneAndFreeze(item))) as TValue;
+    if (Object.getPrototypeOf(value) !== Array.prototype) {
+      throw new TypeError("Unsafe array prototype.");
+    }
+    const clone: unknown[] = [];
+    const keys = Reflect.ownKeys(value);
+    if (
+      keys.length !== value.length + 1 ||
+      keys.some(
+        (key) =>
+          key !== "length" &&
+          (typeof key !== "string" || !/^(?:0|[1-9][0-9]*)$/u.test(key))
+      )
+    ) {
+      throw new TypeError("Unsafe array descriptor.");
+    }
+    for (let index = 0; index < value.length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (
+        descriptor === undefined ||
+        !descriptor.enumerable ||
+        !("value" in descriptor)
+      ) {
+        throw new TypeError("Unsafe array descriptor.");
+      }
+      clone.push(cloneAndFreeze(descriptor.value));
+    }
+    return Object.freeze(clone) as TValue;
   }
-  const clone: Record<string, unknown> = {};
-  for (const [key, item] of Object.entries(value)) {
-    clone[key] = cloneAndFreeze(item);
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError("Unsafe object prototype.");
+  }
+  const clone = Object.create(null) as Record<string, unknown>;
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string") throw new TypeError("Unsafe symbol key.");
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (
+      descriptor === undefined ||
+      !descriptor.enumerable ||
+      !("value" in descriptor)
+    ) {
+      throw new TypeError("Unsafe object descriptor.");
+    }
+    Object.defineProperty(clone, key, {
+      value: cloneAndFreeze(descriptor.value),
+      enumerable: true,
+      configurable: false,
+      writable: false
+    });
   }
   return Object.freeze(clone) as TValue;
 }

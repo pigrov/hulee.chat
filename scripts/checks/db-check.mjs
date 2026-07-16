@@ -151,6 +151,22 @@ const inboxV2SourceRawIngressEnumNames = [
   "public.inbox_v2_source_raw_quarantine_reason",
   "public.inbox_v2_source_raw_work_state"
 ];
+const inboxV2SourceNormalizationFileName =
+  "0043_inbox_v2_source_normalization.sql";
+const inboxV2SourceNormalizationMarker =
+  "-- INBOX_V2_SOURCE_NORMALIZATION_FINALIZED_V1";
+const inboxV2SourceNormalizationInvariantName =
+  "INBOX_V2_SOURCE_NORMALIZATION_INTEGRITY_SQL";
+const inboxV2SourceNormalizationTableNames = [
+  "public.inbox_v2_source_normalization_results",
+  "public.inbox_v2_source_normalized_envelopes",
+  "public.inbox_v2_source_normalized_evidence",
+  "public.inbox_v2_source_normalized_evidence_payloads",
+  "public.inbox_v2_source_normalized_quarantines"
+];
+const inboxV2SourceNormalizationEnumNames = [
+  "public.inbox_v2_source_normalization_outcome"
+];
 const inboxV2SourceRegistryPrerequisiteUniqueConstraintNames = [
   "channel_auth_challenges_tenant_id_unique",
   "channel_auth_challenges_tenant_id_connector_unique",
@@ -251,6 +267,9 @@ const inboxV2SourceOnboardingResultMigrations = migrationFiles.filter(
 const inboxV2SourceRawIngressMigrations = migrationFiles.filter(
   ({ fileName }) => fileName === inboxV2SourceRawIngressFileName
 );
+const inboxV2SourceNormalizationMigrations = migrationFiles.filter(
+  ({ fileName }) => fileName === inboxV2SourceNormalizationFileName
+);
 const inboxV2SchemaFileNames = (await readdir(inboxV2SchemaDirectory))
   .filter((fileName) => fileName.endsWith(".ts"))
   .sort();
@@ -321,6 +340,9 @@ const inboxV2SourceRegistryInvariantBlocks = inboxV2InvariantBlocks.filter(
 );
 const inboxV2SourceRawIngressInvariantBlocks = inboxV2InvariantBlocks.filter(
   ({ name }) => name === inboxV2SourceRawIngressInvariantName
+);
+const inboxV2SourceNormalizationInvariantBlocks = inboxV2InvariantBlocks.filter(
+  ({ name }) => name === inboxV2SourceNormalizationInvariantName
 );
 const inboxV2MembershipPrivilegeBoundaryBlock = extractInboxV2NamedSqlBlock(
   "membership-privilege-boundary.ts",
@@ -412,6 +434,12 @@ if (inboxV2SourceRawIngressInvariantBlocks.length !== 1) {
   );
   process.exit(1);
 }
+if (inboxV2SourceNormalizationInvariantBlocks.length !== 1) {
+  console.error(
+    `Expected exactly one ${inboxV2SourceNormalizationInvariantName} schema block, found ${inboxV2SourceNormalizationInvariantBlocks.length}.`
+  );
+  process.exit(1);
+}
 const unownedInvariantBlocks = inboxV2InvariantBlocks.filter(
   ({ name }) =>
     !inboxV2FoundationInvariantNames.has(name) &&
@@ -424,7 +452,8 @@ const unownedInvariantBlocks = inboxV2InvariantBlocks.filter(
     name !== inboxV2RepositoryFoundationInvariantName &&
     name !== inboxV2ConversationTimelineHeadInvariantName &&
     name !== inboxV2SourceRegistryInvariantName &&
-    name !== inboxV2SourceRawIngressInvariantName
+    name !== inboxV2SourceRawIngressInvariantName &&
+    name !== inboxV2SourceNormalizationInvariantName
 );
 if (unownedInvariantBlocks.length > 0) {
   console.error(
@@ -559,6 +588,12 @@ if (inboxV2SourceRawIngressMigrations.length !== 1) {
   );
   process.exit(1);
 }
+if (inboxV2SourceNormalizationMigrations.length !== 1) {
+  console.error(
+    `Expected exactly one source-normalization migration, found ${inboxV2SourceNormalizationMigrations.length}.`
+  );
+  process.exit(1);
+}
 
 try {
   assertGlobalMigrationArtifactBijection({
@@ -602,6 +637,16 @@ try {
     journal: drizzleJournal,
     targetIndex: 42,
     finalizedMigrationFileName: inboxV2SourceRawIngressMigrations[0].fileName,
+    migrationFileNames,
+    snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
+      fileName.endsWith("_snapshot.json")
+    )
+  });
+  assertMigrationJournalArtifactParity({
+    journal: drizzleJournal,
+    targetIndex: 43,
+    finalizedMigrationFileName:
+      inboxV2SourceNormalizationMigrations[0].fileName,
     migrationFileNames,
     snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
       fileName.endsWith("_snapshot.json")
@@ -684,6 +729,10 @@ assertInboxV2SourceRawIngressMigration(
   inboxV2SourceRawIngressMigrations[0],
   inboxV2SourceRawIngressInvariantBlocks[0]
 );
+assertInboxV2SourceNormalizationMigration(
+  inboxV2SourceNormalizationMigrations[0],
+  inboxV2SourceNormalizationInvariantBlocks[0]
+);
 assertInboxV2SecurityDenialMigration(inboxV2SecurityDenialMigrations[0]);
 assertInboxV2RepositoryFoundationMigration(
   inboxV2RepositoryFoundationMigrations[0]
@@ -710,6 +759,9 @@ try {
   );
   await assertInboxV2SourceRawIngressGeneratedSchemaParity(
     inboxV2SourceRawIngressMigrations[0]
+  );
+  await assertInboxV2SourceNormalizationGeneratedSchemaParity(
+    inboxV2SourceNormalizationMigrations[0]
   );
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
@@ -864,6 +916,40 @@ function assertInboxV2SourceRawIngressMigration(migration, invariantBlock) {
     if (!migration.sql.includes(requiredFragment)) {
       throw new Error(
         `Inbox V2 source-raw-ingress migration is missing ${requiredFragment}.`
+      );
+    }
+  }
+}
+
+function assertInboxV2SourceNormalizationMigration(migration, invariantBlock) {
+  const statements = splitMigrationStatements(migration.sql);
+  if (statements.length < 2) {
+    throw new Error(
+      "Inbox V2 source-normalization migration is missing generated DDL or its invariant tail."
+    );
+  }
+  assertExactSqlSequence(
+    [`${inboxV2SourceNormalizationMarker}\n${invariantBlock.sql}`],
+    statements.slice(-1),
+    "Inbox V2 SRC-003 source-normalization invariant tail"
+  );
+  for (const requiredFragment of [
+    'CREATE TYPE "public"."inbox_v2_source_normalization_outcome"',
+    'CREATE TABLE "inbox_v2_source_normalized_envelopes"',
+    'CREATE TABLE "inbox_v2_source_normalized_evidence"',
+    'CREATE TABLE "inbox_v2_source_normalized_evidence_payloads"',
+    'CREATE TABLE "inbox_v2_source_normalized_quarantines"',
+    'CREATE TABLE "inbox_v2_source_normalization_results"',
+    "inbox_v2_source_normalized_assert_aggregate",
+    "inbox_v2_source_normalization_assert_result",
+    "inbox_v2_source_normalization_complete_work_guard",
+    "exact unexpired lease result",
+    "deferrable initially deferred",
+    "set search_path = pg_catalog, public, pg_temp"
+  ]) {
+    if (!migration.sql.includes(requiredFragment)) {
+      throw new Error(
+        `Inbox V2 source-normalization migration is missing ${requiredFragment}.`
       );
     }
   }
@@ -1040,6 +1126,33 @@ async function assertInboxV2SourceRawIngressGeneratedSchemaParity(migration) {
     baseIndex: 41,
     targetIndex: 42
   });
+  const historicalGenerated =
+    withoutInboxV2SourceNormalizationSchemaDelta(generated);
+  const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
+  assertDrizzleSnapshotParity(
+    historicalGenerated.snapshot,
+    checkedInSnapshot,
+    snapshotPath
+  );
+
+  const checkedInStatements = splitMigrationStatements(migration.sql);
+  assertExactSqlSequence(
+    historicalGenerated.statements,
+    checkedInStatements.slice(0, -1),
+    "Inbox V2 SRC-002 ordered generated migration DDL"
+  );
+}
+
+async function assertInboxV2SourceNormalizationGeneratedSchemaParity(
+  migration
+) {
+  const snapshotPath = "packages/db/drizzle/meta/0043_snapshot.json";
+  const generated = await generateExpectedDrizzleMigration({
+    workspaceRoot: process.cwd(),
+    migrationDirectory,
+    baseIndex: 42,
+    targetIndex: 43
+  });
   const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
   assertDrizzleSnapshotParity(
     generated.snapshot,
@@ -1051,7 +1164,7 @@ async function assertInboxV2SourceRawIngressGeneratedSchemaParity(migration) {
   assertExactSqlSequence(
     generated.statements,
     checkedInStatements.slice(0, -1),
-    "Inbox V2 SRC-002 ordered generated migration DDL"
+    "Inbox V2 SRC-003 ordered generated migration DDL"
   );
 }
 
@@ -1389,15 +1502,31 @@ function withoutInboxV2SourceOnboardingResultSchemaDelta(generated) {
 }
 
 function withoutInboxV2SourceRawIngressSchemaDelta(generated) {
-  const snapshot = structuredClone(generated.snapshot);
+  const withoutSourceNormalization =
+    withoutInboxV2SourceNormalizationSchemaDelta(generated);
+  const snapshot = structuredClone(withoutSourceNormalization.snapshot);
   for (const tableName of inboxV2SourceRawIngressTableNames) {
     delete snapshot.tables[tableName];
   }
   for (const enumName of inboxV2SourceRawIngressEnumNames) {
     delete snapshot.enums[enumName];
   }
-  const statements = generated.statements.filter(
+  const statements = withoutSourceNormalization.statements.filter(
     (statement) => !statement.includes("inbox_v2_source_raw_")
+  );
+  return { snapshot, statements };
+}
+
+function withoutInboxV2SourceNormalizationSchemaDelta(generated) {
+  const snapshot = structuredClone(generated.snapshot);
+  for (const tableName of inboxV2SourceNormalizationTableNames) {
+    delete snapshot.tables[tableName];
+  }
+  for (const enumName of inboxV2SourceNormalizationEnumNames) {
+    delete snapshot.enums[enumName];
+  }
+  const statements = generated.statements.filter(
+    (statement) => !statement.includes("inbox_v2_source_normal")
   );
   return { snapshot, statements };
 }

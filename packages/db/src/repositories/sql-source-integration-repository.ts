@@ -1,21 +1,11 @@
 import type {
-  ConversationId,
   EmployeeId,
-  EventSchemaVersion,
-  MessageId,
-  NormalizedInboundEventId,
-  RawInboundEventId,
-  ReplyCapability,
   SourceAccountId,
   SourceAccountType,
   SourceAuthType,
   SourceConnectionId,
   SourceConnectionStatus,
-  SourceEventDirection,
-  SourceEventProcessingStatus,
-  SourceEventType,
   SourceType,
-  SourceVisibility,
   TenantId
 } from "@hulee/contracts";
 import { sql, type SQL } from "drizzle-orm";
@@ -50,31 +40,6 @@ export type SourceAccountRecord = {
   displayName: string;
   status: SourceConnectionStatus | (string & {});
   metadata: unknown;
-  createdAt: Date;
-  updatedAt: Date;
-};
-
-export type NormalizedInboundEventRecord = {
-  id: NormalizedInboundEventId;
-  tenantId: TenantId;
-  rawEventId: RawInboundEventId;
-  sourceConnectionId: SourceConnectionId;
-  sourceAccountId: SourceAccountId | null;
-  sourceType: SourceType | (string & {});
-  sourceName: string;
-  eventType: SourceEventType | (string & {});
-  direction: SourceEventDirection | (string & {});
-  visibility: SourceVisibility | (string & {});
-  externalThreadId: string | null;
-  externalMessageId: string | null;
-  externalUserId: string | null;
-  payloadVersion: EventSchemaVersion | (string & {});
-  normalizedPayload: unknown;
-  replyCapability: unknown;
-  conversationId: ConversationId | null;
-  messageId: MessageId | null;
-  idempotencyKey: string;
-  processingStatus: SourceEventProcessingStatus | (string & {});
   createdAt: Date;
   updatedAt: Date;
 };
@@ -119,30 +84,6 @@ export type UpsertSourceAccountInput = {
   updatedAt: Date;
 };
 
-export type RecordNormalizedInboundEventInput = {
-  id: NormalizedInboundEventId | string;
-  tenantId: TenantId;
-  rawEventId: RawInboundEventId | string;
-  sourceConnectionId: SourceConnectionId | string;
-  sourceAccountId?: SourceAccountId | string | null;
-  sourceType: SourceType | string;
-  sourceName: string;
-  eventType: SourceEventType | string;
-  direction: SourceEventDirection | string;
-  visibility: SourceVisibility | string;
-  externalThreadId?: string | null;
-  externalMessageId?: string | null;
-  externalUserId?: string | null;
-  payloadVersion?: EventSchemaVersion | string;
-  normalizedPayload: unknown;
-  replyCapability?: ReplyCapability | Record<string, unknown> | null;
-  conversationId?: ConversationId | string | null;
-  messageId?: MessageId | string | null;
-  idempotencyKey: string;
-  processingStatus?: SourceEventProcessingStatus | string;
-  updatedAt: Date;
-};
-
 export type SourceIntegrationRepository = {
   findSourceConnection(
     input: FindSourceConnectionInput
@@ -156,9 +97,6 @@ export type SourceIntegrationRepository = {
   upsertSourceAccount(
     input: UpsertSourceAccountInput
   ): Promise<SourceAccountRecord>;
-  recordNormalizedInboundEvent(
-    input: RecordNormalizedInboundEventInput
-  ): Promise<NormalizedInboundEventRecord>;
 };
 
 type SourceConnectionRow = {
@@ -188,31 +126,6 @@ type SourceAccountRow = {
   display_name: string;
   status: string;
   metadata: unknown;
-  created_at: PgDateValue;
-  updated_at: PgDateValue;
-};
-
-type NormalizedInboundEventRow = {
-  id: string;
-  tenant_id: string;
-  raw_event_id: string;
-  source_connection_id: string;
-  source_account_id: string | null;
-  source_type: string;
-  source_name: string;
-  event_type: string;
-  direction: string;
-  visibility: string;
-  external_thread_id: string | null;
-  external_message_id: string | null;
-  external_user_id: string | null;
-  payload_version: string;
-  normalized_payload: unknown;
-  reply_capability: unknown;
-  conversation_id: string | null;
-  message_id: string | null;
-  idempotency_key: string;
-  processing_status: string;
   created_at: PgDateValue;
   updated_at: PgDateValue;
 };
@@ -258,16 +171,6 @@ export function createSqlSourceIntegrationRepository(
 
       return mapSourceAccountRow(
         requireReturnedRow(result.rows[0], "source account")
-      );
-    },
-
-    async recordNormalizedInboundEvent(input) {
-      const result = await rawExecutor.execute<NormalizedInboundEventRow>(
-        buildRecordNormalizedInboundEventSql(input)
-      );
-
-      return mapNormalizedInboundEventRow(
-        requireReturnedRow(result.rows[0], "normalized inbound event")
       );
     }
   };
@@ -398,64 +301,6 @@ export function buildUpsertSourceAccountSql(
   `;
 }
 
-export function buildRecordNormalizedInboundEventSql(
-  input: RecordNormalizedInboundEventInput
-): SQL {
-  return sql`
-    insert into normalized_inbound_events (
-      id,
-      tenant_id,
-      raw_event_id,
-      source_connection_id,
-      source_account_id,
-      source_type,
-      source_name,
-      event_type,
-      direction,
-      visibility,
-      external_thread_id,
-      external_message_id,
-      external_user_id,
-      payload_version,
-      normalized_payload,
-      reply_capability,
-      conversation_id,
-      message_id,
-      idempotency_key,
-      processing_status,
-      created_at,
-      updated_at
-    )
-    values (
-      ${input.id},
-      ${input.tenantId},
-      ${input.rawEventId},
-      ${input.sourceConnectionId},
-      ${input.sourceAccountId ?? null},
-      ${input.sourceType},
-      ${input.sourceName},
-      ${input.eventType},
-      ${input.direction},
-      ${input.visibility},
-      ${input.externalThreadId ?? null},
-      ${input.externalMessageId ?? null},
-      ${input.externalUserId ?? null},
-      ${input.payloadVersion ?? "v1"},
-      ${JSON.stringify(input.normalizedPayload)}::jsonb,
-      ${JSON.stringify(input.replyCapability ?? {})}::jsonb,
-      ${input.conversationId ?? null},
-      ${input.messageId ?? null},
-      ${input.idempotencyKey},
-      ${input.processingStatus ?? "new"},
-      ${input.updatedAt},
-      ${input.updatedAt}
-    )
-    on conflict (tenant_id, idempotency_key) do update
-    set updated_at = normalized_inbound_events.updated_at
-    returning ${normalizedInboundEventSelectList}
-  `;
-}
-
 const sourceConnectionSelectList = sql`
   id,
   tenant_id,
@@ -483,31 +328,6 @@ const sourceAccountSelectList = sql`
   display_name,
   status,
   metadata,
-  created_at,
-  updated_at
-`;
-
-const normalizedInboundEventSelectList = sql`
-  id,
-  tenant_id,
-  raw_event_id,
-  source_connection_id,
-  source_account_id,
-  source_type,
-  source_name,
-  event_type,
-  direction,
-  visibility,
-  external_thread_id,
-  external_message_id,
-  external_user_id,
-  payload_version,
-  normalized_payload,
-  reply_capability,
-  conversation_id,
-  message_id,
-  idempotency_key,
-  processing_status,
   created_at,
   updated_at
 `;
@@ -544,35 +364,6 @@ function mapSourceAccountRow(row: SourceAccountRow): SourceAccountRecord {
     displayName: row.display_name,
     status: row.status,
     metadata: row.metadata,
-    createdAt: normalizePgDate(row.created_at),
-    updatedAt: normalizePgDate(row.updated_at)
-  };
-}
-
-function mapNormalizedInboundEventRow(
-  row: NormalizedInboundEventRow
-): NormalizedInboundEventRecord {
-  return {
-    id: row.id as NormalizedInboundEventId,
-    tenantId: row.tenant_id as TenantId,
-    rawEventId: row.raw_event_id as RawInboundEventId,
-    sourceConnectionId: row.source_connection_id as SourceConnectionId,
-    sourceAccountId: row.source_account_id as SourceAccountId | null,
-    sourceType: row.source_type,
-    sourceName: row.source_name,
-    eventType: row.event_type,
-    direction: row.direction,
-    visibility: row.visibility,
-    externalThreadId: row.external_thread_id,
-    externalMessageId: row.external_message_id,
-    externalUserId: row.external_user_id,
-    payloadVersion: row.payload_version,
-    normalizedPayload: row.normalized_payload,
-    replyCapability: row.reply_capability,
-    conversationId: row.conversation_id as ConversationId | null,
-    messageId: row.message_id as MessageId | null,
-    idempotencyKey: row.idempotency_key,
-    processingStatus: row.processing_status,
     createdAt: normalizePgDate(row.created_at),
     updatedAt: normalizePgDate(row.updated_at)
   };

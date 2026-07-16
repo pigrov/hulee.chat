@@ -1,7 +1,4 @@
 import {
-  createNormalizedSourceIdempotencyKey,
-  type NormalizedInboundEventId,
-  type RawInboundEventId,
   type SourceAccountId,
   type SourceConnectionId,
   type TenantId
@@ -17,7 +14,6 @@ import type {
 
 import {
   buildListTenantSourceConnectionsSql,
-  buildRecordNormalizedInboundEventSql,
   buildUpsertSourceConnectionSql,
   createSqlSourceIntegrationRepository
 } from "./sql-source-integration-repository";
@@ -25,8 +21,6 @@ import {
 const tenantId = "tenant_source" as TenantId;
 const sourceConnectionId = "src_conn_market_1" as SourceConnectionId;
 const sourceAccountId = "src_acc_shop_1" as SourceAccountId;
-const rawEventId = "raw_evt_1" as RawInboundEventId;
-const normalizedEventId = "norm_evt_1" as NormalizedInboundEventId;
 const now = new Date("2026-07-08T10:00:00.000Z");
 
 describe("SQL source integration repository", () => {
@@ -126,39 +120,12 @@ describe("SQL source integration repository", () => {
     );
   });
 
-  it("keeps normalized compatibility writes separate from the V2 raw-ingress boundary", () => {
-    const normalizedIdempotencyKey = createNormalizedSourceIdempotencyKey({
-      transport: "webhook",
-      sourceConnectionId,
-      sourceAccountId,
-      sourceEventType: "message",
-      externalEventId: "ozon-message-1"
-    });
-    const normalizedQuery = sqlText(
-      buildRecordNormalizedInboundEventSql({
-        id: normalizedEventId,
-        tenantId,
-        rawEventId,
-        sourceConnectionId,
-        sourceAccountId,
-        sourceType: "marketplace",
-        sourceName: "ozon",
-        eventType: "message",
-        direction: "inbound",
-        visibility: "private",
-        normalizedPayload: {
-          text: "hello"
-        },
-        idempotencyKey: normalizedIdempotencyKey,
-        updatedAt: now
-      })
+  it("does not expose the legacy content-writing normalized-event path", () => {
+    const repository = createSqlSourceIntegrationRepository(
+      new RecordingSqlExecutor([])
     );
 
-    expect(normalizedIdempotencyKey).toContain("source:v1:normalized:webhook");
-    expect(normalizedQuery).toContain(
-      "on conflict (tenant_id, idempotency_key)"
-    );
-    expect(normalizedQuery).toContain("returning");
+    expect(repository).not.toHaveProperty("recordNormalizedInboundEvent");
   });
 });
 

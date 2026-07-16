@@ -4,6 +4,7 @@ import type {
   InboxV2SourceConnectionReference,
   InboxV2SourceConnectionRegistryState,
   InboxV2RawIngressSanitizer,
+  InboxV2SourceNormalizer,
   InboxV2SourceRegistryArtifactReference,
   InboxV2SourceRegistryLifecycleBinding,
   InboxV2SourceRegistryRelatedAuthorityReference,
@@ -27,6 +28,7 @@ import {
   isInboxV2SourceAdapterDeclarationLifecycleBinding,
   isInboxV2SourceConnectionRegistryState,
   isInboxV2RawIngressSanitizer,
+  isInboxV2SourceNormalizer,
   isInboxV2SourceRegistryLifecycleBinding,
   isInboxV2SourceRegistryTransition
 } from "@hulee/contracts";
@@ -145,6 +147,7 @@ export type SourceAdapterRegistration = Readonly<{
   onboardingHandler: SourceAdapterOnboardingHandler | null;
   ingressHandler: SourceAdapterIngressHandler | null;
   rawIngressSanitizer: InboxV2RawIngressSanitizer | null;
+  sourceNormalizer: InboxV2SourceNormalizer | null;
 }>;
 
 export type SourceAdapterRegistry = Readonly<{
@@ -152,6 +155,7 @@ export type SourceAdapterRegistry = Readonly<{
   getRegistration(sourceName: string): SourceAdapterRegistration | null;
   getIngressHandler(sourceName: string): SourceAdapterIngressHandler | null;
   getRawIngressSanitizer(sourceName: string): InboxV2RawIngressSanitizer | null;
+  getSourceNormalizer(sourceName: string): InboxV2SourceNormalizer | null;
   listSourceNames(): readonly string[];
 }>;
 
@@ -163,6 +167,8 @@ export class SourceAdapterRegistryError extends Error {
     | "source_adapter.handler_mismatch"
     | "source_adapter.sanitizer_missing"
     | "source_adapter.sanitizer_mismatch"
+    | "source_adapter.normalizer_missing"
+    | "source_adapter.normalizer_mismatch"
     | "source_adapter.invalid_prepared_authority"
     | "source_adapter.invalid_ingress_input"
     | "source_adapter.invalid_ingress_result";
@@ -218,6 +224,9 @@ export function createSourceAdapterRegistry(input: {
     getRawIngressSanitizer(sourceName: string) {
       return registrations.get(sourceName)?.rawIngressSanitizer ?? null;
     },
+    getSourceNormalizer(sourceName: string) {
+      return registrations.get(sourceName)?.sourceNormalizer ?? null;
+    },
     listSourceNames() {
       return Object.freeze([...registrations.keys()].sort());
     }
@@ -234,6 +243,7 @@ function validateAndWrapRegistration(
   const onboardingHandlerInput = registration.onboardingHandler;
   const ingressHandlerInput = registration.ingressHandler;
   const rawIngressSanitizerInput = registration.rawIngressSanitizer;
+  const sourceNormalizerInput = registration.sourceNormalizer;
   if (
     !isInboxV2SourceAdapterDeclaration(declarationAuthority) ||
     !isInboxV2SourceRegistryLifecycleBinding(lifecycleBindingAuthority) ||
@@ -276,6 +286,10 @@ function validateAndWrapRegistration(
     declaration,
     rawIngressSanitizerInput
   );
+  const sourceNormalizer = validateSourceNormalizer(
+    declaration,
+    sourceNormalizerInput
+  );
   const onboardingPrepare =
     onboardingHandler === null
       ? null
@@ -293,6 +307,7 @@ function validateAndWrapRegistration(
     declaration: declarationAuthority,
     lifecycleBinding: lifecycleBindingAuthority,
     rawIngressSanitizer,
+    sourceNormalizer,
     onboardingHandler:
       onboardingHandler === null
         ? null
@@ -392,6 +407,64 @@ function validateRawIngressSanitizer(
     );
   }
   return sanitizer;
+}
+
+function validateSourceNormalizer(
+  declaration: InboxV2SourceAdapterDeclaration["payload"],
+  normalizer: InboxV2SourceNormalizer | null
+): InboxV2SourceNormalizer | null {
+  if (declaration.normalization.mode === "not_supported") {
+    if (normalizer !== null) {
+      throw new SourceAdapterRegistryError(
+        "source_adapter.normalizer_mismatch",
+        "Adapter cannot register a source normalizer for not_supported mode."
+      );
+    }
+    return null;
+  }
+  if (normalizer === null) {
+    throw new SourceAdapterRegistryError(
+      "source_adapter.normalizer_missing",
+      `Adapter declaration requires source normalizer ${declaration.normalization.normalizerProfile.payload.handlerId}.`
+    );
+  }
+  if (!isInboxV2SourceNormalizer(normalizer)) {
+    throw new SourceAdapterRegistryError(
+      "source_adapter.normalizer_mismatch",
+      "Registered source normalizer is not an authentic adapter capability."
+    );
+  }
+  if (
+    calculateInboxV2CanonicalSha256(normalizer.profile) !==
+      calculateInboxV2CanonicalSha256(
+        declaration.normalization.normalizerProfile
+      ) ||
+    calculateInboxV2CanonicalSha256(
+      normalizer.profile.payload.adapterContract
+    ) !== calculateInboxV2CanonicalSha256(declaration.adapterContract) ||
+    declaration.ingress.mode === "not_supported" ||
+    calculateInboxV2CanonicalSha256(
+      normalizer.profile.payload.rawIngressSanitizer
+    ) !==
+      calculateInboxV2CanonicalSha256({
+        profileSchemaId: declaration.ingress.sanitizerProfile.schemaId,
+        profileSchemaVersion:
+          declaration.ingress.sanitizerProfile.schemaVersion,
+        handlerId: declaration.ingress.sanitizerProfile.payload.handlerId,
+        handlerVersion:
+          declaration.ingress.sanitizerProfile.payload.handlerVersion,
+        declarationRevision:
+          declaration.ingress.sanitizerProfile.payload.declarationRevision,
+        restrictedPayloadSchema:
+          declaration.ingress.sanitizerProfile.payload.restrictedPayloadSchema
+      })
+  ) {
+    throw new SourceAdapterRegistryError(
+      "source_adapter.normalizer_mismatch",
+      "Registered source-normalizer profile does not match the declared profile, adapter contract and raw-ingress sanitizer pin."
+    );
+  }
+  return normalizer;
 }
 
 function validateHandler<THandler extends Readonly<{ handlerId: string }>>(

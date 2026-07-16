@@ -3,6 +3,8 @@ import {
   defineInboxV2DataLifecycleRegistry,
   defineInboxV2RawIngressSanitizer,
   defineInboxV2RawIngressSanitizerProfile,
+  defineInboxV2SourceNormalizer,
+  defineInboxV2SourceNormalizerProfile,
   defineInboxV2SourceAdapterDeclaration,
   defineInboxV2SourceConnectionRegistryState,
   defineInboxV2SourceRegistryLifecycleBinding,
@@ -101,6 +103,42 @@ function createTestMegaPbxRawIngressSanitizer() {
   });
 }
 
+function createTestMegaPbxSourceNormalizer(
+  rawIngressSanitizer: ReturnType<typeof createTestMegaPbxRawIngressSanitizer>
+) {
+  const rawProfile = rawIngressSanitizer.profile;
+  const profile = defineInboxV2SourceNormalizerProfile({
+    schemaId: "core:inbox-v2.source-normalizer-profile",
+    schemaVersion: "v1",
+    payload: {
+      adapterContract,
+      handlerId: "module:megapbx:normalize-webhook-v1",
+      handlerVersion: "v1",
+      declarationRevision: "1",
+      rawIngressSanitizer: {
+        profileSchemaId: rawProfile.schemaId,
+        profileSchemaVersion: rawProfile.schemaVersion,
+        handlerId: rawProfile.payload.handlerId,
+        handlerVersion: rawProfile.payload.handlerVersion,
+        declarationRevision: rawProfile.payload.declarationRevision,
+        restrictedPayloadSchema: rawProfile.payload.restrictedPayloadSchema
+      },
+      eventKinds: ["message_created"],
+      identityDeclarations: [],
+      evidenceSlots: []
+    }
+  });
+  return defineInboxV2SourceNormalizer({
+    profile,
+    parseRestrictedPayload: (value) => value,
+    evidenceParsers: {},
+    handler: () => ({
+      outcome: "ignored" as const,
+      reasonCode: "source.event_not_actionable" as const
+    })
+  });
+}
+
 function parseSyntheticRestrictedPayload(value: unknown) {
   if (
     typeof value !== "object" ||
@@ -155,6 +193,8 @@ export function createTestMegaPbxSourceAdapterRegistry(input?: {
     input?.credentialProfile ?? "standard_webhook_secret";
   const lifecycleBinding = createLifecycleBinding();
   const rawIngressSanitizer = createTestMegaPbxRawIngressSanitizer();
+  const sourceNormalizer =
+    createTestMegaPbxSourceNormalizer(rawIngressSanitizer);
   const onboardingHandler: SourceAdapterOnboardingHandler = {
     handlerId: "module:megapbx:onboarding-v1",
     async prepare(prepareInput) {
@@ -350,6 +390,10 @@ export function createTestMegaPbxSourceAdapterRegistry(input?: {
             mode: "webhook",
             handlerId: "module:megapbx:ingress-v1",
             sanitizerProfile: rawIngressSanitizer.profile
+          },
+          normalization: {
+            mode: "supported",
+            normalizerProfile: sourceNormalizer.profile
           }
         }
       }
@@ -362,7 +406,8 @@ export function createTestMegaPbxSourceAdapterRegistry(input?: {
         return { accepted: true, diagnosticCodeId: null };
       }
     },
-    rawIngressSanitizer
+    rawIngressSanitizer,
+    sourceNormalizer
   };
 
   return {

@@ -388,6 +388,111 @@ describe("Inbox V2 raw ingress sanitization", () => {
     }
   });
 
+  it("keeps an own __proto__ property as inert null-prototype JSON data", async () => {
+    const payload: Record<string, unknown> = {};
+    Object.defineProperty(payload, "__proto__", {
+      value: { polluted: "must-remain-inert-data" },
+      enumerable: true,
+      configurable: true,
+      writable: true
+    });
+    payload.message = "safe";
+
+    const result = await sanitizeInboxV2RawIngress({
+      sanitizer: sanitizer(() => ({
+        outcome: "accepted",
+        restrictedPayload: payload,
+        validatedAllowedHeaders: []
+      })),
+      request: request()
+    });
+
+    const persisted = acceptedCandidate(result.candidate).restrictedPayload
+      .value as Readonly<Record<string, unknown>>;
+    expect(Object.getPrototypeOf(persisted)).toBeNull();
+    expect(Object.hasOwn(persisted, "__proto__")).toBe(true);
+    expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
+  });
+
+  it("quarantines sparse/accessor arrays, custom properties and NUL data without invoking getters", async () => {
+    const factories: readonly Readonly<{
+      name: string;
+      create: () => Readonly<{
+        value: unknown;
+        getterReads?: () => number;
+      }>;
+    }>[] = [
+      {
+        name: "sparse array",
+        create: () => {
+          const value: unknown[] = [];
+          value.length = 2;
+          value[1] = "safe";
+          return { value };
+        }
+      },
+      {
+        name: "array getter",
+        create: () => {
+          let reads = 0;
+          const value = ["safe"];
+          Object.defineProperty(value, "0", {
+            enumerable: true,
+            configurable: true,
+            get: () => {
+              reads += 1;
+              return "must-not-run";
+            }
+          });
+          return { value, getterReads: () => reads };
+        }
+      },
+      {
+        name: "custom array property",
+        create: () => {
+          const value = ["safe"] as unknown[] & { extra?: string };
+          value.extra = "must-not-copy";
+          return { value };
+        }
+      },
+      {
+        name: "symbol property",
+        create: () => {
+          const value = { message: "safe" } as Record<PropertyKey, unknown>;
+          value[Symbol("hidden")] = "must-not-copy";
+          return { value };
+        }
+      },
+      {
+        name: "NUL key",
+        create: () => ({ value: { ["unsafe\u0000key"]: "safe" } })
+      },
+      {
+        name: "NUL value",
+        create: () => ({ value: { message: "unsafe\u0000value" } })
+      }
+    ];
+
+    for (const testCase of factories) {
+      const unsafe = testCase.create();
+      const result = await sanitizeInboxV2RawIngress({
+        sanitizer: sanitizer(() => ({
+          outcome: "accepted",
+          restrictedPayload: { nested: unsafe.value },
+          validatedAllowedHeaders: []
+        })),
+        request: request()
+      });
+
+      expect(result.outcome, testCase.name).toBe("quarantined");
+      expect(result.candidate.disposition, testCase.name).toEqual({
+        outcome: "quarantined",
+        reasonCode: "source.payload_shape_unknown"
+      });
+      expect(unsafe.getterReads?.() ?? 0, testCase.name).toBe(0);
+    }
+  });
+
   it("uses bounded stable quarantine codes for handler rejection, throw and malformed decisions", async () => {
     const rejected = await sanitizeInboxV2RawIngress({
       sanitizer: sanitizer(() => ({

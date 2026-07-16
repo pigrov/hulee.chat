@@ -3,6 +3,8 @@ import {
   defineInboxV2DataLifecycleRegistry,
   defineInboxV2RawIngressSanitizer,
   defineInboxV2RawIngressSanitizerProfile,
+  defineInboxV2SourceNormalizer,
+  defineInboxV2SourceNormalizerProfile,
   defineInboxV2SourceAdapterDeclaration,
   defineInboxV2SourceConnectionRegistryState,
   defineInboxV2SourceRegistryLifecycleBinding,
@@ -115,6 +117,46 @@ function syntheticRawIngressSanitizer(profile = rawIngressSanitizerProfile()) {
       };
     },
     parseRestrictedPayload: parseSyntheticRestrictedPayload
+  });
+}
+
+function sourceNormalizerProfile(
+  sanitizerProfile = rawIngressSanitizerProfile(),
+  overrides: Readonly<{ handlerVersion?: string }> = {}
+) {
+  return defineInboxV2SourceNormalizerProfile({
+    schemaId: "core:inbox-v2.source-normalizer-profile",
+    schemaVersion: "v1",
+    payload: {
+      adapterContract,
+      handlerId: "module:synthetic:normalize-webhook",
+      handlerVersion: overrides.handlerVersion ?? "v1",
+      declarationRevision: "1",
+      rawIngressSanitizer: {
+        profileSchemaId: sanitizerProfile.schemaId,
+        profileSchemaVersion: sanitizerProfile.schemaVersion,
+        handlerId: sanitizerProfile.payload.handlerId,
+        handlerVersion: sanitizerProfile.payload.handlerVersion,
+        declarationRevision: sanitizerProfile.payload.declarationRevision,
+        restrictedPayloadSchema:
+          sanitizerProfile.payload.restrictedPayloadSchema
+      },
+      eventKinds: ["message_created"],
+      identityDeclarations: [],
+      evidenceSlots: []
+    }
+  });
+}
+
+function syntheticSourceNormalizer(profile = sourceNormalizerProfile()) {
+  return defineInboxV2SourceNormalizer({
+    profile,
+    parseRestrictedPayload: (value) => value,
+    evidenceParsers: {},
+    handler: () => ({
+      outcome: "ignored" as const,
+      reasonCode: "source.event_not_actionable" as const
+    })
   });
 }
 
@@ -502,6 +544,9 @@ function registrationFixture(
     input.routeMaterial ?? new Uint8Array(32).fill(0x45)
   );
   const rawIngressSanitizer = syntheticRawIngressSanitizer();
+  const sourceNormalizer = syntheticSourceNormalizer(
+    sourceNormalizerProfile(rawIngressSanitizer.profile)
+  );
   const connectionHead = defineInboxV2SourceConnectionRegistryState({
     lifecycleBinding: binding,
     value: {
@@ -620,6 +665,10 @@ function registrationFixture(
           mode: "webhook",
           handlerId: "module:synthetic:ingress",
           sanitizerProfile: rawIngressSanitizer.profile
+        },
+        normalization: {
+          mode: "supported",
+          normalizerProfile: sourceNormalizer.profile
         }
       }
     }
@@ -682,7 +731,8 @@ function registrationFixture(
     lifecycleBinding: binding,
     onboardingHandler,
     ingressHandler,
-    rawIngressSanitizer
+    rawIngressSanitizer,
+    sourceNormalizer
   };
   const prepareInput: SourceAdapterOnboardingPrepareInput = {
     tenantId: connectionHead.payload.tenantId,
@@ -1314,6 +1364,78 @@ describe("SourceAdapterRegistry", () => {
     }
   });
 
+  it("pins and exposes the authentic source normalizer capability", () => {
+    const fixture = registrationFixture();
+    const registry = createSourceAdapterRegistry({
+      registrations: [fixture.registration]
+    });
+
+    expect(registry.getSourceNormalizer("synthetic")).toBe(
+      fixture.registration.sourceNormalizer
+    );
+    expect(registry.getSourceNormalizer("unknown")).toBeNull();
+    expect(Object.isFrozen(registry.getSourceNormalizer("synthetic"))).toBe(
+      true
+    );
+  });
+
+  it("rejects missing, forged and mismatched source normalizers", () => {
+    const fixture = registrationFixture();
+    const mismatched = syntheticSourceNormalizer(
+      sourceNormalizerProfile(
+        fixture.registration.rawIngressSanitizer!.profile,
+        { handlerVersion: "v2" }
+      )
+    );
+    const mismatchedRawSanitizer = syntheticSourceNormalizer(
+      sourceNormalizerProfile(
+        rawIngressSanitizerProfile({ handlerVersion: "v2" })
+      )
+    );
+    const cases: readonly Readonly<{
+      normalizer: SourceAdapterRegistration["sourceNormalizer"];
+      code: SourceAdapterRegistryError["code"];
+    }>[] = [
+      { normalizer: null, code: "source_adapter.normalizer_missing" },
+      {
+        normalizer: {
+          profile:
+            fixture.registration.declaration.payload.normalization.mode ===
+            "supported"
+              ? fixture.registration.declaration.payload.normalization
+                  .normalizerProfile
+              : mismatched.profile
+        } as unknown as SourceAdapterRegistration["sourceNormalizer"],
+        code: "source_adapter.normalizer_mismatch"
+      },
+      {
+        normalizer: mismatched,
+        code: "source_adapter.normalizer_mismatch"
+      },
+      {
+        normalizer: mismatchedRawSanitizer,
+        code: "source_adapter.normalizer_mismatch"
+      }
+    ];
+
+    for (const testCase of cases) {
+      expect(() =>
+        createSourceAdapterRegistry({
+          registrations: [
+            {
+              ...fixture.registration,
+              sourceNormalizer: testCase.normalizer
+            }
+          ]
+        })
+      ).toThrowError(
+        expect.objectContaining({
+          code: testCase.code
+        })
+      );
+    }
+  });
+
   it("does not accept a sanitizer capability for unsupported ingress", () => {
     const fixture = registrationFixture();
     const unsupportedDeclaration = defineInboxV2SourceAdapterDeclaration({
@@ -1323,7 +1445,8 @@ describe("SourceAdapterRegistry", () => {
         schemaVersion: "v1",
         payload: {
           ...fixture.registration.declaration.payload,
-          ingress: { mode: "not_supported" }
+          ingress: { mode: "not_supported" },
+          normalization: { mode: "not_supported" }
         }
       }
     });
@@ -1331,7 +1454,8 @@ describe("SourceAdapterRegistry", () => {
       ...fixture.registration,
       declaration: unsupportedDeclaration,
       ingressHandler: null,
-      rawIngressSanitizer: null
+      rawIngressSanitizer: null,
+      sourceNormalizer: null
     };
 
     expect(
@@ -1344,13 +1468,28 @@ describe("SourceAdapterRegistry", () => {
         registrations: [
           {
             ...unsupported,
-            rawIngressSanitizer: fixture.registration.rawIngressSanitizer
+            rawIngressSanitizer: fixture.registration.rawIngressSanitizer,
+            sourceNormalizer: fixture.registration.sourceNormalizer
           }
         ]
       })
     ).toThrowError(
       expect.objectContaining({
         code: "source_adapter.sanitizer_mismatch"
+      })
+    );
+    expect(() =>
+      createSourceAdapterRegistry({
+        registrations: [
+          {
+            ...unsupported,
+            sourceNormalizer: fixture.registration.sourceNormalizer
+          }
+        ]
+      })
+    ).toThrowError(
+      expect.objectContaining({
+        code: "source_adapter.normalizer_mismatch"
       })
     );
   });

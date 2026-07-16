@@ -512,6 +512,7 @@ export {
   createSecurityDenialRetentionBackgroundRunner,
   createSecurityDenialRetentionSweeper
 } from "./security-denial-retention-sweeper";
+export { createInboxV2SourceNormalizationProcessor } from "./source-normalization-processor";
 export {
   createSecurityDenialRetentionDatabaseConfig,
   sanitizeSecurityDenialRetentionDatabaseUrl
@@ -595,3 +596,9 @@ export type {
   SecurityDenialRetentionSweeper,
   SecurityDenialRetentionSweeperOptions
 } from "./security-denial-retention-sweeper";
+export type {
+  InboxV2SourceNormalizationClaim,
+  InboxV2SourceNormalizationProcessResult,
+  InboxV2SourceNormalizationProcessor,
+  InboxV2SourceNormalizationProcessorOptions
+} from "./source-normalization-processor";

@@ -10,6 +10,7 @@ import {
 } from "./schema-version";
 import { inboxV2AdapterContractSnapshotSchema } from "./source-routing-primitives";
 import { inboxV2RawIngressSanitizerProfileSchema } from "./source-raw-ingress";
+import { inboxV2SourceNormalizerProfileSchema } from "./source-normalized-ingress";
 import { inboxV2SourceRegistryNameSchema } from "./source-registry-state";
 import {
   inboxV2SourceRegistryLifecycleRegistryReferenceSchema,
@@ -108,6 +109,15 @@ const sourceAdapterDeclarationPayloadSchema = z
           mode: z.enum(["webhook", "polling", "stream"]),
           handlerId: inboxV2NamespacedIdSchema,
           sanitizerProfile: inboxV2RawIngressSanitizerProfileSchema
+        })
+        .strict()
+    ]),
+    normalization: z.discriminatedUnion("mode", [
+      z.object({ mode: z.literal("not_supported") }).strict(),
+      z
+        .object({
+          mode: z.literal("supported"),
+          normalizerProfile: inboxV2SourceNormalizerProfileSchema
         })
         .strict()
     ])
@@ -215,6 +225,56 @@ const sourceAdapterDeclarationPayloadSchema = z
         path: ["ingress", "sanitizerProfile", "payload", "adapterContract"],
         message:
           "Raw-ingress sanitizer profile must pin the declaration adapter contract."
+      });
+    }
+    if (
+      (declaration.ingress.mode === "not_supported") !==
+      (declaration.normalization.mode === "not_supported")
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["normalization", "mode"],
+        message:
+          "Source normalization support must exactly match raw-ingress support."
+      });
+    }
+    if (
+      declaration.normalization.mode === "supported" &&
+      !hasExactAdapterContract(
+        declaration.normalization.normalizerProfile.payload.adapterContract,
+        declaration.adapterContract
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: [
+          "normalization",
+          "normalizerProfile",
+          "payload",
+          "adapterContract"
+        ],
+        message:
+          "Source-normalizer profile must pin the declaration adapter contract."
+      });
+    }
+    if (
+      declaration.ingress.mode !== "not_supported" &&
+      declaration.normalization.mode === "supported" &&
+      !hasExactRawIngressSanitizerPin(
+        declaration.normalization.normalizerProfile.payload.rawIngressSanitizer,
+        declaration.ingress.sanitizerProfile
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: [
+          "normalization",
+          "normalizerProfile",
+          "payload",
+          "rawIngressSanitizer"
+        ],
+        message:
+          "Source-normalizer profile must pin the exact raw-ingress sanitizer and restricted payload schema."
       });
     }
   });
@@ -330,5 +390,24 @@ function hasExactAdapterContract(
     left.surfaceId === right.surfaceId &&
     left.loadedByTrustedServiceId === right.loadedByTrustedServiceId &&
     left.loadedAt === right.loadedAt
+  );
+}
+
+function hasExactRawIngressSanitizerPin(
+  left: z.infer<
+    typeof inboxV2SourceNormalizerProfileSchema
+  >["payload"]["rawIngressSanitizer"],
+  right: z.infer<typeof inboxV2RawIngressSanitizerProfileSchema>
+): boolean {
+  return (
+    left.profileSchemaId === right.schemaId &&
+    left.profileSchemaVersion === right.schemaVersion &&
+    left.handlerId === right.payload.handlerId &&
+    left.handlerVersion === right.payload.handlerVersion &&
+    left.declarationRevision === right.payload.declarationRevision &&
+    left.restrictedPayloadSchema.schemaId ===
+      right.payload.restrictedPayloadSchema.schemaId &&
+    left.restrictedPayloadSchema.schemaVersion ===
+      right.payload.restrictedPayloadSchema.schemaVersion
   );
 }

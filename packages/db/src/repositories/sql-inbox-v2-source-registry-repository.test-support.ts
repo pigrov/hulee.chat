@@ -125,6 +125,52 @@ export function createInboxV2SourceRegistryOnboardingFixture(input: {
     loadedByTrustedServiceId: "core:source-runtime",
     loadedAt: sourceRegistryFixtureOccurredAt
   } as const;
+  const rawIngressSanitizerProfile = {
+    schemaId: "core:inbox-v2.raw-ingress-sanitizer-profile" as const,
+    schemaVersion: "v1" as const,
+    payload: {
+      adapterContract,
+      handlerId: "module:synthetic:sanitize-webhook",
+      handlerVersion: "v1",
+      declarationRevision: "1",
+      restrictedPayloadSchema: {
+        schemaId: "module:synthetic:raw-webhook",
+        schemaVersion: "v1"
+      },
+      persistedHeaderNames: ["x-request-id"],
+      payloadClassification: {
+        dataClassId: "core:raw_provider_payload" as const,
+        purposeIds: ["core:source_replay_and_diagnostics" as const]
+      },
+      allowedHeadersClassification: {
+        dataClassId: "core:raw_provider_allowed_headers" as const,
+        purposeIds: ["core:source_replay_and_diagnostics" as const]
+      }
+    }
+  };
+  const sourceNormalizerProfile = {
+    schemaId: "core:inbox-v2.source-normalizer-profile" as const,
+    schemaVersion: "v1" as const,
+    payload: {
+      adapterContract,
+      handlerId: "module:synthetic:normalize-webhook",
+      handlerVersion: "v1",
+      declarationRevision: "1",
+      rawIngressSanitizer: {
+        profileSchemaId: rawIngressSanitizerProfile.schemaId,
+        profileSchemaVersion: rawIngressSanitizerProfile.schemaVersion,
+        handlerId: rawIngressSanitizerProfile.payload.handlerId,
+        handlerVersion: rawIngressSanitizerProfile.payload.handlerVersion,
+        declarationRevision:
+          rawIngressSanitizerProfile.payload.declarationRevision,
+        restrictedPayloadSchema:
+          rawIngressSanitizerProfile.payload.restrictedPayloadSchema
+      },
+      eventKinds: ["message_created" as const],
+      identityDeclarations: [],
+      evidenceSlots: []
+    }
+  };
   const declaration = defineInboxV2SourceAdapterDeclaration({
     lifecycleBinding,
     value: {
@@ -157,29 +203,11 @@ export function createInboxV2SourceRegistryOnboardingFixture(input: {
         ingress: {
           mode: "webhook",
           handlerId: "module:synthetic:ingress",
-          sanitizerProfile: {
-            schemaId: "core:inbox-v2.raw-ingress-sanitizer-profile",
-            schemaVersion: "v1",
-            payload: {
-              adapterContract,
-              handlerId: "module:synthetic:sanitize-webhook",
-              handlerVersion: "v1",
-              declarationRevision: "1",
-              restrictedPayloadSchema: {
-                schemaId: "module:synthetic:raw-webhook",
-                schemaVersion: "v1"
-              },
-              persistedHeaderNames: ["x-request-id"],
-              payloadClassification: {
-                dataClassId: "core:raw_provider_payload",
-                purposeIds: ["core:source_replay_and_diagnostics"]
-              },
-              allowedHeadersClassification: {
-                dataClassId: "core:raw_provider_allowed_headers",
-                purposeIds: ["core:source_replay_and_diagnostics"]
-              }
-            }
-          }
+          sanitizerProfile: rawIngressSanitizerProfile
+        },
+        normalization: {
+          mode: "supported",
+          normalizerProfile: sourceNormalizerProfile
         }
       }
     }

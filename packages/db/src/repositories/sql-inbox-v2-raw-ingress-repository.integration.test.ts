@@ -67,7 +67,7 @@ describePostgres("SQL Inbox V2 raw-ingress PostgreSQL invariants", () => {
     if (database) await closeHuleeDatabase(database);
   }, 30_000);
 
-  it("atomically persists a secret-free aggregate and replays after evidence expiry", async () => {
+  it("atomically persists a secret-free aggregate, guards pending evidence and replays exactly", async () => {
     const ids = scope("atomic");
     const candidate = await acceptedCandidate(ids, {
       identity: `${rawIdentitySentinel}-atomic`,
@@ -174,11 +174,13 @@ describePostgres("SQL Inbox V2 raw-ingress PostgreSQL invariants", () => {
       recorded.rawEventId
     );
 
-    await database.execute(sql`
-      delete from public.inbox_v2_source_raw_evidence
-       where tenant_id = ${ids.tenantId}
-         and raw_event_id = ${recorded.rawEventId}
-    `);
+    await expect(
+      database.execute(sql`
+        delete from public.inbox_v2_source_raw_evidence
+         where tenant_id = ${ids.tenantId}
+           and raw_event_id = ${recorded.rawEventId}
+      `)
+    ).rejects.toMatchObject({ cause: { code: "23514" } });
     const replayAfterPurge = await repository.record(laterRetryCandidate);
     expect(replayAfterPurge).toEqual(replay);
     expect(await loadWork(database, ids.tenantId, recorded.rawEventId)).toEqual(

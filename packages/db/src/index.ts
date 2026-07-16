@@ -190,7 +190,6 @@ export {
   buildListTenantInvitationsSql,
   buildMarkOutboundMessageFailedSql,
   buildMarkOutboundMessageSentSql,
-  buildRecordNormalizedInboundEventSql,
   buildMarkOutboxFailedSql,
   buildMarkOutboxProcessedSql,
   buildRevokeAuthSessionSql,
@@ -463,7 +462,6 @@ export type {
   SourceAccountRecord,
   SourceConnectionRecord,
   SourceIntegrationRepository,
-  NormalizedInboundEventRecord,
   AcceptEmployeeInvitationPersistenceInput,
   CreateTenantApiKeyInput,
   CreateEmployeeInvitationPersistenceInput,
@@ -529,7 +527,6 @@ export type {
   ListDeploymentEgressStatusSnapshotsInput,
   MarkOutboundMessageFailedInput,
   MarkOutboundMessageSentInput,
-  RecordNormalizedInboundEventInput,
   MarkAttachmentTransferFailedInput,
   MarkAttachmentTransferStoredInput,
   ReplyPersistenceRows,
@@ -620,4 +617,5 @@ export * from "./repositories/sql-inbox-v2-repository-outbox";
 export * from "./repositories/sql-inbox-v2-repository-projection";
 export * from "./repositories/sql-inbox-v2-repository-stream";
 export * from "./repositories/sql-inbox-v2-raw-ingress-repository";
+export * from "./repositories/sql-inbox-v2-source-normalization-repository";
 export * from "./schema/inbox-v2/membership-privilege-boundary";

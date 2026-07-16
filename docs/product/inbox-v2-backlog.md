@@ -1493,9 +1493,10 @@ participant set.
     verification evidence are in
     `docs/product/inbox-v2-src-002-raw-ingress.md`.
 
-- [ ] `INB2-SRC-003` Normalize message, membership and lifecycle events for V2.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-SRC-001`,
+- [x] `INB2-SRC-003` Normalize message, membership and lifecycle events for V2.
+  - State: `done`; Priority: `P0`; Depends on: `INB2-SRC-001`,
     `INB2-SRC-010`, `INB2-CON-008`, `INB2-CON-010`.
+  - Started: `2026-07-16`; Completed: `2026-07-16`; Owner: `Codex`.
   - Acceptance: normalized input separates exact source/account/thread/sender
     IDs, supports zero-to-many identity/roster observations with completeness,
     and retains provider time, capabilities, payload version and classified
@@ -1507,7 +1508,25 @@ participant set.
   - Verification: shared contract harness rejects missing scope, unsafe opaque-ID
     canonicalization and raw provider fragments in core payloads. Same-key
     fixtures across event types/raw events/accounts and mismatched safe digests
-    never return an unrelated normalized row. Evidence: -
+    never return an unrelated normalized row. Evidence: completed on
+    `2026-07-16` with authentic adapter-declared normalizers, a fenced
+    `loadClaimedInput` evidence boundary, explicit legacy `messenger` to catalog
+    `core:messenger` mapping, generic worker orchestration, immutable normalized
+    envelopes/results, classified purgeable payloads, tenant-keyed HMAC
+    idempotency, exact collision quarantine and final-clock lease fences. Safe
+    JSON and batch budgets cover prototype/accessor/sparse/symbol/NUL vectors and
+    bound one raw event to 32 events / 8 evidence per event / 64 total. Focused
+    suites passed `5/5` files / `66/66` tests. The clean PostgreSQL gate applied
+    `44` migrations with contract
+    `sha256:97e9204e2c12572f14bc23e91bde1bf03e4f701bed6d804f02a55c2f2be72d45`
+    and passed `26/26` files / `238/238` tests; DB-enabled preserve, pinned N-1
+    and RBAC passed `3/3` files / `17/17` tests. Full `pnpm check` passed with
+    `320` test files / `3281` executed tests; `35` opt-in files / `281` tests
+    were skipped by the default process and covered by explicit gates.
+    Independent security and DB reviews found no remaining P0/P1 defect.
+    Production activation remains blocked on the finite HMAC skeleton lifecycle
+    in `INB2-SRC-008`. Detailed evidence is in
+    `docs/product/inbox-v2-src-003-normalization.md`.
 
 - [ ] `INB2-SRC-004` Implement external identity and participant resolution.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-SRC-003`, `INB2-DB-002`.
@@ -3056,3 +3075,4 @@ the task state, checkbox and evidence above.
 | 2026-07-16 | `INB2-SRC-001`     | Map; focused 12/71; independent 8/45, 12/89, 3/74; full 304/3041           | working tree | Codex + three independent reviews |
 | 2026-07-16 | `INB2-SRC-010`     | Source registry; focused 7/191; live PG 6/6; N-1 2/2; full gate            | working tree | Codex                             |
 | 2026-07-16 | `INB2-SRC-002`     | Raw ingress/lease; PG 25/232; preserve 3/17; full 316/3229 + all gates     | working tree | Codex + three independent reviews |
+| 2026-07-16 | `INB2-SRC-003`     | Normalize/complete; focused 5/66; PG 26/238; preserve 3/17; full 320/3281  | working tree | Codex + two independent reviews   |
