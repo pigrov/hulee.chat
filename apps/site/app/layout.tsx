@@ -9,7 +9,11 @@ const appName = defaultBrandProfile.productName;
 const shortAppName = defaultBrandProfile.shortProductName ?? appName;
 const defaultTheme = resolveBrandThemePreset("hulee").tokens;
 const siteUrl = new URL(process.env.HULEE_SITE_BASE_URL ?? "https://hulee.ru");
-const heroImage = "/marketing/hero-workspace-2-transparent-x2.png";
+const brandPreview =
+  defaultBrandProfile.assets.logoLight ??
+  defaultBrandProfile.assets.mark ??
+  defaultBrandProfile.assets.pwaIcon ??
+  "/brand/hulee-logo-3-full-transparent.png";
 const sansation = localFont({
   src: [
     {
@@ -78,10 +82,10 @@ export const metadata: Metadata = {
     type: "website",
     images: [
       {
-        url: heroImage,
-        width: 2400,
-        height: 1600,
-        alt: `${appName} workspace preview`
+        url: brandPreview,
+        width: 600,
+        height: 200,
+        alt: `${appName} logo`
       }
     ]
   },
@@ -90,7 +94,7 @@ export const metadata: Metadata = {
     title: appName,
     description:
       "A modular communication workspace for customer channels and internal requests.",
-    images: [heroImage]
+    images: [brandPreview]
   },
   formatDetection: {
     telephone: false
@@ -102,24 +106,6 @@ export const viewport: Viewport = {
   colorScheme: "light dark"
 };
 
-const themeScript = `
-(() => {
-  try {
-    const mode = window.localStorage.getItem("hulee-site-theme") || "system";
-    const resolved =
-      mode === "dark" || mode === "light"
-        ? mode
-        : window.matchMedia("(prefers-color-scheme: dark)").matches
-          ? "dark"
-          : "light";
-    document.documentElement.dataset.themeMode = mode;
-    document.documentElement.dataset.theme = resolved;
-  } catch {
-    document.documentElement.dataset.themeMode = "system";
-  }
-})();
-`;
-
 export default function RootLayout({
   children
 }: {
@@ -127,10 +113,7 @@ export default function RootLayout({
 }): ReactNode {
   return (
     <html className={sansation.variable} lang="ru" suppressHydrationWarning>
-      <body className={sansation.className}>
-        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
-        {children}
-      </body>
+      <body className={sansation.className}>{children}</body>
     </html>
   );
 }
