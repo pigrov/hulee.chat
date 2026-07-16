@@ -1414,8 +1414,8 @@ participant set.
     Detailed evidence is in
     `docs/product/inbox-v2-src-010-source-registry.md`.
 
-- [ ] `INB2-SRC-011` Wire standalone source onboarding through the authorized command protocol.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-CON-011`,
+- [x] `INB2-SRC-011` Wire standalone source onboarding through the authorized command protocol.
+  - State: `completed`; Priority: `P0`; Depends on: `INB2-CON-011`,
     `INB2-SRC-010`, `INB2-DB-009`, `INB2-CON-010`, `INB2-RBAC-003`.
   - Acceptance: the versioned standalone-onboarding API requires a stable
     `clientMutationId`; the server computes the canonical request hash without
@@ -1438,10 +1438,26 @@ participant set.
     same-hash execution writes once, different-hash conflict writes nothing,
     revocation/expiry during slow prepare is denied, provider prepare is not
     repeated by DB retry, rollback leaves no command/source/secret/route/stream
-    rows, the atomic stream commit carries command/client-mutation/source event
+    rows, an incomplete lifecycle purge rolls back with its full closure intact,
+    the official checkpoint-safe prefix operation advances the advertised
+    minimum without a replay gap and preserves its immutable commit skeleton,
+    any retained command/event/outbox/audit reference blocks snapshot expiry,
+    the atomic stream commit carries command/client-mutation/source event
     evidence, replay never rediscloses the token, and production composition
     fails closed when any required dependency or registered profile is absent.
-    Evidence: -
+    Evidence: completed on 2026-07-16 with stable UI/API mutation identity,
+    HMAC credential fingerprints, adapter-owned prepare outside the retryable
+    transaction, independent platform route material, DB-only authorized source
+    persistence, immutable non-sensitive replay snapshots, exact lifecycle
+    fences and fail-closed production composition. The clean PostgreSQL gate
+    applied `42` migrations with contract
+    `sha256:258ece1966e15b981ea77507f5299472de1baebe97429b1d8290c76d0969de0c`
+    and passed `24/24` files / `225/225` tests. Preserve, pinned N-1 and RBAC
+    passed `3/3` files / `17/17` tests. Full `pnpm check` passed with `313`
+    test files / `3187` executed tests; `33` opt-in files / `268` tests were
+    skipped by the default process. Detailed design and verification evidence
+    are in
+    `docs/product/inbox-v2-src-011-authorized-source-onboarding.md`.
 
 - [ ] `INB2-SRC-002` Add atomic raw-event claim, lease and stale reclaim.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-SRC-001`,

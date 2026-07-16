@@ -28,6 +28,8 @@ import {
   internalRbacRoleMutationRequestSchema,
   internalRbacRoleResponseSchema,
   internalRbacRolesResponseSchema,
+  internalSourceConnectionCreateRequestSchema,
+  internalSourceConnectionCreateResponseSchema,
   internalTenantBrandResponseSchema,
   internalTenantBrandUpdateRequestSchema,
   internalTelegramIntegrationResponseSchema,
@@ -36,6 +38,54 @@ import {
 } from "./internal-api-v1";
 
 describe("internal API v1 schemas", () => {
+  it("requires an idempotent source-onboarding command and exposes a safe replay receipt", () => {
+    expect(
+      internalSourceConnectionCreateRequestSchema.parse({
+        sourceName: "megapbx",
+        clientMutationId: "client-mutation:source-onboarding-1",
+        displayName: "Sales PBX"
+      })
+    ).toMatchObject({
+      clientMutationId: "client-mutation:source-onboarding-1"
+    });
+    expect(() =>
+      internalSourceConnectionCreateRequestSchema.parse({
+        sourceName: "megapbx",
+        displayName: "Sales PBX"
+      })
+    ).toThrow();
+
+    const replay = internalSourceConnectionCreateResponseSchema.parse({
+      connection: {
+        sourceConnectionId: "source_connection:megapbx:stable",
+        sourceName: "megapbx",
+        sourceType: "phone",
+        displayName: "Sales PBX",
+        status: "onboarding",
+        authType: "webhook_secret",
+        createdAt: "2026-07-16T10:00:00.000Z",
+        updatedAt: "2026-07-16T10:00:00.000Z"
+      },
+      command: {
+        outcome: "already_applied",
+        commandId: "command:source-onboarding-1",
+        clientMutationId: "client-mutation:source-onboarding-1",
+        mutationId: "source-onboarding:mutation-1",
+        publicResultCode: "core:source-connection.created",
+        streamCommitId: "commit:source-onboarding-1",
+        streamEpoch: "stream:source-onboarding-1",
+        streamPosition: "1",
+        committedAt: "2026-07-16T10:00:00.000Z"
+      }
+    });
+
+    expect(replay.command.outcome).toBe("already_applied");
+    expect(replay.command.clientMutationId).toBe(
+      "client-mutation:source-onboarding-1"
+    );
+    expect(replay).not.toHaveProperty("webhookToken");
+  });
+
   it("parses an inbox view response with tenant brand context", () => {
     expect(
       internalInboxViewResponseSchema.parse({

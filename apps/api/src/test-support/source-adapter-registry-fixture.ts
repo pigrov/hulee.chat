@@ -93,9 +93,12 @@ export function createTestMegaPbxSourceAdapterRegistry(input?: {
       if (ingressRoute.kind !== "source_ingress_route") {
         throw new Error("MegaPBX test handler requires an ingress route.");
       }
-      const routeMaterial = new TextEncoder().encode(
-        `route:${prepareInput.sourceConnection.id}`
-      );
+      const routeMaterial = prepareInput.ephemeralIngressRouteMaterial;
+      if (routeMaterial === null) {
+        throw new Error(
+          "MegaPBX test handler requires platform route material."
+        );
+      }
       const connectionHead = defineInboxV2SourceConnectionRegistryState({
         lifecycleBinding,
         value: {
@@ -218,6 +221,7 @@ export function createTestMegaPbxSourceAdapterRegistry(input?: {
             "source_catalog_registration",
             "source_module_registration",
             "source_connection_registry",
+            "source_onboarding_result_snapshot",
             "source_account_registry",
             "source_registry_artifact",
             "source_ingress_route",
@@ -272,11 +276,138 @@ export function createTestMegaPbxSourceAdapterRegistry(input?: {
   };
 }
 
+function sourceRegistryCoreLifecycleRegistrations() {
+  const handler = (
+    kind:
+      | "lifecycle"
+      | "subject_discovery"
+      | "export_projection"
+      | "export_execution"
+      | "delete_execution"
+      | "verification",
+    operations: readonly (
+      | "read"
+      | "persist"
+      | "export"
+      | "delete"
+      | "verify_absence"
+    )[],
+    verifiesAbsence = false
+  ) => ({
+    kind,
+    supportedRootKinds: ["sql" as const],
+    supportedOperations: [...operations],
+    bounded: true as const,
+    idempotent: true as const,
+    checksTenantFence: true as const,
+    checksRevisionFence: true as const,
+    checksHoldFence: true,
+    verifiesAbsence
+  });
+
+  return {
+    coreStorageRootRegistrations: [
+      {
+        schemaId: "core:inbox-v2.catalog-registration" as const,
+        schemaVersion: "v1" as const,
+        payload: {
+          catalog: "storage-root" as const,
+          owner: { kind: "core" as const },
+          entries: [
+            {
+              id: "core:source-registry-sql",
+              definition: {
+                kind: "sql" as const,
+                boundary: "operated_data_plane" as const,
+                tenantIsolation: "required" as const,
+                versionEnumeration: "not_applicable" as const,
+                configurationProfileId: "core:storage-profile.sql"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    coreLifecycleHandlerRegistrations: [
+      {
+        schemaId: "core:inbox-v2.catalog-registration" as const,
+        schemaVersion: "v1" as const,
+        payload: {
+          catalog: "lifecycle-handler" as const,
+          owner: { kind: "core" as const },
+          entries: [
+            {
+              id: "core:source-registry-lifecycle",
+              definition: handler("lifecycle", [
+                "persist",
+                "export",
+                "delete",
+                "verify_absence"
+              ])
+            },
+            {
+              id: "core:source-registry-subject-discovery",
+              definition: handler("subject_discovery", ["read"])
+            },
+            {
+              id: "core:source-registry-export-projection",
+              definition: handler("export_projection", ["export"])
+            },
+            {
+              id: "core:source-registry-export",
+              definition: handler("export_execution", ["export"])
+            },
+            {
+              id: "core:source-registry-delete",
+              definition: handler("delete_execution", ["delete"])
+            },
+            {
+              id: "core:source-registry-verify",
+              definition: handler("verification", ["verify_absence"], true)
+            }
+          ]
+        }
+      }
+    ],
+    coreDataUseRegistrations: [
+      {
+        schemaId: "core:inbox-v2.core-data-use-registration" as const,
+        schemaVersion: "v1" as const,
+        payload: {
+          dataUses: [
+            {
+              dataClassId: metadataClassId,
+              storageRootId: "core:source-registry-sql",
+              purposeIds: ["core:source_replay_and_diagnostics"],
+              operations: [
+                "persist" as const,
+                "export" as const,
+                "delete" as const,
+                "verify_absence" as const
+              ],
+              canonicalAnchorId: "core:disconnect_or_account_termination",
+              lifecycleHandlerId: "core:source-registry-lifecycle",
+              subjectDiscoveryHandlerId:
+                "core:source-registry-subject-discovery",
+              exportProjectionHandlerId:
+                "core:source-registry-export-projection",
+              exportHandlerId: "core:source-registry-export",
+              deleteHandlerId: "core:source-registry-delete",
+              verificationHandlerId: "core:source-registry-verify"
+            }
+          ]
+        }
+      }
+    ]
+  };
+}
+
 function createLifecycleBinding(): InboxV2SourceRegistryLifecycleBinding {
   if (telegramChannelManifest.dataHandling !== "tenant_or_customer_data") {
     throw new Error("Telegram test manifest must declare data governance.");
   }
   const registry = defineInboxV2DataLifecycleRegistry({
+    ...sourceRegistryCoreLifecycleRegistrations(),
     moduleContributions: [telegramChannelManifest.dataGovernance]
   });
   const registryReference = {
@@ -300,6 +431,12 @@ function createLifecycleBinding(): InboxV2SourceRegistryLifecycleBinding {
         registry,
         "source_connection_registry",
         metadataClassId
+      ),
+      lifecycleBindingEntry(
+        registry,
+        "source_onboarding_result_snapshot",
+        metadataClassId,
+        "core"
       ),
       lifecycleBindingEntry(
         registry,
@@ -334,10 +471,17 @@ function createLifecycleBinding(): InboxV2SourceRegistryLifecycleBinding {
 function lifecycleBindingEntry(
   registry: ReturnType<typeof defineInboxV2DataLifecycleRegistry>,
   copySlot: InboxV2SourceRegistryCopySlot,
-  dataClassId: string
+  dataClassId: string,
+  rootOwner: "module" | "core" = "module"
 ) {
   const dataUse = registry.dataUses.find(
-    (candidate) => String(candidate.dataClassId) === dataClassId
+    (candidate) =>
+      String(candidate.dataClassId) === dataClassId &&
+      (rootOwner === "core"
+        ? String(candidate.storageRootId) === "core:source-registry-sql"
+        : String(candidate.storageRootId).startsWith(
+            `module:${lifecycleModuleId}:`
+          ))
   );
   const dataClass = registry.dataClasses.find(
     (candidate) => String(candidate.id) === dataClassId
@@ -355,7 +499,10 @@ function lifecycleBindingEntry(
 
   return {
     copySlot,
-    owner: { kind: "module" as const, moduleId: lifecycleModuleId },
+    owner:
+      rootOwner === "core"
+        ? ({ kind: "core" } as const)
+        : ({ kind: "module", moduleId: lifecycleModuleId } as const),
     lineageRevision: "1",
     dataClass: clone({ id: dataClass.id, definition: dataClass.definition }),
     storageRoot: clone({

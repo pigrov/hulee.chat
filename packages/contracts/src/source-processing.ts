@@ -406,6 +406,7 @@ function retryabilityForPlatformErrorCode(
     case "auth.invalid_credentials":
     case "auth.email_not_verified":
     case "auth.rate_limited":
+    case "command.idempotency_conflict":
     case "entitlement.missing":
     case "license.inactive":
     case "permission.denied":
@@ -438,6 +439,7 @@ function platformErrorCodeSchema() {
     "auth.invalid_credentials",
     "auth.email_not_verified",
     "auth.rate_limited",
+    "command.idempotency_conflict",
     "entitlement.missing",
     "license.inactive",
     "permission.denied",

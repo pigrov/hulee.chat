@@ -125,6 +125,18 @@ const inboxV2SourceRegistryInvariantName =
 const inboxV2SourceRegistryPreflightSql = (
   await readFile("scripts/db/inbox-v2-source-registry-preflight.sql", "utf8")
 ).trim();
+const inboxV2AuthorizedDomainCommandFileName =
+  "0040_inbox_v2_authorized_domain_command.sql";
+const inboxV2AuthorizedDomainCommandMarker =
+  "-- INB2-SRC-011_AUTHORIZED_DOMAIN_COMMAND_V1";
+const inboxV2AuthorizedDomainCommandTailDigest =
+  "sha256:b78242af3fe12af296bee0407140fa6fef5fd787240f4d65861819b40acd3e6c";
+const inboxV2SourceOnboardingResultFileName =
+  "0041_inbox_v2_source_onboarding_result.sql";
+const inboxV2SourceOnboardingResultMarker =
+  "-- INB2-SRC-011_IMMUTABLE_COMMAND_RESULT_V1";
+const inboxV2SourceOnboardingResultTailDigest =
+  "sha256:55b75bd00ce694225a1043bf9007535d21fa2460172e7acc1e4463a165c2ddd0";
 const inboxV2SourceRegistryPrerequisiteUniqueConstraintNames = [
   "channel_auth_challenges_tenant_id_unique",
   "channel_auth_challenges_tenant_id_connector_unique",
@@ -215,6 +227,12 @@ const inboxV2ConversationTimelineHeadMigrations = migrationFiles.filter(
 );
 const inboxV2SourceRegistryMigrations = migrationFiles.filter(({ sql }) =>
   sql.includes(inboxV2SourceRegistryMarker)
+);
+const inboxV2AuthorizedDomainCommandMigrations = migrationFiles.filter(
+  ({ fileName }) => fileName === inboxV2AuthorizedDomainCommandFileName
+);
+const inboxV2SourceOnboardingResultMigrations = migrationFiles.filter(
+  ({ fileName }) => fileName === inboxV2SourceOnboardingResultFileName
 );
 const inboxV2SchemaFileNames = (await readdir(inboxV2SchemaDirectory))
   .filter((fileName) => fileName.endsWith(".ts"))
@@ -496,6 +514,18 @@ if (inboxV2SourceRegistryMigrations.length !== 1) {
   );
   process.exit(1);
 }
+if (inboxV2AuthorizedDomainCommandMigrations.length !== 1) {
+  console.error(
+    `Expected exactly one authorized-domain-command migration, found ${inboxV2AuthorizedDomainCommandMigrations.length}.`
+  );
+  process.exit(1);
+}
+if (inboxV2SourceOnboardingResultMigrations.length !== 1) {
+  console.error(
+    `Expected exactly one source-onboarding-result migration, found ${inboxV2SourceOnboardingResultMigrations.length}.`
+  );
+  process.exit(1);
+}
 
 try {
   assertGlobalMigrationArtifactBijection({
@@ -510,6 +540,26 @@ try {
     targetIndex: 34,
     finalizedMigrationFileName:
       inboxV2AuthorizationRelationsMigrations[0].fileName,
+    migrationFileNames,
+    snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
+      fileName.endsWith("_snapshot.json")
+    )
+  });
+  assertMigrationJournalArtifactParity({
+    journal: drizzleJournal,
+    targetIndex: 40,
+    finalizedMigrationFileName:
+      inboxV2AuthorizedDomainCommandMigrations[0].fileName,
+    migrationFileNames,
+    snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
+      fileName.endsWith("_snapshot.json")
+    )
+  });
+  assertMigrationJournalArtifactParity({
+    journal: drizzleJournal,
+    targetIndex: 41,
+    finalizedMigrationFileName:
+      inboxV2SourceOnboardingResultMigrations[0].fileName,
     migrationFileNames,
     snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
       fileName.endsWith("_snapshot.json")
@@ -605,6 +655,12 @@ try {
   );
   await assertInboxV2SourceRegistryGeneratedSchemaParity(
     inboxV2SourceRegistryMigrations[0]
+  );
+  await assertInboxV2AuthorizedDomainCommandGeneratedSchemaParity(
+    inboxV2AuthorizedDomainCommandMigrations[0]
+  );
+  await assertInboxV2SourceOnboardingResultGeneratedSchemaParity(
+    inboxV2SourceOnboardingResultMigrations[0]
   );
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
@@ -742,15 +798,16 @@ async function assertInboxV2SourceRegistryGeneratedSchemaParity(migration) {
     baseIndex: 38,
     targetIndex: 39
   });
+  const historicalGenerated = withoutInboxV2Src011SchemaDelta(generated);
   const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
   assertDrizzleSnapshotParity(
-    generated.snapshot,
+    historicalGenerated.snapshot,
     checkedInSnapshot,
     snapshotPath
   );
 
   const expectedStatements = orderSourceRegistryGeneratedStatements(
-    generated.statements
+    historicalGenerated.statements
   );
   const checkedInStatements = splitMigrationStatements(migration.sql);
   assertExactSqlSequence(
@@ -758,6 +815,140 @@ async function assertInboxV2SourceRegistryGeneratedSchemaParity(migration) {
     checkedInStatements.slice(1, -1),
     "Inbox V2 SRC-010 ordered generated migration DDL"
   );
+}
+
+async function assertInboxV2AuthorizedDomainCommandGeneratedSchemaParity(
+  migration
+) {
+  const snapshotPath = "packages/db/drizzle/meta/0040_snapshot.json";
+  const generated = await generateExpectedDrizzleMigration({
+    workspaceRoot: process.cwd(),
+    migrationDirectory,
+    baseIndex: 39,
+    targetIndex: 40
+  });
+  const historicalGenerated =
+    withoutInboxV2SourceOnboardingResultSchemaDelta(generated);
+  const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
+  assertDrizzleSnapshotParity(
+    historicalGenerated.snapshot,
+    checkedInSnapshot,
+    snapshotPath
+  );
+
+  const checkedInStatements = splitMigrationStatements(migration.sql);
+  const invariantStart = checkedInStatements.findIndex((statement) =>
+    statement.includes(inboxV2AuthorizedDomainCommandMarker)
+  );
+  if (invariantStart < 0) {
+    throw new Error(
+      "Inbox V2 SRC-011 authorized-domain migration is missing its coherence tail."
+    );
+  }
+  assertExactSqlSequence(
+    historicalGenerated.statements,
+    checkedInStatements.slice(0, invariantStart),
+    "Inbox V2 SRC-011 authorized-domain ordered generated migration prefix"
+  );
+  const invariantTail = checkedInStatements.slice(invariantStart);
+  if (
+    invariantTail.length !== 4 ||
+    digestOrderedSqlStatements(invariantTail) !==
+      inboxV2AuthorizedDomainCommandTailDigest
+  ) {
+    throw new Error(
+      "Inbox V2 SRC-011 authorized-domain coherence tail differs from its reviewed exact digest."
+    );
+  }
+}
+
+async function assertInboxV2SourceOnboardingResultGeneratedSchemaParity(
+  migration
+) {
+  const snapshotPath = "packages/db/drizzle/meta/0041_snapshot.json";
+  const generated = await generateExpectedDrizzleMigration({
+    workspaceRoot: process.cwd(),
+    migrationDirectory,
+    baseIndex: 40,
+    targetIndex: 41
+  });
+  const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
+  assertDrizzleSnapshotParity(
+    generated.snapshot,
+    checkedInSnapshot,
+    snapshotPath
+  );
+
+  const checkedInStatements = splitMigrationStatements(migration.sql);
+  const invariantStart = checkedInStatements.findIndex((statement) =>
+    statement.includes(inboxV2SourceOnboardingResultMarker)
+  );
+  if (invariantStart < 0) {
+    throw new Error(
+      "Inbox V2 SRC-011 migration is missing its immutable result/coherence tail."
+    );
+  }
+  assertExactSqlSequence(
+    generated.statements,
+    checkedInStatements.slice(0, invariantStart),
+    "Inbox V2 SRC-011 ordered generated migration prefix"
+  );
+
+  const invariantTail = checkedInStatements.slice(invariantStart);
+  if (
+    invariantTail.length !== 10 ||
+    digestOrderedSqlStatements(invariantTail) !==
+      inboxV2SourceOnboardingResultTailDigest
+  ) {
+    throw new Error(
+      "Inbox V2 SRC-011 immutable result/coherence tail differs from its reviewed exact digest."
+    );
+  }
+  const invariantSql = invariantTail.join("\n");
+  for (const requiredFragment of [
+    "inbox_v2_source_onboarding_results_command_mutation_fk",
+    "inbox_v2_source_onboarding_results_stream_mutation_fk",
+    "inbox_v2_source_onboarding_results_mutation_commit_fk",
+    "inbox_v2_source_onboarding_canonical_json_text",
+    "inbox_v2_source_onboarding_result_immutable",
+    "inbox_v2_source_onboarding_result_truncate_guard_trigger",
+    "inbox_v2_source_onboarding_result_coherence",
+    "inbox_v2_source_onboarding_result_commit_constraint",
+    "inbox_v2_source_onboarding_result_row_constraint",
+    "on delete cascade",
+    "inbox_v2_assert_source_registry_lineage",
+    "source_onboarding_result_snapshot",
+    "core:source_account_connector_metadata",
+    "core:source-registry-sql",
+    "core:source_replay_and_diagnostics",
+    "inbox_v2_tenant_stream_commits",
+    "inbox_v2_tenant_stream_heads",
+    "inbox_v2_tenant_stream_retention_advances",
+    "inbox_v2_tenant_stream_changes",
+    "inbox_v2_domain_events",
+    "inbox_v2_outbox_intents",
+    "inbox_v2_outbox_work_items",
+    "inbox_v2_outbox_outcomes",
+    "inbox_v2_auth_audit_events",
+    "inbox_v2_auth_audit_facets",
+    "stream_row.command_ids @>",
+    "stream_row.position < head_row.min_retained_position",
+    "advance_row.resulting_head_revision <= head_row.revision",
+    "command_row.result_reference->>'recordId' = old.id",
+    "event_row.payload_reference->>'recordId' = old.id",
+    "intent_row.payload_reference->>'recordId' = old.id",
+    "work_row.terminal_result_reference->>'recordId' = old.id",
+    "outcome_row.result_reference->>'recordId' = old.id",
+    "audit_row.evidence_reference->>'recordId' = old.id",
+    "deferrable initially deferred",
+    "set search_path = pg_catalog, public, pg_temp"
+  ]) {
+    if (!invariantSql.includes(requiredFragment)) {
+      throw new Error(
+        `Inbox V2 SRC-011 migration invariant tail is missing ${requiredFragment}.`
+      );
+    }
+  }
 }
 
 function orderSourceRegistryGeneratedStatements(statements) {
@@ -961,7 +1152,9 @@ function withoutInboxV2Db010SchemaDelta(generated) {
 }
 
 function withoutInboxV2Src010SchemaDelta(generated) {
-  const snapshot = structuredClone(generated.snapshot);
+  const withoutAuthorizedDomainCommand =
+    withoutInboxV2Src011SchemaDelta(generated);
+  const snapshot = structuredClone(withoutAuthorizedDomainCommand.snapshot);
   for (const tableName of inboxV2SourceRegistryTableNames) {
     delete snapshot.tables[tableName];
   }
@@ -974,12 +1167,117 @@ function withoutInboxV2Src010SchemaDelta(generated) {
       delete table.uniqueConstraints?.[constraintName];
     }
   }
-  const statements = generated.statements.filter(
+  const statements = withoutAuthorizedDomainCommand.statements.filter(
     (statement) =>
       !statement.includes("inbox_v2_source_registry_") &&
       !inboxV2SourceRegistryBaseConstraintNames.some((name) =>
         statement.includes(name)
       )
+  );
+  return { snapshot, statements };
+}
+
+function withoutInboxV2Src011SchemaDelta(generated) {
+  const withoutSourceOnboardingResult =
+    withoutInboxV2SourceOnboardingResultSchemaDelta(generated);
+  const snapshot = structuredClone(withoutSourceOnboardingResult.snapshot);
+  const mutationCommit =
+    snapshot.tables["public.inbox_v2_auth_mutation_commits"];
+  const constraintName = "inbox_v2_auth_mutation_commits_manifest_check";
+  const constraint = mutationCommit?.checkConstraints?.[constraintName];
+  if (!constraint) {
+    throw new Error(
+      "Generated historical schema is missing the authorization mutation manifest constraint."
+    );
+  }
+  constraint.value =
+    '"inbox_v2_auth_mutation_commits"."revision_effect_count" >= 1\n' +
+    '        and "inbox_v2_auth_mutation_commits"."relation_write_count" >= 1\n' +
+    '        and "inbox_v2_auth_mutation_commits"."projection_intent_count" >= 1\n' +
+    '        and "inbox_v2_auth_mutation_commits"."revision_effect_digest_sha256" ~ \'^sha256:[0-9a-f]{64}$\'\n' +
+    '        and "inbox_v2_auth_mutation_commits"."relation_write_digest_sha256" ~ \'^sha256:[0-9a-f]{64}$\'\n' +
+    '        and "inbox_v2_auth_mutation_commits"."manifest_digest_sha256" ~ \'^sha256:[0-9a-f]{64}$\'';
+  const statements = withoutSourceOnboardingResult.statements.filter(
+    (statement) => !statement.includes(constraintName)
+  );
+  return { snapshot, statements };
+}
+
+function withoutInboxV2SourceOnboardingResultSchemaDelta(generated) {
+  const snapshot = structuredClone(generated.snapshot);
+  const resultTableName = "public.inbox_v2_source_onboarding_result_snapshots";
+  delete snapshot.tables[resultTableName];
+
+  const command = snapshot.tables["public.inbox_v2_auth_command_records"];
+  const audit = snapshot.tables["public.inbox_v2_auth_audit_events"];
+  if (
+    !command?.columns ||
+    !command.checkConstraints ||
+    !audit?.checkConstraints
+  ) {
+    throw new Error(
+      "Generated schema is missing source-onboarding result predecessor tables."
+    );
+  }
+  delete command.columns.result_reference;
+
+  const commandState =
+    command.checkConstraints.inbox_v2_auth_command_records_state_check;
+  const commandValues =
+    command.checkConstraints.inbox_v2_auth_command_records_values_check;
+  const auditValues =
+    audit.checkConstraints.inbox_v2_auth_audit_events_reference_check;
+  if (!commandState || !commandValues || !auditValues) {
+    throw new Error(
+      "Generated schema is missing source-onboarding result predecessor constraints."
+    );
+  }
+  commandState.value = replaceExactSchemaFragment(
+    commandState.value,
+    '\n          and "inbox_v2_auth_command_records"."result_reference" is null',
+    "",
+    "authorized command pending result reference"
+  );
+  commandValues.value = replaceExactSchemaFragment(
+    commandValues.value,
+    'char_length("inbox_v2_auth_command_records"."client_mutation_id") between 1 and 512\n' +
+      '        and "inbox_v2_auth_command_records"."client_mutation_id" ~ \'^[A-Za-z0-9][A-Za-z0-9._~:-]*$\'',
+    'char_length("inbox_v2_auth_command_records"."client_mutation_id") between 1 and 256',
+    "authorized command client mutation identifier"
+  );
+  commandValues.value = replaceExactSchemaFragment(
+    commandValues.value,
+    '\n        and ("inbox_v2_auth_command_records"."result_reference" is null or (\n' +
+      '          jsonb_typeof("inbox_v2_auth_command_records"."result_reference") = \'object\'\n' +
+      '          and "inbox_v2_auth_command_records"."result_reference" ?&\n' +
+      "            array['tenantId', 'recordId', 'schemaId', 'schemaVersion', 'digest']::text[]\n" +
+      '          and ("inbox_v2_auth_command_records"."result_reference" -\n' +
+      "            array['tenantId', 'recordId', 'schemaId', 'schemaVersion', 'digest']::text[]) =\n" +
+      "              '{}'::jsonb\n" +
+      '          and "inbox_v2_auth_command_records"."result_reference"->>\'tenantId\' = "inbox_v2_auth_command_records"."tenant_id"\n' +
+      "          and \"inbox_v2_auth_command_records\".\"result_reference\"->>'digest' ~ '^sha256:[0-9a-f]{64}$'\n" +
+      "        ))",
+    "",
+    "authorized command canonical result reference"
+  );
+  auditValues.value = replaceExactSchemaFragment(
+    auditValues.value,
+    'char_length("inbox_v2_auth_audit_events"."client_mutation_id") between 1 and 512\n' +
+      '        and "inbox_v2_auth_audit_events"."client_mutation_id" ~ \'^[A-Za-z0-9][A-Za-z0-9._~:-]*$\'',
+    'char_length("inbox_v2_auth_audit_events"."client_mutation_id") between 1 and 256',
+    "authorization audit client mutation identifier"
+  );
+
+  const generatedConstraintNames = [
+    "inbox_v2_auth_audit_events_reference_check",
+    "inbox_v2_auth_command_records_state_check",
+    "inbox_v2_auth_command_records_values_check"
+  ];
+  const statements = generated.statements.filter(
+    (statement) =>
+      !statement.includes("inbox_v2_source_onboarding_result_snapshots") &&
+      !statement.includes('ADD COLUMN "result_reference"') &&
+      !generatedConstraintNames.some((name) => statement.includes(name))
   );
   return { snapshot, statements };
 }
@@ -1778,6 +2076,18 @@ function assertExactSqlSequence(expected, actual, label) {
   ) {
     throw new Error(`${label} does not match the schema-owned SQL exactly.`);
   }
+}
+
+function replaceExactSchemaFragment(source, expected, replacement, label) {
+  const firstIndex = source.indexOf(expected);
+  if (firstIndex < 0 || source.indexOf(expected, firstIndex + 1) >= 0) {
+    throw new Error(
+      `Generated schema has an unexpected ${label} predecessor shape.`
+    );
+  }
+  return `${source.slice(0, firstIndex)}${replacement}${source.slice(
+    firstIndex + expected.length
+  )}`;
 }
 
 function digestOrderedSqlStatements(statements) {

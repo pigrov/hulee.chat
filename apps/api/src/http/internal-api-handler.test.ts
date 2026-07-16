@@ -12,6 +12,7 @@ import type {
   InternalWorkQueueUpsertRequest,
   TenantId
 } from "@hulee/contracts";
+import { inboxV2ClientMutationIdSchema } from "@hulee/contracts";
 import {
   CoreError,
   createInternalApiSignature,
@@ -328,6 +329,19 @@ function createHandler(input?: {
         "secret:tenant_1/source-megapbx/webhook-source-generated",
       createdAt: "2026-07-09T10:00:00.000Z",
       updatedAt: "2026-07-09T10:00:00.000Z"
+    },
+    command: {
+      outcome: "applied" as const,
+      commandId: "command:source-onboarding-generated",
+      clientMutationId: inboxV2ClientMutationIdSchema.parse(
+        "client-mutation:http-source-test"
+      ),
+      mutationId: "source-onboarding:mutation-generated",
+      publicResultCode: "core:source-connection.created",
+      streamCommitId: "commit:source-onboarding-generated",
+      streamEpoch: "stream:source-onboarding-generated",
+      streamPosition: "1",
+      committedAt: "2026-07-09T10:00:00.000Z"
     },
     webhookToken: "source-webhook-token-generated"
   }));
@@ -1665,6 +1679,9 @@ describe("internal API handler", () => {
       method: "POST",
       path: "/internal/v1/sources/connections",
       body: {
+        clientMutationId: inboxV2ClientMutationIdSchema.parse(
+          "client-mutation:http-source-test"
+        ),
         sourceName: "megapbx",
         displayName: "MegaPBX"
       }
@@ -1720,6 +1737,11 @@ describe("internal API handler", () => {
         sourceConnectionId: "source_connection:megapbx:generated",
         sourceName: "megapbx"
       },
+      command: {
+        outcome: "applied",
+        clientMutationId: "client-mutation:http-source-test",
+        streamCommitId: "commit:source-onboarding-generated"
+      },
       webhookToken: "source-webhook-token-generated"
     });
     expect(connectorsResponse.status).toBe(200);
@@ -1736,8 +1758,37 @@ describe("internal API handler", () => {
     expect(listChannelConnectors).toHaveBeenCalledWith(modulesManageSession);
     expect(listSourceConnections).toHaveBeenCalledWith(modulesManageSession);
     expect(createSourceConnection).toHaveBeenCalledWith(modulesManageSession, {
+      clientMutationId: "client-mutation:http-source-test",
       sourceName: "megapbx",
       displayName: "MegaPBX"
+    });
+  });
+
+  it("returns a stable conflict for a reused source-onboarding mutation with a different request", async () => {
+    const modulesManageSession = sessionWithPermissions(["modules.manage"]);
+    const { handler, createSourceConnection } = createHandler({
+      session: modulesManageSession
+    });
+    createSourceConnection.mockRejectedValueOnce(
+      new CoreError("command.idempotency_conflict")
+    );
+
+    const response = await handler.handle({
+      method: "POST",
+      path: "/internal/v1/sources/connections",
+      body: {
+        clientMutationId: "client-mutation:http-source-conflict",
+        sourceName: "megapbx",
+        displayName: "Different request"
+      }
+    });
+
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({
+      error: {
+        code: "command.idempotency_conflict",
+        retryability: "not_retryable"
+      }
     });
   });
 

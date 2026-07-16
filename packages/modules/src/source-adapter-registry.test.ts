@@ -190,6 +190,7 @@ function lifecycleAuthority() {
   const entry = (
     copySlot:
       | "source_connection_registry"
+      | "source_onboarding_result_snapshot"
       | "credential_binding"
       | "source_registry_artifact"
       | "source_ingress_route"
@@ -257,6 +258,7 @@ function lifecycleAuthority() {
         registry: registryReference,
         bindings: [
           entry("source_connection_registry"),
+          entry("source_onboarding_result_snapshot"),
           entry("credential_binding"),
           entry("source_registry_artifact"),
           entry("source_ingress_route"),
@@ -273,6 +275,7 @@ function locator(
   binding: InboxV2SourceRegistryLifecycleBinding,
   copySlot:
     | "source_connection_registry"
+    | "source_onboarding_result_snapshot"
     | "credential_binding"
     | "source_registry_artifact"
     | "source_ingress_route"
@@ -302,16 +305,38 @@ function registrationFixture(
       schemaId: string;
       supportedVersions: string[];
     }> | null;
+    configurationMaterial?: Uint8Array;
     registrationArtifact?: Readonly<{
       kind: "catalog_registration" | "module_registration";
       schemaId: string;
       schemaVersion: string;
     }>;
     credentialMaterial?: Uint8Array;
+    routeMaterial?: Uint8Array;
+    oneTimeResponseProfile?: Readonly<{
+      schemaId: string;
+      schemaVersion: string;
+      fields: readonly Readonly<{
+        fieldId: string;
+        value: Uint8Array;
+      }>[];
+    }>;
   } = {}
 ) {
   const { registry: lifecycleRegistry, binding } = lifecycleAuthority();
-  const configurationMaterial = new Uint8Array([123, 125]);
+  const configurationMaterial = new Uint8Array(
+    input.configurationMaterial ?? [123, 125]
+  );
+  const oneTimeResponseProfile = input.oneTimeResponseProfile ?? {
+    schemaId: "core:source-onboarding-response",
+    schemaVersion: "v1",
+    fields: [
+      {
+        fieldId: "core:webhook-token",
+        value: new Uint8Array([1, 2, 3])
+      }
+    ]
+  };
   const configurationArtifact = input.configurationArtifact
     ? inboxV2SourceRegistryArtifactReferenceSchema.parse({
         kind: "configuration" as const,
@@ -374,7 +399,9 @@ function registrationFixture(
     throw new Error("Expected a source ingress route fixture.");
   }
   const ingressRoute = parsedIngressRoute;
-  const routeMaterial = new Uint8Array([4, 5, 6]);
+  const routeMaterial = new Uint8Array(
+    input.routeMaterial ?? new Uint8Array(32).fill(0x45)
+  );
   const connectionHead = defineInboxV2SourceConnectionRegistryState({
     lifecycleBinding: binding,
     value: {
@@ -453,6 +480,7 @@ function registrationFixture(
         lifecycleRegistry: binding.payload.registry,
         requiredCopySlots: [
           "source_connection_registry",
+          "source_onboarding_result_snapshot",
           "source_registry_artifact",
           ...(credentialBinding === null
             ? []
@@ -481,9 +509,11 @@ function registrationFixture(
           mode: "standalone",
           handlerId: "module:synthetic:onboarding",
           oneTimeResponse: {
-            schemaId: "core:source-onboarding-response",
-            schemaVersion: "v1",
-            fieldIds: ["core:webhook-token"]
+            schemaId: oneTimeResponseProfile.schemaId,
+            schemaVersion: oneTimeResponseProfile.schemaVersion,
+            fieldIds: oneTimeResponseProfile.fields.map(
+              (field) => field.fieldId
+            )
           }
         },
         ingress: {
@@ -526,14 +556,12 @@ function registrationFixture(
       }
     ],
     oneTimeResponse: {
-      schemaId: "core:source-onboarding-response",
-      schemaVersion: "v1",
-      fields: [
-        {
-          fieldId: "core:webhook-token",
-          value: new Uint8Array([1, 2, 3])
-        }
-      ]
+      schemaId: oneTimeResponseProfile.schemaId,
+      schemaVersion: oneTimeResponseProfile.schemaVersion,
+      fields: oneTimeResponseProfile.fields.map((field) => ({
+        fieldId: field.fieldId,
+        value: new Uint8Array(field.value)
+      }))
     }
   };
   const onboardingHandler: SourceAdapterOnboardingHandler = {
@@ -572,7 +600,8 @@ function registrationFixture(
               bindingId: credentialBinding.bindingId,
               material: new Uint8Array(input.credentialMaterial)
             }
-          ]
+          ],
+    ephemeralIngressRouteMaterial: new Uint8Array(routeMaterial)
   };
   return { lifecycleRegistry, registration, prepared, prepareInput };
 }
@@ -644,14 +673,16 @@ describe("SourceAdapterRegistry", () => {
     expect(Array.from(retainedCredential!)).toEqual([0, 0, 0]);
     expect(Array.from(rawArtifact)).toEqual([0, 0]);
     expect(Array.from(rawSecret)).toEqual([0, 0, 0]);
-    expect(Array.from(rawRoute)).toEqual([0, 0, 0]);
+    expect(Array.from(rawRoute)).toEqual(new Array(32).fill(0));
     expect(Array.from(rawResponse)).toEqual([0, 0, 0]);
     expect(
       Array.from(fixture.prepareInput.ephemeralCredentials[0]!.material)
     ).toEqual([7, 8, 9]);
     expect(Array.from(result.artifactWrites[0]!.material)).toEqual([123, 125]);
     expect(Array.from(result.secretWrites[0]!.material)).toEqual([7, 8, 9]);
-    expect(Array.from(result.routeWrites[0]!.material)).toEqual([4, 5, 6]);
+    expect(Array.from(result.routeWrites[0]!.material)).toEqual(
+      new Array(32).fill(0x45)
+    );
     expect(Array.from(result.oneTimeResponse!.fields[0]!.value)).toEqual([
       1, 2, 3
     ]);
@@ -719,6 +750,157 @@ describe("SourceAdapterRegistry", () => {
       ).rejects.toThrow(/route write/u);
     }
   );
+
+  it("rejects copied ingress route material in a classified artifact", async () => {
+    const routeMaterial = new Uint8Array(32).fill(0x45);
+    const fixture = registrationFixture({
+      configurationArtifact: {
+        schemaId: "module:synthetic:configuration",
+        schemaVersion: "v1"
+      },
+      configurationMaterial: new Uint8Array(routeMaterial),
+      routeMaterial: new Uint8Array(routeMaterial)
+    });
+    expect(fixture.prepared.artifactWrites[0]!.material).not.toBe(
+      fixture.prepareInput.ephemeralIngressRouteMaterial
+    );
+    const registry = createSourceAdapterRegistry({
+      registrations: [fixture.registration]
+    });
+
+    await expect(
+      registry.get("synthetic")!.prepare(fixture.prepareInput)
+    ).rejects.toThrow(/route material must be independent/u);
+  });
+
+  it("rejects copied ingress route material in a classified secret write", async () => {
+    const routeMaterial = new Uint8Array(32).fill(0x45);
+    const fixture = registrationFixture({
+      credentialMaterial: new Uint8Array(routeMaterial),
+      routeMaterial: new Uint8Array(routeMaterial)
+    });
+    const registry = createSourceAdapterRegistry({
+      registrations: [fixture.registration]
+    });
+
+    await expect(
+      registry.get("synthetic")!.prepare(fixture.prepareInput)
+    ).rejects.toThrow(/route material must be independent/u);
+  });
+
+  it("rejects copied ingress route material in the standard one-time response", async () => {
+    const routeMaterial = new Uint8Array(32).fill(0x45);
+    const fixture = registrationFixture({
+      routeMaterial: new Uint8Array(routeMaterial),
+      oneTimeResponseProfile: {
+        schemaId: "core:source-onboarding-response",
+        schemaVersion: "v1",
+        fields: [
+          {
+            fieldId: "core:webhook-token",
+            value: new Uint8Array(routeMaterial)
+          }
+        ]
+      }
+    });
+    const registry = createSourceAdapterRegistry({
+      registrations: [fixture.registration]
+    });
+
+    await expect(
+      registry.get("synthetic")!.prepare(fixture.prepareInput)
+    ).rejects.toThrow(/route material must be independent/u);
+  });
+
+  it("checks every field of future one-time response profiles for route copies", async () => {
+    const routeMaterial = new Uint8Array(32).fill(0x45);
+    const fixture = registrationFixture({
+      routeMaterial: new Uint8Array(routeMaterial),
+      oneTimeResponseProfile: {
+        schemaId: "core:future-source-onboarding-response",
+        schemaVersion: "v2",
+        fields: [
+          {
+            fieldId: "core:future-correlation",
+            value: new Uint8Array([9, 8, 7])
+          },
+          {
+            fieldId: "core:future-bootstrap-token",
+            value: new Uint8Array(routeMaterial)
+          }
+        ]
+      }
+    });
+    const registry = createSourceAdapterRegistry({
+      registrations: [fixture.registration]
+    });
+
+    await expect(
+      registry.get("synthetic")!.prepare(fixture.prepareInput)
+    ).rejects.toThrow(/route material must be independent/u);
+  });
+
+  it("accepts the declared secret/response reuse when route material stays independent", async () => {
+    const webhookToken = new Uint8Array([7, 8, 9]);
+    const fixture = registrationFixture({
+      credentialMaterial: new Uint8Array(webhookToken),
+      oneTimeResponseProfile: {
+        schemaId: "core:source-onboarding-response",
+        schemaVersion: "v1",
+        fields: [
+          {
+            fieldId: "core:webhook-token",
+            value: new Uint8Array(webhookToken)
+          }
+        ]
+      }
+    });
+    const registry = createSourceAdapterRegistry({
+      registrations: [fixture.registration]
+    });
+
+    const prepared = await registry
+      .get("synthetic")!
+      .prepare(fixture.prepareInput);
+
+    expect(Array.from(prepared.secretWrites[0]!.material)).toEqual(
+      Array.from(prepared.oneTimeResponse!.fields[0]!.value)
+    );
+    expect(Array.from(prepared.routeWrites[0]!.material)).not.toEqual(
+      Array.from(prepared.oneTimeResponse!.fields[0]!.value)
+    );
+  });
+
+  it("accepts independent fields in a future one-time response profile", async () => {
+    const fixture = registrationFixture({
+      oneTimeResponseProfile: {
+        schemaId: "core:future-source-onboarding-response",
+        schemaVersion: "v2",
+        fields: [
+          {
+            fieldId: "core:future-correlation",
+            value: new Uint8Array([9, 8, 7])
+          },
+          {
+            fieldId: "core:future-bootstrap-token",
+            value: new Uint8Array([6, 5, 4])
+          }
+        ]
+      }
+    });
+    const registry = createSourceAdapterRegistry({
+      registrations: [fixture.registration]
+    });
+
+    await expect(
+      registry.get("synthetic")!.prepare(fixture.prepareInput)
+    ).resolves.toMatchObject({
+      oneTimeResponse: {
+        schemaId: "core:future-source-onboarding-response",
+        schemaVersion: "v2"
+      }
+    });
+  });
 
   it.each(["missing", "digest"] as const)(
     "rejects %s optional artifact material",
@@ -797,7 +979,7 @@ describe("SourceAdapterRegistry", () => {
       registry.get("synthetic")!.prepare(fixture.prepareInput)
     ).rejects.toThrow("synthetic prepared snapshot copy failure");
     expect(Array.from(rawSecret)).toEqual([0, 0, 0]);
-    expect(Array.from(rawRoute)).toEqual([0, 0, 0]);
+    expect(Array.from(rawRoute)).toEqual(new Array(32).fill(0));
     expect(Array.from(rawResponse)).toEqual([0, 0, 0]);
   });
 

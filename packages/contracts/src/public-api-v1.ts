@@ -8,6 +8,7 @@ export const publicApiPlatformErrorCodeSchema = z.enum([
   "auth.invalid_credentials",
   "auth.email_not_verified",
   "auth.rate_limited",
+  "command.idempotency_conflict",
   "entitlement.missing",
   "license.inactive",
   "permission.denied",

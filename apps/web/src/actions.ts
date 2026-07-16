@@ -11,6 +11,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  inboxV2ClientMutationIdSchema,
   internalChannelAuthChallengeTypeSchema,
   internalChannelTypeSchema,
   type InternalTelegramIntegrationConfig
@@ -629,10 +630,14 @@ export async function createSourceConnectionAction(
       { redirectOnEmailNotVerified: false }
     );
     const sourceName = readRequiredFormString(formData, "sourceName").trim();
+    const clientMutationId = inboxV2ClientMutationIdSchema.parse(
+      readRequiredFormString(formData, "clientMutationId").trim()
+    );
     const displayName = readOptionalFormString(formData, "displayName")?.trim();
     const response = await createSourceConnection(
       {
         sourceName,
+        clientMutationId,
         displayName:
           displayName === undefined || displayName.length === 0
             ? undefined

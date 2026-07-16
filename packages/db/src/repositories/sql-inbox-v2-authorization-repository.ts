@@ -16,6 +16,7 @@ import {
   inboxV2AuthorizationDecisionReferenceSchema,
   inboxV2CatalogIdSchema,
   inboxV2ClientIdSchema,
+  inboxV2ClientMutationIdSchema,
   inboxV2ConversationIdSchema,
   inboxV2DomainEventSchema,
   inboxV2EmployeeIdSchema,
@@ -23,6 +24,7 @@ import {
   inboxV2InternalOpaqueReferenceSchema,
   inboxV2OutboxIntentSchema,
   inboxV2PayloadReferenceSchema,
+  inboxV2RequestIdSchema,
   inboxV2SchemaVersionTokenSchema,
   inboxV2SourceAccountIdSchema,
   inboxV2TenantIdSchema,
@@ -73,6 +75,7 @@ export type InboxV2AuthorizationCommandClaim = Readonly<
     authorizationEpoch: string;
     authorizedAt: string;
     publicResultCode: string;
+    resultReference: InboxV2PayloadReference | null;
     sensitiveResultReference: string | null;
   }
 >;
@@ -184,19 +187,30 @@ export type InboxV2AuthorizationAuditInput = Readonly<{
   facets: readonly InboxV2AuthorizationAuditFacetInput[];
 }>;
 
+export type InboxV2AuthorizationRelationKind =
+  | "role"
+  | "role_binding"
+  | "direct_grant"
+  | "workforce_membership"
+  | "structural_access"
+  | "conversation_collaborator"
+  | "work_item_collaborator"
+  | "internal_membership"
+  | "primary_responsibility"
+  | "servicing_team";
+
+export type InboxV2AuthorizedCommandMutationProfile =
+  | "domain"
+  | "authorization_relation";
+
 export type InboxV2AuthorizationMutationRecords = Readonly<{
   mutationId: string;
-  relationKind:
-    | "role"
-    | "role_binding"
-    | "direct_grant"
-    | "workforce_membership"
-    | "structural_access"
-    | "conversation_collaborator"
-    | "work_item_collaborator"
-    | "internal_membership"
-    | "primary_responsibility"
-    | "servicing_team";
+  /**
+   * Authorization-relation mutations retain their exact relation kind.
+   * A null kind selects the provider-neutral domain profile; the profile is
+   * deliberately derived so callers cannot submit contradictory flags.
+   */
+  relationKind: InboxV2AuthorizationRelationKind | null;
   streamCommitId: string;
   expectedStreamEpoch: string;
   audienceImpact: InboxV2TenantStreamCommit["audienceImpact"];
@@ -253,14 +267,41 @@ export type InboxV2PrivilegedAuthorizationMutationCallbackResult<TResult> =
 export type InboxV2PrivilegedAuthorizationMutationContext = Readonly<{
   executor: RawSqlExecutor;
   tenantId: string;
+  commandId: string;
+  clientMutationId: string;
+  commandTypeId: string;
   mutationId: string;
+  profile: InboxV2AuthorizedCommandMutationProfile;
   revisionEffects: readonly InboxV2AuthorizationRevisionEffect[];
 }>;
+
+const authorizedCommandMutationContexts = new WeakSet<object>();
+
+/**
+ * Runtime capability check for repositories that may write only from the
+ * coordinator-owned transaction callback. Structural TypeScript values are
+ * not sufficient for this trust boundary because an in-process caller could
+ * otherwise forge the executor/mutation tuple.
+ */
+export function assertInboxV2AuthorizedCommandMutationContext(
+  context: InboxV2PrivilegedAuthorizationMutationContext
+): void {
+  if (
+    typeof context !== "object" ||
+    context === null ||
+    !authorizedCommandMutationContexts.has(context)
+  ) {
+    throw new TypeError(
+      "Inbox V2 domain persistence requires a live authorized-command context."
+    );
+  }
+}
 
 export type InboxV2PrivilegedAuthorizationMutationReplayStatus = Readonly<{
   commandId: string;
   mutationId: string;
   publicResultCode: string;
+  resultReference: InboxV2PayloadReference | null;
   streamCommitId: string;
   streamEpoch: string;
   streamPosition: string;
@@ -284,6 +325,8 @@ export type WithPrivilegedAuthorizationMutationResult<TResult> =
       /** The canonical body is intentionally not returned on replay. */
       kind: "already_applied";
       status: InboxV2PrivilegedAuthorizationMutationReplayStatus;
+      /** Present only when the caller supplied a DB-only authorized loader. */
+      result?: TResult;
     }>
   | Readonly<{
       kind: "idempotency_conflict";
@@ -363,7 +406,11 @@ export type InboxV2AuthorizedCommandCoordinator = Readonly<{
      */
     persistDomainMutation: (
       context: InboxV2AuthorizedCommandMutationContext
-    ) => Promise<InboxV2AuthorizedCommandMutationCallbackResult<TResult>>
+    ) => Promise<InboxV2AuthorizedCommandMutationCallbackResult<TResult>>,
+    loadCommittedResult?: (
+      context: InboxV2AuthorizedCommandMutationContext,
+      status: InboxV2PrivilegedAuthorizationMutationReplayStatus
+    ) => Promise<TResult>
   ): Promise<InboxV2AuthorizedCommandMutationResult<TResult>>;
 }>;
 
@@ -391,6 +438,7 @@ type CommandReplayRow = {
   request_hash: unknown;
   mutation_id: unknown;
   public_result_code: unknown;
+  result_reference: unknown;
   stream_commit_id: unknown;
   stream_epoch: unknown;
   stream_position: unknown;
@@ -498,7 +546,11 @@ export function createSqlInboxV2AuthorizedCommandCoordinator(
     executor as unknown as InboxV2AuthorizationTransactionExecutor;
 
   return {
-    async withAuthorizedCommandMutation(input, persistDomainMutation) {
+    async withAuthorizedCommandMutation(
+      input,
+      persistDomainMutation,
+      loadCommittedResult
+    ) {
       const normalized = normalizeMutationInput(input);
       return runAuthorizationMutationTransaction(
         transactionExecutor,
@@ -506,7 +558,8 @@ export function createSqlInboxV2AuthorizedCommandCoordinator(
           persistPrivilegedAuthorizationMutation(
             transaction,
             normalized,
-            persistDomainMutation
+            persistDomainMutation,
+            loadCommittedResult
           )
       );
     }
@@ -518,7 +571,11 @@ async function persistPrivilegedAuthorizationMutation<TResult>(
   input: WithPrivilegedAuthorizationMutationInput,
   persistDomainMutation: (
     context: InboxV2PrivilegedAuthorizationMutationContext
-  ) => Promise<InboxV2PrivilegedAuthorizationMutationCallbackResult<TResult>>
+  ) => Promise<InboxV2PrivilegedAuthorizationMutationCallbackResult<TResult>>,
+  loadCommittedResult?: (
+    context: InboxV2AuthorizedCommandMutationContext,
+    status: InboxV2PrivilegedAuthorizationMutationReplayStatus
+  ) => Promise<TResult>
 ): Promise<WithPrivilegedAuthorizationMutationResult<TResult>> {
   const claim = await transaction.execute<CommandClaimRow>(
     buildClaimInboxV2AuthorizationCommandSql(input)
@@ -554,9 +611,49 @@ async function persistPrivilegedAuthorizationMutation<TResult>(
         "A visible authorization command remained pending outside its mutation transaction."
       );
     }
+
+    const status = mapReplayStatus(replay, mutationId);
+    if (loadCommittedResult === undefined) {
+      // Opaque reconciliation is intentionally available without replaying the
+      // original pre-mutation revision plan. No result body is exposed here.
+      return {
+        kind: "already_applied",
+        status
+      };
+    }
+
+    // Returning a canonical body is a current read. Fence the caller's fresh
+    // authorization proof before the DB-only result loader runs.
+    const replayAuthorization = await lockAndCheckAuthorizationRevisions(
+      transaction,
+      input
+    );
+    if (replayAuthorization.kind !== "locked") {
+      throw new AuthorizationMutationAbort(replayAuthorization.result);
+    }
+    await assertAuthorizationDecisionTemporalFence(transaction, input);
+    const replayContext: InboxV2PrivilegedAuthorizationMutationContext =
+      Object.freeze({
+        executor: transaction,
+        tenantId: input.tenantId,
+        commandId: status.commandId,
+        clientMutationId: input.command.clientMutationId,
+        commandTypeId: input.command.commandTypeId,
+        mutationId: status.mutationId,
+        profile: authorizedCommandMutationProfile(input.records),
+        revisionEffects: replayAuthorization.effects
+      });
+    authorizedCommandMutationContexts.add(replayContext);
+    let result: TResult;
+    try {
+      result = await loadCommittedResult(replayContext, status);
+    } finally {
+      authorizedCommandMutationContexts.delete(replayContext);
+    }
     return {
       kind: "already_applied",
-      status: mapReplayStatus(replay, mutationId)
+      status,
+      result
     };
   }
 
@@ -565,12 +662,29 @@ async function persistPrivilegedAuthorizationMutation<TResult>(
     throw new AuthorizationMutationAbort(locked.result);
   }
 
-  const callbackResult = await persistDomainMutation({
-    executor: transaction,
-    tenantId: input.tenantId,
-    mutationId: input.records.mutationId,
-    revisionEffects: locked.effects
-  });
+  // The authorization proof is useful only while every decision is valid at
+  // the database clock. Fence it before the retryable callback so an expired
+  // command cannot perform even transaction-local domain writes.
+  await assertAuthorizationDecisionTemporalFence(transaction, input);
+
+  const callbackContext: InboxV2PrivilegedAuthorizationMutationContext =
+    Object.freeze({
+      executor: transaction,
+      tenantId: input.tenantId,
+      commandId: input.command.id,
+      clientMutationId: input.command.clientMutationId,
+      commandTypeId: input.command.commandTypeId,
+      mutationId: input.records.mutationId,
+      profile: authorizedCommandMutationProfile(input.records),
+      revisionEffects: locked.effects
+    });
+  authorizedCommandMutationContexts.add(callbackContext);
+  let callbackResult: InboxV2PrivilegedAuthorizationMutationCallbackResult<TResult>;
+  try {
+    callbackResult = await persistDomainMutation(callbackContext);
+  } finally {
+    authorizedCommandMutationContexts.delete(callbackContext);
+  }
   const relationWrites = normalizeRelationWrites(
     input,
     callbackResult.relationWrites ?? []
@@ -614,6 +728,9 @@ async function persistPrivilegedAuthorizationMutation<TResult>(
     "tenant stream head revision"
   );
 
+  // The callback and final stream-head lock may outlive the first fence. Check
+  // the database clock again after the last potentially blocking domain lock,
+  // before any canonical commit/audit rows are appended.
   await assertAuthorizationDecisionTemporalFence(transaction, input);
 
   await applyAuthorizationRevisionAdvances(transaction, input, locked);
@@ -709,6 +826,7 @@ async function persistPrivilegedAuthorizationMutation<TResult>(
       commandId: input.command.id,
       mutationId: input.records.mutationId,
       publicResultCode: input.command.publicResultCode,
+      resultReference: input.command.resultReference,
       sensitiveResultReference: input.command.sensitiveResultReference,
       streamCommitId: input.records.streamCommitId,
       streamEpoch,
@@ -785,6 +903,7 @@ export function buildLockInboxV2AuthorizationCommandByScopeSql(
            command.request_hash,
            command.mutation_id,
            command.public_result_code,
+           command.result_reference,
            stream_commit.id as stream_commit_id,
            stream_commit.stream_epoch,
            stream_commit.position as stream_position,
@@ -812,6 +931,7 @@ export function buildLockInboxV2AuthorizationCommandByIdSql(input: {
            command.request_hash,
            command.mutation_id,
            command.public_result_code,
+           command.result_reference,
            stream_commit.id as stream_commit_id,
            stream_commit.stream_epoch,
            stream_commit.position as stream_position,
@@ -824,6 +944,12 @@ export function buildLockInboxV2AuthorizationCommandByIdSql(input: {
       and command.id = ${input.commandId}
     for update of command
   `;
+}
+
+export function authorizedCommandMutationProfile(
+  records: Pick<InboxV2AuthorizationMutationRecords, "relationKind">
+): InboxV2AuthorizedCommandMutationProfile {
+  return records.relationKind === null ? "domain" : "authorization_relation";
 }
 
 function normalizeMutationInput(
@@ -847,6 +973,7 @@ function normalizeMutationInput(
       "authorizationEpoch",
       "authorizedAt",
       "publicResultCode",
+      "resultReference",
       "sensitiveResultReference"
     ],
     "command"
@@ -856,12 +983,9 @@ function normalizeMutationInput(
   assertNonEmpty(input.command.id, "command.id");
   assertInternalDomainId(input.command.id, "command.id");
   assertNonEmpty(input.command.requestId, "command.requestId");
-  assertInternalDomainId(input.command.requestId, "command.requestId");
+  inboxV2RequestIdSchema.parse(input.command.requestId);
   assertNonEmpty(input.command.clientMutationId, "command.clientMutationId");
-  assertInternalDomainId(
-    input.command.clientMutationId,
-    "command.clientMutationId"
-  );
+  inboxV2ClientMutationIdSchema.parse(input.command.clientMutationId);
   assertNonEmpty(input.command.commandTypeId, "command.commandTypeId");
   inboxV2CatalogIdSchema.parse(input.command.commandTypeId);
   assertSha256(input.command.requestHash, "command.requestHash");
@@ -880,6 +1004,12 @@ function normalizeMutationInput(
   assertTimestamp(input.command.authorizedAt, "command.authorizedAt");
   assertNonEmpty(input.command.publicResultCode, "command.publicResultCode");
   inboxV2CatalogIdSchema.parse(input.command.publicResultCode);
+  if (input.command.resultReference !== null) {
+    inboxV2PayloadReferenceSchema.parse(input.command.resultReference);
+    if (input.command.resultReference.tenantId !== input.tenantId) {
+      throw new TypeError("Command result reference crosses tenant scope.");
+    }
+  }
   if (input.command.sensitiveResultReference !== null) {
     inboxV2InternalOpaqueReferenceSchema.parse(
       input.command.sensitiveResultReference
@@ -1173,7 +1303,9 @@ function normalizeMutationRecords(
     assertNonEmpty(value, label);
     assertInternalDomainId(value, label);
   }
-  assertAuthorizationRelationKind(records.relationKind);
+  if (records.relationKind !== null) {
+    assertAuthorizationRelationKind(records.relationKind);
+  }
   assertNonEmpty(records.expectedStreamEpoch, "records.expectedStreamEpoch");
   assertSha256(records.commitHash, "records.commitHash");
   if (
@@ -1325,6 +1457,7 @@ function normalizeMutationRecords(
     }
   }
   if (
+    authorizedCommandMutationProfile(records) === "authorization_relation" &&
     !events.some(
       (event) =>
         event.typeId === "core:authorization.changed" &&
@@ -1526,7 +1659,7 @@ function assertAtomicMutationContract(input: {
             recordedAt: mutation.occurredAt,
             kind: "committed",
             commit: commitReference,
-            resultReference: null
+            resultReference: mutation.command.resultReference
           },
           authorizationDecisionRefs: input.audit.authorizationDecisionRefs,
           authorizedAt: mutation.command.authorizedAt,
@@ -1781,6 +1914,23 @@ function assertBoundedRevisionRule(
     ({ advanceCollaboratorSet }) =>
       advanceCollaboratorSet !== undefined && advanceCollaboratorSet !== "none"
   );
+  if (relationKind === null) {
+    if (
+      revisions.advanceTenantRbac ||
+      revisions.advanceSharedAccess ||
+      employeeAccessAdvances.length > 0 ||
+      employeeRelationAdvances.length > 0 ||
+      resourceAdvances.length > 0 ||
+      structuralRelationAdvances.length > 0 ||
+      collaboratorSetAdvances.length > 0 ||
+      audienceImpact.kind !== "none"
+    ) {
+      throw new TypeError(
+        "Domain mutation cannot advance authorization relations or declare an authorization audience impact."
+      );
+    }
+    return;
+  }
   const expectExactShape = (input: {
     tenantRbac: boolean;
     sharedAccess: boolean;
@@ -4576,6 +4726,7 @@ export function buildCompleteInboxV2AuthorizationCommandSql(
     update inbox_v2_auth_command_records command
     set state = 'completed',
         mutation_id = ${input.records.mutationId},
+        result_reference = ${input.command.resultReference === null ? null : JSON.stringify(input.command.resultReference)}::jsonb,
         sensitive_result_reference = ${input.command.sensitiveResultReference},
         revision = command.revision + 1,
         updated_at = ${input.occurredAt}
@@ -4594,6 +4745,7 @@ export function buildCompleteInboxV2AuthorizationCommandSql(
       and command.authorization_not_after = ${earliestAuthorizationNotAfter(input.records.audit.authorizationDecisionRefs)}
       and command.state = 'pending'
       and command.mutation_id is null
+      and command.result_reference is null
       and command.sensitive_result_reference is null
       and command.revision = 1
     returning command.id
@@ -5040,6 +5192,10 @@ function mapReplayStatus(
       row.public_result_code,
       "replayed public result code"
     ),
+    resultReference:
+      row.result_reference === null
+        ? null
+        : inboxV2PayloadReferenceSchema.parse(row.result_reference),
     streamCommitId: asString(row.stream_commit_id, "replayed stream commit ID"),
     streamEpoch: asString(row.stream_epoch, "replayed stream epoch"),
     streamPosition: positiveCounter(
@@ -5099,9 +5255,20 @@ function authorizationRevisionEffectRows(
   input: WithPrivilegedAuthorizationMutationInput,
   effects: readonly InboxV2AuthorizationRevisionEffect[]
 ): readonly AuthorizationRevisionEffectRow[] {
-  if (effects.length === 0 || effects.length > 1_000) {
+  const profile = authorizedCommandMutationProfile(input.records);
+  if (effects.length > 1_000) {
     throw new TypeError(
-      "Authorization mutation requires a bounded non-empty revision manifest."
+      "Authorized command mutation revision manifest exceeds 1000 rows."
+    );
+  }
+  if (profile === "authorization_relation" && effects.length === 0) {
+    throw new TypeError(
+      "Authorization relation mutation requires a non-empty revision manifest."
+    );
+  }
+  if (profile === "domain" && effects.length > 0) {
+    throw invariantError(
+      "Domain mutation reached revision-row serialization with authorization effects."
     );
   }
   return effects.map((effect, index) => {
@@ -5152,7 +5319,7 @@ function authorizationRevisionEffectRows(
 type AuthorizationRelationWriteRow = Readonly<{
   id: string;
   ordinal: number;
-  relation_kind: InboxV2AuthorizationMutationRecords["relationKind"];
+  relation_kind: InboxV2AuthorizationRelationKind;
   relation_id: string;
   previous_revision: string | null;
   resulting_revision: string;
@@ -5172,15 +5339,24 @@ function authorizationRelationWriteRows(
   input: WithPrivilegedAuthorizationMutationInput,
   writes: readonly InboxV2AuthorizationRelationRevisionEffect[]
 ): readonly AuthorizationRelationWriteRow[] {
+  const relationKind = input.records.relationKind;
+  if (relationKind === null) {
+    if (writes.length > 0) {
+      throw invariantError(
+        "Domain mutation reached relation-row serialization with relation writes."
+      );
+    }
+    return [];
+  }
   return writes.map((write) => {
     const typedReference = relationWriteReferenceColumns(
-      input.records.relationKind,
+      relationKind,
       write.relationId
     );
     const base = {
       id: write.id,
       ordinal: write.ordinal,
-      relation_kind: input.records.relationKind,
+      relation_kind: relationKind,
       relation_id: write.relationId,
       previous_revision: write.previousRevision,
       resulting_revision: write.resultingRevision,
@@ -5198,7 +5374,7 @@ function authorizationRelationWriteRows(
 }
 
 function relationWriteReferenceColumns(
-  kind: InboxV2AuthorizationMutationRecords["relationKind"],
+  kind: InboxV2AuthorizationRelationKind,
   relationId: string
 ): Omit<
   AuthorizationRelationWriteRow,
@@ -5357,6 +5533,14 @@ function normalizeRelationWrites(
   input: WithPrivilegedAuthorizationMutationInput,
   writes: readonly InboxV2AuthorizationRelationRevisionEffect[]
 ): readonly InboxV2AuthorizationRelationRevisionEffect[] {
+  if (authorizedCommandMutationProfile(input.records) === "domain") {
+    if (writes.length > 0) {
+      throw new TypeError(
+        "Domain mutation cannot persist authorization relation writes."
+      );
+    }
+    return [];
+  }
   if (writes.length === 0) {
     throw new TypeError(
       "Authorization mutation must persist a relation write proof."
@@ -5864,9 +6048,7 @@ function assertAudienceImpactTenant(
   tenantId: string
 ): void {
   if (audienceImpact.kind === "none") {
-    throw new TypeError(
-      "Authorization mutation cannot use an empty audience impact."
-    );
+    return;
   }
   if (audienceImpact.kind === "direct") {
     for (const recipient of audienceImpact.affectedRecipients) {
@@ -5921,7 +6103,7 @@ function assertInvalidationScopesTenant(
 
 function assertAuthorizationRelationKind(
   value: string
-): asserts value is InboxV2AuthorizationMutationRecords["relationKind"] {
+): asserts value is InboxV2AuthorizationRelationKind {
   if (
     ![
       "role",

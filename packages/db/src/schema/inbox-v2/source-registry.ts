@@ -4,6 +4,7 @@ import {
   check,
   foreignKey,
   index,
+  jsonb,
   pgEnum,
   pgTable,
   primaryKey,
@@ -23,7 +24,10 @@ import {
   tenantSecrets,
   tenants
 } from "../tables";
-import { inboxV2AuthorizationResourceHeads } from "./authorization-relations";
+import {
+  inboxV2AuthorizationCommandRecords,
+  inboxV2AuthorizationResourceHeads
+} from "./authorization-relations";
 import {
   inboxV2DataGovernanceControlSetHeads,
   inboxV2DataGovernanceDataUseLineages,
@@ -675,6 +679,254 @@ export const inboxV2SourceRegistryTransitions = pgTable(
   ]
 );
 
+/**
+ * Immutable, non-sensitive command result for standalone onboarding. The
+ * compatibility SourceConnection and registry head remain mutable; replay and
+ * old stream references resolve exclusively through this versioned snapshot.
+ */
+export const inboxV2SourceOnboardingResultSnapshots = pgTable(
+  "inbox_v2_source_onboarding_result_snapshots",
+  {
+    tenantId: text("tenant_id").notNull(),
+    id: text("id").notNull(),
+    commandRecordId: text("command_record_id").notNull(),
+    clientMutationId: text("client_mutation_id").notNull(),
+    mutationId: text("mutation_id").notNull(),
+    streamCommitId: text("stream_commit_id").notNull(),
+    sourceConnectionId: text("source_connection_id").notNull(),
+    sourceTransitionId: text("source_transition_id").notNull(),
+    sourceRegistryRevision: bigint("source_registry_revision", {
+      mode: "bigint"
+    }).notNull(),
+    sourceType: text("source_type").notNull(),
+    sourceName: text("source_name").notNull(),
+    displayName: text("display_name").notNull(),
+    status: text("status").notNull(),
+    authType: text("auth_type").notNull(),
+    createdByEmployeeId: text("created_by_employee_id").notNull(),
+    connectionCreatedAt: timestamp("connection_created_at", {
+      withTimezone: true,
+      precision: 3
+    }).notNull(),
+    connectionUpdatedAt: timestamp("connection_updated_at", {
+      withTimezone: true,
+      precision: 3
+    }).notNull(),
+    resultDigestSha256: text("result_digest_sha256").notNull(),
+    resultCanonicalJson: text("result_canonical_json").notNull(),
+    statePayload: jsonb("state_payload")
+      .$type<Readonly<Record<string, unknown>>>()
+      .notNull(),
+    stateDigestSha256: text("state_digest_sha256").notNull(),
+    stateCanonicalJson: text("state_canonical_json").notNull(),
+    transitionPayload: jsonb("transition_payload")
+      .$type<Readonly<Record<string, unknown>>>()
+      .notNull(),
+    transitionDigestSha256: text("transition_digest_sha256").notNull(),
+    transitionCanonicalJson: text("transition_canonical_json").notNull(),
+    auditTargetRef: text("audit_target_ref").notNull(),
+    tenantFacetRef: text("tenant_facet_ref").notNull(),
+    grantSourceMappings: jsonb("grant_source_mappings")
+      .$type<
+        readonly Readonly<{
+          internalReference: string;
+          authorizationDecisionId: string;
+        }>[]
+      >()
+      .notNull(),
+    ...retainedResultLifecycleReferenceColumns(),
+    createdAt: timestamp("created_at", {
+      withTimezone: true,
+      precision: 3
+    }).notNull()
+  },
+  (table) => [
+    primaryKey({
+      name: "inbox_v2_source_onboarding_result_snapshots_pk",
+      columns: [table.tenantId, table.id]
+    }),
+    unique("inbox_v2_source_onboarding_results_command_unique").on(
+      table.tenantId,
+      table.commandRecordId
+    ),
+    unique("inbox_v2_source_onboarding_results_mutation_unique").on(
+      table.tenantId,
+      table.mutationId
+    ),
+    unique("inbox_v2_source_onboarding_results_source_unique").on(
+      table.tenantId,
+      table.sourceConnectionId
+    ),
+    unique("inbox_v2_source_onboarding_results_transition_unique").on(
+      table.tenantId,
+      table.sourceTransitionId
+    ),
+    unique("inbox_v2_source_onboarding_results_target_ref_unique").on(
+      table.tenantId,
+      table.auditTargetRef
+    ),
+    unique("inbox_v2_source_onboarding_results_tenant_ref_unique").on(
+      table.tenantId,
+      table.tenantFacetRef
+    ),
+    foreignKey({
+      name: "inbox_v2_source_onboarding_results_command_fk",
+      columns: [table.tenantId, table.commandRecordId],
+      foreignColumns: [
+        inboxV2AuthorizationCommandRecords.tenantId,
+        inboxV2AuthorizationCommandRecords.id
+      ]
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inbox_v2_source_onboarding_results_connection_fk",
+      columns: [table.tenantId, table.sourceConnectionId],
+      foreignColumns: [sourceConnections.tenantId, sourceConnections.id]
+    }),
+    foreignKey({
+      name: "inbox_v2_source_onboarding_results_transition_fk",
+      columns: [
+        table.tenantId,
+        table.sourceTransitionId,
+        table.sourceConnectionId,
+        table.sourceRegistryRevision
+      ],
+      foreignColumns: [
+        inboxV2SourceRegistryTransitions.tenantId,
+        inboxV2SourceRegistryTransitions.transitionId,
+        inboxV2SourceRegistryTransitions.authorityId,
+        inboxV2SourceRegistryTransitions.resultingRevision
+      ]
+    }),
+    foreignKey({
+      name: "inbox_v2_source_onboarding_results_creator_fk",
+      columns: [table.tenantId, table.createdByEmployeeId],
+      foreignColumns: [employees.tenantId, employees.id]
+    }),
+    foreignKey({
+      name: "inbox_v2_source_onboarding_results_policy_fk",
+      columns: [
+        table.tenantId,
+        table.effectivePolicyId,
+        table.effectivePolicyVersion
+      ],
+      foreignColumns: [
+        inboxV2DataGovernanceEffectivePolicies.tenantId,
+        inboxV2DataGovernanceEffectivePolicies.policyId,
+        inboxV2DataGovernanceEffectivePolicies.version
+      ]
+    }),
+    foreignKey({
+      name: "inbox_v2_source_onboarding_results_rule_fk",
+      columns: [
+        table.tenantId,
+        table.effectivePolicyId,
+        table.effectivePolicyVersion,
+        table.effectiveRuleId,
+        table.effectiveRuleRevision
+      ],
+      foreignColumns: [
+        inboxV2DataGovernanceEffectivePolicyRules.tenantId,
+        inboxV2DataGovernanceEffectivePolicyRules.policyId,
+        inboxV2DataGovernanceEffectivePolicyRules.policyVersion,
+        inboxV2DataGovernanceEffectivePolicyRules.ruleId,
+        inboxV2DataGovernanceEffectivePolicyRules.ruleRevision
+      ]
+    }),
+    foreignKey({
+      name: "inbox_v2_source_onboarding_results_control_set_fk",
+      columns: [table.tenantId],
+      foreignColumns: [inboxV2DataGovernanceControlSetHeads.tenantId]
+    }),
+    foreignKey({
+      name: "inbox_v2_source_onboarding_results_lineage_fk",
+      columns: [
+        table.registryId,
+        table.registryRevision,
+        table.dataClassId,
+        table.storageRootId,
+        table.purposeId
+      ],
+      foreignColumns: [
+        inboxV2DataGovernanceDataUseLineages.registryId,
+        inboxV2DataGovernanceDataUseLineages.registryRevision,
+        inboxV2DataGovernanceDataUseLineages.dataClassId,
+        inboxV2DataGovernanceDataUseLineages.storageRootId,
+        inboxV2DataGovernanceDataUseLineages.purposeId
+      ]
+    }),
+    check(
+      "inbox_v2_source_onboarding_results_values_check",
+      sql`char_length(${table.id}) between 1 and 512
+        and ${table.id} ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'
+        and char_length(${table.clientMutationId}) between 1 and 512
+        and ${table.clientMutationId} ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'
+        and ${table.sourceRegistryRevision} = 1
+        and char_length(${table.sourceName}) between 1 and 160
+        and char_length(${table.displayName}) between 1 and 200
+        and ${table.status} = 'onboarding'
+        and char_length(${table.sourceType}) between 1 and 160
+        and char_length(${table.authType}) between 1 and 160
+        and ${table.resultDigestSha256} ~ '^sha256:[0-9a-f]{64}$'
+        and ${table.resultCanonicalJson}::jsonb->>'protocol' is not distinct from
+          'core:inbox-v2.source-onboarding-result@v1'
+        and octet_length(${table.resultCanonicalJson}) <= 8388608
+        and ${table.resultDigestSha256} = 'sha256:' || encode(
+          sha256(convert_to(${table.resultCanonicalJson}, 'UTF8')), 'hex'
+        )
+        and jsonb_typeof(${table.statePayload}) = 'object'
+        and ${table.stateDigestSha256} ~ '^sha256:[0-9a-f]{64}$'
+        and ${table.stateCanonicalJson}::jsonb = ${table.statePayload}
+        and octet_length(${table.stateCanonicalJson}) <= 8388608
+        and ${table.stateDigestSha256} = 'sha256:' || encode(
+          sha256(convert_to(${table.stateCanonicalJson}, 'UTF8')), 'hex'
+        )
+        and jsonb_typeof(${table.transitionPayload}) = 'object'
+        and ${table.transitionDigestSha256} ~ '^sha256:[0-9a-f]{64}$'
+        and ${table.transitionCanonicalJson}::jsonb = ${table.transitionPayload}
+        and octet_length(${table.transitionCanonicalJson}) <= 8388608
+        and ${table.transitionDigestSha256} = 'sha256:' || encode(
+          sha256(convert_to(${table.transitionCanonicalJson}, 'UTF8')), 'hex'
+        )
+        and ${table.auditTargetRef} ~ '^internal-ref:[a-f0-9]{64}$'
+        and ${table.tenantFacetRef} ~ '^internal-ref:[a-f0-9]{64}$'
+        and ${table.auditTargetRef} <> ${table.tenantFacetRef}
+        and jsonb_typeof(${table.grantSourceMappings}) = 'array'
+        and jsonb_array_length(${table.grantSourceMappings}) between 1 and 64
+        and ${table.copySlot} = 'source_onboarding_result_snapshot'
+        and ${table.dataClassId} = 'core:source_account_connector_metadata'
+        and ${table.storageRootId} = 'core:source-registry-sql'
+        and ${table.purposeId} = 'core:source_replay_and_diagnostics'
+        and ${table.canonicalAnchorId} = 'core:disconnect_or_account_termination'
+        and ${table.registryRevision} >= 1
+        and ${table.lineageRevision} >= 1
+        and ${table.effectivePolicyVersion} >= 1
+        and ${table.effectiveRuleRevision} >= 1
+        and ${table.policyActivationRevision} >= 1
+        and ${table.policyActivationHeadRevision} >= 1
+        and ${table.legalHoldSetRevision} >= 0
+        and ${table.restrictionSetRevision} >= 0
+        and ${sha256Sql(table.registryCompositionHash)}
+        and isfinite(${table.connectionCreatedAt})
+        and isfinite(${table.connectionUpdatedAt})
+        and ${table.connectionUpdatedAt} = ${table.connectionCreatedAt}
+        and isfinite(${table.createdAt})
+        and ${table.createdAt} = ${table.connectionCreatedAt}`
+    ),
+    index("inbox_v2_source_onboarding_results_time_idx").on(
+      table.tenantId,
+      table.createdAt,
+      table.id
+    ),
+    index("inbox_v2_source_onboarding_results_lineage_idx").on(
+      table.registryId,
+      table.registryRevision,
+      table.dataClassId,
+      table.storageRootId,
+      table.purposeId
+    )
+  ]
+);
+
 /** Exact current authority. A head can only project one immutable transition. */
 export const inboxV2SourceRegistryHeads = pgTable(
   "inbox_v2_source_registry_heads",
@@ -968,38 +1220,55 @@ export const inboxV2SourceRegistryHeads = pgTable(
   ]
 );
 
-const lifecycleReferenceColumns = () => ({
-  copySlot: inboxV2SourceRegistryCopySlot("copy_slot").notNull(),
-  registryId: text("registry_id").notNull(),
-  registryCompositionHash: text("registry_composition_hash").notNull(),
-  registryRevision: bigint("registry_revision", { mode: "bigint" }).notNull(),
-  dataClassId: text("data_class_id").notNull(),
-  storageRootId: text("storage_root_id").notNull(),
-  purposeId: text("purpose_id").notNull(),
-  canonicalAnchorId: text("canonical_anchor_id").notNull(),
-  lineageRevision: bigint("lineage_revision", { mode: "bigint" }).notNull(),
-  effectivePolicyId: text("effective_policy_id").notNull(),
-  effectivePolicyVersion: bigint("effective_policy_version", {
-    mode: "bigint"
-  }).notNull(),
-  effectiveRuleId: text("effective_rule_id").notNull(),
-  effectiveRuleRevision: bigint("effective_rule_revision", {
-    mode: "bigint"
-  }).notNull(),
-  policyActivationId: text("policy_activation_id").notNull(),
-  policyActivationRevision: bigint("policy_activation_revision", {
-    mode: "bigint"
-  }).notNull(),
-  policyActivationHeadRevision: bigint("policy_activation_head_revision", {
-    mode: "bigint"
-  }).notNull(),
-  legalHoldSetRevision: bigint("legal_hold_set_revision", {
-    mode: "bigint"
-  }).notNull(),
-  restrictionSetRevision: bigint("restriction_set_revision", {
-    mode: "bigint"
-  }).notNull()
-});
+function lifecycleReferenceColumns() {
+  return {
+    copySlot: inboxV2SourceRegistryCopySlot("copy_slot").notNull(),
+    ...lifecycleReferenceAuthorityColumns()
+  };
+}
+
+function retainedResultLifecycleReferenceColumns() {
+  return {
+    copySlot: text("copy_slot").notNull(),
+    ...lifecycleReferenceAuthorityColumns()
+  };
+}
+
+function lifecycleReferenceAuthorityColumns() {
+  return {
+    registryId: text("registry_id").notNull(),
+    registryCompositionHash: text("registry_composition_hash").notNull(),
+    registryRevision: bigint("registry_revision", {
+      mode: "bigint"
+    }).notNull(),
+    dataClassId: text("data_class_id").notNull(),
+    storageRootId: text("storage_root_id").notNull(),
+    purposeId: text("purpose_id").notNull(),
+    canonicalAnchorId: text("canonical_anchor_id").notNull(),
+    lineageRevision: bigint("lineage_revision", { mode: "bigint" }).notNull(),
+    effectivePolicyId: text("effective_policy_id").notNull(),
+    effectivePolicyVersion: bigint("effective_policy_version", {
+      mode: "bigint"
+    }).notNull(),
+    effectiveRuleId: text("effective_rule_id").notNull(),
+    effectiveRuleRevision: bigint("effective_rule_revision", {
+      mode: "bigint"
+    }).notNull(),
+    policyActivationId: text("policy_activation_id").notNull(),
+    policyActivationRevision: bigint("policy_activation_revision", {
+      mode: "bigint"
+    }).notNull(),
+    policyActivationHeadRevision: bigint("policy_activation_head_revision", {
+      mode: "bigint"
+    }).notNull(),
+    legalHoldSetRevision: bigint("legal_hold_set_revision", {
+      mode: "bigint"
+    }).notNull(),
+    restrictionSetRevision: bigint("restriction_set_revision", {
+      mode: "bigint"
+    }).notNull()
+  };
+}
 
 /** Typed envelope pointer only; provider JSON/content is stored behind the classified ref. */
 export const inboxV2SourceRegistryArtifactRefs = pgTable(

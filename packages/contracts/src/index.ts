@@ -455,6 +455,7 @@ export type PlatformErrorCode =
   | "auth.invalid_credentials"
   | "auth.email_not_verified"
   | "auth.rate_limited"
+  | "command.idempotency_conflict"
   | "entitlement.missing"
   | "license.inactive"
   | "permission.denied"
@@ -471,6 +472,7 @@ export type Retryability = "retryable" | "not_retryable" | "unknown";
 
 export type PlatformErrorCategory =
   | "auth"
+  | "command"
   | "entitlement"
   | "license"
   | "permission"
@@ -515,6 +517,14 @@ export const platformErrorCatalog = {
     retryability: "not_retryable",
     severity: "warn",
     messageKey: "errors.auth.rateLimited"
+  },
+  "command.idempotency_conflict": {
+    code: "command.idempotency_conflict",
+    category: "command",
+    httpStatus: 409,
+    retryability: "not_retryable",
+    severity: "warn",
+    messageKey: "errors.command.idempotencyConflict"
   },
   "entitlement.missing": {
     code: "entitlement.missing",

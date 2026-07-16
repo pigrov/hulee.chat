@@ -1,9 +1,14 @@
 import {
+  INBOX_V2_SOURCE_ONBOARDING_RESULT_SCHEMA_ID,
+  INBOX_V2_SOURCE_ONBOARDING_RESULT_SCHEMA_VERSION,
+  calculateInboxV2CanonicalSha256,
   defineInboxV2DataLifecycleRegistry,
   defineInboxV2SourceAdapterDeclaration,
   defineInboxV2SourceConnectionRegistryState,
   defineInboxV2SourceRegistryLifecycleBinding,
   defineInboxV2SourceRegistryTransition,
+  inboxV2PayloadReferenceSchema,
+  type EmployeeId,
   type InboxV2SourceRegistryArtifactReference,
   type InboxV2SourceRegistryRelatedAuthorityReference,
   type InboxV2SourceRegistrySecretReference,
@@ -21,6 +26,7 @@ export function createInboxV2SourceRegistryOnboardingFixture(input: {
   suffix: string;
   registryId?: string;
   includeArtifact?: boolean;
+  employeeId?: EmployeeId;
 }) {
   const registry = lifecycleRegistry();
   const registryReference = {
@@ -32,16 +38,21 @@ export function createInboxV2SourceRegistryOnboardingFixture(input: {
     "source_catalog_registration",
     "source_module_registration",
     "source_connection_registry",
+    "source_onboarding_result_snapshot",
     "credential_binding",
     "source_registry_artifact",
     "source_ingress_route"
   ] as const;
   const bindings = slots.map((copySlot) => {
     const secret = copySlot === "credential_binding";
-    const dataUse = registry.dataUses.find((candidate) =>
-      String(candidate.dataClassId).includes(
-        secret ? "auth_credential" : "source_account_connector"
-      )
+    const dataUse = registry.dataUses.find(
+      (candidate) =>
+        String(candidate.dataClassId).includes(
+          secret ? "auth_credential" : "source_account_connector"
+        ) &&
+        (!secret
+          ? String(candidate.storageRootId) === "core:source-registry-sql"
+          : true)
     )!;
     const dataClass = registry.dataClasses.find(
       (candidate) => String(candidate.id) === String(dataUse.dataClassId)
@@ -91,12 +102,18 @@ export function createInboxV2SourceRegistryOnboardingFixture(input: {
     const binding = lifecycleBinding.payload.bindings.find(
       (candidate) => candidate.copySlot === copySlot
     )!;
+    const purposeId =
+      copySlot === "source_onboarding_result_snapshot"
+        ? binding.processingPurposes.find(
+            ({ id }) => String(id) === "core:source_replay_and_diagnostics"
+          )!.id
+        : binding.processingPurposes[0]!.id;
     return {
       registry: lifecycleBinding.payload.registry,
       copySlot,
       dataClassId: binding.dataClass.id,
       storageRootId: binding.storageRoot.id,
-      purposeId: binding.processingPurposes[0]!.id,
+      purposeId,
       lineageRevision: binding.lineageRevision
     };
   };
@@ -224,10 +241,21 @@ export function createInboxV2SourceRegistryOnboardingFixture(input: {
         artifacts: input.includeArtifact ? [artifact] : [],
         credentialBindings: [secretBinding],
         relatedAuthorities: [route],
-        createdBy: {
-          kind: "trusted_service",
-          trustedServiceId: "core:source-runtime"
-        },
+        createdBy:
+          input.employeeId === undefined
+            ? {
+                kind: "trusted_service",
+                trustedServiceId: "core:source-runtime"
+              }
+            : {
+                kind: "employee",
+                employee: {
+                  tenantId: input.tenantId,
+                  kind: "employee",
+                  id: input.employeeId
+                },
+                authorizationEpoch: `authorization:source-onboarding-${input.suffix}`
+              },
         createdAt: sourceRegistryFixtureOccurredAt,
         updatedAt: sourceRegistryFixtureOccurredAt
       }
@@ -266,43 +294,102 @@ export function createInboxV2SourceRegistryOnboardingFixture(input: {
       }
     }
   });
+  const compatibilityConnection = {
+    id: connectionId,
+    tenantId: input.tenantId,
+    sourceType: "messenger" as const,
+    sourceName: "synthetic",
+    displayName: "Synthetic",
+    status: "onboarding" as const,
+    authType: "webhook_secret" as const,
+    createdByEmployeeId: input.employeeId ?? null,
+    updatedAt: new Date(sourceRegistryFixtureOccurredAt)
+  };
+  const resultSnapshotId = `source-onboarding-result:${createHash("sha256")
+    .update(`${input.tenantId}\u001f${input.suffix}`, "utf8")
+    .digest("hex")}`;
+  const auditTargetRef = internalReference(
+    `${input.tenantId}:${input.suffix}:source-audit`
+  );
+  const tenantFacetRef = internalReference(
+    `${input.tenantId}:${input.suffix}:tenant-facet`
+  );
+  const grantSourceMappings = [
+    {
+      internalReference: internalReference(
+        `${input.tenantId}:${input.suffix}:grant-source`
+      ),
+      authorizationDecisionId: `authorization-decision:${createHash("sha256")
+        .update(`${input.tenantId}\u001f${input.suffix}`, "utf8")
+        .digest("hex")}`
+    }
+  ] as const;
+  const resultReference = inboxV2PayloadReferenceSchema.parse({
+    tenantId: input.tenantId,
+    recordId: resultSnapshotId,
+    schemaId: INBOX_V2_SOURCE_ONBOARDING_RESULT_SCHEMA_ID,
+    schemaVersion: INBOX_V2_SOURCE_ONBOARDING_RESULT_SCHEMA_VERSION,
+    digest: calculateInboxV2CanonicalSha256({
+      protocol: `${INBOX_V2_SOURCE_ONBOARDING_RESULT_SCHEMA_ID}@${INBOX_V2_SOURCE_ONBOARDING_RESULT_SCHEMA_VERSION}`,
+      connection: {
+        id: compatibilityConnection.id,
+        tenantId: compatibilityConnection.tenantId,
+        sourceType: compatibilityConnection.sourceType,
+        sourceName: compatibilityConnection.sourceName,
+        displayName: compatibilityConnection.displayName,
+        status: compatibilityConnection.status,
+        authType: compatibilityConnection.authType,
+        capabilities: {},
+        config: {},
+        diagnostics: {},
+        metadata: {},
+        createdByEmployeeId: compatibilityConnection.createdByEmployeeId,
+        createdAt: sourceRegistryFixtureOccurredAt,
+        updatedAt: sourceRegistryFixtureOccurredAt
+      }
+    })
+  });
+  const onboarding = {
+    declaration,
+    lifecycleBinding,
+    transition,
+    compatibilityConnection,
+    artifactWrites: input.includeArtifact
+      ? [{ artifact, material: artifactMaterial }]
+      : [],
+    secretWrites: [
+      {
+        binding: secretBinding,
+        material: secretMaterial,
+        materialDigest: prefixedDigest(secretMaterial)
+      }
+    ],
+    routeWrites: [
+      {
+        route,
+        material: routeMaterial,
+        materialDigest: prefixedDigest(routeMaterial)
+      }
+    ]
+  };
   return {
     registry,
     connectionId,
     routeMaterial,
     secretMaterial,
-    input: {
-      declaration,
-      lifecycleBinding,
-      transition,
-      compatibilityConnection: {
-        id: connectionId,
-        tenantId: input.tenantId,
-        sourceType: "messenger" as const,
-        sourceName: "synthetic",
-        displayName: "Synthetic",
-        status: "onboarding" as const,
-        authType: "webhook_secret" as const,
-        createdByEmployeeId: null,
-        updatedAt: new Date(sourceRegistryFixtureOccurredAt)
-      },
-      artifactWrites: input.includeArtifact
-        ? [{ artifact, material: artifactMaterial }]
-        : [],
-      secretWrites: [
-        {
-          binding: secretBinding,
-          material: secretMaterial,
-          materialDigest: prefixedDigest(secretMaterial)
-        }
-      ],
-      routeWrites: [
-        {
-          route,
-          material: routeMaterial,
-          materialDigest: prefixedDigest(routeMaterial)
-        }
-      ]
+    input: onboarding,
+    authorizedInput: {
+      onboarding,
+      resultSnapshot: {
+        resultReference,
+        streamCommitId: `source-onboarding-commit:${createHash("sha256")
+          .update(`${input.tenantId}\u001f${input.suffix}:stream`, "utf8")
+          .digest("hex")}`,
+        lifecycle: locator("source_onboarding_result_snapshot"),
+        auditTargetRef,
+        tenantFacetRef,
+        grantSourceMappings
+      }
     }
   };
 }
@@ -408,7 +495,10 @@ function lifecycleRegistry() {
             {
               dataClassId: "core:source_account_connector_metadata",
               storageRootId: "core:source-registry-sql",
-              purposeIds: ["core:communication_delivery"],
+              purposeIds: [
+                "core:communication_delivery",
+                "core:source_replay_and_diagnostics"
+              ],
               operations: ["persist", "export", "delete", "verify_absence"],
               canonicalAnchorId: "core:disconnect_or_account_termination",
               lifecycleHandlerId: "core:source-registry-lifecycle",
@@ -442,4 +532,10 @@ function lifecycleRegistry() {
 
 function prefixedDigest(material: Uint8Array): `sha256:${string}` {
   return `sha256:${createHash("sha256").update(material).digest("hex")}`;
+}
+
+function internalReference(value: string): `internal-ref:${string}` {
+  return `internal-ref:${createHash("sha256")
+    .update(value, "utf8")
+    .digest("hex")}`;
 }

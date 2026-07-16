@@ -56,6 +56,7 @@ export const INBOX_V2_CORE_DOMAIN_EVENT_TYPE_IDS = [
   "core:timeline.changed",
   "core:message.changed",
   "core:staff-note.changed",
+  "core:source-connection.changed",
   "core:source-binding.changed",
   "core:authorization.changed",
   "core:content.invalidated"

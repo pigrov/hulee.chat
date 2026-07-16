@@ -2,6 +2,12 @@ import {
   INBOX_V2_CATALOG_REGISTRATION_SCHEMA_ID,
   INBOX_V2_INITIAL_SCHEMA_VERSION,
   INBOX_V2_SOURCE_ADAPTER_DECLARATION_SCHEMA_ID,
+  INBOX_V2_SOURCE_ONBOARDING_RESULT_SCHEMA_ID,
+  INBOX_V2_SOURCE_ONBOARDING_RESULT_SCHEMA_VERSION,
+  assertInboxV2SourceRegistryLifecycleLocator,
+  calculateInboxV2CanonicalSha256,
+  canonicalizeInboxV2Json,
+  inboxV2PayloadReferenceSchema,
   isInboxV2SourceAdapterDeclaration,
   isInboxV2SourceAdapterDeclarationLifecycleBinding,
   isInboxV2SourceRegistryLifecycleBinding,
@@ -13,12 +19,18 @@ import {
   type InboxV2SourceRegistryRelatedAuthorityReference,
   type InboxV2SourceRegistrySecretReference,
   type InboxV2SourceRegistryTransition,
+  type InboxV2PayloadReference,
+  type SourceConnectionId,
   type TenantId
 } from "@hulee/contracts";
 import { createHash } from "node:crypto";
 import { sql, type SQL } from "drizzle-orm";
 
 import type { HuleeDatabase } from "../client";
+import {
+  assertInboxV2AuthorizedCommandMutationContext,
+  type InboxV2AuthorizedCommandMutationContext
+} from "./sql-inbox-v2-authorization-repository";
 import { InboxV2PersistenceInvariantError } from "./sql-inbox-v2-conversation-repository";
 import type {
   RawSqlExecutor,
@@ -67,10 +79,10 @@ export type InboxV2SourceRegistryClassifiedPayloadWrite = Readonly<{
 }>;
 
 export type InboxV2SourceRegistryClassifiedPayloadWriter = Readonly<{
-  write(
-    transaction: RawSqlExecutor,
+  /** Returns SQL only; the repository executes every statement itself. */
+  buildWriteSql(
     input: InboxV2SourceRegistryClassifiedPayloadWrite
-  ): Promise<void>;
+  ): SQL | readonly SQL[];
 }>;
 
 export type SqlInboxV2SourceRegistryRepositoryOptions = Readonly<{
@@ -102,6 +114,21 @@ export type CommitInboxV2SourceConnectionOnboardingInput = Readonly<{
   routeWrites: readonly InboxV2SourceRegistryEphemeralRouteWrite[];
 }>;
 
+export type PersistInboxV2AuthorizedSourceConnectionOnboardingInput = Readonly<{
+  onboarding: CommitInboxV2SourceConnectionOnboardingInput;
+  resultSnapshot: Readonly<{
+    resultReference: InboxV2PayloadReference;
+    streamCommitId: string;
+    lifecycle: InboxV2SourceRegistryLifecycleLocator;
+    auditTargetRef: string;
+    tenantFacetRef: string;
+    grantSourceMappings: readonly Readonly<{
+      internalReference: string;
+      authorizationDecisionId: string;
+    }>[];
+  }>;
+}>;
+
 export type InboxV2SourceRegistryIngressResolution = Readonly<{
   tenantId: string;
   sourceConnectionId: string;
@@ -116,6 +143,35 @@ export type InboxV2SourceRegistryRepository = Readonly<{
   commitSourceConnectionOnboarding(
     input: CommitInboxV2SourceConnectionOnboardingInput
   ): Promise<SourceConnectionRecord>;
+  /**
+   * DB-only callback for the generic authorized-command coordinator. The
+   * supplied executor already belongs to the coordinator-owned transaction;
+   * this method never opens, commits or retries a transaction itself.
+   */
+  persistSourceConnectionOnboarding(
+    context: InboxV2AuthorizedCommandMutationContext,
+    input: PersistInboxV2AuthorizedSourceConnectionOnboardingInput
+  ): Promise<SourceConnectionRecord>;
+  findCommittedSourceConnection(input: {
+    tenantId: TenantId;
+    sourceConnectionId: SourceConnectionId;
+  }): Promise<SourceConnectionRecord | null>;
+  loadSourceOnboardingResultSnapshot(
+    context: InboxV2AuthorizedCommandMutationContext,
+    input: {
+      resultReference: InboxV2PayloadReference;
+    }
+  ): Promise<SourceConnectionRecord | null>;
+  resolveSourceOnboardingInternalReference(input: {
+    tenantId: TenantId;
+    internalReference: string;
+  }): Promise<Readonly<{
+    entityTypeId:
+      | "core:source-connection"
+      | "core:tenant"
+      | "core:authorization-decision";
+    entityId: string;
+  }> | null>;
   resolveIngressRoute(input: {
     material: Uint8Array;
   }): Promise<InboxV2SourceRegistryIngressResolution | null>;
@@ -166,6 +222,30 @@ type SourceConnectionRow = {
   updated_at: unknown;
 };
 
+type SourceOnboardingResultSnapshotRow = {
+  tenant_id: unknown;
+  id: unknown;
+  command_record_id: unknown;
+  mutation_id: unknown;
+  source_connection_id: unknown;
+  source_type: unknown;
+  source_name: unknown;
+  display_name: unknown;
+  status: unknown;
+  auth_type: unknown;
+  created_by_employee_id: unknown;
+  connection_created_at: unknown;
+  connection_updated_at: unknown;
+  result_digest_sha256: unknown;
+};
+
+type SourceOnboardingInternalReferenceRow = {
+  source_connection_id: unknown;
+  audit_target_ref: unknown;
+  tenant_facet_ref: unknown;
+  authorization_decision_id: unknown;
+};
+
 type IngressResolutionRow = {
   tenant_id: unknown;
   source_connection_id: unknown;
@@ -202,178 +282,329 @@ export function createSqlInboxV2SourceRegistryRepository(
   const transactionExecutor =
     executor as unknown as InboxV2SourceRegistryTransactionExecutor;
 
+  const persistNormalizedOnboarding = async (
+    transaction: RawSqlExecutor,
+    normalized: NormalizedOnboarding
+  ): Promise<SourceConnectionRecord> => {
+    const lifecycleAuthorities = new Map<string, LifecycleAuthority>();
+    const lifecycleFor = async (
+      locator: InboxV2SourceRegistryLifecycleLocator,
+      requiresExport: boolean
+    ): Promise<LifecycleAuthority> => {
+      const key = `${lifecycleKey(locator)}\u0000${requiresExport}`;
+      const cached = lifecycleAuthorities.get(key);
+      if (cached) return cached;
+      const resolved = await resolveLifecycleAuthority(transaction, {
+        tenantId: normalized.tenantId,
+        locator,
+        requiresExport
+      });
+      lifecycleAuthorities.set(key, resolved);
+      return resolved;
+    };
+
+    const authorityLifecycle = await lifecycleFor(
+      normalized.state.lifecycle,
+      true
+    );
+    const artifactLifecycles = await Promise.all(
+      normalized.state.artifacts.map((artifact) =>
+        lifecycleFor(artifact.lifecycle, artifact.kind !== "diagnostic")
+      )
+    );
+    const secretLifecycles = await Promise.all(
+      normalized.state.credentialBindings.map((binding) =>
+        lifecycleFor(binding.lifecycle, false)
+      )
+    );
+    const relatedLifecycles = await Promise.all(
+      normalized.state.relatedAuthorities.map((authority) =>
+        lifecycleFor(
+          authority.lifecycle,
+          authority.kind === "channel_connector" ||
+            authority.kind === "source_ingress_route"
+        )
+      )
+    );
+
+    const connectionResult = await transaction.execute<SourceConnectionRow>(
+      buildInsertCompatibilitySourceConnectionSql(
+        normalized.compatibilityConnection
+      )
+    );
+    const connectionRow = expectExactlyOneRow(
+      connectionResult,
+      "SourceConnection compatibility insert"
+    );
+
+    for (const secret of normalized.secrets) {
+      await transaction.execute(
+        buildInsertTenantSecretSql({
+          tenantId: normalized.tenantId,
+          secretRef: secret.secretRef,
+          encryptedValue: secret.encryptedValue,
+          encryptionKeyRef: cipher.keyRef,
+          occurredAt: normalized.occurredAt
+        })
+      );
+    }
+
+    await transaction.execute(
+      buildInsertSourceRegistryTransitionSql({
+        normalized,
+        lifecycle: authorityLifecycle
+      })
+    );
+
+    for (const [index, artifactWrite] of normalized.artifacts.entries()) {
+      const writerMaterial = Uint8Array.from(artifactWrite.material);
+      try {
+        const built = options.classifiedPayloadWriter!.buildWriteSql({
+          tenantId: normalized.tenantId,
+          authorityId: normalized.authorityId,
+          authorityRevision: normalized.resultingRevision.toString(),
+          transitionId: normalized.transition.payload.transitionId,
+          artifact: artifactWrite.artifact,
+          material: writerMaterial,
+          materialDigest: artifactWrite.materialDigest,
+          occurredAt: normalized.occurredAt
+        });
+        for (const statement of Array.isArray(built) ? built : [built]) {
+          await transaction.execute(statement);
+        }
+      } finally {
+        writerMaterial.fill(0);
+      }
+      await transaction.execute(
+        buildInsertSourceRegistryArtifactSql({
+          tenantId: normalized.tenantId,
+          authorityId: normalized.authorityId,
+          authorityRevision: normalized.resultingRevision,
+          transitionId: normalized.transition.payload.transitionId,
+          artifact: artifactWrite.artifact,
+          lifecycle: artifactLifecycles[index]!,
+          occurredAt: normalized.occurredAt
+        })
+      );
+    }
+
+    for (const [index, secret] of normalized.secrets.entries()) {
+      await transaction.execute(
+        buildInsertSourceRegistrySecretSql({
+          tenantId: normalized.tenantId,
+          authorityId: normalized.authorityId,
+          authorityRevision: normalized.resultingRevision,
+          transitionId: normalized.transition.payload.transitionId,
+          secret,
+          lifecycle: secretLifecycles[index]!,
+          occurredAt: normalized.occurredAt
+        })
+      );
+    }
+
+    for (const [index, routeWrite] of normalized.routes.entries()) {
+      await transaction.execute(
+        buildInsertSourceRegistryRouteSql({
+          tenantId: normalized.tenantId,
+          parentAuthorityId: normalized.authorityId,
+          parentAuthorityRevision: normalized.resultingRevision,
+          parentTransitionId: normalized.transition.payload.transitionId,
+          routeWrite,
+          adapterHandlerId: normalized.adapterHandlerId,
+          lifecycle:
+            relatedLifecycles[
+              normalized.state.relatedAuthorities.indexOf(routeWrite.route)
+            ] ?? relatedLifecycles[index]!,
+          occurredAt: normalized.occurredAt
+        })
+      );
+    }
+
+    for (const [
+      index,
+      authority
+    ] of normalized.state.relatedAuthorities.entries()) {
+      await transaction.execute(
+        buildInsertSourceRegistryRelatedAuthoritySql({
+          tenantId: normalized.tenantId,
+          parentAuthorityId: normalized.authorityId,
+          parentAuthorityRevision: normalized.resultingRevision,
+          parentTransitionId: normalized.transition.payload.transitionId,
+          authority,
+          lifecycle: relatedLifecycles[index]!,
+          occurredAt: normalized.occurredAt
+        })
+      );
+    }
+
+    await transaction.execute(
+      buildInsertSourceRegistryHeadSql({
+        normalized,
+        lifecycle: authorityLifecycle
+      })
+    );
+
+    return mapSourceConnectionRow(connectionRow);
+  };
+
   return {
     async commitSourceConnectionOnboarding(input) {
       const normalized = normalizeOnboardingInput(
         input,
         cipher,
-        options.classifiedPayloadWriter
+        options.classifiedPayloadWriter,
+        "direct_commit"
       );
       try {
-        return await transactionExecutor.transaction(async (transaction) => {
-          const lifecycleAuthorities = new Map<string, LifecycleAuthority>();
-          const lifecycleFor = async (
-            locator: InboxV2SourceRegistryLifecycleLocator,
-            requiresExport: boolean
-          ): Promise<LifecycleAuthority> => {
-            const key = `${lifecycleKey(locator)}\u0000${requiresExport}`;
-            const cached = lifecycleAuthorities.get(key);
-            if (cached) return cached;
-            const resolved = await resolveLifecycleAuthority(transaction, {
-              tenantId: normalized.tenantId,
-              locator,
-              requiresExport
-            });
-            lifecycleAuthorities.set(key, resolved);
-            return resolved;
-          };
-
-          const authorityLifecycle = await lifecycleFor(
-            normalized.state.lifecycle,
-            true
-          );
-          const artifactLifecycles = await Promise.all(
-            normalized.state.artifacts.map((artifact) =>
-              lifecycleFor(artifact.lifecycle, artifact.kind !== "diagnostic")
-            )
-          );
-          const secretLifecycles = await Promise.all(
-            normalized.state.credentialBindings.map((binding) =>
-              lifecycleFor(binding.lifecycle, false)
-            )
-          );
-          const relatedLifecycles = await Promise.all(
-            normalized.state.relatedAuthorities.map((authority) =>
-              lifecycleFor(
-                authority.lifecycle,
-                authority.kind === "channel_connector" ||
-                  authority.kind === "source_ingress_route"
-              )
-            )
-          );
-
-          const connectionResult =
-            await transaction.execute<SourceConnectionRow>(
-              buildInsertCompatibilitySourceConnectionSql(
-                normalized.compatibilityConnection
-              )
-            );
-          const connectionRow = expectExactlyOneRow(
-            connectionResult,
-            "SourceConnection compatibility insert"
-          );
-
-          for (const secret of normalized.secrets) {
-            await transaction.execute(
-              buildInsertTenantSecretSql({
-                tenantId: normalized.tenantId,
-                secretRef: secret.secretRef,
-                encryptedValue: secret.encryptedValue,
-                encryptionKeyRef: cipher.keyRef,
-                occurredAt: normalized.occurredAt
-              })
-            );
-          }
-
-          await transaction.execute(
-            buildInsertSourceRegistryTransitionSql({
-              normalized,
-              lifecycle: authorityLifecycle
-            })
-          );
-
-          for (const [index, artifactWrite] of normalized.artifacts.entries()) {
-            const writerMaterial = Uint8Array.from(artifactWrite.material);
-            try {
-              await options.classifiedPayloadWriter!.write(transaction, {
-                tenantId: normalized.tenantId,
-                authorityId: normalized.authorityId,
-                authorityRevision: normalized.resultingRevision.toString(),
-                transitionId: normalized.transition.payload.transitionId,
-                artifact: artifactWrite.artifact,
-                material: writerMaterial,
-                materialDigest: artifactWrite.materialDigest,
-                occurredAt: normalized.occurredAt
-              });
-            } finally {
-              writerMaterial.fill(0);
-            }
-            await transaction.execute(
-              buildInsertSourceRegistryArtifactSql({
-                tenantId: normalized.tenantId,
-                authorityId: normalized.authorityId,
-                authorityRevision: normalized.resultingRevision,
-                transitionId: normalized.transition.payload.transitionId,
-                artifact: artifactWrite.artifact,
-                lifecycle: artifactLifecycles[index]!,
-                occurredAt: normalized.occurredAt
-              })
-            );
-          }
-
-          for (const [index, secret] of normalized.secrets.entries()) {
-            await transaction.execute(
-              buildInsertSourceRegistrySecretSql({
-                tenantId: normalized.tenantId,
-                authorityId: normalized.authorityId,
-                authorityRevision: normalized.resultingRevision,
-                transitionId: normalized.transition.payload.transitionId,
-                secret,
-                lifecycle: secretLifecycles[index]!,
-                occurredAt: normalized.occurredAt
-              })
-            );
-          }
-
-          for (const [index, routeWrite] of normalized.routes.entries()) {
-            await transaction.execute(
-              buildInsertSourceRegistryRouteSql({
-                tenantId: normalized.tenantId,
-                parentAuthorityId: normalized.authorityId,
-                parentAuthorityRevision: normalized.resultingRevision,
-                parentTransitionId: normalized.transition.payload.transitionId,
-                routeWrite,
-                adapterHandlerId: normalized.adapterHandlerId,
-                lifecycle:
-                  relatedLifecycles[
-                    normalized.state.relatedAuthorities.indexOf(
-                      routeWrite.route
-                    )
-                  ] ?? relatedLifecycles[index]!,
-                occurredAt: normalized.occurredAt
-              })
-            );
-          }
-
-          for (const [
-            index,
-            authority
-          ] of normalized.state.relatedAuthorities.entries()) {
-            await transaction.execute(
-              buildInsertSourceRegistryRelatedAuthoritySql({
-                tenantId: normalized.tenantId,
-                parentAuthorityId: normalized.authorityId,
-                parentAuthorityRevision: normalized.resultingRevision,
-                parentTransitionId: normalized.transition.payload.transitionId,
-                authority,
-                lifecycle: relatedLifecycles[index]!,
-                occurredAt: normalized.occurredAt
-              })
-            );
-          }
-
-          await transaction.execute(
-            buildInsertSourceRegistryHeadSql({
-              normalized,
-              lifecycle: authorityLifecycle
-            })
-          );
-
-          return mapSourceConnectionRow(connectionRow);
-        }, SOURCE_REGISTRY_TRANSACTION_CONFIG);
+        return await transactionExecutor.transaction(
+          (transaction) => persistNormalizedOnboarding(transaction, normalized),
+          SOURCE_REGISTRY_TRANSACTION_CONFIG
+        );
       } finally {
         zeroNormalizedTransientMaterials(normalized);
       }
+    },
+
+    async persistSourceConnectionOnboarding(context, input) {
+      assertInboxV2AuthorizedCommandMutationContext(context);
+      assertAuthorizedSourceOnboardingContext(context, input);
+      const normalized = normalizeOnboardingInput(
+        input.onboarding,
+        cipher,
+        options.classifiedPayloadWriter,
+        "coordinated"
+      );
+      try {
+        const resultLifecycleLocator =
+          assertInboxV2SourceRegistryLifecycleLocator({
+            binding: input.onboarding.lifecycleBinding,
+            locator: input.resultSnapshot.lifecycle
+          });
+        if (
+          resultLifecycleLocator.copySlot !==
+            "source_onboarding_result_snapshot" ||
+          resultLifecycleLocator.dataClassId !==
+            "core:source_account_connector_metadata" ||
+          resultLifecycleLocator.storageRootId !== "core:source-registry-sql" ||
+          resultLifecycleLocator.purposeId !==
+            "core:source_replay_and_diagnostics"
+        ) {
+          throw invariantError(
+            "Source onboarding result snapshot requires its retained production lifecycle copy."
+          );
+        }
+        const resultLifecycle = await resolveLifecycleAuthority(
+          context.executor,
+          {
+            tenantId: context.tenantId,
+            locator: resultLifecycleLocator,
+            requiresExport: true
+          }
+        );
+        const record = await persistNormalizedOnboarding(
+          context.executor,
+          normalized
+        );
+        await expectExactlyOneWrite(
+          context.executor,
+          buildInsertSourceOnboardingResultSnapshotSql({
+            context,
+            input,
+            record,
+            lifecycle: resultLifecycle
+          }),
+          "Source onboarding result snapshot"
+        );
+        return record;
+      } finally {
+        zeroNormalizedTransientMaterials(normalized);
+      }
+    },
+
+    async findCommittedSourceConnection(input) {
+      const result = await transactionExecutor.execute<SourceConnectionRow>(
+        buildFindCommittedSourceConnectionSql(input)
+      );
+      const row = atMostOneRow(result, "Committed SourceConnection lookup");
+      return row === null ? null : mapSourceConnectionRow(row);
+    },
+
+    async loadSourceOnboardingResultSnapshot(context, input) {
+      assertInboxV2AuthorizedCommandMutationContext(context);
+      if (
+        context.profile !== "domain" ||
+        context.commandTypeId !== "core:source-connection.create" ||
+        context.revisionEffects.length !== 0
+      ) {
+        throw invariantError(
+          "Source onboarding replay requires an authorized domain-command context."
+        );
+      }
+      const reference = inboxV2PayloadReferenceSchema.parse(
+        input.resultReference
+      );
+      if (
+        reference.tenantId !== context.tenantId ||
+        reference.schemaId !== INBOX_V2_SOURCE_ONBOARDING_RESULT_SCHEMA_ID ||
+        reference.schemaVersion !==
+          INBOX_V2_SOURCE_ONBOARDING_RESULT_SCHEMA_VERSION
+      ) {
+        return null;
+      }
+      const result =
+        await context.executor.execute<SourceOnboardingResultSnapshotRow>(
+          buildFindSourceOnboardingResultSnapshotSql({
+            tenantId: context.tenantId as TenantId,
+            commandRecordId: context.commandId,
+            mutationId: context.mutationId,
+            resultReference: reference
+          })
+        );
+      const row = atMostOneRow(result, "Source onboarding result replay");
+      if (row === null) return null;
+      const record = mapSourceOnboardingResultSnapshotRow(row);
+      if (
+        calculateSourceOnboardingResultDigest(record) !== reference.digest ||
+        readText(row.result_digest_sha256, "result_digest_sha256") !==
+          reference.digest
+      ) {
+        throw invariantError(
+          "Source onboarding result snapshot digest does not match its reference."
+        );
+      }
+      return record;
+    },
+
+    async resolveSourceOnboardingInternalReference(input) {
+      const result =
+        await transactionExecutor.execute<SourceOnboardingInternalReferenceRow>(
+          buildResolveSourceOnboardingInternalReferenceSql(input)
+        );
+      const row = atMostOneRow(result, "Source onboarding internal reference");
+      if (row === null) return null;
+      const sourceConnectionId = readText(
+        row.source_connection_id,
+        "source_connection_id"
+      );
+      if (row.audit_target_ref === input.internalReference) {
+        return {
+          entityTypeId: "core:source-connection",
+          entityId: sourceConnectionId
+        };
+      }
+      if (row.tenant_facet_ref === input.internalReference) {
+        return { entityTypeId: "core:tenant", entityId: input.tenantId };
+      }
+      if (row.authorization_decision_id !== null) {
+        return {
+          entityTypeId: "core:authorization-decision",
+          entityId: readText(
+            row.authorization_decision_id,
+            "authorization_decision_id"
+          )
+        };
+      }
+      throw invariantError("Resolved source onboarding reference is invalid.");
     },
 
     async resolveIngressRoute(input) {
@@ -390,12 +621,105 @@ export function createSqlInboxV2SourceRegistryRepository(
 
 type NormalizedOnboarding = ReturnType<typeof normalizeOnboardingInput>;
 
+type SourceOnboardingPersistenceMode = "direct_commit" | "coordinated";
+
+function assertAuthorizedSourceOnboardingContext(
+  context: InboxV2AuthorizedCommandMutationContext,
+  input: PersistInboxV2AuthorizedSourceConnectionOnboardingInput
+): void {
+  const onboarding = input.onboarding;
+  const reference = inboxV2PayloadReferenceSchema.safeParse(
+    input.resultSnapshot.resultReference
+  );
+  const grantMappings = input.resultSnapshot.grantSourceMappings;
+  const grantRefs = grantMappings.map((mapping) => mapping.internalReference);
+  const grantDecisionIds = grantMappings.map(
+    (mapping) => mapping.authorizationDecisionId
+  );
+  if (
+    context.profile !== "domain" ||
+    context.commandTypeId !== "core:source-connection.create" ||
+    context.revisionEffects.length !== 0 ||
+    context.tenantId !== onboarding.compatibilityConnection.tenantId ||
+    context.tenantId !== onboarding.transition.payload.tenantId ||
+    !reference.success ||
+    reference.data.tenantId !== context.tenantId ||
+    reference.data.schemaId !== INBOX_V2_SOURCE_ONBOARDING_RESULT_SCHEMA_ID ||
+    reference.data.schemaVersion !==
+      INBOX_V2_SOURCE_ONBOARDING_RESULT_SCHEMA_VERSION ||
+    input.resultSnapshot.streamCommitId.trim().length === 0 ||
+    !/^internal-ref:[a-f0-9]{64}$/u.test(input.resultSnapshot.auditTargetRef) ||
+    !/^internal-ref:[a-f0-9]{64}$/u.test(input.resultSnapshot.tenantFacetRef) ||
+    input.resultSnapshot.auditTargetRef ===
+      input.resultSnapshot.tenantFacetRef ||
+    grantMappings.length === 0 ||
+    grantMappings.length > 64 ||
+    new Set(grantRefs).size !== grantRefs.length ||
+    new Set(grantDecisionIds).size !== grantDecisionIds.length ||
+    grantMappings.some(
+      (mapping) =>
+        !/^internal-ref:[a-f0-9]{64}$/u.test(mapping.internalReference) ||
+        mapping.internalReference === input.resultSnapshot.auditTargetRef ||
+        mapping.internalReference === input.resultSnapshot.tenantFacetRef ||
+        mapping.authorizationDecisionId.trim().length === 0
+    )
+  ) {
+    throw invariantError(
+      "Source onboarding persistence crossed its authorized command context."
+    );
+  }
+}
+
+function sourceOnboardingResultPayload(record: SourceConnectionRecord): object {
+  return {
+    connection: {
+      id: record.id,
+      tenantId: record.tenantId,
+      sourceType: record.sourceType,
+      sourceName: record.sourceName,
+      displayName: record.displayName,
+      status: record.status,
+      authType: record.authType,
+      capabilities: record.capabilities,
+      config: record.config,
+      diagnostics: record.diagnostics,
+      metadata: record.metadata,
+      createdByEmployeeId: record.createdByEmployeeId,
+      createdAt: record.createdAt.toISOString(),
+      updatedAt: record.updatedAt.toISOString()
+    }
+  };
+}
+
+function calculateSourceOnboardingResultDigest(
+  record: SourceConnectionRecord
+): string {
+  return calculateInboxV2CanonicalSha256(sourceOnboardingResult(record));
+}
+
+function sourceOnboardingResult(record: SourceConnectionRecord): object {
+  return {
+    protocol: `${INBOX_V2_SOURCE_ONBOARDING_RESULT_SCHEMA_ID}@${INBOX_V2_SOURCE_ONBOARDING_RESULT_SCHEMA_VERSION}`,
+    ...sourceOnboardingResultPayload(record)
+  };
+}
+
+async function expectExactlyOneWrite(
+  executor: RawSqlExecutor,
+  statement: SQL,
+  label: string
+): Promise<void> {
+  const result = await executor.execute<{ id: unknown }>(statement);
+  expectExactlyOneRow(result, label);
+}
+
 function normalizeOnboardingInput(
   input: CommitInboxV2SourceConnectionOnboardingInput,
   cipher: TenantSecretCipher,
   classifiedPayloadWriter:
     | InboxV2SourceRegistryClassifiedPayloadWriter
-    | undefined
+    | undefined,
+  persistenceMode: SourceOnboardingPersistenceMode
 ) {
   if (
     !isInboxV2SourceAdapterDeclaration(input.declaration) ||
@@ -441,7 +765,10 @@ function normalizeOnboardingInput(
       "Source onboarding declaration, lifecycle, and resulting state differ."
     );
   }
-  if (state.createdBy.kind === "employee") {
+  if (
+    persistenceMode === "direct_commit" &&
+    state.createdBy.kind === "employee"
+  ) {
     throw invariantError(
       "Employee source onboarding requires the generic authorized-command coordinator."
     );
@@ -452,7 +779,8 @@ function normalizeOnboardingInput(
   );
   const expectedCompatibilityAuthType =
     legacyAuthTypeForDeclaration(declaration);
-  const creatorEmployeeId = null;
+  const creatorEmployeeId =
+    state.createdBy.kind === "employee" ? state.createdBy.employee.id : null;
   if (
     compatibility.tenantId !== state.tenantId ||
     compatibility.id !== state.sourceConnection.id ||
@@ -867,6 +1195,155 @@ function buildInsertCompatibilitySourceConnectionSql(
     returning id, tenant_id, source_type, source_name, display_name, status,
               auth_type, capabilities, config, diagnostics, metadata,
               created_by_employee_id, created_at, updated_at
+  `;
+}
+
+function buildFindCommittedSourceConnectionSql(input: {
+  tenantId: TenantId;
+  sourceConnectionId: SourceConnectionId;
+}): SQL {
+  return sql`
+    select sc.id, sc.tenant_id, sc.source_type, sc.source_name,
+           sc.display_name, sc.status, sc.auth_type, sc.capabilities,
+           sc.config, sc.diagnostics, sc.metadata,
+           sc.created_by_employee_id, sc.created_at, sc.updated_at
+      from source_connections sc
+      join inbox_v2_source_registry_heads head
+        on head.tenant_id = sc.tenant_id
+       and head.authority_id = sc.id
+       and head.authority_kind = 'source_connection'
+     where sc.tenant_id = ${input.tenantId}
+       and sc.id = ${input.sourceConnectionId}
+     limit 2
+  `;
+}
+
+function buildInsertSourceOnboardingResultSnapshotSql(input: {
+  context: InboxV2AuthorizedCommandMutationContext;
+  input: PersistInboxV2AuthorizedSourceConnectionOnboardingInput;
+  record: SourceConnectionRecord;
+  lifecycle: LifecycleAuthority;
+}): SQL {
+  const { context, record } = input;
+  const onboarding = input.input.onboarding;
+  const snapshot = input.input.resultSnapshot;
+  const transition = onboarding.transition;
+  const state = transition.payload.resultingState;
+  const resultCanonicalJson = canonicalizeInboxV2Json(
+    sourceOnboardingResult(record)
+  );
+  const stateCanonicalJson = canonicalizeInboxV2Json(state);
+  const transitionCanonicalJson = canonicalizeInboxV2Json(transition);
+  const resultDigest = calculateSourceOnboardingResultDigest(record);
+  const stateDigest = calculateInboxV2CanonicalSha256(state);
+  const transitionDigest = calculateInboxV2CanonicalSha256(transition);
+  if (
+    snapshot.resultReference.recordId.trim().length === 0 ||
+    snapshot.resultReference.digest !== resultDigest ||
+    record.tenantId !== context.tenantId ||
+    record.id !== onboarding.compatibilityConnection.id ||
+    record.status !== "onboarding" ||
+    record.createdByEmployeeId === null ||
+    record.createdAt.toISOString() !== transition.payload.committedAt ||
+    record.updatedAt.toISOString() !== transition.payload.committedAt ||
+    !isEmptyPlainObject(record.capabilities) ||
+    !isEmptyPlainObject(record.config) ||
+    !isEmptyPlainObject(record.diagnostics) ||
+    !isEmptyPlainObject(record.metadata)
+  ) {
+    throw invariantError(
+      "Source onboarding result is not a safe immutable command snapshot."
+    );
+  }
+
+  return sql`
+    insert into inbox_v2_source_onboarding_result_snapshots (
+      tenant_id, id, command_record_id, client_mutation_id, mutation_id,
+      stream_commit_id, source_connection_id, source_transition_id,
+      source_registry_revision, source_type, source_name, display_name,
+      status, auth_type, created_by_employee_id, connection_created_at,
+      connection_updated_at, result_digest_sha256, result_canonical_json,
+      state_payload, state_digest_sha256, state_canonical_json,
+      transition_payload, transition_digest_sha256,
+      transition_canonical_json, audit_target_ref, tenant_facet_ref,
+      grant_source_mappings, ${lifecycleColumnNamesSql()}, created_at
+    ) values (
+      ${context.tenantId}, ${snapshot.resultReference.recordId},
+      ${context.commandId}, ${context.clientMutationId}, ${context.mutationId},
+      ${snapshot.streamCommitId}, ${record.id},
+      ${transition.payload.transitionId},
+      ${BigInt(transition.payload.cas.resultingRevision)}, ${record.sourceType},
+      ${record.sourceName}, ${record.displayName}, ${record.status},
+      ${record.authType}, ${record.createdByEmployeeId}, ${record.createdAt},
+      ${record.updatedAt}, ${resultDigest}, ${resultCanonicalJson},
+      ${JSON.stringify(state)}::jsonb, ${stateDigest}, ${stateCanonicalJson},
+      ${JSON.stringify(transition)}::jsonb, ${transitionDigest},
+      ${transitionCanonicalJson}, ${snapshot.auditTargetRef},
+      ${snapshot.tenantFacetRef},
+      ${JSON.stringify(snapshot.grantSourceMappings)}::jsonb,
+      ${lifecycleValuesSql(input.lifecycle)},
+      ${record.createdAt}
+    )
+    returning id
+  `;
+}
+
+function buildFindSourceOnboardingResultSnapshotSql(input: {
+  tenantId: TenantId;
+  resultReference: InboxV2PayloadReference;
+  commandRecordId: string;
+  mutationId: string;
+}): SQL {
+  return sql`
+    select result.tenant_id, result.id, result.command_record_id,
+           result.mutation_id, result.source_connection_id,
+           result.source_type, result.source_name, result.display_name,
+           result.status, result.auth_type, result.created_by_employee_id,
+           result.connection_created_at, result.connection_updated_at,
+           result.result_digest_sha256
+      from inbox_v2_source_onboarding_result_snapshots result
+      join inbox_v2_auth_command_records command
+        on command.tenant_id = result.tenant_id
+       and command.id = result.command_record_id
+       and command.mutation_id = result.mutation_id
+      join inbox_v2_tenant_stream_commits stream_commit
+        on stream_commit.tenant_id = result.tenant_id
+       and stream_commit.id = result.stream_commit_id
+       and stream_commit.mutation_id = result.mutation_id
+      join inbox_v2_auth_mutation_commits mutation_commit
+        on mutation_commit.tenant_id = result.tenant_id
+       and mutation_commit.mutation_id = result.mutation_id
+     where result.tenant_id = ${input.tenantId}
+       and result.id = ${input.resultReference.recordId}
+       and result.result_digest_sha256 = ${input.resultReference.digest}
+       and result.command_record_id = ${input.commandRecordId}
+       and result.mutation_id = ${input.mutationId}
+       and command.state = 'completed'
+       and command.command_type_id = 'core:source-connection.create'
+       and command.public_result_code = 'core:source-connection.created'
+       and command.result_reference =
+         ${JSON.stringify(input.resultReference)}::jsonb
+     limit 2
+  `;
+}
+
+function buildResolveSourceOnboardingInternalReferenceSql(input: {
+  tenantId: TenantId;
+  internalReference: string;
+}): SQL {
+  return sql`
+    select result.source_connection_id, result.audit_target_ref,
+           result.tenant_facet_ref,
+           grant_mapping->>'authorizationDecisionId' as authorization_decision_id
+      from inbox_v2_source_onboarding_result_snapshots result
+      left join lateral jsonb_array_elements(result.grant_source_mappings)
+        grant_mapping on
+          grant_mapping->>'internalReference' = ${input.internalReference}
+     where result.tenant_id = ${input.tenantId}
+       and (${input.internalReference} = result.audit_target_ref
+         or ${input.internalReference} = result.tenant_facet_ref
+         or grant_mapping is not null)
+     limit 2
   `;
 }
 
@@ -1363,6 +1840,36 @@ function mapSourceConnectionRow(
   };
 }
 
+function mapSourceOnboardingResultSnapshotRow(
+  row: SourceOnboardingResultSnapshotRow
+): SourceConnectionRecord {
+  return {
+    id: readText(
+      row.source_connection_id,
+      "source_connection_id"
+    ) as SourceConnectionRecord["id"],
+    tenantId: readText(
+      row.tenant_id,
+      "tenant_id"
+    ) as SourceConnectionRecord["tenantId"],
+    sourceType: readText(row.source_type, "source_type"),
+    sourceName: readText(row.source_name, "source_name"),
+    displayName: readText(row.display_name, "display_name"),
+    status: readText(row.status, "status"),
+    authType: readText(row.auth_type, "auth_type"),
+    capabilities: {},
+    config: {},
+    diagnostics: {},
+    metadata: {},
+    createdByEmployeeId: readText(
+      row.created_by_employee_id,
+      "created_by_employee_id"
+    ) as SourceConnectionRecord["createdByEmployeeId"],
+    createdAt: normalizeDate(row.connection_created_at),
+    updatedAt: normalizeDate(row.connection_updated_at)
+  };
+}
+
 function mapIngressResolutionRow(
   row: IngressResolutionRow
 ): InboxV2SourceRegistryIngressResolution {
@@ -1381,6 +1888,15 @@ function mapIngressResolutionRow(
     ).toString(),
     adapterHandlerId: readText(row.adapter_handler_id, "adapter_handler_id")
   };
+}
+
+function isEmptyPlainObject(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === 0
+  );
 }
 
 function normalizeDate(value: unknown): Date {

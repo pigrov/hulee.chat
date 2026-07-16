@@ -59,6 +59,33 @@ describe("SQL Inbox V2 source-registry repository", () => {
     );
   });
 
+  it("finds a tenant-scoped source connection only through its committed V2 head", async () => {
+    const fixture = createFixture();
+    const executor = createRecordingTransactionExecutor();
+    const repository = createSqlInboxV2SourceRegistryRepository(
+      executor,
+      recordingCipher([])
+    );
+
+    const record = await repository.findCommittedSourceConnection({
+      tenantId,
+      sourceConnectionId: fixture.connectionId
+    });
+
+    expect(record?.id).toBe(fixture.connectionId);
+    expect(record?.tenantId).toBe(tenantId);
+    expect(executor.transactionCalls).toBe(0);
+    expect(executor.attemptedSql).toHaveLength(1);
+    expect(executor.attemptedSql[0]).toContain(
+      "join inbox_v2_source_registry_heads"
+    );
+    expect(executor.attemptedSql[0]).toContain(
+      "head.authority_kind = 'source_connection'"
+    );
+    expect(executor.attemptedSql[0]).toContain(tenantId);
+    expect(executor.attemptedSql[0]).toContain(fixture.connectionId);
+  });
+
   it("rolls back the tenant secret when the authority head write fails", async () => {
     const fixture = createFixture();
     const executor = createRecordingTransactionExecutor({
@@ -128,11 +155,9 @@ describe("SQL Inbox V2 source-registry repository", () => {
       recordingCipher([]),
       {
         classifiedPayloadWriter: {
-          async write(transaction, input) {
+          buildWriteSql(input) {
             writerInputs.push(input);
-            await transaction.execute(
-              sql`select 1 as source_registry_classified_payload_write`
-            );
+            return sql`select 1 as source_registry_classified_payload_write`;
           }
         }
       }
@@ -183,11 +208,8 @@ describe("SQL Inbox V2 source-registry repository", () => {
       recordingCipher([]),
       {
         classifiedPayloadWriter: {
-          async write(transaction, input) {
+          buildWriteSql(input) {
             retainedWriterMaterial = input.material;
-            await transaction.execute(
-              sql`select 1 as source_registry_classified_payload_write`
-            );
             throw new Error("injected classified payload failure");
           }
         }
@@ -202,7 +224,7 @@ describe("SQL Inbox V2 source-registry repository", () => {
     expect(executor.committedSql).toEqual([]);
     expect(
       executor.attemptedSql.some((text) =>
-        text.includes("source_registry_classified_payload_write")
+        text.includes("insert into source_connections")
       )
     ).toBe(true);
     expect(
@@ -255,7 +277,9 @@ describe("SQL Inbox V2 source-registry repository", () => {
       recordingCipher([]),
       {
         classifiedPayloadWriter: {
-          async write() {}
+          buildWriteSql() {
+            return sql`select 1 as source_registry_classified_payload_write`;
+          }
         }
       }
     );
@@ -282,7 +306,7 @@ describe("SQL Inbox V2 source-registry repository", () => {
     expect(executor.transactionCalls).toBe(0);
   });
 
-  it("fails closed for an employee actor before transaction until the generic coordinator exists", async () => {
+  it("fails closed for a direct employee commit before transaction", async () => {
     const fixture = createFixture({ employeeActor: true });
     const executor = createRecordingTransactionExecutor();
     const cipherInputs: string[] = [];
@@ -297,6 +321,86 @@ describe("SQL Inbox V2 source-registry repository", () => {
     expect(executor.transactionCalls).toBe(0);
     expect(executor.attemptedSql).toEqual([]);
     expect(cipherInputs).toEqual([]);
+  });
+
+  it("rejects a structurally forged coordinator context before DB-only employee onboarding", async () => {
+    const fixture = createFixture({ employeeActor: true });
+    const executor = createRecordingTransactionExecutor();
+    const cipherInputs: string[] = [];
+    const repository = createSqlInboxV2SourceRegistryRepository(
+      executor,
+      recordingCipher(cipherInputs)
+    );
+
+    await expect(
+      repository.persistSourceConnectionOnboarding(
+        {
+          executor: executor.rawTransaction,
+          tenantId,
+          commandId: "command:forged-source-onboarding",
+          clientMutationId: "client-mutation:forged-source-onboarding",
+          commandTypeId: "core:source-connection.create",
+          mutationId: "source-onboarding-mutation:forged",
+          profile: "domain",
+          revisionEffects: []
+        } as never,
+        {
+          onboarding: fixture.input,
+          resultSnapshot: {
+            resultReference: {
+              tenantId,
+              recordId: "source-onboarding-result:forged",
+              schemaId: "core:inbox-v2.source-onboarding-result",
+              schemaVersion: "v1",
+              digest: prefixedDigest(new TextEncoder().encode("forged"))
+            },
+            streamCommitId: "source-onboarding-commit:forged",
+            auditTargetRef: `internal-ref:${"a".repeat(64)}`,
+            tenantFacetRef: `internal-ref:${"b".repeat(64)}`
+          }
+        } as never
+      )
+    ).rejects.toThrow(/live authorized-command context/iu);
+
+    expect(executor.transactionCalls).toBe(0);
+    expect(executor.committedSql).toEqual([]);
+    expect(executor.rawTransactionSql).toEqual([]);
+    expect(cipherInputs).toEqual([]);
+  });
+
+  it("resolves immutable onboarding references only inside the requested tenant", async () => {
+    const internalReference = `internal-ref:${"c".repeat(64)}`;
+    const executor = createRecordingTransactionExecutor({
+      sourceOnboardingInternalReferenceRow: {
+        source_connection_id: "source_connection:synthetic-primary",
+        audit_target_ref: internalReference,
+        tenant_facet_ref: `internal-ref:${"d".repeat(64)}`
+      }
+    });
+    const repository = createSqlInboxV2SourceRegistryRepository(
+      executor,
+      recordingCipher([])
+    );
+
+    await expect(
+      repository.resolveSourceOnboardingInternalReference({
+        tenantId,
+        internalReference
+      })
+    ).resolves.toEqual({
+      entityTypeId: "core:source-connection",
+      entityId: "source_connection:synthetic-primary"
+    });
+
+    expect(executor.attemptedSql).toHaveLength(1);
+    expect(executor.attemptedSql[0]).toContain(
+      "from inbox_v2_source_onboarding_result_snapshots"
+    );
+    expect(executor.attemptedSql[0]).toMatch(
+      /where result\.tenant_id = \$\d+/u
+    );
+    expect(executor.attemptedSql[0]).toContain(tenantId);
+    expect(executor.attemptedSql[0]).toContain(internalReference);
   });
 
   it.each([
@@ -350,16 +454,21 @@ function createFixture(
     "source_catalog_registration",
     "source_module_registration",
     "source_connection_registry",
+    "source_onboarding_result_snapshot",
     "credential_binding",
     "source_registry_artifact",
     "source_ingress_route"
   ] as const;
   const bindings = slots.map((copySlot) => {
     const secret = copySlot === "credential_binding";
-    const dataUse = registry.dataUses.find((candidate) =>
-      String(candidate.dataClassId).includes(
-        secret ? "auth_credential" : "source_account_connector"
-      )
+    const dataUse = registry.dataUses.find(
+      (candidate) =>
+        String(candidate.dataClassId).includes(
+          secret ? "auth_credential" : "source_account_connector"
+        ) &&
+        (!secret
+          ? String(candidate.storageRootId) === "core:source-registry-sql"
+          : true)
     )!;
     const dataClass = registry.dataClasses.find(
       (candidate) => String(candidate.id) === String(dataUse.dataClassId)
@@ -409,12 +518,18 @@ function createFixture(
     const binding = lifecycleBinding.payload.bindings.find(
       (candidate) => candidate.copySlot === copySlot
     )!;
+    const purposeId =
+      copySlot === "source_onboarding_result_snapshot"
+        ? binding.processingPurposes.find(
+            ({ id }) => String(id) === "core:source_replay_and_diagnostics"
+          )!.id
+        : binding.processingPurposes[0]!.id;
     return {
       registry: lifecycleBinding.payload.registry,
       copySlot,
       dataClassId: binding.dataClass.id,
       storageRootId: binding.storageRoot.id,
-      purposeId: binding.processingPurposes[0]!.id,
+      purposeId,
       lineageRevision: binding.lineageRevision
     };
   };
@@ -747,7 +862,10 @@ function lifecycleRegistry() {
             {
               dataClassId: "core:source_account_connector_metadata",
               storageRootId: "core:source-registry-sql",
-              purposeIds: ["core:communication_delivery"],
+              purposeIds: [
+                "core:communication_delivery",
+                "core:source_replay_and_diagnostics"
+              ],
               operations: ["persist", "export", "delete", "verify_absence"],
               canonicalAnchorId: "core:disconnect_or_account_termination",
               lifecycleHandlerId: "core:source-registry-lifecycle",
@@ -779,90 +897,109 @@ function lifecycleRegistry() {
   });
 }
 
-function createRecordingTransactionExecutor(input: { failOn?: string } = {}) {
+function createRecordingTransactionExecutor(
+  input: {
+    failOn?: string;
+    sourceOnboardingInternalReferenceRow?: Record<string, unknown>;
+  } = {}
+) {
   const committedSql: string[] = [];
   const attemptedSql: string[] = [];
+  const rawTransactionSql: string[] = [];
   let transactionCalls = 0;
+  const sourceConnectionRow = {
+    id: "source_connection:synthetic-primary",
+    tenant_id: tenantId,
+    source_type: "messenger",
+    source_name: "synthetic",
+    display_name: "Synthetic",
+    status: "onboarding",
+    auth_type: "webhook_secret",
+    capabilities: {},
+    config: {},
+    diagnostics: {},
+    metadata: {},
+    created_by_employee_id: null,
+    created_at: new Date(occurredAt),
+    updated_at: new Date(occurredAt)
+  };
+  const createRawExecutor = (pending: string[]): RawSqlExecutor => ({
+    async execute<Row extends Record<string, unknown>>(
+      query: Parameters<RawSqlExecutor["execute"]>[0]
+    ) {
+      const rendered = dialect.sqlToQuery(query);
+      const normalized = rendered.sql.toLowerCase();
+      const captured = `${rendered.sql}\n${JSON.stringify(
+        rendered.params,
+        (_key, value) => (typeof value === "bigint" ? value.toString() : value)
+      )}`;
+      attemptedSql.push(captured);
+      pending.push(captured);
+      if (input.failOn && normalized.includes(input.failOn)) {
+        throw new Error("injected transaction failure");
+      }
+      if (
+        normalized.includes("from inbox_v2_data_governance_registry_versions")
+      ) {
+        return {
+          rows: [
+            {
+              canonical_anchor_id: "core:disconnect_or_account_termination",
+              effective_policy_id: "policy:default",
+              effective_policy_version: "1",
+              effective_rule_id: "rule:source-registry",
+              effective_rule_revision: "1",
+              policy_activation_id: "activation:default",
+              policy_activation_revision: "1",
+              policy_activation_head_revision: "1",
+              legal_hold_set_revision: "0",
+              restriction_set_revision: "0"
+            } as unknown as Row
+          ]
+        };
+      }
+      if (normalized.includes("from source_connections sc")) {
+        return { rows: [sourceConnectionRow as unknown as Row] };
+      }
+      if (normalized.includes("insert into source_connections")) {
+        return { rows: [sourceConnectionRow as unknown as Row] };
+      }
+      if (
+        normalized.includes(
+          "from inbox_v2_source_onboarding_result_snapshots"
+        ) &&
+        input.sourceOnboardingInternalReferenceRow !== undefined
+      ) {
+        return {
+          rows: [input.sourceOnboardingInternalReferenceRow as Row]
+        };
+      }
+      return { rows: [] };
+    }
+  });
+  const rawTransaction = createRawExecutor(rawTransactionSql);
+  const readExecutor = createRawExecutor([]);
   const executor: InboxV2SourceRegistryTransactionExecutor & {
     readonly committedSql: string[];
     readonly attemptedSql: string[];
+    readonly rawTransaction: RawSqlExecutor;
+    readonly rawTransactionSql: string[];
     readonly transactionCalls: number;
   } = {
     committedSql,
     attemptedSql,
+    rawTransaction,
+    rawTransactionSql,
     get transactionCalls() {
       return transactionCalls;
     },
-    async execute() {
-      return { rows: [] };
+    async execute(query) {
+      return readExecutor.execute(query);
     },
     async transaction(work) {
       transactionCalls += 1;
       const pending: string[] = [];
-      const transaction: RawSqlExecutor = {
-        async execute<Row extends Record<string, unknown>>(
-          query: Parameters<RawSqlExecutor["execute"]>[0]
-        ) {
-          const rendered = dialect.sqlToQuery(query);
-          const normalized = rendered.sql.toLowerCase();
-          const captured = `${rendered.sql}\n${JSON.stringify(
-            rendered.params,
-            (_key, value) =>
-              typeof value === "bigint" ? value.toString() : value
-          )}`;
-          attemptedSql.push(captured);
-          pending.push(captured);
-          if (input.failOn && normalized.includes(input.failOn)) {
-            throw new Error("injected transaction failure");
-          }
-          if (
-            normalized.includes(
-              "from inbox_v2_data_governance_registry_versions"
-            )
-          ) {
-            return {
-              rows: [
-                {
-                  canonical_anchor_id: "core:disconnect_or_account_termination",
-                  effective_policy_id: "policy:default",
-                  effective_policy_version: "1",
-                  effective_rule_id: "rule:source-registry",
-                  effective_rule_revision: "1",
-                  policy_activation_id: "activation:default",
-                  policy_activation_revision: "1",
-                  policy_activation_head_revision: "1",
-                  legal_hold_set_revision: "0",
-                  restriction_set_revision: "0"
-                } as unknown as Row
-              ]
-            };
-          }
-          if (normalized.includes("insert into source_connections")) {
-            return {
-              rows: [
-                {
-                  id: "source_connection:synthetic-primary",
-                  tenant_id: tenantId,
-                  source_type: "messenger",
-                  source_name: "synthetic",
-                  display_name: "Synthetic",
-                  status: "onboarding",
-                  auth_type: "webhook_secret",
-                  capabilities: {},
-                  config: {},
-                  diagnostics: {},
-                  metadata: {},
-                  created_by_employee_id: null,
-                  created_at: new Date(occurredAt),
-                  updated_at: new Date(occurredAt)
-                } as unknown as Row
-              ]
-            };
-          }
-          return { rows: [] };
-        }
-      };
-      const result = await work(transaction);
+      const result = await work(createRawExecutor(pending));
       committedSql.push(...pending);
       return result;
     }

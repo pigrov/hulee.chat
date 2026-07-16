@@ -11,6 +11,7 @@ const platformErrorCodes: PlatformErrorCode[] = [
   "auth.invalid_credentials",
   "auth.email_not_verified",
   "auth.rate_limited",
+  "command.idempotency_conflict",
   "entitlement.missing",
   "license.inactive",
   "permission.denied",
@@ -41,6 +42,7 @@ describe("platform error catalog", () => {
   });
 
   it("detects known codes without accepting arbitrary strings", () => {
+    expect(isPlatformErrorCode("command.idempotency_conflict")).toBe(true);
     expect(isPlatformErrorCode("validation.failed")).toBe(true);
     expect(isPlatformErrorCode("validation.secret_value")).toBe(false);
   });

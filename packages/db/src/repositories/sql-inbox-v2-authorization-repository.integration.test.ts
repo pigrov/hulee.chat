@@ -28,7 +28,9 @@ import {
   type HuleeDatabase
 } from "../client";
 import {
+  assertInboxV2AuthorizedCommandMutationContext,
   computeInboxV2LeafHashDigest,
+  createSqlInboxV2AuthorizedCommandCoordinator,
   createSqlInboxV2AuthorizationRepository,
   type InboxV2AuthorizationRelationRevisionEffect,
   type InboxV2AuthorizationRevisionPlan,
@@ -199,6 +201,206 @@ describePostgres(
       fixtures.push(created);
       return created;
     }
+
+    it("commits one domain mutation, replays without its callback and conflicts on a different hash", async () => {
+      const current = await fixture("domain-source-replay");
+      const input = domainSourceMutationInput(current, "domain-source-replay");
+      const coordinator = createSqlInboxV2AuthorizedCommandCoordinator(db);
+      const sourceConnectionId =
+        input.records.changes[0]?.entity.entityId ?? "missing-source";
+      let callbackCount = 0;
+      let replayLoaderCount = 0;
+
+      const applied = await coordinator.withAuthorizedCommandMutation(
+        input,
+        async (context) => {
+          callbackCount += 1;
+          expect(context.profile).toBe("domain");
+          expect(context.revisionEffects).toEqual([]);
+          return { result: { sourceConnectionId } };
+        }
+      );
+
+      expect(applied).toMatchObject({
+        kind: "applied",
+        result: { sourceConnectionId },
+        status: {
+          streamEpoch: input.records.expectedStreamEpoch,
+          streamPosition: "1",
+          resultReference: input.command.resultReference,
+          sensitiveResultReference: null
+        },
+        revisionEffects: []
+      });
+
+      const replay = await coordinator.withAuthorizedCommandMutation(
+        input,
+        async () => {
+          callbackCount += 1;
+          throw new Error("domain replay callback must not run");
+        },
+        async (context, status) => {
+          replayLoaderCount += 1;
+          assertInboxV2AuthorizedCommandMutationContext(context);
+          expect(context).toMatchObject({
+            tenantId: current.tenantId,
+            commandId: input.command.id,
+            clientMutationId: input.command.clientMutationId,
+            commandTypeId: input.command.commandTypeId,
+            mutationId: input.records.mutationId,
+            profile: "domain",
+            revisionEffects: []
+          });
+          expect(status.resultReference).toEqual(input.command.resultReference);
+          const persisted = await context.executor.execute<{
+            entity_id: string;
+          }>(sql`
+            select entity_id
+            from inbox_v2_tenant_stream_changes
+            where tenant_id = ${context.tenantId}
+              and stream_commit_id = ${status.streamCommitId}
+              and mutation_id = ${status.mutationId}
+              and ordinal = 1
+          `);
+          return {
+            sourceConnectionId:
+              persisted.rows[0]?.entity_id ?? "missing-replayed-source"
+          };
+        }
+      );
+      expect(replay.kind).toBe("already_applied");
+      if (replay.kind === "already_applied") {
+        expect(replay.status.resultReference).toEqual(
+          input.command.resultReference
+        );
+        expect(replay.result).toEqual({ sourceConnectionId });
+        expect(Object.hasOwn(replay.status, "sensitiveResultReference")).toBe(
+          false
+        );
+      }
+      expect(callbackCount).toBe(1);
+      expect(replayLoaderCount).toBe(1);
+
+      const differentHash = await coordinator.withAuthorizedCommandMutation(
+        {
+          ...input,
+          command: {
+            ...input.command,
+            requestHash: digest("different-domain-source-request")
+          }
+        },
+        async () => {
+          throw new Error("domain idempotency conflict callback must not run");
+        }
+      );
+      expect(differentHash).toEqual({
+        kind: "idempotency_conflict",
+        code: "command.idempotency_conflict"
+      });
+
+      const staleReplay = await coordinator.withAuthorizedCommandMutation(
+        {
+          ...input,
+          revisions: {
+            ...input.revisions,
+            expectedTenantRbacRevision: "2"
+          }
+        },
+        async () => {
+          throw new Error("stale replay callback must not run");
+        },
+        async () => {
+          replayLoaderCount += 1;
+          throw new Error("stale replay loader must not run");
+        }
+      );
+      expect(staleReplay).toMatchObject({
+        kind: "revision_conflict",
+        conflicts: [{ kind: "tenant_rbac", currentRevision: "1" }]
+      });
+      expect(replayLoaderCount).toBe(1);
+
+      expect(await artifactCounts(db, current.tenantId)).toEqual({
+        commands: 1,
+        mutationCommits: 1,
+        audits: 1,
+        auditFacets: 1,
+        streamCommits: 1,
+        changes: 1,
+        events: 1,
+        outboxIntents: 1,
+        revisionEffects: 0,
+        relationWrites: 0
+      });
+      const evidence = await db.execute<{
+        audience_impact_kind: string;
+        audience_impact_manifest: unknown;
+        type_id: string;
+        access_effect: string;
+        access_effect_causes: unknown;
+      }>(sql`
+        select stream.audience_impact_kind::text,
+               stream.audience_impact_manifest,
+               event.type_id,
+               event.access_effect::text,
+               event.access_effect_causes
+        from inbox_v2_tenant_stream_commits stream
+        join inbox_v2_domain_events event
+          on event.tenant_id = stream.tenant_id
+         and event.mutation_id = stream.mutation_id
+        where stream.tenant_id = ${current.tenantId}
+          and stream.mutation_id = ${input.records.mutationId}
+      `);
+      expect(evidence.rows).toEqual([
+        {
+          audience_impact_kind: "none",
+          audience_impact_manifest: { kind: "none" },
+          type_id: "core:source-connection.changed",
+          access_effect: "none",
+          access_effect_causes: []
+        }
+      ]);
+    }, 30_000);
+
+    it("persists UUID and 512-character request and client-mutation IDs", async () => {
+      const current = await fixture("domain-opaque-transport-ids");
+      const coordinator = createSqlInboxV2AuthorizedCommandCoordinator(db);
+      const identifiers = [
+        ["uuid", "550e8400-e29b-41d4-a716-446655440000"],
+        ["maximum", "a".repeat(512)]
+      ] as const;
+
+      for (const [label, identifier] of identifiers) {
+        const input = withCommandTransportIds(
+          domainSourceMutationInput(current, `domain-opaque-${label}`),
+          {
+            requestId: identifier,
+            clientMutationId: identifier
+          }
+        );
+        await expect(
+          coordinator.withAuthorizedCommandMutation(input, async () => ({
+            result: null
+          }))
+        ).resolves.toMatchObject({ kind: "applied" });
+
+        const persisted = await db.execute<{
+          first_request_id: string;
+          client_mutation_id: string;
+        }>(sql`
+          select first_request_id, client_mutation_id
+          from inbox_v2_auth_command_records
+          where tenant_id = ${current.tenantId}
+            and id = ${input.command.id}
+        `);
+        expect(persisted.rows).toEqual([
+          {
+            first_request_id: identifier,
+            client_mutation_id: identifier
+          }
+        ]);
+      }
+    }, 30_000);
 
     it("commits one atomic role mutation, replays status-only and keeps Employee fanout at zero", async () => {
       const current = await fixture("role-replay");
@@ -2316,6 +2518,132 @@ type Deferred<T> = Readonly<{
   reject(error: unknown): void;
 }>;
 
+function domainSourceMutationInput(
+  fixture: IntegrationFixture,
+  label: string,
+  options: MutationOptions = {}
+): WithPrivilegedAuthorizationMutationInput {
+  const sourceConnectionId = internalId("source_connection", fixture, label);
+  const base = mutationInput(fixture, label, {
+    ...options,
+    relationKind: null as never,
+    permissionId: "core:tenant.manage",
+    resourceEntityTypeId: "core:source-connection",
+    resourceEntityId: sourceConnectionId,
+    revisions: {
+      expectedTenantRbacRevision: "1",
+      expectedSharedAccessRevision: "1",
+      advanceTenantRbac: false,
+      advanceSharedAccess: false,
+      employees: [actorFence(fixture)],
+      resources: []
+    },
+    audienceImpact: { kind: "none" }
+  });
+  const baseChange = base.records.changes[0]!;
+  const baseEvent = base.records.events[0]!;
+  const baseIntent = base.records.outboxIntents[0]!;
+  const stateReference = {
+    ...payloadReference(fixture, label, "source-state"),
+    schemaId: "core:inbox-v2.source-connection-registry-state"
+  };
+  const transitionReference = {
+    ...payloadReference(fixture, label, "source-transition"),
+    schemaId: "core:inbox-v2.source-registry-transition"
+  };
+  const sourceEntity = {
+    tenantId: fixture.tenantId,
+    entityTypeId: "core:source-connection",
+    entityId: sourceConnectionId
+  };
+  return {
+    ...base,
+    command: {
+      ...base.command,
+      commandTypeId: "core:domain-command.test",
+      publicResultCode: "core:domain-command.applied",
+      resultReference: transitionReference,
+      sensitiveResultReference: null
+    },
+    records: {
+      ...base.records,
+      relationKind: null,
+      audienceImpact: { kind: "none" },
+      changes: [
+        {
+          ...baseChange,
+          entity: sourceEntity,
+          resultingRevision: "1",
+          audience: "staff_only",
+          state: {
+            kind: "upsert",
+            stateSchemaId: "core:inbox-v2.source-connection-registry-state",
+            stateSchemaVersion: "v1",
+            stateHash: digest(
+              `${fixture.tenantId}:${label}:source-connection-state`
+            ),
+            payloadReference: stateReference,
+            domainCommitReference: transitionReference
+          }
+        }
+      ],
+      events: [
+        {
+          ...baseEvent,
+          typeId: "core:source-connection.changed",
+          payloadSchemaId: "core:inbox-v2.source-connection-change",
+          subjects: [sourceEntity],
+          accessEffect: { kind: "none" }
+        }
+      ],
+      outboxIntents: [
+        {
+          ...baseIntent,
+          handlerId: "core:source-connection-projection"
+        }
+      ],
+      audit: {
+        ...base.records.audit,
+        actionId: "core:domain-command.test",
+        target: {
+          tenantId: fixture.tenantId,
+          entityTypeId: "core:source-connection",
+          entityId: internalRef(
+            `${fixture.tenantId}:${label}:source-audit-target`
+          )
+        },
+        reasonCodeId: "core:domain-command-applied",
+        matchedPermissionIds: ["core:tenant.manage"],
+        evidenceReference: transitionReference
+      }
+    }
+  } as never;
+}
+
+function withCommandTransportIds(
+  input: WithPrivilegedAuthorizationMutationInput,
+  identifiers: Readonly<{
+    requestId: string;
+    clientMutationId: string;
+  }>
+): WithPrivilegedAuthorizationMutationInput {
+  return {
+    ...input,
+    command: {
+      ...input.command,
+      requestId: identifiers.requestId,
+      clientMutationId: identifiers.clientMutationId
+    },
+    records: {
+      ...input.records,
+      events: input.records.events.map((event) => ({
+        ...event,
+        clientMutationIds: [identifiers.clientMutationId]
+      }))
+    }
+  } as never;
+}
+
 function roleMutationInput(
   fixture: IntegrationFixture,
   label: string,
@@ -2799,6 +3127,7 @@ function mutationInput(
       authorizationEpoch: decision.authorizationEpoch,
       authorizedAt,
       publicResultCode: "core:authorization.applied",
+      resultReference: null,
       sensitiveResultReference: options.sensitiveResultReference ?? null
     },
     revisions: options.revisions,

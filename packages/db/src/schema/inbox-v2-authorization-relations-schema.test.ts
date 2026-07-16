@@ -370,10 +370,30 @@ describe("Inbox V2 authorization relation schema", () => {
     expect(columnNames(inboxV2AuthorizationCommandRecords)).toEqual(
       expect.arrayContaining([
         "first_request_id",
+        "result_reference",
         "authorization_decision_refs",
         "authorized_at",
         "authorization_not_after"
       ])
+    );
+    const commandValues = checkSql(
+      inboxV2AuthorizationCommandRecords,
+      "inbox_v2_auth_command_records_values_check"
+    );
+    expect(commandValues).toContain(
+      'char_length("inbox_v2_auth_command_records"."client_mutation_id") between 1 and 512'
+    );
+    expect(commandValues).toContain("^[A-Za-z0-9][A-Za-z0-9._~:-]*$");
+    expect(commandValues).toContain(
+      '"inbox_v2_auth_command_records"."result_reference"->>\'tenantId\' = "inbox_v2_auth_command_records"."tenant_id"'
+    );
+    expect(
+      checkSql(
+        inboxV2AuthorizationAuditEvents,
+        "inbox_v2_auth_audit_events_reference_check"
+      )
+    ).toContain(
+      'char_length("inbox_v2_auth_audit_events"."client_mutation_id") between 1 and 512'
     );
   });
 

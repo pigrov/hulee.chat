@@ -1749,6 +1749,8 @@ export const inboxV2AuthorizationCommandRecords = pgTable(
     state: inboxV2AuthorizationCommandState("state").notNull(),
     mutationId: text("mutation_id"),
     publicResultCode: text("public_result_code").notNull(),
+    resultReference:
+      jsonb("result_reference").$type<Readonly<Record<string, unknown>>>(),
     sensitiveResultReference: text("sensitive_result_reference"),
     revision: bigint("revision", { mode: "bigint" }).notNull(),
     occurredAt: timestamp("occurred_at", {
@@ -1808,11 +1810,13 @@ export const inboxV2AuthorizationCommandRecords = pgTable(
           and ${table.mutationId} is not null)
         or (${table.state} = 'pending'
           and ${table.mutationId} is null
+          and ${table.resultReference} is null
           and ${table.sensitiveResultReference} is null)`
     ),
     check(
       "inbox_v2_auth_command_records_values_check",
-      sql`char_length(${table.clientMutationId}) between 1 and 256
+      sql`char_length(${table.clientMutationId}) between 1 and 512
+        and ${table.clientMutationId} ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'
         and ${catalogIdSql(table.commandTypeId)}
         and char_length(${table.firstRequestId}) between 1 and 512
         and ${table.firstRequestId} ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'
@@ -1825,6 +1829,16 @@ export const inboxV2AuthorizationCommandRecords = pgTable(
         and isfinite(${table.authorizationNotAfter})
         and ${table.authorizationNotAfter} > ${table.authorizedAt}
         and ${catalogIdSql(table.publicResultCode)}
+        and (${table.resultReference} is null or (
+          jsonb_typeof(${table.resultReference}) = 'object'
+          and ${table.resultReference} ?&
+            array['tenantId', 'recordId', 'schemaId', 'schemaVersion', 'digest']::text[]
+          and (${table.resultReference} -
+            array['tenantId', 'recordId', 'schemaId', 'schemaVersion', 'digest']::text[]) =
+              '{}'::jsonb
+          and ${table.resultReference}->>'tenantId' = ${table.tenantId}
+          and ${table.resultReference}->>'digest' ~ '^sha256:[0-9a-f]{64}$'
+        ))
         and (${table.sensitiveResultReference} is null
           or ${table.sensitiveResultReference} ~
             '^internal-ref:[a-f0-9]{32,64}$')
@@ -2408,7 +2422,8 @@ export const inboxV2AuthorizationAuditEvents = pgTable(
         and char_length(${table.authorizationEpoch}) between 8 and 1024
         and ${sha256Sql(table.revisionDeltaHash)}
         and ${catalogIdSql(table.reasonCodeId)}
-        and char_length(${table.clientMutationId}) between 1 and 256
+        and char_length(${table.clientMutationId}) between 1 and 512
+        and ${table.clientMutationId} ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'
         and ${catalogIdSql(table.commandTypeId)}
         and ${sha256Sql(table.requestHash)}
         and char_length(${table.correlationId}) between 1 and 256
@@ -2599,8 +2614,10 @@ export const inboxV2AuthorizationMutationCommits = pgTable(
     }),
     check(
       "inbox_v2_auth_mutation_commits_manifest_check",
-      sql`${table.revisionEffectCount} >= 1
-        and ${table.relationWriteCount} >= 1
+      sql`((${table.revisionEffectCount} = 0
+          and ${table.relationWriteCount} = 0)
+        or (${table.revisionEffectCount} >= 1
+          and ${table.relationWriteCount} >= 1))
         and ${table.projectionIntentCount} >= 1
         and ${sha256Sql(table.revisionEffectDigestSha256)}
         and ${sha256Sql(table.relationWriteDigestSha256)}

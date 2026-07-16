@@ -20,9 +20,11 @@ import {
   computeInboxV2AuthorizationMutationManifestDigest,
   computeInboxV2LeafHashDigest,
   computeInboxV2TenantStreamManifestDigest,
+  assertInboxV2AuthorizedCommandMutationContext,
   createSqlInboxV2AuthorizedCommandCoordinator,
   createSqlInboxV2AuthorizationRepository,
   type InboxV2AuthorizationTransactionExecutor,
+  type InboxV2AuthorizedCommandMutationContext,
   type WithPrivilegedAuthorizationMutationInput
 } from "./sql-inbox-v2-authorization-repository";
 
@@ -43,8 +45,9 @@ describe("SQL Inbox V2 authorization mutation repository", () => {
 
     const result = await repository.withPrivilegedAuthorizationMutation(
       roleMutationInput(),
-      async () => {
+      async (context) => {
         executor.timeline.push("relation_callback");
+        expect(context.profile).toBe("authorization_relation");
         return {
           result: { roleId: "role:role-1" },
           relationWrites: [relationWrite("role:role-1")]
@@ -64,13 +67,13 @@ describe("SQL Inbox V2 authorization mutation repository", () => {
     expect(executor.commitCount).toBe(1);
     expect(executor.rollbackCount).toBe(0);
     expect(executor.timeline[0]).toBe("claim_command");
+    expect(executor.timeline.indexOf("decision_time_fence")).toBeLessThan(
+      executor.timeline.indexOf("relation_callback")
+    );
     expect(executor.timeline.indexOf("relation_callback")).toBeLessThan(
       executor.timeline.indexOf("lock_stream_head")
     );
     expect(executor.timeline.indexOf("lock_stream_head")).toBeLessThan(
-      executor.timeline.indexOf("decision_time_fence")
-    );
-    expect(executor.timeline.indexOf("decision_time_fence")).toBeLessThan(
       executor.timeline.indexOf("insert_stream_commit")
     );
     expect(
@@ -219,6 +222,7 @@ describe("SQL Inbox V2 authorization mutation repository", () => {
 
     expect(replayed.kind).toBe("already_applied");
     if (replayed.kind === "already_applied") {
+      expect(replayed.status.resultReference).toBeNull();
       expect(Object.hasOwn(replayed.status, "sensitiveResultReference")).toBe(
         false
       );
@@ -245,18 +249,36 @@ describe("SQL Inbox V2 authorization mutation repository", () => {
     expect(conflict.timeline).toEqual(["claim_command", "replay_by_scope"]);
   });
 
-  it("exposes the replay-safe idempotency protocol through the generic coordinator", async () => {
+  it("exposes an authorized DB-only replay loader through the generic coordinator", async () => {
     const executor = new RoutingAuthorizationExecutor({
       replayRequestHash: hashA
     });
     const coordinator = createSqlInboxV2AuthorizedCommandCoordinator(executor);
     let callbackCount = 0;
+    let loaderCount = 0;
+    let capturedContext: InboxV2AuthorizedCommandMutationContext | undefined;
 
     const result = await coordinator.withAuthorizedCommandMutation(
       roleMutationInput(),
       async () => {
         callbackCount += 1;
         throw new Error("domain callback must not run on replay");
+      },
+      async (context, status) => {
+        loaderCount += 1;
+        capturedContext = context;
+        assertInboxV2AuthorizedCommandMutationContext(context);
+        expect(context).toMatchObject({
+          tenantId,
+          commandId: "command:command-1",
+          clientMutationId: "mutation:mutation-1",
+          commandTypeId: "core:authorization.role_definition",
+          mutationId: "authorization-mutation:mutation-1",
+          profile: "authorization_relation"
+        });
+        expect(status.resultReference).toBeNull();
+        executor.timeline.push("replay_loader");
+        return { roleId: "role:role-1" };
       }
     );
 
@@ -266,6 +288,7 @@ describe("SQL Inbox V2 authorization mutation repository", () => {
         commandId: "command:command-1",
         mutationId: "authorization-mutation:mutation-1",
         publicResultCode: "core:authorization.applied",
+        resultReference: null,
         streamCommitId: "commit:commit-1",
         streamEpoch: "stream:epoch-1",
         streamPosition: "1"
@@ -273,9 +296,179 @@ describe("SQL Inbox V2 authorization mutation repository", () => {
       expect(Object.hasOwn(result.status, "sensitiveResultReference")).toBe(
         false
       );
+      expect(result.result).toEqual({ roleId: "role:role-1" });
     }
     expect(callbackCount).toBe(0);
-    expect(executor.timeline).toEqual(["claim_command", "replay_by_scope"]);
+    expect(loaderCount).toBe(1);
+    expect(executor.timeline).toEqual([
+      "claim_command",
+      "replay_by_scope",
+      "ensure_tenant_head",
+      "lock_tenant_head",
+      "ensure_employee_heads",
+      "lock_employee_heads",
+      "decision_time_fence",
+      "replay_loader"
+    ]);
+    expect(() =>
+      assertInboxV2AuthorizedCommandMutationContext(capturedContext!)
+    ).toThrow("requires a live authorized-command context");
+
+    const stale = new RoutingAuthorizationExecutor({
+      replayRequestHash: hashA,
+      tenantRbacRevision: "8"
+    });
+    let staleLoaderCount = 0;
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        stale
+      ).withAuthorizedCommandMutation(
+        roleMutationInput(),
+        async () => {
+          throw new Error("must not run");
+        },
+        async () => {
+          staleLoaderCount += 1;
+          throw new Error("stale loader must not run");
+        }
+      )
+    ).resolves.toMatchObject({
+      kind: "revision_conflict",
+      conflicts: [{ kind: "tenant_rbac", currentRevision: "8" }]
+    });
+    expect(staleLoaderCount).toBe(0);
+    expect(stale.timeline).toContain("lock_tenant_head");
+    expect(stale.timeline).not.toContain("decision_time_fence");
+
+    const expired = new RoutingAuthorizationExecutor({
+      replayRequestHash: hashA,
+      databaseNow: "2026-07-15T10:00:00.000Z"
+    });
+    let expiredLoaderCount = 0;
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        expired
+      ).withAuthorizedCommandMutation(
+        roleMutationInput(),
+        async () => {
+          throw new Error("must not run");
+        },
+        async () => {
+          expiredLoaderCount += 1;
+          throw new Error("expired loader must not run");
+        }
+      )
+    ).resolves.toMatchObject({
+      kind: "revision_conflict",
+      conflicts: [{ kind: "authorization_decision_time" }]
+    });
+    expect(expiredLoaderCount).toBe(0);
+    expect(expired.timeline.at(-1)).toBe("decision_time_fence");
+  });
+
+  it("rejects forged authorized-command callback contexts", () => {
+    const fakeContext = {
+      executor: new RoutingAuthorizationExecutor(),
+      tenantId,
+      commandId: "command:forged",
+      clientMutationId: "mutation:forged",
+      commandTypeId: "core:source-connection.create",
+      mutationId: "authorization-mutation:forged",
+      profile: "domain",
+      revisionEffects: []
+    } as unknown as InboxV2AuthorizedCommandMutationContext;
+
+    expect(() =>
+      assertInboxV2AuthorizedCommandMutationContext(fakeContext)
+    ).toThrow("requires a live authorized-command context");
+  });
+
+  it("accepts opaque UUID and 512-character transport IDs but rejects overflow and invalid characters", async () => {
+    const uuid = "550e8400-e29b-41d4-a716-446655440000";
+    const maximumOpaqueId = "a".repeat(512);
+
+    for (const opaqueId of [uuid, maximumOpaqueId]) {
+      const executor = new RoutingAuthorizationExecutor();
+      await expect(
+        createSqlInboxV2AuthorizationRepository(
+          executor
+        ).withPrivilegedAuthorizationMutation(
+          withCommandTransportIds(roleMutationInput(), {
+            requestId: opaqueId,
+            clientMutationId: opaqueId
+          }),
+          async () => ({
+            result: null,
+            relationWrites: [relationWrite("role:role-1")]
+          })
+        )
+      ).resolves.toMatchObject({ kind: "applied" });
+      expect(executor.commitCount).toBe(1);
+    }
+
+    await expectInvalidBeforeTransaction(
+      withCommandTransportIds(roleMutationInput(), {
+        requestId: "a".repeat(513)
+      })
+    );
+    await expectInvalidBeforeTransaction(
+      withCommandTransportIds(roleMutationInput(), {
+        clientMutationId: "a".repeat(513)
+      })
+    );
+    await expectInvalidBeforeTransaction(
+      withCommandTransportIds(roleMutationInput(), {
+        requestId: "invalid/request"
+      })
+    );
+    await expectInvalidBeforeTransaction(
+      withCommandTransportIds(roleMutationInput(), {
+        clientMutationId: "invalid mutation"
+      })
+    );
+  });
+
+  it("applies a provider-neutral domain command with zero authorization effects and relation writes", async () => {
+    const executor = new RoutingAuthorizationExecutor();
+    const coordinator = createSqlInboxV2AuthorizedCommandCoordinator(executor);
+    let callbackCount = 0;
+
+    const result = await coordinator.withAuthorizedCommandMutation(
+      domainMutationInput(),
+      async (context) => {
+        callbackCount += 1;
+        executor.timeline.push("domain_callback");
+        expect(context.profile).toBe("domain");
+        expect(context.revisionEffects).toEqual([]);
+        return { result: { sourceConnectionId: "source_connection:source-1" } };
+      }
+    );
+
+    expect(result).toMatchObject({
+      kind: "applied",
+      result: { sourceConnectionId: "source_connection:source-1" },
+      revisionEffects: []
+    });
+    expect(callbackCount).toBe(1);
+    expect(executor.timeline.indexOf("decision_time_fence")).toBeLessThan(
+      executor.timeline.indexOf("domain_callback")
+    );
+    expect(executor.timeline).not.toContain("read_relation_write_targets");
+    expect(executor.timeline).not.toContain("read_persisted_role_permissions");
+    const revisionEffectInsert = executor.queries.find(
+      (query) =>
+        statementKind(normalizeSql(renderQuery(query).sql)) ===
+        "insert_revision_effects"
+    );
+    const relationWriteInsert = executor.queries.find(
+      (query) =>
+        statementKind(normalizeSql(renderQuery(query).sql)) ===
+        "insert_relation_writes"
+    );
+    expect(revisionEffectInsert).toBeDefined();
+    expect(relationWriteInsert).toBeDefined();
+    expect(jsonRecordsetRowCount(revisionEffectInsert!)).toBe(0);
+    expect(jsonRecordsetRowCount(relationWriteInsert!)).toBe(0);
   });
 
   it("rolls back callback, audit and stale stream failures without a partial commit", async () => {
@@ -326,17 +519,22 @@ describe("SQL Inbox V2 authorization mutation repository", () => {
     const expiredDecision = new RoutingAuthorizationExecutor({
       databaseNow: "2026-07-15T10:00:00.000Z"
     });
+    let expiredCallbackCount = 0;
     await expect(
       createSqlInboxV2AuthorizationRepository(
         expiredDecision
-      ).withPrivilegedAuthorizationMutation(roleMutationInput(), async () => ({
-        result: null,
-        relationWrites: [relationWrite("role:role-1")]
-      }))
+      ).withPrivilegedAuthorizationMutation(roleMutationInput(), async () => {
+        expiredCallbackCount += 1;
+        return {
+          result: null,
+          relationWrites: [relationWrite("role:role-1")]
+        };
+      })
     ).resolves.toMatchObject({
       kind: "revision_conflict",
       conflicts: [{ kind: "authorization_decision_time" }]
     });
+    expect(expiredCallbackCount).toBe(0);
     expect(expiredDecision.timeline).toContain("decision_time_fence");
     expect(expiredDecision.timeline).not.toContain("insert_stream_commit");
   });
@@ -1364,6 +1562,7 @@ class RoutingAuthorizationExecutor implements InboxV2AuthorizationTransactionExe
           request_hash: this.options.replayRequestHash,
           mutation_id: "authorization-mutation:mutation-1",
           public_result_code: "core:authorization.applied",
+          result_reference: null,
           stream_commit_id: "commit:commit-1",
           stream_epoch: "stream:epoch-1",
           stream_position: "1",
@@ -1512,6 +1711,7 @@ function roleMutationInput(
       authorizationEpoch: decision.authorizationEpoch,
       authorizedAt: occurredAt,
       publicResultCode: "core:authorization.applied",
+      resultReference: null,
       sensitiveResultReference: null
     },
     revisions: {
@@ -1537,6 +1737,122 @@ function roleMutationInput(
     },
     occurredAt,
     ...overrides
+  } as never;
+}
+
+function withCommandTransportIds(
+  input: WithPrivilegedAuthorizationMutationInput,
+  identifiers: Readonly<{
+    requestId?: string;
+    clientMutationId?: string;
+  }>
+): WithPrivilegedAuthorizationMutationInput {
+  const clientMutationId =
+    identifiers.clientMutationId ?? input.command.clientMutationId;
+  return {
+    ...input,
+    command: {
+      ...input.command,
+      requestId: identifiers.requestId ?? input.command.requestId,
+      clientMutationId
+    },
+    records: {
+      ...input.records,
+      events: input.records.events.map((event) => ({
+        ...event,
+        clientMutationIds: [clientMutationId]
+      }))
+    }
+  } as never;
+}
+
+function domainMutationInput(): WithPrivilegedAuthorizationMutationInput {
+  const base = roleMutationInput();
+  const sourceConnectionId = "source_connection:source-1";
+  const commandTypeId = inboxV2CatalogIdSchema.parse(
+    "core:source-connection.create"
+  );
+  const decision = {
+    ...authorizationDecision(),
+    permissionId: "core:source-connections.manage",
+    resourceScopeId: "core:permission-scope.tenant",
+    resource: {
+      tenantId,
+      entityTypeId: "core:source-connection",
+      entityId: sourceConnectionId
+    }
+  };
+  const sourceStateReference = {
+    ...payloadReference("source-connection-state:source-1"),
+    schemaId: "core:inbox-v2.source-connection-registry-state"
+  };
+  const sourceTransitionReference = {
+    ...payloadReference("source-connection-transition:source-1"),
+    schemaId: "core:inbox-v2.source-registry-transition"
+  };
+  const change = {
+    ...streamChange(),
+    entity: {
+      tenantId,
+      entityTypeId: "core:source-connection",
+      entityId: sourceConnectionId
+    },
+    resultingRevision: "1",
+    audience: "staff_only" as const,
+    state: {
+      kind: "upsert" as const,
+      stateSchemaId: "core:inbox-v2.source-connection-registry-state",
+      stateSchemaVersion: "v1",
+      stateHash: hashA,
+      payloadReference: sourceStateReference,
+      domainCommitReference: sourceTransitionReference
+    }
+  };
+  const event = {
+    ...authorizationEvent(decision, change.id),
+    typeId: "core:source-connection.changed" as const,
+    payloadSchemaId: "core:inbox-v2.source-connection-change",
+    subjects: [change.entity],
+    accessEffect: { kind: "none" as const }
+  };
+  return {
+    ...base,
+    command: {
+      ...base.command,
+      commandTypeId,
+      authorizationDecisionId: decision.id,
+      authorizationEpoch: decision.authorizationEpoch,
+      resultReference: sourceTransitionReference
+    },
+    revisions: {
+      ...base.revisions,
+      advanceTenantRbac: false,
+      advanceSharedAccess: false
+    },
+    records: {
+      ...base.records,
+      relationKind: null,
+      audienceImpact: { kind: "none" },
+      changes: [change],
+      events: [event],
+      outboxIntents: [
+        {
+          ...projectionIntent(change.id),
+          handlerId: "core:source-connection-projection"
+        }
+      ],
+      audit: {
+        ...authorizationAudit(decision),
+        actionId: commandTypeId,
+        target: {
+          tenantId,
+          entityTypeId: "core:source-connection",
+          entityId: `internal-ref:${"4".repeat(32)}`
+        },
+        reasonCodeId: "core:source-connection-created",
+        matchedPermissionIds: [decision.permissionId]
+      }
+    }
   } as never;
 }
 

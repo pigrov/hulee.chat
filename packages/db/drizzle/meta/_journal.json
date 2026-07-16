@@ -281,6 +281,20 @@
       "when": 1784183764551,
       "tag": "0039_inbox_v2_source_registry",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1784201967080,
+      "tag": "0040_inbox_v2_authorized_domain_command",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1784206751025,
+      "tag": "0041_inbox_v2_source_onboarding_result",
+      "breakpoints": true
     }
   ]
 }

@@ -69,6 +69,7 @@ import { TelegramIntegrationPanel } from "../../../src/telegram-integration-pane
 import { TenantAdminShell } from "../../../src/tenant-admin-shell";
 import { navigationAccessFromTenantAdminAccess } from "../../../src/tenant-admin-nav";
 import { SourceConnectionCreateForm } from "../../../src/source-connection-create-form";
+import { createSourceConnectionClientMutationId } from "../../../src/source-connection-client-mutation-id.server";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -279,6 +280,7 @@ export default async function IntegrationsAdminPage({
     />
   ) : selectedSource ? (
     <SourceCatalogDetailPanel
+      clientMutationId={createSourceConnectionClientMutationId()}
       locale={locale}
       methods={selectedSourceChannels}
       source={selectedSource}
@@ -545,11 +547,13 @@ function SourceCatalogListItem({
 }
 
 function SourceCatalogDetailPanel({
+  clientMutationId,
   locale,
   methods,
   source,
   t
 }: {
+  clientMutationId: string;
   locale: string;
   methods: readonly InternalChannelCatalogItem[];
   source: InternalSourceCatalogItem;
@@ -600,6 +604,7 @@ function SourceCatalogDetailPanel({
         </div>
       ) : source.setupMode === "source_connection" ? (
         <SourceConnectionCreateForm
+          clientMutationId={clientMutationId}
           defaultDisplayName={title}
           label={t("admin.integrations.createSourceConnection")}
           messages={{

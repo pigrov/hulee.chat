@@ -33,6 +33,7 @@ export const INBOX_V2_SOURCE_REGISTRY_LIFECYCLE_BINDING_SCHEMA_VERSION =
  */
 export const inboxV2SourceRegistryCopySlotSchema = z.enum([
   "source_connection_registry",
+  "source_onboarding_result_snapshot",
   "source_account_registry",
   "channel_connector_registry",
   "channel_session_state",

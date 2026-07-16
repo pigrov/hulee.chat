@@ -106,6 +106,25 @@ describe("source catalog", () => {
     );
   });
 
+  it("keeps every production standalone source fail-closed until composition is complete", () => {
+    const standaloneSources = sourceCatalogItems.filter(
+      ({ setupMode }) => setupMode === "source_connection"
+    );
+
+    expect(standaloneSources.length).toBeGreaterThan(0);
+    expect(
+      standaloneSources.map(({ sourceName, readiness }) => ({
+        sourceName,
+        readiness
+      }))
+    ).toEqual(
+      standaloneSources.map(({ sourceName }) => ({
+        sourceName,
+        readiness: "coming_soon"
+      }))
+    );
+  });
+
   it("rejects catalog items when source type and category disagree", () => {
     expect(() =>
       sourceCatalogItemSchema.parse({

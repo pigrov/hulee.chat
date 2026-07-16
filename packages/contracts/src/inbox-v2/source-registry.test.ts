@@ -166,6 +166,7 @@ function lifecycleBinding() {
   } as const;
   const slots = [
     "source_connection_registry",
+    "source_onboarding_result_snapshot",
     "source_account_registry",
     "credential_binding",
     "source_registry_artifact",
@@ -506,6 +507,7 @@ function adapterDeclarationInput(
       lifecycleRegistry: binding.payload.registry,
       requiredCopySlots: [
         "source_connection_registry",
+        "source_onboarding_result_snapshot",
         "source_account_registry",
         "credential_binding",
         "source_registry_artifact",
@@ -605,10 +607,19 @@ function defineTransition(input: {
 describe("Inbox V2 source registry contracts", () => {
   it("creates authentic lifecycle binding and rejects stale locator lineage", () => {
     const { binding } = lifecycleBinding();
+    const onboardingResultLocator = locator(
+      "source_onboarding_result_snapshot"
+    );
     expect(isInboxV2SourceRegistryLifecycleBinding(binding)).toBe(true);
     expect(
       isInboxV2SourceRegistryLifecycleBinding(structuredClone(binding))
     ).toBe(false);
+    expect(
+      assertInboxV2SourceRegistryLifecycleLocator({
+        binding,
+        locator: onboardingResultLocator
+      })
+    ).toEqual(onboardingResultLocator);
     expect(() =>
       assertInboxV2SourceRegistryLifecycleLocator({
         binding,
@@ -809,6 +820,7 @@ describe("Inbox V2 source registry contracts", () => {
 
   it.each([
     "source_connection_registry",
+    "source_onboarding_result_snapshot",
     "source_account_registry",
     "credential_binding",
     "source_registry_artifact",
@@ -826,10 +838,26 @@ describe("Inbox V2 source registry contracts", () => {
     );
   });
 
-  it("requires connector lifecycle authority for channel-connector setup", () => {
+  it("rejects standalone source onboarding without result-snapshot lifecycle lineage", () => {
+    const { binding } = lifecycleBinding();
+    const value = structuredClone(adapterDeclarationInput(binding));
+    value.payload.requiredCopySlots = value.payload.requiredCopySlots.filter(
+      (slot) => slot !== "source_onboarding_result_snapshot"
+    );
+
+    expect(value.payload.onboarding.mode).toBe("standalone");
+    expect(inboxV2SourceAdapterDeclarationSchema.safeParse(value).success).toBe(
+      false
+    );
+  });
+
+  it("requires connector lineage without imposing source-onboarding result lineage", () => {
     const { binding } = lifecycleBinding();
     const value = structuredClone(adapterDeclarationInput(binding));
     value.payload.setupMode = "channel_connector";
+    value.payload.requiredCopySlots = value.payload.requiredCopySlots.filter(
+      (slot) => slot !== "source_onboarding_result_snapshot"
+    );
     expect(inboxV2SourceAdapterDeclarationSchema.safeParse(value).success).toBe(
       false
     );

@@ -10,7 +10,8 @@ import {
   inboxV2SourceRegistryIngressRoutes,
   inboxV2SourceRegistryRelatedAuthorityRefs,
   inboxV2SourceRegistrySecretRefs,
-  inboxV2SourceRegistryTransitions
+  inboxV2SourceRegistryTransitions,
+  inboxV2SourceOnboardingResultSnapshots
 } from "./inbox-v2/source-registry";
 import {
   channelAuthChallenges,
@@ -132,6 +133,56 @@ describe("Inbox V2 source registry persistence schema", () => {
         "session_authority_id"
       ])
     );
+  });
+
+  it("keeps onboarding replay in one immutable tenant-scoped result snapshot", () => {
+    const results = getTableConfig(inboxV2SourceOnboardingResultSnapshots);
+
+    expect(primaryKeyColumns(results)).toEqual([["tenant_id", "id"]]);
+    expect(results.columns.map(({ name }) => name)).toEqual(
+      expect.arrayContaining([
+        "command_record_id",
+        "mutation_id",
+        "stream_commit_id",
+        "source_connection_id",
+        "source_transition_id",
+        "result_digest_sha256",
+        "result_canonical_json",
+        "state_payload",
+        "state_digest_sha256",
+        "state_canonical_json",
+        "transition_payload",
+        "transition_digest_sha256",
+        "transition_canonical_json",
+        "audit_target_ref",
+        "tenant_facet_ref",
+        "copy_slot",
+        "registry_id",
+        "registry_composition_hash",
+        "data_class_id",
+        "storage_root_id",
+        "purpose_id",
+        "effective_policy_id",
+        "effective_rule_id",
+        "policy_activation_id",
+        "legal_hold_set_revision",
+        "restriction_set_revision"
+      ])
+    );
+    for (const name of [
+      "inbox_v2_source_onboarding_results_command_fk",
+      "inbox_v2_source_onboarding_results_connection_fk",
+      "inbox_v2_source_onboarding_results_transition_fk",
+      "inbox_v2_source_onboarding_results_creator_fk",
+      "inbox_v2_source_onboarding_results_policy_fk",
+      "inbox_v2_source_onboarding_results_rule_fk",
+      "inbox_v2_source_onboarding_results_control_set_fk",
+      "inbox_v2_source_onboarding_results_lineage_fk"
+    ]) {
+      expect(
+        results.foreignKeys.some(({ reference }) => reference().name === name)
+      ).toBe(true);
+    }
   });
 
   it("installs CAS, orphan, lifecycle, fence and invalidation guards", () => {

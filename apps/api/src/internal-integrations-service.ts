@@ -76,7 +76,6 @@ import {
   managedMessengerVpnEgressRequirement,
   deploymentPolicyDirectEgressRequirement,
   isSourceAdapterRegistry,
-  SourceAdapterRegistryError,
   type EgressProfileResolution,
   type EgressRuntime,
   type SourceAdapterOnboardingPrepared,
@@ -86,16 +85,19 @@ import {
   type TelegramBotApiSettings,
   type TelegramBotIdentity
 } from "@hulee/modules";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 import {
   clearSourceOnboardingTransientMaterial,
   createSourceAdapterOnboardingPrepareInput,
-  resolveSourceOnboardingEmployeeActor,
+  createSourceOnboardingRequestHash,
+  resolveSourceOnboardingAuthorization,
   resolveStandardWebhookSecretOneTimeToken,
   sourceAuthTypeForAdapterRegistration,
   validateCommittedSourceOnboarding,
   type SourceOnboardingAuthorizationResolver,
+  type SourceOnboardingCredentialFingerprint,
+  type SourceOnboardingCredentialFingerprintProvider,
   type SourceRegistryOnboardingUnitOfWork
 } from "./source-registry-onboarding";
 
@@ -236,6 +238,7 @@ export type InternalIntegrationServiceOptions = {
   sourceAdapterRegistry?: SourceAdapterRegistry;
   sourceOnboardingAuthorizationResolver?: SourceOnboardingAuthorizationResolver;
   sourceRegistryOnboardingUnitOfWork?: SourceRegistryOnboardingUnitOfWork;
+  sourceOnboardingCredentialFingerprintProvider?: SourceOnboardingCredentialFingerprintProvider;
   sourceCatalogItemResolver?: (
     sourceName: string
   ) => SourceCatalogItem | undefined;
@@ -251,6 +254,7 @@ export type InternalIntegrationServiceOptions = {
     channelExternalId: string;
   }) => string;
   webhookSecretTokenFactory?: () => string;
+  sourceOnboardingIngressRouteMaterialFactory?: () => Uint8Array;
   providerValidationTimeoutMs?: number;
   providerValidationPollIntervalMs?: number;
   now?: () => Date;
@@ -845,22 +849,54 @@ export function createInternalIntegrationService(
         throw new CoreError("module.unhealthy");
       }
 
-      const sourceConnectionId = createStandaloneSourceConnectionId(
-        source.sourceName
-      );
+      const sourceConnectionId = createStandaloneSourceConnectionId({
+        tenantId: context.tenantId,
+        employeeId: context.employeeId,
+        sourceName: source.sourceName,
+        clientMutationId: request.clientMutationId
+      });
       const updatedAt = now();
       const displayName =
         request.displayName?.trim() ||
         defaultSourceDisplayName(source.sourceName);
-      const actor = await resolveSourceOnboardingEmployeeActor({
+      const authorization = await resolveSourceOnboardingAuthorization({
         context,
         sourceName: source.sourceName,
         requestedAt: updatedAt,
         authorizationResolver: options.sourceOnboardingAuthorizationResolver
       });
+      let credentialFingerprint: SourceOnboardingCredentialFingerprint | null =
+        null;
+      if (request.webhookToken !== undefined) {
+        const provider = options.sourceOnboardingCredentialFingerprintProvider;
+        if (!provider) {
+          throw new CoreError("module.unhealthy");
+        }
+        const credentialMaterial = new TextEncoder().encode(
+          request.webhookToken
+        );
+        try {
+          credentialFingerprint = await provider.fingerprint({
+            tenantId: context.tenantId,
+            purpose: "core:source-onboarding.webhook-token",
+            material: credentialMaterial
+          });
+        } catch {
+          throw new CoreError("module.unhealthy");
+        } finally {
+          credentialMaterial.fill(0);
+        }
+      }
+      const requestHash = createSourceOnboardingRequestHash({
+        tenantId: context.tenantId,
+        sourceName: source.sourceName,
+        displayName,
+        clientMutationId: request.clientMutationId,
+        credentialFingerprint
+      });
       const invocation = createSourceAdapterOnboardingPrepareInput({
         context,
-        actor,
+        actor: authorization.actor,
         source,
         sourceConnectionId,
         registration,
@@ -868,6 +904,9 @@ export function createInternalIntegrationService(
         publicBaseUrl: options.publicWebhookBaseUrl,
         webhookToken: request.webhookToken,
         createWebhookToken,
+        createIngressRouteMaterial:
+          options.sourceOnboardingIngressRouteMaterialFactory ??
+          (() => randomBytes(32)),
         requestedAt: updatedAt
       });
       let prepared: SourceAdapterOnboardingPrepared | undefined;
@@ -875,21 +914,22 @@ export function createInternalIntegrationService(
       try {
         try {
           prepared = await handler.prepare(invocation.prepareInput);
-        } catch (error) {
-          if (error instanceof SourceAdapterRegistryError) {
-            throw new CoreError("module.unhealthy");
-          }
-
-          throw error;
+        } catch {
+          // Adapter/provider errors may contain request headers or credential
+          // bytes in message/cause. Never let that object reach HTTP logging.
+          throw new CoreError("module.unhealthy");
         }
         const webhookToken = resolveStandardWebhookSecretOneTimeToken({
           prepared,
           expected: invocation.expectedStandardWebhookSecretToken
         });
-        const record =
+        const result =
           await options.sourceRegistryOnboardingUnitOfWork.onboardStandaloneSource(
             {
               requestId: context.requestId,
+              clientMutationId: request.clientMutationId,
+              requestHash,
+              authorization,
               registration,
               sourceConnection: {
                 id: sourceConnectionId,
@@ -912,12 +952,23 @@ export function createInternalIntegrationService(
           context,
           source,
           sourceConnectionId,
-          record
+          record: result.connection
         });
 
         return {
-          connection: toInternalSourceConnectionSummary(record),
-          ...(webhookToken ? { webhookToken } : {})
+          connection: toInternalSourceConnectionSummary(result.connection),
+          command: {
+            outcome: result.kind,
+            commandId: result.commit.commandId,
+            clientMutationId: request.clientMutationId,
+            mutationId: result.commit.mutationId,
+            publicResultCode: result.commit.publicResultCode,
+            streamCommitId: result.commit.streamCommitId,
+            streamEpoch: result.commit.streamEpoch,
+            streamPosition: result.commit.streamPosition,
+            committedAt: result.commit.committedAt
+          },
+          ...(result.kind === "applied" && webhookToken ? { webhookToken } : {})
         };
       } finally {
         clearSourceOnboardingTransientMaterial({
@@ -1773,10 +1824,24 @@ function toInternalSourceConnectionSummary(
   };
 }
 
-function createStandaloneSourceConnectionId(
-  sourceName: string
-): SourceConnectionId {
-  return `source_connection:${sourceName}:${randomUUID()}` as SourceConnectionId;
+function createStandaloneSourceConnectionId(input: {
+  tenantId: TenantId;
+  employeeId: EmployeeId;
+  sourceName: string;
+  clientMutationId: string;
+}): SourceConnectionId {
+  const digest = createHash("sha256")
+    .update("core:source-connection-id@v1\0", "utf8")
+    .update(String(input.tenantId), "utf8")
+    .update("\0", "utf8")
+    .update(String(input.employeeId), "utf8")
+    .update("\0", "utf8")
+    .update(input.sourceName, "utf8")
+    .update("\0", "utf8")
+    .update(input.clientMutationId, "utf8")
+    .digest("hex");
+
+  return `source_connection:${input.sourceName}:${digest}` as SourceConnectionId;
 }
 
 function createWebhookToken(): string {

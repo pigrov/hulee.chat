@@ -1,4 +1,5 @@
 import { CoreError } from "@hulee/core";
+import { inboxV2ClientMutationIdSchema } from "@hulee/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./session", () => ({
@@ -418,6 +419,17 @@ describe("inbox API client", () => {
           createdAt: "2026-07-09T10:00:00.000Z",
           updatedAt: "2026-07-09T10:00:00.000Z"
         },
+        command: {
+          outcome: "applied",
+          commandId: "command:source-onboarding-1",
+          clientMutationId: "client-mutation:web-source-test",
+          mutationId: "source-onboarding:mutation-1",
+          publicResultCode: "core:source-connection.created",
+          streamCommitId: "commit:source-onboarding-1",
+          streamEpoch: "stream:source-onboarding-1",
+          streamPosition: "1",
+          committedAt: "2026-07-09T10:00:00.000Z"
+        },
         webhookToken: "test-source-webhook-token"
       });
     });
@@ -427,6 +439,9 @@ describe("inbox API client", () => {
     await createSourceConnection(
       {
         sourceName: "megapbx",
+        clientMutationId: inboxV2ClientMutationIdSchema.parse(
+          "client-mutation:web-source-test"
+        ),
         displayName: "MegaPBX"
       },
       {
@@ -439,6 +454,7 @@ describe("inbox API client", () => {
       path: "/internal/v1/sources/connections",
       body: {
         sourceName: "megapbx",
+        clientMutationId: "client-mutation:web-source-test",
         displayName: "MegaPBX"
       },
       effectivePermissionOverride: "modules.manage"

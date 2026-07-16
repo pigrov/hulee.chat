@@ -79,8 +79,7 @@ own versioned mapper is registered.
 
 `INB2-SRC-010` establishes authentic contracts, storage and per-attempt atomic
 registry writes; it does not claim that standalone onboarding is already a
-production command. Before the first `setupMode=source_connection` catalog item
-can become `available`, two blocking P0 tasks must be complete:
+production command. The two blocking protocol foundations are now implemented:
 
 1. `INB2-CON-011` extracts the existing generic Inbox V2 authorized-command
    transaction coordinator instead of creating a source-specific idempotency
@@ -92,9 +91,12 @@ can become `available`, two blocking P0 tasks must be complete:
 Adapter prepare remains outside that database transaction. The first successful
 response may disclose a registered one-time value, while an
 `already_applied` replay never stores or rediscloses plaintext; a lost first
-response requires credential rotation. Current production composition omits the
-registry adapter, transactional authorization resolver and onboarding unit of
-work, so this incomplete path is unreachable and fail-closed.
+response requires credential rotation. Current production composition still
+deliberately omits the real registry adapter, transactional authorization
+resolver, fingerprint/lifecycle authority and onboarding unit of work.
+Therefore no `setupMode=source_connection` item is enabled merely because the
+generic protocol exists; the path remains unreachable and fail-closed until an
+exact provider composition is reviewed.
 
 ## Verification map
 
@@ -119,9 +121,9 @@ The completion gate covers:
 
 `INB2-SRC-010` is implemented by the additive V2 source registry contracts,
 module registry, SQL schema, repository, migration and internal onboarding API.
-The production standalone onboarding path remains fail-closed until
-`INB2-CON-011` and `INB2-SRC-011` add the generic authorized-command
-coordinator and replay-safe command surface.
+`INB2-CON-011` and `INB2-SRC-011` add the generic authorized-command coordinator
+and replay-safe command surface; production standalone onboarding remains
+fail-closed until a real provider installs every dependency listed above.
 
 Verified on 2026-07-16:
 

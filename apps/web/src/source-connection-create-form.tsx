@@ -20,11 +20,13 @@ export type SourceConnectionCreateMessages = Record<
 };
 
 export function SourceConnectionCreateForm({
+  clientMutationId,
   defaultDisplayName,
   label,
   messages,
   sourceName
 }: {
+  readonly clientMutationId: string;
   readonly defaultDisplayName: string;
   readonly label: string;
   readonly messages: SourceConnectionCreateMessages;
@@ -53,6 +55,7 @@ export function SourceConnectionCreateForm({
   return (
     <form className="adminStack" action={formAction}>
       <input type="hidden" name="sourceName" value={sourceName} />
+      <input type="hidden" name="clientMutationId" value={clientMutationId} />
       <label className="field">
         <span>{messages.displayName}</span>
         <input

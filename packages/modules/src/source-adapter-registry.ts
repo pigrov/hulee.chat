@@ -47,6 +47,11 @@ export type SourceAdapterOnboardingPrepareInput = Readonly<{
   artifacts: readonly InboxV2SourceRegistryArtifactReference[];
   credentialBindings: readonly InboxV2SourceRegistrySecretReference[];
   ephemeralCredentials: readonly SourceAdapterEphemeralCredentialInput[];
+  /**
+   * Platform-allocated opaque route capability. Adapters may bind it to their
+   * ingress authority but must never derive or replace it with provider data.
+   */
+  ephemeralIngressRouteMaterial: Uint8Array | null;
 }>;
 
 export type SourceAdapterTransientSecretWrite = Readonly<{
@@ -286,7 +291,7 @@ function validateAndWrapRegistration(
               try {
                 assertPrepareInputSnapshotShape(prepareInput);
                 inputSnapshot = snapshotPrepareInput(prepareInput);
-                assertPrepareInput(declaration.sourceName, inputSnapshot);
+                assertPrepareInput(declarationAuthority, inputSnapshot);
                 prepared = await invokeAndSnapshotPrepareHandler(
                   onboardingPrepare!,
                   clonePrepareInputForHandler(inputSnapshot)
@@ -397,6 +402,8 @@ function assertPrepareInputSnapshotShape(
     !Array.isArray(input.artifacts) ||
     !Array.isArray(input.credentialBindings) ||
     !Array.isArray(input.ephemeralCredentials) ||
+    (input.ephemeralIngressRouteMaterial !== null &&
+      !(input.ephemeralIngressRouteMaterial instanceof Uint8Array)) ||
     input.ephemeralCredentials.some(
       (credential) =>
         !credential ||
@@ -409,17 +416,22 @@ function assertPrepareInputSnapshotShape(
 }
 
 function assertPrepareInput(
-  sourceName: string,
+  declaration: InboxV2SourceAdapterDeclaration,
   input: SourceAdapterOnboardingPrepareInput
 ): void {
+  const requiresIngressRoute =
+    declaration.payload.ingress.mode !== "not_supported";
   if (
-    input.sourceName !== sourceName ||
+    input.sourceName !== declaration.payload.sourceName ||
     input.sourceConnection.tenantId !== input.tenantId ||
     (input.actor.kind === "employee" &&
       input.actor.employee.tenantId !== input.tenantId) ||
     !inboxV2TimestampSchema.safeParse(input.requestedAt).success ||
     input.displayName.trim().length === 0 ||
-    input.displayName.length > 200
+    input.displayName.length > 200 ||
+    (requiresIngressRoute
+      ? input.ephemeralIngressRouteMaterial?.byteLength !== 32
+      : input.ephemeralIngressRouteMaterial !== null)
   ) {
     throw new SourceAdapterRegistryError(
       "source_adapter.invalid_prepared_authority",
@@ -565,7 +577,11 @@ function snapshotPrepareInput(
             material: copyBytes(credential.material, copies)
           })
         )
-      )
+      ),
+      ephemeralIngressRouteMaterial:
+        input.ephemeralIngressRouteMaterial === null
+          ? null
+          : copyBytes(input.ephemeralIngressRouteMaterial, copies)
     });
   } catch (error) {
     zeroByteCopies(copies);
@@ -593,7 +609,11 @@ function clonePrepareInputForHandler(
       ephemeralCredentials: input.ephemeralCredentials.map((credential) => ({
         bindingId: credential.bindingId,
         material: copyBytes(credential.material, copies)
-      }))
+      })),
+      ephemeralIngressRouteMaterial:
+        input.ephemeralIngressRouteMaterial === null
+          ? null
+          : copyBytes(input.ephemeralIngressRouteMaterial, copies)
     };
   } catch (error) {
     zeroByteCopies(copies);
@@ -622,6 +642,7 @@ function zeroPrepareInputCredentials(
   for (const credential of input?.ephemeralCredentials ?? []) {
     zeroBytes(credential.material);
   }
+  zeroBytes(input?.ephemeralIngressRouteMaterial ?? undefined);
 }
 
 function zeroPreparedTransientMaterial(prepared: unknown): void {
@@ -1061,7 +1082,8 @@ function assertPreparedAuthority(
     if (
       matches.length !== 1 ||
       !(matches[0]!.material instanceof Uint8Array) ||
-      matches[0]!.material.byteLength === 0 ||
+      input.ephemeralIngressRouteMaterial === null ||
+      !sameBytes(matches[0]!.material, input.ephemeralIngressRouteMaterial) ||
       calculateInboxV2BytesSha256(matches[0]!.material) !==
         matches[0]!.materialDigest
     ) {
@@ -1075,6 +1097,36 @@ function assertPreparedAuthority(
     prepared.oneTimeResponse,
     "handlerId" in onboarding ? onboarding.oneTimeResponse : null
   );
+  assertIngressRouteMaterialIndependence(
+    input.ephemeralIngressRouteMaterial,
+    prepared
+  );
+}
+
+function assertIngressRouteMaterialIndependence(
+  routeMaterial: Uint8Array | null,
+  prepared: SourceAdapterOnboardingPrepared
+): void {
+  if (routeMaterial === null) {
+    return;
+  }
+
+  const classifiedMaterial = [
+    ...prepared.artifactWrites.map((write) => write.material),
+    ...prepared.secretWrites.map((write) => write.material)
+  ];
+  const responseMaterial =
+    prepared.oneTimeResponse?.fields.map((field) => field.value) ?? [];
+
+  if (
+    [...classifiedMaterial, ...responseMaterial].some((material) =>
+      sameBytes(routeMaterial, material)
+    )
+  ) {
+    throw invalidPrepared(
+      "Ephemeral ingress route material must be independent from classified and one-time response material."
+    );
+  }
 }
 
 function assertArtifactDeclarations(

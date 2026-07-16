@@ -23,6 +23,10 @@ export const INBOX_V2_SOURCE_ADAPTER_DECLARATION_SCHEMA_VERSION =
   INBOX_V2_INITIAL_SCHEMA_VERSION;
 export const INBOX_V2_SOURCE_ONBOARDING_ONE_TIME_RESPONSE_SCHEMA_ID =
   "core:source-onboarding-response" as const;
+export const INBOX_V2_SOURCE_ONBOARDING_RESULT_SCHEMA_ID =
+  "core:inbox-v2.source-onboarding-result" as const;
+export const INBOX_V2_SOURCE_ONBOARDING_RESULT_SCHEMA_VERSION =
+  INBOX_V2_INITIAL_SCHEMA_VERSION;
 export const INBOX_V2_SOURCE_ONBOARDING_WEBHOOK_TOKEN_FIELD_ID =
   "core:webhook-token" as const;
 
@@ -132,6 +136,17 @@ const sourceAdapterDeclarationPayloadSchema = z
           message: `Source adapter declaration requires ${slot}.`
         });
       }
+    }
+    if (
+      declaration.setupMode === "source_connection" &&
+      !required.has("source_onboarding_result_snapshot")
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["requiredCopySlots"],
+        message:
+          "Source-connection setup requires source_onboarding_result_snapshot lifecycle lineage."
+      });
     }
     if (
       declaration.setupMode === "channel_connector" &&

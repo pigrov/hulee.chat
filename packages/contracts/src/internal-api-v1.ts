@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import type { PlatformErrorCode } from "./index";
+import { inboxV2ClientMutationIdSchema } from "./inbox-v2";
 import {
   sourceCatalogCategoryDefinitionSchema,
   sourceCatalogItemSchema
@@ -12,6 +13,7 @@ export const internalApiPlatformErrorCodeSchema = z.enum([
   "auth.invalid_credentials",
   "auth.email_not_verified",
   "auth.rate_limited",
+  "command.idempotency_conflict",
   "entitlement.missing",
   "license.inactive",
   "permission.denied",
@@ -840,14 +842,30 @@ export const internalSourceConnectionsResponseSchema = z
 export const internalSourceConnectionCreateRequestSchema = z
   .object({
     sourceName: z.string().trim().min(1).max(120),
+    clientMutationId: inboxV2ClientMutationIdSchema,
     displayName: z.string().trim().min(1).max(160).optional(),
     webhookToken: z.string().trim().min(16).max(200).optional()
+  })
+  .strict();
+
+export const internalSourceConnectionCommandResultSchema = z
+  .object({
+    outcome: z.enum(["applied", "already_applied"]),
+    commandId: z.string().trim().min(1).max(256),
+    clientMutationId: inboxV2ClientMutationIdSchema,
+    mutationId: z.string().trim().min(1).max(256),
+    publicResultCode: z.string().trim().min(3).max(256),
+    streamCommitId: z.string().trim().min(1).max(256),
+    streamEpoch: z.string().trim().min(8).max(256),
+    streamPosition: z.string().regex(/^[1-9][0-9]{0,18}$/u),
+    committedAt: z.string().datetime({ offset: true })
   })
   .strict();
 
 export const internalSourceConnectionCreateResponseSchema = z
   .object({
     connection: internalSourceConnectionSummarySchema,
+    command: internalSourceConnectionCommandResultSchema,
     webhookToken: z.string().trim().min(16).max(200).optional()
   })
   .strict();
