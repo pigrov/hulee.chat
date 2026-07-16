@@ -340,6 +340,26 @@ describe("Inbox V2 public contract boundary", () => {
     expect(
       publicContracts.inboxV2SourceAccountIdentityTransitionCommitSchema
     ).toBeDefined();
+    expect(
+      publicContracts.inboxV2SourceRegistryLifecycleBindingSchema
+    ).toBeDefined();
+    expect(
+      publicContracts.defineInboxV2SourceRegistryLifecycleBinding
+    ).toBeTypeOf("function");
+    expect(
+      publicContracts.inboxV2SourceConnectionRegistryStateSchema
+    ).toBeDefined();
+    expect(
+      publicContracts.inboxV2SourceAccountRegistryStateSchema
+    ).toBeDefined();
+    expect(publicContracts.inboxV2SourceRegistryTransitionSchema).toBeDefined();
+    expect(publicContracts.defineInboxV2SourceRegistryTransition).toBeTypeOf(
+      "function"
+    );
+    expect(publicContracts.inboxV2SourceAdapterDeclarationSchema).toBeDefined();
+    expect(publicContracts.defineInboxV2SourceAdapterDeclaration).toBeTypeOf(
+      "function"
+    );
     expect(publicContracts.inboxV2ExternalThreadSchema).toBeDefined();
     expect(
       publicContracts.inboxV2ExternalThreadAliasCommitSchema

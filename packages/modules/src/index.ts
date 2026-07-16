@@ -67,6 +67,29 @@ export type {
   EgressRuntimeRegistry
 } from "./egress";
 export {
+  createSourceAdapterRegistry,
+  isSourceAdapterRegistry,
+  SourceAdapterRegistryError
+} from "./source-adapter-registry";
+export type {
+  SourceAdapterEphemeralCredentialInput,
+  SourceAdapterAccountAuthority,
+  SourceAdapterConnectionAuthority,
+  SourceAdapterIngressDispatchInput,
+  SourceAdapterIngressDispatchResult,
+  SourceAdapterIngressHandler,
+  SourceAdapterOnboardingAuthority,
+  SourceAdapterOnboardingHandler,
+  SourceAdapterOnboardingPrepareInput,
+  SourceAdapterOnboardingPrepared,
+  SourceAdapterOneTimeResponse,
+  SourceAdapterRegistration,
+  SourceAdapterRegistry,
+  SourceAdapterTransientArtifactWrite,
+  SourceAdapterTransientRouteWrite,
+  SourceAdapterTransientSecretWrite
+} from "./source-adapter-registry";
+export {
   createPublicApiChannelAdapter,
   normalizePublicApiIncomingMessage,
   publicApiChannelInboundEnvelopeSchema,

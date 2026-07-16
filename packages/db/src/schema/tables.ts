@@ -329,6 +329,22 @@ export const channelConnectors = pgTable(
     ...timestamps
   },
   (table) => [
+    unique("channel_connectors_tenant_id_unique").on(table.tenantId, table.id),
+    unique("channel_connectors_tenant_id_connection_unique").on(
+      table.tenantId,
+      table.id,
+      table.sourceConnectionId
+    ),
+    foreignKey({
+      name: "channel_connectors_tenant_connection_fk",
+      columns: [table.tenantId, table.sourceConnectionId],
+      foreignColumns: [sourceConnections.tenantId, sourceConnections.id]
+    }),
+    foreignKey({
+      name: "channel_connectors_tenant_creator_fk",
+      columns: [table.tenantId, table.createdByEmployeeId],
+      foreignColumns: [employees.tenantId, employees.id]
+    }),
     index("channel_connectors_tenant_idx").on(table.tenantId),
     index("channel_connectors_tenant_type_idx").on(
       table.tenantId,
@@ -380,6 +396,17 @@ export const channelSessions = pgTable(
     ...timestamps
   },
   (table) => [
+    unique("channel_sessions_tenant_id_unique").on(table.tenantId, table.id),
+    unique("channel_sessions_tenant_id_connector_unique").on(
+      table.tenantId,
+      table.id,
+      table.connectorId
+    ),
+    foreignKey({
+      name: "channel_sessions_tenant_connector_fk",
+      columns: [table.tenantId, table.connectorId],
+      foreignColumns: [channelConnectors.tenantId, channelConnectors.id]
+    }),
     uniqueIndex("channel_sessions_tenant_connector_key_unique").on(
       table.tenantId,
       table.connectorId,
@@ -426,6 +453,30 @@ export const channelSessionEvents = pgTable(
     ...timestamps
   },
   (table) => [
+    unique("channel_session_events_tenant_id_unique").on(
+      table.tenantId,
+      table.id
+    ),
+    unique("channel_session_events_tenant_exact_unique").on(
+      table.tenantId,
+      table.id,
+      table.sessionId,
+      table.connectorId
+    ),
+    foreignKey({
+      name: "channel_session_events_tenant_connector_fk",
+      columns: [table.tenantId, table.connectorId],
+      foreignColumns: [channelConnectors.tenantId, channelConnectors.id]
+    }),
+    foreignKey({
+      name: "channel_session_events_tenant_session_connector_fk",
+      columns: [table.tenantId, table.sessionId, table.connectorId],
+      foreignColumns: [
+        channelSessions.tenantId,
+        channelSessions.id,
+        channelSessions.connectorId
+      ]
+    }),
     index("channel_session_events_tenant_idx").on(table.tenantId),
     index("channel_session_events_tenant_connector_idx").on(
       table.tenantId,
@@ -460,6 +511,25 @@ export const channelAuthChallenges = pgTable(
     ...timestamps
   },
   (table) => [
+    unique("channel_auth_challenges_tenant_id_unique").on(
+      table.tenantId,
+      table.id
+    ),
+    unique("channel_auth_challenges_tenant_id_connector_unique").on(
+      table.tenantId,
+      table.id,
+      table.connectorId
+    ),
+    foreignKey({
+      name: "channel_auth_challenges_tenant_connector_fk",
+      columns: [table.tenantId, table.connectorId],
+      foreignColumns: [channelConnectors.tenantId, channelConnectors.id]
+    }),
+    foreignKey({
+      name: "channel_auth_challenges_tenant_creator_fk",
+      columns: [table.tenantId, table.createdByEmployeeId],
+      foreignColumns: [employees.tenantId, employees.id]
+    }),
     index("channel_auth_challenges_tenant_idx").on(table.tenantId),
     index("channel_auth_challenges_tenant_connector_idx").on(
       table.tenantId,
@@ -495,6 +565,20 @@ export const channelProviderValidationJobs = pgTable(
     ...timestamps
   },
   (table) => [
+    unique("channel_provider_validation_jobs_tenant_id_unique").on(
+      table.tenantId,
+      table.id
+    ),
+    foreignKey({
+      name: "channel_provider_validation_jobs_tenant_secret_fk",
+      columns: [table.tenantId, table.botTokenSecretRef],
+      foreignColumns: [tenantSecrets.tenantId, tenantSecrets.secretRef]
+    }),
+    foreignKey({
+      name: "channel_provider_validation_jobs_tenant_creator_fk",
+      columns: [table.tenantId, table.createdByEmployeeId],
+      foreignColumns: [employees.tenantId, employees.id]
+    }),
     index("channel_provider_validation_jobs_tenant_idx").on(table.tenantId),
     index("channel_provider_validation_jobs_tenant_status_idx").on(
       table.tenantId,
@@ -526,6 +610,11 @@ export const sourceConnections = pgTable(
   },
   (table) => [
     unique("source_connections_tenant_id_unique").on(table.tenantId, table.id),
+    foreignKey({
+      name: "source_connections_tenant_creator_fk",
+      columns: [table.tenantId, table.createdByEmployeeId],
+      foreignColumns: [employees.tenantId, employees.id]
+    }),
     index("source_connections_tenant_idx").on(table.tenantId),
     index("source_connections_tenant_type_idx").on(
       table.tenantId,

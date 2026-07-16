@@ -33,6 +33,7 @@ export * from "./security-denial-audit";
 export * from "./source-account-identity";
 export * from "./source-occurrence-materialization";
 export * from "./source-routing-primitives";
+export * from "./source-registry";
 export * from "./source-thread-binding";
 export * from "./staff-note";
 export * from "./sync-primitives";

@@ -216,6 +216,13 @@ export function calculateInboxV2CanonicalSha256(
   return `sha256:${bytesToHex(sha256(encodeInboxV2CanonicalJson(value)))}` as InboxV2Sha256Digest;
 }
 
+/** Digest for an already encoded classified payload or transient secret. */
+export function calculateInboxV2BytesSha256(
+  value: Uint8Array
+): InboxV2Sha256Digest {
+  return `sha256:${bytesToHex(sha256(value))}` as InboxV2Sha256Digest;
+}
+
 function buildInboxV2RecipientUpsertStateFingerprintPreimage<TValue>(
   input: InboxV2RecipientUpsertStateHashInput<TValue>,
   protection: InboxV2RecipientStateFingerprintProtection

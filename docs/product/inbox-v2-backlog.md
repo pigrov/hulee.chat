@@ -671,6 +671,30 @@ implementation.
     the concurrent untracked landing component
     `apps/site/app/[locale]/calculator-section.tsx`.
 
+- [ ] `INB2-CON-011` Extract the generic authorized-command transaction coordinator.
+  - State: `planned`; Priority: `P0`; Depends on: `INB2-CON-008`,
+    `INB2-RBAC-003`.
+  - Acceptance: the command claim, same-transaction authorization/revision/
+    temporal fence, tenant-stream commit, domain event, outbox, audit and final
+    idempotency result currently embedded in the authorization-relation writer
+    are exposed through one provider-neutral coordinator. It accepts the exact
+    `InboxV2CommandRequestIdentity`, principal, full authorization epoch snapshot
+    and decision references, expected revisions and a DB-only domain mutation
+    callback over the coordinator-owned executor; relation writes remain a thin
+    wrapper over the same protocol. Equal tenant/principal/command/
+    `clientMutationId` plus equal request hash returns the canonical
+    `already_applied` result without re-running the domain callback; a different
+    hash conflicts. DB-clock `notAfter`, epoch/relation/revision changes and
+    malformed evidence fail before the callback, and serialization retry may
+    repeat only the DB callback, never provider I/O. The coordinator stores no
+    plaintext credential or one-time response and supports only a non-sensitive
+    replay result/reference.
+  - Verification: unit and live PostgreSQL concurrency/failure fixtures cover
+    same-hash replay, different-hash conflict, independent tenant/principal
+    scopes, revocation or expiry after preflight, rollback with no command/
+    stream/domain residue, serialization retry, exact command/change/event
+    correlation and no one-time-secret redisclosure. Evidence: -
+
 - [x] `INB2-RBAC-001` Implement the versioned Inbox V2 permission/scope catalog.
   - State: `done`; Priority: `P0`; Started: `2026-07-12`;
     Completed: `2026-07-12`; Owner: `Codex`; Depends on: `INB2-CON-001`,
@@ -1337,9 +1361,10 @@ participant set.
     `pnpm check` passed (`304/3041`, with `31/258` opt-in integration tests
     intentionally skipped by the default process).
 
-- [ ] `INB2-SRC-010` Harden the reusable SourceConnection, SourceAccount and
+- [x] `INB2-SRC-010` Harden the reusable SourceConnection, SourceAccount and
       channel-connector registry for V2.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-SRC-001`,
+  - State: `done`; Priority: `P0`; Started: `2026-07-16`; Completed:
+    `2026-07-16`; Owner: `Codex`; Depends on: `INB2-SRC-001`,
     `INB2-DB-003`, `INB2-DB-009`, `INB2-CON-010`, `INB2-RBAC-003`.
   - Acceptance: every SourceConnection, SourceAccount, creator/owner/access,
     ChannelConnector, ChannelSession, session-event and auth-challenge edge is
@@ -1367,6 +1392,43 @@ participant set.
     composition rejects missing subject/parent/anchor/hold/export/delete/
     absence handlers and stale lineage revisions; hold/restriction and absence
     verification fail closed. Focused legacy source/channel tests pass.
+    Evidence: additive V2 source registry contracts/modules, SQL schema,
+    finalized migration, repository and internal onboarding API; production
+    standalone onboarding remains fail-closed until `INB2-CON-011`/`INB2-SRC-011`.
+    Focused contracts/modules/public boundary `3/73`, API `2/98`, DB unit/schema
+    `2/20`, live migration `1/4`, clean temporary PostgreSQL repository `1/2`,
+    N-1 upgrade `1/2`, `pnpm db:check`, `pnpm typecheck` and `pnpm lint` passed.
+    Full `pnpm check` passed with `308/3146` and all gates.
+    Detailed evidence is in
+    `docs/product/inbox-v2-src-010-source-registry.md`.
+
+- [ ] `INB2-SRC-011` Wire standalone source onboarding through the authorized command protocol.
+  - State: `planned`; Priority: `P0`; Depends on: `INB2-CON-011`,
+    `INB2-SRC-010`, `INB2-DB-009`, `INB2-CON-010`, `INB2-RBAC-003`.
+  - Acceptance: the versioned standalone-onboarding API requires a stable
+    `clientMutationId`; the server computes the canonical request hash without
+    plaintext credentials and invokes adapter prepare outside the sole database
+    transaction. A DB-only source-registry callback then writes the compatibility
+    source, transition/head, typed artifacts, revocable secret/route references
+    and activation state through the `INB2-CON-011` coordinator, with the full
+    current authorization snapshot and decision references revalidated in that
+    same transaction. The first `applied` response may disclose a one-time value
+    only through an explicitly registered response profile; `already_applied`
+    returns the canonical non-sensitive source/commit result and never persists
+    or rediscloses plaintext. A lost first response requires explicit credential
+    rotation. The standard webhook-secret profile may deliberately use the same
+    transient bytes for its revocable credential and `core:webhook-token`
+    response, while generic route material and future response profiles remain
+    independent. No production catalog item with `setupMode=source_connection`
+    may become `available` until this coordinator, real adapter, transactional
+    authorization resolver and production composition are all present.
+  - Verification: API/repository/live PostgreSQL fixtures prove concurrent
+    same-hash execution writes once, different-hash conflict writes nothing,
+    revocation/expiry during slow prepare is denied, provider prepare is not
+    repeated by DB retry, rollback leaves no command/source/secret/route/stream
+    rows, the atomic stream commit carries command/client-mutation/source event
+    evidence, replay never rediscloses the token, and production composition
+    fails closed when any required dependency or registered profile is absent.
     Evidence: -
 
 - [ ] `INB2-SRC-002` Add atomic raw-event claim, lease and stale reclaim.
@@ -1900,7 +1962,7 @@ provider-specific architecture.
 - [ ] `INB2-DMX-001` Implement SourceCapabilities V2 and direct adapter contract harness.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-ARCH-008`,
     `INB2-ARCH-010`, `INB2-CON-005`, `INB2-CON-007`, `INB2-CON-010`,
-    `INB2-SRC-010`.
+    `INB2-SRC-010`, `INB2-SRC-011`.
   - Acceptance: capability profiles belong to an exact provider surface and
     binding; they separately describe access model, private/group thread/message
     scope, opaque route token, roster fidelity/history, group read/write,
@@ -2950,3 +3012,4 @@ the task state, checkbox and evidence above.
 | 2026-07-16 | `INB2-DB-010`      | Coherence/TRUNCATE; lifecycle 6/6; preserve 3/17; reset 1/1; full 303/3031 | working tree | Codex + three independent reviews |
 | 2026-07-16 | `INB2-EPIC-2-GATE` | Fresh PG 23/219; preserve/reset/lifecycle; full 304/3041 and all gates     | working tree | Codex + independent reviews       |
 | 2026-07-16 | `INB2-SRC-001`     | Map; focused 12/71; independent 8/45, 12/89, 3/74; full 304/3041           | working tree | Codex + three independent reviews |
+| 2026-07-16 | `INB2-SRC-010`     | Source registry; focused 7/191; live PG 6/6; N-1 2/2; full gate            | working tree | Codex                             |

@@ -33,6 +33,7 @@ import type {
   InternalTelegramSetupStep,
   PlatformErrorCode,
   PlatformEvent,
+  SourceCatalogItem,
   SourceConnectionId,
   TenantId
 } from "@hulee/contracts";
@@ -74,14 +75,29 @@ import {
   TelegramAdapterError,
   managedMessengerVpnEgressRequirement,
   deploymentPolicyDirectEgressRequirement,
+  isSourceAdapterRegistry,
+  SourceAdapterRegistryError,
   type EgressProfileResolution,
   type EgressRuntime,
+  type SourceAdapterOnboardingPrepared,
+  type SourceAdapterRegistry,
   type TelegramBotApiEgressBinding,
   type TelegramBotApiClient,
   type TelegramBotApiSettings,
   type TelegramBotIdentity
 } from "@hulee/modules";
 import { randomBytes, randomUUID } from "node:crypto";
+
+import {
+  clearSourceOnboardingTransientMaterial,
+  createSourceAdapterOnboardingPrepareInput,
+  resolveSourceOnboardingEmployeeActor,
+  resolveStandardWebhookSecretOneTimeToken,
+  sourceAuthTypeForAdapterRegistration,
+  validateCommittedSourceOnboarding,
+  type SourceOnboardingAuthorizationResolver,
+  type SourceRegistryOnboardingUnitOfWork
+} from "./source-registry-onboarding";
 
 export type InternalIntegrationContext = {
   requestId: string;
@@ -193,8 +209,7 @@ export type SecretWriter = {
     purpose:
       | "telegram.bot_token"
       | "telegram.bot_token_validation"
-      | "telegram.webhook_secret_token"
-      | "source.webhook_secret";
+      | "telegram.webhook_secret_token";
     plainText: string;
     updatedAt: Date;
   }): Promise<void>;
@@ -212,6 +227,18 @@ export type InternalIntegrationServiceOptions = {
   providerValidationJobRepository?: ChannelProviderValidationJobRepository;
   providerOperationEvents?: DomainEventRepository;
   sourceRepository?: SourceIntegrationRepository;
+  /**
+   * Test-only standalone V2 onboarding requires this complete authentic trio.
+   * Production intentionally omits it, and the SQL authority rejects employee
+   * onboarding until INB2-CON-011/SRC-011 add the generic command coordinator,
+   * a real adapter and same-transaction RBAC-003 evidence.
+   */
+  sourceAdapterRegistry?: SourceAdapterRegistry;
+  sourceOnboardingAuthorizationResolver?: SourceOnboardingAuthorizationResolver;
+  sourceRegistryOnboardingUnitOfWork?: SourceRegistryOnboardingUnitOfWork;
+  sourceCatalogItemResolver?: (
+    sourceName: string
+  ) => SourceCatalogItem | undefined;
   authChallengeCipher?: Pick<TenantSecretCipher, "encrypt" | "decrypt">;
   secretResolver?: SecretResolver;
   secretWriter?: SecretWriter;
@@ -719,6 +746,8 @@ export function createInternalIntegrationService(
     options.webhookConnectorIdFactory ?? createTelegramWebhookConnectorId;
   const webhookSecretTokenFactory =
     options.webhookSecretTokenFactory ?? createTelegramWebhookSecretToken;
+  const sourceCatalogItemResolver =
+    options.sourceCatalogItemResolver ?? findSourceCatalogItem;
 
   return {
     async listChannelCatalog() {
@@ -779,87 +808,123 @@ export function createInternalIntegrationService(
     },
 
     async createSourceConnection(context, request) {
-      if (!options.sourceRepository || !options.secretWriter) {
+      const source = sourceCatalogItemResolver(request.sourceName);
+
+      if (
+        !source ||
+        source.setupMode !== "source_connection" ||
+        source.readiness !== "available"
+      ) {
+        throw new CoreError("validation.failed");
+      }
+
+      if (!isSourceAdapterRegistry(options.sourceAdapterRegistry)) {
         throw new CoreError("module.unhealthy");
       }
 
-      const source = findSourceCatalogItem(request.sourceName);
+      const registration = options.sourceAdapterRegistry.getRegistration(
+        source.sourceName
+      );
+      const handler = options.sourceAdapterRegistry.get(source.sourceName);
 
-      if (!source || source.setupMode !== "source_connection") {
-        throw new CoreError("validation.failed");
+      if (
+        !registration ||
+        !handler ||
+        registration.declaration.payload.sourceName !== source.sourceName ||
+        registration.declaration.payload.sourceTypeId !==
+          `core:${source.sourceType}` ||
+        registration.declaration.payload.setupMode !== "source_connection" ||
+        registration.declaration.payload.onboarding.mode !== "standalone" ||
+        registration.declaration.payload.onboarding.handlerId !==
+          handler.handlerId
+      ) {
+        throw new CoreError("module.unhealthy");
+      }
+
+      if (!options.sourceRegistryOnboardingUnitOfWork) {
+        throw new CoreError("module.unhealthy");
       }
 
       const sourceConnectionId = createStandaloneSourceConnectionId(
         source.sourceName
       );
-      const webhookToken = request.webhookToken?.trim() || createWebhookToken();
-      const webhookSecretRef = createTenantSecretRef({
-        tenantId: context.tenantId,
-        moduleId: `source-${source.sourceName}`,
-        secretName: `webhook-${randomUUID()}`
-      });
-      const webhookPath = createSourceWebhookPath({
-        sourceName: source.sourceName,
-        sourceConnectionId
-      });
-      const webhookUrl = options.publicWebhookBaseUrl
-        ? new URL(webhookPath, options.publicWebhookBaseUrl).toString()
-        : undefined;
       const updatedAt = now();
-
-      await options.secretWriter.upsertSecret({
-        tenantId: context.tenantId,
-        secretRef: webhookSecretRef,
-        purpose: "source.webhook_secret",
-        plainText: webhookToken,
-        updatedAt
-      });
-
-      const record = await options.sourceRepository.upsertSourceConnection({
-        id: sourceConnectionId,
-        tenantId: context.tenantId,
-        sourceType: source.sourceType,
+      const displayName =
+        request.displayName?.trim() ||
+        defaultSourceDisplayName(source.sourceName);
+      const actor = await resolveSourceOnboardingEmployeeActor({
+        context,
         sourceName: source.sourceName,
-        displayName:
-          request.displayName?.trim() ||
-          defaultSourceDisplayName(source.sourceName),
-        status: "onboarding",
-        authType: "webhook_secret",
-        capabilities: normalizeSourceCapabilities({
-          canReceive: source.capabilities.includes("receive_events"),
-          canReply: source.capabilities.includes("native_reply"),
-          canFetchHistory: source.capabilities.includes("history_fetch"),
-          canSendFiles: source.capabilities.includes("file_send"),
-          canReceiveFiles: source.capabilities.includes("file_receive"),
-          supportsThreads: source.capabilities.includes("threading"),
-          supportsReactions: source.capabilities.includes("reactions"),
-          supportsReadStatus: source.capabilities.includes("read_status"),
-          supportsDeliveryStatus:
-            source.capabilities.includes("delivery_status"),
-          webhookSupported: source.capabilities.includes("webhook_delivery"),
-          pollingRequired: source.capabilities.includes("polling_runtime"),
-          customerProfile: source.capabilities.includes("customer_profile"),
-          oauthSupported: source.capabilities.includes("oauth"),
-          sandboxAvailable: Boolean(source.metadata?.sandboxAvailable)
-        }),
-        config: {
-          webhookPath,
-          ...(webhookUrl ? { webhookUrl } : {}),
-          webhookSecretRef,
-          tokenField: "crm_token"
-        },
-        metadata: {
-          category: source.category,
-          provider: source.provider ?? source.sourceName
-        },
-        createdByEmployeeId: context.employeeId,
-        updatedAt
+        requestedAt: updatedAt,
+        authorizationResolver: options.sourceOnboardingAuthorizationResolver
       });
+      const invocation = createSourceAdapterOnboardingPrepareInput({
+        context,
+        actor,
+        source,
+        sourceConnectionId,
+        registration,
+        displayName,
+        publicBaseUrl: options.publicWebhookBaseUrl,
+        webhookToken: request.webhookToken,
+        createWebhookToken,
+        requestedAt: updatedAt
+      });
+      let prepared: SourceAdapterOnboardingPrepared | undefined;
 
-      return {
-        connection: toInternalSourceConnectionSummary(record),
-        webhookToken
-      };
+      try {
+        try {
+          prepared = await handler.prepare(invocation.prepareInput);
+        } catch (error) {
+          if (error instanceof SourceAdapterRegistryError) {
+            throw new CoreError("module.unhealthy");
+          }
+
+          throw error;
+        }
+        const webhookToken = resolveStandardWebhookSecretOneTimeToken({
+          prepared,
+          expected: invocation.expectedStandardWebhookSecretToken
+        });
+        const record =
+          await options.sourceRegistryOnboardingUnitOfWork.onboardStandaloneSource(
+            {
+              requestId: context.requestId,
+              registration,
+              sourceConnection: {
+                id: sourceConnectionId,
+                tenantId: context.tenantId,
+                sourceType: source.sourceType,
+                sourceName: source.sourceName,
+                displayName,
+                status: "onboarding",
+                authType: sourceAuthTypeForAdapterRegistration({
+                  registration,
+                  source
+                }),
+                createdByEmployeeId: context.employeeId,
+                updatedAt
+              },
+              prepared
+            }
+          );
+        validateCommittedSourceOnboarding({
+          context,
+          source,
+          sourceConnectionId,
+          record
+        });
+
+        return {
+          connection: toInternalSourceConnectionSummary(record),
+          ...(webhookToken ? { webhookToken } : {})
+        };
+      } finally {
+        clearSourceOnboardingTransientMaterial({
+          prepareInput: invocation.prepareInput,
+          ...(prepared ? { prepared } : {})
+        });
+      }
     },
 
     async createChannelConnector(context, request) {
@@ -1712,15 +1777,6 @@ function createStandaloneSourceConnectionId(
   sourceName: string
 ): SourceConnectionId {
   return `source_connection:${sourceName}:${randomUUID()}` as SourceConnectionId;
-}
-
-function createSourceWebhookPath(input: {
-  sourceName: string;
-  sourceConnectionId: SourceConnectionId;
-}): string {
-  return `/webhooks/sources/${encodeURIComponent(
-    input.sourceName
-  )}/${encodeURIComponent(input.sourceConnectionId)}`;
 }
 
 function createWebhookToken(): string {
@@ -2647,7 +2703,7 @@ function buildTelegramBotTokenSecretRef(input: {
   return createChannelConnectorSecretRef({
     tenantId: input.tenantId,
     connectorId: input.connectorId,
-    secretName: "bot-token"
+    secretName: `bot-token-v1-${randomUUID()}`
   });
 }
 
@@ -2690,7 +2746,7 @@ function buildTelegramWebhookSecretTokenSecretRef(input: {
   return createChannelConnectorSecretRef({
     tenantId: input.tenantId,
     connectorId: input.connectorId,
-    secretName: "webhook-secret-token"
+    secretName: `webhook-secret-token-v1-${randomUUID()}`
   });
 }
 

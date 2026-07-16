@@ -116,6 +116,58 @@ const inboxV2ConversationTimelineHeadPreflightSql = (
     "utf8"
   )
 ).trim();
+const inboxV2SourceRegistryMarker =
+  "-- INBOX_V2_SOURCE_REGISTRY_MIGRATION_FINALIZED_V1";
+const inboxV2SourceRegistryPreflightMarker =
+  "-- INBOX_V2_SOURCE_REGISTRY_PREFLIGHT_V1";
+const inboxV2SourceRegistryInvariantName =
+  "INBOX_V2_SOURCE_REGISTRY_INTEGRITY_SQL";
+const inboxV2SourceRegistryPreflightSql = (
+  await readFile("scripts/db/inbox-v2-source-registry-preflight.sql", "utf8")
+).trim();
+const inboxV2SourceRegistryPrerequisiteUniqueConstraintNames = [
+  "channel_auth_challenges_tenant_id_unique",
+  "channel_auth_challenges_tenant_id_connector_unique",
+  "channel_connectors_tenant_id_unique",
+  "channel_connectors_tenant_id_connection_unique",
+  "channel_provider_validation_jobs_tenant_id_unique",
+  "channel_session_events_tenant_id_unique",
+  "channel_session_events_tenant_exact_unique",
+  "channel_sessions_tenant_id_unique",
+  "channel_sessions_tenant_id_connector_unique"
+];
+const inboxV2SourceRegistryTableNames = [
+  "public.inbox_v2_source_registry_transitions",
+  "public.inbox_v2_source_registry_heads",
+  "public.inbox_v2_source_registry_artifact_refs",
+  "public.inbox_v2_source_registry_secret_refs",
+  "public.inbox_v2_source_registry_ingress_routes",
+  "public.inbox_v2_source_registry_related_authority_refs"
+];
+const inboxV2SourceRegistryEnumNames = [
+  "public.inbox_v2_source_registry_actor_kind",
+  "public.inbox_v2_source_registry_artifact_kind",
+  "public.inbox_v2_source_registry_authority_kind",
+  "public.inbox_v2_source_registry_copy_slot",
+  "public.inbox_v2_source_registry_related_authority_kind",
+  "public.inbox_v2_source_registry_related_authority_status",
+  "public.inbox_v2_source_registry_route_authority_state",
+  "public.inbox_v2_source_registry_state",
+  "public.inbox_v2_source_registry_transition_intent"
+];
+const inboxV2SourceRegistryBaseConstraintNames = [
+  ...inboxV2SourceRegistryPrerequisiteUniqueConstraintNames,
+  "channel_auth_challenges_tenant_connector_fk",
+  "channel_auth_challenges_tenant_creator_fk",
+  "channel_connectors_tenant_connection_fk",
+  "channel_connectors_tenant_creator_fk",
+  "channel_provider_validation_jobs_tenant_secret_fk",
+  "channel_provider_validation_jobs_tenant_creator_fk",
+  "channel_session_events_tenant_connector_fk",
+  "channel_session_events_tenant_session_connector_fk",
+  "channel_sessions_tenant_connector_fk",
+  "source_connections_tenant_creator_fk"
+];
 const inboxV2MembershipPrivilegeBoundaryName =
   "INBOX_V2_MEMBERSHIP_PRIVILEGE_BOUNDARY_SQL";
 const inboxV2FoundationInvariantNames = new Set([
@@ -160,6 +212,9 @@ const inboxV2DatabaseResetReceiptMigrations = migrationFiles.filter(
 );
 const inboxV2ConversationTimelineHeadMigrations = migrationFiles.filter(
   ({ sql }) => sql.includes(inboxV2ConversationTimelineHeadMarker)
+);
+const inboxV2SourceRegistryMigrations = migrationFiles.filter(({ sql }) =>
+  sql.includes(inboxV2SourceRegistryMarker)
 );
 const inboxV2SchemaFileNames = (await readdir(inboxV2SchemaDirectory))
   .filter((fileName) => fileName.endsWith(".ts"))
@@ -226,6 +281,9 @@ const inboxV2ConversationTimelineHeadInvariantBlocks =
   inboxV2InvariantBlocks.filter(
     ({ name }) => name === inboxV2ConversationTimelineHeadInvariantName
   );
+const inboxV2SourceRegistryInvariantBlocks = inboxV2InvariantBlocks.filter(
+  ({ name }) => name === inboxV2SourceRegistryInvariantName
+);
 const inboxV2MembershipPrivilegeBoundaryBlock = extractInboxV2NamedSqlBlock(
   "membership-privilege-boundary.ts",
   await readFile(
@@ -304,6 +362,12 @@ if (inboxV2ConversationTimelineHeadInvariantBlocks.length !== 1) {
   );
   process.exit(1);
 }
+if (inboxV2SourceRegistryInvariantBlocks.length !== 1) {
+  console.error(
+    `Expected exactly one ${inboxV2SourceRegistryInvariantName} schema block, found ${inboxV2SourceRegistryInvariantBlocks.length}.`
+  );
+  process.exit(1);
+}
 const unownedInvariantBlocks = inboxV2InvariantBlocks.filter(
   ({ name }) =>
     !inboxV2FoundationInvariantNames.has(name) &&
@@ -314,7 +378,8 @@ const unownedInvariantBlocks = inboxV2InvariantBlocks.filter(
     !inboxV2AuthorizationRelationsInvariantNames.has(name) &&
     name !== inboxV2SecurityDenialInvariantName &&
     name !== inboxV2RepositoryFoundationInvariantName &&
-    name !== inboxV2ConversationTimelineHeadInvariantName
+    name !== inboxV2ConversationTimelineHeadInvariantName &&
+    name !== inboxV2SourceRegistryInvariantName
 );
 if (unownedInvariantBlocks.length > 0) {
   console.error(
@@ -425,6 +490,12 @@ if (inboxV2ConversationTimelineHeadMigrations.length !== 1) {
   );
   process.exit(1);
 }
+if (inboxV2SourceRegistryMigrations.length !== 1) {
+  console.error(
+    `Expected exactly one finalized Inbox V2 source-registry migration, found ${inboxV2SourceRegistryMigrations.length}.`
+  );
+  process.exit(1);
+}
 
 try {
   assertGlobalMigrationArtifactBijection({
@@ -483,6 +554,15 @@ try {
       fileName.endsWith("_snapshot.json")
     )
   });
+  assertMigrationJournalArtifactParity({
+    journal: drizzleJournal,
+    targetIndex: 39,
+    finalizedMigrationFileName: inboxV2SourceRegistryMigrations[0].fileName,
+    migrationFileNames,
+    snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
+      fileName.endsWith("_snapshot.json")
+    )
+  });
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
@@ -504,6 +584,10 @@ assertInboxV2ConversationTimelineHeadMigration(
   inboxV2ConversationTimelineHeadMigrations[0],
   inboxV2ConversationTimelineHeadInvariantBlocks[0]
 );
+assertInboxV2SourceRegistryMigration(
+  inboxV2SourceRegistryMigrations[0],
+  inboxV2SourceRegistryInvariantBlocks[0]
+);
 assertInboxV2SecurityDenialMigration(inboxV2SecurityDenialMigrations[0]);
 assertInboxV2RepositoryFoundationMigration(
   inboxV2RepositoryFoundationMigrations[0]
@@ -518,6 +602,9 @@ try {
   );
   await assertInboxV2ConversationTimelineHeadGeneratedSchemaParity(
     inboxV2ConversationTimelineHeadMigrations[0]
+  );
+  await assertInboxV2SourceRegistryGeneratedSchemaParity(
+    inboxV2SourceRegistryMigrations[0]
   );
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
@@ -587,6 +674,74 @@ async function assertInboxV2ConversationTimelineHeadGeneratedSchemaParity(
     baseIndex: 37,
     targetIndex: 38
   });
+  const historicalGenerated = withoutInboxV2Src010SchemaDelta(generated);
+  const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
+  assertDrizzleSnapshotParity(
+    historicalGenerated.snapshot,
+    checkedInSnapshot,
+    snapshotPath
+  );
+
+  const checkedInStatements = splitMigrationStatements(migration.sql);
+  assertExactSqlSequence(
+    historicalGenerated.statements,
+    checkedInStatements.slice(1, -1),
+    "Inbox V2 DB-010 ordered generated migration DDL"
+  );
+}
+
+function assertInboxV2SourceRegistryMigration(migration, invariantBlock) {
+  const statements = splitMigrationStatements(migration.sql);
+  if (statements.length < 12) {
+    throw new Error(
+      "Inbox V2 source-registry migration is missing preflight, generated DDL, or its invariant tail."
+    );
+  }
+  assertExactSqlSequence(
+    [`${inboxV2SourceRegistryMarker}\n${inboxV2SourceRegistryPreflightSql}`],
+    statements.slice(0, 1),
+    "Inbox V2 source-registry preflight"
+  );
+  assertExactSqlSequence(
+    [invariantBlock.sql],
+    statements.slice(-1),
+    "Inbox V2 source-registry invariant tail"
+  );
+  if (
+    !statements[0]?.includes(inboxV2SourceRegistryPreflightMarker) ||
+    statements[0].indexOf(inboxV2SourceRegistryPreflightMarker) >
+      statements[0].indexOf("do $preflight$")
+  ) {
+    throw new Error(
+      "Inbox V2 source-registry migration must run its reviewed preflight first."
+    );
+  }
+  for (const requiredFragment of [
+    'CREATE TABLE "inbox_v2_source_registry_transitions"',
+    'CREATE TABLE "inbox_v2_source_registry_heads"',
+    'CREATE TABLE "inbox_v2_source_registry_related_authority_refs"',
+    "inbox_v2_source_registry_assert_transition",
+    "inbox_v2_source_registry_head_after_update",
+    "inbox_v2_source_registry_child_head_deferred",
+    "deferrable initially deferred",
+    "set search_path = pg_catalog, public, pg_temp"
+  ]) {
+    if (!migration.sql.includes(requiredFragment)) {
+      throw new Error(
+        `Inbox V2 source-registry migration is missing ${requiredFragment}.`
+      );
+    }
+  }
+}
+
+async function assertInboxV2SourceRegistryGeneratedSchemaParity(migration) {
+  const snapshotPath = "packages/db/drizzle/meta/0039_snapshot.json";
+  const generated = await generateExpectedDrizzleMigration({
+    workspaceRoot: process.cwd(),
+    migrationDirectory,
+    baseIndex: 38,
+    targetIndex: 39
+  });
   const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
   assertDrizzleSnapshotParity(
     generated.snapshot,
@@ -594,12 +749,49 @@ async function assertInboxV2ConversationTimelineHeadGeneratedSchemaParity(
     snapshotPath
   );
 
+  const expectedStatements = orderSourceRegistryGeneratedStatements(
+    generated.statements
+  );
   const checkedInStatements = splitMigrationStatements(migration.sql);
   assertExactSqlSequence(
-    generated.statements,
+    expectedStatements,
     checkedInStatements.slice(1, -1),
-    "Inbox V2 DB-010 ordered generated migration DDL"
+    "Inbox V2 SRC-010 ordered generated migration DDL"
   );
+}
+
+function orderSourceRegistryGeneratedStatements(statements) {
+  const prerequisites = [];
+  const remainder = [];
+  for (const statement of statements) {
+    if (
+      inboxV2SourceRegistryPrerequisiteUniqueConstraintNames.some((name) =>
+        statement.includes(`ADD CONSTRAINT "${name}" UNIQUE`)
+      )
+    ) {
+      prerequisites.push(statement);
+    } else {
+      remainder.push(statement);
+    }
+  }
+  if (
+    prerequisites.length !==
+    inboxV2SourceRegistryPrerequisiteUniqueConstraintNames.length
+  ) {
+    throw new Error(
+      "Inbox V2 SRC-010 generated DDL is missing prerequisite composite unique constraints."
+    );
+  }
+  prerequisites.sort(
+    (left, right) =>
+      inboxV2SourceRegistryPrerequisiteUniqueConstraintNames.findIndex((name) =>
+        left.includes(name)
+      ) -
+      inboxV2SourceRegistryPrerequisiteUniqueConstraintNames.findIndex((name) =>
+        right.includes(name)
+      )
+  );
+  return [...prerequisites, ...remainder];
 }
 
 function assertGlobalMigrationArtifactBijection({
@@ -749,7 +941,8 @@ async function assertInboxV2LatestGeneratedSchemaParity(
 }
 
 function withoutInboxV2Db010SchemaDelta(generated) {
-  const snapshot = structuredClone(generated.snapshot);
+  const withoutSourceRegistry = withoutInboxV2Src010SchemaDelta(generated);
+  const snapshot = structuredClone(withoutSourceRegistry.snapshot);
   delete snapshot.tables[inboxV2ConversationIdentityFenceTableName];
   const timelineItem = snapshot.tables["public.inbox_v2_timeline_items"];
   if (!timelineItem?.indexes) {
@@ -759,10 +952,34 @@ function withoutInboxV2Db010SchemaDelta(generated) {
   }
   delete timelineItem.indexes[inboxV2EligibleActivityTailIndexName];
 
-  const statements = generated.statements.filter(
+  const statements = withoutSourceRegistry.statements.filter(
     (statement) =>
       !statement.includes("inbox_v2_conversation_identity_fences") &&
       !statement.includes(inboxV2EligibleActivityTailIndexName)
+  );
+  return { snapshot, statements };
+}
+
+function withoutInboxV2Src010SchemaDelta(generated) {
+  const snapshot = structuredClone(generated.snapshot);
+  for (const tableName of inboxV2SourceRegistryTableNames) {
+    delete snapshot.tables[tableName];
+  }
+  for (const enumName of inboxV2SourceRegistryEnumNames) {
+    delete snapshot.enums[enumName];
+  }
+  for (const table of Object.values(snapshot.tables)) {
+    for (const constraintName of inboxV2SourceRegistryBaseConstraintNames) {
+      delete table.foreignKeys?.[constraintName];
+      delete table.uniqueConstraints?.[constraintName];
+    }
+  }
+  const statements = generated.statements.filter(
+    (statement) =>
+      !statement.includes("inbox_v2_source_registry_") &&
+      !inboxV2SourceRegistryBaseConstraintNames.some((name) =>
+        statement.includes(name)
+      )
   );
   return { snapshot, statements };
 }

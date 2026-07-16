@@ -17,6 +17,7 @@ export * from "./inbox-v2/repository-foundation";
 export * from "./inbox-v2/security-denial";
 export * from "./inbox-v2/source-account-identity";
 export * from "./inbox-v2/source-occurrence";
+export * from "./inbox-v2/source-registry";
 export * from "./inbox-v2/source-thread-binding";
 export * from "./inbox-v2/tenant-policy-authority";
 export * from "./inbox-v2/timeline-message";

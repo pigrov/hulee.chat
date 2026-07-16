@@ -9,8 +9,13 @@ import type {
   InternalChannelAuthChallengeType,
   PlatformErrorCode,
   PlatformEvent,
+  SourceCatalogItem,
   SourceConnectionId,
   TenantId
+} from "@hulee/contracts";
+import {
+  findSourceCatalogItem,
+  inboxV2AuthorizationEpochSchema
 } from "@hulee/contracts";
 import type {
   ChannelAuthChallengeRecord,
@@ -44,6 +49,7 @@ import type {
   ListActiveChannelConnectorsByTypeInput,
   ListTenantSourceConnectionsInput,
   ListTenantChannelConnectorsInput,
+  InboxV2SourceRegistryRepository,
   NormalizedInboundEventRecord,
   RawInboundEventRecord,
   RecordNormalizedInboundEventInput,
@@ -58,12 +64,24 @@ import type {
   UpsertSourceAccountInput,
   UpsertSourceConnectionInput
 } from "@hulee/db";
+import type {
+  SourceAdapterRegistry,
+  SourceAdapterTransientSecretWrite
+} from "@hulee/modules";
+import { createSourceAdapterRegistry } from "@hulee/modules";
 import { describe, expect, it, vi } from "vitest";
 
 import {
   createInternalIntegrationService,
   type InternalIntegrationContext
 } from "./internal-integrations-service";
+import {
+  createSourceAdapterOnboardingPrepareInput,
+  createSourceRegistryOnboardingUnitOfWork,
+  type SourceOnboardingAuthorizationResolver,
+  type SourceRegistryOnboardingUnitOfWork
+} from "./source-registry-onboarding";
+import { createTestMegaPbxSourceAdapterRegistry } from "./test-support/source-adapter-registry-fixture";
 
 const tenantId = "tenant-integrations" as TenantId;
 const context: InternalIntegrationContext = {
@@ -95,6 +113,82 @@ const directEgressDiagnostics = (checkedAt = now.toISOString()) => ({
   profileKind: "direct" as const,
   checkedAt
 });
+
+function availableMegaPbxCatalogItemResolver(
+  sourceName: string
+): SourceCatalogItem | undefined {
+  const source = findSourceCatalogItem(sourceName);
+
+  return source?.sourceName === "megapbx"
+    ? {
+        ...source,
+        readiness: "available"
+      }
+    : undefined;
+}
+
+function structuralFakeSourceAdapterRegistry(): SourceAdapterRegistry {
+  return {
+    get: vi.fn(() => null),
+    getRegistration: vi.fn(() => null),
+    getIngressHandler: vi.fn(() => null),
+    listSourceNames: vi.fn(() => [])
+  };
+}
+
+type SourceOnboardingAuthorization = Exclude<
+  Awaited<
+    ReturnType<
+      SourceOnboardingAuthorizationResolver["resolveSourceOnboardingAuthorization"]
+    >
+  >,
+  null
+>;
+
+function currentSourceOnboardingAuthorizationResolver(
+  transform?: (
+    authorization: SourceOnboardingAuthorization
+  ) => SourceOnboardingAuthorization
+): SourceOnboardingAuthorizationResolver {
+  return {
+    async resolveSourceOnboardingAuthorization(input) {
+      const authorization: SourceOnboardingAuthorization = {
+        actor: {
+          kind: "employee",
+          employee: {
+            tenantId: input.tenantId,
+            kind: "employee",
+            id: input.employeeId
+          },
+          authorizationEpoch: inboxV2AuthorizationEpochSchema.parse(
+            "authorization:source-onboarding-current"
+          )
+        },
+        decision: {
+          tenantId: input.tenantId,
+          principal: {
+            kind: "employee",
+            employee: {
+              tenantId: input.tenantId,
+              kind: "employee",
+              id: input.employeeId
+            }
+          },
+          resource: { kind: "tenant", tenantId: input.tenantId },
+          authorizationEpoch: "authorization:source-onboarding-current",
+          permissionId: "modules.manage",
+          outcome: "allowed",
+          decidedAt: new Date(
+            input.requestedAt.getTime() - 1_000
+          ).toISOString(),
+          notAfter: new Date(input.requestedAt.getTime() + 60_000).toISOString()
+        }
+      };
+
+      return transform?.(authorization) ?? authorization;
+    }
+  };
+}
 
 describe("internal integrations service", () => {
   it("returns channel catalog entries with onboarding flows", async () => {
@@ -577,14 +671,393 @@ describe("internal integrations service", () => {
     ]);
   });
 
-  it("creates standalone MegaPBX source connections with webhook secret storage", async () => {
+  it("rejects coming-soon standalone sources before registry or persistence side effects", async () => {
+    const registry = structuralFakeSourceAdapterRegistry();
+    const unitOfWork = new InMemorySourceRegistryOnboardingUnitOfWork(
+      new InMemorySourceIntegrationRepository()
+    );
+    const service = createInternalIntegrationService({
+      connectorRepository: new InMemoryChannelConnectorRepository(),
+      sourceAdapterRegistry: registry,
+      sourceRegistryOnboardingUnitOfWork: unitOfWork,
+      now: () => now
+    });
+
+    await expect(
+      service.createSourceConnection(context, {
+        sourceName: "megapbx",
+        webhookToken: "megapbx-webhook-token"
+      })
+    ).rejects.toMatchObject({
+      code: "validation.failed"
+    });
+    expect(registry.getRegistration).not.toHaveBeenCalled();
+    expect(registry.get).not.toHaveBeenCalled();
+    expect(unitOfWork.commits).toHaveLength(0);
+    expect(unitOfWork.secretWrites).toHaveLength(0);
+  });
+
+  it("rejects a caller-authored structural source-adapter registry before handler access", async () => {
+    const sourceRepository = new InMemorySourceIntegrationRepository();
+    const registry = structuralFakeSourceAdapterRegistry();
+    const unitOfWork = new InMemorySourceRegistryOnboardingUnitOfWork(
+      sourceRepository
+    );
+    const service = createInternalIntegrationService({
+      connectorRepository: new InMemoryChannelConnectorRepository(),
+      sourceRepository,
+      sourceCatalogItemResolver: availableMegaPbxCatalogItemResolver,
+      sourceAdapterRegistry: registry,
+      sourceOnboardingAuthorizationResolver:
+        currentSourceOnboardingAuthorizationResolver(),
+      sourceRegistryOnboardingUnitOfWork: unitOfWork,
+      now: () => now
+    });
+
+    await expect(
+      service.createSourceConnection(context, {
+        sourceName: "megapbx",
+        webhookToken: "megapbx-webhook-token"
+      })
+    ).rejects.toMatchObject({ code: "module.unhealthy" });
+    expect(registry.getRegistration).not.toHaveBeenCalled();
+    expect(registry.get).not.toHaveBeenCalled();
+    expect(unitOfWork.commits).toHaveLength(0);
+    expect(sourceRepository.connections.size).toBe(0);
+  });
+
+  it("rejects available standalone sources without an exact registered handler", async () => {
+    const sourceRepository = new InMemorySourceIntegrationRepository();
+    const unitOfWork = new InMemorySourceRegistryOnboardingUnitOfWork(
+      sourceRepository
+    );
+    const service = createInternalIntegrationService({
+      connectorRepository: new InMemoryChannelConnectorRepository(),
+      sourceRepository,
+      sourceCatalogItemResolver: availableMegaPbxCatalogItemResolver,
+      sourceAdapterRegistry: createSourceAdapterRegistry({ registrations: [] }),
+      sourceOnboardingAuthorizationResolver:
+        currentSourceOnboardingAuthorizationResolver(),
+      sourceRegistryOnboardingUnitOfWork: unitOfWork,
+      now: () => now
+    });
+
+    await expect(
+      service.createSourceConnection(context, {
+        sourceName: "megapbx",
+        webhookToken: "megapbx-webhook-token"
+      })
+    ).rejects.toMatchObject({
+      code: "module.unhealthy"
+    });
+    expect(unitOfWork.commits).toHaveLength(0);
+    expect(unitOfWork.secretWrites).toHaveLength(0);
+    expect(sourceRepository.connections.size).toBe(0);
+  });
+
+  it("does not prepare registered standalone onboarding without an atomic unit-of-work", async () => {
+    const prepare = vi.fn();
+    const fixture = createTestMegaPbxSourceAdapterRegistry({
+      onPrepare: prepare
+    });
+    const service = createInternalIntegrationService({
+      connectorRepository: new InMemoryChannelConnectorRepository(),
+      sourceCatalogItemResolver: availableMegaPbxCatalogItemResolver,
+      sourceAdapterRegistry: fixture.registry,
+      sourceOnboardingAuthorizationResolver:
+        currentSourceOnboardingAuthorizationResolver(),
+      now: () => now
+    });
+
+    await expect(
+      service.createSourceConnection(context, {
+        sourceName: "megapbx",
+        webhookToken: "megapbx-webhook-token"
+      })
+    ).rejects.toMatchObject({
+      code: "module.unhealthy"
+    });
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
+  it("does not prepare standalone onboarding without current RBAC authorization authority", async () => {
+    const sourceRepository = new InMemorySourceIntegrationRepository();
+    const prepare = vi.fn();
+    const fixture = createTestMegaPbxSourceAdapterRegistry({
+      onPrepare: prepare
+    });
+    const unitOfWork = new InMemorySourceRegistryOnboardingUnitOfWork(
+      sourceRepository
+    );
+    const service = createInternalIntegrationService({
+      connectorRepository: new InMemoryChannelConnectorRepository(),
+      sourceRepository,
+      sourceCatalogItemResolver: availableMegaPbxCatalogItemResolver,
+      sourceAdapterRegistry: fixture.registry,
+      sourceRegistryOnboardingUnitOfWork: unitOfWork,
+      now: () => now
+    });
+
+    await expect(
+      service.createSourceConnection(context, {
+        sourceName: "megapbx",
+        webhookToken: "megapbx-webhook-token"
+      })
+    ).rejects.toMatchObject({ code: "module.unhealthy" });
+    expect(prepare).not.toHaveBeenCalled();
+    expect(unitOfWork.commits).toHaveLength(0);
+    expect(sourceRepository.connections.size).toBe(0);
+  });
+
+  it("rejects unsupported revocable credential profiles before generating or handing off secret bytes", async () => {
+    const prepare = vi.fn();
+    const fixture = createTestMegaPbxSourceAdapterRegistry({
+      credentialProfile: "unsupported_webhook_secret",
+      onPrepare: prepare
+    });
+    const source = availableMegaPbxCatalogItemResolver("megapbx")!;
+    const authorization =
+      await currentSourceOnboardingAuthorizationResolver().resolveSourceOnboardingAuthorization(
+        {
+          requestId: context.requestId,
+          tenantId: context.tenantId,
+          employeeId: context.employeeId,
+          sourceName: source.sourceName,
+          requestedAt: now
+        }
+      );
+    const createWebhookToken = vi.fn(() => "generated-webhook-token");
+
+    expect(() =>
+      createSourceAdapterOnboardingPrepareInput({
+        context,
+        actor: authorization!.actor,
+        source,
+        sourceConnectionId:
+          "source_connection:megapbx:unsupported-profile" as SourceConnectionId,
+        registration: fixture.registration,
+        displayName: "Unsupported MegaPBX",
+        createWebhookToken,
+        requestedAt: now
+      })
+    ).toThrowError(expect.objectContaining({ code: "validation.failed" }));
+    expect(createWebhookToken).not.toHaveBeenCalled();
+
+    const unitOfWork = new InMemorySourceRegistryOnboardingUnitOfWork(
+      new InMemorySourceIntegrationRepository()
+    );
+    const service = createInternalIntegrationService({
+      connectorRepository: new InMemoryChannelConnectorRepository(),
+      sourceCatalogItemResolver: availableMegaPbxCatalogItemResolver,
+      sourceAdapterRegistry: fixture.registry,
+      sourceOnboardingAuthorizationResolver:
+        currentSourceOnboardingAuthorizationResolver(),
+      sourceRegistryOnboardingUnitOfWork: unitOfWork,
+      now: () => now
+    });
+
+    await expect(
+      service.createSourceConnection(context, { sourceName: "megapbx" })
+    ).rejects.toMatchObject({ code: "validation.failed" });
+    expect(prepare).not.toHaveBeenCalled();
+    expect(unitOfWork.commits).toHaveLength(0);
+  });
+
+  it("builds credential-free adapter input without generating a webhook token", async () => {
+    const fixture = createTestMegaPbxSourceAdapterRegistry({
+      credentialProfile: "none"
+    });
+    const source = availableMegaPbxCatalogItemResolver("megapbx")!;
+    const authorization =
+      await currentSourceOnboardingAuthorizationResolver().resolveSourceOnboardingAuthorization(
+        {
+          requestId: context.requestId,
+          tenantId: context.tenantId,
+          employeeId: context.employeeId,
+          sourceName: source.sourceName,
+          requestedAt: now
+        }
+      );
+    const createWebhookToken = vi.fn(() => "generated-webhook-token");
+
+    const invocation = createSourceAdapterOnboardingPrepareInput({
+      context,
+      actor: authorization!.actor,
+      source,
+      sourceConnectionId:
+        "source_connection:megapbx:no-credentials" as SourceConnectionId,
+      registration: fixture.registration,
+      displayName: "Credential-free MegaPBX",
+      createWebhookToken,
+      requestedAt: now
+    });
+
+    expect(createWebhookToken).not.toHaveBeenCalled();
+    expect(invocation.expectedStandardWebhookSecretToken).toBeUndefined();
+    expect(invocation.prepareInput.credentialBindings).toEqual([]);
+    expect(invocation.prepareInput.ephemeralCredentials).toEqual([]);
+  });
+
+  it.each([
+    {
+      name: "cross-tenant actor",
+      transform: (authorization: SourceOnboardingAuthorization) => ({
+        ...authorization,
+        actor: {
+          ...authorization.actor,
+          employee: {
+            ...authorization.actor.employee,
+            tenantId: "tenant-other" as TenantId
+          }
+        }
+      })
+    },
+    {
+      name: "different employee",
+      transform: (authorization: SourceOnboardingAuthorization) => ({
+        ...authorization,
+        actor: {
+          ...authorization.actor,
+          employee: {
+            ...authorization.actor.employee,
+            id: "employee-other" as EmployeeId
+          }
+        }
+      })
+    },
+    {
+      name: "cross-tenant decision",
+      transform: (authorization: SourceOnboardingAuthorization) => ({
+        ...authorization,
+        decision: {
+          ...authorization.decision,
+          tenantId: "tenant-other" as TenantId,
+          resource: {
+            ...authorization.decision.resource,
+            tenantId: "tenant-other" as TenantId
+          }
+        }
+      })
+    },
+    {
+      name: "different decision employee",
+      transform: (authorization: SourceOnboardingAuthorization) => ({
+        ...authorization,
+        decision: {
+          ...authorization.decision,
+          principal: {
+            ...authorization.decision.principal,
+            employee: {
+              ...authorization.decision.principal.employee,
+              id: "employee-other" as EmployeeId
+            }
+          }
+        }
+      })
+    },
+    {
+      name: "mismatched authorization epoch",
+      transform: (authorization: SourceOnboardingAuthorization) => ({
+        ...authorization,
+        decision: {
+          ...authorization.decision,
+          authorizationEpoch: "authorization:forged"
+        }
+      })
+    },
+    {
+      name: "future decision",
+      transform: (authorization: SourceOnboardingAuthorization) => ({
+        ...authorization,
+        decision: {
+          ...authorization.decision,
+          decidedAt: new Date(now.getTime() + 1_000).toISOString()
+        }
+      })
+    },
+    {
+      name: "stale decision",
+      transform: (authorization: SourceOnboardingAuthorization) => ({
+        ...authorization,
+        decision: {
+          ...authorization.decision,
+          notAfter: now.toISOString()
+        }
+      })
+    },
+    {
+      name: "denied decision",
+      transform: (authorization: SourceOnboardingAuthorization) => ({
+        ...authorization,
+        decision: { ...authorization.decision, outcome: "denied" as const }
+      })
+    },
+    {
+      name: "wrong permission",
+      transform: (authorization: SourceOnboardingAuthorization) => ({
+        ...authorization,
+        decision: {
+          ...authorization.decision,
+          permissionId: "integrations.manage"
+        }
+      })
+    }
+  ])(
+    "rejects $name authorization before adapter prepare",
+    async ({ transform }) => {
+      const sourceRepository = new InMemorySourceIntegrationRepository();
+      const prepare = vi.fn();
+      const fixture = createTestMegaPbxSourceAdapterRegistry({
+        onPrepare: prepare
+      });
+      const registryRepository = new InMemoryInboxV2SourceRegistryRepository(
+        sourceRepository
+      );
+      const unitOfWork =
+        createSourceRegistryOnboardingUnitOfWork(registryRepository);
+      const service = createInternalIntegrationService({
+        connectorRepository: new InMemoryChannelConnectorRepository(),
+        sourceRepository,
+        sourceCatalogItemResolver: availableMegaPbxCatalogItemResolver,
+        sourceAdapterRegistry: fixture.registry,
+        sourceOnboardingAuthorizationResolver:
+          currentSourceOnboardingAuthorizationResolver(transform),
+        sourceRegistryOnboardingUnitOfWork: unitOfWork,
+        now: () => now
+      });
+
+      await expect(
+        service.createSourceConnection(context, {
+          sourceName: "megapbx",
+          webhookToken: "megapbx-webhook-token"
+        })
+      ).rejects.toMatchObject({ code: "permission.denied" });
+      expect(prepare).not.toHaveBeenCalled();
+      expect(registryRepository.commits).toHaveLength(0);
+      expect(sourceRepository.connections.size).toBe(0);
+    }
+  );
+
+  it("creates standalone sources only through a registered handler and atomic unit-of-work", async () => {
     const repository = new InMemoryChannelConnectorRepository();
     const sourceRepository = new InMemorySourceIntegrationRepository();
-    const secretWriter = new InMemorySecretWriter();
+    const prepare = vi.fn();
+    const fixture = createTestMegaPbxSourceAdapterRegistry({
+      onPrepare: prepare
+    });
+    const registryRepository = new InMemoryInboxV2SourceRegistryRepository(
+      sourceRepository
+    );
+    const unitOfWork =
+      createSourceRegistryOnboardingUnitOfWork(registryRepository);
     const service = createInternalIntegrationService({
       connectorRepository: repository,
       sourceRepository,
-      secretWriter,
+      sourceCatalogItemResolver: availableMegaPbxCatalogItemResolver,
+      sourceAdapterRegistry: fixture.registry,
+      sourceOnboardingAuthorizationResolver:
+        currentSourceOnboardingAuthorizationResolver(),
+      sourceRegistryOnboardingUnitOfWork: unitOfWork,
       publicWebhookBaseUrl: "https://chat.example.test",
       now: () => now
     });
@@ -604,25 +1077,34 @@ describe("internal integrations service", () => {
         sourceType: "phone",
         displayName: "Sales MegaPBX",
         status: "onboarding",
-        authType: "webhook_secret",
-        webhookPath: expect.stringContaining("/webhooks/sources/megapbx/"),
-        webhookUrl: expect.stringContaining(
-          "https://chat.example.test/webhooks/sources/megapbx/"
-        ),
-        webhookSecretRef: expect.stringContaining(
-          "secret:tenant-integrations/source-megapbx/webhook-"
-        )
+        authType: "webhook_secret"
       },
       webhookToken: "megapbx-webhook-token"
     });
-    expect(secretWriter.upserts).toEqual([
+    expect(response.connection).not.toHaveProperty("webhookPath");
+    expect(response.connection).not.toHaveProperty("webhookUrl");
+    expect(prepare).toHaveBeenCalledWith(
       expect.objectContaining({
-        tenantId,
-        secretRef: response.connection.webhookSecretRef,
-        purpose: "source.webhook_secret",
-        plainText: "megapbx-webhook-token"
+        actor: expect.objectContaining({
+          kind: "employee",
+          authorizationEpoch: "authorization:source-onboarding-current"
+        }),
+        publicBaseUrl: "https://chat.example.test"
       })
-    ]);
+    );
+    expect(registryRepository.secretWrites).toHaveLength(1);
+    expect(registryRepository.secretWrites[0]).toEqual(
+      expect.objectContaining({
+        binding: expect.objectContaining({
+          tenantId,
+          status: "active"
+        }),
+        materialDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u)
+      })
+    );
+    expect(
+      new TextDecoder().decode(registryRepository.secretWrites[0]!.material)
+    ).toBe("megapbx-webhook-token");
     expect([...sourceRepository.connections.values()]).toEqual([
       expect.objectContaining({
         id: response.connection.sourceConnectionId,
@@ -632,18 +1114,203 @@ describe("internal integrations service", () => {
         displayName: "Sales MegaPBX",
         status: "onboarding",
         authType: "webhook_secret",
-        config: expect.objectContaining({
-          webhookPath: response.connection.webhookPath,
-          webhookUrl: response.connection.webhookUrl,
-          webhookSecretRef: response.connection.webhookSecretRef,
-          tokenField: "crm_token"
-        })
+        config: {}
       })
     ]);
+    expect(registryRepository.commits).toEqual([
+      expect.objectContaining({
+        declaration: expect.objectContaining({
+          payload: expect.objectContaining({ sourceName: "megapbx" })
+        }),
+        compatibilityConnection: expect.objectContaining({
+          tenantId,
+          sourceType: "phone",
+          sourceName: "megapbx",
+          displayName: "Sales MegaPBX",
+          status: "onboarding",
+          authType: "webhook_secret",
+          createdByEmployeeId: context.employeeId
+        }),
+        transition: expect.objectContaining({
+          payload: expect.objectContaining({
+            entityKind: "source_connection",
+            intent: "create",
+            previousState: null,
+            resultingState: expect.objectContaining({
+              payload: expect.objectContaining({
+                createdBy: expect.objectContaining({
+                  authorizationEpoch: "authorization:source-onboarding-current"
+                })
+              })
+            })
+          })
+        }),
+        routeWrites: [
+          expect.objectContaining({
+            route: expect.objectContaining({ kind: "source_ingress_route" }),
+            materialDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u)
+          })
+        ]
+      })
+    ]);
+    expect(
+      new TextDecoder().decode(registryRepository.routeWrites[0]!.material)
+    ).toBe(`route:${response.connection.sourceConnectionId}`);
 
     await expect(service.listSourceConnections(context)).resolves.toEqual({
       connections: [response.connection]
     });
+  });
+
+  it("fails the API-to-DB adapter closed for accounts and non-create chains", async () => {
+    const sourceRepository = new InMemorySourceIntegrationRepository();
+    const fixture = createTestMegaPbxSourceAdapterRegistry();
+    const capture = new InMemorySourceRegistryOnboardingUnitOfWork(
+      sourceRepository
+    );
+    const service = createInternalIntegrationService({
+      connectorRepository: new InMemoryChannelConnectorRepository(),
+      sourceRepository,
+      sourceCatalogItemResolver: availableMegaPbxCatalogItemResolver,
+      sourceAdapterRegistry: fixture.registry,
+      sourceOnboardingAuthorizationResolver:
+        currentSourceOnboardingAuthorizationResolver(),
+      sourceRegistryOnboardingUnitOfWork: capture,
+      now: () => now
+    });
+    await service.createSourceConnection(context, {
+      sourceName: "megapbx",
+      webhookToken: "megapbx-webhook-token"
+    });
+    const valid = capture.commits[0]!;
+    const commitSourceConnectionOnboarding = vi.fn(async () => {
+      throw new Error("DB boundary must not be reached.");
+    });
+    const unitOfWork = createSourceRegistryOnboardingUnitOfWork({
+      commitSourceConnectionOnboarding
+    });
+    const transition = valid.prepared.authority.connection.transitions[0]!;
+    const invalidInputs: SourceRegistryOnboardingCommitInput[] = [
+      {
+        ...valid,
+        prepared: {
+          ...valid.prepared,
+          authority: {
+            ...valid.prepared.authority,
+            accounts: [
+              null
+            ] as unknown as typeof valid.prepared.authority.accounts
+          }
+        }
+      },
+      {
+        ...valid,
+        prepared: {
+          ...valid.prepared,
+          authority: {
+            ...valid.prepared.authority,
+            connection: {
+              ...valid.prepared.authority.connection,
+              transitions: [
+                {
+                  ...transition,
+                  payload: { ...transition.payload, intent: "enable" }
+                } as typeof transition
+              ]
+            }
+          }
+        }
+      }
+    ];
+
+    for (const invalid of invalidInputs) {
+      await expect(
+        unitOfWork.onboardStandaloneSource(invalid)
+      ).rejects.toMatchObject({ code: "module.unhealthy" });
+    }
+    expect(commitSourceConnectionOnboarding).not.toHaveBeenCalled();
+  });
+
+  it("leaves no standalone source or secret behind when the onboarding unit-of-work fails", async () => {
+    const sourceRepository = new InMemorySourceIntegrationRepository();
+    const fixture = createTestMegaPbxSourceAdapterRegistry();
+    const registryRepository = new InMemoryInboxV2SourceRegistryRepository(
+      sourceRepository,
+      { failBeforeCommit: true }
+    );
+    const unitOfWork =
+      createSourceRegistryOnboardingUnitOfWork(registryRepository);
+    const service = createInternalIntegrationService({
+      connectorRepository: new InMemoryChannelConnectorRepository(),
+      sourceRepository,
+      sourceCatalogItemResolver: availableMegaPbxCatalogItemResolver,
+      sourceAdapterRegistry: fixture.registry,
+      sourceOnboardingAuthorizationResolver:
+        currentSourceOnboardingAuthorizationResolver(),
+      sourceRegistryOnboardingUnitOfWork: unitOfWork,
+      publicWebhookBaseUrl: "https://chat.example.test",
+      now: () => now
+    });
+
+    await expect(
+      service.createSourceConnection(context, {
+        sourceName: "megapbx",
+        webhookToken: "megapbx-webhook-token"
+      })
+    ).rejects.toThrow("Injected source onboarding transaction failure.");
+    expect(registryRepository.commits).toHaveLength(1);
+    expect(registryRepository.secretWrites).toHaveLength(0);
+    expect(sourceRepository.connections.size).toBe(0);
+    const committed = registryRepository.commits[0]!;
+    expect([...committed.secretWrites[0]!.material]).toEqual(
+      new Array("megapbx-webhook-token".length).fill(0)
+    );
+    expect(committed.routeWrites[0]!.material.every((byte) => byte === 0)).toBe(
+      true
+    );
+  });
+
+  it("rejects caller-authored adapter authority before persistence", async () => {
+    const sourceRepository = new InMemorySourceIntegrationRepository();
+    const fixture = createTestMegaPbxSourceAdapterRegistry({
+      transformPrepared(prepared) {
+        return {
+          ...prepared,
+          authority: {
+            ...prepared.authority,
+            connection: {
+              ...prepared.authority.connection,
+              head: structuredClone(prepared.authority.connection.head)
+            }
+          }
+        } as typeof prepared;
+      }
+    });
+    const unitOfWork = new InMemorySourceRegistryOnboardingUnitOfWork(
+      sourceRepository
+    );
+    const service = createInternalIntegrationService({
+      connectorRepository: new InMemoryChannelConnectorRepository(),
+      sourceRepository,
+      sourceCatalogItemResolver: availableMegaPbxCatalogItemResolver,
+      sourceAdapterRegistry: fixture.registry,
+      sourceOnboardingAuthorizationResolver:
+        currentSourceOnboardingAuthorizationResolver(),
+      sourceRegistryOnboardingUnitOfWork: unitOfWork,
+      now: () => now
+    });
+
+    await expect(
+      service.createSourceConnection(context, {
+        sourceName: "megapbx",
+        webhookToken: "megapbx-webhook-token"
+      })
+    ).rejects.toMatchObject({
+      code: "module.unhealthy"
+    });
+    expect(unitOfWork.commits).toHaveLength(0);
+    expect(unitOfWork.secretWrites).toHaveLength(0);
+    expect(sourceRepository.connections.size).toBe(0);
   });
 
   it.each([
@@ -1220,27 +1887,29 @@ describe("internal integrations service", () => {
     expect(secretWriter.upserts).toEqual([
       {
         tenantId,
-        secretRef:
-          "secret:tenant-integrations/channels/telegram_bot:tenant-integrations/bot-token",
+        secretRef: expect.stringMatching(
+          /^secret:tenant-integrations\/channels\/telegram_bot:tenant-integrations\/bot-token-v1-/
+        ),
         purpose: "telegram.bot_token",
         plainText: "telegram-token-1",
         updatedAt: now
       },
       {
         tenantId,
-        secretRef:
-          "secret:tenant-integrations/channels/telegram_bot:tenant-integrations/webhook-secret-token",
+        secretRef: expect.stringMatching(
+          /^secret:tenant-integrations\/channels\/telegram_bot:tenant-integrations\/webhook-secret-token-v1-/
+        ),
         purpose: "telegram.webhook_secret_token",
         plainText: "raw-telegram-webhook-secret-value",
         updatedAt: now
       }
     ]);
     expect(response.config?.botTokenSecretRef).toBe(
-      "secret:tenant-integrations/channels/telegram_bot:tenant-integrations/bot-token"
+      secretWriter.upserts[0]?.secretRef
     );
     expect(response.config?.webhookConnectorId).toBe("tgwh_test");
     expect(response.config?.webhookSecretTokenSecretRef).toBe(
-      "secret:tenant-integrations/channels/telegram_bot:tenant-integrations/webhook-secret-token"
+      secretWriter.upserts[1]?.secretRef
     );
     expect(JSON.stringify(response)).not.toContain("telegram-token-1");
     expect(JSON.stringify(response)).not.toContain(
@@ -1249,6 +1918,92 @@ describe("internal integrations service", () => {
     expect(
       JSON.stringify(repository.records.get("telegram_bot:tenant-integrations"))
     ).not.toContain("telegram-token-1");
+
+    const rotated = await service.updateTelegramIntegration(context, {
+      connectorId: "telegram_bot:tenant-integrations",
+      enabled: true,
+      channelExternalId: "telegram-local",
+      mode: "webhook",
+      botToken: "telegram-token-2",
+      outboundEnabled: true
+    });
+
+    expect(secretWriter.upserts).toHaveLength(3);
+    expect(secretWriter.upserts[2]).toEqual(
+      expect.objectContaining({
+        purpose: "telegram.bot_token",
+        plainText: "telegram-token-2",
+        secretRef: expect.stringContaining("/bot-token-v1-")
+      })
+    );
+    expect(secretWriter.upserts[2]?.secretRef).not.toBe(
+      secretWriter.upserts[0]?.secretRef
+    );
+    expect(rotated.config?.botTokenSecretRef).toBe(
+      secretWriter.upserts[2]?.secretRef
+    );
+    expect(rotated.config?.webhookSecretTokenSecretRef).toBe(
+      secretWriter.upserts[1]?.secretRef
+    );
+  });
+
+  it("does not overwrite the active Telegram secret when connector rotation persistence fails", async () => {
+    const activeBotTokenSecretRef =
+      "secret:tenant-integrations/channels/telegram_bot:tenant-integrations/bot-token-v1-active";
+    const activeWebhookSecretRef =
+      "secret:tenant-integrations/channels/telegram_bot:tenant-integrations/webhook-secret-token-v1-active";
+    const repository = new InMemoryChannelConnectorRepository([
+      createTelegramConnector({
+        config: {
+          channelExternalId: "telegram-local",
+          mode: "webhook",
+          botTokenSecretRef: activeBotTokenSecretRef,
+          webhookConnectorId: "tgwh_test",
+          webhookSecretTokenSecretRef: activeWebhookSecretRef,
+          outboundEnabled: true
+        },
+        diagnostics: {}
+      })
+    ]);
+    vi.spyOn(repository, "upsertConnector").mockRejectedValueOnce(
+      new Error("Injected connector persistence failure.")
+    );
+    const secretWriter = new InMemorySecretWriter();
+    const service = createInternalIntegrationService({
+      connectorRepository: repository,
+      secretWriter,
+      now: () => now
+    });
+
+    await expect(
+      service.updateTelegramIntegration(context, {
+        connectorId: "telegram_bot:tenant-integrations",
+        enabled: true,
+        channelExternalId: "telegram-local",
+        mode: "webhook",
+        botToken: "telegram-token-rotated",
+        outboundEnabled: true
+      })
+    ).rejects.toThrow("Injected connector persistence failure.");
+
+    expect(secretWriter.upserts).toEqual([
+      expect.objectContaining({
+        purpose: "telegram.bot_token",
+        plainText: "telegram-token-rotated",
+        secretRef: expect.stringContaining("/bot-token-v1-")
+      })
+    ]);
+    expect(secretWriter.upserts[0]?.secretRef).not.toBe(
+      activeBotTokenSecretRef
+    );
+    expect(
+      repository.records.get("telegram_bot:tenant-integrations")?.config
+    ).toEqual(
+      expect.objectContaining({
+        botTokenSecretRef: activeBotTokenSecretRef,
+        webhookSecretTokenSecretRef: activeWebhookSecretRef
+      })
+    );
   });
 
   it("preserves Telegram diagnostics when only display name changes", async () => {
@@ -1987,6 +2742,119 @@ class InMemorySourceIntegrationRepository implements SourceIntegrationRepository
   }
 }
 
+type SourceRegistryOnboardingCommitInput = Parameters<
+  SourceRegistryOnboardingUnitOfWork["onboardStandaloneSource"]
+>[0];
+
+class InMemorySourceRegistryOnboardingUnitOfWork implements SourceRegistryOnboardingUnitOfWork {
+  readonly commits: SourceRegistryOnboardingCommitInput[] = [];
+  readonly secretWrites: SourceAdapterTransientSecretWrite[] = [];
+
+  constructor(
+    private readonly sourceRepository: InMemorySourceIntegrationRepository,
+    private readonly options: { failBeforeCommit?: boolean } = {}
+  ) {}
+
+  async onboardStandaloneSource(
+    input: SourceRegistryOnboardingCommitInput
+  ): Promise<SourceConnectionRecord> {
+    this.commits.push(input);
+
+    if (this.options.failBeforeCommit) {
+      throw new Error("Injected source onboarding transaction failure.");
+    }
+
+    const record: SourceConnectionRecord = {
+      ...input.sourceConnection,
+      capabilities: {},
+      config: {},
+      diagnostics: {},
+      metadata: {},
+      createdAt: input.sourceConnection.updatedAt
+    };
+
+    this.sourceRepository.connections.set(String(record.id), record);
+    this.secretWrites.push(
+      ...input.prepared.secretWrites.map((write) => ({
+        binding: write.binding,
+        material: new Uint8Array(write.material),
+        materialDigest: write.materialDigest
+      }))
+    );
+
+    return record;
+  }
+}
+
+type InboxV2SourceRegistryCommitInput = Parameters<
+  InboxV2SourceRegistryRepository["commitSourceConnectionOnboarding"]
+>[0];
+
+/* Verifies the API-to-DB adapter without pretending to be SQL itself. */
+class InMemoryInboxV2SourceRegistryRepository implements Pick<
+  InboxV2SourceRegistryRepository,
+  "commitSourceConnectionOnboarding"
+> {
+  readonly commits: InboxV2SourceRegistryCommitInput[] = [];
+  readonly secretWrites: SourceAdapterTransientSecretWrite[] = [];
+  readonly routeWrites: InboxV2SourceRegistryCommitInput["routeWrites"][number][] =
+    [];
+
+  constructor(
+    private readonly sourceRepository: InMemorySourceIntegrationRepository,
+    private readonly options: { failBeforeCommit?: boolean } = {}
+  ) {}
+
+  async commitSourceConnectionOnboarding(
+    input: InboxV2SourceRegistryCommitInput
+  ): Promise<SourceConnectionRecord> {
+    this.commits.push(input);
+
+    if (this.options.failBeforeCommit) {
+      throw new Error("Injected source onboarding transaction failure.");
+    }
+
+    const compatibility = input.compatibilityConnection;
+    const record: SourceConnectionRecord = {
+      id: compatibility.id as SourceConnectionRecord["id"],
+      tenantId: compatibility.tenantId,
+      sourceType:
+        compatibility.sourceType as SourceConnectionRecord["sourceType"],
+      sourceName: compatibility.sourceName,
+      displayName: compatibility.displayName,
+      status: compatibility.status as SourceConnectionRecord["status"],
+      authType: compatibility.authType as SourceConnectionRecord["authType"],
+      capabilities: {},
+      config: {},
+      diagnostics: {},
+      metadata: {},
+      createdByEmployeeId:
+        compatibility.createdByEmployeeId as EmployeeId | null,
+      createdAt: compatibility.updatedAt,
+      updatedAt: compatibility.updatedAt
+    };
+
+    this.sourceRepository.connections.set(String(record.id), record);
+    this.secretWrites.push(
+      ...input.secretWrites.map((write) => ({
+        binding: write.binding,
+        material: new Uint8Array(write.material),
+        materialDigest:
+          write.materialDigest as SourceAdapterTransientSecretWrite["materialDigest"]
+      }))
+    );
+    this.routeWrites.push(
+      ...input.routeWrites.map((write) => ({
+        route: write.route,
+        material: new Uint8Array(write.material),
+        materialDigest: write.materialDigest
+      }))
+    );
+
+    return record;
+  }
+}
+
 class InMemoryChannelAuthChallengeRepository implements ChannelAuthChallengeRepository {
   readonly records = new Map<string, ChannelAuthChallengeRecord>();
 
@@ -2292,8 +3160,7 @@ class InMemoryDomainEventRepository implements DomainEventRepository {
 type InMemorySecretPurpose =
   | "telegram.bot_token"
   | "telegram.bot_token_validation"
-  | "telegram.webhook_secret_token"
-  | "source.webhook_secret";
+  | "telegram.webhook_secret_token";
 
 class InMemorySecretWriter {
   readonly upserts: {

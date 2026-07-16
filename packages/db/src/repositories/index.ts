@@ -818,6 +818,7 @@ export type {
   WorkspacePersistenceRows
 } from "./vertical-slice-mapper";
 export * from "./sql-inbox-v2-access-plan-repository";
+export * from "./sql-inbox-v2-source-registry-repository";
 export * from "./sql-inbox-v2-membership-transaction-policy";
 export * from "./sql-inbox-v2-repository-outbox";
 export * from "./sql-inbox-v2-repository-projection";
