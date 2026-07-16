@@ -84,6 +84,7 @@ describe("SQL Inbox V2 provider participant membership repository", () => {
         conversationId,
         transition,
         participantId,
+        episodeOriginProvider: provider,
         provider
       })
     );
@@ -117,6 +118,84 @@ describe("SQL Inbox V2 provider participant membership repository", () => {
       "inbox_v2_provider_membership_ordering_heads"
     );
     expect(normalizeSql(orderingHeadInsert.sql)).toContain("ordering_position");
+  });
+
+  it("keeps immutable provider origin separate from a later transition cause", () => {
+    const originProvider = {
+      evidenceKind: "member" as const,
+      rosterEvidenceId,
+      memberEvidenceId,
+      sourceThreadBindingId,
+      sourceExternalIdentityId,
+      ordering: {
+        kind: "adapter_monotonic",
+        scopeToken: "roster-scope:provider-1",
+        comparatorId: "module:synthetic-source:roster-sequence",
+        comparatorRevision: 1n,
+        position: 1n
+      }
+    };
+    const provider = {
+      ...originProvider,
+      rosterEvidenceId: nextRosterEvidenceId,
+      memberEvidenceId: nextMemberEvidenceId,
+      ordering: { ...originProvider.ordering, position: 2n }
+    };
+    const episode = {
+      ...providerEpisodeRecord(),
+      role: "member" as const,
+      revision: "2" as never
+    };
+    const transition = {
+      ...providerInitialTransitionRecord(),
+      id: nextTransitionId,
+      intent: "change_role" as const,
+      fromState: "active" as const,
+      fromRole: "admin" as const,
+      toRole: "member" as const,
+      cause: {
+        kind: "provider_roster" as const,
+        evidence: {
+          kind: "provider_roster_member" as const,
+          reference: {
+            tenantId,
+            kind: "provider_roster_member_evidence" as const,
+            id: nextMemberEvidenceId
+          }
+        }
+      },
+      expectedRevision: "1" as never,
+      currentRevision: "1" as never,
+      resultingRevision: "2" as never,
+      occurredAt: nextObservedAt
+    };
+    const mutation = renderQuery(
+      buildApplyInboxV2ParticipantMembershipMutationSql({
+        operation: "transition",
+        expectedMembershipRevision: "1" as InboxV2BigintCounter,
+        resultingMembershipRevision: "2" as InboxV2BigintCounter,
+        episode,
+        conversationId,
+        transition,
+        participantId,
+        episodeOriginProvider: originProvider,
+        provider
+      })
+    );
+    const payload = JSON.parse(String(mutation.params[0])) as Record<
+      string,
+      unknown
+    >;
+
+    expect(payload).toMatchObject({
+      episodeOriginProviderRosterMemberEvidenceId: memberEvidenceId,
+      episodeOriginProviderRosterEvidenceId: rosterEvidenceId,
+      episodeOriginOrderingPosition: "1",
+      episodeProviderOrderingHeadPosition: "2",
+      transitionCauseProviderRosterMemberEvidenceId: nextMemberEvidenceId,
+      transitionCauseProviderRosterEvidenceId: nextRosterEvidenceId,
+      transitionCauseOrderingPosition: "2"
+    });
   });
 
   it("keeps provider evidence locks tenant-scoped and omission absence explicit", () => {

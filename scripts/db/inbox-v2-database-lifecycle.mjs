@@ -46,6 +46,18 @@ const V1_BUSINESS_TABLES = new Set([
 const REQUIRED_CURRENT_RELATIONS = [
   "tenants",
   "inbox_v2_conversations",
+  "inbox_v2_conversation_heads",
+  "inbox_v2_timeline_items",
+  "inbox_v2_conversation_identity_fences",
+  "inbox_v2_external_thread_key_registry",
+  "inbox_v2_external_threads",
+  "inbox_v2_source_thread_bindings",
+  "inbox_v2_source_thread_binding_heads",
+  "inbox_v2_source_thread_binding_remote_access_episodes",
+  "inbox_v2_source_thread_binding_transitions",
+  "inbox_v2_source_thread_binding_snapshots",
+  "inbox_v2_work_items",
+  "inbox_v2_work_item_primary_assignments",
   "inbox_v2_messages",
   "inbox_v2_data_governance_contexts",
   "inbox_v2_auth_tenant_heads",
@@ -60,6 +72,30 @@ const REQUIRED_CURRENT_RELATIONS = [
   "inbox_v2_database_reset_receipts"
 ];
 const REQUIRED_CURRENT_FUNCTIONS = [
+  "public.inbox_v2_reject_immutable_binding_row_change()",
+  "public.inbox_v2_guard_binding_episode_change()",
+  "public.inbox_v2_guard_binding_head_update()",
+  "public.inbox_v2_assert_source_thread_binding_integrity(text,text)",
+  "public.inbox_v2_check_source_thread_binding_integrity()",
+  "public.inbox_v2_check_source_thread_binding_edge_integrity()",
+  "public.inbox_v2_tm_head_guard()",
+  "public.inbox_v2_tm_core_coherence()",
+  "public.inbox_v2_work_item_guard()",
+  "public.inbox_v2_work_assignment_guard()",
+  "public.inbox_v2_work_assignment_non_overlap()",
+  "public.inbox_v2_work_item_mutation_coherence()",
+  "public.inbox_v2_work_item_aggregate_coherence()",
+  "public.inbox_v2_assert_conversation_timeline_head(text,text)",
+  "public.inbox_v2_lock_conversation_identity(text,text)",
+  "public.inbox_v2_conversation_timeline_head_deferred()",
+  "public.inbox_v2_conversation_delete_guard()",
+  "public.inbox_v2_conversation_insert_guard()",
+  "public.inbox_v2_conversation_identity_fence_guard()",
+  "public.inbox_v2_conversation_head_delete_guard()",
+  "public.inbox_v2_conversation_update_guard()",
+  "public.inbox_v2_conversation_head_insert_guard()",
+  "public.inbox_v2_conversation_head_update_guard()",
+  "public.inbox_v2_conversation_timeline_truncate_guard()",
   "public.inbox_v2_auth_stream_head_guard()",
   "public.inbox_v2_repository_projection_checkpoint_guard()",
   "public.inbox_v2_repository_projection_head_coherence()",
@@ -127,6 +163,166 @@ const REQUIRED_SECURITY_ROLES = [
 ];
 const REQUIRED_CURRENT_TRIGGERS = [
   [
+    "inbox_v2_source_thread_bindings",
+    "inbox_v2_binding_anchors_immutable",
+    "public.inbox_v2_reject_immutable_binding_row_change()"
+  ],
+  [
+    "inbox_v2_source_thread_binding_remote_access_episodes",
+    "inbox_v2_binding_episode_close_guard",
+    "public.inbox_v2_guard_binding_episode_change()"
+  ],
+  [
+    "inbox_v2_source_thread_binding_transitions",
+    "inbox_v2_binding_transitions_immutable",
+    "public.inbox_v2_reject_immutable_binding_row_change()"
+  ],
+  [
+    "inbox_v2_source_thread_binding_snapshots",
+    "inbox_v2_binding_snapshots_immutable",
+    "public.inbox_v2_reject_immutable_binding_row_change()"
+  ],
+  [
+    "inbox_v2_source_thread_binding_heads",
+    "inbox_v2_binding_head_update_guard",
+    "public.inbox_v2_guard_binding_head_update()"
+  ],
+  [
+    "inbox_v2_source_thread_binding_heads",
+    "inbox_v2_binding_heads_integrity",
+    "public.inbox_v2_check_source_thread_binding_integrity()"
+  ],
+  [
+    "inbox_v2_source_thread_bindings",
+    "inbox_v2_binding_anchors_integrity",
+    "public.inbox_v2_check_source_thread_binding_edge_integrity()"
+  ],
+  [
+    "inbox_v2_source_thread_binding_remote_access_episodes",
+    "inbox_v2_binding_episodes_integrity",
+    "public.inbox_v2_check_source_thread_binding_edge_integrity()"
+  ],
+  [
+    "inbox_v2_source_thread_binding_transitions",
+    "inbox_v2_binding_transitions_integrity",
+    "public.inbox_v2_check_source_thread_binding_integrity()"
+  ],
+  [
+    "inbox_v2_source_thread_binding_snapshots",
+    "inbox_v2_binding_snapshots_integrity",
+    "public.inbox_v2_check_source_thread_binding_integrity()"
+  ],
+  [
+    "inbox_v2_timeline_items",
+    "inbox_v2_tm_timeline_head_guard",
+    "public.inbox_v2_tm_head_guard()"
+  ],
+  [
+    "inbox_v2_timeline_items",
+    "inbox_v2_tm_timeline_coherence",
+    "public.inbox_v2_tm_core_coherence()"
+  ],
+  [
+    "inbox_v2_work_items",
+    "inbox_v2_work_items_guard_trigger",
+    "public.inbox_v2_work_item_guard()"
+  ],
+  [
+    "inbox_v2_work_item_primary_assignments",
+    "inbox_v2_work_item_primary_assignments_guard_trigger",
+    "public.inbox_v2_work_assignment_guard()"
+  ],
+  [
+    "inbox_v2_work_item_primary_assignments",
+    "inbox_v2_work_assignment_non_overlap_constraint",
+    "public.inbox_v2_work_assignment_non_overlap()"
+  ],
+  [
+    "inbox_v2_work_items",
+    "inbox_v2_work_item_mutation_coherence_constraint",
+    "public.inbox_v2_work_item_mutation_coherence()"
+  ],
+  [
+    "inbox_v2_work_items",
+    "inbox_v2_work_items_aggregate_constraint",
+    "public.inbox_v2_work_item_aggregate_coherence()"
+  ],
+  [
+    "inbox_v2_work_item_primary_assignments",
+    "inbox_v2_work_assignment_aggregate_constraint",
+    "public.inbox_v2_work_item_aggregate_coherence()"
+  ],
+  [
+    "inbox_v2_conversations",
+    "inbox_v2_conversations_insert_guard_trigger",
+    "public.inbox_v2_conversation_insert_guard()"
+  ],
+  [
+    "inbox_v2_conversations",
+    "inbox_v2_conversations_update_guard_trigger",
+    "public.inbox_v2_conversation_update_guard()"
+  ],
+  [
+    "inbox_v2_conversations",
+    "inbox_v2_conversations_delete_guard_trigger",
+    "public.inbox_v2_conversation_delete_guard()"
+  ],
+  [
+    "inbox_v2_conversation_heads",
+    "inbox_v2_conversation_heads_insert_guard_trigger",
+    "public.inbox_v2_conversation_head_insert_guard()"
+  ],
+  [
+    "inbox_v2_conversation_heads",
+    "inbox_v2_conversation_heads_update_guard_trigger",
+    "public.inbox_v2_conversation_head_update_guard()"
+  ],
+  [
+    "inbox_v2_conversation_heads",
+    "inbox_v2_conversation_heads_delete_guard_trigger",
+    "public.inbox_v2_conversation_head_delete_guard()"
+  ],
+  [
+    "inbox_v2_conversation_identity_fences",
+    "inbox_v2_conversation_identity_fences_guard_trigger",
+    "public.inbox_v2_conversation_identity_fence_guard()"
+  ],
+  [
+    "inbox_v2_conversations",
+    "inbox_v2_conversations_truncate_guard_trigger",
+    "public.inbox_v2_conversation_timeline_truncate_guard()"
+  ],
+  [
+    "inbox_v2_conversation_heads",
+    "inbox_v2_conversation_heads_truncate_guard_trigger",
+    "public.inbox_v2_conversation_timeline_truncate_guard()"
+  ],
+  [
+    "inbox_v2_timeline_items",
+    "inbox_v2_timeline_items_truncate_guard_trigger",
+    "public.inbox_v2_conversation_timeline_truncate_guard()"
+  ],
+  [
+    "inbox_v2_conversation_identity_fences",
+    "inbox_v2_conversation_identity_fences_truncate_guard_trigger",
+    "public.inbox_v2_conversation_timeline_truncate_guard()"
+  ],
+  [
+    "inbox_v2_conversation_identity_fences",
+    "inbox_v2_conversation_identity_fence_coherence_trigger",
+    "public.inbox_v2_conversation_timeline_head_deferred()"
+  ],
+  [
+    "inbox_v2_conversations",
+    "inbox_v2_conversations_timeline_head_constraint_trigger",
+    "public.inbox_v2_conversation_timeline_head_deferred()"
+  ],
+  [
+    "inbox_v2_conversation_heads",
+    "inbox_v2_conversation_heads_timeline_constraint_trigger",
+    "public.inbox_v2_conversation_timeline_head_deferred()"
+  ],
+  [
     "inbox_v2_tenant_stream_heads",
     "inbox_v2_tenant_stream_head_guard_trigger",
     "public.inbox_v2_auth_stream_head_guard()"
@@ -188,6 +384,268 @@ const REQUIRED_CURRENT_TRIGGERS = [
   ]
 ];
 const REQUIRED_CURRENT_CONSTRAINTS = [
+  {
+    relation: "inbox_v2_conversations",
+    name: "inbox_v2_conversations_pk",
+    type: "p",
+    columns: ["tenant_id", "id"]
+  },
+  foreignKeyContract(
+    "inbox_v2_conversations",
+    "inbox_v2_conversations_tenant_id_tenants_id_fk",
+    ["tenant_id"],
+    "tenants",
+    ["id"],
+    { onDelete: "a" }
+  ),
+  {
+    relation: "inbox_v2_external_thread_key_registry",
+    name: "inbox_v2_ext_thread_key_registry_pk",
+    type: "p",
+    columns: ["tenant_id", "id"]
+  },
+  {
+    relation: "inbox_v2_external_thread_key_registry",
+    name: "inbox_v2_ext_thread_key_digest_unique",
+    type: "u",
+    columns: ["tenant_id", "key_digest"]
+  },
+  foreignKeyContract(
+    "inbox_v2_external_thread_key_registry",
+    "inbox_v2_ext_thread_key_conversation_fk",
+    ["tenant_id", "canonical_conversation_id"],
+    "inbox_v2_conversations",
+    ["tenant_id", "id"],
+    { onDelete: "a" }
+  ),
+  {
+    relation: "inbox_v2_external_threads",
+    name: "inbox_v2_external_threads_pk",
+    type: "p",
+    columns: ["tenant_id", "id"]
+  },
+  {
+    relation: "inbox_v2_external_threads",
+    name: "inbox_v2_external_threads_conversation_unique",
+    type: "u",
+    columns: ["tenant_id", "conversation_id"]
+  },
+  {
+    relation: "inbox_v2_external_threads",
+    name: "inbox_v2_external_threads_registry_unique",
+    type: "u",
+    columns: ["tenant_id", "key_registry_id"]
+  },
+  foreignKeyContract(
+    "inbox_v2_external_threads",
+    "inbox_v2_external_threads_conversation_fk",
+    [
+      "tenant_id",
+      "conversation_id",
+      "conversation_transport",
+      "conversation_topology"
+    ],
+    "inbox_v2_conversations",
+    ["tenant_id", "id", "transport", "topology"],
+    { onDelete: "a" }
+  ),
+  foreignKeyContract(
+    "inbox_v2_external_threads",
+    "inbox_v2_external_threads_registry_fk",
+    [
+      "tenant_id",
+      "key_registry_id",
+      "key_registry_entry_kind",
+      "id",
+      "conversation_id",
+      "key_digest"
+    ],
+    "inbox_v2_external_thread_key_registry",
+    [
+      "tenant_id",
+      "id",
+      "entry_kind",
+      "canonical_thread_id",
+      "canonical_conversation_id",
+      "key_digest"
+    ],
+    { onDelete: "a" }
+  ),
+  {
+    relation: "inbox_v2_source_thread_bindings",
+    name: "inbox_v2_source_thread_bindings_pk",
+    type: "p",
+    columns: ["tenant_id", "id"]
+  },
+  {
+    relation: "inbox_v2_source_thread_bindings",
+    name: "inbox_v2_source_thread_bindings_thread_account_unique",
+    type: "u",
+    columns: ["tenant_id", "external_thread_id", "source_account_id"]
+  },
+  foreignKeyContract(
+    "inbox_v2_source_thread_bindings",
+    "inbox_v2_source_thread_bindings_thread_fk",
+    ["tenant_id", "external_thread_id"],
+    "inbox_v2_external_threads",
+    ["tenant_id", "id"],
+    { onDelete: "a" }
+  ),
+  {
+    relation: "inbox_v2_source_thread_binding_heads",
+    name: "inbox_v2_source_thread_binding_heads_pk",
+    type: "p",
+    columns: ["tenant_id", "binding_id"]
+  },
+  foreignKeyContract(
+    "inbox_v2_source_thread_binding_heads",
+    "inbox_v2_source_thread_binding_heads_binding_fk",
+    [
+      "tenant_id",
+      "binding_id",
+      "external_thread_id",
+      "source_connection_id",
+      "source_account_id"
+    ],
+    "inbox_v2_source_thread_bindings",
+    [
+      "tenant_id",
+      "id",
+      "external_thread_id",
+      "source_connection_id",
+      "source_account_id"
+    ]
+  ),
+  {
+    relation: "inbox_v2_work_items",
+    name: "inbox_v2_work_items_pk",
+    type: "p",
+    columns: ["tenant_id", "id"]
+  },
+  foreignKeyContract(
+    "inbox_v2_work_items",
+    "inbox_v2_work_items_conversation_fk",
+    ["tenant_id", "conversation_id"],
+    "inbox_v2_conversations",
+    ["tenant_id", "id"]
+  ),
+  {
+    relation: "inbox_v2_work_items",
+    name: "inbox_v2_work_items_state_head_check",
+    type: "c",
+    definitionSha256:
+      "sha256:a8ce7ac326eaa2670c207b88049c780739e2b7e198272cf67476731941c8c94d",
+    definitionFragments: [
+      "state = 'new'",
+      "state = any",
+      "current_primary_assignment_id is null",
+      "current_primary_assignment_id is not null",
+      "terminal_snapshot is null",
+      "terminal_snapshot is not null",
+      "jsonb_typeof(terminal_snapshot) = 'object'"
+    ]
+  },
+  {
+    relation: "inbox_v2_work_item_primary_assignments",
+    name: "inbox_v2_work_item_primary_assignments_pk",
+    type: "p",
+    columns: ["tenant_id", "id"]
+  },
+  foreignKeyContract(
+    "inbox_v2_work_item_primary_assignments",
+    "inbox_v2_work_item_primary_assignment_work_item_fk",
+    ["tenant_id", "work_item_id"],
+    "inbox_v2_work_items",
+    ["tenant_id", "id"]
+  ),
+  {
+    relation: "inbox_v2_work_item_primary_assignments",
+    name: "inbox_v2_work_item_primary_assignment_end_shape_check",
+    type: "c",
+    definitionSha256:
+      "sha256:e33c6d3299673cc462e735323ba552f5729523f8463c0ac9729b4c8ac3ed5524",
+    definitionFragments: [
+      "state = 'active'",
+      "revision = 1",
+      "ended_at is null",
+      "state = 'ended'",
+      "revision = 2",
+      "ended_at is not null",
+      "termination_transition_id is not null"
+    ]
+  },
+  {
+    relation: "inbox_v2_conversation_heads",
+    name: "inbox_v2_conversation_heads_pk",
+    type: "p",
+    columns: ["tenant_id", "conversation_id"]
+  },
+  foreignKeyContract(
+    "inbox_v2_conversation_heads",
+    "inbox_v2_conversation_heads_conversation_fk",
+    ["tenant_id", "conversation_id"],
+    "inbox_v2_conversations",
+    ["tenant_id", "id"]
+  ),
+  {
+    relation: "inbox_v2_timeline_items",
+    name: "inbox_v2_timeline_items_sequence_unique",
+    type: "u",
+    columns: ["tenant_id", "conversation_id", "timeline_sequence"]
+  },
+  foreignKeyContract(
+    "inbox_v2_timeline_items",
+    "inbox_v2_timeline_items_conversation_fk",
+    ["tenant_id", "conversation_id"],
+    "inbox_v2_conversations",
+    ["tenant_id", "id"],
+    { onDelete: "a" }
+  ),
+  {
+    relation: "inbox_v2_timeline_items",
+    name: "inbox_v2_timeline_items_clock_check",
+    type: "c",
+    definitionSha256:
+      "sha256:300b58eea4eee213b16c192938edc01fb526949d22c072dee47a87d7ac3bfab3",
+    definitionFragments: [
+      "timeline_sequence >= 1",
+      "revision >= 1",
+      "last_changed_stream_position >= 1",
+      "isfinite(occurred_at)",
+      "isfinite(received_at)",
+      "isfinite(created_at)",
+      "isfinite(updated_at)",
+      "occurred_at <= received_at",
+      "received_at <= created_at",
+      "created_at <= updated_at"
+    ]
+  },
+  {
+    relation: "inbox_v2_conversation_identity_fences",
+    name: "inbox_v2_conversation_identity_fences_pk",
+    type: "p",
+    columns: ["tenant_id", "conversation_id"]
+  },
+  {
+    relation: "inbox_v2_conversation_identity_fences",
+    name: "inbox_v2_conversation_identity_fences_values_check",
+    type: "c",
+    definitionSha256:
+      "sha256:c5a7648848cd7e8c56559296454e770491452a5a2dfddc71596611266b7600e8",
+    definitionFragments: [
+      "retired_revision >= 1",
+      "retired_stream_position >= 1",
+      "isfinite(retired_updated_at)",
+      "isfinite(retired_at)"
+    ]
+  },
+  foreignKeyContract(
+    "inbox_v2_conversation_identity_fences",
+    "inbox_v2_conversation_identity_fences_tenant_id_tenants_id_fk",
+    ["tenant_id"],
+    "tenants",
+    ["id"]
+  ),
   {
     relation: RESET_RECEIPT_RELATION,
     name: "inbox_v2_database_reset_receipts_pk",
@@ -302,6 +760,41 @@ const REQUIRED_CURRENT_CONSTRAINTS = [
   }
 ];
 const REQUIRED_CURRENT_INDEXES = [
+  Object.freeze({
+    name: "inbox_v2_ext_thread_key_canonical_target_unique",
+    definition:
+      "create unique index inbox_v2_ext_thread_key_canonical_target_unique on public.inbox_v2_external_thread_key_registry using btree (tenant_id, canonical_thread_id) where (entry_kind = 'canonical'::inbox_v2_external_thread_key_kind)",
+    unique: true,
+    primary: false
+  }),
+  Object.freeze({
+    name: "inbox_v2_work_items_non_terminal_unique",
+    definition:
+      "create unique index inbox_v2_work_items_non_terminal_unique on public.inbox_v2_work_items using btree (tenant_id, conversation_id) where (state = any (array['new'::inbox_v2_work_item_state, 'assigned'::inbox_v2_work_item_state, 'in_progress'::inbox_v2_work_item_state, 'waiting'::inbox_v2_work_item_state]))",
+    unique: true,
+    primary: false
+  }),
+  Object.freeze({
+    name: "inbox_v2_work_item_primary_assignment_active_unique",
+    definition:
+      "create unique index inbox_v2_work_item_primary_assignment_active_unique on public.inbox_v2_work_item_primary_assignments using btree (tenant_id, work_item_id) where (state = 'active'::inbox_v2_work_assignment_state)",
+    unique: true,
+    primary: false
+  }),
+  Object.freeze({
+    name: "inbox_v2_conversation_identity_fences_tenant_retired_idx",
+    definition:
+      "create index inbox_v2_conversation_identity_fences_tenant_retired_idx on public.inbox_v2_conversation_identity_fences using btree (tenant_id, retired_at, conversation_id)",
+    unique: false,
+    primary: false
+  }),
+  Object.freeze({
+    name: "inbox_v2_timeline_items_eligible_activity_tail_idx",
+    definition:
+      "create index inbox_v2_timeline_items_eligible_activity_tail_idx on public.inbox_v2_timeline_items using btree (tenant_id, conversation_id, timeline_sequence desc nulls last, id, occurred_at) where (activity_kind = 'eligible'::inbox_v2_timeline_activity_kind)",
+    unique: false,
+    primary: false
+  }),
   Object.freeze({
     name: "inbox_v2_database_reset_receipts_tenant_idx",
     definition:
@@ -2652,7 +3145,8 @@ function foreignKeyContract(
   name,
   columns,
   referenceRelation,
-  referenceColumns
+  referenceColumns,
+  { onUpdate = "a", onDelete = "c" } = {}
 ) {
   return Object.freeze({
     relation,
@@ -2661,8 +3155,8 @@ function foreignKeyContract(
     columns,
     referenceRelation,
     referenceColumns,
-    onUpdate: "a",
-    onDelete: "c"
+    onUpdate,
+    onDelete
   });
 }
 

@@ -30,6 +30,7 @@ export type ApplyInboxV2ParticipantMembershipMutationInput = Readonly<{
   resultingMembershipRevision: InboxV2BigintCounter;
   episode: InboxV2ParticipantMembershipEpisode;
   transition: InboxV2ParticipantMembershipTransition;
+  episodeOriginProvider: InboxV2ProviderMembershipMutationAnchor | null;
   provider: InboxV2ProviderMembershipMutationAnchor | null;
 }>;
 
@@ -124,29 +125,40 @@ function buildMutationPayload(
 }
 
 function originColumns(input: ApplyInboxV2ParticipantMembershipMutationInput) {
-  const { episode, provider } = input;
+  const { episode, episodeOriginProvider, provider } = input;
   if (episode.origin.kind === "provider_roster") {
-    if (provider === null) {
-      throw new Error("Provider membership mutation anchor is required.");
+    if (
+      episodeOriginProvider === null ||
+      provider === null ||
+      episodeOriginProvider.evidenceKind !== "member" ||
+      episodeOriginProvider.memberEvidenceId === null ||
+      episodeOriginProvider.memberEvidenceId !==
+        episode.origin.memberEvidence.id
+    ) {
+      throw new Error(
+        "Provider membership origin and mutation anchors are required."
+      );
     }
     return {
-      providerRosterMemberEvidenceId: provider.memberEvidenceId,
-      providerRosterEvidenceId: provider.rosterEvidenceId,
-      sourceThreadBindingId: provider.sourceThreadBindingId,
-      sourceExternalIdentityId: provider.sourceExternalIdentityId,
-      orderingKind: provider.ordering.kind,
-      orderingScopeToken: provider.ordering.scopeToken,
-      orderingComparatorId: provider.ordering.comparatorId,
-      orderingComparatorRevision: String(provider.ordering.comparatorRevision),
-      orderingPosition: String(provider.ordering.position),
+      providerRosterMemberEvidenceId: episodeOriginProvider.memberEvidenceId,
+      providerRosterEvidenceId: episodeOriginProvider.rosterEvidenceId,
+      sourceThreadBindingId: episodeOriginProvider.sourceThreadBindingId,
+      sourceExternalIdentityId: episodeOriginProvider.sourceExternalIdentityId,
+      orderingKind: episodeOriginProvider.ordering.kind,
+      orderingScopeToken: episodeOriginProvider.ordering.scopeToken,
+      orderingComparatorId: episodeOriginProvider.ordering.comparatorId,
+      orderingComparatorRevision: String(
+        episodeOriginProvider.ordering.comparatorRevision
+      ),
+      orderingPosition: String(episodeOriginProvider.ordering.position),
       providerOrderingHeadPosition: String(provider.ordering.position),
       migrationProvenanceId: null,
       systemPolicyId: null
     };
   }
-  if (provider !== null) {
+  if (episodeOriginProvider !== null || provider !== null) {
     throw new Error(
-      "Provider anchor is forbidden for non-provider membership."
+      "Provider anchors are forbidden for non-provider membership."
     );
   }
   return {

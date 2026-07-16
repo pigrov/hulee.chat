@@ -37,6 +37,7 @@ import {
   type InboxV2MembershipMutationEntrypointRow
 } from "./sql-inbox-v2-membership-mutation-entrypoint";
 import {
+  hasPostgresSqlStateAndMessage,
   runInboxV2MembershipTransaction,
   type InboxV2MembershipTransactionExecutor
 } from "./sql-inbox-v2-membership-transaction-policy";
@@ -398,6 +399,13 @@ type ParticipantMembershipPersist<TResult> = (
   }>
 ) => Promise<TResult>;
 
+class InactiveInternalEmployeeMembershipStartError extends Error {
+  constructor(readonly databaseError: unknown) {
+    super("Internal Employee membership start was rejected.");
+    this.name = "InactiveInternalEmployeeMembershipStartError";
+  }
+}
+
 async function persistStartEpisode(
   transactionExecutor: InboxV2ParticipantMembershipTransactionExecutor,
   input: StartInboxV2ParticipantMembershipEpisodeInput
@@ -417,77 +425,86 @@ async function persistStartEpisode<TResult>(
 > {
   const normalized = normalizeStartEpisodeInput(input);
 
-  return runParticipantMembershipTransaction(
-    transactionExecutor,
-    async (transaction) => {
-      const headRevision = await lockMembershipHead(transaction, {
-        tenantId: normalized.episode.tenantId,
-        conversationId: normalized.conversationId
-      });
-      if (headRevision === null) {
-        return { kind: "conversation_not_found" } as const;
-      }
-      if (headRevision !== normalized.expectedMembershipRevision) {
-        return {
-          kind: "membership_revision_conflict",
-          currentMembershipRevision: headRevision
+  try {
+    return await runParticipantMembershipTransaction(
+      transactionExecutor,
+      async (transaction) => {
+        const headRevision = await lockMembershipHead(transaction, {
+          tenantId: normalized.episode.tenantId,
+          conversationId: normalized.conversationId
+        });
+        if (headRevision === null) {
+          return { kind: "conversation_not_found" } as const;
+        }
+        if (headRevision !== normalized.expectedMembershipRevision) {
+          return {
+            kind: "membership_revision_conflict",
+            currentMembershipRevision: headRevision
+          } as const;
+        }
+
+        const participant = await loadParticipantById(transaction, {
+          tenantId: normalized.episode.tenantId,
+          participantId: normalized.episode.participant.id
+        });
+        if (
+          participant === null ||
+          participant.conversation.id !== normalized.conversationId
+        ) {
+          return { kind: "participant_not_found" } as const;
+        }
+
+        const episodeById = await loadEpisodeById(transaction, {
+          tenantId: normalized.episode.tenantId,
+          episodeId: normalized.episode.id
+        });
+        if (episodeById !== null) {
+          return { kind: "episode_id_conflict" } as const;
+        }
+
+        const currentOrigin = await loadCurrentEpisodeByOrigin(
+          transaction,
+          normalized.episode
+        );
+        if (currentOrigin !== null) {
+          return {
+            kind: "current_origin_conflict",
+            currentEpisode: currentOrigin
+          } as const;
+        }
+
+        await applyInternalMembershipStartMutation(transaction, {
+          operation: "start",
+          conversationId: normalized.conversationId,
+          participantId: normalized.episode.participant.id,
+          expectedMembershipRevision: normalized.expectedMembershipRevision,
+          resultingMembershipRevision: normalized.resultingMembershipRevision,
+          episode: normalized.episode,
+          transition: normalized.transition,
+          episodeOriginProvider: null,
+          provider: null
+        });
+
+        const record = {
+          conversationMembershipRevision:
+            normalized.resultingMembershipRevision,
+          episode: normalized.episode,
+          transition: normalized.transition
         } as const;
-      }
-
-      const participant = await loadParticipantById(transaction, {
-        tenantId: normalized.episode.tenantId,
-        participantId: normalized.episode.participant.id
-      });
-      if (
-        participant === null ||
-        participant.conversation.id !== normalized.conversationId
-      ) {
-        return { kind: "participant_not_found" } as const;
-      }
-
-      const episodeById = await loadEpisodeById(transaction, {
-        tenantId: normalized.episode.tenantId,
-        episodeId: normalized.episode.id
-      });
-      if (episodeById !== null) {
-        return { kind: "episode_id_conflict" } as const;
-      }
-
-      const currentOrigin = await loadCurrentEpisodeByOrigin(
-        transaction,
-        normalized.episode
-      );
-      if (currentOrigin !== null) {
-        return {
-          kind: "current_origin_conflict",
-          currentEpisode: currentOrigin
-        } as const;
-      }
-
-      await applyMembershipMutation(transaction, {
-        operation: "start",
-        conversationId: normalized.conversationId,
-        participantId: normalized.episode.participant.id,
-        expectedMembershipRevision: normalized.expectedMembershipRevision,
-        resultingMembershipRevision: normalized.resultingMembershipRevision,
-        episode: normalized.episode,
-        transition: normalized.transition,
-        provider: null
-      });
-
-      const record = {
-        conversationMembershipRevision: normalized.resultingMembershipRevision,
-        episode: normalized.episode,
-        transition: normalized.transition
-      } as const;
-      if (persist === undefined) {
-        return { kind: "created", record } as const;
-      }
-      const result = await persist({ executor: transaction, record });
-      return { kind: "created", record, result } as const;
-    },
-    persist === undefined ? "retry_safe" : "single_attempt"
-  );
+        if (persist === undefined) {
+          return { kind: "created", record } as const;
+        }
+        const result = await persist({ executor: transaction, record });
+        return { kind: "created", record, result } as const;
+      },
+      persist === undefined ? "retry_safe" : "single_attempt"
+    );
+  } catch (error) {
+    if (error instanceof InactiveInternalEmployeeMembershipStartError) {
+      return { kind: "participant_not_found" } as const;
+    }
+    throw error;
+  }
 }
 
 async function persistTransitionEpisode(
@@ -565,6 +582,7 @@ async function persistTransitionEpisode<TResult>(
         resultingMembershipRevision: mutation.conversationMembershipRevision,
         episode: mutation.episode,
         transition: mutation.transition,
+        episodeOriginProvider: null,
         provider: null
       });
 
@@ -844,6 +862,27 @@ async function applyMembershipMutation(
     throw invariantError(
       "Membership mutation entrypoint returned a different revision."
     );
+  }
+}
+
+async function applyInternalMembershipStartMutation(
+  executor: RawSqlExecutor,
+  input: ApplyInboxV2ParticipantMembershipMutationInput &
+    Readonly<{ operation: "start" }>
+): Promise<void> {
+  try {
+    await applyMembershipMutation(executor, input);
+  } catch (error) {
+    if (
+      hasPostgresSqlStateAndMessage(
+        error,
+        "23514",
+        "inbox_v2.internal_membership_subject_or_employee_invalid"
+      )
+    ) {
+      throw new InactiveInternalEmployeeMembershipStartError(error);
+    }
+    throw error;
   }
 }
 

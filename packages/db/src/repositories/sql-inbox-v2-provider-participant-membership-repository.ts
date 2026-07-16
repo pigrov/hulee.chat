@@ -500,6 +500,14 @@ export function createSqlInboxV2ProviderParticipantMembershipRepository(
                 occurredAt: normalized.occurredAt
               });
 
+            const provider = {
+              evidenceKind: "member" as const,
+              rosterEvidenceId: normalized.rosterEvidenceId,
+              memberEvidenceId: normalized.memberEvidenceId,
+              sourceThreadBindingId: normalized.sourceThreadBindingId,
+              sourceExternalIdentityId: normalized.sourceExternalIdentityId,
+              ordering
+            };
             await writeProviderMutation(transaction, {
               tenantId: normalized.tenantId,
               conversationId: normalized.conversationId,
@@ -508,14 +516,8 @@ export function createSqlInboxV2ProviderParticipantMembershipRepository(
               resultingMembershipRevision,
               episode,
               transition,
-              provider: {
-                evidenceKind: "member",
-                rosterEvidenceId: normalized.rosterEvidenceId,
-                memberEvidenceId: normalized.memberEvidenceId,
-                sourceThreadBindingId: normalized.sourceThreadBindingId,
-                sourceExternalIdentityId: normalized.sourceExternalIdentityId,
-                ordering
-              },
+              episodeOriginProvider: provider,
+              provider,
               previousEpisodeRevision: null,
               previousProviderOrderingHead: providerOrderingHead
             });
@@ -763,6 +765,7 @@ export function createSqlInboxV2ProviderParticipantMembershipRepository(
               resultingMembershipRevision,
               episode,
               transition,
+              episodeOriginProvider: mapProviderEpisodeOriginAnchor(episodeRow),
               provider: {
                 evidenceKind: normalized.evidence.kind,
                 rosterEvidenceId: normalized.evidence.rosterEvidenceId,
@@ -1148,6 +1151,7 @@ async function writeProviderMutation(
     resultingMembershipRevision: InboxV2BigintCounter;
     episode: InboxV2ParticipantMembershipEpisode;
     transition: InboxV2ParticipantMembershipMutationRecord["transition"];
+    episodeOriginProvider: ProviderWriteAnchor;
     provider: ProviderWriteAnchor;
     previousEpisodeRevision: InboxV2EntityRevision | null;
     previousProviderOrderingHead: ProviderOrderingHead | null;
@@ -1164,6 +1168,7 @@ async function writeProviderMutation(
         resultingMembershipRevision: input.resultingMembershipRevision,
         episode: input.episode,
         transition: input.transition,
+        episodeOriginProvider: input.episodeOriginProvider,
         provider: input.provider
       })
     );
@@ -1507,6 +1512,60 @@ function mapProviderEpisode(
         : parseTimestamp(row.valid_to, "Provider episode validTo"),
     revision: String(parseBigint(row.revision, "Provider episode revision"))
   });
+}
+
+function mapProviderEpisodeOriginAnchor(
+  row: ProviderEpisodeRow
+): ProviderWriteAnchor {
+  return {
+    evidenceKind: "member",
+    rosterEvidenceId: inboxV2ProviderRosterEvidenceIdSchema.parse(
+      requireString(
+        row.origin_provider_roster_evidence_id,
+        "Provider episode origin roster evidence"
+      )
+    ),
+    memberEvidenceId: inboxV2ProviderRosterMemberEvidenceIdSchema.parse(
+      requireString(
+        row.origin_provider_roster_member_evidence_id,
+        "Provider episode origin member evidence"
+      )
+    ),
+    sourceThreadBindingId: inboxV2SourceThreadBindingIdSchema.parse(
+      requireString(
+        row.origin_source_thread_binding_id,
+        "Provider episode origin source thread binding"
+      )
+    ),
+    sourceExternalIdentityId: inboxV2SourceExternalIdentityIdSchema.parse(
+      requireString(
+        row.origin_source_external_identity_id,
+        "Provider episode origin source identity"
+      )
+    ),
+    ordering: {
+      kind: requireString(
+        row.origin_ordering_kind,
+        "Provider episode origin ordering kind"
+      ),
+      scopeToken: requireString(
+        row.origin_ordering_scope_token,
+        "Provider episode origin ordering scope"
+      ),
+      comparatorId: requireString(
+        row.origin_ordering_comparator_id,
+        "Provider episode origin ordering comparator"
+      ),
+      comparatorRevision: parseBigint(
+        row.origin_ordering_comparator_revision,
+        "Provider episode origin ordering comparator revision"
+      ),
+      position: parseBigint(
+        row.origin_ordering_position,
+        "Provider episode origin ordering position"
+      )
+    }
+  };
 }
 
 function normalizeStartInput(

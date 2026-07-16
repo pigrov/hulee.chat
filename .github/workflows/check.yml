@@ -67,6 +67,41 @@ jobs:
       - name: Verify Inbox V2 conversation timeline head integrity
         run: pnpm test:inbox-v2:conversation-head-integrity
 
+  inbox-v2-postgres-repositories:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: hulee
+          POSTGRES_PASSWORD: hulee
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hulee -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://hulee:hulee@127.0.0.1:5432/postgres
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Verify Inbox V2 repositories against a fresh current database
+        run: pnpm test:inbox-v2:postgres
+
   inbox-v2-disposable-lifecycle:
     runs-on: ubuntu-latest
     timeout-minutes: 20

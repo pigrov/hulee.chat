@@ -156,7 +156,7 @@ session-event and authentication-challenge state. It then:
 2. runs the RBAC report and proves that it did not write to the database;
 3. proves that the default runner returns the sanitized online-bridge refusal
    while leaving the journal and every V1 fact unchanged;
-4. applies the current migration-0037 contract only through the strict DB-008
+4. applies the current migration-0038 contract only through the strict DB-008
    compatibility switch and bounded DDL budget;
 5. proves every V1 baseline column and row value is unchanged, and that the only
    V2 rows are the migration-owned foundation state expected from existing
@@ -224,7 +224,7 @@ result digests. The compatibility patch must be deployed before expand; do not
 run schema expand merely because the unpatched historical image starts. The
 runtime gate keeps one pinned source-bundled process and one connection pool/
 backend alive across pre-expand, a failed expand and migration `0035` through
-`0037`. It proves V1 inbox query, reply, routing, web view-model load and worker
+`0038`. It proves V1 inbox query, reply, routing, web view-model load and worker
 outbox processing before expand, immediately after rollback and after the
 successful compatibility expand, without provider I/O.
 
@@ -462,14 +462,14 @@ Verified scenarios:
 - the default runner detects unsafe pending DDL for the populated
   migration-0027 V1 snapshot and refuses without changing its journal, schema or
   content;
-- the strict ephemeral compatibility lane reaches migration 0037 without
+- the strict ephemeral compatibility lane reaches migration 0038 without
   changing V1 baseline facts, creates exactly the allowlisted 14 deterministic
   foundation rows and creates no operational V2 rows;
 - the read-only RBAC dry run remains deterministic across expand and reports
   every mapped/review/compatibility/invalid source without applying access;
 - the pinned, patched migration-0034 source-bundled N-1 process harness remains
   healthy before, immediately after rollback and after the strict ephemeral
-  0035-0037 compatibility expand;
+  0035-0038 compatibility expand;
 - an injected failed migration rolls back its V1 mutation, marker and journal
   entry while the same N-1 process remains operational.
 

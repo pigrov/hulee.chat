@@ -1316,6 +1316,468 @@ describePostgres("Inbox V2 clean install and guarded reset", () => {
       migrationJournalSha256: firstInstall.migrationJournalSha256
     });
   }, 300_000);
+
+  it("rejects gate-critical tenant, thread, assignment and sequence schema tampering", async () => {
+    const database = await createDisposableDatabase("gate_contract");
+    const expectedMigrationCount =
+      expectedMigrationContract(migrationsFolder).length;
+    const installCurrent = () =>
+      installInboxV2Database({
+        databaseUrl: database.url,
+        migrationsFolder
+      });
+    const expectInstallFailure = async (code) => {
+      await expect(installCurrent()).rejects.toMatchObject({ code });
+    };
+
+    await expect(installCurrent()).resolves.toMatchObject({
+      action: "install",
+      migrationCount: expectedMigrationCount
+    });
+
+    await withClient(database.url, (client) =>
+      client.query(`
+        alter table public.inbox_v2_conversation_identity_fences
+          rename to inbox_v2_conversation_identity_fences_tampered
+      `)
+    );
+    try {
+      await expectInstallFailure("inbox_v2.current_schema_incomplete");
+    } finally {
+      await withClient(database.url, (client) =>
+        client.query(`
+          alter table public.inbox_v2_conversation_identity_fences_tampered
+            rename to inbox_v2_conversation_identity_fences
+        `)
+      );
+    }
+
+    await withClient(database.url, (client) =>
+      client.query(`
+        alter table public.inbox_v2_conversations
+          drop constraint inbox_v2_conversations_tenant_id_tenants_id_fk
+      `)
+    );
+    try {
+      await expectInstallFailure("inbox_v2.current_schema_incomplete");
+    } finally {
+      await withClient(database.url, (client) =>
+        client.query(`
+          alter table public.inbox_v2_conversations
+            add constraint inbox_v2_conversations_tenant_id_tenants_id_fk
+            foreign key (tenant_id) references public.tenants(id)
+            on delete no action on update no action
+        `)
+      );
+    }
+
+    await withClient(database.url, (client) =>
+      client.query(`
+        alter table public.inbox_v2_source_thread_bindings
+          drop constraint inbox_v2_source_thread_bindings_thread_fk
+      `)
+    );
+    try {
+      await expectInstallFailure("inbox_v2.current_schema_incomplete");
+    } finally {
+      await withClient(database.url, (client) =>
+        client.query(`
+          alter table public.inbox_v2_source_thread_bindings
+            add constraint inbox_v2_source_thread_bindings_thread_fk
+            foreign key (tenant_id, external_thread_id)
+            references public.inbox_v2_external_threads(tenant_id, id)
+            on delete no action on update no action
+        `)
+      );
+    }
+
+    await withClient(database.url, (client) =>
+      client.query(`
+        alter table public.inbox_v2_external_threads
+          drop constraint inbox_v2_external_threads_registry_fk
+      `)
+    );
+    try {
+      await expectInstallFailure("inbox_v2.current_schema_incomplete");
+    } finally {
+      await withClient(database.url, (client) =>
+        client.query(`
+          alter table public.inbox_v2_external_threads
+            add constraint inbox_v2_external_threads_registry_fk
+            foreign key (
+              tenant_id,
+              key_registry_id,
+              key_registry_entry_kind,
+              id,
+              conversation_id,
+              key_digest
+            ) references public.inbox_v2_external_thread_key_registry (
+              tenant_id,
+              id,
+              entry_kind,
+              canonical_thread_id,
+              canonical_conversation_id,
+              key_digest
+            ) on delete no action on update no action
+        `)
+      );
+    }
+
+    const bindingAnchorTriggerDefinition = await readTriggerDefinition(
+      database.url,
+      "inbox_v2_source_thread_bindings",
+      "inbox_v2_binding_anchors_integrity"
+    );
+    await withClient(database.url, (client) =>
+      client.query(`
+        drop trigger inbox_v2_binding_anchors_integrity
+          on public.inbox_v2_source_thread_bindings
+      `)
+    );
+    try {
+      await expectInstallFailure("inbox_v2.current_schema_incomplete");
+    } finally {
+      await withClient(database.url, (client) =>
+        client.query(bindingAnchorTriggerDefinition)
+      );
+    }
+
+    const bindingAnchorImmutableTriggerDefinition = await readTriggerDefinition(
+      database.url,
+      "inbox_v2_source_thread_bindings",
+      "inbox_v2_binding_anchors_immutable"
+    );
+    await withClient(database.url, (client) =>
+      client.query(`
+        drop trigger inbox_v2_binding_anchors_immutable
+          on public.inbox_v2_source_thread_bindings
+      `)
+    );
+    try {
+      await expectInstallFailure("inbox_v2.current_schema_incomplete");
+    } finally {
+      await withClient(database.url, (client) =>
+        client.query(bindingAnchorImmutableTriggerDefinition)
+      );
+    }
+
+    await withClient(database.url, (client) =>
+      client.query(`
+        drop index public.inbox_v2_ext_thread_key_canonical_target_unique;
+        create unique index inbox_v2_ext_thread_key_canonical_target_unique
+          on public.inbox_v2_external_thread_key_registry using btree
+            (tenant_id, canonical_thread_id)
+          where entry_kind = 'alias'
+      `)
+    );
+    try {
+      await expectInstallFailure("inbox_v2.current_schema_definition_mismatch");
+    } finally {
+      await withClient(database.url, (client) =>
+        client.query(`
+          drop index public.inbox_v2_ext_thread_key_canonical_target_unique;
+          create unique index inbox_v2_ext_thread_key_canonical_target_unique
+            on public.inbox_v2_external_thread_key_registry using btree
+              (tenant_id, canonical_thread_id)
+            where entry_kind = 'canonical'
+        `)
+      );
+    }
+
+    await withClient(database.url, (client) =>
+      client.query(`
+        alter table public.inbox_v2_work_item_primary_assignments
+          enable replica trigger
+            inbox_v2_work_item_primary_assignments_guard_trigger
+      `)
+    );
+    try {
+      await expectInstallFailure("inbox_v2.current_schema_definition_mismatch");
+    } finally {
+      await withClient(database.url, (client) =>
+        client.query(`
+          alter table public.inbox_v2_work_item_primary_assignments
+            enable trigger
+              inbox_v2_work_item_primary_assignments_guard_trigger
+        `)
+      );
+    }
+
+    const assignmentNonOverlapTriggerDefinition = await readTriggerDefinition(
+      database.url,
+      "inbox_v2_work_item_primary_assignments",
+      "inbox_v2_work_assignment_non_overlap_constraint"
+    );
+    await withClient(database.url, (client) =>
+      client.query(`
+        drop trigger inbox_v2_work_assignment_non_overlap_constraint
+          on public.inbox_v2_work_item_primary_assignments
+      `)
+    );
+    try {
+      await expectInstallFailure("inbox_v2.current_schema_incomplete");
+    } finally {
+      await withClient(database.url, (client) =>
+        client.query(assignmentNonOverlapTriggerDefinition)
+      );
+    }
+
+    const assignmentAggregateTriggerDefinition = await readTriggerDefinition(
+      database.url,
+      "inbox_v2_work_item_primary_assignments",
+      "inbox_v2_work_assignment_aggregate_constraint"
+    );
+    await withClient(database.url, (client) =>
+      client.query(`
+        drop trigger inbox_v2_work_assignment_aggregate_constraint
+          on public.inbox_v2_work_item_primary_assignments
+      `)
+    );
+    try {
+      await expectInstallFailure("inbox_v2.current_schema_incomplete");
+    } finally {
+      await withClient(database.url, (client) =>
+        client.query(assignmentAggregateTriggerDefinition)
+      );
+    }
+
+    await withClient(database.url, (client) =>
+      client.query(`
+        drop index public.inbox_v2_work_items_non_terminal_unique;
+        create unique index inbox_v2_work_items_non_terminal_unique
+          on public.inbox_v2_work_items using btree
+            (tenant_id, conversation_id)
+          where state in ('new', 'assigned', 'in_progress')
+      `)
+    );
+    try {
+      await expectInstallFailure("inbox_v2.current_schema_definition_mismatch");
+    } finally {
+      await withClient(database.url, (client) =>
+        client.query(`
+          drop index public.inbox_v2_work_items_non_terminal_unique;
+          create unique index inbox_v2_work_items_non_terminal_unique
+            on public.inbox_v2_work_items using btree
+              (tenant_id, conversation_id)
+            where state in ('new', 'assigned', 'in_progress', 'waiting')
+        `)
+      );
+    }
+
+    await withClient(database.url, (client) =>
+      client.query(`
+        drop index
+          public.inbox_v2_work_item_primary_assignment_active_unique;
+        create unique index
+          inbox_v2_work_item_primary_assignment_active_unique
+          on public.inbox_v2_work_item_primary_assignments using btree
+            (tenant_id, work_item_id)
+          where state = 'ended'
+      `)
+    );
+    try {
+      await expectInstallFailure("inbox_v2.current_schema_definition_mismatch");
+    } finally {
+      await withClient(database.url, (client) =>
+        client.query(`
+          drop index
+            public.inbox_v2_work_item_primary_assignment_active_unique;
+          create unique index
+            inbox_v2_work_item_primary_assignment_active_unique
+            on public.inbox_v2_work_item_primary_assignments using btree
+              (tenant_id, work_item_id)
+            where state = 'active'
+        `)
+      );
+    }
+
+    await withClient(database.url, (client) =>
+      client.query(`
+        alter table public.inbox_v2_conversation_identity_fences
+          drop constraint inbox_v2_conversation_identity_fences_values_check;
+        alter table public.inbox_v2_conversation_identity_fences
+          add constraint inbox_v2_conversation_identity_fences_values_check
+          check (
+            retired_revision >= 0
+            and retired_stream_position >= 1
+            and isfinite(retired_updated_at)
+            and isfinite(retired_at)
+          )
+      `)
+    );
+    try {
+      await expectInstallFailure("inbox_v2.current_schema_definition_mismatch");
+    } finally {
+      await withClient(database.url, (client) =>
+        client.query(`
+          alter table public.inbox_v2_conversation_identity_fences
+            drop constraint inbox_v2_conversation_identity_fences_values_check;
+          alter table public.inbox_v2_conversation_identity_fences
+            add constraint inbox_v2_conversation_identity_fences_values_check
+            check (
+              retired_revision >= 1
+              and retired_stream_position >= 1
+              and isfinite(retired_updated_at)
+              and isfinite(retired_at)
+            )
+        `)
+      );
+    }
+
+    await withClient(database.url, (client) =>
+      client.query(`
+        alter table public.inbox_v2_conversations enable replica trigger
+          inbox_v2_conversations_insert_guard_trigger
+      `)
+    );
+    try {
+      await expectInstallFailure("inbox_v2.current_schema_definition_mismatch");
+    } finally {
+      await withClient(database.url, (client) =>
+        client.query(`
+          alter table public.inbox_v2_conversations enable trigger
+            inbox_v2_conversations_insert_guard_trigger
+        `)
+      );
+    }
+
+    const identityLockFunctionDefinition = await withClient(
+      database.url,
+      async (client) => {
+        const result = await client.query(`
+          select pg_get_functiondef(
+                   'public.inbox_v2_lock_conversation_identity(text,text)'
+                     ::regprocedure
+                 ) as definition
+        `);
+        return result.rows[0].definition;
+      }
+    );
+    await withClient(database.url, (client) =>
+      client.query(`
+        create or replace function public.inbox_v2_lock_conversation_identity(
+          checked_tenant_id text,
+          checked_conversation_id text
+        )
+        returns void
+        language plpgsql
+        set search_path = pg_catalog, public, pg_temp
+        as $function$
+        begin
+          return;
+        end;
+        $function$
+      `)
+    );
+    try {
+      await expectInstallFailure("inbox_v2.current_schema_definition_mismatch");
+    } finally {
+      await withClient(database.url, (client) =>
+        client.query(identityLockFunctionDefinition)
+      );
+    }
+
+    const timelineCoherenceTriggerDefinition = await readTriggerDefinition(
+      database.url,
+      "inbox_v2_timeline_items",
+      "inbox_v2_tm_timeline_coherence"
+    );
+    await withClient(database.url, (client) =>
+      client.query(`
+        drop trigger inbox_v2_tm_timeline_coherence
+          on public.inbox_v2_timeline_items
+      `)
+    );
+    try {
+      await expectInstallFailure("inbox_v2.current_schema_incomplete");
+    } finally {
+      await withClient(database.url, (client) =>
+        client.query(timelineCoherenceTriggerDefinition)
+      );
+    }
+
+    await withClient(database.url, (client) =>
+      client.query(`
+        alter table public.inbox_v2_timeline_items enable replica trigger
+          inbox_v2_tm_timeline_head_guard
+      `)
+    );
+    try {
+      await expectInstallFailure("inbox_v2.current_schema_definition_mismatch");
+    } finally {
+      await withClient(database.url, (client) =>
+        client.query(`
+          alter table public.inbox_v2_timeline_items enable trigger
+            inbox_v2_tm_timeline_head_guard
+        `)
+      );
+    }
+
+    await withClient(database.url, (client) =>
+      client.query(`
+        drop index
+          public.inbox_v2_timeline_items_eligible_activity_tail_idx;
+        create index inbox_v2_timeline_items_eligible_activity_tail_idx
+          on public.inbox_v2_timeline_items using btree
+            (
+              tenant_id,
+              conversation_id,
+              timeline_sequence desc nulls last,
+              id,
+              occurred_at
+            )
+          where activity_kind = 'non_activity'
+      `)
+    );
+    try {
+      await expectInstallFailure("inbox_v2.current_schema_definition_mismatch");
+    } finally {
+      await withClient(database.url, (client) =>
+        client.query(`
+          drop index
+            public.inbox_v2_timeline_items_eligible_activity_tail_idx;
+          create index inbox_v2_timeline_items_eligible_activity_tail_idx
+            on public.inbox_v2_timeline_items using btree
+              (
+                tenant_id,
+                conversation_id,
+                timeline_sequence desc nulls last,
+                id,
+                occurred_at
+              )
+            where activity_kind = 'eligible'
+        `)
+      );
+    }
+
+    const timelineClockConstraintDefinition = await readConstraintDefinition(
+      database.url,
+      "inbox_v2_timeline_items",
+      "inbox_v2_timeline_items_clock_check"
+    );
+    await withClient(database.url, (client) =>
+      client.query(`
+        alter table public.inbox_v2_timeline_items
+          drop constraint inbox_v2_timeline_items_clock_check
+      `)
+    );
+    try {
+      await expectInstallFailure("inbox_v2.current_schema_incomplete");
+    } finally {
+      await withClient(database.url, (client) =>
+        client.query(`
+          alter table public.inbox_v2_timeline_items
+            add constraint inbox_v2_timeline_items_clock_check
+            ${timelineClockConstraintDefinition}
+        `)
+      );
+    }
+
+    await expect(installCurrent()).resolves.toMatchObject({
+      action: "install",
+      migrationCount: expectedMigrationCount
+    });
+  }, 300_000);
 });
 
 async function createDisposableDatabase(label) {
@@ -1533,6 +1995,41 @@ async function withClient(databaseUrl, work) {
   } finally {
     await client.end();
   }
+}
+
+async function readTriggerDefinition(databaseUrl, relation, trigger) {
+  return withClient(databaseUrl, async (client) => {
+    const result = await client.query(
+      `select pg_get_triggerdef(trigger_row.oid, true) as definition
+         from pg_catalog.pg_trigger trigger_row
+        where trigger_row.tgrelid = to_regclass($1)
+          and trigger_row.tgname = $2
+          and not trigger_row.tgisinternal`,
+      [`public.${relation}`, trigger]
+    );
+    if (result.rows.length !== 1) {
+      throw new Error(`Missing trigger definition for ${relation}.${trigger}.`);
+    }
+    return result.rows[0].definition;
+  });
+}
+
+async function readConstraintDefinition(databaseUrl, relation, constraint) {
+  return withClient(databaseUrl, async (client) => {
+    const result = await client.query(
+      `select pg_get_constraintdef(constraint_row.oid, false) as definition
+         from pg_catalog.pg_constraint constraint_row
+        where constraint_row.conrelid = to_regclass($1)
+          and constraint_row.conname = $2`,
+      [`public.${relation}`, constraint]
+    );
+    if (result.rows.length !== 1) {
+      throw new Error(
+        `Missing constraint definition for ${relation}.${constraint}.`
+      );
+    }
+    return result.rows[0].definition;
+  });
 }
 
 function bootstrapFixture() {

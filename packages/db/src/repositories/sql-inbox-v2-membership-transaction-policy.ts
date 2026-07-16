@@ -211,6 +211,36 @@ export function hasPostgresSqlState(
   return false;
 }
 
+export function hasPostgresSqlStateAndMessage(
+  error: unknown,
+  state: string,
+  message: string
+): boolean {
+  let current = error;
+  const seen = new Set<unknown>();
+
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (
+      (typeof current !== "object" || current === null) &&
+      typeof current !== "function"
+    ) {
+      return false;
+    }
+    if (seen.has(current)) return false;
+    seen.add(current);
+
+    if (
+      Reflect.get(current, "code") === state &&
+      Reflect.get(current, "message") === message
+    ) {
+      return true;
+    }
+    current = Reflect.get(current, "cause");
+  }
+
+  return false;
+}
+
 function isRetryableMembershipSqlState(error: unknown): boolean {
   return hasPostgresSqlState(error, RETRYABLE_MEMBERSHIP_SQLSTATES);
 }

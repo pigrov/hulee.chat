@@ -89,6 +89,7 @@ describe("SQL Inbox V2 participant membership repository", () => {
         resultingMembershipRevision: "1" as never,
         episode,
         transition,
+        episodeOriginProvider: null,
         provider: null
       })
     );
@@ -595,6 +596,63 @@ describe("SQL Inbox V2 participant membership repository", () => {
       ).transitionEpisode(transitionInput())
     ).rejects.toBe(databaseError);
     expect(failingExecutor.rollbackCount).toBe(1);
+  });
+
+  it("maps only the exact inactive-Employee entrypoint rejection after rollback", async () => {
+    const databaseError = Object.assign(
+      new Error("inbox_v2.internal_membership_subject_or_employee_invalid"),
+      { code: "23514" }
+    );
+    const wrappedError = Object.assign(new Error("Failed query"), {
+      cause: databaseError
+    });
+    const executor = new ScriptedMembershipExecutor([
+      [{ membership_revision: "0" }],
+      [participantRow(participantRecord())],
+      [],
+      [],
+      [{ __throw: wrappedError }]
+    ]);
+
+    await expect(
+      createSqlInboxV2ParticipantMembershipRepository(executor).startEpisode(
+        startInput()
+      )
+    ).resolves.toEqual({ kind: "participant_not_found" });
+    expect(executor.commitCount).toBe(0);
+    expect(executor.rollbackCount).toBe(1);
+
+    const differentError = Object.assign(
+      new Error("inbox_v2.membership_episode_revision_conflict"),
+      { code: "23514" }
+    );
+    const failClosed = new ScriptedMembershipExecutor([
+      [{ membership_revision: "0" }],
+      [participantRow(participantRecord())],
+      [],
+      [],
+      [{ __throw: differentError }]
+    ]);
+    await expect(
+      createSqlInboxV2ParticipantMembershipRepository(failClosed).startEpisode(
+        startInput()
+      )
+    ).rejects.toBe(differentError);
+
+    const callbackError = Object.assign(
+      new Error("inbox_v2.internal_membership_subject_or_employee_invalid"),
+      { code: "23514" }
+    );
+    const callbackExecutor = successfulStartExecutor();
+    await expect(
+      createSqlInboxV2ParticipantMembershipRepository(
+        callbackExecutor
+      ).withStartEpisode(startInput(), async () => {
+        throw callbackError;
+      })
+    ).rejects.toBe(callbackError);
+    expect(callbackExecutor.commitCount).toBe(0);
+    expect(callbackExecutor.rollbackCount).toBe(1);
   });
 
   it("rejects membership and episode bigint overflow before any durable write", async () => {

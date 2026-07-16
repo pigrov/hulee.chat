@@ -847,7 +847,7 @@ PostgreSQL gate passes. `INB2-DB-005` cannot start before both are complete.
     with no P0/P1/P2 findings.
 
 - [x] `INB2-DB-002` Add external identities, participants and client links.
-  - State: `completed`; Priority: `P0`; Started: `2026-07-13`; Completed:
+  - State: `done`; Priority: `P0`; Started: `2026-07-13`; Completed:
     `2026-07-14`; Owner: `Codex`; Depends on: `INB2-DB-001`, `INB2-CON-004`;
     coupled delivery: `INB2-DB-003`.
   - Acceptance: source identity storage is separate from auth identity links;
@@ -902,7 +902,7 @@ PostgreSQL gate passes. `INB2-DB-005` cannot start before both are complete.
     `INB2-DB-003` transport delivery is complete.
 
 - [x] `INB2-DB-003` Add external threads, account bindings and provider references.
-  - State: `completed`; Priority: `P0`; Started: `2026-07-13`; Completed:
+  - State: `done`; Priority: `P0`; Started: `2026-07-13`; Completed:
     `2026-07-14`; Owner: `Codex`; Depends on: `INB2-DB-001`, `INB2-CON-005`;
     coupled delivery: `INB2-DB-002` foundation/coherence.
   - Acceptance: composite tenant uniqueness respects versioned thread/message
@@ -1253,7 +1253,7 @@ PostgreSQL gate passes. `INB2-DB-005` cannot start before both are complete.
     inventory-scoped operation per statement with count and domain-separated
     inventory digest, never a statement-by-relation expansion. One pinned
     migration-0034 source-bundled N-1 process remains operational across the
-    immediate failed-migration probe and strict ephemeral 0035-0037
+    immediate failed-migration probe and strict ephemeral 0035-0038
     compatibility expand. The contract binds revision `3b9d703`, exact source/
     build/input/migration digests and the reviewed routing patch; full-history CI
     regenerates the deterministic bundle and rejects drift. The sequential
@@ -1297,14 +1297,23 @@ PostgreSQL gate passes. `INB2-DB-005` cannot start before both are complete.
     independent reviews found no remaining P0/P1/P2 blocker. Production preserve
     expand remains fail-closed until `INB2-MIG-002` supplies its online bridge.
 
-- [ ] `INB2-EPIC-2-GATE` Verify Epic 2 exit gate.
-  - State: `planned`; Priority: `P0`; Depends on: all Epic 2 tasks, including
-    `INB2-DB-010`.
+- [x] `INB2-EPIC-2-GATE` Verify Epic 2 exit gate.
+  - State: `done`; Priority: `P0`; Started: `2026-07-16`;
+    Completed: `2026-07-16`; Owner: `Codex`; Depends on: all Epic 2 tasks,
+    including `INB2-DB-010`.
   - Acceptance: fresh/current V2 databases enforce tenant, thread, assignment
     and sequence invariants without application-only assumptions; a
     representative V1-upgraded database is required by the selected preserve
     path.
-  - Verification: schema/repository/migration evidence is complete. Evidence: -
+  - Verification: schema/repository/migration evidence is complete.
+  - Evidence: `docs/product/inbox-v2-epic-2-gate-review.md`; fresh/current
+    PostgreSQL 16 applied `39/39` migrations and passed `23/23` files with
+    `219/219` tests; preserve `3/17`, timeline `1/6`, reset `1/2`, lifecycle and
+    runner `2/27`, and focused membership `3/32` passed; `pnpm db:check` and
+    `pnpm check` passed (`304/3041`, with `31/258` opt-in integration tests
+    intentionally skipped by the default process); independent latest-tree
+    reviews found no remaining P0/P1/P2 blocker. Production preserve expand,
+    backfill, cutover and V1 removal remain outside this gate.
 
 ## Epic 3. Source Pipeline, Identity And Conversation Resolution
 
@@ -2857,7 +2866,15 @@ the task state, checkbox and evidence above.
 | 2026-07-11 | `INB2-CON-003`     | Participant/identity graphs; focused 6/144; full 151/868 and gates         | working tree | Codex + three reviewers           |
 | 2026-07-11 | `INB2-CON-004`     | Client links/bounded merge; focused 8/199; full 153/923 and gates          | working tree | Codex + three reviewers           |
 | 2026-07-11 | `INB2-CON-005`     | Thread/binding/route/dispatch; focused 15/343; full 160/1067 + gates       | working tree | Codex + domain/security reviews   |
+| 2026-07-11 | `INB2-CON-006`     | WorkItem/assignment/SLA contracts; focused 6/53; full 164/1104 + gates     | working tree | Codex + independent review        |
+| 2026-07-11 | `INB2-CON-007`     | Timeline/lifecycle contracts; focused 28/479; full 173/1203 + gates        | working tree | Codex + two reviewers             |
+| 2026-07-11 | `INB2-CON-008`     | Command/event/realtime contracts; focused 40/578; full 185/1302 + gates    | working tree | Codex + two reviewers             |
+| 2026-07-12 | `INB2-CON-010`     | Privacy/lifecycle contracts; critical 5/60; full 199/1425 + gates          | working tree | Codex + two reviewers             |
 | 2026-07-12 | `INB2-RBAC-001`    | 101x12 catalog; focused 13/13; full 200/1438 + applicable gates            | working tree | Codex + two reviewers             |
+| 2026-07-13 | `INB2-RBAC-002`    | Pure authorization policy; focused 10/585; full 209/2010 + gates           | working tree | Codex + two reviewers             |
+| 2026-07-13 | `INB2-RBAC-005`    | Resource-scoped admin/audit; focused 21/284; full 217/2150 + gates         | working tree | Codex + security reviews          |
+| 2026-07-13 | `INB2-CON-009`     | In-memory scenario runner; focused 4/19; full 213/2029 + gates             | working tree | Codex + acceptance/security       |
+| 2026-07-13 | `INB2-EPIC-1-GATE` | Public-boundary proof; scenario 6/38; focused 68/1311; full 219/2169       | working tree | Codex + independent reviews       |
 | 2026-07-13 | `INB2-DB-001`      | Conversation/head DB; PG 7/7; focused 4/94; full 221/2185 + gates          | working tree | Codex + three reviewers           |
 | 2026-07-14 | `INB2-DB-002`      | Identity/participants/client links; shared PG 13/124; full 247/2511        | working tree | Codex + two reviewers             |
 | 2026-07-14 | `INB2-DB-003`      | Thread/binding/outbound; PG 13/124; outbound 6/6; full 247/2511            | working tree | Codex + two reviewers             |
@@ -2865,7 +2882,10 @@ the task state, checkbox and evidence above.
 | 2026-07-14 | `INB2-DB-005`      | Timeline/message DB; PG 18/18; DB 73/666; full 254/2577                    | working tree | Codex + two reviewers             |
 | 2026-07-15 | `INB2-DB-006`      | Employee state/read DB; PG 4/4; migration 3/3; full 258/2605               | working tree | Codex + three reviewers           |
 | 2026-07-15 | `INB2-DB-009`      | Governance/privacy DB; PG 22/22; migration 8/8; full 271/2718              | working tree | Codex + three reviewers           |
+| 2026-07-15 | `INB2-RBAC-003`    | Authorization relations/fences; live 23/23; focused 9/522; full 277/2782   | working tree | Codex + independent reviews       |
+| 2026-07-15 | `INB2-RBAC-007`    | Bounded denial sink/review; live 14/14; focused 9/480; full 286/2850       | working tree | Codex + independent reviews       |
 | 2026-07-15 | `INB2-DB-007`      | Repository foundation; PG 4/4; migration 4/4; full 296/2954                | working tree | Codex + three reviewers           |
 | 2026-07-16 | `INB2-MIG-001`     | C01-C24/D01-D31 inventory; preserve; full 298/2968 and all gates           | working tree | Codex + independent reviews       |
 | 2026-07-16 | `INB2-DB-008`      | Preserve 3/17; reset 1/1; focused 5/72; full 302/3024 + gates              | working tree | Codex + independent reviews       |
 | 2026-07-16 | `INB2-DB-010`      | Coherence/TRUNCATE; lifecycle 6/6; preserve 3/17; reset 1/1; full 303/3031 | working tree | Codex + three independent reviews |
+| 2026-07-16 | `INB2-EPIC-2-GATE` | Fresh PG 23/219; preserve/reset/lifecycle; full 304/3041 and all gates     | working tree | Codex + independent reviews       |
