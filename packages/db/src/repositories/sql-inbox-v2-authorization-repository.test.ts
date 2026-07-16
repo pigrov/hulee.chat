@@ -1,3 +1,7 @@
+import {
+  inboxV2CatalogIdSchema,
+  inboxV2Sha256DigestSchema
+} from "@hulee/contracts";
 import { PgDialect } from "drizzle-orm/pg-core";
 import type { SQL } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
@@ -16,6 +20,7 @@ import {
   computeInboxV2AuthorizationMutationManifestDigest,
   computeInboxV2LeafHashDigest,
   computeInboxV2TenantStreamManifestDigest,
+  createSqlInboxV2AuthorizedCommandCoordinator,
   createSqlInboxV2AuthorizationRepository,
   type InboxV2AuthorizationTransactionExecutor,
   type WithPrivilegedAuthorizationMutationInput
@@ -26,8 +31,8 @@ const otherTenantId = "tenant:tenant-2";
 const employeeId = "employee:employee-1";
 const occurredAt = "2026-07-15T09:00:00.000Z";
 const expiresAt = "2027-07-15T09:00:00.000Z";
-const hashA = `sha256:${"a".repeat(64)}`;
-const hashB = `sha256:${"b".repeat(64)}`;
+const hashA = inboxV2Sha256DigestSchema.parse(`sha256:${"a".repeat(64)}`);
+const hashB = inboxV2Sha256DigestSchema.parse(`sha256:${"b".repeat(64)}`);
 const internalRoleId = `internal-ref:${"1".repeat(32)}`;
 const internalTenantId = `internal-ref:${"2".repeat(32)}`;
 
@@ -238,6 +243,39 @@ describe("SQL Inbox V2 authorization mutation repository", () => {
       code: "command.idempotency_conflict"
     });
     expect(conflict.timeline).toEqual(["claim_command", "replay_by_scope"]);
+  });
+
+  it("exposes the replay-safe idempotency protocol through the generic coordinator", async () => {
+    const executor = new RoutingAuthorizationExecutor({
+      replayRequestHash: hashA
+    });
+    const coordinator = createSqlInboxV2AuthorizedCommandCoordinator(executor);
+    let callbackCount = 0;
+
+    const result = await coordinator.withAuthorizedCommandMutation(
+      roleMutationInput(),
+      async () => {
+        callbackCount += 1;
+        throw new Error("domain callback must not run on replay");
+      }
+    );
+
+    expect(result.kind).toBe("already_applied");
+    if (result.kind === "already_applied") {
+      expect(result.status).toMatchObject({
+        commandId: "command:command-1",
+        mutationId: "authorization-mutation:mutation-1",
+        publicResultCode: "core:authorization.applied",
+        streamCommitId: "commit:commit-1",
+        streamEpoch: "stream:epoch-1",
+        streamPosition: "1"
+      });
+      expect(Object.hasOwn(result.status, "sensitiveResultReference")).toBe(
+        false
+      );
+    }
+    expect(callbackCount).toBe(0);
+    expect(executor.timeline).toEqual(["claim_command", "replay_by_scope"]);
   });
 
   it("rolls back callback, audit and stale stream failures without a partial commit", async () => {
@@ -1508,7 +1546,9 @@ function roleBindingMutationInput(): WithPrivilegedAuthorizationMutationInput {
     ...base,
     command: {
       ...base.command,
-      commandTypeId: "core:authorization.role_binding"
+      commandTypeId: inboxV2CatalogIdSchema.parse(
+        "core:authorization.role_binding"
+      )
     },
     records: {
       ...base.records,

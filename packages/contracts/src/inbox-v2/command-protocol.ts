@@ -1100,6 +1100,9 @@ function sameValue(left: unknown, right: unknown): boolean {
 export type InboxV2CommandPrincipal = z.infer<
   typeof inboxV2CommandPrincipalSchema
 >;
+export type InboxV2CommandRequestIdentity = z.infer<
+  typeof inboxV2CommandRequestIdentitySchema
+>;
 export type InboxV2AuthorizedCommand = z.infer<
   typeof inboxV2AuthorizedCommandSchema
 >;

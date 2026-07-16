@@ -671,8 +671,9 @@ implementation.
     the concurrent untracked landing component
     `apps/site/app/[locale]/calculator-section.tsx`.
 
-- [ ] `INB2-CON-011` Extract the generic authorized-command transaction coordinator.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-CON-008`,
+- [x] `INB2-CON-011` Extract the generic authorized-command transaction coordinator.
+  - State: `done`; Priority: `P0`; Started: `2026-07-16`;
+    Completed: `2026-07-16`; Owner: `Codex`; Depends on: `INB2-CON-008`,
     `INB2-RBAC-003`.
   - Acceptance: the command claim, same-transaction authorization/revision/
     temporal fence, tenant-stream commit, domain event, outbox, audit and final
@@ -693,7 +694,18 @@ implementation.
     same-hash replay, different-hash conflict, independent tenant/principal
     scopes, revocation or expiry after preflight, rollback with no command/
     stream/domain residue, serialization retry, exact command/change/event
-    correlation and no one-time-secret redisclosure. Evidence: -
+    correlation and no one-time-secret redisclosure. Evidence: the generic
+    `createSqlInboxV2AuthorizedCommandCoordinator` now owns command claim,
+    authorization/revision/temporal fences, tenant-stream commit, domain events,
+    outbox, audit, final idempotency result and retry loop; the authorization
+    repository is a thin wrapper over the coordinator. `InboxV2CommandRequestIdentity`
+    is exported from contracts and the coordinator command claim is typed from
+    that exact request identity without duplicating the schema. Focused unit and
+    contract suites passed `46/46`, TypeScript passed, scoped Prettier and ESLint
+    passed, skip-mode integration passed `1/23` with `22` opt-in tests skipped,
+    and a clean disposable PostgreSQL database on `hulee-postgres` passed the
+    live authorization repository fixture `23/23` after applying `40` migrations
+    on `2026-07-16`.
 
 - [x] `INB2-RBAC-001` Implement the versioned Inbox V2 permission/scope catalog.
   - State: `done`; Priority: `P0`; Started: `2026-07-12`;

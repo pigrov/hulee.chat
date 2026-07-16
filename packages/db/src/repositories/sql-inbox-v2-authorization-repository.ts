@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import type {
   InboxV2AuthorizationDecisionReference,
+  InboxV2CommandRequestIdentity,
   InboxV2DomainEvent,
   InboxV2InternalEntityReference,
   InboxV2OutboxIntent,
@@ -64,19 +65,17 @@ export type InboxV2AuthorizationActor =
   | Readonly<{ kind: "employee"; employeeId: string }>
   | Readonly<{ kind: "trusted_service"; trustedServiceId: string }>;
 
-export type InboxV2AuthorizationCommandClaim = Readonly<{
-  id: string;
-  requestId: string;
-  clientMutationId: string;
-  commandTypeId: string;
-  requestHash: string;
-  actor: InboxV2AuthorizationActor;
-  authorizationDecisionId: string;
-  authorizationEpoch: string;
-  authorizedAt: string;
-  publicResultCode: string;
-  sensitiveResultReference: string | null;
-}>;
+export type InboxV2AuthorizationCommandClaim = Readonly<
+  Omit<InboxV2CommandRequestIdentity, "tenantId"> & {
+    id: string;
+    actor: InboxV2AuthorizationActor;
+    authorizationDecisionId: string;
+    authorizationEpoch: string;
+    authorizedAt: string;
+    publicResultCode: string;
+    sensitiveResultReference: string | null;
+  }
+>;
 
 export type InboxV2AuthorizationEmployeeRevisionExpectation = Readonly<{
   employeeId: string;
@@ -330,12 +329,43 @@ export type InboxV2AuthorizationRevisionConflict = Readonly<{
   currentRevision: string;
 }>;
 
+export type InboxV2AuthorizedCommandActor = InboxV2AuthorizationActor;
+export type InboxV2AuthorizedCommandClaim = InboxV2AuthorizationCommandClaim;
+export type InboxV2AuthorizedCommandRevisionPlan =
+  InboxV2AuthorizationRevisionPlan;
+export type InboxV2AuthorizedCommandRecords =
+  InboxV2AuthorizationMutationRecords;
+export type WithInboxV2AuthorizedCommandMutationInput =
+  WithPrivilegedAuthorizationMutationInput;
+export type InboxV2AuthorizedCommandMutationCallbackResult<TResult> =
+  InboxV2PrivilegedAuthorizationMutationCallbackResult<TResult>;
+export type InboxV2AuthorizedCommandMutationContext =
+  InboxV2PrivilegedAuthorizationMutationContext;
+export type InboxV2AuthorizedCommandMutationResult<TResult> =
+  WithPrivilegedAuthorizationMutationResult<TResult>;
+
 export type InboxV2AuthorizationTransactionExecutor = RawSqlExecutor & {
   transaction<TResult>(
     work: (transaction: RawSqlExecutor) => Promise<TResult>,
     config: Readonly<{ isolationLevel: "read committed" }>
   ): Promise<TResult>;
 };
+
+export type InboxV2AuthorizedCommandCoordinator = Readonly<{
+  withAuthorizedCommandMutation<TResult>(
+    input: WithInboxV2AuthorizedCommandMutationInput,
+    /**
+     * Runs inside the coordinator-owned retryable database transaction and may
+     * execute again after serialization failures or deadlocks. The callback is
+     * intentionally DB-only: provider I/O, credential exchange and one-time
+     * secret material must be represented through non-sensitive outbox/result
+     * references prepared before the coordinator is called.
+     */
+    persistDomainMutation: (
+      context: InboxV2AuthorizedCommandMutationContext
+    ) => Promise<InboxV2AuthorizedCommandMutationCallbackResult<TResult>>
+  ): Promise<InboxV2AuthorizedCommandMutationResult<TResult>>;
+}>;
 
 export type InboxV2AuthorizationRepository = Readonly<{
   withPrivilegedAuthorizationMutation<TResult>(
@@ -452,11 +482,23 @@ type RoleBindingLegalityRow = {
 export function createSqlInboxV2AuthorizationRepository(
   executor: InboxV2AuthorizationTransactionExecutor | HuleeDatabase
 ): InboxV2AuthorizationRepository {
+  const coordinator = createSqlInboxV2AuthorizedCommandCoordinator(executor);
+
+  return {
+    async withPrivilegedAuthorizationMutation(input, persistRelations) {
+      return coordinator.withAuthorizedCommandMutation(input, persistRelations);
+    }
+  };
+}
+
+export function createSqlInboxV2AuthorizedCommandCoordinator(
+  executor: InboxV2AuthorizationTransactionExecutor | HuleeDatabase
+): InboxV2AuthorizedCommandCoordinator {
   const transactionExecutor =
     executor as unknown as InboxV2AuthorizationTransactionExecutor;
 
   return {
-    async withPrivilegedAuthorizationMutation(input, persistRelations) {
+    async withAuthorizedCommandMutation(input, persistDomainMutation) {
       const normalized = normalizeMutationInput(input);
       return runAuthorizationMutationTransaction(
         transactionExecutor,
@@ -464,7 +506,7 @@ export function createSqlInboxV2AuthorizationRepository(
           persistPrivilegedAuthorizationMutation(
             transaction,
             normalized,
-            persistRelations
+            persistDomainMutation
           )
       );
     }
@@ -474,7 +516,7 @@ export function createSqlInboxV2AuthorizationRepository(
 async function persistPrivilegedAuthorizationMutation<TResult>(
   transaction: RawSqlExecutor,
   input: WithPrivilegedAuthorizationMutationInput,
-  persistRelations: (
+  persistDomainMutation: (
     context: InboxV2PrivilegedAuthorizationMutationContext
   ) => Promise<InboxV2PrivilegedAuthorizationMutationCallbackResult<TResult>>
 ): Promise<WithPrivilegedAuthorizationMutationResult<TResult>> {
@@ -523,7 +565,7 @@ async function persistPrivilegedAuthorizationMutation<TResult>(
     throw new AuthorizationMutationAbort(locked.result);
   }
 
-  const callbackResult = await persistRelations({
+  const callbackResult = await persistDomainMutation({
     executor: transaction,
     tenantId: input.tenantId,
     mutationId: input.records.mutationId,

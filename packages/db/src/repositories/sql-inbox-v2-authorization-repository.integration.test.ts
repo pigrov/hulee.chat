@@ -9,6 +9,7 @@ import {
   inboxV2ParticipantMembershipEpisodeIdSchema,
   inboxV2ParticipantMembershipReasonIdSchema,
   inboxV2ParticipantMembershipTransitionIdSchema,
+  inboxV2Sha256DigestSchema,
   inboxV2TenantIdSchema,
   inboxV2WorkItemCreationCommitSchema,
   inboxV2WorkItemIdSchema,
@@ -3223,8 +3224,12 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(normalize(value));
 }
 
-function digest(value: string): string {
-  return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`;
+function digest(
+  value: string
+): ReturnType<typeof inboxV2Sha256DigestSchema.parse> {
+  return inboxV2Sha256DigestSchema.parse(
+    `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`
+  );
 }
 
 function internalRef(value: string): string {
