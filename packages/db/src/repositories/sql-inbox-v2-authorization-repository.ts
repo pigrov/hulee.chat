@@ -270,6 +270,15 @@ export type InboxV2PrivilegedAuthorizationMutationContext = Readonly<{
   commandId: string;
   clientMutationId: string;
   commandTypeId: string;
+  /**
+   * Server-authenticated actor copied from the durably claimed command. Domain
+   * repositories use this value from the non-forgeable live context instead
+   * of trusting actor/service identifiers repeated in command payloads.
+   */
+  actor: InboxV2AuthorizationActor;
+  authorizationDecisionId: string;
+  authorizedAt: string;
+  occurredAt: string;
   mutationId: string;
   profile: InboxV2AuthorizedCommandMutationProfile;
   revisionEffects: readonly InboxV2AuthorizationRevisionEffect[];
@@ -639,6 +648,10 @@ async function persistPrivilegedAuthorizationMutation<TResult>(
         commandId: status.commandId,
         clientMutationId: input.command.clientMutationId,
         commandTypeId: input.command.commandTypeId,
+        actor: input.command.actor,
+        authorizationDecisionId: input.command.authorizationDecisionId,
+        authorizedAt: input.command.authorizedAt,
+        occurredAt: input.occurredAt,
         mutationId: status.mutationId,
         profile: authorizedCommandMutationProfile(input.records),
         revisionEffects: replayAuthorization.effects
@@ -674,6 +687,10 @@ async function persistPrivilegedAuthorizationMutation<TResult>(
       commandId: input.command.id,
       clientMutationId: input.command.clientMutationId,
       commandTypeId: input.command.commandTypeId,
+      actor: input.command.actor,
+      authorizationDecisionId: input.command.authorizationDecisionId,
+      authorizedAt: input.command.authorizedAt,
+      occurredAt: input.occurredAt,
       mutationId: input.records.mutationId,
       profile: authorizedCommandMutationProfile(input.records),
       revisionEffects: locked.effects

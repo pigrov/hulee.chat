@@ -1528,8 +1528,10 @@ participant set.
     in `INB2-SRC-008`. Detailed evidence is in
     `docs/product/inbox-v2-src-003-normalization.md`.
 
-- [ ] `INB2-SRC-004` Implement external identity and participant resolution.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-SRC-003`, `INB2-DB-002`.
+- [x] `INB2-SRC-004` Implement external identity and participant resolution.
+  - State: `done`; Priority: `P0`; Started: `2026-07-17`; Completed:
+    `2026-07-17`; Owner: `Codex`; Depends on: `INB2-SRC-003`,
+    `INB2-DB-002`.
   - Acceptance: employee, client contact, conflicted and unresolved outcomes
     retain provenance/confidence; membership origins are conversation/binding
     specific; Employee/ClientContact claim commands use separate permissions,
@@ -1539,7 +1541,29 @@ participant set.
   - Verification: same sender in several groups does not collapse participants;
     concurrent claim, claim-to-self and claim-reassignment tests grant no
     Account, RBAC, membership, watcher/read or WorkItem state implicitly.
-    Evidence: -
+    Evidence: completed on `2026-07-17` with a closed SRC-003 identity
+    projection, tenant-keyed long-lived HMAC namespace, stable/ephemeral
+    SourceExternalIdentity materialization, all four resolver outcomes,
+    historical replay, conversation-local deferred participant materialization
+    and separately authorized Employee/ClientContact claim commands. Exact
+    command-intent hashes, authorization epoch/dependency/decision/revision
+    closure, semantic audit and DB-locked active-claim/typed-old-target fences
+    reject stale or substituted claims; the coordinator alone owns transaction
+    retries, self-claim and runtime migration fail closed, and re-claim after
+    revoke remains legal at the exact nonzero head version. Migration `0044`
+    persists immutable observations/assessments plus CAS heads using bounded
+    predecessor/successor/head checks, subjectless/tokenless provenance and
+    fail-closed lifecycle declarations for all three roots. Focused suites
+    passed `11/11` files / `537/537` tests. The clean PostgreSQL gate applied
+    `45` migrations with contract
+    `sha256:686be094f65af826d67157ef67bf7fb57b6aeae774e1f15c62e2d13c56200f73`
+    and passed `27/27` files / `239/239` tests; populated preserve, pinned N-1
+    and RBAC passed `3/3` files / `17/17` tests. Full `pnpm check` passed `328`
+    test files / `3334` executed tests plus all repository gates; `36` opt-in
+    files / `282` tests were skipped by the default process and covered by the
+    explicit gates. Two independent final reviews found no remaining P0/P1.
+    Detailed evidence is in
+    `docs/product/inbox-v2-src-004-identity-resolution.md`.
 
 - [ ] `INB2-SRC-005` Implement canonical direct/group conversation resolution.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-SRC-003`, `INB2-DB-003`.
@@ -3076,3 +3100,4 @@ the task state, checkbox and evidence above.
 | 2026-07-16 | `INB2-SRC-010`     | Source registry; focused 7/191; live PG 6/6; N-1 2/2; full gate            | working tree | Codex                             |
 | 2026-07-16 | `INB2-SRC-002`     | Raw ingress/lease; PG 25/232; preserve 3/17; full 316/3229 + all gates     | working tree | Codex + three independent reviews |
 | 2026-07-16 | `INB2-SRC-003`     | Normalize/complete; focused 5/66; PG 26/238; preserve 3/17; full 320/3281  | working tree | Codex + two independent reviews   |
+| 2026-07-17 | `INB2-SRC-004`     | Identity/claims; focused 11/537; PG 27/239; preserve 3/17; full 328/3334   | task commit  | Codex + two independent reviews   |

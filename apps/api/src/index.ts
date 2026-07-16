@@ -335,6 +335,11 @@ export { createInternalApiHandler } from "./http/internal-api-handler";
 export { createPublicApiHandler } from "./http/public-api-handler";
 export { createTelegramWebhookHandler } from "./http/telegram-webhook-handler";
 export { createExternalChannelCommandService } from "./external-channel-command-service";
+export {
+  calculateInboxV2IdentityClaimIntentDigest,
+  createInboxV2IdentityClaimCommandService,
+  createInboxV2IdentityClaimEvidenceManifest
+} from "./inbox-v2-identity-claim-command";
 export { createInternalAccessDecisionService } from "./internal-access-decision-service";
 export { createInternalEgressStatusService } from "./internal-egress-status-service";
 export { createInternalFileService } from "./internal-file-service";
@@ -354,6 +359,21 @@ export type {
   ExternalChannelCommandService,
   ExternalChannelCommandServiceOptions
 } from "./external-channel-command-service";
+export type {
+  InboxV2AutomaticIdentityClaimCommand,
+  InboxV2IdentityClaimCommand,
+  InboxV2IdentityClaimCommandPreparer,
+  InboxV2IdentityClaimCommandResult,
+  InboxV2IdentityClaimCommandService,
+  InboxV2IdentityClaimCommandServiceOptions,
+  InboxV2IdentityClaimEvidenceManifest,
+  InboxV2IdentityClaimIntentKind,
+  InboxV2IdentityClaimRevokeCommand,
+  InboxV2ManualClientContactClaimCommand,
+  InboxV2ManualEmployeeClaimCommand,
+  InboxV2PreparedIdentityClaimAuthorizationBinding,
+  InboxV2PreparedIdentityClaimCommand
+} from "./inbox-v2-identity-claim-command";
 export type {
   InternalAccessDecisionContext,
   InternalAccessDecisionService,

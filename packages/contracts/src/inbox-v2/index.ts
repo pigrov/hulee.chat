@@ -31,6 +31,7 @@ export * from "./schema-version";
 export * from "./schema-safety";
 export * from "./security-denial-audit";
 export * from "./source-account-identity";
+export * from "./source-identity-resolution";
 export * from "./source-occurrence-materialization";
 export * from "./source-raw-ingress";
 export * from "./source-normalized-ingress";

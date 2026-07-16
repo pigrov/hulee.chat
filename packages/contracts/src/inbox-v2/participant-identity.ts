@@ -159,7 +159,7 @@ export const inboxV2SourceIdentityClaimVersionSchema =
     (value) => value as unknown as InboxV2SourceIdentityClaimVersion
   );
 
-const inboxV2OpaqueExternalIdentityValueSchema = z
+export const inboxV2OpaqueExternalIdentityValueSchema = z
   .string()
   .min(1)
   .max(512)
@@ -171,7 +171,7 @@ const inboxV2OpaqueExternalIdentityValueSchema = z
       "Opaque provider value cannot contain an unpaired UTF-16 surrogate."
   });
 
-const inboxV2SourceIdentityScopeSchema = z.discriminatedUnion("kind", [
+export const inboxV2SourceIdentityScopeSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("provider") }).strict(),
   z
     .object({
@@ -192,16 +192,19 @@ const inboxV2SourceIdentityObservationReferenceSchema = z.union([
   inboxV2NormalizedInboundEventReferenceSchema
 ]);
 
-const inboxV2SourceIdentityStabilitySchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("stable") }).strict(),
-  z
-    .object({
-      kind: z.literal("observation_ephemeral"),
-      observation: inboxV2SourceIdentityObservationReferenceSchema,
-      observationKey: inboxV2OpaqueExternalIdentityValueSchema
-    })
-    .strict()
-]);
+export const inboxV2SourceIdentityStabilitySchema = z.discriminatedUnion(
+  "kind",
+  [
+    z.object({ kind: z.literal("stable") }).strict(),
+    z
+      .object({
+        kind: z.literal("observation_ephemeral"),
+        observation: inboxV2SourceIdentityObservationReferenceSchema,
+        observationKey: inboxV2OpaqueExternalIdentityValueSchema
+      })
+      .strict()
+  ]
+);
 
 export const inboxV2SourceIdentityMaterializationAuthoritySchema = z
   .object({

@@ -514,6 +514,12 @@ export {
 } from "./security-denial-retention-sweeper";
 export { createInboxV2SourceNormalizationProcessor } from "./source-normalization-processor";
 export {
+  createInboxV2SourceIdentityResolutionProcessor,
+  createInboxV2TrustedSourceIdentityMaterializer,
+  InboxV2SourceIdentityResolutionProcessorError
+} from "./source-identity-resolution-processor";
+export { createInboxV2SourceParticipantMaterializer } from "./source-participant-materialization";
+export {
   createSecurityDenialRetentionDatabaseConfig,
   sanitizeSecurityDenialRetentionDatabaseUrl
 } from "./security-denial-retention-database-config";
@@ -602,3 +608,20 @@ export type {
   InboxV2SourceNormalizationProcessor,
   InboxV2SourceNormalizationProcessorOptions
 } from "./source-normalization-processor";
+export type {
+  InboxV2SourceIdentityAssessmentPlan,
+  InboxV2SourceIdentityAssessmentPlanner,
+  InboxV2SourceIdentityResolutionProcessResult,
+  InboxV2SourceIdentityResolutionProcessor,
+  InboxV2SourceIdentityResolutionProcessorErrorCode,
+  InboxV2SourceIdentityResolutionProcessorOptions,
+  InboxV2SourceIdentityNamespaceDeriver,
+  InboxV2TrustedSourceIdentityMaterializer
+} from "./source-identity-resolution-processor";
+export type {
+  InboxV2ParticipantIdFactory,
+  InboxV2SourceParticipantMaterializer,
+  InboxV2SourceParticipantMaterializerOptions,
+  MaterializeInboxV2DeferredParticipantInput,
+  MaterializeInboxV2DeferredParticipantResult
+} from "./source-participant-materialization";

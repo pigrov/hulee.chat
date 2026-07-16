@@ -309,6 +309,13 @@
       "when": 1784233934357,
       "tag": "0043_inbox_v2_source_normalization",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1784237678522,
+      "tag": "0044_inbox_v2_source_identity_resolution",
+      "breakpoints": true
     }
   ]
 }

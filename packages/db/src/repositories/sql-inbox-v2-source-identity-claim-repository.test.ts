@@ -293,6 +293,39 @@ describe("SQL Inbox V2 source identity claim repository", () => {
     expect(executor.commitCount).toBe(1);
   });
 
+  it("rejects structurally forged authorized-command contexts before claim SQL", async () => {
+    const executor = seededExecutor();
+    const repository = createSqlInboxV2SourceIdentityClaimRepository(executor);
+
+    await expect(
+      repository.applyTransitionInAuthorizedContext(
+        {
+          executor,
+          tenantId,
+          commandId: "command:forged",
+          clientMutationId: "client-mutation:forged",
+          commandTypeId: "core:identity.claim",
+          actor: { kind: "employee", employeeId: targetEmployeeId },
+          authorizationDecisionId: "authorization-decision:forged",
+          authorizedAt: occurredAt,
+          occurredAt,
+          mutationId: "mutation:forged",
+          profile: "domain",
+          revisionEffects: []
+        } as never,
+        employeeClaimInput(),
+        {
+          authorizationDecisionId: "authorization-decision:forged",
+          expectedActiveClaim: null
+        }
+      )
+    ).rejects.toThrow(
+      "Inbox V2 domain persistence requires a live authorized-command context."
+    );
+    expect(executor.statementKinds()).toEqual([]);
+    expect(executor.commitCount).toBe(0);
+  });
+
   it("reassigns to ClientContact and revokes using one monotonic claim clock", async () => {
     const executor = seededExecutor();
     const repository = createSqlInboxV2SourceIdentityClaimRepository(executor);

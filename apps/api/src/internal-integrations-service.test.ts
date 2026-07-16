@@ -3466,6 +3466,10 @@ class InMemoryInboxV2AuthorizedCommandCoordinator implements InboxV2AuthorizedCo
       commandId: input.command.id,
       clientMutationId: input.command.clientMutationId,
       commandTypeId: input.command.commandTypeId,
+      actor: input.command.actor,
+      authorizationDecisionId: input.command.authorizationDecisionId,
+      authorizedAt: input.command.authorizedAt,
+      occurredAt: input.occurredAt,
       mutationId: input.records.mutationId,
       profile: "domain",
       revisionEffects: []

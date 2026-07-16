@@ -391,6 +391,7 @@ export type {
   InboxV2SourceExternalIdentityTransactionExecutor,
   ApplyInboxV2SourceIdentityClaimTransitionInput,
   ApplyInboxV2SourceIdentityClaimTransitionResult,
+  InboxV2AuthorizedSourceIdentityClaimStateFence,
   ActivateInboxV2TenantPolicyVersionResult,
   ApproveInboxV2TenantPolicyVersionResult,
   InboxV2SourceIdentityClaimMutationOperation,
@@ -618,4 +619,6 @@ export * from "./repositories/sql-inbox-v2-repository-projection";
 export * from "./repositories/sql-inbox-v2-repository-stream";
 export * from "./repositories/sql-inbox-v2-raw-ingress-repository";
 export * from "./repositories/sql-inbox-v2-source-normalization-repository";
+export * from "./repositories/sql-inbox-v2-source-identity-resolution-repository";
+export * from "./repositories/sql-inbox-v2-source-identity-resolution-lifecycle";
 export * from "./schema/inbox-v2/membership-privilege-boundary";

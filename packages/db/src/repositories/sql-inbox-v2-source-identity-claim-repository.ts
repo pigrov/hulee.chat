@@ -34,6 +34,10 @@ import { CoreError } from "@hulee/core";
 import { sql, type SQL } from "drizzle-orm";
 
 import type { HuleeDatabase } from "../client";
+import {
+  assertInboxV2AuthorizedCommandMutationContext,
+  type InboxV2AuthorizedCommandMutationContext
+} from "./sql-inbox-v2-authorization-repository";
 import { InboxV2PersistenceInvariantError } from "./sql-inbox-v2-conversation-repository";
 import {
   lockAndValidateExactActiveInboxV2TenantPolicyAuthority,
@@ -98,6 +102,22 @@ export type ApplyInboxV2SourceIdentityClaimTransitionInput = Readonly<{
   occurredAt: string;
 }>;
 
+export type InboxV2AuthorizedSourceIdentityClaimStateFence = Readonly<{
+  authorizationDecisionId: string;
+  expectedActiveClaim: null | Readonly<{
+    claimId: InboxV2SourceIdentityClaimId;
+    target:
+      | Readonly<{
+          kind: "employee";
+          employeeId: InboxV2EmployeeId;
+        }>
+      | Readonly<{
+          kind: "client_contact";
+          clientContactId: InboxV2ClientContactId;
+        }>;
+  }>;
+}>;
+
 export type ApplyInboxV2SourceIdentityClaimTransitionResult =
   | Readonly<{
       kind: "applied";
@@ -125,6 +145,12 @@ export type ApplyInboxV2SourceIdentityClaimTransitionResult =
     }>
   | Readonly<{ kind: "manual_self_claim_forbidden" }>
   | Readonly<{ kind: "no_active_claim" }>
+  | Readonly<{
+      kind: "active_claim_conflict";
+      currentVersion: InboxV2SourceIdentityClaimVersion | null;
+      activeClaimId: InboxV2SourceIdentityClaimId | null;
+      activeTarget: InboxV2SourceIdentityClaimTarget | null;
+    }>
   | Readonly<{
       kind: "evidence_not_found" | "evidence_scope_conflict";
       evidence: ClaimEvidenceReference;
@@ -159,8 +185,18 @@ export type InboxV2SourceIdentityClaimTransactionExecutor = RawSqlExecutor & {
 };
 
 export type InboxV2SourceIdentityClaimRepository = Readonly<{
+  /**
+   * Low-level compatibility and migration entrypoint. Runtime/API commands
+   * must use applyTransitionInAuthorizedContext so authenticated attribution
+   * and live authorization revision fences share the mutation transaction.
+   */
   applyTransition(
     input: ApplyInboxV2SourceIdentityClaimTransitionInput
+  ): Promise<ApplyInboxV2SourceIdentityClaimTransitionResult>;
+  applyTransitionInAuthorizedContext(
+    context: InboxV2AuthorizedCommandMutationContext,
+    input: ApplyInboxV2SourceIdentityClaimTransitionInput,
+    stateFence: InboxV2AuthorizedSourceIdentityClaimStateFence
   ): Promise<ApplyInboxV2SourceIdentityClaimTransitionResult>;
   findClaimById(input: {
     tenantId: InboxV2TenantId;
@@ -282,6 +318,37 @@ export function createSqlInboxV2SourceIdentityClaimRepository(
     executor as unknown as InboxV2SourceIdentityClaimTransactionExecutor;
 
   return {
+    async applyTransitionInAuthorizedContext(context, input, stateFence) {
+      assertInboxV2AuthorizedCommandMutationContext(context);
+      const normalized = normalizeApplyInput(input);
+      const normalizedFence = normalizeAuthorizedStateFence(
+        stateFence,
+        normalized
+      );
+
+      if (
+        context.profile !== "domain" ||
+        context.tenantId !== normalized.tenantId ||
+        context.occurredAt !== normalized.occurredAt ||
+        context.authorizationDecisionId !==
+          normalizedFence.authorizationDecisionId ||
+        normalized.decision.kind === "migration" ||
+        !claimDecisionMatchesAuthorizedActor(normalized.decision, context.actor)
+      ) {
+        throw new CoreError("permission.denied");
+      }
+
+      // The authorization coordinator owns the live transaction and its retry
+      // loop. Call the no-transaction core directly: one failed statement
+      // aborts PostgreSQL's executor, so a local retry would only hide the
+      // original 40001/40P01 behind 25P02.
+      return applyNormalizedTransitionOnExistingTransaction(
+        context.executor as InboxV2TenantPolicyAuthorityUseTransaction,
+        normalized,
+        normalizedFence
+      );
+    },
+
     async applyTransition(input) {
       const normalized = normalizeApplyInput(input);
       if (isManualSelfClaim(normalized)) {
@@ -291,201 +358,12 @@ export function createSqlInboxV2SourceIdentityClaimRepository(
       try {
         return await runClaimTransaction(
           transactionExecutor,
-          async (transaction) => {
-            const identity = await lockIdentity(transaction, normalized);
-            if (identity === null)
-              return { kind: "identity_not_found" } as const;
-
-            const head = await lockHead(transaction, normalized);
-            assertIdentityClaimClock(identity.revision, head.latestVersion);
-            if (head.latestVersion !== normalized.expectedVersion) {
-              return {
-                kind: "version_conflict",
-                currentVersion: head.latestVersion,
-                resolutionStatus: head.resolutionStatus,
-                activeClaimId: head.activeClaimId
-              } as const;
-            }
-
-            const activeClaim = await lockCurrentClaim(
-              transaction,
-              normalized,
-              head
-            );
-            if (
-              normalized.operation.kind === "revoke" &&
-              activeClaim === null
-            ) {
-              return { kind: "no_active_claim" } as const;
-            }
-
-            if (
-              await rowIdExists(
-                transaction,
-                "inbox_v2_source_identity_claim_transitions",
-                normalized.tenantId,
-                normalized.transitionId
-              )
-            ) {
-              return {
-                kind: "transition_id_conflict",
-                transitionId: normalized.transitionId
-              } as const;
-            }
-            if (
-              normalized.operation.kind !== "revoke" &&
-              (await rowIdExists(
-                transaction,
-                "inbox_v2_source_identity_claims",
-                normalized.tenantId,
-                normalized.operation.claimId
-              ))
-            ) {
-              return {
-                kind: "claim_id_conflict",
-                claimId: normalized.operation.claimId
-              } as const;
-            }
-
-            const targetResult = await lockAndValidateTargets(
-              transaction,
-              normalized,
-              activeClaim
-            );
-            if (targetResult !== null) return targetResult;
-
-            let validatedPolicyAuthorityHeadRevision: InboxV2EntityRevision | null =
-              null;
-            if (normalized.decision.kind === "automatic_policy") {
-              const policyAuthority =
-                await lockAndValidateExactActiveInboxV2TenantPolicyAuthority(
-                  transaction,
-                  inboxV2ExactActiveTenantPolicyAuthorityInputSchema.parse({
-                    tenantId: normalized.tenantId,
-                    family: "source_identity_claim",
-                    policyId: normalized.policyId,
-                    policyVersion: normalized.policyVersion,
-                    definitionContractVersion:
-                      normalized.decision.policyAuthority
-                        .definitionContractVersion,
-                    definitionDigestSha256:
-                      normalized.decision.policyAuthority
-                        .definitionDigestSha256,
-                    approvedTrustedServiceId:
-                      normalized.decision.trustedServiceId,
-                    expectedHeadRevision:
-                      normalized.decision.policyAuthority
-                        .activationHeadRevision,
-                    occurredAt: normalized.occurredAt
-                  })
-                );
-              if (policyAuthority.kind !== "locked") return policyAuthority;
-              validatedPolicyAuthorityHeadRevision =
-                policyAuthority.headRevision;
-            }
-
-            const evidenceResult = await lockAndValidateEvidence(
-              transaction,
-              normalized,
-              identity
-            );
-            if (evidenceResult !== null) return evidenceResult;
-
-            const resultingVersion = incrementClaimVersion(head.latestVersion);
-            const mutation = buildCanonicalMutation({
-              input: normalized,
-              activeClaim,
-              resultingVersion,
-              validatedPolicyAuthorityHeadRevision
-            });
-
-            if (activeClaim !== null) {
-              await expectOneRow(
-                transaction,
-                buildRevokeInboxV2SourceIdentityClaimSql({
-                  tenantId: normalized.tenantId,
-                  sourceExternalIdentityId: normalized.sourceExternalIdentityId,
-                  claimId: activeClaim.id,
-                  revokedAt: normalized.occurredAt
-                }),
-                "SourceIdentityClaim revoke"
-              );
-            }
-            if (mutation.claim !== null) {
-              await expectOneRow(
-                transaction,
-                buildInsertInboxV2SourceIdentityClaimSql(mutation.claim),
-                "SourceIdentityClaim insert"
-              );
-              for (const [
-                ordinal,
-                evidence
-              ] of mutation.claim.evidenceReferences.entries()) {
-                await expectOneRow(
-                  transaction,
-                  buildInsertInboxV2SourceIdentityClaimEvidenceSql({
-                    claim: mutation.claim,
-                    evidence: evidence as SupportedClaimEvidenceReference,
-                    ordinal
-                  }),
-                  "SourceIdentityClaim evidence insert"
-                );
-              }
-            }
-            await expectOneRow(
-              transaction,
-              buildInsertInboxV2SourceIdentityClaimTransitionSql(
-                mutation.transition
-              ),
-              "SourceIdentityClaim transition insert"
-            );
-            await expectOneRow(
-              transaction,
-              buildAdvanceInboxV2SourceExternalIdentityRevisionSql({
-                tenantId: normalized.tenantId,
-                sourceExternalIdentityId: normalized.sourceExternalIdentityId,
-                expectedRevision: identity.revision,
-                resultingRevision: incrementEntityRevision(identity.revision),
-                updatedAt: normalized.occurredAt
-              }),
-              "SourceExternalIdentity revision advance"
-            );
-            await expectOneRow(
-              transaction,
-              buildAdvanceInboxV2SourceIdentityClaimHeadSql({
-                tenantId: normalized.tenantId,
-                sourceExternalIdentityId: normalized.sourceExternalIdentityId,
-                expectedVersion: head.latestVersion,
-                resultingVersion,
-                activeClaimId: mutation.claim?.id ?? null,
-                resolutionStatus:
-                  mutation.claim === null ? "unresolved" : "claimed"
-              }),
-              "SourceIdentityClaim head advance"
-            );
-
-            return {
-              kind: "applied",
-              transition: mutation.transition
-            } as const;
-          }
+          async (transaction) =>
+            applyNormalizedTransition(transaction, normalized, null),
+          CLAIM_TRANSACTION_ATTEMPTS
         );
       } catch (error) {
-        const constraint = findPostgresUniqueConstraint(error);
-        if (constraint === "inbox_v2_source_identity_claims_pk") {
-          if (normalized.operation.kind === "revoke") throw error;
-          return {
-            kind: "claim_id_conflict",
-            claimId: normalized.operation.claimId
-          };
-        }
-        if (constraint === "inbox_v2_identity_claim_transitions_pk") {
-          return {
-            kind: "transition_id_conflict",
-            transitionId: normalized.transitionId
-          };
-        }
-        throw error;
+        return mapClaimPersistenceConflictOrThrow(normalized, error);
       }
     },
 
@@ -506,6 +384,230 @@ export function createSqlInboxV2SourceIdentityClaimRepository(
       return mapClaimRows(result.rows, normalized.tenantId);
     }
   };
+}
+
+async function applyNormalizedTransitionOnExistingTransaction(
+  transaction: InboxV2TenantPolicyAuthorityUseTransaction,
+  normalized: NormalizedInput,
+  stateFence: InboxV2AuthorizedSourceIdentityClaimStateFence
+): Promise<ApplyInboxV2SourceIdentityClaimTransitionResult> {
+  if (isManualSelfClaim(normalized)) {
+    return { kind: "manual_self_claim_forbidden" };
+  }
+  try {
+    return await applyNormalizedTransition(transaction, normalized, stateFence);
+  } catch (error) {
+    return mapClaimPersistenceConflictOrThrow(normalized, error);
+  }
+}
+
+async function applyNormalizedTransition(
+  transaction: InboxV2TenantPolicyAuthorityUseTransaction,
+  normalized: NormalizedInput,
+  stateFence: InboxV2AuthorizedSourceIdentityClaimStateFence | null
+): Promise<ApplyInboxV2SourceIdentityClaimTransitionResult> {
+  const identity = await lockIdentity(transaction, normalized);
+  if (identity === null) return { kind: "identity_not_found" };
+
+  const head = await lockHead(transaction, normalized);
+  assertIdentityClaimClock(identity.revision, head.latestVersion);
+  if (head.latestVersion !== normalized.expectedVersion) {
+    return {
+      kind: "version_conflict",
+      currentVersion: head.latestVersion,
+      resolutionStatus: head.resolutionStatus,
+      activeClaimId: head.activeClaimId
+    };
+  }
+
+  const activeClaim = await lockCurrentClaim(transaction, normalized, head);
+  if (
+    stateFence !== null &&
+    !activeClaimMatchesStateFence(activeClaim, stateFence)
+  ) {
+    return {
+      kind: "active_claim_conflict",
+      currentVersion: head.latestVersion,
+      activeClaimId: activeClaim?.id ?? null,
+      activeTarget: activeClaim?.target ?? null
+    };
+  }
+  if (normalized.operation.kind === "revoke" && activeClaim === null) {
+    return { kind: "no_active_claim" };
+  }
+
+  if (
+    await rowIdExists(
+      transaction,
+      "inbox_v2_source_identity_claim_transitions",
+      normalized.tenantId,
+      normalized.transitionId
+    )
+  ) {
+    return {
+      kind: "transition_id_conflict",
+      transitionId: normalized.transitionId
+    };
+  }
+  if (
+    normalized.operation.kind !== "revoke" &&
+    (await rowIdExists(
+      transaction,
+      "inbox_v2_source_identity_claims",
+      normalized.tenantId,
+      normalized.operation.claimId
+    ))
+  ) {
+    return {
+      kind: "claim_id_conflict",
+      claimId: normalized.operation.claimId
+    };
+  }
+
+  const targetResult = await lockAndValidateTargets(
+    transaction,
+    normalized,
+    activeClaim
+  );
+  if (targetResult !== null) return targetResult;
+
+  let validatedPolicyAuthorityHeadRevision: InboxV2EntityRevision | null = null;
+  if (normalized.decision.kind === "automatic_policy") {
+    const policyAuthority =
+      await lockAndValidateExactActiveInboxV2TenantPolicyAuthority(
+        transaction,
+        inboxV2ExactActiveTenantPolicyAuthorityInputSchema.parse({
+          tenantId: normalized.tenantId,
+          family: "source_identity_claim",
+          policyId: normalized.policyId,
+          policyVersion: normalized.policyVersion,
+          definitionContractVersion:
+            normalized.decision.policyAuthority.definitionContractVersion,
+          definitionDigestSha256:
+            normalized.decision.policyAuthority.definitionDigestSha256,
+          approvedTrustedServiceId: normalized.decision.trustedServiceId,
+          expectedHeadRevision:
+            normalized.decision.policyAuthority.activationHeadRevision,
+          occurredAt: normalized.occurredAt
+        })
+      );
+    if (policyAuthority.kind !== "locked") return policyAuthority;
+    validatedPolicyAuthorityHeadRevision = policyAuthority.headRevision;
+  }
+
+  const evidenceResult = await lockAndValidateEvidence(
+    transaction,
+    normalized,
+    identity
+  );
+  if (evidenceResult !== null) return evidenceResult;
+
+  const resultingVersion = incrementClaimVersion(head.latestVersion);
+  const mutation = buildCanonicalMutation({
+    input: normalized,
+    activeClaim,
+    resultingVersion,
+    validatedPolicyAuthorityHeadRevision
+  });
+
+  if (activeClaim !== null) {
+    await expectOneRow(
+      transaction,
+      buildRevokeInboxV2SourceIdentityClaimSql({
+        tenantId: normalized.tenantId,
+        sourceExternalIdentityId: normalized.sourceExternalIdentityId,
+        claimId: activeClaim.id,
+        revokedAt: normalized.occurredAt
+      }),
+      "SourceIdentityClaim revoke"
+    );
+  }
+  if (mutation.claim !== null) {
+    await expectOneRow(
+      transaction,
+      buildInsertInboxV2SourceIdentityClaimSql(mutation.claim),
+      "SourceIdentityClaim insert"
+    );
+    for (const [
+      ordinal,
+      evidence
+    ] of mutation.claim.evidenceReferences.entries()) {
+      await expectOneRow(
+        transaction,
+        buildInsertInboxV2SourceIdentityClaimEvidenceSql({
+          claim: mutation.claim,
+          evidence: evidence as SupportedClaimEvidenceReference,
+          ordinal
+        }),
+        "SourceIdentityClaim evidence insert"
+      );
+    }
+  }
+  await expectOneRow(
+    transaction,
+    buildInsertInboxV2SourceIdentityClaimTransitionSql(mutation.transition),
+    "SourceIdentityClaim transition insert"
+  );
+  await expectOneRow(
+    transaction,
+    buildAdvanceInboxV2SourceExternalIdentityRevisionSql({
+      tenantId: normalized.tenantId,
+      sourceExternalIdentityId: normalized.sourceExternalIdentityId,
+      expectedRevision: identity.revision,
+      resultingRevision: incrementEntityRevision(identity.revision),
+      updatedAt: normalized.occurredAt
+    }),
+    "SourceExternalIdentity revision advance"
+  );
+  await expectOneRow(
+    transaction,
+    buildAdvanceInboxV2SourceIdentityClaimHeadSql({
+      tenantId: normalized.tenantId,
+      sourceExternalIdentityId: normalized.sourceExternalIdentityId,
+      expectedVersion: head.latestVersion,
+      resultingVersion,
+      activeClaimId: mutation.claim?.id ?? null,
+      resolutionStatus: mutation.claim === null ? "unresolved" : "claimed"
+    }),
+    "SourceIdentityClaim head advance"
+  );
+
+  return { kind: "applied", transition: mutation.transition };
+}
+
+function activeClaimMatchesStateFence(
+  activeClaim: Awaited<ReturnType<typeof lockCurrentClaim>>,
+  stateFence: InboxV2AuthorizedSourceIdentityClaimStateFence
+): boolean {
+  const expected = stateFence.expectedActiveClaim;
+  if (expected === null) return activeClaim === null;
+  if (activeClaim === null || activeClaim.id !== expected.claimId) return false;
+  return expected.target.kind === "employee"
+    ? activeClaim.target.kind === "employee" &&
+        activeClaim.target.employee.id === expected.target.employeeId
+    : activeClaim.target.kind === "client_contact" &&
+        activeClaim.target.clientContact.id === expected.target.clientContactId;
+}
+
+function mapClaimPersistenceConflictOrThrow(
+  normalized: NormalizedInput,
+  error: unknown
+): ApplyInboxV2SourceIdentityClaimTransitionResult {
+  const constraint = findPostgresUniqueConstraint(error);
+  if (constraint === "inbox_v2_source_identity_claims_pk") {
+    if (normalized.operation.kind === "revoke") throw error;
+    return {
+      kind: "claim_id_conflict",
+      claimId: normalized.operation.claimId
+    };
+  }
+  if (constraint === "inbox_v2_identity_claim_transitions_pk") {
+    return {
+      kind: "transition_id_conflict",
+      transitionId: normalized.transitionId
+    };
+  }
+  throw error;
 }
 
 export function buildLockInboxV2SourceIdentityClaimIdentitySql(input: {
@@ -1528,6 +1630,79 @@ function normalizeApplyInput(
   };
 }
 
+function normalizeAuthorizedStateFence(
+  input: InboxV2AuthorizedSourceIdentityClaimStateFence,
+  transition: NormalizedInput
+): InboxV2AuthorizedSourceIdentityClaimStateFence {
+  assertExactKeys(
+    input,
+    new Set(["authorizationDecisionId", "expectedActiveClaim"]),
+    "authorized SourceIdentityClaim state fence"
+  );
+  if (
+    typeof input.authorizationDecisionId !== "string" ||
+    input.authorizationDecisionId.length === 0 ||
+    input.authorizationDecisionId.length > 256
+  ) {
+    throw new CoreError("permission.denied");
+  }
+  if (input.expectedActiveClaim === null) {
+    return {
+      authorizationDecisionId: input.authorizationDecisionId,
+      expectedActiveClaim: null
+    };
+  }
+  if (transition.expectedVersion === null) {
+    throw new CoreError("permission.denied");
+  }
+  assertExactKeys(
+    input.expectedActiveClaim,
+    new Set(["claimId", "target"]),
+    "authorized SourceIdentityClaim active-state fence"
+  );
+  const claimId = inboxV2SourceIdentityClaimIdSchema.parse(
+    input.expectedActiveClaim.claimId
+  );
+  const target = input.expectedActiveClaim.target;
+  if (target.kind === "employee") {
+    assertExactKeys(
+      target,
+      new Set(["kind", "employeeId"]),
+      "authorized SourceIdentityClaim Employee target fence"
+    );
+    return {
+      authorizationDecisionId: input.authorizationDecisionId,
+      expectedActiveClaim: {
+        claimId,
+        target: {
+          kind: "employee",
+          employeeId: inboxV2EmployeeIdSchema.parse(target.employeeId)
+        }
+      }
+    };
+  }
+  if (target.kind === "client_contact") {
+    assertExactKeys(
+      target,
+      new Set(["kind", "clientContactId"]),
+      "authorized SourceIdentityClaim ClientContact target fence"
+    );
+    return {
+      authorizationDecisionId: input.authorizationDecisionId,
+      expectedActiveClaim: {
+        claimId,
+        target: {
+          kind: "client_contact",
+          clientContactId: inboxV2ClientContactIdSchema.parse(
+            target.clientContactId
+          )
+        }
+      }
+    };
+  }
+  throw new CoreError("permission.denied");
+}
+
 function normalizeOperation(
   operation: InboxV2SourceIdentityClaimMutationOperation,
   tenantId: InboxV2TenantId
@@ -2149,16 +2324,14 @@ async function runClaimTransaction<TResult>(
   executor: InboxV2SourceIdentityClaimTransactionExecutor,
   work: (
     transaction: InboxV2TenantPolicyAuthorityUseTransaction
-  ) => Promise<TResult>
+  ) => Promise<TResult>,
+  attempts: number
 ): Promise<TResult> {
-  for (let attempt = 1; attempt <= CLAIM_TRANSACTION_ATTEMPTS; attempt += 1) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       return await executor.transaction(work, CLAIM_TRANSACTION_CONFIG);
     } catch (error) {
-      if (
-        attempt === CLAIM_TRANSACTION_ATTEMPTS ||
-        !isRetryableClaimTransactionError(error)
-      ) {
+      if (attempt === attempts || !isRetryableClaimTransactionError(error)) {
         throw error;
       }
     }
@@ -2342,6 +2515,25 @@ function requireNonEmpty(values: readonly unknown[], label: string): void {
   if (values.length === 0) {
     throw new CoreError("validation.failed", `${label} cannot be empty.`);
   }
+}
+
+function claimDecisionMatchesAuthorizedActor(
+  decision: ClaimDecision,
+  actor: InboxV2AuthorizedCommandMutationContext["actor"]
+): boolean {
+  if (decision.kind === "manual") {
+    return (
+      actor.kind === "employee" &&
+      actor.employeeId === String(decision.actorEmployee.id)
+    );
+  }
+  if (decision.kind === "automatic_policy") {
+    return (
+      actor.kind === "trusted_service" &&
+      actor.trustedServiceId === String(decision.trustedServiceId)
+    );
+  }
+  return false;
 }
 
 function assertExactKeys(

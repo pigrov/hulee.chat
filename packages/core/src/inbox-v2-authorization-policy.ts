@@ -6553,7 +6553,9 @@ function evaluateGuard(
           !sameEntityKey(guard.targetResource, operation.newTargetResource) ||
           operation.newTargetResource.entityTypeId !== expectedTargetType ||
           (operation.oldTargetResource !== null &&
-            operation.oldTargetResource.entityTypeId !== expectedTargetType) ||
+            operation.oldTargetResource.entityTypeId !== "core:employee" &&
+            operation.oldTargetResource.entityTypeId !==
+              "core:client-contact") ||
           operation.claimPolicyResource.entityTypeId !==
             "core:identity-claim-policy" ||
           operation.claimPolicyState !== "approved_active" ||
@@ -6582,9 +6584,7 @@ function evaluateGuard(
           operation.expectedClaimVersion !== operation.currentClaimVersion ||
           (operation.oldTargetResource === null
             ? operation.oldTargetRequirementId !== null ||
-              operation.currentClaimTargetResource !== null ||
-              operation.expectedClaimVersion !== null ||
-              operation.currentClaimVersion !== null
+              operation.currentClaimTargetResource !== null
             : operation.oldTargetRequirementId === null ||
               operation.currentClaimTargetResource === null ||
               !sameEntityKey(

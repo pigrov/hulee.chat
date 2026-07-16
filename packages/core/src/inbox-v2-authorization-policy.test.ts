@@ -2366,6 +2366,129 @@ describe("Inbox V2 authorization policy", () => {
     }
   });
 
+  it.each([
+    "employee_to_client_contact",
+    "client_contact_to_employee"
+  ] as const)(
+    "allows $s cross-kind identity reassignment only with exact old-target revoke and new typed manage authority",
+    (direction) => {
+      const fixture = makeCrossKindIdentityClaimFixture(direction);
+
+      expect(evaluateInboxV2AuthorizationPlan(fixture.input).outcome).toBe(
+        "allowed"
+      );
+
+      const withoutOldTargetRevoke = makeInput(
+        fixture.input.requirements.filter(
+          ({ id }) => id !== fixture.oldTargetRequirementId
+        ),
+        fixture.input.grants
+      );
+      expect(
+        evaluateInboxV2AuthorizationPlan(withoutOldTargetRevoke).outcome
+      ).toBe("denied");
+
+      const substitutedOldTarget = resource(
+        String(fixture.oldTargetResource.entityTypeId),
+        `substituted:${direction}`
+      );
+      const reboundOldTargetRevoke = makeInput(
+        fixture.input.requirements.map((requirement) => {
+          if (requirement.id !== fixture.oldTargetRequirementId) {
+            return requirement;
+          }
+          if (
+            requirement.guard.profileId !==
+              "core:rbac.guard.identity_evidence" ||
+            requirement.guard.operation.kind !== "claim_revoke"
+          ) {
+            throw new Error("Cross-kind fixture old-target guard is invalid.");
+          }
+          return {
+            ...requirement,
+            resource: substitutedOldTarget,
+            guard: {
+              ...requirement.guard,
+              targetResource: substitutedOldTarget,
+              operation: {
+                ...requirement.guard.operation,
+                existingTargetResource: substitutedOldTarget,
+                claimTargetResource: substitutedOldTarget,
+                auditTargetResource: substitutedOldTarget
+              }
+            }
+          };
+        }),
+        fixture.input.grants
+      );
+      expect(
+        evaluateInboxV2AuthorizationPlan(reboundOldTargetRevoke).outcome
+      ).toBe("denied");
+
+      const wrongManagePermission =
+        fixture.newTargetPermissionId === "core:identity.employee_claim.manage"
+          ? ("core:identity.client_contact_claim.manage" as const)
+          : ("core:identity.employee_claim.manage" as const);
+      const wrongNewTargetPermission = makeInput(
+        fixture.input.requirements.map((requirement) =>
+          requirement.id !== fixture.primaryRequirementId
+            ? requirement
+            : {
+                ...requirement,
+                permissionId: wrongManagePermission
+              }
+        ),
+        fixture.input.grants.map((grant) =>
+          grant.permissionId !== fixture.newTargetPermissionId
+            ? grant
+            : { ...grant, permissionId: wrongManagePermission }
+        )
+      );
+      expect(
+        evaluateInboxV2AuthorizationPlan(wrongNewTargetPermission).outcome
+      ).toBe("denied");
+    }
+  );
+
+  it("allows a claim at a nonzero head version when the active claim is exactly absent", () => {
+    const fixture = makeCrossKindIdentityClaimFixture(
+      "client_contact_to_employee"
+    );
+    const requirements = fixture.input.requirements
+      .filter(({ id }) => id !== fixture.oldTargetRequirementId)
+      .map((requirement) => {
+        if (requirement.id !== fixture.primaryRequirementId) return requirement;
+        if (
+          requirement.guard.profileId !== "core:rbac.guard.identity_evidence" ||
+          requirement.guard.operation.kind !== "employee_claim_manage"
+        ) {
+          throw new Error(
+            "Identity re-claim fixture primary guard is invalid."
+          );
+        }
+        return {
+          ...requirement,
+          guard: {
+            ...requirement.guard,
+            operation: {
+              ...requirement.guard.operation,
+              oldTargetResource: null,
+              oldTargetRequirementId: null,
+              currentClaimTargetResource: null,
+              expectedClaimVersion: "1",
+              currentClaimVersion: "1"
+            }
+          }
+        };
+      });
+
+    expect(
+      evaluateInboxV2AuthorizationPlan(
+        makeInput(requirements, fixture.input.grants)
+      ).outcome
+    ).toBe("allowed");
+  });
+
   it("requires real underlying read authority for report drilldown", () => {
     const drilldown = makeRequirement({
       id: "drilldown",
@@ -7077,6 +7200,187 @@ describe("Inbox V2 authorization policy", () => {
     }
   );
 });
+
+function makeCrossKindIdentityClaimFixture(
+  direction: "employee_to_client_contact" | "client_contact_to_employee"
+): Readonly<{
+  input: InboxV2AuthorizationPlanInput;
+  primaryRequirementId: string;
+  oldTargetRequirementId: string;
+  oldTargetResource: InboxV2EntityKey;
+  newTargetPermissionId:
+    | "core:identity.employee_claim.manage"
+    | "core:identity.client_contact_claim.manage";
+}> {
+  const sourceRequirementId = `cross-kind-source:${direction}`;
+  const oldTargetRequirementId = `cross-kind-old-target:${direction}`;
+  const primaryRequirementId = `cross-kind-primary:${direction}`;
+  const oldClientContactResource = resource(
+    "core:client-contact",
+    "client_contact:cross-kind-old"
+  );
+  const newClientContactResource = resource(
+    "core:client-contact",
+    "client_contact:cross-kind-new"
+  );
+  const oldTargetResource =
+    direction === "employee_to_client_contact"
+      ? otherEmployeeResource
+      : oldClientContactResource;
+  const newTargetResource =
+    direction === "employee_to_client_contact"
+      ? newClientContactResource
+      : otherEmployeeResource;
+  const newTargetPermissionId =
+    direction === "employee_to_client_contact"
+      ? ("core:identity.client_contact_claim.manage" as const)
+      : ("core:identity.employee_claim.manage" as const);
+  const activeClaimResource = resource(
+    "core:source-identity-claim",
+    `source_identity_claim:cross-kind-${direction}`
+  );
+  const claimHeadResource = resource(
+    "core:source-identity-claim-head",
+    `source_identity_claim_head:cross-kind-${direction}`
+  );
+
+  const sourceRequirement = makeRequirement({
+    id: sourceRequirementId,
+    permissionId: "core:identity.source_identity.use",
+    resource: sourceExternalIdentityResource,
+    visibility: "secondary_hidden",
+    guard: {
+      profileId: "core:rbac.guard.identity_evidence",
+      targetResource: sourceExternalIdentityResource,
+      evidenceState: "verified",
+      operation: {
+        kind: "source_identity_use",
+        actorEmployeeId: employeeId,
+        evidenceResource: sourceExternalIdentityResource,
+        revisionChecks: currentRevisionChecks("relation")
+      }
+    }
+  });
+  const oldTargetRequirement = makeRequirement({
+    id: oldTargetRequirementId,
+    permissionId: "core:identity.claim.revoke",
+    resource: oldTargetResource,
+    visibility: "secondary_hidden",
+    guard: {
+      profileId: "core:rbac.guard.identity_evidence",
+      targetResource: oldTargetResource,
+      evidenceState: "verified",
+      operation: {
+        kind: "claim_revoke",
+        actorEmployeeId: employeeId,
+        sourceIdentityResource: sourceExternalIdentityResource,
+        sourceIdentityRequirementId: sourceRequirementId,
+        sourceIdentityRevisionChecks: currentRevisionChecks("entity"),
+        reasonCodeId: "core:cross-kind-reassignment",
+        auditEventResource: resource(
+          "core:audit-event",
+          `audit_event:cross-kind-old-${direction}`
+        ),
+        auditActorEmployeeId: employeeId,
+        auditSourceIdentityResource: sourceExternalIdentityResource,
+        auditTargetResource: oldTargetResource,
+        auditRevisionChecks: currentRevisionChecks("entity"),
+        activeClaimResource,
+        claimSourceIdentityResource: sourceExternalIdentityResource,
+        existingTargetResource: oldTargetResource,
+        claimTargetResource: oldTargetResource,
+        activeClaimRevisionChecks: currentRevisionChecks("relation"),
+        targetRevisionChecks: currentRevisionChecks("entity")
+      }
+    }
+  });
+  const commonClaimOperation = {
+    actorEmployeeId: employeeId,
+    sourceIdentityResource: sourceExternalIdentityResource,
+    sourceIdentityRequirementId: sourceRequirementId,
+    sourceIdentityRevisionChecks: currentRevisionChecks("entity"),
+    reasonCodeId: "core:cross-kind-reassignment",
+    auditEventResource: resource(
+      "core:audit-event",
+      `audit_event:cross-kind-new-${direction}`
+    ),
+    auditActorEmployeeId: employeeId,
+    auditSourceIdentityResource: sourceExternalIdentityResource,
+    auditTargetResource: newTargetResource,
+    auditRevisionChecks: currentRevisionChecks("entity"),
+    oldTargetResource,
+    oldTargetRequirementId,
+    newTargetResource,
+    claimPolicyResource: identityClaimPolicyResource,
+    claimPolicyState: "approved_active" as const,
+    claimPolicyVersion: "1",
+    evidencePolicyResource: identityClaimPolicyResource,
+    evidencePolicyVersion: "1",
+    evidenceResource: identityEvidenceResource,
+    evidenceSourceIdentityResource: sourceExternalIdentityResource,
+    evidenceTargetResource: newTargetResource,
+    sensitiveEvidenceIncluded: false,
+    evidenceViewRequirementId: null,
+    claimPolicyRevisionChecks: currentRevisionChecks("policy"),
+    evidenceRevisionChecks: currentRevisionChecks("entity"),
+    targetRevisionChecks: currentRevisionChecks("entity"),
+    claimHeadResource,
+    claimHeadSourceIdentityResource: sourceExternalIdentityResource,
+    currentClaimTargetResource: oldTargetResource,
+    expectedClaimVersion: "1",
+    currentClaimVersion: "1",
+    claimRevisionChecks: currentRevisionChecks("relation")
+  } as const;
+  const primaryRequirement = makeRequirement({
+    id: primaryRequirementId,
+    permissionId: newTargetPermissionId,
+    resource: newTargetResource,
+    guard: {
+      profileId: "core:rbac.guard.identity_evidence",
+      targetResource: newTargetResource,
+      evidenceState: "verified",
+      operation:
+        direction === "employee_to_client_contact"
+          ? {
+              kind: "client_contact_claim_manage",
+              ...commonClaimOperation
+            }
+          : {
+              kind: "employee_claim_manage",
+              ...commonClaimOperation,
+              newTargetEmployeeId: otherEmployeeId,
+              newTargetLifecycle: "active"
+            }
+    }
+  });
+
+  return Object.freeze({
+    input: makeInput(
+      [primaryRequirement, sourceRequirement, oldTargetRequirement],
+      [
+        makeGrant(
+          newTargetPermissionId,
+          { type: "tenant", tenantId },
+          `cross-kind-new-${direction}`
+        ),
+        makeGrant(
+          "core:identity.source_identity.use",
+          { type: "tenant", tenantId },
+          `cross-kind-source-${direction}`
+        ),
+        makeGrant(
+          "core:identity.claim.revoke",
+          { type: "tenant", tenantId },
+          `cross-kind-old-${direction}`
+        )
+      ]
+    ),
+    primaryRequirementId,
+    oldTargetRequirementId,
+    oldTargetResource,
+    newTargetPermissionId
+  });
+}
 
 function resource(
   entityTypeId: string,

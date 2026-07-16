@@ -116,6 +116,10 @@ describe("source registry authorized onboarding", () => {
           commandId: input.command.id,
           clientMutationId: input.command.clientMutationId,
           commandTypeId: input.command.commandTypeId,
+          actor: input.command.actor,
+          authorizationDecisionId: input.command.authorizationDecisionId,
+          authorizedAt: input.command.authorizedAt,
+          occurredAt: input.occurredAt,
           mutationId: input.records.mutationId,
           profile: "domain",
           revisionEffects: []
@@ -251,6 +255,10 @@ describe("source registry authorized onboarding", () => {
           commandId: input.command.id,
           clientMutationId: input.command.clientMutationId,
           commandTypeId: input.command.commandTypeId,
+          actor: input.command.actor,
+          authorizationDecisionId: input.command.authorizationDecisionId,
+          authorizedAt: input.command.authorizedAt,
+          occurredAt: input.occurredAt,
           mutationId: input.records.mutationId,
           profile: "domain" as const,
           revisionEffects: []
