@@ -1586,6 +1586,53 @@ export const inboxV2ConversationHeads = pgTable(
   ]
 );
 
+/**
+ * Minimal identity anchor retained after a Conversation hard-delete. It has no
+ * FK back to Conversation by design: the row prevents a retired canonical ID
+ * from being reused with reset revisions or stream positions.
+ */
+export const inboxV2ConversationIdentityFences = pgTable(
+  "inbox_v2_conversation_identity_fences",
+  {
+    tenantId: tenantIdColumn().references(() => tenants.id, {
+      onDelete: "cascade"
+    }),
+    conversationId: text("conversation_id").notNull(),
+    retiredRevision: bigint("retired_revision", { mode: "bigint" }).notNull(),
+    retiredStreamPosition: bigint("retired_stream_position", {
+      mode: "bigint"
+    }).notNull(),
+    retiredUpdatedAt: timestamp("retired_updated_at", {
+      withTimezone: true,
+      precision: 3
+    }).notNull(),
+    retiredAt: timestamp("retired_at", {
+      withTimezone: true,
+      precision: 3
+    })
+      .notNull()
+      .defaultNow()
+  },
+  (table) => [
+    primaryKey({
+      name: "inbox_v2_conversation_identity_fences_pk",
+      columns: [table.tenantId, table.conversationId]
+    }),
+    check(
+      "inbox_v2_conversation_identity_fences_values_check",
+      sql`${table.retiredRevision} >= 1
+        and ${table.retiredStreamPosition} >= 1
+        and isfinite(${table.retiredUpdatedAt})
+        and isfinite(${table.retiredAt})`
+    ),
+    index("inbox_v2_conversation_identity_fences_tenant_retired_idx").on(
+      table.tenantId,
+      table.retiredAt,
+      table.conversationId
+    )
+  ]
+);
+
 export const conversations = pgTable(
   "conversations",
   {

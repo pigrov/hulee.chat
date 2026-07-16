@@ -1099,6 +1099,15 @@ export const inboxV2TimelineItems = pgTable(
       table.conversationId,
       table.timelineSequence.desc()
     ),
+    index("inbox_v2_timeline_items_eligible_activity_tail_idx")
+      .on(
+        table.tenantId,
+        table.conversationId,
+        table.timelineSequence.desc(),
+        table.id,
+        table.occurredAt
+      )
+      .where(sql`${table.activityKind} = 'eligible'`),
     index("inbox_v2_timeline_items_stream_idx").on(
       table.tenantId,
       table.lastChangedStreamPosition,

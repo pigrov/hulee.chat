@@ -113,6 +113,8 @@ export const initialTables = [
   // prettier-ignore
   { name: "inbox_v2_conversation_heads", scope: "tenant", requiresTenantId: true },
   // prettier-ignore
+  { name: "inbox_v2_conversation_identity_fences", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
   { name: "inbox_v2_employee_conversation_states", scope: "tenant", requiresTenantId: true },
   // Inbox V2 data-governance registry/template catalogs are deployment-global;
   // all effective policy, privacy and operation state below is tenant-local.

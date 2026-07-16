@@ -95,6 +95,27 @@ describe("Inbox V2 timeline and Message schema", () => {
     );
   });
 
+  it("indexes the latest eligible Conversation activity without scanning non-activity tails", () => {
+    const tableIndex = getTableConfig(inboxV2TimelineItems).indexes.find(
+      (candidate) =>
+        candidate.config.name ===
+        "inbox_v2_timeline_items_eligible_activity_tail_idx"
+    );
+    expect(tableIndex?.config.columns.map(indexColumnName)).toEqual([
+      "tenant_id",
+      "conversation_id",
+      "timeline_sequence",
+      "id",
+      "occurred_at"
+    ]);
+    if (!tableIndex?.config.where) {
+      throw new Error("Missing eligible-activity index predicate.");
+    }
+    expect(new PgDialect().sqlToQuery(tableIndex.config.where).sql).toContain(
+      `"activity_kind" = 'eligible'`
+    );
+  });
+
   it("keeps ordered TimelineItem and immutable Message authorship canonical", () => {
     expect(
       uniqueColumns(

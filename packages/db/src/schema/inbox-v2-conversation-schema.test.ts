@@ -1,7 +1,11 @@
 import { getTableConfig, PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
-import { inboxV2ConversationHeads, inboxV2Conversations } from "./tables";
+import {
+  inboxV2ConversationHeads,
+  inboxV2ConversationIdentityFences,
+  inboxV2Conversations
+} from "./tables";
 
 describe("Inbox V2 Conversation persistence schema", () => {
   it("keeps Conversation and ConversationHead as separate tenant-owned boundaries", () => {
@@ -51,8 +55,35 @@ describe("Inbox V2 Conversation persistence schema", () => {
     ).toEqual(["tenant_id", "id"]);
   });
 
+  it("retains a tenant-scoped canonical-ID fence after Conversation deletion", () => {
+    const fence = getTableConfig(inboxV2ConversationIdentityFences);
+
+    expect(fence.columns.map((column) => column.name)).toEqual([
+      "tenant_id",
+      "conversation_id",
+      "retired_revision",
+      "retired_stream_position",
+      "retired_updated_at",
+      "retired_at"
+    ]);
+    expect(primaryKeyColumns(fence)).toEqual([
+      ["tenant_id", "conversation_id"]
+    ]);
+    expect(fence.foreignKeys).toHaveLength(1);
+    expect(fence.indexes.map((tableIndex) => tableIndex.config.name)).toContain(
+      "inbox_v2_conversation_identity_fences_tenant_retired_idx"
+    );
+    expect(
+      checkSql(fence, "inbox_v2_conversation_identity_fences_values_check")
+    ).toContain("isfinite");
+  });
+
   it("keeps every tenant-owned access index tenant-leading", () => {
-    for (const table of [inboxV2Conversations, inboxV2ConversationHeads]) {
+    for (const table of [
+      inboxV2Conversations,
+      inboxV2ConversationHeads,
+      inboxV2ConversationIdentityFences
+    ]) {
       const config = getTableConfig(table);
 
       expect(config.indexes.length).toBeGreaterThan(0);

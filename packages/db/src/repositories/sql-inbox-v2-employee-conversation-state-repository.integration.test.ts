@@ -434,7 +434,9 @@ async function seedReadTargets(
          and conversation_id = ${conversationId}
     `);
 
-    for (const target of targets) {
+    // A committed Conversation timeline is contiguous even when this fixture
+    // only exercises a sparse set of read targets.
+    for (let target = 1; target <= latest; target += 1) {
       const eventId = `event:db006-target-${label}-${target}-${runId}`;
       const itemId = timelineItem(`target-${label}-${target}-${runId}`);
       await transaction.execute(sql`

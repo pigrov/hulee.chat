@@ -27,6 +27,7 @@
     "db:inbox-v2:rbac-dry-run": "tsx scripts/db/inbox-v2-rbac-dry-run.mjs",
     "db:inbox-v2:n1-bundle": "node scripts/db/fixtures/inbox-v2/generate-db008-n1-bundle.mjs",
     "db:seed:mvp": "tsx scripts/db/seed-mvp.ts",
+    "test:inbox-v2:conversation-head-integrity": "vitest run --no-file-parallelism scripts/db/inbox-v2-conversation-timeline-head-migration.integration.test.mjs",
     "test:inbox-v2:preserve": "vitest run --no-file-parallelism scripts/db/inbox-v2-rbac-dry-run.test.mjs scripts/db/inbox-v2-preserve-upgrade.integration.test.mjs scripts/db/inbox-v2-n1-upgrade.integration.test.mjs",
     "web:dev": "pnpm --filter @hulee/web exec next dev --hostname 127.0.0.1 --port 3001",
     "db:check": "node scripts/checks/db-check.mjs",

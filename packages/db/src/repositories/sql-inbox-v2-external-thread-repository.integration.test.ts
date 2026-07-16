@@ -69,6 +69,9 @@ describePostgres("SQL Inbox V2 ExternalThread repository (PostgreSQL)", () => {
           where tenant_id in (${tenantA}, ${tenantB})
         `);
       await db.transaction(async (transaction) => {
+        await transaction.execute(
+          sql`set local session_replication_role = replica`
+        );
         await transaction.execute(sql`
             delete from inbox_v2_conversation_membership_heads
             where tenant_id in (${tenantA}, ${tenantB})

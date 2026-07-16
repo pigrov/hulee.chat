@@ -14,7 +14,12 @@ import {
   createHuleeDatabase,
   type HuleeDatabase
 } from "../client";
-import { createSqlInboxV2ConversationRepository } from "./sql-inbox-v2-conversation-repository";
+import {
+  createSqlInboxV2ConversationRepository,
+  type AllocateInboxV2TimelineRangeInput,
+  type InboxV2TimelineRangeAllocation
+} from "./sql-inbox-v2-conversation-repository";
+import type { RawSqlExecutor } from "./sql-outbox-repository";
 
 const describePostgres =
   process.env.HULEE_DB_INTEGRATION === "1" ? describe : describe.skip;
@@ -45,6 +50,21 @@ describePostgres("SQL Inbox V2 Conversation repository (PostgreSQL)", () => {
     }
 
     await db.transaction(async (transaction) => {
+      await transaction.execute(
+        sql`set local session_replication_role = replica`
+      );
+      await transaction.execute(sql`
+        delete from inbox_v2_timeline_subject_details
+        where tenant_id in (${tenantA}, ${tenantB})
+      `);
+      await transaction.execute(sql`
+        delete from inbox_v2_timeline_items
+        where tenant_id in (${tenantA}, ${tenantB})
+      `);
+      await transaction.execute(sql`
+        delete from inbox_v2_conversation_work_item_slots
+        where tenant_id in (${tenantA}, ${tenantB})
+      `);
       await transaction.execute(sql`
         delete from inbox_v2_conversation_membership_heads
         where tenant_id in (${tenantA}, ${tenantB})
@@ -220,8 +240,20 @@ describePostgres("SQL Inbox V2 Conversation repository (PostgreSQL)", () => {
     );
 
     const concurrent = await Promise.all([
-      repository.withTimelineSequenceAllocation(firstAttempt, async () => "a"),
-      repository.withTimelineSequenceAllocation(secondAttempt, async () => "b")
+      repository.withTimelineSequenceAllocation(
+        firstAttempt,
+        async (context) => {
+          await persistAllocatedCallItems(context, firstAttempt);
+          return "a";
+        }
+      ),
+      repository.withTimelineSequenceAllocation(
+        secondAttempt,
+        async (context) => {
+          await persistAllocatedCallItems(context, secondAttempt);
+          return "b";
+        }
+      )
     ]);
     const winner = concurrent.find((result) => result.kind === "allocated");
     const loser = concurrent.find(
@@ -246,7 +278,15 @@ describePostgres("SQL Inbox V2 Conversation repository (PostgreSQL)", () => {
         streamPosition: position("3"),
         changedAt: t2
       },
-      async () => "retry"
+      async (context) => {
+        await persistAllocatedCallItems(context, {
+          ...secondAttempt,
+          items: retryItems,
+          streamPosition: position("3"),
+          changedAt: t2
+        });
+        return "retry";
+      }
     );
 
     expect(retry.kind).toBe("allocated");
@@ -272,7 +312,8 @@ describePostgres("SQL Inbox V2 Conversation repository (PostgreSQL)", () => {
     ]);
 
     await expect(
-      repository.withTimelineSequenceAllocation(input, async () => {
+      repository.withTimelineSequenceAllocation(input, async (context) => {
+        await persistAllocatedCallItems(context, input);
         throw new Error("forced callback rollback");
       })
     ).rejects.toThrow("forced callback rollback");
@@ -290,7 +331,10 @@ describePostgres("SQL Inbox V2 Conversation repository (PostgreSQL)", () => {
 
     const retry = await repository.withTimelineSequenceAllocation(
       input,
-      async ({ allocation }) => allocation.firstSequence
+      async (context) => {
+        await persistAllocatedCallItems(context, input);
+        return context.allocation.firstSequence;
+      }
     );
 
     expect(retry.kind).toBe("allocated");
@@ -322,7 +366,13 @@ describePostgres("SQL Inbox V2 Conversation repository (PostgreSQL)", () => {
         allocationInput(tenantA, conversationId, "1", "2", t1, [
           item("rollback-holder", t1, true)
         ]),
-        async () => {
+        async (context) => {
+          await persistAllocatedCallItems(
+            context,
+            allocationInput(tenantA, conversationId, "1", "2", t1, [
+              item("rollback-holder", t1, true)
+            ])
+          );
           markHolderEntered();
           await holderRelease;
           throw new Error("forced holder rollback");
@@ -340,7 +390,15 @@ describePostgres("SQL Inbox V2 Conversation repository (PostgreSQL)", () => {
         allocationInput(tenantA, conversationId, "1", "2", t1, [
           item("rollback-waiter", t1, true)
         ]),
-        async () => "waiter"
+        async (context) => {
+          await persistAllocatedCallItems(
+            context,
+            allocationInput(tenantA, conversationId, "1", "2", t1, [
+              item("rollback-waiter", t1, true)
+            ])
+          );
+          return "waiter";
+        }
       )
       .finally(() => {
         waiterSettled = true;
@@ -404,7 +462,14 @@ describePostgres("SQL Inbox V2 Conversation repository (PostgreSQL)", () => {
       allocationInput(tenantA, conversationId, "1", "3", t2, [
         item("independent-1", t0, true)
       ]),
-      async () => undefined
+      async (context) => {
+        await persistAllocatedCallItems(
+          context,
+          allocationInput(tenantA, conversationId, "1", "3", t2, [
+            item("independent-1", t0, true)
+          ])
+        );
+      }
     );
 
     expect(headUpdate.kind).toBe("allocated");
@@ -444,24 +509,38 @@ describePostgres("SQL Inbox V2 Conversation repository (PostgreSQL)", () => {
     expect(noOp.record.aggregate.head.revision).toBe("2");
   });
 
-  it("round-trips bigint values losslessly and rejects overflow without mutation", async () => {
+  it("rejects an impossible bigint head gap and preserves bounded allocation", async () => {
     const repository = createSqlInboxV2ConversationRepository(db);
     const conversationId = conversation("bigint");
     await repository.create(createInput(tenantA, conversationId, "1", t0));
-    await db.execute(sql`
-      update inbox_v2_conversation_heads
-      set latest_timeline_sequence = 9223372036854775805,
-          last_changed_stream_position = 9007199254740993
-      where tenant_id = ${tenantA}
-        and conversation_id = ${conversationId}
-    `);
+    await expect(
+      db.transaction(async (transaction) => {
+        await transaction.execute(sql`
+          update inbox_v2_conversation_heads
+          set latest_timeline_sequence = 9223372036854775805,
+              revision = 2,
+              last_changed_stream_position = 9007199254740993,
+              updated_at = ${t1}
+          where tenant_id = ${tenantA}
+            and conversation_id = ${conversationId}
+        `);
+        await transaction.execute(sql`set constraints all immediate`);
+      })
+    ).rejects.toThrow();
 
+    const input = allocationInput(
+      tenantA,
+      conversationId,
+      "1",
+      "9007199254740994",
+      t1,
+      [item("bigint-1", t1, false), item("bigint-2", t1, false)]
+    );
     const allocation = await repository.withTimelineSequenceAllocation(
-      allocationInput(tenantA, conversationId, "1", "9007199254740994", t1, [
-        item("bigint-1", t1, false),
-        item("bigint-2", t1, false)
-      ]),
-      async () => undefined
+      input,
+      async (context) => {
+        await persistAllocatedCallItems(context, input);
+      }
     );
 
     expect(allocation.kind).toBe("allocated");
@@ -469,28 +548,19 @@ describePostgres("SQL Inbox V2 Conversation repository (PostgreSQL)", () => {
       throw new Error("Expected max bigint allocation.");
     }
     expect(allocation.allocation).toMatchObject({
-      firstSequence: "9223372036854775806",
-      lastSequence: "9223372036854775807"
+      firstSequence: "1",
+      lastSequence: "2"
     });
     expect(allocation.record.headLastChangedStreamPosition).toBe(
       "9007199254740994"
     );
 
-    await expect(
-      repository.withTimelineSequenceAllocation(
-        allocationInput(tenantA, conversationId, "2", "9007199254740995", t2, [
-          item("overflow", t2, false)
-        ]),
-        async () => undefined
-      )
-    ).rejects.toThrow("exceeds the PostgreSQL bigint range");
-
-    const afterOverflow = await repository.findById({
+    const afterAllocation = await repository.findById({
       tenantId: tenantA,
       conversationId
     });
-    expect(afterOverflow?.aggregate.head).toMatchObject({
-      latestTimelineSequence: "9223372036854775807",
+    expect(afterAllocation?.aggregate.head).toMatchObject({
+      latestTimelineSequence: "2",
       revision: "2",
       updatedAt: t1
     });
@@ -539,6 +609,48 @@ function item(id: string, occurredAt: string, activityEligible: boolean) {
     occurredAt,
     activityEligible
   };
+}
+
+async function persistAllocatedCallItems(
+  context: {
+    allocation: InboxV2TimelineRangeAllocation;
+    executor: RawSqlExecutor;
+  },
+  input: AllocateInboxV2TimelineRangeInput
+): Promise<void> {
+  for (const [index, assignment] of context.allocation.assignments.entries()) {
+    const allocationItem = input.items[index];
+    if (!allocationItem) {
+      throw new Error("Timeline allocation fixture lost its matching item.");
+    }
+    const sourceObjectId = `call:${assignment.itemId}`;
+    await context.executor.execute(sql`
+      insert into inbox_v2_timeline_items (
+        tenant_id, id, conversation_id, timeline_sequence,
+        subject_kind, subject_id, visibility, activity_kind,
+        activity_reason_id, occurred_at, received_at, revision,
+        last_changed_stream_position, created_at, updated_at
+      ) values (
+        ${input.tenantId}, ${assignment.itemId}, ${input.conversationId},
+        ${assignment.timelineSequence}, 'call', ${sourceObjectId},
+        'source_item_policy',
+        ${allocationItem.activityEligible ? "eligible" : "non_activity"},
+        ${allocationItem.activityEligible ? null : "core:db001_fixture"},
+        ${allocationItem.occurredAt}, ${input.changedAt}, 1,
+        ${input.streamPosition}, ${input.changedAt}, ${input.changedAt}
+      )
+    `);
+    await context.executor.execute(sql`
+      insert into inbox_v2_timeline_subject_details (
+        tenant_id, timeline_item_id, subject_kind, source_object_id,
+        source_object_kind_id, source_object_revision, record_revision,
+        created_at
+      ) values (
+        ${input.tenantId}, ${assignment.itemId}, 'call', ${sourceObjectId},
+        'core:call', 1, 1, ${input.changedAt}
+      )
+    `);
+  }
 }
 
 function conversation(id: string) {

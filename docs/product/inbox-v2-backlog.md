@@ -1269,8 +1269,37 @@ PostgreSQL gate passes. `INB2-DB-005` cannot start before both are complete.
     ephemeral target. Production preserve expand remains fail-closed until
     `INB2-MIG-002`; backfill remains `INB2-MIG-003`.
 
+- [x] `INB2-DB-010` Close Conversation/Head/timeline database coherence gaps.
+  - State: `done`; Priority: `P0`; Started: `2026-07-16`; Completed:
+    `2026-07-16`; Owner: `Codex`; Depends on: `INB2-DB-001`, `INB2-DB-005`,
+    `INB2-DB-008`.
+  - Acceptance: every persisted Conversation has exactly one tenant-matched
+    ConversationHead; the head sequence and activity tuple exactly match the
+    committed TimelineItems; direct SQL cannot delete the mandatory head,
+    advertise an unpersisted sequence or regress Conversation/Head revision,
+    stream position or update clock, and cannot truncate invariant-owned
+    Conversation, Head, TimelineItem or identity-fence state. The checks are
+    deferred where an atomic Conversation/Head/Timeline transaction needs
+    temporary intermediate state, remain safe for Conversation/Tenant delete
+    cascades and do not rely on repository-only assumptions.
+  - Verification: a schema-owned invariant block and append-only migration pass
+    fresh, coherent-upgrade, incoherent-preflight and rollback tests; adversarial
+    PostgreSQL tests reject missing/deleted heads, forged sequence/activity and
+    stale revision/stream writes while valid repository create and atomic
+    Timeline allocation still commit. Evidence: schema-owned invariant,
+    preflight and append-only migration `0038`; fresh/upgrade/preflight/race/
+    rollback PostgreSQL lifecycle `1` file / `6` tests; preserve/N-1 lane `3`
+    files / `17` tests; disposable reset lane `1` file / `1` exhaustive test on
+    PostgreSQL 16 with `max_prepared_transactions=10`; affected repositories `5`
+    files / `42` tests; schema invariant `5/5`; migration SQL/snapshot/journal
+    parity `39/39/39`; full `pnpm check` `303` passed files / `3031` passed tests
+    with `31` files / `257` integration tests intentionally skipped. Three
+    independent reviews found no remaining P0/P1/P2 blocker. Production preserve
+    expand remains fail-closed until `INB2-MIG-002` supplies its online bridge.
+
 - [ ] `INB2-EPIC-2-GATE` Verify Epic 2 exit gate.
-  - State: `planned`; Priority: `P0`; Depends on: all Epic 2 tasks.
+  - State: `planned`; Priority: `P0`; Depends on: all Epic 2 tasks, including
+    `INB2-DB-010`.
   - Acceptance: fresh/current V2 databases enforce tenant, thread, assignment
     and sequence invariants without application-only assumptions; a
     representative V1-upgraded database is required by the selected preserve
@@ -2809,33 +2838,34 @@ The first package must produce:
 Append one row when a task becomes `done`. Do not use the log instead of updating
 the task state, checkbox and evidence above.
 
-| Date       | Task               | Verification evidence                                                 | Commit/PR    | Verified by                     |
-| ---------- | ------------------ | --------------------------------------------------------------------- | ------------ | ------------------------------- |
-| 2026-07-10 | `INB2-BASE-001`    | Baseline inventory; targeted 13/103; full 145/724 and all gates       | working tree | Codex + `baseline_verify`       |
-| 2026-07-10 | `INB2-ARCH-001`    | Glossary/scenario matrix review; requirements consistency; full check | working tree | Codex + `scenario_glossary`     |
-| 2026-07-10 | `INB2-ARCH-002`    | ADR 0009 review against ADR 0001-0008; full check                     | working tree | Codex + `domain_adr_review`     |
-| 2026-07-10 | `INB2-ARCH-003`    | ADR 0010 code/identity/security/consistency review; full check        | working tree | Codex + four reviewers          |
-| 2026-07-10 | `INB2-ARCH-004`    | ADR 0011 Hulee/RIK route review; exact thread/route fixtures; check   | working tree | Codex + two reviewers           |
-| 2026-07-10 | `INB2-ARCH-005`    | ADR 0012 Hulee/RIK/transaction review; snapshot-stream races; check   | working tree | Codex + three reviewers         |
-| 2026-07-10 | `INB2-ARCH-006`    | ADR 0013 RBAC/code/security/product/backlog review; full check        | working tree | Codex + four reviewers          |
-| 2026-07-10 | `INB2-ARCH-007`    | ADR 0015; 58 classes; DG-001..012; 205/48 graph; full 145/724         | working tree | Codex + three reviewers         |
-| 2026-07-10 | `INB2-ARCH-008`    | 504-cell direct matrix; 44 RIK rows; focused 10/62; full 145/724      | working tree | Codex + three reviewers         |
-| 2026-07-11 | `INB2-ARCH-009`    | ADR 0014 fast/preserve amendment; V1/outbox audit; graph re-review    | working tree | Codex + four reviewers          |
-| 2026-07-10 | `INB2-ARCH-010`    | Surface/evidence policy; 31 links; 145/724 and all gates              | working tree | Codex + three reviewers         |
-| 2026-07-10 | `INB2-EPIC-0-GATE` | Cross-ADR review; 205/48 graph; 504 cells; full 145/724               | working tree | Codex + three reviewers         |
-| 2026-07-11 | `INB2-CON-001`     | IDs/version/catalog contracts; focused 4/28; full 149/752 and gates   | working tree | Codex + three reviewers         |
-| 2026-07-11 | `INB2-CON-002`     | Conversation contract; focused 5/97; full 150/821 and all gates       | working tree | Codex + three reviewers         |
-| 2026-07-11 | `INB2-CON-003`     | Participant/identity graphs; focused 6/144; full 151/868 and gates    | working tree | Codex + three reviewers         |
-| 2026-07-11 | `INB2-CON-004`     | Client links/bounded merge; focused 8/199; full 153/923 and gates     | working tree | Codex + three reviewers         |
-| 2026-07-11 | `INB2-CON-005`     | Thread/binding/route/dispatch; focused 15/343; full 160/1067 + gates  | working tree | Codex + domain/security reviews |
-| 2026-07-12 | `INB2-RBAC-001`    | 101x12 catalog; focused 13/13; full 200/1438 + applicable gates       | working tree | Codex + two reviewers           |
-| 2026-07-13 | `INB2-DB-001`      | Conversation/head DB; PG 7/7; focused 4/94; full 221/2185 + gates     | working tree | Codex + three reviewers         |
-| 2026-07-14 | `INB2-DB-002`      | Identity/participants/client links; shared PG 13/124; full 247/2511   | working tree | Codex + two reviewers           |
-| 2026-07-14 | `INB2-DB-003`      | Thread/binding/outbound; PG 13/124; outbound 6/6; full 247/2511       | working tree | Codex + two reviewers           |
-| 2026-07-14 | `INB2-DB-004`      | WorkItem/assignment DB; PG 14 files; DB 70/617; full 250/2540         | working tree | Codex + two reviewers           |
-| 2026-07-14 | `INB2-DB-005`      | Timeline/message DB; PG 18/18; DB 73/666; full 254/2577               | working tree | Codex + two reviewers           |
-| 2026-07-15 | `INB2-DB-006`      | Employee state/read DB; PG 4/4; migration 3/3; full 258/2605          | working tree | Codex + three reviewers         |
-| 2026-07-15 | `INB2-DB-009`      | Governance/privacy DB; PG 22/22; migration 8/8; full 271/2718         | working tree | Codex + three reviewers         |
-| 2026-07-15 | `INB2-DB-007`      | Repository foundation; PG 4/4; migration 4/4; full 296/2954           | working tree | Codex + three reviewers         |
-| 2026-07-16 | `INB2-MIG-001`     | C01-C24/D01-D31 inventory; preserve; full 298/2968 and all gates      | working tree | Codex + independent reviews     |
-| 2026-07-16 | `INB2-DB-008`      | Preserve 3/17; reset 1/1; focused 5/72; full 302/3024 + gates         | working tree | Codex + independent reviews     |
+| Date       | Task               | Verification evidence                                                      | Commit/PR    | Verified by                       |
+| ---------- | ------------------ | -------------------------------------------------------------------------- | ------------ | --------------------------------- |
+| 2026-07-10 | `INB2-BASE-001`    | Baseline inventory; targeted 13/103; full 145/724 and all gates            | working tree | Codex + `baseline_verify`         |
+| 2026-07-10 | `INB2-ARCH-001`    | Glossary/scenario matrix review; requirements consistency; full check      | working tree | Codex + `scenario_glossary`       |
+| 2026-07-10 | `INB2-ARCH-002`    | ADR 0009 review against ADR 0001-0008; full check                          | working tree | Codex + `domain_adr_review`       |
+| 2026-07-10 | `INB2-ARCH-003`    | ADR 0010 code/identity/security/consistency review; full check             | working tree | Codex + four reviewers            |
+| 2026-07-10 | `INB2-ARCH-004`    | ADR 0011 Hulee/RIK route review; exact thread/route fixtures; check        | working tree | Codex + two reviewers             |
+| 2026-07-10 | `INB2-ARCH-005`    | ADR 0012 Hulee/RIK/transaction review; snapshot-stream races; check        | working tree | Codex + three reviewers           |
+| 2026-07-10 | `INB2-ARCH-006`    | ADR 0013 RBAC/code/security/product/backlog review; full check             | working tree | Codex + four reviewers            |
+| 2026-07-10 | `INB2-ARCH-007`    | ADR 0015; 58 classes; DG-001..012; 205/48 graph; full 145/724              | working tree | Codex + three reviewers           |
+| 2026-07-10 | `INB2-ARCH-008`    | 504-cell direct matrix; 44 RIK rows; focused 10/62; full 145/724           | working tree | Codex + three reviewers           |
+| 2026-07-11 | `INB2-ARCH-009`    | ADR 0014 fast/preserve amendment; V1/outbox audit; graph re-review         | working tree | Codex + four reviewers            |
+| 2026-07-10 | `INB2-ARCH-010`    | Surface/evidence policy; 31 links; 145/724 and all gates                   | working tree | Codex + three reviewers           |
+| 2026-07-10 | `INB2-EPIC-0-GATE` | Cross-ADR review; 205/48 graph; 504 cells; full 145/724                    | working tree | Codex + three reviewers           |
+| 2026-07-11 | `INB2-CON-001`     | IDs/version/catalog contracts; focused 4/28; full 149/752 and gates        | working tree | Codex + three reviewers           |
+| 2026-07-11 | `INB2-CON-002`     | Conversation contract; focused 5/97; full 150/821 and all gates            | working tree | Codex + three reviewers           |
+| 2026-07-11 | `INB2-CON-003`     | Participant/identity graphs; focused 6/144; full 151/868 and gates         | working tree | Codex + three reviewers           |
+| 2026-07-11 | `INB2-CON-004`     | Client links/bounded merge; focused 8/199; full 153/923 and gates          | working tree | Codex + three reviewers           |
+| 2026-07-11 | `INB2-CON-005`     | Thread/binding/route/dispatch; focused 15/343; full 160/1067 + gates       | working tree | Codex + domain/security reviews   |
+| 2026-07-12 | `INB2-RBAC-001`    | 101x12 catalog; focused 13/13; full 200/1438 + applicable gates            | working tree | Codex + two reviewers             |
+| 2026-07-13 | `INB2-DB-001`      | Conversation/head DB; PG 7/7; focused 4/94; full 221/2185 + gates          | working tree | Codex + three reviewers           |
+| 2026-07-14 | `INB2-DB-002`      | Identity/participants/client links; shared PG 13/124; full 247/2511        | working tree | Codex + two reviewers             |
+| 2026-07-14 | `INB2-DB-003`      | Thread/binding/outbound; PG 13/124; outbound 6/6; full 247/2511            | working tree | Codex + two reviewers             |
+| 2026-07-14 | `INB2-DB-004`      | WorkItem/assignment DB; PG 14 files; DB 70/617; full 250/2540              | working tree | Codex + two reviewers             |
+| 2026-07-14 | `INB2-DB-005`      | Timeline/message DB; PG 18/18; DB 73/666; full 254/2577                    | working tree | Codex + two reviewers             |
+| 2026-07-15 | `INB2-DB-006`      | Employee state/read DB; PG 4/4; migration 3/3; full 258/2605               | working tree | Codex + three reviewers           |
+| 2026-07-15 | `INB2-DB-009`      | Governance/privacy DB; PG 22/22; migration 8/8; full 271/2718              | working tree | Codex + three reviewers           |
+| 2026-07-15 | `INB2-DB-007`      | Repository foundation; PG 4/4; migration 4/4; full 296/2954                | working tree | Codex + three reviewers           |
+| 2026-07-16 | `INB2-MIG-001`     | C01-C24/D01-D31 inventory; preserve; full 298/2968 and all gates           | working tree | Codex + independent reviews       |
+| 2026-07-16 | `INB2-DB-008`      | Preserve 3/17; reset 1/1; focused 5/72; full 302/3024 + gates              | working tree | Codex + independent reviews       |
+| 2026-07-16 | `INB2-DB-010`      | Coherence/TRUNCATE; lifecycle 6/6; preserve 3/17; reset 1/1; full 303/3031 | working tree | Codex + three independent reviews |

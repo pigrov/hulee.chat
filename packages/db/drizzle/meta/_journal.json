@@ -267,6 +267,13 @@
       "when": 1784146744823,
       "tag": "0037_inbox_v2_database_reset_receipt",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1784170944261,
+      "tag": "0038_inbox_v2_conversation_timeline_head_integrity",
+      "breakpoints": true
     }
   ]
 }

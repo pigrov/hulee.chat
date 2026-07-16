@@ -100,6 +100,22 @@ const inboxV2DatabaseResetReceiptInvariantName =
   "INBOX_V2_DATABASE_RESET_RECEIPT_INVARIANT_SQL";
 const inboxV2DatabaseResetReceiptFileName =
   "0037_inbox_v2_database_reset_receipt.sql";
+const inboxV2ConversationTimelineHeadMarker =
+  "-- INBOX_V2_CONVERSATION_TIMELINE_HEAD_MIGRATION_FINALIZED_V1";
+const inboxV2ConversationTimelineHeadPreflightMarker =
+  "-- INBOX_V2_CONVERSATION_TIMELINE_HEAD_PREFLIGHT_V1";
+const inboxV2ConversationTimelineHeadInvariantName =
+  "INBOX_V2_CONVERSATION_TIMELINE_HEAD_INTEGRITY_SQL";
+const inboxV2ConversationIdentityFenceTableName =
+  "public.inbox_v2_conversation_identity_fences";
+const inboxV2EligibleActivityTailIndexName =
+  "inbox_v2_timeline_items_eligible_activity_tail_idx";
+const inboxV2ConversationTimelineHeadPreflightSql = (
+  await readFile(
+    "scripts/db/inbox-v2-conversation-timeline-head-preflight.sql",
+    "utf8"
+  )
+).trim();
 const inboxV2MembershipPrivilegeBoundaryName =
   "INBOX_V2_MEMBERSHIP_PRIVILEGE_BOUNDARY_SQL";
 const inboxV2FoundationInvariantNames = new Set([
@@ -141,6 +157,9 @@ const inboxV2RepositoryFoundationMigrations = migrationFiles.filter(({ sql }) =>
 );
 const inboxV2DatabaseResetReceiptMigrations = migrationFiles.filter(
   ({ fileName }) => fileName === inboxV2DatabaseResetReceiptFileName
+);
+const inboxV2ConversationTimelineHeadMigrations = migrationFiles.filter(
+  ({ sql }) => sql.includes(inboxV2ConversationTimelineHeadMarker)
 );
 const inboxV2SchemaFileNames = (await readdir(inboxV2SchemaDirectory))
   .filter((fileName) => fileName.endsWith(".ts"))
@@ -202,6 +221,10 @@ const inboxV2SecurityDenialInvariantBlocks = inboxV2InvariantBlocks.filter(
 const inboxV2RepositoryFoundationInvariantBlocks =
   inboxV2InvariantBlocks.filter(
     ({ name }) => name === inboxV2RepositoryFoundationInvariantName
+  );
+const inboxV2ConversationTimelineHeadInvariantBlocks =
+  inboxV2InvariantBlocks.filter(
+    ({ name }) => name === inboxV2ConversationTimelineHeadInvariantName
   );
 const inboxV2MembershipPrivilegeBoundaryBlock = extractInboxV2NamedSqlBlock(
   "membership-privilege-boundary.ts",
@@ -275,6 +298,12 @@ if (inboxV2RepositoryFoundationInvariantBlocks.length !== 1) {
   );
   process.exit(1);
 }
+if (inboxV2ConversationTimelineHeadInvariantBlocks.length !== 1) {
+  console.error(
+    `Expected exactly one ${inboxV2ConversationTimelineHeadInvariantName} schema block, found ${inboxV2ConversationTimelineHeadInvariantBlocks.length}.`
+  );
+  process.exit(1);
+}
 const unownedInvariantBlocks = inboxV2InvariantBlocks.filter(
   ({ name }) =>
     !inboxV2FoundationInvariantNames.has(name) &&
@@ -284,7 +313,8 @@ const unownedInvariantBlocks = inboxV2InvariantBlocks.filter(
     !inboxV2DataGovernancePrivacyInvariantNames.has(name) &&
     !inboxV2AuthorizationRelationsInvariantNames.has(name) &&
     name !== inboxV2SecurityDenialInvariantName &&
-    name !== inboxV2RepositoryFoundationInvariantName
+    name !== inboxV2RepositoryFoundationInvariantName &&
+    name !== inboxV2ConversationTimelineHeadInvariantName
 );
 if (unownedInvariantBlocks.length > 0) {
   console.error(
@@ -389,6 +419,12 @@ if (inboxV2DatabaseResetReceiptMigrations.length !== 1) {
   );
   process.exit(1);
 }
+if (inboxV2ConversationTimelineHeadMigrations.length !== 1) {
+  console.error(
+    `Expected exactly one finalized Inbox V2 Conversation timeline-head migration, found ${inboxV2ConversationTimelineHeadMigrations.length}.`
+  );
+  process.exit(1);
+}
 
 try {
   assertGlobalMigrationArtifactBijection({
@@ -437,6 +473,16 @@ try {
       fileName.endsWith("_snapshot.json")
     )
   });
+  assertMigrationJournalArtifactParity({
+    journal: drizzleJournal,
+    targetIndex: 38,
+    finalizedMigrationFileName:
+      inboxV2ConversationTimelineHeadMigrations[0].fileName,
+    migrationFileNames,
+    snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
+      fileName.endsWith("_snapshot.json")
+    )
+  });
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
@@ -454,6 +500,10 @@ assertInboxV2DataGovernancePrivacyMigration(
 assertInboxV2AuthorizationRelationsMigration(
   inboxV2AuthorizationRelationsMigrations[0]
 );
+assertInboxV2ConversationTimelineHeadMigration(
+  inboxV2ConversationTimelineHeadMigrations[0],
+  inboxV2ConversationTimelineHeadInvariantBlocks[0]
+);
 assertInboxV2SecurityDenialMigration(inboxV2SecurityDenialMigrations[0]);
 assertInboxV2RepositoryFoundationMigration(
   inboxV2RepositoryFoundationMigrations[0]
@@ -466,12 +516,91 @@ try {
     inboxV2DatabaseResetReceiptMigrations[0],
     inboxV2DatabaseResetReceiptInvariantBlock
   );
+  await assertInboxV2ConversationTimelineHeadGeneratedSchemaParity(
+    inboxV2ConversationTimelineHeadMigrations[0]
+  );
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 }
 
 console.log("db:check passed");
+
+function assertInboxV2ConversationTimelineHeadMigration(
+  migration,
+  invariantBlock
+) {
+  const statements = splitMigrationStatements(migration.sql);
+  if (statements.length < 3) {
+    throw new Error(
+      "Inbox V2 Conversation timeline-head migration is missing generated DDL or its invariant tail."
+    );
+  }
+  assertExactSqlSequence(
+    [
+      `${inboxV2ConversationTimelineHeadMarker}\n${inboxV2ConversationTimelineHeadPreflightSql}`
+    ],
+    statements.slice(0, 1),
+    "Inbox V2 Conversation timeline-head preflight"
+  );
+  assertExactSqlSequence(
+    [invariantBlock.sql],
+    statements.slice(-1),
+    "Inbox V2 Conversation timeline-head invariant tail"
+  );
+
+  if (
+    !statements[0]?.includes(inboxV2ConversationTimelineHeadPreflightMarker) ||
+    statements[0].indexOf(inboxV2ConversationTimelineHeadPreflightMarker) >
+      statements[0].indexOf("do $preflight$")
+  ) {
+    throw new Error(
+      "Inbox V2 Conversation timeline-head migration must run its reviewed preflight first."
+    );
+  }
+
+  for (const requiredFragment of [
+    'CREATE TABLE "inbox_v2_conversation_identity_fences"',
+    'CREATE INDEX "inbox_v2_timeline_items_eligible_activity_tail_idx"',
+    "inbox_v2_assert_conversation_timeline_head",
+    "inbox_v2_lock_conversation_identity",
+    "inbox_v2_conversations_timeline_head_constraint_trigger",
+    "inbox_v2_conversation_heads_timeline_constraint_trigger",
+    "deferrable initially deferred",
+    "set search_path = pg_catalog, public, pg_temp"
+  ]) {
+    if (!migration.sql.includes(requiredFragment)) {
+      throw new Error(
+        `Inbox V2 Conversation timeline-head migration is missing ${requiredFragment}.`
+      );
+    }
+  }
+}
+
+async function assertInboxV2ConversationTimelineHeadGeneratedSchemaParity(
+  migration
+) {
+  const snapshotPath = "packages/db/drizzle/meta/0038_snapshot.json";
+  const generated = await generateExpectedDrizzleMigration({
+    workspaceRoot: process.cwd(),
+    migrationDirectory,
+    baseIndex: 37,
+    targetIndex: 38
+  });
+  const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
+  assertDrizzleSnapshotParity(
+    generated.snapshot,
+    checkedInSnapshot,
+    snapshotPath
+  );
+
+  const checkedInStatements = splitMigrationStatements(migration.sql);
+  assertExactSqlSequence(
+    generated.statements,
+    checkedInStatements.slice(1, -1),
+    "Inbox V2 DB-010 ordered generated migration DDL"
+  );
+}
 
 function assertGlobalMigrationArtifactBijection({
   journal,
@@ -540,9 +669,10 @@ async function assertInboxV2RepositoryFoundationGeneratedSchemaParity(
         .map((fileName) => `${inboxV2SchemaDirectory}/${fileName}`)
     ]
   });
+  const historicalGenerated = withoutInboxV2Db010SchemaDelta(generated);
   const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
   assertDrizzleSnapshotParity(
-    generated.snapshot,
+    historicalGenerated.snapshot,
     checkedInSnapshot,
     snapshotPath
   );
@@ -570,7 +700,7 @@ async function assertInboxV2RepositoryFoundationGeneratedSchemaParity(
     inboxV2RepositoryFoundationBackfillStatements,
     "Inbox V2 DB-007 reviewed backfills"
   );
-  assertSqlStatementParity(generated.statements, generatedDdl);
+  assertSqlStatementParity(historicalGenerated.statements, generatedDdl);
 }
 
 async function assertInboxV2LatestGeneratedSchemaParity(
@@ -584,9 +714,10 @@ async function assertInboxV2LatestGeneratedSchemaParity(
     baseIndex: 36,
     targetIndex: 37
   });
+  const historicalGenerated = withoutInboxV2Db010SchemaDelta(generated);
   const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
   assertDrizzleSnapshotParity(
-    generated.snapshot,
+    historicalGenerated.snapshot,
     checkedInSnapshot,
     snapshotPath
   );
@@ -611,10 +742,29 @@ async function assertInboxV2LatestGeneratedSchemaParity(
     "Inbox V2 DB-008 invariant tail"
   );
   assertExactSqlSequence(
-    generated.statements,
+    historicalGenerated.statements,
     checkedInStatements.slice(0, invariantStart),
     "Inbox V2 DB-008 ordered generated migration prefix"
   );
+}
+
+function withoutInboxV2Db010SchemaDelta(generated) {
+  const snapshot = structuredClone(generated.snapshot);
+  delete snapshot.tables[inboxV2ConversationIdentityFenceTableName];
+  const timelineItem = snapshot.tables["public.inbox_v2_timeline_items"];
+  if (!timelineItem?.indexes) {
+    throw new Error(
+      "Generated historical schema is missing Inbox V2 TimelineItem indexes."
+    );
+  }
+  delete timelineItem.indexes[inboxV2EligibleActivityTailIndexName];
+
+  const statements = generated.statements.filter(
+    (statement) =>
+      !statement.includes("inbox_v2_conversation_identity_fences") &&
+      !statement.includes(inboxV2EligibleActivityTailIndexName)
+  );
+  return { snapshot, statements };
 }
 
 function assertInboxV2FoundationMigration(migration) {
