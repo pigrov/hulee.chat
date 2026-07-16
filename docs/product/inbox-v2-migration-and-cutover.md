@@ -107,7 +107,9 @@ Implementation belongs to:
   harness;
 - `INB2-MIG-001`: completed producer/consumer/runtime inventory and preserve
   disposition;
-- `INB2-MIG-002/003`: activated compatibility/backfill for preserve;
+- `INB2-MIG-002`: activated online schema bridge and compatibility
+  materialization for preserve;
+- `INB2-MIG-003`: activated operational backfill for preserve;
 - `INB2-MIG-004`: final revisioned preserve disposition plus shadow/rollout/
   authority controls;
 - `INB2-MIG-005`: atomic preserve-disposition/control revalidation followed by
@@ -407,13 +409,36 @@ Expand DDL rules for the migrate-before-restart deployment:
   API/worker cannot parse; V2 state uses new tables/columns/contracts;
 - new columns are nullable or have an N-1-safe staged default;
 - large indexes use the platform's online/concurrent path and explicit lock/
-  statement budgets; constraints are staged (`NOT VALID`/equivalent), backfilled
-  and validated before later tightening;
+  statement budgets; after reviewed N-1 write compatibility is proven,
+  constraints are staged (`NOT VALID`/equivalent), backfilled and validated
+  before later tightening;
 - the N-1 API read/write paths, V1 inbox query/reply/routing, worker claim/
   finalize and old image startup pass against the expanded database before the
   new image is deployed;
 - migration failure leaves the N-1 release operational or triggers an explicit
   halt before application replacement.
+
+The checked DB-008 pre-expand compatibility build is pinned to revision
+`3b9d703bb63d5ce39ea549d62413dee02d1969a0` plus the exact
+`db008-n1-routing-returning-qualification-v1` patch. The raw historical revision
+is not a valid expand candidate: its V1 routing statement can fail with
+PostgreSQL `42702`. Deploy an image containing the same patched source digest
+and pass `pnpm test:inbox-v2:preserve` before expand. That repository harness is
+only a prerequisite: it does not authorize a preserving deployment. Its checked
+CJS process exercises pinned API service functions, a stubbed Web load path and
+the outbox worker, but it is not a Next/API server or deployable image.
+
+The normal install runner also preflights pending DDL and refuses the historical
+`0029`/`0036` blocking, rewrite, destructive and unbounded-work boundaries with
+`inbox_v2.expand_online_bridge_required`. For pre-existing relations this is a
+categorical decision, not a mutable row-count/size decision: unknown ALTER/DDL,
+rewrites, immediate tightening, trigger/security changes and unbounded work all
+require review even when the observed relation is currently empty or small.
+Production and on-prem preserve expand remain blocked until `INB2-MIG-002`
+supplies a reviewed online bridge, the real supported N-1 deploy image starts
+and passes its workload, and the PostgreSQL/object restore plus release controls
+below pass. The DB-008 test-only compatibility switch is not exposed through
+CLI or environment and must never be used as deployment authority.
 
 Exit: fresh DB and representative V1 snapshot both migrate; old compatible app
 still reads, writes and processes worker work; PostgreSQL and object-storage

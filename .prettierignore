@@ -8,3 +8,4 @@ pnpm-lock.yaml
 deploy/docker/Dockerfile
 deploy/nginx/*.conf
 deploy/production/env.example
+scripts/db/fixtures/inbox-v2/db008-n1-runtime-probe.bundle.cjs

@@ -1,0 +1,26 @@
+diff --git a/packages/db/src/repositories/external-message-repository.ts b/packages/db/src/repositories/external-message-repository.ts
+--- a/packages/db/src/repositories/external-message-repository.ts
++++ b/packages/db/src/repositories/external-message-repository.ts
+@@ -411,14 +411,14 @@ export function buildUpdateConversationRoutingSql(
+         and validation.queue_valid
+         and validation.employee_valid
+         and validation.team_valid
+-      returning id,
+-                tenant_id,
+-                type,
+-                client_id,
+-                current_queue_id,
+-                assigned_employee_id,
+-                assigned_team_id,
+-                created_at
++      returning conversations.id,
++                conversations.tenant_id,
++                conversations.type,
++                conversations.client_id,
++                conversations.current_queue_id,
++                conversations.assigned_employee_id,
++                conversations.assigned_team_id,
++                conversations.created_at
+     ),
+     event_rows as (
+       select *

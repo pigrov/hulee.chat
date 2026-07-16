@@ -9,7 +9,8 @@ export default [
       "dist/**",
       "coverage/**",
       "**/.next/**",
-      "pnpm-lock.yaml"
+      "pnpm-lock.yaml",
+      "scripts/db/fixtures/inbox-v2/db008-n1-runtime-probe.bundle.cjs"
     ]
   },
   js.configs.recommended,

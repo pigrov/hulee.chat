@@ -379,7 +379,10 @@ Rejected because V2-only data cannot be represented safely in V1 schema.
   V1-upgrade harness;
 - `INB2-MIG-001`: completed repository/runtime/deployment inventory and preserve
   disposition;
-- `INB2-MIG-002/003`: activated compatibility materialization/backfill;
+- `INB2-MIG-002`: reviewed online schema bridge for any historical migration
+  boundary rejected by preserve DDL preflight, followed by compatibility
+  materialization;
+- `INB2-MIG-003`: activated operational backfill;
 - `INB2-MIG-004`: finalize the revisioned preserve disposition and build its
   shadow/rollout/authority controls;
 - `INB2-MIG-005`: atomically revalidate that disposition and every applicable

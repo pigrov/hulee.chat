@@ -20,3 +20,102 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
+
+  inbox-v2-preserve-upgrade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: hulee
+          POSTGRES_PASSWORD: hulee
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hulee -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://hulee:hulee@127.0.0.1:5432/postgres
+      HULEE_DB_INTEGRATION: "1"
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Rebuild pinned Inbox V2 N-1 compatibility artifact
+        run: |
+          pnpm db:inbox-v2:n1-bundle
+          git diff --exit-code -- \
+            scripts/db/fixtures/inbox-v2/db008-n1-runtime-probe.bundle.cjs \
+            scripts/db/fixtures/inbox-v2/db008-n1-runtime-probe.contract.json
+      - name: Verify Inbox V2 preserve upgrade and N-1 compatibility
+        run: >-
+          pnpm exec vitest run --no-file-parallelism
+          scripts/db/inbox-v2-rbac-dry-run.test.mjs
+          scripts/db/inbox-v2-preserve-upgrade.integration.test.mjs
+          scripts/db/inbox-v2-n1-upgrade.integration.test.mjs
+
+  inbox-v2-disposable-lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      DATABASE_URL: postgresql://hulee:hulee@127.0.0.1:5433/postgres
+      HULEE_DB_INTEGRATION: "1"
+      NODE_ENV: test
+      POSTGRES_CONTAINER: hulee-db008-disposable-postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Start disposable PostgreSQL 16
+        run: |
+          docker run --detach --rm \
+            --name "$POSTGRES_CONTAINER" \
+            --publish 127.0.0.1:5433:5432 \
+            --env POSTGRES_DB=postgres \
+            --env POSTGRES_USER=hulee \
+            --env POSTGRES_PASSWORD=hulee \
+            postgres:16-alpine \
+            -c max_prepared_transactions=10
+
+          for attempt in {1..30}; do
+            if docker exec "$POSTGRES_CONTAINER" pg_isready -U hulee -d postgres; then
+              exit 0
+            fi
+            sleep 2
+          done
+
+          docker logs "$POSTGRES_CONTAINER"
+          exit 1
+      - name: Verify disposable Inbox V2 install and reset lifecycle
+        run: >-
+          pnpm exec vitest run --no-file-parallelism
+          scripts/db/inbox-v2-install-reset.integration.test.mjs
+      - name: Stop disposable PostgreSQL 16
+        if: always()
+        run: |
+          if docker container inspect "$POSTGRES_CONTAINER" >/dev/null 2>&1; then
+            docker stop "$POSTGRES_CONTAINER"
+          fi

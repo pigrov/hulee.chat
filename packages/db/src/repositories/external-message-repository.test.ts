@@ -11,6 +11,7 @@ import {
   registerExternalClient
 } from "@hulee/core";
 import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -188,19 +189,20 @@ describe("external message repository", () => {
   });
 
   it("updates conversation routing and maps nullable assignment fields", async () => {
+    const executor = new RecordingSqlExecutor([
+      {
+        id: "conversation-1",
+        tenant_id: tenantId,
+        type: "client_direct",
+        client_id: "client-1",
+        current_queue_id: "queue-sales",
+        assigned_employee_id: "employee-sales",
+        assigned_team_id: null,
+        created_at: "2026-06-22T10:00:00.000Z"
+      }
+    ]);
     const repository = createExternalMessageRepository({
-      rawExecutor: new RecordingSqlExecutor([
-        {
-          id: "conversation-1",
-          tenant_id: tenantId,
-          type: "client_direct",
-          client_id: "client-1",
-          current_queue_id: "queue-sales",
-          assigned_employee_id: "employee-sales",
-          assigned_team_id: null,
-          created_at: "2026-06-22T10:00:00.000Z"
-        }
-      ]),
+      rawExecutor: executor,
       persistenceExecutor: new RecordingPersistenceExecutor()
     });
 
@@ -226,6 +228,9 @@ describe("external message repository", () => {
       assignedEmployeeId: "employee-sales",
       assignedTeamId: undefined
     });
+    expect(new PgDialect().sqlToQuery(executor.queries[0]!).sql).toMatch(
+      /returning\s+conversations\.id[\s\S]*conversations\.current_queue_id/u
+    );
   });
 });
 

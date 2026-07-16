@@ -6,6 +6,7 @@ import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import pg from "pg";
 
+import { inspectInboxV2ExpandDdlRisk } from "./inbox-v2-expand-ddl-risk.mjs";
 import {
   InboxV2DatabaseLifecycleContractError,
   assertInboxV2DisposableResetAuthorized,
@@ -22,6 +23,14 @@ import {
 
 const { Client, Pool } = pg;
 const LIFECYCLE_LOCK_KEY = "hulee:inbox-v2:database-lifecycle:v1";
+const MIGRATION_DDL_BUDGET_EVIDENCE_SCHEMA_ID =
+  "core:inbox-v2.migration-ddl-budget-evidence@v1";
+const MAX_MIGRATION_LOCK_TIMEOUT_MS = 60_000;
+const MAX_MIGRATION_STATEMENT_TIMEOUT_MS = 3_600_000;
+export const INBOX_V2_MIGRATION_DDL_BUDGET_DEFAULTS = Object.freeze({
+  lockTimeoutMs: 5_000,
+  statementTimeoutMs: 900_000
+});
 const DRIZZLE_MIGRATIONS_RELATION = "drizzle.__drizzle_migrations";
 const PROTECTED_DATABASES = new Set(["postgres", "template0", "template1"]);
 const ALLOWED_RESET_SCHEMAS = new Set(["public", "drizzle"]);
@@ -303,47 +312,193 @@ const REQUIRED_CURRENT_INDEXES = [
 ];
 
 export class InboxV2DatabaseLifecycleError extends Error {
-  constructor(code, message) {
+  constructor(code, message, { evidence = null } = {}) {
     super(`${code}: ${message}`);
     this.name = "InboxV2DatabaseLifecycleError";
     this.code = code;
+    this.evidence = evidence;
+    this.reportSha256 = evidence?.reportSha256 ?? null;
   }
 }
 
 export async function installInboxV2Database(options) {
   const databaseUrl = requiredDatabaseUrl(options.databaseUrl);
+  const migrationDdlBudget = resolveInboxV2MigrationDdlBudget(options);
   const migrationsFolder = resolve(
     options.migrationsFolder ?? "packages/db/drizzle"
   );
   const migrationBundle = loadMigrationBundle(migrationsFolder);
   const bootstrapDocument = await resolveBootstrap(options.bootstrap);
-  return withLifecycleConnection(databaseUrl, async ({ pool, lockClient }) => {
-    await assertMigrationJournalPrefix(lockClient, migrationsFolder);
-    await assertNoUnsafeInboxV2DefaultPrivileges(lockClient);
-    await assertNoPublicSchemaCreate(lockClient);
-    await migrate(drizzle(pool), { migrationsFolder });
-    const journal = await assertCurrentMigrationJournalAgainstBundle(
+  return withLifecycleConnection(databaseUrl, async ({ lockClient }) => {
+    const lifecycle = await withInboxV2MigrationDdlBudget(
       lockClient,
-      migrationBundle
-    );
-    await assertCurrentInboxV2Schema(lockClient, migrationBundle);
-    const bootstrapResult =
-      bootstrapDocument === null
-        ? null
-        : await bootstrapInboxV2Repository(
-            lockClient,
-            bootstrapDocument.bootstrap
+      migrationDdlBudget,
+      async (migrationClient) => {
+        const journalPrefix = await assertMigrationJournalPrefix(
+          migrationClient,
+          migrationsFolder
+        );
+        await assertNoUnsafeInboxV2DefaultPrivileges(migrationClient);
+        await assertNoPublicSchemaCreate(migrationClient);
+        const expandDdlRisk = await inspectInboxV2ExpandDdlRisk(
+          migrationClient,
+          {
+            migrations: migrationBundle.migrations,
+            appliedCount: journalPrefix.applied.length,
+            allowEphemeralBlockingDdlCompatibilityTest:
+              options.allowEphemeralBlockingDdlCompatibilityTest
+          }
+        );
+        if (
+          expandDdlRisk.overrideRequested &&
+          !expandDdlRisk.overrideAuthorized
+        ) {
+          throw lifecycleError(
+            "inbox_v2.expand_ddl_test_override_forbidden",
+            "The blocking-DDL compatibility override is restricted to strictly named DB-008 ephemeral integration-test databases.",
+            { evidence: expandDdlRisk }
           );
+        }
+        if (
+          expandDdlRisk.requiresOnlineBridge &&
+          !expandDdlRisk.overrideAuthorized
+        ) {
+          throw lifecycleError(
+            "inbox_v2.expand_online_bridge_required",
+            `Pending preserve DDL contains ${expandDdlRisk.violationCount} operation(s) that require an explicitly reviewed online bridge instead of the normal install runner.`,
+            { evidence: expandDdlRisk }
+          );
+        }
+        await migrate(drizzle(migrationClient), { migrationsFolder });
+        const journal = await assertCurrentMigrationJournalAgainstBundle(
+          migrationClient,
+          migrationBundle
+        );
+        await assertCurrentInboxV2Schema(migrationClient, migrationBundle);
+        const bootstrapResult =
+          bootstrapDocument === null
+            ? null
+            : await bootstrapInboxV2Repository(
+                migrationClient,
+                bootstrapDocument.bootstrap
+              );
+        return Object.freeze({
+          journal,
+          expandDdlRisk,
+          bootstrapResult
+        });
+      }
+    );
     return Object.freeze({
       action: "install",
       migrationsFolder,
-      migrationCount: journal.applied.length,
-      migrationContractSha256: journal.expectedDigest,
-      migrationJournalSha256: journal.appliedDigest,
+      migrationCount: lifecycle.result.journal.applied.length,
+      migrationContractSha256: lifecycle.result.journal.expectedDigest,
+      migrationJournalSha256: lifecycle.result.journal.appliedDigest,
+      expandDdlRisk: lifecycle.result.expandDdlRisk,
+      migrationDdlBudget: lifecycle.evidence,
       bootstrapSha256: bootstrapDocument?.digest ?? null,
-      bootstrap: bootstrapResult
+      bootstrap: lifecycle.result.bootstrapResult
     });
   });
+}
+
+export function resolveInboxV2MigrationDdlBudget(options = {}) {
+  const lockTimeoutMs = migrationTimeoutMilliseconds(
+    options.lockTimeoutMs,
+    INBOX_V2_MIGRATION_DDL_BUDGET_DEFAULTS.lockTimeoutMs,
+    MAX_MIGRATION_LOCK_TIMEOUT_MS,
+    "lockTimeoutMs"
+  );
+  const statementTimeoutMs = migrationTimeoutMilliseconds(
+    options.statementTimeoutMs,
+    INBOX_V2_MIGRATION_DDL_BUDGET_DEFAULTS.statementTimeoutMs,
+    MAX_MIGRATION_STATEMENT_TIMEOUT_MS,
+    "statementTimeoutMs"
+  );
+  if (statementTimeoutMs < lockTimeoutMs) {
+    throw lifecycleError(
+      "inbox_v2.migration_ddl_budget_invalid",
+      "statementTimeoutMs must be greater than or equal to lockTimeoutMs."
+    );
+  }
+  return Object.freeze({ lockTimeoutMs, statementTimeoutMs });
+}
+
+export async function withInboxV2MigrationDdlBudget(client, rawBudget, work) {
+  const budget = resolveInboxV2MigrationDdlBudget(rawBudget);
+  if (typeof work !== "function") {
+    throw lifecycleError(
+      "inbox_v2.migration_ddl_budget_invalid",
+      "Migration DDL budget work must be a function."
+    );
+  }
+
+  let appliedSettings;
+  let workFailed = false;
+  let workError;
+  let workResult;
+  try {
+    appliedSettings = exactlyOneRow(
+      await client.query(
+        `select pg_catalog.pg_backend_pid()::int as session_backend_pid,
+                pg_catalog.set_config('lock_timeout', $1, false)
+                  as applied_lock_timeout,
+                pg_catalog.set_config('statement_timeout', $2, false)
+                  as applied_statement_timeout`,
+        [`${budget.lockTimeoutMs}ms`, `${budget.statementTimeoutMs}ms`]
+      ),
+      "migration DDL budget settings"
+    );
+    workResult = await work(client);
+  } catch (error) {
+    workFailed = true;
+    workError = error;
+  }
+
+  const resetErrors = [];
+  for (const setting of ["lock_timeout", "statement_timeout"]) {
+    try {
+      await client.query(`reset ${setting}`);
+    } catch (error) {
+      resetErrors.push(`${setting}: ${errorMessage(error)}`);
+    }
+  }
+  if (resetErrors.length > 0) {
+    const workFailure = workFailed
+      ? ` Migration also failed (${errorMessage(workError)}).`
+      : "";
+    throw lifecycleError(
+      "inbox_v2.migration_ddl_budget_reset_failed",
+      `The migration connection did not reset every session timeout (${resetErrors.join("; ")}).${workFailure}`
+    );
+  }
+  if (workFailed) throw workError;
+
+  const sessionBackendPid = appliedSettings?.session_backend_pid;
+  if (!Number.isSafeInteger(sessionBackendPid) || sessionBackendPid <= 0) {
+    throw lifecycleError(
+      "inbox_v2.migration_ddl_budget_evidence_invalid",
+      "The migration connection returned an invalid PostgreSQL backend PID."
+    );
+  }
+  const evidence = Object.freeze({
+    schemaId: MIGRATION_DDL_BUDGET_EVIDENCE_SCHEMA_ID,
+    sessionScope: "lifecycle_advisory_lock_connection",
+    sessionBackendPid,
+    lockTimeoutMs: budget.lockTimeoutMs,
+    statementTimeoutMs: budget.statementTimeoutMs,
+    appliedLockTimeout: requiredText(
+      appliedSettings.applied_lock_timeout,
+      "applied migration lock timeout"
+    ),
+    appliedStatementTimeout: requiredText(
+      appliedSettings.applied_statement_timeout,
+      "applied migration statement timeout"
+    ),
+    sessionSettingsReset: true
+  });
+  return Object.freeze({ result: workResult, evidence });
 }
 
 export async function resetInboxV2Database(options) {
@@ -2352,14 +2507,16 @@ function assertResetTargetMatchesManifest(target, manifest) {
   }
 }
 
-async function assertNoOtherDatabaseSessions(client, databaseName) {
+export async function assertNoOtherDatabaseSessions(client, databaseName) {
   const row = exactlyOneRow(
     await client.query(
       `select
          (select count(*)::int
             from pg_catalog.pg_stat_activity
            where datname = $1
-             and pid <> pg_backend_pid()) as connection_count,
+             and pid <> pg_backend_pid()
+             and backend_type is distinct from 'autovacuum worker')
+           as connection_count,
          (select count(*)::int
             from pg_catalog.pg_prepared_xacts
            where database = $1) as prepared_transaction_count`,
@@ -2370,7 +2527,7 @@ async function assertNoOtherDatabaseSessions(client, databaseName) {
   if (row.connection_count !== 0) {
     throw lifecycleError(
       "inbox_v2.reset_active_connections",
-      `Reset refuses ${row.connection_count} other database connection(s).`
+      `Reset refuses ${row.connection_count} other database backend(s).`
     );
   }
   if (row.prepared_transaction_count !== 0) {
@@ -2711,6 +2868,21 @@ function requiredDatabaseUrl(value) {
   return value;
 }
 
+function migrationTimeoutMilliseconds(value, fallback, maximum, label) {
+  const milliseconds = value ?? fallback;
+  if (
+    !Number.isSafeInteger(milliseconds) ||
+    milliseconds <= 0 ||
+    milliseconds > maximum
+  ) {
+    throw lifecycleError(
+      "inbox_v2.migration_ddl_budget_invalid",
+      `${label} must be a positive safe integer no greater than ${maximum}.`
+    );
+  }
+  return milliseconds;
+}
+
 function exactlyOneRow(result, label) {
   if (!result || !Array.isArray(result.rows) || result.rows.length !== 1) {
     throw lifecycleError(
@@ -2746,8 +2918,8 @@ function quoteIdentifier(value) {
   return `"${value.replaceAll('"', '""')}"`;
 }
 
-function lifecycleError(code, message) {
-  return new InboxV2DatabaseLifecycleError(code, message);
+function lifecycleError(code, message, options) {
+  return new InboxV2DatabaseLifecycleError(code, message, options);
 }
 
 function errorMessage(error) {

@@ -4,6 +4,12 @@ const options = parseArguments(process.argv.slice(2));
 const result = await installInboxV2Database({
   databaseUrl: process.env.DATABASE_URL,
   migrationsFolder: process.env.HULEE_MIGRATIONS_FOLDER,
+  lockTimeoutMs: optionalEnvironmentNumber(
+    "HULEE_INBOX_V2_MIGRATION_LOCK_TIMEOUT_MS"
+  ),
+  statementTimeoutMs: optionalEnvironmentNumber(
+    "HULEE_INBOX_V2_MIGRATION_STATEMENT_TIMEOUT_MS"
+  ),
   bootstrap: options.bootstrap
 });
 console.log(JSON.stringify(result, null, 2));
@@ -27,4 +33,9 @@ function requiredArgument(arguments_, index, option) {
     throw new Error(`${option} requires a value.`);
   }
   return value;
+}
+
+function optionalEnvironmentNumber(name) {
+  const value = process.env[name];
+  return value === undefined ? undefined : Number(value);
 }

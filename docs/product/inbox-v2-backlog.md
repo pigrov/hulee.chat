@@ -1212,17 +1212,22 @@ PostgreSQL gate passes. `INB2-DB-005` cannot start before both are complete.
     skipped, plus formatting, repository-wide ESLint, TypeScript, DB, i18n,
     encoding, branding and native gates on `2026-07-15`.
 
-- [ ] `INB2-DB-008` Add repeatable clean V2 install and guarded reset migrations.
-  - State: `in_progress`; Priority: `P0`; Started: `2026-07-15`; Owner:
-    `Codex`; Preserve lane activated by completed `INB2-MIG-001`; Depends on:
-    `INB2-DB-007`, `INB2-DB-009`, `INB2-ARCH-009`, `INB2-MIG-001`.
+- [x] `INB2-DB-008` Add repeatable clean V2 install and guarded reset migrations.
+  - State: `done`; Priority: `P0`; Started: `2026-07-15`; Completed:
+    `2026-07-16`; Owner: `Codex`; Preserve lane activated by completed
+    `INB2-MIG-001`; Depends on: `INB2-DB-007`, `INB2-DB-009`,
+    `INB2-ARCH-009`, `INB2-MIG-001`.
   - Acceptance: owns clean V2 DDL/seed/bootstrap and an explicitly guarded
     disposable reset path; it never infers reset authority from environment or
-    row count. A representative V1 snapshot/additive-schema upgrade harness,
-    migrate-before-restart N-1 API/web/worker smoke, RBAC dry-run mapping and
-    rollback harness are mandatory because `INB2-MIG-001` selected `preserve`.
-    Runtime dual materialization belongs to `INB2-MIG-002`; operational data
-    backfill belongs to `INB2-MIG-003` and is outside DB-008.
+    row count. Because `INB2-MIG-001` selected `preserve`, a representative V1
+    compatibility harness must prove default fail-closed online-DDL
+    classification, strict ephemeral semantic compatibility, source-bundled N-1
+    service-module behavior, no-write RBAC mapping and transactional rollback.
+    This repository gate does not authorize deployment expand: the reviewed
+    online bridge and runtime dual materialization belong to `INB2-MIG-002`,
+    operational data backfill to `INB2-MIG-003`, real deploy-image/restore proof
+    to `INB2-MIG-006`, and packaging/restore productization to
+    `INB2-OPS-009/007`.
   - Verification: empty/current DB install, idempotent seed/reset and projection/
     stream bootstrap pass; when preserve is activated, representative V1 upgrade,
     N-1 smoke and rollback evidence become mandatory. `pnpm db:check` and
@@ -1234,20 +1239,35 @@ PostgreSQL gate passes. `INB2-DB-005` cannot start before both are complete.
     `reset_noop` (including an expired exact retry), different-tenant and old
     generation replay refusal, bounded fresh destructive authority, exact
     critical schema/SECURITY DEFINER/ACL audit and synthetic repair are
-    implemented in
-    `scripts/db/inbox-v2-database-lifecycle.mjs`, migration `0037` and
-    `docs/product/inbox-v2-db-008-install-and-reset.md`. Focused contract/schema/
-    PostgreSQL 16 lifecycle suites passed `3` files / `15` tests with
-    `max_prepared_transactions=10`; teardown left `0` `hulee_db008_*` databases.
-    Full `pnpm check` passed `298` files / `2968`
-    tests, with `29` files / `248` integration tests intentionally skipped, plus
-    formatting, ESLint, TypeScript, DB, i18n, encoding, branding and native gates
-    on `2026-07-15`. The checkbox remains open: `INB2-MIG-001` completed on
-    `2026-07-16` with preserve disposition, so a representative V1 snapshot
-    upgrade, migrate-before-restart N-1 API/web/worker smoke, RBAC dry-run and
-    rollback evidence are now mandatory before this task can close. The guarded
-    reset remains available only to a different explicitly disposable personal/
-    ephemeral target.
+    implemented in `scripts/db/inbox-v2-database-lifecycle.mjs`, migration
+    `0037` and `docs/product/inbox-v2-db-008-install-and-reset.md`. The normal
+    preserve runner now produces hashed PII-safe evidence and refuses every
+    classified pre-existing-relation hazard before DDL, including generated
+    rewrites, blocking indexes/immediate constraints, trigger/security changes
+    and unbounded Tenant/Client/Employee source backfills. A library-only,
+    strictly named integration lane then proves unchanged V1
+    baseline facts, exactly `14` deterministic Client/Employee foundation rows,
+    zero operational V2 rows and no-write RBAC mapping. Rule changes, nameless
+    indexes and global blocking maintenance also fail closed, including SQL with
+    comments between keywords. Unknown SQL uses bounded Evidence V2: one
+    inventory-scoped operation per statement with count and domain-separated
+    inventory digest, never a statement-by-relation expansion. One pinned
+    migration-0034 source-bundled N-1 process remains operational across the
+    immediate failed-migration probe and strict ephemeral 0035-0037
+    compatibility expand. The contract binds revision `3b9d703`, exact source/
+    build/input/migration digests and the reviewed routing patch; full-history CI
+    regenerates the deterministic bundle and rejects drift. The sequential
+    PostgreSQL 16 preserve gate passed `3` files / `17` tests; lifecycle/DDL/
+    RBAC/install/routing focused suites passed `5` files / `72` tests;
+    `pnpm db:check` passed. The disposable PostgreSQL 16 reset suite passed `1`
+    file / `1` exhaustive scenario with `max_prepared_transactions=10`; both
+    PostgreSQL lanes left `0` strictly named child databases. Full `pnpm check`
+    passed `302` files / `3024` tests, with `30` files / `251` integration tests
+    intentionally skipped, plus formatting, ESLint, TypeScript, DB, i18n,
+    encoding, branding and native gates on `2026-07-16`. Guarded reset remains
+    available only to a separately reviewed, explicitly disposable personal/
+    ephemeral target. Production preserve expand remains fail-closed until
+    `INB2-MIG-002`; backfill remains `INB2-MIG-003`.
 
 - [ ] `INB2-EPIC-2-GATE` Verify Epic 2 exit gate.
   - State: `planned`; Priority: `P0`; Depends on: all Epic 2 tasks.
@@ -2494,12 +2514,19 @@ the full ADR 0014 preserve path are active.
     `INB2-EPIC-5-GATE`, `INB2-MIG-001`.
   - Activation reason: the known shared SaaS deployment and current local
     upgrade fixture must be preserved; provider I/O cannot be duplicated.
-  - Acceptance: existing v1 contracts remain stable while current inbound flows
-    materialize V2 through one canonical command; a minimum audited
-    materialization phase/kill switch exists here, provider I/O has one owner,
-    and outbound prefers explicit V2 binding while measuring legacy fallback.
-  - Verification: current Public API/Telegram Bot/inbox tests still pass and V2
-    rows/events are correct. Evidence: -
+  - Acceptance: first supplies a reviewed, resumable online schema bridge for
+    the historical `0029`/`0036` boundaries (concurrent indexes, staged
+    constraints, bounded backfills and explicit generated-column rewrite or
+    maintenance disposition) and proves exact target schema/journal equivalence
+    before enabling materialization. Existing v1 contracts then remain stable
+    while current inbound flows materialize V2 through one canonical command; a
+    minimum audited materialization phase/kill switch exists here, provider I/O
+    has one owner, and outbound prefers explicit V2 binding while measuring
+    legacy fallback.
+  - Verification: the normal install preflight accepts the reviewed bridge
+    result without a test bypass; representative populated V1, current Public
+    API/Telegram Bot/inbox tests still pass and V2 rows/events are correct.
+    Evidence: -
 
 - [ ] `INB2-MIG-003` Implement repeatable backfill and diagnostic report.
   - State: `planned`; Priority: `P0`; Reactivated: `2026-07-16` by the
@@ -2811,3 +2838,4 @@ the task state, checkbox and evidence above.
 | 2026-07-15 | `INB2-DB-009`      | Governance/privacy DB; PG 22/22; migration 8/8; full 271/2718         | working tree | Codex + three reviewers         |
 | 2026-07-15 | `INB2-DB-007`      | Repository foundation; PG 4/4; migration 4/4; full 296/2954           | working tree | Codex + three reviewers         |
 | 2026-07-16 | `INB2-MIG-001`     | C01-C24/D01-D31 inventory; preserve; full 298/2968 and all gates      | working tree | Codex + independent reviews     |
+| 2026-07-16 | `INB2-DB-008`      | Preserve 3/17; reset 1/1; focused 5/72; full 302/3024 + gates         | working tree | Codex + independent reviews     |
