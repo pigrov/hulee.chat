@@ -389,6 +389,28 @@ const modelStepImages = [
     darkSrc: "/marketing/model-storage-transparent-dark.png"
   }
 ] as const satisfies readonly ThemeImageAsset[];
+const audienceImages = [
+  {
+    src: "/marketing/audience-sales-light.png",
+    darkSrc: "/marketing/audience-sales-dark.png"
+  },
+  {
+    src: "/marketing/audience-support-light.png",
+    darkSrc: "/marketing/audience-support-dark.png"
+  },
+  {
+    src: "/marketing/audience-ecommerce-light.png",
+    darkSrc: "/marketing/audience-ecommerce-dark.png"
+  },
+  {
+    src: "/marketing/audience-branches-light.png",
+    darkSrc: "/marketing/audience-branches-dark.png"
+  },
+  {
+    src: "/marketing/audience-enterprise-light.png",
+    darkSrc: "/marketing/audience-enterprise-dark.png"
+  }
+] as const satisfies readonly ThemeImageAsset[];
 const chatBaseUrl = "https://chat.hulee.ru";
 
 const iconMap: Record<IconName, LucideIcon> = {
@@ -980,6 +1002,7 @@ function AudienceSection({
       <div className="section__inner audience-layout">
         {content.items.map((item, index) => {
           const Icon = iconMap[item.icon];
+          const image = audienceImages[index];
 
           return (
             <article
@@ -994,7 +1017,24 @@ function AudienceSection({
                 {String(index + 1).padStart(2, "0")}
               </span>
               <div className="audience-card__visual" aria-hidden="true">
-                <Icon />
+                {image ? (
+                  <ThemeImage
+                    className="audience-card__image"
+                    src={image.src}
+                    darkSrc={image.darkSrc}
+                    alt=""
+                    width={1536}
+                    height={1024}
+                    sizes={
+                      index === 0
+                        ? "(max-width: 980px) 90vw, 36vw"
+                        : "(max-width: 980px) 70vw, 22vw"
+                    }
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <Icon />
+                )}
               </div>
               <div className="audience-card__content">
                 <h3>{copy(item.title)}</h3>

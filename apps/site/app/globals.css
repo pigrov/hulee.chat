@@ -919,17 +919,23 @@ svg {
   aspect-ratio: 3 / 2;
   place-items: center;
   border-radius: 24px;
-  background:
-    radial-gradient(circle at 50% 45%, rgb(129 140 248 / 22%), transparent 54%),
-    linear-gradient(135deg, rgb(240 241 255 / 88%), rgb(255 255 255 / 34%));
   color: var(--site-primary);
-  filter: drop-shadow(0 18px 28px rgb(79 70 229 / 18%));
+  pointer-events: none;
 }
 
 :root[data-theme="dark"] .audience-card__visual {
-  background:
-    radial-gradient(circle at 50% 45%, rgb(129 140 248 / 26%), transparent 56%),
-    linear-gradient(135deg, rgb(32 39 71 / 84%), rgb(17 22 43 / 28%));
+  color: var(--site-primary);
+}
+
+.audience-card__image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+  filter: drop-shadow(0 18px 28px rgb(79 70 229 / 18%));
+}
+
+:root[data-theme="dark"] .audience-card__image {
   filter: drop-shadow(0 18px 30px rgb(129 140 248 / 18%));
 }
 
