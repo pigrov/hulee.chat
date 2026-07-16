@@ -1459,9 +1459,10 @@ participant set.
     are in
     `docs/product/inbox-v2-src-011-authorized-source-onboarding.md`.
 
-- [ ] `INB2-SRC-002` Add atomic raw-event claim, lease and stale reclaim.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-SRC-001`,
+- [x] `INB2-SRC-002` Add atomic raw-event claim, lease and stale reclaim.
+  - State: `done`; Priority: `P0`; Depends on: `INB2-SRC-001`,
     `INB2-SRC-010`, `INB2-CON-010`.
+  - Started: `2026-07-16`; Completed: `2026-07-16`; Owner: `Codex`.
   - Acceptance: before the first durable raw-event write, an adapter-declared
     sanitizer strips authorization/cookie/password/token/session material,
     persists only allowlisted diagnostic/signature headers and classified
@@ -1477,7 +1478,20 @@ participant set.
     credential material. Equal keys across connections/accounts and equal scope
     with a different safe digest are rejected and quarantined; exact retries
     return the original outcome. Multi-worker tests cover winner, retry and crash
-    recovery. Evidence: -
+    recovery. Evidence: completed on `2026-07-16` with a process-authentic,
+    adapter-owned sanitizer boundary, classified immutable raw envelopes,
+    independently purgeable restricted evidence, server-owned identity digests
+    and idempotency keys, collision quarantine, fenced PostgreSQL claim/renew/
+    release and expired-lease reclaim. The clean PostgreSQL gate applied `43`
+    migrations with contract
+    `sha256:b9b743b8b486cdfcabcf6a26fe6cdba8d665edef063c9ef80f7364184861c804`
+    and passed `25/25` files / `232/232` tests. Preserve, pinned N-1 and RBAC
+    passed `3/3` files / `17/17` tests. Full `pnpm check` passed with `316`
+    test files / `3229` executed tests; `34` opt-in files / `275` tests were
+    skipped by the default process. Independent contract/schema, repository and
+    security reviews found no remaining P0/P1 defect. Detailed design and
+    verification evidence are in
+    `docs/product/inbox-v2-src-002-raw-ingress.md`.
 
 - [ ] `INB2-SRC-003` Normalize message, membership and lifecycle events for V2.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-SRC-001`,
@@ -3041,3 +3055,4 @@ the task state, checkbox and evidence above.
 | 2026-07-16 | `INB2-EPIC-2-GATE` | Fresh PG 23/219; preserve/reset/lifecycle; full 304/3041 and all gates     | working tree | Codex + independent reviews       |
 | 2026-07-16 | `INB2-SRC-001`     | Map; focused 12/71; independent 8/45, 12/89, 3/74; full 304/3041           | working tree | Codex + three independent reviews |
 | 2026-07-16 | `INB2-SRC-010`     | Source registry; focused 7/191; live PG 6/6; N-1 2/2; full gate            | working tree | Codex                             |
+| 2026-07-16 | `INB2-SRC-002`     | Raw ingress/lease; PG 25/232; preserve 3/17; full 316/3229 + all gates     | working tree | Codex + three independent reviews |

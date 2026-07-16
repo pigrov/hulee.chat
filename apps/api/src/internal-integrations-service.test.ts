@@ -63,9 +63,7 @@ import type {
   InboxV2AuthorizedCommandMutationContext,
   InboxV2AuthorizedCommandMutationResult,
   NormalizedInboundEventRecord,
-  RawInboundEventRecord,
   RecordNormalizedInboundEventInput,
-  RecordRawInboundEventInput,
   SourceAccountRecord,
   SourceConnectionRecord,
   SourceIntegrationRepository,
@@ -169,6 +167,7 @@ function structuralFakeSourceAdapterRegistry(): SourceAdapterRegistry {
     get: vi.fn(() => null),
     getRegistration: vi.fn(() => null),
     getIngressHandler: vi.fn(() => null),
+    getRawIngressSanitizer: vi.fn(() => null),
     listSourceNames: vi.fn(() => [])
   };
 }
@@ -3255,12 +3254,6 @@ class InMemorySourceIntegrationRepository implements SourceIntegrationRepository
   async upsertSourceAccount(
     _input: UpsertSourceAccountInput
   ): Promise<SourceAccountRecord> {
-    throw new Error("Not implemented in this test fake.");
-  }
-
-  async recordRawInboundEvent(
-    _input: RecordRawInboundEventInput
-  ): Promise<RawInboundEventRecord> {
     throw new Error("Not implemented in this test fake.");
   }
 

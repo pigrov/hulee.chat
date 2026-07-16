@@ -1,6 +1,8 @@
 import {
   calculateInboxV2BytesSha256,
   defineInboxV2DataLifecycleRegistry,
+  defineInboxV2RawIngressSanitizer,
+  defineInboxV2RawIngressSanitizerProfile,
   defineInboxV2SourceAdapterDeclaration,
   defineInboxV2SourceConnectionRegistryState,
   defineInboxV2SourceRegistryLifecycleBinding,
@@ -35,6 +37,97 @@ const adapterContract = {
   loadedAt: "2026-01-01T00:00:00.000Z"
 } as const;
 
+function createTestMegaPbxRawIngressSanitizer() {
+  const profile = defineInboxV2RawIngressSanitizerProfile({
+    schemaId: "core:inbox-v2.raw-ingress-sanitizer-profile",
+    schemaVersion: "v1",
+    payload: {
+      adapterContract,
+      handlerId: "module:megapbx:sanitize-webhook-v1",
+      handlerVersion: "v1",
+      declarationRevision: "1",
+      restrictedPayloadSchema: {
+        schemaId: "module:megapbx:raw-webhook",
+        schemaVersion: "v1"
+      },
+      persistedHeaderNames: ["x-request-id"],
+      payloadClassification: {
+        dataClassId: "core:raw_provider_payload",
+        purposeIds: ["core:source_replay_and_diagnostics"]
+      },
+      allowedHeadersClassification: {
+        dataClassId: "core:raw_provider_allowed_headers",
+        purposeIds: ["core:source_replay_and_diagnostics"]
+      }
+    }
+  });
+  return defineInboxV2RawIngressSanitizer({
+    profile,
+    handler({ body, headers }) {
+      let value: unknown;
+      try {
+        value = JSON.parse(
+          new TextDecoder("utf-8", { fatal: true }).decode(body)
+        );
+      } catch {
+        return {
+          outcome: "quarantined" as const,
+          reasonCode: "source.payload_shape_unknown" as const
+        };
+      }
+      if (
+        typeof value !== "object" ||
+        value === null ||
+        Array.isArray(value) ||
+        Object.keys(value).sort().join(",") !== "eventId,message" ||
+        typeof (value as Record<string, unknown>).eventId !== "string" ||
+        typeof (value as Record<string, unknown>).message !== "string"
+      ) {
+        return {
+          outcome: "quarantined" as const,
+          reasonCode: "source.payload_shape_unknown" as const
+        };
+      }
+      return {
+        outcome: "accepted" as const,
+        restrictedPayload: {
+          eventId: (value as Record<string, unknown>).eventId,
+          message: (value as Record<string, unknown>).message
+        },
+        validatedAllowedHeaders: validatedRequestIdHeader(headers)
+      };
+    },
+    parseRestrictedPayload: parseSyntheticRestrictedPayload
+  });
+}
+
+function parseSyntheticRestrictedPayload(value: unknown) {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.keys(value).sort().join(",") !== "eventId,message" ||
+    typeof (value as Record<string, unknown>).eventId !== "string" ||
+    typeof (value as Record<string, unknown>).message !== "string"
+  ) {
+    throw new TypeError("Synthetic raw payload does not match its schema.");
+  }
+  return {
+    eventId: (value as Record<string, unknown>).eventId,
+    message: (value as Record<string, unknown>).message
+  };
+}
+
+function validatedRequestIdHeader(
+  headers: Readonly<Record<string, readonly string[]>>
+) {
+  const requestId = headers["x-request-id"]?.[0];
+  return requestId !== undefined &&
+    /^request-[A-Za-z0-9._:-]+$/u.test(requestId)
+    ? [{ name: "x-request-id" as const, values: [requestId] }]
+    : [];
+}
+
 export type TestMegaPbxRegistryFixture = Readonly<{
   registry: SourceAdapterRegistry;
   registration: SourceAdapterRegistration;
@@ -61,6 +154,7 @@ export function createTestMegaPbxSourceAdapterRegistry(input?: {
   const credentialProfile =
     input?.credentialProfile ?? "standard_webhook_secret";
   const lifecycleBinding = createLifecycleBinding();
+  const rawIngressSanitizer = createTestMegaPbxRawIngressSanitizer();
   const onboardingHandler: SourceAdapterOnboardingHandler = {
     handlerId: "module:megapbx:onboarding-v1",
     async prepare(prepareInput) {
@@ -254,7 +348,8 @@ export function createTestMegaPbxSourceAdapterRegistry(input?: {
           },
           ingress: {
             mode: "webhook",
-            handlerId: "module:megapbx:ingress-v1"
+            handlerId: "module:megapbx:ingress-v1",
+            sanitizerProfile: rawIngressSanitizer.profile
           }
         }
       }
@@ -266,7 +361,8 @@ export function createTestMegaPbxSourceAdapterRegistry(input?: {
       async dispatch() {
         return { accepted: true, diagnosticCodeId: null };
       }
-    }
+    },
+    rawIngressSanitizer
   };
 
   return {

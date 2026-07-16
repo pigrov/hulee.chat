@@ -9,6 +9,7 @@ import {
   inboxV2SchemaVersionTokenSchema
 } from "./schema-version";
 import { inboxV2AdapterContractSnapshotSchema } from "./source-routing-primitives";
+import { inboxV2RawIngressSanitizerProfileSchema } from "./source-raw-ingress";
 import { inboxV2SourceRegistryNameSchema } from "./source-registry-state";
 import {
   inboxV2SourceRegistryLifecycleRegistryReferenceSchema,
@@ -105,7 +106,8 @@ const sourceAdapterDeclarationPayloadSchema = z
       z
         .object({
           mode: z.enum(["webhook", "polling", "stream"]),
-          handlerId: inboxV2NamespacedIdSchema
+          handlerId: inboxV2NamespacedIdSchema,
+          sanitizerProfile: inboxV2RawIngressSanitizerProfileSchema
         })
         .strict()
     ])
@@ -199,6 +201,20 @@ const sourceAdapterDeclarationPayloadSchema = z
         path: ["requiredCopySlots"],
         message:
           "Ingress-capable adapters require source_ingress_route lineage."
+      });
+    }
+    if (
+      declaration.ingress.mode !== "not_supported" &&
+      !hasExactAdapterContract(
+        declaration.ingress.sanitizerProfile.payload.adapterContract,
+        declaration.adapterContract
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["ingress", "sanitizerProfile", "payload", "adapterContract"],
+        message:
+          "Raw-ingress sanitizer profile must pin the declaration adapter contract."
       });
     }
   });
@@ -301,4 +317,18 @@ function cloneAndFreeze<TValue>(value: TValue): TValue {
     clone[key] = cloneAndFreeze(item);
   }
   return Object.freeze(clone) as TValue;
+}
+
+function hasExactAdapterContract(
+  left: z.infer<typeof inboxV2AdapterContractSnapshotSchema>,
+  right: z.infer<typeof inboxV2AdapterContractSnapshotSchema>
+): boolean {
+  return (
+    left.contractId === right.contractId &&
+    left.contractVersion === right.contractVersion &&
+    left.declarationRevision === right.declarationRevision &&
+    left.surfaceId === right.surfaceId &&
+    left.loadedByTrustedServiceId === right.loadedByTrustedServiceId &&
+    left.loadedAt === right.loadedAt
+  );
 }

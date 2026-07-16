@@ -7,9 +7,7 @@ import type {
   FindSourceConnectionInput,
   ListTenantSourceConnectionsInput,
   NormalizedInboundEventRecord,
-  RawInboundEventRecord,
   RecordNormalizedInboundEventInput,
-  RecordRawInboundEventInput,
   SourceAccountRecord,
   SourceConnectionRecord,
   SourceIntegrationRepository,
@@ -99,12 +97,6 @@ export class InMemorySourceIntegrationRepository implements SourceIntegrationRep
     this.accounts.set(record.id, record);
 
     return record;
-  }
-
-  async recordRawInboundEvent(
-    _input: RecordRawInboundEventInput
-  ): Promise<RawInboundEventRecord> {
-    throw new Error("recordRawInboundEvent is not used by worker tests.");
   }
 
   async recordNormalizedInboundEvent(

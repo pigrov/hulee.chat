@@ -1,6 +1,8 @@
 import {
   calculateInboxV2BytesSha256,
   defineInboxV2DataLifecycleRegistry,
+  defineInboxV2RawIngressSanitizer,
+  defineInboxV2RawIngressSanitizerProfile,
   defineInboxV2SourceAdapterDeclaration,
   defineInboxV2SourceConnectionRegistryState,
   defineInboxV2SourceRegistryLifecycleBinding,
@@ -9,6 +11,7 @@ import {
   inboxV2SourceRegistryRelatedAuthorityReferenceSchema,
   inboxV2SourceRegistrySecretReferenceSchema,
   inboxV2TenantIdSchema,
+  sanitizeInboxV2RawIngress,
   type InboxV2SourceRegistryLifecycleBinding
 } from "@hulee/contracts";
 import { describe, expect, it } from "vitest";
@@ -45,6 +48,102 @@ const adapterContract = {
   loadedByTrustedServiceId: "core:source-runtime",
   loadedAt: t0
 } as const;
+
+function rawIngressSanitizerProfile(
+  overrides: Readonly<{ handlerVersion?: string }> = {}
+) {
+  return defineInboxV2RawIngressSanitizerProfile({
+    schemaId: "core:inbox-v2.raw-ingress-sanitizer-profile",
+    schemaVersion: "v1",
+    payload: {
+      adapterContract,
+      handlerId: "module:synthetic:sanitize-webhook",
+      handlerVersion: overrides.handlerVersion ?? "v1",
+      declarationRevision: "1",
+      restrictedPayloadSchema: {
+        schemaId: "module:synthetic:raw-webhook",
+        schemaVersion: "v1"
+      },
+      persistedHeaderNames: ["x-request-id"],
+      payloadClassification: {
+        dataClassId: "core:raw_provider_payload",
+        purposeIds: ["core:source_replay_and_diagnostics"]
+      },
+      allowedHeadersClassification: {
+        dataClassId: "core:raw_provider_allowed_headers",
+        purposeIds: ["core:source_replay_and_diagnostics"]
+      }
+    }
+  });
+}
+
+function syntheticRawIngressSanitizer(profile = rawIngressSanitizerProfile()) {
+  return defineInboxV2RawIngressSanitizer({
+    profile,
+    handler({ body, headers }) {
+      let value: unknown;
+      try {
+        value = JSON.parse(
+          new TextDecoder("utf-8", { fatal: true }).decode(body)
+        );
+      } catch {
+        return {
+          outcome: "quarantined" as const,
+          reasonCode: "source.payload_shape_unknown" as const
+        };
+      }
+      if (
+        typeof value !== "object" ||
+        value === null ||
+        Array.isArray(value) ||
+        Object.keys(value).sort().join(",") !== "eventId,message" ||
+        typeof (value as Record<string, unknown>).eventId !== "string" ||
+        typeof (value as Record<string, unknown>).message !== "string"
+      ) {
+        return {
+          outcome: "quarantined" as const,
+          reasonCode: "source.payload_shape_unknown" as const
+        };
+      }
+      return {
+        outcome: "accepted" as const,
+        restrictedPayload: {
+          eventId: (value as Record<string, unknown>).eventId,
+          message: (value as Record<string, unknown>).message
+        },
+        validatedAllowedHeaders: validatedRequestIdHeader(headers)
+      };
+    },
+    parseRestrictedPayload: parseSyntheticRestrictedPayload
+  });
+}
+
+function parseSyntheticRestrictedPayload(value: unknown) {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.keys(value).sort().join(",") !== "eventId,message" ||
+    typeof (value as Record<string, unknown>).eventId !== "string" ||
+    typeof (value as Record<string, unknown>).message !== "string"
+  ) {
+    throw new TypeError("Synthetic raw payload does not match its schema.");
+  }
+  return {
+    eventId: (value as Record<string, unknown>).eventId,
+    message: (value as Record<string, unknown>).message
+  };
+}
+
+function validatedRequestIdHeader(
+  headers: Readonly<Record<string, readonly string[]>>
+) {
+  const requestId = headers["x-request-id"]?.[0];
+  return requestId !== undefined &&
+    /^request-[A-Za-z0-9._:-]+$/u.test(requestId)
+    ? [{ name: "x-request-id" as const, values: [requestId] }]
+    : [];
+}
 
 type MutableOnboardingHandler = {
   handlerId: string;
@@ -402,6 +501,7 @@ function registrationFixture(
   const routeMaterial = new Uint8Array(
     input.routeMaterial ?? new Uint8Array(32).fill(0x45)
   );
+  const rawIngressSanitizer = syntheticRawIngressSanitizer();
   const connectionHead = defineInboxV2SourceConnectionRegistryState({
     lifecycleBinding: binding,
     value: {
@@ -518,7 +618,8 @@ function registrationFixture(
         },
         ingress: {
           mode: "webhook",
-          handlerId: "module:synthetic:ingress"
+          handlerId: "module:synthetic:ingress",
+          sanitizerProfile: rawIngressSanitizer.profile
         }
       }
     }
@@ -580,7 +681,8 @@ function registrationFixture(
     declaration,
     lifecycleBinding: binding,
     onboardingHandler,
-    ingressHandler
+    ingressHandler,
+    rawIngressSanitizer
   };
   const prepareInput: SourceAdapterOnboardingPrepareInput = {
     tenantId: connectionHead.payload.tenantId,
@@ -1117,6 +1219,140 @@ describe("SourceAdapterRegistry", () => {
     expect(
       Object.isFrozen(ingressRegistry.getIngressHandler("synthetic"))
     ).toBe(true);
+  });
+
+  it("pins and exposes the authentic sanitizer capability", async () => {
+    const fixture = registrationFixture();
+    const registry = createSourceAdapterRegistry({
+      registrations: [fixture.registration]
+    });
+    const sanitizer = registry.getRawIngressSanitizer("synthetic");
+    expect(sanitizer).toBe(fixture.registration.rawIngressSanitizer);
+    expect(registry.getRawIngressSanitizer("unknown")).toBeNull();
+
+    const body = new TextEncoder().encode(
+      JSON.stringify({ eventId: "event-1", message: "hello" })
+    );
+    const headers = {
+      Authorization: "Bearer transient-secret",
+      Cookie: "sid=transient-secret",
+      "X-Request-Id": "request-1"
+    };
+    const result = await sanitizeInboxV2RawIngress({
+      sanitizer: sanitizer!,
+      request: {
+        tenantId,
+        sourceConnectionId: sourceConnection.id,
+        sourceAccountId: null,
+        transport: "webhook",
+        eventIdentity: { kind: "provider_event_id", value: "event-1" },
+        providerOccurredAt: t0,
+        receivedAt: t0,
+        sanitizedAt: t0,
+        body,
+        headers
+      }
+    });
+
+    expect(result.outcome).toBe("accepted");
+    if (result.candidate.disposition.outcome !== "accepted") {
+      throw new Error("Expected accepted sanitizer fixture result.");
+    }
+    expect(result.candidate.disposition.restrictedPayload.value).toEqual({
+      eventId: "event-1",
+      message: "hello"
+    });
+    expect(result.candidate.disposition.allowedHeaders.values).toEqual([
+      { name: "x-request-id", values: ["request-1"] }
+    ]);
+    expect(Array.from(body)).toEqual(new Array(body.byteLength).fill(0));
+    expect(headers).toEqual({});
+  });
+
+  it("rejects missing, forged and mismatched sanitizer capabilities", () => {
+    const fixture = registrationFixture();
+    const mismatched = syntheticRawIngressSanitizer(
+      rawIngressSanitizerProfile({ handlerVersion: "v2" })
+    );
+    const cases: readonly Readonly<{
+      sanitizer: SourceAdapterRegistration["rawIngressSanitizer"];
+      code: SourceAdapterRegistryError["code"];
+    }>[] = [
+      { sanitizer: null, code: "source_adapter.sanitizer_missing" },
+      {
+        sanitizer: {
+          profile:
+            fixture.registration.declaration.payload.ingress.mode ===
+            "not_supported"
+              ? mismatched.profile
+              : fixture.registration.declaration.payload.ingress
+                  .sanitizerProfile
+        } as unknown as SourceAdapterRegistration["rawIngressSanitizer"],
+        code: "source_adapter.sanitizer_mismatch"
+      },
+      {
+        sanitizer: mismatched,
+        code: "source_adapter.sanitizer_mismatch"
+      }
+    ];
+
+    for (const testCase of cases) {
+      expect(() =>
+        createSourceAdapterRegistry({
+          registrations: [
+            {
+              ...fixture.registration,
+              rawIngressSanitizer: testCase.sanitizer
+            }
+          ]
+        })
+      ).toThrowError(
+        expect.objectContaining({
+          code: testCase.code
+        })
+      );
+    }
+  });
+
+  it("does not accept a sanitizer capability for unsupported ingress", () => {
+    const fixture = registrationFixture();
+    const unsupportedDeclaration = defineInboxV2SourceAdapterDeclaration({
+      lifecycleBinding: fixture.registration.lifecycleBinding,
+      value: {
+        schemaId: "core:inbox-v2.source-adapter-declaration",
+        schemaVersion: "v1",
+        payload: {
+          ...fixture.registration.declaration.payload,
+          ingress: { mode: "not_supported" }
+        }
+      }
+    });
+    const unsupported: SourceAdapterRegistration = {
+      ...fixture.registration,
+      declaration: unsupportedDeclaration,
+      ingressHandler: null,
+      rawIngressSanitizer: null
+    };
+
+    expect(
+      createSourceAdapterRegistry({
+        registrations: [unsupported]
+      }).getRawIngressSanitizer("synthetic")
+    ).toBeNull();
+    expect(() =>
+      createSourceAdapterRegistry({
+        registrations: [
+          {
+            ...unsupported,
+            rawIngressSanitizer: fixture.registration.rawIngressSanitizer
+          }
+        ]
+      })
+    ).toThrowError(
+      expect.objectContaining({
+        code: "source_adapter.sanitizer_mismatch"
+      })
+    );
   });
 
   it("validates ingress authority and zeroes handler-owned body clones", async () => {

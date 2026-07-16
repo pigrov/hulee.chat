@@ -52,6 +52,16 @@ export const initialTables = [
   { name: "source_connections", scope: "tenant", requiresTenantId: true },
   { name: "source_accounts", scope: "tenant", requiresTenantId: true },
   { name: "raw_inbound_events", scope: "tenant", requiresTenantId: true },
+  // Inbox V2 raw ingress keeps a safe envelope/work head beside the legacy
+  // compatibility anchor; restricted evidence remains independently purgeable.
+  // prettier-ignore
+  { name: "inbox_v2_source_raw_envelopes", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_raw_evidence", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_raw_quarantines", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_raw_work_items", scope: "tenant", requiresTenantId: true },
   {
     name: "normalized_inbound_events",
     scope: "tenant",

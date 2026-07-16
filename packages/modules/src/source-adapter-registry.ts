@@ -3,6 +3,7 @@ import type {
   InboxV2SourceAdapterDeclaration,
   InboxV2SourceConnectionReference,
   InboxV2SourceConnectionRegistryState,
+  InboxV2RawIngressSanitizer,
   InboxV2SourceRegistryArtifactReference,
   InboxV2SourceRegistryLifecycleBinding,
   InboxV2SourceRegistryRelatedAuthorityReference,
@@ -13,6 +14,7 @@ import type {
 } from "@hulee/contracts";
 import {
   calculateInboxV2BytesSha256,
+  calculateInboxV2CanonicalSha256,
   INBOX_V2_CATALOG_REGISTRATION_SCHEMA_ID,
   INBOX_V2_INITIAL_SCHEMA_VERSION,
   INBOX_V2_SOURCE_ADAPTER_DECLARATION_SCHEMA_ID,
@@ -24,6 +26,7 @@ import {
   isInboxV2SourceAdapterDeclaration,
   isInboxV2SourceAdapterDeclarationLifecycleBinding,
   isInboxV2SourceConnectionRegistryState,
+  isInboxV2RawIngressSanitizer,
   isInboxV2SourceRegistryLifecycleBinding,
   isInboxV2SourceRegistryTransition
 } from "@hulee/contracts";
@@ -141,12 +144,14 @@ export type SourceAdapterRegistration = Readonly<{
   lifecycleBinding: InboxV2SourceRegistryLifecycleBinding;
   onboardingHandler: SourceAdapterOnboardingHandler | null;
   ingressHandler: SourceAdapterIngressHandler | null;
+  rawIngressSanitizer: InboxV2RawIngressSanitizer | null;
 }>;
 
 export type SourceAdapterRegistry = Readonly<{
   get(sourceName: string): SourceAdapterOnboardingHandler | null;
   getRegistration(sourceName: string): SourceAdapterRegistration | null;
   getIngressHandler(sourceName: string): SourceAdapterIngressHandler | null;
+  getRawIngressSanitizer(sourceName: string): InboxV2RawIngressSanitizer | null;
   listSourceNames(): readonly string[];
 }>;
 
@@ -156,6 +161,8 @@ export class SourceAdapterRegistryError extends Error {
     | "source_adapter.duplicate_registration"
     | "source_adapter.handler_missing"
     | "source_adapter.handler_mismatch"
+    | "source_adapter.sanitizer_missing"
+    | "source_adapter.sanitizer_mismatch"
     | "source_adapter.invalid_prepared_authority"
     | "source_adapter.invalid_ingress_input"
     | "source_adapter.invalid_ingress_result";
@@ -208,6 +215,9 @@ export function createSourceAdapterRegistry(input: {
     getIngressHandler(sourceName: string) {
       return registrations.get(sourceName)?.ingressHandler ?? null;
     },
+    getRawIngressSanitizer(sourceName: string) {
+      return registrations.get(sourceName)?.rawIngressSanitizer ?? null;
+    },
     listSourceNames() {
       return Object.freeze([...registrations.keys()].sort());
     }
@@ -223,6 +233,7 @@ function validateAndWrapRegistration(
   const lifecycleBindingAuthority = registration.lifecycleBinding;
   const onboardingHandlerInput = registration.onboardingHandler;
   const ingressHandlerInput = registration.ingressHandler;
+  const rawIngressSanitizerInput = registration.rawIngressSanitizer;
   if (
     !isInboxV2SourceAdapterDeclaration(declarationAuthority) ||
     !isInboxV2SourceRegistryLifecycleBinding(lifecycleBindingAuthority) ||
@@ -261,6 +272,10 @@ function validateAndWrapRegistration(
     ingressHandlerInput,
     "ingress"
   );
+  const rawIngressSanitizer = validateRawIngressSanitizer(
+    declaration,
+    rawIngressSanitizerInput
+  );
   const onboardingPrepare =
     onboardingHandler === null
       ? null
@@ -277,6 +292,7 @@ function validateAndWrapRegistration(
   return Object.freeze({
     declaration: declarationAuthority,
     lifecycleBinding: lifecycleBindingAuthority,
+    rawIngressSanitizer,
     onboardingHandler:
       onboardingHandler === null
         ? null
@@ -335,6 +351,47 @@ function validateAndWrapRegistration(
             }
           })
   });
+}
+
+function validateRawIngressSanitizer(
+  declaration: InboxV2SourceAdapterDeclaration["payload"],
+  sanitizer: InboxV2RawIngressSanitizer | null
+): InboxV2RawIngressSanitizer | null {
+  if (declaration.ingress.mode === "not_supported") {
+    if (sanitizer !== null) {
+      throw new SourceAdapterRegistryError(
+        "source_adapter.sanitizer_mismatch",
+        "Adapter cannot register a raw-ingress sanitizer for not_supported mode."
+      );
+    }
+    return null;
+  }
+  if (sanitizer === null) {
+    throw new SourceAdapterRegistryError(
+      "source_adapter.sanitizer_missing",
+      `Adapter declaration requires raw-ingress sanitizer ${declaration.ingress.sanitizerProfile.payload.handlerId}.`
+    );
+  }
+  if (!isInboxV2RawIngressSanitizer(sanitizer)) {
+    throw new SourceAdapterRegistryError(
+      "source_adapter.sanitizer_mismatch",
+      "Registered raw-ingress sanitizer is not an authentic adapter capability."
+    );
+  }
+  const declaredProfile = declaration.ingress.sanitizerProfile;
+  if (
+    calculateInboxV2CanonicalSha256(sanitizer.profile) !==
+      calculateInboxV2CanonicalSha256(declaredProfile) ||
+    calculateInboxV2CanonicalSha256(
+      sanitizer.profile.payload.adapterContract
+    ) !== calculateInboxV2CanonicalSha256(declaration.adapterContract)
+  ) {
+    throw new SourceAdapterRegistryError(
+      "source_adapter.sanitizer_mismatch",
+      "Registered raw-ingress sanitizer profile does not match the declared profile and adapter contract."
+    );
+  }
+  return sanitizer;
 }
 
 function validateHandler<THandler extends Readonly<{ handlerId: string }>>(

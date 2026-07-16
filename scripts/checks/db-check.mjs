@@ -137,6 +137,20 @@ const inboxV2SourceOnboardingResultMarker =
   "-- INB2-SRC-011_IMMUTABLE_COMMAND_RESULT_V1";
 const inboxV2SourceOnboardingResultTailDigest =
   "sha256:55b75bd00ce694225a1043bf9007535d21fa2460172e7acc1e4463a165c2ddd0";
+const inboxV2SourceRawIngressFileName = "0042_inbox_v2_raw_source_ingress.sql";
+const inboxV2SourceRawIngressInvariantName =
+  "INBOX_V2_SOURCE_RAW_INGRESS_INTEGRITY_SQL";
+const inboxV2SourceRawIngressTableNames = [
+  "public.inbox_v2_source_raw_envelopes",
+  "public.inbox_v2_source_raw_evidence",
+  "public.inbox_v2_source_raw_quarantines",
+  "public.inbox_v2_source_raw_work_items"
+];
+const inboxV2SourceRawIngressEnumNames = [
+  "public.inbox_v2_source_raw_evidence_kind",
+  "public.inbox_v2_source_raw_quarantine_reason",
+  "public.inbox_v2_source_raw_work_state"
+];
 const inboxV2SourceRegistryPrerequisiteUniqueConstraintNames = [
   "channel_auth_challenges_tenant_id_unique",
   "channel_auth_challenges_tenant_id_connector_unique",
@@ -234,6 +248,9 @@ const inboxV2AuthorizedDomainCommandMigrations = migrationFiles.filter(
 const inboxV2SourceOnboardingResultMigrations = migrationFiles.filter(
   ({ fileName }) => fileName === inboxV2SourceOnboardingResultFileName
 );
+const inboxV2SourceRawIngressMigrations = migrationFiles.filter(
+  ({ fileName }) => fileName === inboxV2SourceRawIngressFileName
+);
 const inboxV2SchemaFileNames = (await readdir(inboxV2SchemaDirectory))
   .filter((fileName) => fileName.endsWith(".ts"))
   .sort();
@@ -301,6 +318,9 @@ const inboxV2ConversationTimelineHeadInvariantBlocks =
   );
 const inboxV2SourceRegistryInvariantBlocks = inboxV2InvariantBlocks.filter(
   ({ name }) => name === inboxV2SourceRegistryInvariantName
+);
+const inboxV2SourceRawIngressInvariantBlocks = inboxV2InvariantBlocks.filter(
+  ({ name }) => name === inboxV2SourceRawIngressInvariantName
 );
 const inboxV2MembershipPrivilegeBoundaryBlock = extractInboxV2NamedSqlBlock(
   "membership-privilege-boundary.ts",
@@ -386,6 +406,12 @@ if (inboxV2SourceRegistryInvariantBlocks.length !== 1) {
   );
   process.exit(1);
 }
+if (inboxV2SourceRawIngressInvariantBlocks.length !== 1) {
+  console.error(
+    `Expected exactly one ${inboxV2SourceRawIngressInvariantName} schema block, found ${inboxV2SourceRawIngressInvariantBlocks.length}.`
+  );
+  process.exit(1);
+}
 const unownedInvariantBlocks = inboxV2InvariantBlocks.filter(
   ({ name }) =>
     !inboxV2FoundationInvariantNames.has(name) &&
@@ -397,7 +423,8 @@ const unownedInvariantBlocks = inboxV2InvariantBlocks.filter(
     name !== inboxV2SecurityDenialInvariantName &&
     name !== inboxV2RepositoryFoundationInvariantName &&
     name !== inboxV2ConversationTimelineHeadInvariantName &&
-    name !== inboxV2SourceRegistryInvariantName
+    name !== inboxV2SourceRegistryInvariantName &&
+    name !== inboxV2SourceRawIngressInvariantName
 );
 if (unownedInvariantBlocks.length > 0) {
   console.error(
@@ -526,6 +553,12 @@ if (inboxV2SourceOnboardingResultMigrations.length !== 1) {
   );
   process.exit(1);
 }
+if (inboxV2SourceRawIngressMigrations.length !== 1) {
+  console.error(
+    `Expected exactly one source-raw-ingress migration, found ${inboxV2SourceRawIngressMigrations.length}.`
+  );
+  process.exit(1);
+}
 
 try {
   assertGlobalMigrationArtifactBijection({
@@ -560,6 +593,15 @@ try {
     targetIndex: 41,
     finalizedMigrationFileName:
       inboxV2SourceOnboardingResultMigrations[0].fileName,
+    migrationFileNames,
+    snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
+      fileName.endsWith("_snapshot.json")
+    )
+  });
+  assertMigrationJournalArtifactParity({
+    journal: drizzleJournal,
+    targetIndex: 42,
+    finalizedMigrationFileName: inboxV2SourceRawIngressMigrations[0].fileName,
     migrationFileNames,
     snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
       fileName.endsWith("_snapshot.json")
@@ -638,6 +680,10 @@ assertInboxV2SourceRegistryMigration(
   inboxV2SourceRegistryMigrations[0],
   inboxV2SourceRegistryInvariantBlocks[0]
 );
+assertInboxV2SourceRawIngressMigration(
+  inboxV2SourceRawIngressMigrations[0],
+  inboxV2SourceRawIngressInvariantBlocks[0]
+);
 assertInboxV2SecurityDenialMigration(inboxV2SecurityDenialMigrations[0]);
 assertInboxV2RepositoryFoundationMigration(
   inboxV2RepositoryFoundationMigrations[0]
@@ -661,6 +707,9 @@ try {
   );
   await assertInboxV2SourceOnboardingResultGeneratedSchemaParity(
     inboxV2SourceOnboardingResultMigrations[0]
+  );
+  await assertInboxV2SourceRawIngressGeneratedSchemaParity(
+    inboxV2SourceRawIngressMigrations[0]
   );
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
@@ -790,6 +839,36 @@ function assertInboxV2SourceRegistryMigration(migration, invariantBlock) {
   }
 }
 
+function assertInboxV2SourceRawIngressMigration(migration, invariantBlock) {
+  const statements = splitMigrationStatements(migration.sql);
+  if (statements.length < 2) {
+    throw new Error(
+      "Inbox V2 source-raw-ingress migration is missing generated DDL or its invariant tail."
+    );
+  }
+  assertExactSqlSequence(
+    [invariantBlock.sql],
+    statements.slice(-1),
+    "Inbox V2 SRC-002 source-raw-ingress invariant tail"
+  );
+  for (const requiredFragment of [
+    'CREATE TABLE "inbox_v2_source_raw_envelopes"',
+    'CREATE TABLE "inbox_v2_source_raw_evidence"',
+    'CREATE TABLE "inbox_v2_source_raw_quarantines"',
+    'CREATE TABLE "inbox_v2_source_raw_work_items"',
+    "inbox_v2_source_raw_work_guard",
+    "inbox_v2_source_raw_assert_aggregate",
+    "deferrable initially deferred",
+    "set search_path = pg_catalog, public, pg_temp"
+  ]) {
+    if (!migration.sql.includes(requiredFragment)) {
+      throw new Error(
+        `Inbox V2 source-raw-ingress migration is missing ${requiredFragment}.`
+      );
+    }
+  }
+}
+
 async function assertInboxV2SourceRegistryGeneratedSchemaParity(migration) {
   const snapshotPath = "packages/db/drizzle/meta/0039_snapshot.json";
   const generated = await generateExpectedDrizzleMigration({
@@ -872,9 +951,11 @@ async function assertInboxV2SourceOnboardingResultGeneratedSchemaParity(
     baseIndex: 40,
     targetIndex: 41
   });
+  const historicalGenerated =
+    withoutInboxV2SourceRawIngressSchemaDelta(generated);
   const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
   assertDrizzleSnapshotParity(
-    generated.snapshot,
+    historicalGenerated.snapshot,
     checkedInSnapshot,
     snapshotPath
   );
@@ -889,7 +970,7 @@ async function assertInboxV2SourceOnboardingResultGeneratedSchemaParity(
     );
   }
   assertExactSqlSequence(
-    generated.statements,
+    historicalGenerated.statements,
     checkedInStatements.slice(0, invariantStart),
     "Inbox V2 SRC-011 ordered generated migration prefix"
   );
@@ -949,6 +1030,29 @@ async function assertInboxV2SourceOnboardingResultGeneratedSchemaParity(
       );
     }
   }
+}
+
+async function assertInboxV2SourceRawIngressGeneratedSchemaParity(migration) {
+  const snapshotPath = "packages/db/drizzle/meta/0042_snapshot.json";
+  const generated = await generateExpectedDrizzleMigration({
+    workspaceRoot: process.cwd(),
+    migrationDirectory,
+    baseIndex: 41,
+    targetIndex: 42
+  });
+  const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
+  assertDrizzleSnapshotParity(
+    generated.snapshot,
+    checkedInSnapshot,
+    snapshotPath
+  );
+
+  const checkedInStatements = splitMigrationStatements(migration.sql);
+  assertExactSqlSequence(
+    generated.statements,
+    checkedInStatements.slice(0, -1),
+    "Inbox V2 SRC-002 ordered generated migration DDL"
+  );
 }
 
 function orderSourceRegistryGeneratedStatements(statements) {
@@ -1204,7 +1308,9 @@ function withoutInboxV2Src011SchemaDelta(generated) {
 }
 
 function withoutInboxV2SourceOnboardingResultSchemaDelta(generated) {
-  const snapshot = structuredClone(generated.snapshot);
+  const withoutSourceRawIngress =
+    withoutInboxV2SourceRawIngressSchemaDelta(generated);
+  const snapshot = structuredClone(withoutSourceRawIngress.snapshot);
   const resultTableName = "public.inbox_v2_source_onboarding_result_snapshots";
   delete snapshot.tables[resultTableName];
 
@@ -1273,11 +1379,25 @@ function withoutInboxV2SourceOnboardingResultSchemaDelta(generated) {
     "inbox_v2_auth_command_records_state_check",
     "inbox_v2_auth_command_records_values_check"
   ];
-  const statements = generated.statements.filter(
+  const statements = withoutSourceRawIngress.statements.filter(
     (statement) =>
       !statement.includes("inbox_v2_source_onboarding_result_snapshots") &&
       !statement.includes('ADD COLUMN "result_reference"') &&
       !generatedConstraintNames.some((name) => statement.includes(name))
+  );
+  return { snapshot, statements };
+}
+
+function withoutInboxV2SourceRawIngressSchemaDelta(generated) {
+  const snapshot = structuredClone(generated.snapshot);
+  for (const tableName of inboxV2SourceRawIngressTableNames) {
+    delete snapshot.tables[tableName];
+  }
+  for (const enumName of inboxV2SourceRawIngressEnumNames) {
+    delete snapshot.enums[enumName];
+  }
+  const statements = generated.statements.filter(
+    (statement) => !statement.includes("inbox_v2_source_raw_")
   );
   return { snapshot, statements };
 }

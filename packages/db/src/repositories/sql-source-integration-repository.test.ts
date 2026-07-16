@@ -1,6 +1,5 @@
 import {
   createNormalizedSourceIdempotencyKey,
-  createRawSourceIdempotencyKey,
   type NormalizedInboundEventId,
   type RawInboundEventId,
   type SourceAccountId,
@@ -19,7 +18,6 @@ import type {
 import {
   buildListTenantSourceConnectionsSql,
   buildRecordNormalizedInboundEventSql,
-  buildRecordRawInboundEventSql,
   buildUpsertSourceConnectionSql,
   createSqlSourceIntegrationRepository
 } from "./sql-source-integration-repository";
@@ -128,13 +126,7 @@ describe("SQL source integration repository", () => {
     );
   });
 
-  it("records raw and normalized inbound events with idempotency conflict handling", async () => {
-    const rawIdempotencyKey = createRawSourceIdempotencyKey({
-      transport: "webhook",
-      sourceConnectionId,
-      sourceAccountId,
-      externalEventId: "ozon-message-1"
-    });
+  it("keeps normalized compatibility writes separate from the V2 raw-ingress boundary", () => {
     const normalizedIdempotencyKey = createNormalizedSourceIdempotencyKey({
       transport: "webhook",
       sourceConnectionId,
@@ -142,20 +134,6 @@ describe("SQL source integration repository", () => {
       sourceEventType: "message",
       externalEventId: "ozon-message-1"
     });
-    const rawQuery = sqlText(
-      buildRecordRawInboundEventSql({
-        id: rawEventId,
-        tenantId,
-        sourceConnectionId,
-        sourceAccountId,
-        idempotencyKey: rawIdempotencyKey,
-        receivedAt: now,
-        payload: {
-          text: "hello"
-        },
-        updatedAt: now
-      })
-    );
     const normalizedQuery = sqlText(
       buildRecordNormalizedInboundEventSql({
         id: normalizedEventId,
@@ -176,10 +154,7 @@ describe("SQL source integration repository", () => {
       })
     );
 
-    expect(rawIdempotencyKey).toContain("source:v1:raw:webhook");
     expect(normalizedIdempotencyKey).toContain("source:v1:normalized:webhook");
-    expect(rawQuery).toContain("on conflict (tenant_id, idempotency_key)");
-    expect(rawQuery).toContain("returning");
     expect(normalizedQuery).toContain(
       "on conflict (tenant_id, idempotency_key)"
     );

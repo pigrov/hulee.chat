@@ -54,25 +54,6 @@ export type SourceAccountRecord = {
   updatedAt: Date;
 };
 
-export type RawInboundEventRecord = {
-  id: RawInboundEventId;
-  tenantId: TenantId;
-  sourceConnectionId: SourceConnectionId;
-  sourceAccountId: SourceAccountId | null;
-  externalEventId: string | null;
-  eventSignature: string | null;
-  idempotencyKey: string;
-  receivedAt: Date;
-  providerTimestamp: Date | null;
-  payload: unknown;
-  headers: unknown;
-  processingStatus: SourceEventProcessingStatus | (string & {});
-  errorCode: string | null;
-  errorMessage: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-};
-
 export type NormalizedInboundEventRecord = {
   id: NormalizedInboundEventId;
   tenantId: TenantId;
@@ -138,24 +119,6 @@ export type UpsertSourceAccountInput = {
   updatedAt: Date;
 };
 
-export type RecordRawInboundEventInput = {
-  id: RawInboundEventId | string;
-  tenantId: TenantId;
-  sourceConnectionId: SourceConnectionId | string;
-  sourceAccountId?: SourceAccountId | string | null;
-  externalEventId?: string | null;
-  eventSignature?: string | null;
-  idempotencyKey: string;
-  receivedAt: Date;
-  providerTimestamp?: Date | null;
-  payload: unknown;
-  headers?: unknown;
-  processingStatus?: SourceEventProcessingStatus | string;
-  errorCode?: string | null;
-  errorMessage?: string | null;
-  updatedAt: Date;
-};
-
 export type RecordNormalizedInboundEventInput = {
   id: NormalizedInboundEventId | string;
   tenantId: TenantId;
@@ -193,9 +156,6 @@ export type SourceIntegrationRepository = {
   upsertSourceAccount(
     input: UpsertSourceAccountInput
   ): Promise<SourceAccountRecord>;
-  recordRawInboundEvent(
-    input: RecordRawInboundEventInput
-  ): Promise<RawInboundEventRecord>;
   recordNormalizedInboundEvent(
     input: RecordNormalizedInboundEventInput
   ): Promise<NormalizedInboundEventRecord>;
@@ -228,25 +188,6 @@ type SourceAccountRow = {
   display_name: string;
   status: string;
   metadata: unknown;
-  created_at: PgDateValue;
-  updated_at: PgDateValue;
-};
-
-type RawInboundEventRow = {
-  id: string;
-  tenant_id: string;
-  source_connection_id: string;
-  source_account_id: string | null;
-  external_event_id: string | null;
-  event_signature: string | null;
-  idempotency_key: string;
-  received_at: PgDateValue;
-  provider_timestamp: PgDateValue | null;
-  payload: unknown;
-  headers: unknown;
-  processing_status: string;
-  error_code: string | null;
-  error_message: string | null;
   created_at: PgDateValue;
   updated_at: PgDateValue;
 };
@@ -317,16 +258,6 @@ export function createSqlSourceIntegrationRepository(
 
       return mapSourceAccountRow(
         requireReturnedRow(result.rows[0], "source account")
-      );
-    },
-
-    async recordRawInboundEvent(input) {
-      const result = await rawExecutor.execute<RawInboundEventRow>(
-        buildRecordRawInboundEventSql(input)
-      );
-
-      return mapRawInboundEventRow(
-        requireReturnedRow(result.rows[0], "raw inbound event")
       );
     },
 
@@ -467,52 +398,6 @@ export function buildUpsertSourceAccountSql(
   `;
 }
 
-export function buildRecordRawInboundEventSql(
-  input: RecordRawInboundEventInput
-): SQL {
-  return sql`
-    insert into raw_inbound_events (
-      id,
-      tenant_id,
-      source_connection_id,
-      source_account_id,
-      external_event_id,
-      event_signature,
-      idempotency_key,
-      received_at,
-      provider_timestamp,
-      payload,
-      headers,
-      processing_status,
-      error_code,
-      error_message,
-      created_at,
-      updated_at
-    )
-    values (
-      ${input.id},
-      ${input.tenantId},
-      ${input.sourceConnectionId},
-      ${input.sourceAccountId ?? null},
-      ${input.externalEventId ?? null},
-      ${input.eventSignature ?? null},
-      ${input.idempotencyKey},
-      ${input.receivedAt},
-      ${input.providerTimestamp ?? null},
-      ${JSON.stringify(input.payload)}::jsonb,
-      ${JSON.stringify(input.headers ?? {})}::jsonb,
-      ${input.processingStatus ?? "new"},
-      ${input.errorCode ?? null},
-      ${input.errorMessage ?? null},
-      ${input.updatedAt},
-      ${input.updatedAt}
-    )
-    on conflict (tenant_id, idempotency_key) do update
-    set updated_at = raw_inbound_events.updated_at
-    returning ${rawInboundEventSelectList}
-  `;
-}
-
 export function buildRecordNormalizedInboundEventSql(
   input: RecordNormalizedInboundEventInput
 ): SQL {
@@ -602,25 +487,6 @@ const sourceAccountSelectList = sql`
   updated_at
 `;
 
-const rawInboundEventSelectList = sql`
-  id,
-  tenant_id,
-  source_connection_id,
-  source_account_id,
-  external_event_id,
-  event_signature,
-  idempotency_key,
-  received_at,
-  provider_timestamp,
-  payload,
-  headers,
-  processing_status,
-  error_code,
-  error_message,
-  created_at,
-  updated_at
-`;
-
 const normalizedInboundEventSelectList = sql`
   id,
   tenant_id,
@@ -678,29 +544,6 @@ function mapSourceAccountRow(row: SourceAccountRow): SourceAccountRecord {
     displayName: row.display_name,
     status: row.status,
     metadata: row.metadata,
-    createdAt: normalizePgDate(row.created_at),
-    updatedAt: normalizePgDate(row.updated_at)
-  };
-}
-
-function mapRawInboundEventRow(row: RawInboundEventRow): RawInboundEventRecord {
-  return {
-    id: row.id as RawInboundEventId,
-    tenantId: row.tenant_id as TenantId,
-    sourceConnectionId: row.source_connection_id as SourceConnectionId,
-    sourceAccountId: row.source_account_id as SourceAccountId | null,
-    externalEventId: row.external_event_id,
-    eventSignature: row.event_signature,
-    idempotencyKey: row.idempotency_key,
-    receivedAt: normalizePgDate(row.received_at),
-    providerTimestamp: row.provider_timestamp
-      ? normalizePgDate(row.provider_timestamp)
-      : null,
-    payload: row.payload,
-    headers: row.headers,
-    processingStatus: row.processing_status,
-    errorCode: row.error_code,
-    errorMessage: row.error_message,
     createdAt: normalizePgDate(row.created_at),
     updatedAt: normalizePgDate(row.updated_at)
   };

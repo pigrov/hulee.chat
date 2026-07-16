@@ -2,17 +2,10 @@ import type {
   NormalizedInboundEvent,
   NormalizedInboundEventId,
   RawInboundEvent,
-  RawInboundEventId,
-  SourceAccountId,
-  SourceConnectionId,
   SourceEventDirection,
-  SourceEventType,
-  TenantId
+  SourceEventType
 } from "./index";
-import {
-  createNormalizedSourceIdempotencyKey,
-  createRawSourceIdempotencyKey
-} from "./source-idempotency";
+import { createNormalizedSourceIdempotencyKey } from "./source-idempotency";
 import {
   normalizeSourceConversationResolverInput,
   type SourceConversationResolverInput
@@ -36,22 +29,6 @@ export type MegapbxParsedWebhook = {
   eventType: string;
   eventId?: string;
   token?: string;
-};
-
-export type CreateMegapbxRawInboundEventInput = {
-  id: RawInboundEventId | string;
-  tenantId: TenantId | string;
-  sourceConnectionId: SourceConnectionId | string;
-  sourceAccountId?: SourceAccountId | string | null;
-  body: unknown;
-  headers?: Record<string, unknown>;
-  contentType?: string | null;
-  receivedAt: Date | string;
-};
-
-export type CreateMegapbxRawInboundEventResult = {
-  rawEvent: RawInboundEvent;
-  parsedWebhook: MegapbxParsedWebhook;
 };
 
 export type MegapbxNormalizedWebhookEvent = {
@@ -109,49 +86,6 @@ export function parseMegapbxWebhook(
     eventType,
     ...(eventId ? { eventId } : {}),
     ...(token ? { token } : {})
-  };
-}
-
-export function createMegapbxRawInboundEvent(
-  input: CreateMegapbxRawInboundEventInput
-): CreateMegapbxRawInboundEventResult {
-  const parsedWebhook = parseMegapbxWebhook(input);
-  const receivedAt = toIsoTimestamp(input.receivedAt);
-  const providerTimestamp =
-    parseMegapbxTimestamp(readString(parsedWebhook.payload.start)) ?? undefined;
-
-  if (!parsedWebhook.eventId) {
-    throw new MegapbxWebhookNormalizationError(
-      "MegaPBX webhook event id is required for raw event idempotency."
-    );
-  }
-
-  const rawEvent: RawInboundEvent = {
-    id: String(input.id) as RawInboundEventId,
-    tenantId: String(input.tenantId) as TenantId,
-    sourceConnectionId: String(input.sourceConnectionId) as SourceConnectionId,
-    ...(input.sourceAccountId
-      ? { sourceAccountId: String(input.sourceAccountId) as SourceAccountId }
-      : {}),
-    externalEventId: parsedWebhook.eventId,
-    idempotencyKey: createRawSourceIdempotencyKey({
-      transport: "webhook",
-      sourceConnectionId: input.sourceConnectionId,
-      sourceAccountId: input.sourceAccountId,
-      externalEventId: parsedWebhook.eventId
-    }),
-    receivedAt,
-    ...(providerTimestamp ? { providerTimestamp } : {}),
-    payload: parsedWebhook.payload,
-    ...(input.headers ? { headers: normalizeHeaders(input.headers) } : {}),
-    processingStatus: "new",
-    createdAt: receivedAt,
-    updatedAt: receivedAt
-  };
-
-  return {
-    rawEvent,
-    parsedWebhook
   };
 }
 
@@ -609,18 +543,6 @@ function readHeaderString(
   }
 
   return undefined;
-}
-
-function normalizeHeaders(
-  headers: Record<string, unknown>
-): Record<string, unknown> {
-  const normalized: Record<string, unknown> = {};
-
-  for (const [key, value] of Object.entries(headers)) {
-    normalized[key.toLowerCase()] = value;
-  }
-
-  return normalized;
 }
 
 function compactRecord(

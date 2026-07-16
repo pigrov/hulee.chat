@@ -1,14 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import type {
+  RawInboundEvent,
   RawInboundEventId,
   SourceAccountId,
   SourceConnectionId,
   TenantId
 } from "./index";
 import { assertSourceNormalizerContract } from "./source-normalizer-contract";
+import { createRawSourceIdempotencyKey } from "./source-idempotency";
 import {
-  createMegapbxRawInboundEvent,
   normalizeMegapbxWebhookRawEvent,
   parseMegapbxTimestamp,
   parseMegapbxWebhook
@@ -65,7 +66,7 @@ describe("MegaPBX source normalizer", () => {
   });
 
   it("creates raw source events with webhook idempotency keys", () => {
-    const { rawEvent } = createMegapbxRawInboundEvent({
+    const { rawEvent } = createCredentialFreeMegapbxRawFixture({
       id: "raw_evt_megapbx_history_in" as RawInboundEventId,
       tenantId,
       sourceConnectionId,
@@ -85,7 +86,7 @@ describe("MegaPBX source normalizer", () => {
   });
 
   it("normalizes inbound call history into resolver handoff inputs", () => {
-    const { rawEvent, parsedWebhook } = createMegapbxRawInboundEvent({
+    const { rawEvent, parsedWebhook } = createCredentialFreeMegapbxRawFixture({
       id: "raw_evt_megapbx_history_in" as RawInboundEventId,
       tenantId,
       sourceConnectionId,
@@ -152,7 +153,7 @@ describe("MegaPBX source normalizer", () => {
   });
 
   it("normalizes lifecycle events as call status facts", () => {
-    const { rawEvent, parsedWebhook } = createMegapbxRawInboundEvent({
+    const { rawEvent, parsedWebhook } = createCredentialFreeMegapbxRawFixture({
       id: "raw_evt_megapbx_event_completed" as RawInboundEventId,
       tenantId,
       sourceConnectionId,
@@ -192,7 +193,7 @@ describe("MegaPBX source normalizer", () => {
   });
 
   it("keeps contact callbacks as status updates", () => {
-    const { rawEvent, parsedWebhook } = createMegapbxRawInboundEvent({
+    const { rawEvent, parsedWebhook } = createCredentialFreeMegapbxRawFixture({
       id: "raw_evt_megapbx_contact" as RawInboundEventId,
       tenantId,
       sourceConnectionId,
@@ -226,7 +227,97 @@ describe("MegaPBX source normalizer", () => {
       })
     ).not.toThrow();
   });
+
+  it("keeps the legacy normalizer fixture free of webhook credentials", () => {
+    const bodyCredential = "megapbx-body-token-must-not-persist";
+    const headerCredentials = [
+      "megapbx-authorization-must-not-persist",
+      "megapbx-cookie-must-not-persist",
+      "megapbx-api-key-must-not-persist",
+      "megapbx-session-must-not-persist",
+      "megapbx-password-must-not-persist"
+    ];
+    const { rawEvent, parsedWebhook } = createCredentialFreeMegapbxRawFixture({
+      id: "raw_evt_megapbx_credential_boundary" as RawInboundEventId,
+      tenantId,
+      sourceConnectionId,
+      sourceAccountId,
+      body: {
+        ...historyInPayload(),
+        crm_token: bodyCredential
+      },
+      headers: {
+        Authorization: `Bearer ${headerCredentials[0]}`,
+        Cookie: `sid=${headerCredentials[1]}`,
+        "X-Api-Key": headerCredentials[2],
+        "X-Session-Id": headerCredentials[3],
+        "X-Password": headerCredentials[4]
+      },
+      receivedAt: "2026-07-09T10:00:00.000Z"
+    });
+
+    expect(parsedWebhook.token).toBe(bodyCredential);
+    expect(rawEvent.headers).toBeUndefined();
+    const persistedFixture = JSON.stringify(rawEvent);
+    expect(persistedFixture).not.toContain(bodyCredential);
+    for (const credential of headerCredentials) {
+      expect(persistedFixture).not.toContain(credential);
+    }
+    expect(persistedFixture).not.toMatch(
+      /authorization|cookie|password|token|session|crm_token/iu
+    );
+  });
 });
+
+function createCredentialFreeMegapbxRawFixture(input: {
+  id: RawInboundEventId | string;
+  tenantId: TenantId | string;
+  sourceConnectionId: SourceConnectionId | string;
+  sourceAccountId?: SourceAccountId | string | null;
+  body: unknown;
+  headers?: Record<string, unknown>;
+  contentType?: string | null;
+  receivedAt: Date | string;
+}): {
+  rawEvent: RawInboundEvent;
+  parsedWebhook: ReturnType<typeof parseMegapbxWebhook>;
+} {
+  const parsedWebhook = parseMegapbxWebhook(input);
+  if (!parsedWebhook.eventId) {
+    throw new Error("MegaPBX fixture requires an event id.");
+  }
+
+  const { crm_token: _credential, ...credentialFreePayload } =
+    parsedWebhook.payload;
+  const receivedAt = new Date(input.receivedAt).toISOString();
+  const providerTimestamp =
+    typeof credentialFreePayload.start === "string"
+      ? (parseMegapbxTimestamp(credentialFreePayload.start) ?? undefined)
+      : undefined;
+  const rawEvent: RawInboundEvent = {
+    id: String(input.id) as RawInboundEventId,
+    tenantId: String(input.tenantId) as TenantId,
+    sourceConnectionId: String(input.sourceConnectionId) as SourceConnectionId,
+    ...(input.sourceAccountId
+      ? { sourceAccountId: String(input.sourceAccountId) as SourceAccountId }
+      : {}),
+    externalEventId: parsedWebhook.eventId,
+    idempotencyKey: createRawSourceIdempotencyKey({
+      transport: "webhook",
+      sourceConnectionId: input.sourceConnectionId,
+      sourceAccountId: input.sourceAccountId,
+      externalEventId: parsedWebhook.eventId
+    }),
+    receivedAt,
+    ...(providerTimestamp ? { providerTimestamp } : {}),
+    payload: credentialFreePayload,
+    processingStatus: "new",
+    createdAt: receivedAt,
+    updatedAt: receivedAt
+  };
+
+  return { rawEvent, parsedWebhook };
+}
 
 function historyInPayload(): Record<string, string> {
   return {

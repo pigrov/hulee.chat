@@ -357,7 +357,6 @@ export {
   buildFindSourceConnectionSql,
   buildListTenantSourceConnectionsSql,
   buildRecordNormalizedInboundEventSql,
-  buildRecordRawInboundEventSql,
   buildUpsertSourceAccountSql,
   buildUpsertSourceConnectionSql,
   createSqlSourceIntegrationRepository
@@ -625,9 +624,7 @@ export type {
   FindSourceConnectionInput,
   ListTenantSourceConnectionsInput,
   NormalizedInboundEventRecord,
-  RawInboundEventRecord,
   RecordNormalizedInboundEventInput,
-  RecordRawInboundEventInput,
   SourceAccountRecord,
   SourceConnectionRecord,
   SourceIntegrationRepository,
@@ -823,3 +820,4 @@ export * from "./sql-inbox-v2-membership-transaction-policy";
 export * from "./sql-inbox-v2-repository-outbox";
 export * from "./sql-inbox-v2-repository-projection";
 export * from "./sql-inbox-v2-repository-stream";
+export * from "./sql-inbox-v2-raw-ingress-repository";

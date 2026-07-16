@@ -582,7 +582,30 @@ function createFixture(
         },
         ingress: {
           mode: "webhook",
-          handlerId: "module:synthetic:ingress"
+          handlerId: "module:synthetic:ingress",
+          sanitizerProfile: {
+            schemaId: "core:inbox-v2.raw-ingress-sanitizer-profile",
+            schemaVersion: "v1",
+            payload: {
+              adapterContract,
+              handlerId: "module:synthetic:sanitize-webhook",
+              handlerVersion: "v1",
+              declarationRevision: "1",
+              restrictedPayloadSchema: {
+                schemaId: "module:synthetic:raw-webhook",
+                schemaVersion: "v1"
+              },
+              persistedHeaderNames: ["x-request-id"],
+              payloadClassification: {
+                dataClassId: "core:raw_provider_payload",
+                purposeIds: ["core:source_replay_and_diagnostics"]
+              },
+              allowedHeadersClassification: {
+                dataClassId: "core:raw_provider_allowed_headers",
+                purposeIds: ["core:source_replay_and_diagnostics"]
+              }
+            }
+          }
         }
       }
     }

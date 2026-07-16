@@ -263,6 +263,32 @@ const adapterContract = {
   loadedAt: t0
 } as const;
 
+function rawIngressSanitizerProfileInput() {
+  return {
+    schemaId: "core:inbox-v2.raw-ingress-sanitizer-profile" as const,
+    schemaVersion: "v1" as const,
+    payload: {
+      adapterContract,
+      handlerId: "module:synthetic:sanitize-webhook",
+      handlerVersion: "v1",
+      declarationRevision: "1",
+      restrictedPayloadSchema: {
+        schemaId: "module:synthetic:raw-webhook",
+        schemaVersion: "v1"
+      },
+      persistedHeaderNames: ["x-request-id"],
+      payloadClassification: {
+        dataClassId: "core:raw_provider_payload" as const,
+        purposeIds: ["core:source_replay_and_diagnostics" as const]
+      },
+      allowedHeadersClassification: {
+        dataClassId: "core:raw_provider_allowed_headers" as const,
+        purposeIds: ["core:source_replay_and_diagnostics" as const]
+      }
+    }
+  };
+}
+
 function connectionStateInput(revision = "1", generation = "1") {
   return {
     schemaId: "core:inbox-v2.source-connection-registry-state" as const,
@@ -541,7 +567,8 @@ function adapterDeclarationInput(
       },
       ingress: {
         mode: "webhook" as const,
-        handlerId: "module:synthetic:ingress"
+        handlerId: "module:synthetic:ingress",
+        sanitizerProfile: rawIngressSanitizerProfileInput()
       }
     }
   };
@@ -836,6 +863,41 @@ describe("Inbox V2 source registry contracts", () => {
     expect(inboxV2SourceAdapterDeclarationSchema.safeParse(value).success).toBe(
       false
     );
+  });
+
+  it("requires an exact sanitizer profile only for supported ingress", () => {
+    const { binding } = lifecycleBinding();
+    const missingProfile = structuredClone(adapterDeclarationInput(binding));
+    Reflect.deleteProperty(missingProfile.payload.ingress, "sanitizerProfile");
+    expect(
+      inboxV2SourceAdapterDeclarationSchema.safeParse(missingProfile).success
+    ).toBe(false);
+
+    const mismatchedContract = structuredClone(
+      adapterDeclarationInput(binding)
+    );
+    if (mismatchedContract.payload.ingress.mode === "not_supported") {
+      throw new Error("Expected supported ingress declaration fixture.");
+    }
+    mismatchedContract.payload.ingress.sanitizerProfile.payload.adapterContract =
+      {
+        ...mismatchedContract.payload.ingress.sanitizerProfile.payload
+          .adapterContract,
+        contractId: "module:synthetic:different-adapter"
+      };
+    expect(
+      inboxV2SourceAdapterDeclarationSchema.safeParse(mismatchedContract)
+        .success
+    ).toBe(false);
+
+    const unsupported = structuredClone(adapterDeclarationInput(binding));
+    unsupported.payload.ingress = {
+      mode: "not_supported",
+      sanitizerProfile: rawIngressSanitizerProfileInput()
+    } as unknown as typeof unsupported.payload.ingress;
+    expect(
+      inboxV2SourceAdapterDeclarationSchema.safeParse(unsupported).success
+    ).toBe(false);
   });
 
   it("rejects standalone source onboarding without result-snapshot lifecycle lineage", () => {
