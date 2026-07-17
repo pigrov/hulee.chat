@@ -1582,16 +1582,22 @@ participant set.
     `3374` executed tests. Detailed evidence is in
     `docs/product/inbox-v2-src-005-conversation-resolution.md`.
 
-- [ ] `INB2-SRC-006` Implement canonical dedupe and out-of-order reconciliation.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-SRC-005`.
+- [x] `INB2-SRC-006` Implement canonical dedupe and out-of-order reconciliation.
+  - State: `done`; Priority: `P0`; Started: `2026-07-17`; Finished:
+    `2026-07-17`; Owner: `Codex`; Depends on: `INB2-SRC-005`.
   - Acceptance: account-scoped raw observations stay distinct while exact
     adapter-scoped message refs dedupe webhook/polling/cross-account echoes;
     server-owned canonical keys compare exact adapter realm/object/scope and
     immutable message identity before reuse; late lifecycle and ambiguous weak
     correlation retain provenance instead of silently merging.
   - Verification: fixtures cover cross-account duplicate create, equal-content
-    genuine messages, same-key scope/digest collision, edit/delete-before-create,
-    stale reaction/read and replay. Evidence: -
+    genuine messages, exact-key/candidate collision, ordered
+    edit/delete-before-create, stale reaction/read, signed terminal replay,
+    atomic transport links and bounded hot-key drain. Evidence: focused `8/8`
+    files / `70/70` tests; disposable PostgreSQL `46` migrations and `29/29`
+    files / `257/257` tests; preserve/N-1 `3/3` files / `17/17` tests; full
+    `pnpm check` `338` passed files / `3,424` passed tests. Detailed evidence is
+    in `docs/product/inbox-v2-src-006-message-reconciliation.md`.
 
 - [ ] `INB2-SRC-007` Materialize V2 state and outbox atomically.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-SRC-004` through `INB2-SRC-006`.

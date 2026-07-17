@@ -31,7 +31,10 @@ import {
 import { inboxV2ReactionValueSchema } from "./message-reaction";
 import { inboxV2MessageReactionCommitSchema } from "./message-reaction";
 import { inboxV2MessageTransportFactCommitSchema } from "./message-transport";
-import { inboxV2ProviderSemanticProofSchema } from "./provider-semantic-proof";
+import {
+  inboxV2ProviderOrderingPositionSchema,
+  inboxV2ProviderSemanticProofSchema
+} from "./provider-semantic-proof";
 import {
   createInboxV2SchemaEnvelopeSchema,
   INBOX_V2_INITIAL_SCHEMA_VERSION
@@ -157,7 +160,7 @@ export const inboxV2DeferredSourceActionOrderingHeadSchema = z
       .object({
         action: inboxV2DeferredMessageSourceActionReferenceSchema,
         idempotencyKey: inboxV2DeferredSourceActionIdempotencyKeySchema,
-        position: z.string().regex(/^(0|[1-9]\d*)$/u)
+        position: inboxV2ProviderOrderingPositionSchema
       })
       .strict(),
     revision: inboxV2EntityRevisionSchema,
@@ -421,6 +424,28 @@ export const inboxV2DeferredMessageSourceActionCommitSchema = z
       }
       addAppliedEffectIssues(context, commit);
     } else if (
+      after.state.state === "stale" ||
+      after.state.state === "duplicate"
+    ) {
+      const target = commit.targetExternalMessageReference;
+      const resolution = commit.sourceOccurrenceResolution;
+      if (commit.effectProof !== null) {
+        addIssue(
+          context,
+          ["effectProof"],
+          "Stale or duplicate action may resolve provenance but cannot claim a Message mutation."
+        );
+      }
+      if ((target === null) !== (resolution === null)) {
+        addIssue(
+          context,
+          ["sourceOccurrenceResolution"],
+          "Stale or duplicate exact-target provenance carries both reference and occurrence resolution, or neither."
+        );
+      } else if (target !== null && resolution !== null) {
+        addExactOccurrenceResolutionIssues(context, commit, target, resolution);
+      }
+    } else if (
       commit.targetExternalMessageReference !== null ||
       commit.sourceOccurrenceResolution !== null ||
       commit.effectProof !== null
@@ -428,7 +453,7 @@ export const inboxV2DeferredMessageSourceActionCommitSchema = z
       addIssue(
         context,
         ["targetExternalMessageReference"],
-        "Only an applied deferred action binds one canonical target and typed effect."
+        "Target conflict, ordering conflict and expiry cannot bind a canonical target or typed effect."
       );
     }
   });
@@ -678,13 +703,18 @@ function addOrderingCommitIssues(
         commit,
         position !== null && headPosition !== null && position === headPosition,
         transition.afterState.state === "duplicate" &&
-          beforeOrderingHead?.latest.action.id ===
+          beforeOrderingHead !== null &&
+          beforeOrderingHead.latest.action.id ===
             transition.afterState.canonicalAction.id &&
-          sameValue(
-            beforeOrderingHead?.latest.idempotencyKey,
+          sameSemanticDuplicateIdentity(
+            beforeOrderingHead.latest.idempotencyKey,
             before.idempotencyKey
-          ),
-        "Duplicate action must equal the head position and complete idempotency tuple."
+          ) &&
+          (beforeOrderingHead.latest.idempotencyKey.normalizedInboundEvent
+            .id !== before.idempotencyKey.normalizedInboundEvent.id ||
+            beforeOrderingHead.latest.idempotencyKey.sourceOccurrence.id !==
+              before.idempotencyKey.sourceOccurrence.id),
+        "Duplicate action must equal the head position and semantic duplicate identity while remaining a distinct exact replay tuple."
       );
       break;
     case "conflict": {
@@ -700,13 +730,14 @@ function addOrderingCommitIssues(
             headPosition !== null &&
             position === headPosition,
           conflictState !== null &&
-            beforeOrderingHead?.latest.action.id ===
+            beforeOrderingHead !== null &&
+            beforeOrderingHead.latest.action.id ===
               conflictState.conflictingAction?.id &&
-            !sameValue(
-              beforeOrderingHead?.latest.idempotencyKey,
+            !sameSemanticDuplicateIdentity(
+              beforeOrderingHead.latest.idempotencyKey,
               before.idempotencyKey
             ),
-          "Equal provider position with a different idempotency tuple is an explicit conflict."
+          "Equal provider position with a different semantic duplicate identity is an explicit conflict."
         );
       } else if (
         conflictState === null ||
@@ -770,21 +801,7 @@ function addAppliedEffectIssues(
     );
     return;
   }
-  if (
-    resolution.tenantId !== commit.tenantId ||
-    !sameValue(resolution.before, before.sourceOccurrence) ||
-    resolution.after.resolution.state !== "resolved" ||
-    resolution.after.resolution.externalMessageReference.id !== target.id ||
-    resolution.resolvedReference?.id !== target.id ||
-    !sameValue(resolution.resolvedReference, target) ||
-    !isInboxV2TimestampOrderValid(resolution.changedAt, transition.recordedAt)
-  ) {
-    addIssue(
-      context,
-      ["sourceOccurrenceResolution"],
-      "Applied action must resolve its exact captured SourceOccurrence to the exact canonical external reference."
-    );
-  }
+  addExactOccurrenceResolutionIssues(context, commit, target, resolution);
 
   const effectFacts = effectMessageFacts(effect);
   if (
@@ -808,6 +825,32 @@ function addAppliedEffectIssues(
     resolution.after,
     effect
   );
+}
+
+function addExactOccurrenceResolutionIssues(
+  context: z.RefinementCtx,
+  commit: z.infer<typeof inboxV2DeferredMessageSourceActionCommitSchema>,
+  target: InboxV2ExternalMessageReference,
+  resolution: z.infer<typeof inboxV2SourceOccurrenceResolutionCommitSchema>
+): void {
+  const { before, transition } = commit;
+  if (
+    target.tenantId !== commit.tenantId ||
+    !sameValue(target.key, before.externalMessageKey) ||
+    resolution.tenantId !== commit.tenantId ||
+    !sameValue(resolution.before, before.sourceOccurrence) ||
+    resolution.after.resolution.state !== "resolved" ||
+    resolution.after.resolution.externalMessageReference.id !== target.id ||
+    resolution.resolvedReference?.id !== target.id ||
+    !sameValue(resolution.resolvedReference, target) ||
+    !isInboxV2TimestampOrderValid(resolution.changedAt, transition.recordedAt)
+  ) {
+    addIssue(
+      context,
+      ["sourceOccurrenceResolution"],
+      "Terminal exact-target provenance must resolve the captured SourceOccurrence to the exact canonical external reference."
+    );
+  }
 }
 
 function addActionSpecificEffectIssues(
@@ -1035,6 +1078,16 @@ function orderingHeadMatchesAction(
       (head.scopeToken === ordering.scopeToken &&
         head.comparatorId === ordering.comparatorId &&
         head.comparatorRevision === ordering.comparatorRevision))
+  );
+}
+
+function sameSemanticDuplicateIdentity(
+  left: z.infer<typeof inboxV2DeferredSourceActionIdempotencyKeySchema>,
+  right: z.infer<typeof inboxV2DeferredSourceActionIdempotencyKeySchema>
+): boolean {
+  return (
+    left.semanticId === right.semanticId &&
+    left.eventFingerprintSha256 === right.eventFingerprintSha256
   );
 }
 

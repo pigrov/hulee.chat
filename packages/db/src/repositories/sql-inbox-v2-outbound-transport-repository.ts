@@ -2540,6 +2540,51 @@ function buildLoadInboxV2ExternalMessageReferenceForAssociationSql(input: {
   `;
 }
 
+export function buildFindInboxV2ExternalMessageReferenceCandidatesSql(input: {
+  tenantId: InboxV2TenantId;
+  referenceId: InboxV2ExternalMessageReferenceId;
+  keyDigest: string;
+}): SQL {
+  return sql`
+    ${externalMessageReferenceReadSelectSql()}
+     where reference_row.tenant_id = ${input.tenantId}
+       and (
+         reference_row.id = ${input.referenceId}
+         or reference_row.message_key_digest_sha256 = ${input.keyDigest}
+       )
+     order by reference_row.id asc
+     limit 2
+     for share
+  `;
+}
+
+/**
+ * Loads the at-most-two rows capable of conflicting with one reconciliation
+ * candidate: its caller-selected ID and its server-computed exact-key digest.
+ * The caller must still compare every key field; a digest is an index, never
+ * equality proof.
+ */
+export async function findInboxV2ExternalMessageReferenceCandidatesInTransaction(
+  transaction: RawSqlExecutor,
+  input: Readonly<{
+    tenantId: InboxV2TenantId;
+    referenceId: InboxV2ExternalMessageReferenceId;
+    keyDigest: string;
+  }>
+): Promise<readonly InboxV2ExternalMessageReference[]> {
+  const result = await transaction.execute<ExternalMessageReferenceRow>(
+    buildFindInboxV2ExternalMessageReferenceCandidatesSql(input)
+  );
+  if (result.rows.length > 2) {
+    throw invariantError(
+      "External message reference reconciliation lookup exceeded its bounded ID/digest candidates."
+    );
+  }
+  return result.rows.map((row) =>
+    mapExternalMessageReferenceRow(row, input.tenantId)
+  );
+}
+
 function externalMessageReferenceReadSelectSql(): SQL {
   return sql`
     select reference_row.tenant_id, reference_row.id,

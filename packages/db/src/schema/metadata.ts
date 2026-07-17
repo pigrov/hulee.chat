@@ -324,6 +324,8 @@ export const initialTables = [
   // prettier-ignore
   { name: "inbox_v2_source_occurrence_provider_timestamps", scope: "tenant", requiresTenantId: true },
   // prettier-ignore
+  { name: "inbox_v2_source_message_key_registry", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
   { name: "inbox_v2_timeline_items", scope: "tenant", requiresTenantId: true },
   // prettier-ignore
   { name: "inbox_v2_timeline_subject_details", scope: "tenant", requiresTenantId: true },
@@ -387,6 +389,18 @@ export const initialTables = [
   { name: "inbox_v2_provider_receipt_opaque_payloads", scope: "tenant", requiresTenantId: true },
   // prettier-ignore
   { name: "inbox_v2_external_message_references", scope: "tenant", requiresTenantId: true },
+  // SRC-006 keeps exact-key deferred actions and target-free finite weak
+  // correlation evidence separate from canonical Message content.
+  // prettier-ignore
+  { name: "inbox_v2_deferred_message_source_actions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_deferred_message_source_action_transitions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_deferred_source_action_conflict_candidates", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_deferred_source_action_ordering_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_message_correlation_evidence", scope: "tenant", requiresTenantId: true },
   // prettier-ignore
   { name: "inbox_v2_thread_route_policy_versions", scope: "tenant", requiresTenantId: true },
   // prettier-ignore

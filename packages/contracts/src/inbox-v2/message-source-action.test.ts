@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   inboxV2DeferredMessageSourceActionCommitSchema,
-  inboxV2DeferredMessageSourceActionSchema
+  inboxV2DeferredMessageSourceActionSchema,
+  inboxV2DeferredSourceActionOrderingHeadSchema
 } from "./message-source-action";
 import {
   fixtureAdapterContract,
@@ -437,6 +438,25 @@ function retainedDeleteEffect(
 }
 
 describe("Inbox V2 deferred Message source actions", () => {
+  it("bounds the durable ordering-head position to the shared provider limit", () => {
+    const action = pendingAction({
+      kind: "edit",
+      normalizedEvent: normalizedEvent("head-position-limit"),
+      normalizedContentDigestSha256: "a".repeat(64)
+    });
+
+    expect(
+      inboxV2DeferredSourceActionOrderingHeadSchema.safeParse(
+        orderingHead(action, { position: "9".repeat(128) })
+      ).success
+    ).toBe(true);
+    expect(
+      inboxV2DeferredSourceActionOrderingHeadSchema.safeParse(
+        orderingHead(action, { position: "9".repeat(129) })
+      ).success
+    ).toBe(false);
+  });
+
   it("induces each exact-message action from full occurrence and trusted normalized semantics", () => {
     const actions: DeferredPayload[] = [
       {
@@ -596,28 +616,76 @@ describe("Inbox V2 deferred Message source actions", () => {
         fingerprint: "b".repeat(64)
       }
     );
+    const staleCommit = terminalCommit(
+      stale,
+      {
+        state: "stale",
+        headAction: head.latest.action,
+        staleAt: fixtureT3
+      },
+      { outcome: "stale", beforeHead: head }
+    );
+    expect(
+      inboxV2DeferredMessageSourceActionCommitSchema.safeParse(staleCommit)
+        .success
+    ).toBe(true);
+    const stalePreliminaryTarget =
+      fixtureExternalReference(fixtureOccurrence());
+    const staleResolution = occurrenceResolution(stale, stalePreliminaryTarget);
+    const staleTarget = fixtureExternalReference(staleResolution.after);
+    const staleWithExactProvenance = {
+      ...staleCommit,
+      targetExternalMessageReference: staleTarget,
+      sourceOccurrenceResolution: {
+        ...staleResolution,
+        resolvedReference: staleTarget
+      }
+    };
     expect(
       inboxV2DeferredMessageSourceActionCommitSchema.safeParse(
-        terminalCommit(
-          stale,
-          {
-            state: "stale",
-            headAction: head.latest.action,
-            staleAt: fixtureT3
-          },
-          { outcome: "stale", beforeHead: head }
-        )
+        staleWithExactProvenance
       ).success
     ).toBe(true);
+    expect(
+      inboxV2DeferredMessageSourceActionCommitSchema.safeParse({
+        ...staleWithExactProvenance,
+        sourceOccurrenceResolution: null
+      }).success
+    ).toBe(false);
 
-    const duplicate = pendingAction(canonical.action, {
-      id: "deferred_message_source_action:duplicate-1",
+    const duplicate = pendingAction(
+      {
+        ...canonical.action,
+        normalizedEvent: normalizedEvent("duplicate-delivery")
+      },
+      {
+        id: "deferred_message_source_action:duplicate-1",
+        occurrenceId: "source_occurrence:duplicate-1",
+        position: "10"
+      }
+    );
+    const duplicateCommit = terminalCommit(
+      duplicate,
+      {
+        state: "duplicate",
+        canonicalAction: head.latest.action,
+        duplicateAt: fixtureT3
+      },
+      { outcome: "duplicate", beforeHead: head }
+    );
+    expect(
+      inboxV2DeferredMessageSourceActionCommitSchema.safeParse(duplicateCommit)
+        .success
+    ).toBe(true);
+    const occurrenceOnlyDuplicate = pendingAction(canonical.action, {
+      id: "deferred_message_source_action:occurrence-duplicate-1",
+      occurrenceId: "source_occurrence:occurrence-duplicate-1",
       position: "10"
     });
     expect(
       inboxV2DeferredMessageSourceActionCommitSchema.safeParse(
         terminalCommit(
-          duplicate,
+          occurrenceOnlyDuplicate,
           {
             state: "duplicate",
             canonicalAction: head.latest.action,
@@ -626,6 +694,40 @@ describe("Inbox V2 deferred Message source actions", () => {
           { outcome: "duplicate", beforeHead: head }
         )
       ).success
+    ).toBe(true);
+    const exactReplay = pendingAction(canonical.action, {
+      id: "deferred_message_source_action:exact-replay-1",
+      position: "10"
+    });
+    expect(
+      inboxV2DeferredMessageSourceActionCommitSchema.safeParse(
+        terminalCommit(
+          exactReplay,
+          {
+            state: "duplicate",
+            canonicalAction: head.latest.action,
+            duplicateAt: fixtureT3
+          },
+          { outcome: "duplicate", beforeHead: head }
+        )
+      ).success
+    ).toBe(false);
+    const duplicatePreliminaryTarget =
+      fixtureExternalReference(fixtureOccurrence());
+    const duplicateResolution = occurrenceResolution(
+      duplicate,
+      duplicatePreliminaryTarget
+    );
+    const duplicateTarget = fixtureExternalReference(duplicateResolution.after);
+    expect(
+      inboxV2DeferredMessageSourceActionCommitSchema.safeParse({
+        ...duplicateCommit,
+        targetExternalMessageReference: duplicateTarget,
+        sourceOccurrenceResolution: {
+          ...duplicateResolution,
+          resolvedReference: duplicateTarget
+        }
+      }).success
     ).toBe(true);
 
     const conflict = pendingAction(
@@ -655,6 +757,20 @@ describe("Inbox V2 deferred Message source actions", () => {
         )
       ).success
     ).toBe(true);
+    expect(
+      inboxV2DeferredMessageSourceActionCommitSchema.safeParse(
+        terminalCommit(
+          duplicate,
+          {
+            state: "ordering_conflict",
+            conflictingAction: head.latest.action,
+            reasonId: "core:provider-order-conflict",
+            conflictedAt: fixtureT3
+          },
+          { outcome: "conflict", beforeHead: head }
+        )
+      ).success
+    ).toBe(false);
 
     const incomparable = {
       ...pendingAction(

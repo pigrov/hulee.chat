@@ -664,6 +664,86 @@ describe("Inbox V2 Message transport contracts", () => {
     expect(commit.occurrenceBinding.id).toBe(secondBinding.id);
   });
 
+  it("retains reloaded adapter provenance on an exact provider-wide cross-account echo", () => {
+    const secondAccount = fixtureReference(
+      "source_account",
+      "source_account:hulee-reloaded-account-2"
+    );
+    const secondBinding = fixtureReference(
+      "source_thread_binding",
+      "source_thread_binding:hulee-reloaded-binding-2"
+    );
+    const secondConnection = fixtureReference(
+      "source_connection",
+      "source_connection:hulee-reloaded-connection-2"
+    );
+    const reloadedAdapterContract = {
+      ...fixtureAdapterContract,
+      declarationRevision: "8",
+      loadedByTrustedServiceId: "core:source-runtime-reloaded",
+      loadedAt: fixtureT2
+    };
+    const baseEcho = fixtureOccurrence({
+      origin: "provider_echo",
+      direction: "outbound",
+      occurrenceId: "source_occurrence:hulee-reloaded-echo-2",
+      recordedAt: fixtureT3
+    });
+    const echo = {
+      ...baseEcho,
+      messageIdentityDeclaration: {
+        ...baseEcho.messageIdentityDeclaration,
+        adapterContract: reloadedAdapterContract
+      },
+      bindingContext: {
+        ...baseEcho.bindingContext,
+        sourceAccount: secondAccount,
+        sourceThreadBinding: secondBinding
+      },
+      origin: { ...baseEcho.origin, sourceAccount: secondAccount },
+      descriptor: {
+        ...baseEcho.descriptor,
+        adapterContract: reloadedAdapterContract
+      },
+      referencePortability: {
+        ...baseEcho.referencePortability,
+        adapterContract: reloadedAdapterContract
+      }
+    };
+    const originRoute = fixtureRoute();
+    const occurrenceRoute = {
+      ...originRoute,
+      sourceConnection: secondConnection,
+      sourceAccount: secondAccount,
+      sourceThreadBinding: secondBinding
+    };
+    const typedEcho = echo as unknown as ReturnType<typeof fixtureOccurrence>;
+    const baseCommit = associationCommit(typedEcho);
+    const commit = {
+      ...baseCommit,
+      // The canonical reference preserves the first adapter-load snapshot.
+      externalMessageReference: {
+        ...baseCommit.externalMessageReference,
+        identityDeclaration: {
+          ...baseCommit.externalMessageReference.identityDeclaration,
+          adapterContract: fixtureAdapterContract
+        }
+      },
+      externalThreadMapping: providerWideExternalThreadMapping(),
+      occurrenceBinding: occurrenceBindingSnapshot(typedEcho, occurrenceRoute)
+    };
+
+    const parsed =
+      inboxV2MessageTransportAssociationCommitSchema.safeParse(commit);
+    expect(parsed.success ? [] : parsed.error.issues).toEqual([]);
+    expect(commit.sourceOccurrence.descriptor.adapterContract).toEqual(
+      reloadedAdapterContract
+    );
+    expect(
+      commit.externalMessageReference.identityDeclaration.adapterContract
+    ).toEqual(fixtureAdapterContract);
+  });
+
   it("rejects cross-account Hulee echoes with a wrong provider, thread or account-scoped reference", () => {
     const secondAccount = fixtureReference(
       "source_account",

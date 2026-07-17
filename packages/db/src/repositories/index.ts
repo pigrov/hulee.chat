@@ -222,6 +222,7 @@ export type {
 } from "./sql-inbox-v2-external-thread-repository";
 export {
   buildFindInboxV2SourceOccurrenceByIdSql,
+  buildLockInboxV2SourceOccurrenceByIdSql,
   buildInsertInboxV2SourceOccurrenceProviderReferenceSql,
   buildInsertInboxV2SourceOccurrenceProviderTimestampSql,
   buildInsertInboxV2SourceOccurrenceSql,
@@ -234,7 +235,8 @@ export {
   buildLockInboxV2SourceOccurrenceProviderActorSql,
   buildLockInboxV2SourceOccurrenceRawEventSql,
   computeInboxV2SourceAccountCanonicalKeyDigest,
-  createSqlInboxV2SourceOccurrenceRepository
+  createSqlInboxV2SourceOccurrenceRepository,
+  readInboxV2SourceOccurrenceInTransaction
 } from "./sql-inbox-v2-source-occurrence-repository";
 export type {
   InboxV2SourceOccurrenceRepository,
@@ -242,6 +244,7 @@ export type {
   MaterializeInboxV2SourceOccurrenceResult
 } from "./sql-inbox-v2-source-occurrence-repository";
 export {
+  buildFindInboxV2ExternalMessageReferenceCandidatesSql,
   buildCompareAndSwapInboxV2OutboundDispatchAttemptSql,
   buildCompareAndSwapInboxV2OutboundDispatchSql,
   buildCompareAndSwapInboxV2SourceOccurrenceResolutionSql,
@@ -255,7 +258,9 @@ export {
   buildInsertInboxV2OutboundRouteSql,
   buildInsertInboxV2SourceOccurrenceResolutionTransitionSql,
   buildInsertInboxV2ThreadRoutePolicyVersionSql,
-  createSqlInboxV2OutboundTransportRepository
+  computeInboxV2ExternalMessageKeyDigest,
+  createSqlInboxV2OutboundTransportRepository,
+  findInboxV2ExternalMessageReferenceCandidatesInTransaction
 } from "./sql-inbox-v2-outbound-transport-repository";
 export type {
   AppendInboxV2DispatchArtifactResult,
@@ -296,6 +301,7 @@ export {
   buildFindInboxV2SourceConversationAccountIdentitySql,
   createSqlInboxV2SourceConversationResolutionRepository
 } from "./sql-inbox-v2-source-conversation-resolution-repository";
+export * from "./sql-inbox-v2-source-message-reconciliation-repository";
 export type {
   CreateSqlInboxV2SourceConversationResolutionRepositoryOptions,
   InboxV2SourceConversationMaterializationPlanAuthorizationVerifier,

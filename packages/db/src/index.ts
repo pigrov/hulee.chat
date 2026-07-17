@@ -630,4 +630,5 @@ export * from "./repositories/sql-inbox-v2-raw-ingress-repository";
 export * from "./repositories/sql-inbox-v2-source-normalization-repository";
 export * from "./repositories/sql-inbox-v2-source-identity-resolution-repository";
 export * from "./repositories/sql-inbox-v2-source-identity-resolution-lifecycle";
+export * from "./repositories/sql-inbox-v2-source-message-reconciliation-repository";
 export * from "./schema/inbox-v2/membership-privilege-boundary";

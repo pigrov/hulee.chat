@@ -41,8 +41,10 @@ export const INBOX_V2_PROVIDER_SEMANTIC_PROOF_SCHEMA_VERSION =
 
 export const inboxV2ProviderSemanticIdSchema = inboxV2CatalogIdSchema;
 export const inboxV2ProviderSemanticCapabilityIdSchema = inboxV2CatalogIdSchema;
+export const INBOX_V2_PROVIDER_ORDERING_POSITION_MAX_DIGITS = 128;
 export const inboxV2ProviderOrderingPositionSchema = z
   .string()
+  .max(INBOX_V2_PROVIDER_ORDERING_POSITION_MAX_DIGITS)
   .regex(/^(0|[1-9][0-9]*)$/u);
 
 export const inboxV2ProviderSemanticOrderingSchema = z.discriminatedUnion(

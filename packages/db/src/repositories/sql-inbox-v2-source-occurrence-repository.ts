@@ -638,6 +638,19 @@ export function buildFindInboxV2SourceOccurrenceByIdSql(input: {
   `;
 }
 
+export function buildLockInboxV2SourceOccurrenceByIdSql(input: {
+  tenantId: InboxV2TenantId;
+  occurrenceId: InboxV2SourceOccurrenceId;
+}): SQL {
+  return sql`
+    select *
+    from inbox_v2_source_occurrences
+    where tenant_id = ${input.tenantId}
+      and id = ${input.occurrenceId}
+    for update
+  `;
+}
+
 export function buildListInboxV2SourceOccurrenceProviderReferencesSql(input: {
   tenantId: InboxV2TenantId;
   occurrenceId: InboxV2SourceOccurrenceId;
@@ -1408,24 +1421,27 @@ async function loadOccurrenceAggregateRows(
   input: Readonly<{
     tenantId: InboxV2TenantId;
     occurrenceId: InboxV2SourceOccurrenceId;
-  }>
+  }>,
+  options: Readonly<{ lock?: boolean }> = {}
 ): Promise<LoadedOccurrenceAggregateRows | null> {
   const row = requireAtMostOneRow(
     await executor.execute<ExistingOccurrenceRow>(
-      buildFindInboxV2SourceOccurrenceByIdSql(input)
+      options.lock === true
+        ? buildLockInboxV2SourceOccurrenceByIdSql(input)
+        : buildFindInboxV2SourceOccurrenceByIdSql(input)
     ),
     "SourceOccurrence lookup"
   );
   if (row === null) return null;
 
-  const [references, timestamps] = await Promise.all([
-    executor.execute<ProviderReferenceRow>(
-      buildListInboxV2SourceOccurrenceProviderReferencesSql(input)
-    ),
-    executor.execute<ProviderTimestampRow>(
-      buildListInboxV2SourceOccurrenceProviderTimestampsSql(input)
-    )
-  ]);
+  // RawSqlExecutor may be backed by one node-postgres client. Keep aggregate
+  // reads sequential so callers never overlap queries on that transaction.
+  const references = await executor.execute<ProviderReferenceRow>(
+    buildListInboxV2SourceOccurrenceProviderReferencesSql(input)
+  );
+  const timestamps = await executor.execute<ProviderTimestampRow>(
+    buildListInboxV2SourceOccurrenceProviderTimestampsSql(input)
+  );
   const resolutionCandidates =
     row.resolution_state === "conflicted"
       ? await executor.execute<ResolutionCandidateRow>(
@@ -1445,6 +1461,25 @@ async function loadOccurrenceAggregateRows(
     timestamps: timestamps.rows,
     resolutionCandidates: resolutionCandidates.rows
   };
+}
+
+/**
+ * Transaction-local aggregate read used by provider-neutral source
+ * reconciliation. The optional row lock is deliberately acquired before the
+ * bounded child reads so a caller compares one stable occurrence revision.
+ */
+export async function readInboxV2SourceOccurrenceInTransaction(
+  executor: RawSqlExecutor,
+  input: Readonly<{
+    tenantId: InboxV2TenantId;
+    occurrenceId: InboxV2SourceOccurrenceId;
+  }>,
+  options: Readonly<{ lock?: boolean }> = {}
+): Promise<InboxV2SourceOccurrence | null> {
+  const aggregate = await loadOccurrenceAggregateRows(executor, input, options);
+  return aggregate === null
+    ? null
+    : mapSourceOccurrenceAggregate(aggregate, input.tenantId);
 }
 
 function mapSourceOccurrenceAggregate(

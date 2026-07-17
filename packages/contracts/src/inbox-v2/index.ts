@@ -33,6 +33,7 @@ export * from "./security-denial-audit";
 export * from "./source-account-identity";
 export * from "./source-conversation-resolution";
 export * from "./source-identity-resolution";
+export * from "./source-message-reconciliation";
 export * from "./source-occurrence-materialization";
 export * from "./source-raw-ingress";
 export * from "./source-normalized-ingress";

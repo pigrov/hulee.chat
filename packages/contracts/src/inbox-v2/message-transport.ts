@@ -173,7 +173,7 @@ export const inboxV2MessageTransportAssociationCommitSchema = z
         commit.externalMessageReference.key,
         sourceOccurrence.messageKey
       ) ||
-      !sameValue(
+      !sameStableMessageIdentityDeclaration(
         commit.externalMessageReference.identityDeclaration,
         sourceOccurrence.messageIdentityDeclaration
       ) ||
@@ -184,7 +184,7 @@ export const inboxV2MessageTransportAssociationCommitSchema = z
         sourceOccurrence.bindingContext.externalThread.id ||
       commit.externalThreadMapping.conversation.id !==
         message.conversation.id ||
-      !sameValue(
+      !sameStableAdapterSurface(
         commit.externalThreadMapping.thread.identityDeclaration.adapterContract,
         sourceOccurrence.descriptor.adapterContract
       ) ||
@@ -935,7 +935,7 @@ function addTransportAssociationOriginIssues(
         sourceOccurrence.bindingContext.externalThread.id ||
       route.externalThread.id !== commit.externalThreadMapping.thread.id ||
       (!exactSameRouteGeneration && !exactProviderWideEcho) ||
-      !sameValue(
+      !sameStableAdapterSurface(
         route.adapterContract,
         sourceOccurrence.descriptor.adapterContract
       )
@@ -1066,6 +1066,69 @@ function addTransportLinkHeadIssues(
       "Transport association advances only its independent per-Message relation head."
     );
   }
+}
+
+/**
+ * Adapter load/declaration audit metadata belongs to each occurrence and may
+ * legitimately differ on replay or a second account. Canonical association is
+ * based on the immutable message declaration and stable adapter surface only.
+ */
+function sameStableMessageIdentityDeclaration(
+  left: Readonly<{
+    adapterContract: Readonly<{
+      contractId: unknown;
+      contractVersion: string;
+      surfaceId: unknown;
+    }>;
+    identityKind: string;
+    realmId: unknown;
+    realmVersion: string;
+    canonicalizationVersion: string;
+    objectKindId: unknown;
+    scopeKind: string;
+  }>,
+  right: Readonly<{
+    adapterContract: Readonly<{
+      contractId: unknown;
+      contractVersion: string;
+      surfaceId: unknown;
+    }>;
+    identityKind: string;
+    realmId: unknown;
+    realmVersion: string;
+    canonicalizationVersion: string;
+    objectKindId: unknown;
+    scopeKind: string;
+  }>
+): boolean {
+  return (
+    sameStableAdapterSurface(left.adapterContract, right.adapterContract) &&
+    left.identityKind === right.identityKind &&
+    String(left.realmId) === String(right.realmId) &&
+    left.realmVersion === right.realmVersion &&
+    left.canonicalizationVersion === right.canonicalizationVersion &&
+    String(left.objectKindId) === String(right.objectKindId) &&
+    left.scopeKind === right.scopeKind
+  );
+}
+
+function sameStableAdapterSurface(
+  left: Readonly<{
+    contractId: unknown;
+    contractVersion: string;
+    surfaceId: unknown;
+  }>,
+  right: Readonly<{
+    contractId: unknown;
+    contractVersion: string;
+    surfaceId: unknown;
+  }>
+): boolean {
+  return (
+    String(left.contractId) === String(right.contractId) &&
+    left.contractVersion === right.contractVersion &&
+    String(left.surfaceId) === String(right.surfaceId)
+  );
 }
 
 function addTransportScopeTenantIssues(

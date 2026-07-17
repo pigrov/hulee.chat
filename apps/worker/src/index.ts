@@ -529,6 +529,17 @@ export {
   createInboxV2SourceConversationMaterializationPlanVerifier,
   isInboxV2TrustedSourceConversationMaterializationPlanVerifier
 } from "./source-conversation-resolution-plan-verifier";
+export {
+  buildInboxV2SourceMessageReconciliationAuthorizationPreimage,
+  createInboxV2TrustedSourceMessageReconciliationMaterializer,
+  deriveInboxV2SourceMessageReconciliationAuthorizationDigest,
+  InboxV2SourceMessageReconciliationMaterializerError,
+  isInboxV2TrustedSourceMessageReconciliationMaterializer
+} from "./source-message-reconciliation-materializer";
+export {
+  createInboxV2SourceMessageReconciliationPlanVerifier,
+  isInboxV2TrustedSourceMessageReconciliationPlanVerifier
+} from "./source-message-reconciliation-plan-verifier";
 export { createInboxV2SourceParticipantMaterializer } from "./source-participant-materialization";
 export {
   createSecurityDenialRetentionDatabaseConfig,
@@ -640,6 +651,15 @@ export type {
   InboxV2TrustedSourceConversationResolutionMaterializer
 } from "./source-conversation-resolution-materializer";
 export type { InboxV2SourceConversationMaterializationPlanVerifier } from "./source-conversation-resolution-plan-verifier";
+export type {
+  InboxV2SourceMessageNamespaceDeriver,
+  InboxV2SourceMessageNamespacePurpose,
+  InboxV2SourceMessageReconciliationAuthorizationInput,
+  InboxV2SourceMessageReconciliationClock,
+  InboxV2SourceMessageReconciliationMaterializerErrorCode,
+  InboxV2TrustedSourceMessageReconciliationMaterializer
+} from "./source-message-reconciliation-materializer";
+export type { InboxV2SourceMessageReconciliationPlanVerifier } from "./source-message-reconciliation-plan-verifier";
 export type {
   InboxV2ParticipantIdFactory,
   InboxV2SourceParticipantMaterializer,
