@@ -17,6 +17,8 @@ import {
   createSqlChannelSessionRepository,
   createSqlChannelProviderValidationJobRepository,
   createSqlDeploymentEgressProviderPolicyRepository,
+  createSqlInboxV2FencedOutboundTransportRuntimeRepository,
+  createSqlInboxV2RepositoryOutbox,
   createSqlInboxV2SecurityDenialRetentionRepository,
   createDrizzlePersistenceExecutor,
   createExternalMessageRepository,
@@ -79,6 +81,11 @@ import {
   type SecurityDenialRetentionSweepResult,
   type SecurityDenialRetentionSweeper
 } from "./security-denial-retention-sweeper";
+import {
+  createInboxV2ProviderDispatchCoordinator,
+  type InboxV2ProviderDispatchCoordinator,
+  type InboxV2ProviderDispatchCoordinatorOptions
+} from "./inbox-v2-provider-dispatch-coordinator";
 
 export type WorkerBoundary = {
   processesOutbox: true;
@@ -111,6 +118,33 @@ export function createWorkerRuntime(
     config,
     logger: createLevelFilteredLogger(baseLogger, config.logLevel)
   };
+}
+
+export type WorkerInboxV2ProviderDispatchCoordinatorOptions<
+  TRequest = unknown
+> = Omit<
+  InboxV2ProviderDispatchCoordinatorOptions<TRequest>,
+  "outbox" | "transport"
+> &
+  Readonly<{ database: HuleeDatabase }>;
+
+/**
+ * Production composition point for the fenced SRC-009 state machine. Tenant
+ * scheduling remains outside this factory until the Inbox V2 runner owns an
+ * explicit tenant work source.
+ */
+export function createWorkerInboxV2ProviderDispatchCoordinator<
+  TRequest = unknown
+>(
+  options: WorkerInboxV2ProviderDispatchCoordinatorOptions<TRequest>
+): InboxV2ProviderDispatchCoordinator {
+  const { database, ...coordinatorOptions } = options;
+  return createInboxV2ProviderDispatchCoordinator({
+    ...coordinatorOptions,
+    outbox: createSqlInboxV2RepositoryOutbox(database),
+    transport:
+      createSqlInboxV2FencedOutboundTransportRuntimeRepository(database)
+  });
 }
 
 export type WorkerOutboxHandlerOptions = {
@@ -513,6 +547,7 @@ export {
   createSecurityDenialRetentionSweeper
 } from "./security-denial-retention-sweeper";
 export { createInboxV2SourceNormalizationProcessor } from "./source-normalization-processor";
+export { createInboxV2ProviderDispatchCoordinator } from "./inbox-v2-provider-dispatch-coordinator";
 export {
   createInboxV2SourceIdentityResolutionProcessor,
   createInboxV2TrustedSourceIdentityMaterializer,
@@ -624,6 +659,24 @@ export type {
   SecurityDenialRetentionSweeper,
   SecurityDenialRetentionSweeperOptions
 } from "./security-denial-retention-sweeper";
+export type {
+  InboxV2ProviderDispatchAdapterPort,
+  InboxV2ProviderDispatchAdapterResult,
+  InboxV2ProviderDispatchClock,
+  InboxV2ProviderDispatchCoordinator,
+  InboxV2ProviderDispatchCoordinatorErrorCode,
+  InboxV2ProviderDispatchCoordinatorOptions,
+  InboxV2ProviderDispatchFencedMutationResult,
+  InboxV2ProviderDispatchLeaseFence,
+  InboxV2ProviderDispatchLoadedState,
+  InboxV2ProviderDispatchLoadRejected,
+  InboxV2ProviderDispatchLoadResult,
+  InboxV2ProviderDispatchPlan,
+  InboxV2ProviderDispatchPlanner,
+  InboxV2ProviderDispatchProcessResult,
+  InboxV2ProviderDispatchTimer,
+  InboxV2ProviderDispatchTransportPort
+} from "./inbox-v2-provider-dispatch-coordinator";
 export type {
   InboxV2SourceNormalizationClaim,
   InboxV2SourceNormalizationProcessResult,

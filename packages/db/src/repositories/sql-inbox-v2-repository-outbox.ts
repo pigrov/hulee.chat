@@ -7,6 +7,8 @@ import {
   inboxV2EntityRevisionSchema,
   inboxV2OutboxLeaseTokenSchema,
   inboxV2OutboxWorkItemSchema,
+  inboxV2PurgeOutboxTerminalPayloadInputSchema,
+  inboxV2PurgeOutboxTerminalPayloadResultSchema,
   inboxV2RenewOutboxLeaseInputSchema,
   inboxV2RenewOutboxLeaseResultSchema,
   inboxV2Sha256DigestSchema,
@@ -15,8 +17,11 @@ import {
   type InboxV2ClaimOutboxResult,
   type InboxV2FinalizeOutboxInput,
   type InboxV2FinalizeOutboxResult,
+  type InboxV2OutboxTerminalPayloadRetentionPort,
   type InboxV2OutboxWorkItem,
   type InboxV2OutboxWorkRepositoryPort,
+  type InboxV2PurgeOutboxTerminalPayloadInput,
+  type InboxV2PurgeOutboxTerminalPayloadResult,
   type InboxV2RenewOutboxLeaseInput,
   type InboxV2RenewOutboxLeaseResult
 } from "@hulee/contracts";
@@ -72,6 +77,10 @@ type ClaimedOutboxWorkRow = OutboxWorkRow & {
 type LockedOutboxWorkRow = OutboxWorkRow & { db_now: unknown };
 type InsertedOutcomeRow = { outcome_revision: unknown };
 type TerminalReplayOutcomeRow = { outcome_revision: unknown };
+type PurgedTerminalPayloadRow = {
+  outcome_found: unknown;
+  payload_purged: unknown;
+};
 
 export class InboxV2RepositoryOutboxPersistenceInvariantError extends Error {
   constructor(message: string) {
@@ -170,6 +179,17 @@ export function createSqlInboxV2RepositoryOutbox(
           );
         }
 
+        const terminalReference = terminalResultReference(input);
+        if (terminalReference !== null) {
+          await transaction.execute(
+            buildInsertInboxV2OutboxTerminalPayloadReferenceSql({
+              input,
+              dbNow: locked.dbNow,
+              outcomeRevision
+            })
+          );
+        }
+
         const finalized = await transaction.execute<OutboxWorkRow>(
           buildFinalizeInboxV2OutboxSql({
             input,
@@ -179,10 +199,19 @@ export function createSqlInboxV2RepositoryOutbox(
             outcomeRevision
           })
         );
+        const finalizedRow = exactlyOneRow(
+          finalized.rows,
+          "outbox finalization"
+        );
         const work = mapOutboxWorkRow(
           input.context.tenantId,
           input.intentId,
-          exactlyOneRow(finalized.rows, "outbox finalization")
+          terminalReference === null
+            ? finalizedRow
+            : {
+                ...finalizedRow,
+                terminal_result_reference: terminalReference
+              }
         );
         await transaction.execute(sql.raw("set constraints all immediate"));
         const outcome =
@@ -190,6 +219,49 @@ export function createSqlInboxV2RepositoryOutbox(
             ? "retry_scheduled"
             : input.instruction.kind;
         return inboxV2FinalizeOutboxResultSchema.parse({ outcome, work });
+      });
+    }
+  });
+}
+
+/**
+ * Creates the destructive terminal-payload lifecycle boundary. The supplied
+ * executor must authenticate as the dedicated retention-owner database role.
+ */
+export function createSqlInboxV2OutboxTerminalPayloadRetention(
+  executor: InboxV2RepositoryOutboxTransactionExecutor | HuleeDatabase
+): InboxV2OutboxTerminalPayloadRetentionPort {
+  const transactionExecutor =
+    executor as unknown as InboxV2RepositoryOutboxTransactionExecutor;
+  return Object.freeze({
+    async purgeTerminalPayload(
+      rawInput: InboxV2PurgeOutboxTerminalPayloadInput
+    ): Promise<InboxV2PurgeOutboxTerminalPayloadResult> {
+      const input =
+        inboxV2PurgeOutboxTerminalPayloadInputSchema.parse(rawInput);
+      return transactionExecutor.transaction(async (transaction) => {
+        const result = await transaction.execute<PurgedTerminalPayloadRow>(
+          buildPurgeInboxV2OutboxTerminalPayloadSql(input)
+        );
+        const row = exactlyOneRow(result.rows, "outbox terminal payload purge");
+        const outcomeFound = booleanValue(
+          row.outcome_found,
+          "outbox terminal payload outcome existence"
+        );
+        const payloadPurged = booleanValue(
+          row.payload_purged,
+          "outbox terminal payload purge result"
+        );
+        return inboxV2PurgeOutboxTerminalPayloadResultSchema.parse({
+          outcome: !outcomeFound
+            ? "not_found"
+            : payloadPurged
+              ? "purged"
+              : "already_absent",
+          tenantId: input.context.tenantId,
+          intentId: input.intentId,
+          outcomeRevision: input.outcomeRevision
+        });
       });
     }
   });
@@ -295,9 +367,13 @@ export function buildLockInboxV2OutboxWorkSql(input: {
     with db_clock as materialized (
       select clock_timestamp() as db_now
     )
-    select ${outboxWorkSelectColumns("work")},
+    select ${outboxWorkSelectColumns("work", "terminal_payload")},
            db_clock.db_now
       from public.inbox_v2_outbox_work_items work
+      left join public.inbox_v2_outbox_terminal_payload_refs terminal_payload
+        on terminal_payload.tenant_id = work.tenant_id
+       and terminal_payload.intent_id = work.intent_id
+       and terminal_payload.outcome_revision = work.revision
       cross join db_clock
      where work.tenant_id = ${input.context.tenantId}
        and work.intent_id = ${input.intentId}
@@ -322,9 +398,24 @@ export function buildFindInboxV2OutboxTerminalReplaySql(raw: {
       "Terminal outbox replay lookup requires the exact terminal work item."
     );
   }
+  const instruction = input.instruction;
+  if (instruction.kind === "retry") {
+    throw invariantError(
+      "Terminal outbox replay lookup cannot use a retry instruction."
+    );
+  }
+  const resultReference =
+    instruction.resultReference === null
+      ? null
+      : JSON.stringify(instruction.resultReference);
+  const errorCode = instruction.kind === "dead" ? instruction.errorCode : null;
   return sql`
     select outcome.outcome_revision::text as outcome_revision
       from public.inbox_v2_outbox_outcomes outcome
+      left join public.inbox_v2_outbox_terminal_payload_refs terminal_payload
+        on terminal_payload.tenant_id = outcome.tenant_id
+       and terminal_payload.intent_id = outcome.intent_id
+       and terminal_payload.outcome_revision = outcome.outcome_revision
      where outcome.tenant_id = ${input.context.tenantId}
        and outcome.intent_id = ${input.intentId}
        and outcome.outcome_revision = ${terminalWork.revision}
@@ -332,6 +423,19 @@ export function buildFindInboxV2OutboxTerminalReplaySql(raw: {
              ::public.inbox_v2_outbox_outcome_kind
        and outcome.lease_token_hash = ${tokenHash}
        and outcome.worker_id = ${input.workerId}
+       and outcome.outcome_hash = ${instruction.resultHash}
+       and outcome.error_code is not distinct from ${errorCode}
+       and (
+         (not outcome.payload_reference_recorded
+           and ${resultReference}::jsonb is null)
+         or (
+           outcome.payload_reference_recorded
+           and (
+             terminal_payload.tenant_id is null
+             or terminal_payload.result_reference = ${resultReference}::jsonb
+           )
+         )
+       )
      limit 1
   `;
 }
@@ -385,10 +489,7 @@ export function buildInsertInboxV2OutboxOutcomeSql(raw: {
   const instruction = input.instruction;
   const errorCode =
     instruction.kind === "processed" ? null : instruction.errorCode;
-  const resultReference =
-    instruction.kind === "retry" || instruction.resultReference === null
-      ? null
-      : JSON.stringify(instruction.resultReference);
+  const payloadReferenceRecorded = terminalResultReference(input) !== null;
   const retryAt =
     instruction.kind === "retry"
       ? sql`${dbNow}::timestamptz
@@ -404,7 +505,7 @@ export function buildInsertInboxV2OutboxOutcomeSql(raw: {
       lease_token_hash,
       worker_id,
       error_code,
-      result_reference,
+      payload_reference_recorded,
       retry_at,
       outcome_hash,
       occurred_at,
@@ -417,13 +518,74 @@ export function buildInsertInboxV2OutboxOutcomeSql(raw: {
       ${tokenHash},
       ${input.workerId},
       ${errorCode},
-      ${resultReference}::jsonb,
+      ${payloadReferenceRecorded},
       ${retryAt},
       ${instruction.resultHash},
       ${dbNow}::timestamptz,
       ${dbNow}::timestamptz
     )
     returning outcome_revision::text as outcome_revision
+  `;
+}
+
+export function buildInsertInboxV2OutboxTerminalPayloadReferenceSql(raw: {
+  input: InboxV2FinalizeOutboxInput;
+  dbNow: string;
+  outcomeRevision: string;
+}): SQL {
+  const input = inboxV2FinalizeOutboxInputSchema.parse(raw.input);
+  const dbNow = inboxV2TimestampSchema.parse(raw.dbNow);
+  const outcomeRevision = inboxV2EntityRevisionSchema.parse(
+    raw.outcomeRevision
+  );
+  const resultReference = terminalResultReference(input);
+  if (resultReference === null) {
+    throw invariantError(
+      "Terminal payload reference insert requires a recorded reference."
+    );
+  }
+  return sql`
+    insert into public.inbox_v2_outbox_terminal_payload_refs (
+      tenant_id,
+      intent_id,
+      outcome_revision,
+      result_reference,
+      recorded_at
+    ) values (
+      ${input.context.tenantId},
+      ${input.intentId},
+      ${outcomeRevision},
+      ${JSON.stringify(resultReference)}::jsonb,
+      ${dbNow}::timestamptz
+    )
+  `;
+}
+
+export function buildPurgeInboxV2OutboxTerminalPayloadSql(
+  rawInput: InboxV2PurgeOutboxTerminalPayloadInput
+): SQL {
+  const input = inboxV2PurgeOutboxTerminalPayloadInputSchema.parse(rawInput);
+  return sql`
+    with observed_outcome as materialized (
+      select outcome.tenant_id,
+             outcome.intent_id,
+             outcome.outcome_revision
+        from public.inbox_v2_outbox_outcomes outcome
+       where outcome.tenant_id = ${input.context.tenantId}
+         and outcome.intent_id = ${input.intentId}
+         and outcome.outcome_revision = ${input.outcomeRevision}
+         and outcome.kind in ('processed', 'dead')
+    ),
+    deleted_payload as (
+      delete from public.inbox_v2_outbox_terminal_payload_refs payload
+       using observed_outcome
+       where payload.tenant_id = observed_outcome.tenant_id
+         and payload.intent_id = observed_outcome.intent_id
+         and payload.outcome_revision = observed_outcome.outcome_revision
+      returning payload.tenant_id
+    )
+    select exists(select 1 from observed_outcome) as outcome_found,
+           exists(select 1 from deleted_payload) as payload_purged
   `;
 }
 
@@ -455,11 +617,6 @@ export function buildFinalizeInboxV2OutboxSql(raw: {
     ? sql`${dbNow}::timestamptz
         + make_interval(secs => ${instruction.retryAfterSeconds})`
     : sql`null::timestamptz`;
-  const terminalReference =
-    terminal && instruction.resultReference !== null
-      ? JSON.stringify(instruction.resultReference)
-      : null;
-
   return sql`
     update public.inbox_v2_outbox_work_items work
        set state = ${retry ? "pending" : instruction.kind}
@@ -478,7 +635,7 @@ export function buildFinalizeInboxV2OutboxSql(raw: {
            terminal_error_code = ${
              instruction.kind === "dead" ? instruction.errorCode : null
            },
-           terminal_result_reference = ${terminalReference}::jsonb,
+           terminal_result_reference = null,
            terminal_finalized_at = ${terminal ? dbNow : null}::timestamptz,
            revision = ${outcomeRevision},
            updated_at = ${dbNow}::timestamptz
@@ -773,25 +930,21 @@ function terminalInstructionMatches(
   if (terminal === null || terminal.kind !== instruction.kind) return false;
   if (terminal.resultHash !== instruction.resultHash) return false;
   if (
-    terminal.kind === "processed" &&
-    instruction.kind === "processed" &&
-    !sameJsonValue(terminal.resultReference, instruction.resultReference)
-  ) {
-    return false;
-  }
-  if (
     terminal.kind === "dead" &&
     instruction.kind === "dead" &&
-    (terminal.errorCode !== instruction.errorCode ||
-      !sameJsonValue(terminal.resultReference, instruction.resultReference))
+    terminal.errorCode !== instruction.errorCode
   ) {
     return false;
   }
   return true;
 }
 
-function sameJsonValue(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+function terminalResultReference(
+  input: InboxV2FinalizeOutboxInput
+): Readonly<Record<string, unknown>> | null {
+  return input.instruction.kind === "retry"
+    ? null
+    : input.instruction.resultReference;
 }
 
 type ClaimToken = Readonly<{ rawToken: string; tokenHash: string }>;
@@ -1057,18 +1210,31 @@ function mapOutboxWorkRow(
   });
 }
 
-function outboxWorkSelectColumns(alias: string): SQL {
-  return outboxWorkColumns(alias);
+function outboxWorkSelectColumns(
+  alias: string,
+  terminalPayloadAlias?: string
+): SQL {
+  return outboxWorkColumns(alias, terminalPayloadAlias);
 }
 
 function outboxWorkReturningColumns(alias: string): SQL {
   return outboxWorkColumns(alias);
 }
 
-function outboxWorkColumns(alias: string): SQL {
+function outboxWorkColumns(alias: string, terminalPayloadAlias?: string): SQL {
   if (alias !== "work") {
     throw invariantError("Unsupported outbox SQL alias.");
   }
+  if (
+    terminalPayloadAlias !== undefined &&
+    terminalPayloadAlias !== "terminal_payload"
+  ) {
+    throw invariantError("Unsupported terminal payload SQL alias.");
+  }
+  const terminalReference =
+    terminalPayloadAlias === undefined
+      ? "null::jsonb"
+      : `${terminalPayloadAlias}.result_reference`;
   return sql.raw(`
     work.tenant_id,
     work.intent_id,
@@ -1086,7 +1252,7 @@ function outboxWorkColumns(alias: string): SQL {
     work.last_retry_recorded_at,
     work.terminal_result_hash,
     work.terminal_error_code,
-    work.terminal_result_reference,
+    ${terminalReference} as terminal_result_reference,
     work.terminal_finalized_at,
     work.revision::text as revision,
     work.created_at,
@@ -1149,6 +1315,13 @@ function integerValue(value: unknown): number {
     throw invariantError("Outbox claim ordinal is invalid.");
   }
   return result;
+}
+
+function booleanValue(value: unknown, label: string): boolean {
+  if (typeof value !== "boolean") {
+    throw invariantError(`${label} must be a boolean.`);
+  }
+  return value;
 }
 
 function stringValue(value: unknown, label: string): string {

@@ -512,6 +512,8 @@ export const initialTables = [
   // prettier-ignore
   { name: "inbox_v2_outbox_intents", scope: "tenant", requiresTenantId: true },
   // prettier-ignore
+  { name: "inbox_v2_outbox_terminal_payload_refs", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
   { name: "inbox_v2_auth_audit_events", scope: "tenant", requiresTenantId: true },
   // prettier-ignore
   { name: "inbox_v2_auth_audit_facets", scope: "tenant", requiresTenantId: true },

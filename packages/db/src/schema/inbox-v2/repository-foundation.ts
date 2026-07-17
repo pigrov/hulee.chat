@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   bigint,
+  boolean,
   check,
   foreignKey,
   index,
@@ -338,7 +339,7 @@ export const inboxV2OutboxWorkItems = pgTable(
     }),
     terminalResultHash: text("terminal_result_hash"),
     terminalErrorCode: text("terminal_error_code"),
-    terminalResultReference: jsonb("terminal_result_reference").$type<
+    legacyTerminalResultReference: jsonb("terminal_result_reference").$type<
       Readonly<Record<string, unknown>>
     >(),
     terminalFinalizedAt: timestamp("terminal_finalized_at", {
@@ -385,8 +386,10 @@ export const inboxV2OutboxWorkItems = pgTable(
           or ${table.terminalResultHash} ~ '^sha256:[0-9a-f]{64}$')
         and (${table.terminalErrorCode} is null
           or char_length(${table.terminalErrorCode}) between 3 and 256)
-        and (${table.terminalResultReference} is null
-          or jsonb_typeof(${table.terminalResultReference}) = 'object')`
+        and (${table.legacyTerminalResultReference} is null
+          or public.inbox_v2_auth_payload_reference_safe(
+            ${table.legacyTerminalResultReference}, ${table.tenantId}
+          ))`
     ),
     check(
       "inbox_v2_outbox_work_items_state_check",
@@ -399,7 +402,7 @@ export const inboxV2OutboxWorkItems = pgTable(
           and ${table.leaseExpiresAt} is null
           and ${table.terminalResultHash} is null
           and ${table.terminalErrorCode} is null
-          and ${table.terminalResultReference} is null
+          and ${table.legacyTerminalResultReference} is null
           and ${table.terminalFinalizedAt} is null)
         or (${table.state} = 'leased'
           and ${table.availableAt} is not null
@@ -410,7 +413,7 @@ export const inboxV2OutboxWorkItems = pgTable(
           and ${table.leaseExpiresAt} is not null
           and ${table.terminalResultHash} is null
           and ${table.terminalErrorCode} is null
-          and ${table.terminalResultReference} is null
+          and ${table.legacyTerminalResultReference} is null
           and ${table.terminalFinalizedAt} is null)
         or (${table.state} = 'processed'
           and ${table.availableAt} is null
@@ -498,8 +501,11 @@ export const inboxV2OutboxOutcomes = pgTable(
     leaseTokenHash: text("lease_token_hash").notNull(),
     workerId: text("worker_id").notNull(),
     errorCode: text("error_code"),
-    resultReference:
+    legacyResultReference:
       jsonb("result_reference").$type<Readonly<Record<string, unknown>>>(),
+    payloadReferenceRecorded: boolean("payload_reference_recorded")
+      .notNull()
+      .default(false),
     retryAt: timestamp("retry_at", {
       withTimezone: true,
       precision: 3
@@ -539,15 +545,15 @@ export const inboxV2OutboxOutcomes = pgTable(
         and char_length(${table.workerId}) between 1 and 256
         and (${table.errorCode} is null
           or char_length(${table.errorCode}) between 3 and 256)
-        and (${table.resultReference} is null
-          or jsonb_typeof(${table.resultReference}) = 'object')
+        and ${table.legacyResultReference} is null
         and ${table.outcomeHash} ~ '^sha256:[0-9a-f]{64}$'
         and ((${table.kind} = 'processed'
             and ${table.errorCode} is null
             and ${table.retryAt} is null)
           or (${table.kind} = 'retry'
             and ${table.errorCode} is not null
-            and ${table.retryAt} is not null)
+            and ${table.retryAt} is not null
+            and not ${table.payloadReferenceRecorded})
           or (${table.kind} = 'dead'
             and ${table.errorCode} is not null
             and ${table.retryAt} is null))`

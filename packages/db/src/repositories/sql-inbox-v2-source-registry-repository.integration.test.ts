@@ -1596,6 +1596,7 @@ type SourceOnboardingLiveClosureCounts = Readonly<{
   outbox_intents: number;
   outbox_work_items: number;
   outbox_outcomes: number;
+  outbox_terminal_payload_refs: number;
   audit_events: number;
   audit_facets: number;
 }>;
@@ -1672,6 +1673,12 @@ async function sourceOnboardingClosureCounts(
             or outcome_row.result_reference->>'recordId' = ${input.resultId}))
         as outbox_outcomes,
       (select count(*)::int
+         from inbox_v2_outbox_terminal_payload_refs payload_row
+        where payload_row.tenant_id = ${input.tenantId}
+          and (payload_row.intent_id = ${input.outboxIntentId}
+            or payload_row.result_reference->>'recordId' = ${input.resultId}))
+        as outbox_terminal_payload_refs,
+      (select count(*)::int
          from inbox_v2_auth_audit_events audit_row
         where audit_row.tenant_id = ${input.tenantId}
           and (audit_row.id = ${input.auditEventId}
@@ -1704,6 +1711,7 @@ function sourceOnboardingLiveClosureCounts(
     outbox_intents: value,
     outbox_work_items: value,
     outbox_outcomes: value,
+    outbox_terminal_payload_refs: 0,
     audit_events: value,
     audit_facets: value
   };
@@ -1720,6 +1728,7 @@ function sourceOnboardingPrefixPrunedClosureCounts(): SourceOnboardingLiveClosur
     outbox_intents: 0,
     outbox_work_items: 0,
     outbox_outcomes: 0,
+    outbox_terminal_payload_refs: 0,
     audit_events: 1,
     audit_facets: 1
   };
@@ -1736,6 +1745,7 @@ function sourceOnboardingExpiredClosureCounts(): SourceOnboardingLiveClosureCoun
     outbox_intents: 0,
     outbox_work_items: 0,
     outbox_outcomes: 0,
+    outbox_terminal_payload_refs: 0,
     audit_events: 0,
     audit_facets: 0
   };

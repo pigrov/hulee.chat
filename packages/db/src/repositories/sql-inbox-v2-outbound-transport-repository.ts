@@ -1,6 +1,11 @@
 import {
+  calculateInboxV2OutboxLeaseTokenHash,
+  INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
+  INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
   inboxV2ExternalMessageReferenceIdSchema,
   inboxV2ExternalMessageReferenceSchema,
+  inboxV2EntityRevisionSchema,
+  inboxV2NamespacedIdSchema,
   inboxV2OutboundDispatchArtifactAssociationCommitSchema,
   inboxV2OutboundDispatchArtifactSchema,
   inboxV2OutboundDispatchAttemptCommitSchema,
@@ -11,6 +16,13 @@ import {
   inboxV2MessageIdSchema,
   inboxV2OutboundMultiSendOperationSchema,
   inboxV2OutboundRouteResolutionCommitSchema,
+  inboxV2OutboxIntentSchema,
+  inboxV2OutboxIntentIdSchema,
+  inboxV2OutboxLeaseTokenSchema,
+  inboxV2OutboxWorkerIdSchema,
+  inboxV2OutboxWorkStateSchema,
+  inboxV2PayloadReferenceSchema,
+  inboxV2RepositoryTenantContextSchema,
   inboxV2ThreadRoutePolicySchema,
   inboxV2TenantIdSchema,
   inboxV2TimestampSchema,
@@ -28,7 +40,10 @@ import {
   type InboxV2OutboundMultiSendOperation,
   type InboxV2OutboundRoute,
   type InboxV2OutboundRouteResolutionCommit,
+  type InboxV2FinalizeOutboxInput,
   type InboxV2MessageId,
+  type InboxV2OutboxIntent,
+  type InboxV2OutboxWorkItem,
   type InboxV2SourceOccurrenceResolutionCommit,
   type InboxV2TenantId,
   type InboxV2ThreadRoutePolicy
@@ -157,6 +172,48 @@ export type ApplyInboxV2ReconciliationResult =
         | "attempt_already_reconciled";
     }>;
 
+export type InboxV2ProviderIoOutboxLeaseFence = Readonly<
+  Pick<
+    InboxV2FinalizeOutboxInput,
+    "context" | "intentId" | "workerId" | "leaseToken" | "expectedLeaseRevision"
+  > & {
+    expectedHandlerId: InboxV2OutboxIntent["handlerId"];
+  }
+>;
+
+export type InboxV2ProviderIoOutboxFenceFailure =
+  | Readonly<{ kind: "outbox_not_found" }>
+  | Readonly<{
+      kind: "outbox_not_leased";
+      currentState: InboxV2OutboxWorkItem["state"];
+    }>
+  | Readonly<{
+      kind:
+        | "outbox_stale_token"
+        | "outbox_lease_expired"
+        | "outbox_lease_revision_conflict";
+      currentLeaseRevision: InboxV2FinalizeOutboxInput["expectedLeaseRevision"];
+    }>
+  | Readonly<{ kind: "outbox_intent_conflict" }>
+  | Readonly<{ kind: "outbox_attempt_lease_conflict" }>;
+
+export type ApplyInboxV2FencedDispatchAttemptResult =
+  | ApplyInboxV2DispatchAttemptResult
+  | InboxV2ProviderIoOutboxFenceFailure;
+
+export type ApplyInboxV2FencedReconciliationResult =
+  | ApplyInboxV2ReconciliationResult
+  | InboxV2ProviderIoOutboxFenceFailure;
+
+export type LoadInboxV2ClaimedProviderIoResult =
+  | Readonly<{
+      kind: "loaded";
+      intent: InboxV2OutboxIntent;
+      dispatch: InboxV2OutboundDispatch;
+    }>
+  | InboxV2ProviderIoOutboxFenceFailure
+  | Readonly<{ kind: "outbox_dispatch_not_found" }>;
+
 export type AppendInboxV2DispatchArtifactResult =
   | Readonly<{ kind: "committed" | "already_exists" }>
   | Readonly<{
@@ -211,6 +268,12 @@ export type InboxV2OutboundTransportRepository = Readonly<{
     tenantId: InboxV2TenantId;
     dispatchId: InboxV2OutboundDispatchId;
   }): Promise<InboxV2OutboundDispatch | null>;
+  /** Loads the immutable provider intent and dispatch only under its live lease. */
+  loadClaimedProviderIo(
+    input: Readonly<{
+      outboxLease: InboxV2ProviderIoOutboxLeaseFence;
+    }>
+  ): Promise<LoadInboxV2ClaimedProviderIoResult>;
   listMessageDispatches(input: {
     tenantId: InboxV2TenantId;
     messageId: InboxV2MessageId;
@@ -229,12 +292,26 @@ export type InboxV2OutboundTransportRepository = Readonly<{
   applyAttempt(
     commit: InboxV2OutboundDispatchAttemptCommit
   ): Promise<ApplyInboxV2DispatchAttemptResult>;
+  /** Runtime provider I/O must use this lease-bound entrypoint. */
+  applyAttemptFenced(
+    input: Readonly<{
+      outboxLease: InboxV2ProviderIoOutboxLeaseFence;
+      commit: InboxV2OutboundDispatchAttemptCommit;
+    }>
+  ): Promise<ApplyInboxV2FencedDispatchAttemptResult>;
   applyRouteFailure(
     commit: InboxV2OutboundDispatchRouteFailureCommit
   ): Promise<ApplyInboxV2DispatchAttemptResult>;
   reconcile(
     commit: InboxV2OutboundDispatchReconciliationCommit
   ): Promise<ApplyInboxV2ReconciliationResult>;
+  /** Runtime reconciliation must use this lease-bound entrypoint. */
+  reconcileFenced(
+    input: Readonly<{
+      outboxLease: InboxV2ProviderIoOutboxLeaseFence;
+      commit: InboxV2OutboundDispatchReconciliationCommit;
+    }>
+  ): Promise<ApplyInboxV2FencedReconciliationResult>;
   appendArtifact(
     artifact: InboxV2OutboundDispatchArtifact
   ): Promise<AppendInboxV2DispatchArtifactResult>;
@@ -248,6 +325,16 @@ export type InboxV2OutboundTransportRepository = Readonly<{
     }>
   ): Promise<CreateInboxV2MultiSendResult>;
 }>;
+
+export type InboxV2FencedOutboundTransportRuntimeRepository = Readonly<
+  Pick<
+    InboxV2OutboundTransportRepository,
+    | "findDispatch"
+    | "loadClaimedProviderIo"
+    | "applyAttemptFenced"
+    | "reconcileFenced"
+  >
+>;
 
 type IdRow = { id: unknown };
 type BindingAnchorRow = {
@@ -360,6 +447,38 @@ export function createSqlInboxV2OutboundTransportRepository(
       );
     },
 
+    async loadClaimedProviderIo(input) {
+      const outboxLease = parseProviderIoOutboxLeaseFence(input.outboxLease);
+      return runTransportTransaction(
+        transactionExecutor,
+        async (transaction) => {
+          const fenced = await lockAndValidateProviderIoOutboxLease(
+            transaction,
+            outboxLease,
+            null
+          );
+          if (fenced.kind !== "fenced") return fenced;
+          const result = await transaction.execute<DispatchReadRow>(
+            buildFindInboxV2OutboundDispatchSql({
+              tenantId: outboxLease.context.tenantId,
+              dispatchId: fenced.dispatchId
+            })
+          );
+          assertAtMostOneRow(
+            result.rows,
+            "Claimed provider I/O dispatch lookup"
+          );
+          const row = result.rows[0];
+          if (row === undefined) return { kind: "outbox_dispatch_not_found" };
+          return {
+            kind: "loaded",
+            intent: fenced.intent,
+            dispatch: mapDispatchReadRow(row, outboxLease.context.tenantId)
+          };
+        }
+      );
+    },
+
     async listMessageDispatches(input) {
       const tenantId = inboxV2TenantIdSchema.parse(input.tenantId);
       const messageId = inboxV2MessageIdSchema.parse(input.messageId);
@@ -436,6 +555,31 @@ export function createSqlInboxV2OutboundTransportRepository(
       );
     },
 
+    async applyAttemptFenced(input) {
+      const commit = inboxV2OutboundDispatchAttemptCommitSchema.parse(
+        input.commit
+      );
+      const outboxLease = parseProviderIoOutboxLeaseFence(input.outboxLease);
+      assertProviderIoFenceTenant(outboxLease, commit.tenantId);
+      return runTransportTransaction(
+        transactionExecutor,
+        async (transaction) => {
+          const fenced = await lockAndValidateProviderIoOutboxLease(
+            transaction,
+            outboxLease,
+            commit.dispatchBefore.id
+          );
+          if (fenced.kind !== "fenced") return fenced;
+          if (!providerAttemptTimeFenceMatches(commit, fenced)) {
+            return { kind: "outbox_attempt_lease_conflict" } as const;
+          }
+          return commit.kind === "open_attempt"
+            ? openAttemptInTransaction(transaction, commit)
+            : completeAttemptInTransaction(transaction, commit);
+        }
+      );
+    },
+
     async applyRouteFailure(input) {
       const commit =
         inboxV2OutboundDispatchRouteFailureCommitSchema.parse(input);
@@ -449,6 +593,32 @@ export function createSqlInboxV2OutboundTransportRepository(
         inboxV2OutboundDispatchReconciliationCommitSchema.parse(input);
       return runTransportTransaction(transactionExecutor, (transaction) =>
         reconcileInTransaction(transaction, commit)
+      );
+    },
+
+    async reconcileFenced(input) {
+      const commit = inboxV2OutboundDispatchReconciliationCommitSchema.parse(
+        input.commit
+      );
+      const outboxLease = parseProviderIoOutboxLeaseFence(input.outboxLease);
+      assertProviderIoFenceTenant(outboxLease, commit.tenantId);
+      return runTransportTransaction(
+        transactionExecutor,
+        async (transaction) => {
+          const fenced = await lockAndValidateProviderIoOutboxLease(
+            transaction,
+            outboxLease,
+            commit.dispatchBefore.id
+          );
+          if (fenced.kind !== "fenced") return fenced;
+          if (
+            Date.parse(commit.decision.decidedAt) >
+            Date.parse(fenced.databaseNow)
+          ) {
+            return { kind: "outbox_attempt_lease_conflict" } as const;
+          }
+          return reconcileInTransaction(transaction, commit);
+        }
       );
     },
 
@@ -494,6 +664,18 @@ export function createSqlInboxV2OutboundTransportRepository(
       }
     }
   };
+}
+
+export function createSqlInboxV2FencedOutboundTransportRuntimeRepository(
+  executor: InboxV2OutboundTransportTransactionExecutor | HuleeDatabase
+): InboxV2FencedOutboundTransportRuntimeRepository {
+  const repository = createSqlInboxV2OutboundTransportRepository(executor);
+  return Object.freeze({
+    findDispatch: repository.findDispatch,
+    loadClaimedProviderIo: repository.loadClaimedProviderIo,
+    applyAttemptFenced: repository.applyAttemptFenced,
+    reconcileFenced: repository.reconcileFenced
+  });
 }
 
 /**
@@ -1738,6 +1920,282 @@ type CompleteAttemptCommit = Extract<
   InboxV2OutboundDispatchAttemptCommit,
   { kind: "complete_attempt" }
 >;
+
+type ProviderIoOutboxLeaseRow = {
+  state: unknown;
+  lease_owner_id: unknown;
+  lease_token_hash: unknown;
+  lease_revision: unknown;
+  lease_claimed_at: unknown;
+  lease_expires_at: unknown;
+  database_now: unknown;
+  intent_id: unknown;
+  intent_type_id: unknown;
+  intent_handler_id: unknown;
+  intent_effect_class: unknown;
+  intent_stream_commit_id: unknown;
+  intent_stream_position: unknown;
+  intent_stream_epoch: unknown;
+  intent_event_id: unknown;
+  intent_change_ids: unknown;
+  intent_payload_reference: unknown;
+  intent_consumer_dedupe_key: unknown;
+  intent_correlation_id: unknown;
+  intent_available_at: unknown;
+  intent_hash: unknown;
+};
+
+type ValidatedProviderIoOutboxLease = Readonly<{
+  kind: "fenced";
+  intent: InboxV2OutboxIntent;
+  dispatchId: InboxV2OutboundDispatchId;
+  databaseNow: string;
+  leaseClaimedAt: string;
+  leaseExpiresAt: string;
+}>;
+
+function parseProviderIoOutboxLeaseFence(
+  input: InboxV2ProviderIoOutboxLeaseFence
+): InboxV2ProviderIoOutboxLeaseFence {
+  return Object.freeze({
+    context: inboxV2RepositoryTenantContextSchema.parse(input.context),
+    intentId: inboxV2OutboxIntentIdSchema.parse(input.intentId),
+    workerId: inboxV2OutboxWorkerIdSchema.parse(input.workerId),
+    leaseToken: inboxV2OutboxLeaseTokenSchema.parse(input.leaseToken),
+    expectedLeaseRevision: inboxV2EntityRevisionSchema.parse(
+      input.expectedLeaseRevision
+    ),
+    expectedHandlerId: inboxV2NamespacedIdSchema.parse(input.expectedHandlerId)
+  });
+}
+
+function assertProviderIoFenceTenant(
+  fence: InboxV2ProviderIoOutboxLeaseFence,
+  tenantId: InboxV2TenantId
+): void {
+  if (fence.context.tenantId !== tenantId) {
+    throw new CoreError(
+      "tenant.boundary_violation",
+      "Provider I/O outbox lease and outbound commit must belong to one tenant."
+    );
+  }
+}
+
+export function buildLockInboxV2ProviderIoOutboxLeaseSql(
+  input: InboxV2ProviderIoOutboxLeaseFence
+): SQL {
+  const fence = parseProviderIoOutboxLeaseFence(input);
+  return sql`
+    with database_clock as materialized (
+      select clock_timestamp() as database_now
+    )
+    select work.state::text as state,
+           work.lease_owner_id,
+           work.lease_token_hash,
+           work.lease_revision::text as lease_revision,
+           work.lease_claimed_at,
+           work.lease_expires_at,
+           database_clock.database_now,
+           intent.id as intent_id,
+           intent.type_id as intent_type_id,
+           intent.handler_id as intent_handler_id,
+           intent.effect_class::text as intent_effect_class,
+           intent.stream_commit_id as intent_stream_commit_id,
+           intent.stream_position::text as intent_stream_position,
+           stream_commit.stream_epoch as intent_stream_epoch,
+           intent.event_id as intent_event_id,
+           intent.change_ids as intent_change_ids,
+           intent.payload_reference as intent_payload_reference,
+           intent.consumer_dedupe_key as intent_consumer_dedupe_key,
+           intent.correlation_id as intent_correlation_id,
+           intent.available_at as intent_available_at,
+           intent.intent_hash as intent_hash
+      from public.inbox_v2_outbox_work_items work
+      join public.inbox_v2_outbox_intents intent
+        on intent.tenant_id = work.tenant_id
+       and intent.id = work.intent_id
+      join public.inbox_v2_tenant_stream_commits stream_commit
+        on stream_commit.tenant_id = intent.tenant_id
+       and stream_commit.id = intent.stream_commit_id
+      cross join database_clock
+     where work.tenant_id = ${fence.context.tenantId}
+       and work.intent_id = ${fence.intentId}
+     for update of work
+  `;
+}
+
+async function lockAndValidateProviderIoOutboxLease(
+  transaction: RawSqlExecutor,
+  fence: InboxV2ProviderIoOutboxLeaseFence,
+  expectedDispatchId: InboxV2OutboundDispatchId | null
+): Promise<
+  ValidatedProviderIoOutboxLease | InboxV2ProviderIoOutboxFenceFailure
+> {
+  const result = await transaction.execute<ProviderIoOutboxLeaseRow>(
+    buildLockInboxV2ProviderIoOutboxLeaseSql(fence)
+  );
+  assertAtMostOneRow(result.rows, "Provider I/O outbox lease lock");
+  const row = result.rows[0];
+  if (row === undefined) return { kind: "outbox_not_found" };
+
+  const state = inboxV2OutboxWorkStateSchema.parse(row.state);
+  if (state !== "leased") {
+    return { kind: "outbox_not_leased", currentState: state };
+  }
+  const currentLeaseRevision = inboxV2EntityRevisionSchema.parse(
+    parsePositiveDatabaseBigint(
+      row.lease_revision,
+      "provider I/O outbox lease revision"
+    )
+  );
+  const tokenHash = calculateInboxV2OutboxLeaseTokenHash(fence.leaseToken);
+  if (
+    nullableString(row.lease_owner_id) !== fence.workerId ||
+    nullableString(row.lease_token_hash) !== tokenHash
+  ) {
+    return { kind: "outbox_stale_token", currentLeaseRevision };
+  }
+  const databaseNow = parseDatabaseTimestamp(
+    row.database_now,
+    "provider I/O database clock"
+  );
+  const leaseClaimedAt = parseDatabaseTimestamp(
+    row.lease_claimed_at,
+    "provider I/O outbox lease claim"
+  );
+  const leaseExpiresAt = parseDatabaseTimestamp(
+    row.lease_expires_at,
+    "provider I/O outbox lease expiry"
+  );
+  if (Date.parse(leaseExpiresAt) <= Date.parse(databaseNow)) {
+    return { kind: "outbox_lease_expired", currentLeaseRevision };
+  }
+  if (currentLeaseRevision !== fence.expectedLeaseRevision) {
+    return {
+      kind: "outbox_lease_revision_conflict",
+      currentLeaseRevision
+    };
+  }
+
+  const payloadReference = parseDatabasePayloadReference(
+    row.intent_payload_reference
+  );
+  const parsedDispatchId = inboxV2OutboundDispatchIdSchema.safeParse(
+    payloadReference?.recordId
+  );
+  if (
+    nullableString(row.intent_type_id) !== "core:provider.dispatch" ||
+    nullableString(row.intent_effect_class) !== "provider_io" ||
+    nullableString(row.intent_handler_id) !== fence.expectedHandlerId ||
+    payloadReference === null ||
+    !parsedDispatchId.success ||
+    payloadReference.tenantId !== fence.context.tenantId ||
+    (expectedDispatchId !== null &&
+      parsedDispatchId.data !== expectedDispatchId) ||
+    payloadReference.schemaId !== INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID ||
+    payloadReference.schemaVersion !== INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION
+  ) {
+    return { kind: "outbox_intent_conflict" };
+  }
+  const intent = inboxV2OutboxIntentSchema.parse({
+    tenantId: fence.context.tenantId,
+    id: row.intent_id,
+    typeId: row.intent_type_id,
+    handlerId: row.intent_handler_id,
+    effectClass: row.intent_effect_class,
+    commit: {
+      tenantId: fence.context.tenantId,
+      streamEpoch: row.intent_stream_epoch,
+      commitId: row.intent_stream_commit_id,
+      streamPosition: parsePositiveDatabaseBigint(
+        row.intent_stream_position,
+        "provider I/O intent stream position"
+      )
+    },
+    eventId: row.intent_event_id,
+    changeIds: parseDatabaseJson(row.intent_change_ids),
+    payloadReference,
+    consumerDedupeKey: row.intent_consumer_dedupe_key,
+    correlationId: row.intent_correlation_id,
+    availableAt: parseDatabaseTimestamp(
+      row.intent_available_at,
+      "provider I/O intent availability"
+    ),
+    intentHash: row.intent_hash
+  });
+  return {
+    kind: "fenced",
+    intent,
+    dispatchId: parsedDispatchId.data,
+    databaseNow,
+    leaseClaimedAt,
+    leaseExpiresAt
+  };
+}
+
+function providerAttemptTimeFenceMatches(
+  commit: InboxV2OutboundDispatchAttemptCommit,
+  fence: ValidatedProviderIoOutboxLease
+): boolean {
+  const databaseNow = Date.parse(fence.databaseNow);
+  if (commit.kind === "open_attempt") {
+    const openedAt = Date.parse(commit.attempt.openedAt);
+    const attemptExpiresAt = Date.parse(commit.attempt.leaseExpiresAt);
+    return (
+      openedAt >= Date.parse(fence.leaseClaimedAt) &&
+      openedAt <= databaseNow &&
+      attemptExpiresAt > databaseNow &&
+      attemptExpiresAt <= Date.parse(fence.leaseExpiresAt)
+    );
+  }
+
+  const attemptExpired =
+    databaseNow >= Date.parse(commit.attemptBefore.leaseExpiresAt);
+  const completedAt =
+    commit.attemptAfter.outcome.kind === "pending"
+      ? Number.POSITIVE_INFINITY
+      : Date.parse(commit.attemptAfter.outcome.completedAt);
+  if (completedAt > databaseNow) return false;
+  if (attemptExpired) {
+    return (
+      commit.completionSource === "lease_expired" &&
+      commit.attemptAfter.outcome.kind === "outcome_unknown"
+    );
+  }
+  return commit.completionSource !== "lease_expired";
+}
+
+function parseDatabasePayloadReference(
+  value: unknown
+): ReturnType<typeof inboxV2PayloadReferenceSchema.parse> | null {
+  if (value === null || value === undefined) return null;
+  let candidate: unknown = value;
+  if (typeof value === "string") {
+    try {
+      candidate = JSON.parse(value) as unknown;
+    } catch (cause) {
+      throw invariantError(
+        `Provider I/O outbox payload reference is invalid JSON: ${String(cause)}`
+      );
+    }
+  }
+  try {
+    return inboxV2PayloadReferenceSchema.parse(candidate);
+  } catch (cause) {
+    throw invariantError(
+      `Provider I/O outbox payload reference is invalid: ${String(cause)}`
+    );
+  }
+}
+
+function parseDatabaseJson(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch (cause) {
+    throw invariantError(`Database JSON is invalid: ${String(cause)}`);
+  }
+}
 
 async function openAttemptInTransaction(
   transaction: RawSqlExecutor,

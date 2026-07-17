@@ -9,6 +9,7 @@ export * from "./inbox-v2/employee-conversation-state";
 export * from "./inbox-v2/external-thread";
 export * from "./inbox-v2/identity-foundation";
 export * from "./inbox-v2/outbound-transport";
+export * from "./inbox-v2/outbox-terminal-payload";
 export * from "./inbox-v2/participant-membership";
 export * from "./inbox-v2/membership-privilege-boundary";
 export * from "./inbox-v2/provider-semantic-ordering";

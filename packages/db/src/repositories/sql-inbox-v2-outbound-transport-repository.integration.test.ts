@@ -16,6 +16,7 @@ import {
   inboxV2OutboundRouteSchema,
   inboxV2OutboxIntentIdSchema,
   inboxV2Sha256DigestSchema,
+  inboxV2TenantIdSchema,
   inboxV2ThreadRoutePolicySchema,
   inboxV2TimelineContentHeadOf,
   inboxV2TimelineContentSchema,
@@ -49,6 +50,7 @@ import {
   createSqlInboxV2OutboundTransportRepository,
   persistInboxV2RouteResolutionInTransaction
 } from "./sql-inbox-v2-outbound-transport-repository";
+import { createSqlInboxV2RepositoryOutbox } from "./sql-inbox-v2-repository-outbox";
 import {
   computeInboxV2TimelineMessageCommitDigest,
   prepareInboxV2MessageCreation,
@@ -794,6 +796,348 @@ describePostgres(
         attempt_revision: "2",
         reconciliation_count: "1"
       });
+    });
+
+    it("fences provider I/O across an expired lease reclaimed by another worker", async () => {
+      const fixture = fixtureFor("fenced-provider-race");
+      tenantIds.push(fixture.tenantId);
+      await seedOutboundAnchors(db, fixture);
+      await expect(
+        persistAtomicOutboundProducer(db, fixture)
+      ).resolves.toMatchObject({ kind: "applied" });
+
+      const commandInput = authorizedExternalSendInput(fixture);
+      const raceTenantId = inboxV2TenantIdSchema.parse(commandInput.tenantId);
+      const providerIntent = commandInput.records.outboxIntents.find(
+        (intent) => intent.typeId === "core:provider.dispatch"
+      );
+      const projectionIntent = commandInput.records.outboxIntents.find(
+        (intent) => intent.effectClass === "projection"
+      );
+      if (providerIntent === undefined || projectionIntent === undefined) {
+        throw new Error("Provider race fixture is missing its outbox intents.");
+      }
+
+      const workerA = inboxV2NamespacedIdSchema.parse(
+        "core:provider-dispatch-worker-a"
+      );
+      const workerB = inboxV2NamespacedIdSchema.parse(
+        "core:provider-dispatch-worker-b"
+      );
+      const workerADb = createHuleeDatabase();
+      const workerBDb = createHuleeDatabase();
+      try {
+        const outboxA = createSqlInboxV2RepositoryOutbox(workerADb, {
+          tokenSource: (count) =>
+            Array.from(
+              { length: count },
+              (_, index) =>
+                `lease-token:src009-a-${index}-${runId}-${"a".repeat(32)}`
+            )
+        });
+        const outboxB = createSqlInboxV2RepositoryOutbox(workerBDb, {
+          tokenSource: (count) =>
+            Array.from(
+              { length: count },
+              (_, index) =>
+                `lease-token:src009-b-${index}-${runId}-${"b".repeat(32)}`
+            )
+        });
+        const transportA =
+          createSqlInboxV2OutboundTransportRepository(workerADb);
+        const transportB =
+          createSqlInboxV2OutboundTransportRepository(workerBDb);
+
+        const claimedA = await outboxA.claimAvailable({
+          context: { tenantId: raceTenantId },
+          workerId: workerA,
+          leaseDurationSeconds: 3,
+          batchSize: 2
+        });
+        if (claimedA.outcome !== "claimed") {
+          throw new Error("Worker A did not claim the provider intent.");
+        }
+        const providerClaimA = claimedA.claims.find(
+          (claim) => claim.work.intentId === providerIntent.id
+        );
+        const projectionClaimA = claimedA.claims.find(
+          (claim) => claim.work.intentId === projectionIntent.id
+        );
+        if (
+          providerClaimA?.work.lease === null ||
+          providerClaimA === undefined ||
+          projectionClaimA?.work.lease === null ||
+          projectionClaimA === undefined
+        ) {
+          throw new Error("Worker A claim is missing its exact leases.");
+        }
+        const fenceA = {
+          context: { tenantId: raceTenantId },
+          intentId: providerIntent.id,
+          workerId: workerA,
+          leaseToken: providerClaimA.leaseToken,
+          expectedLeaseRevision: providerClaimA.work.lease.leaseRevision,
+          expectedHandlerId: providerIntent.handlerId
+        } as const;
+
+        await expect(
+          transportA.loadClaimedProviderIo({ outboxLease: fenceA })
+        ).resolves.toMatchObject({
+          kind: "loaded",
+          intent: {
+            id: providerIntent.id,
+            handlerId: providerIntent.handlerId
+          },
+          dispatch: fixture.queuedDispatch
+        });
+        await expect(
+          transportA.loadClaimedProviderIo({
+            outboxLease: {
+              ...fenceA,
+              expectedHandlerId: inboxV2NamespacedIdSchema.parse(
+                "core:wrong-provider-handler"
+              )
+            }
+          })
+        ).resolves.toEqual({ kind: "outbox_intent_conflict" });
+        await expect(
+          transportA.loadClaimedProviderIo({
+            outboxLease: {
+              ...fenceA,
+              intentId: projectionIntent.id,
+              leaseToken: projectionClaimA.leaseToken,
+              expectedLeaseRevision: projectionClaimA.work.lease.leaseRevision
+            }
+          })
+        ).resolves.toEqual({ kind: "outbox_intent_conflict" });
+
+        const pendingAttempt = inboxV2OutboundDispatchAttemptSchema.parse({
+          ...fixture.pendingAttempt,
+          openedAt: providerClaimA.work.lease.claimedAt,
+          leaseExpiresAt: providerClaimA.work.lease.expiresAt
+        });
+        const attemptingDispatch = inboxV2OutboundDispatchSchema.parse({
+          ...fixture.attemptingDispatch,
+          updatedAt: pendingAttempt.openedAt
+        });
+        const openCommit = inboxV2OutboundDispatchAttemptCommitSchema.parse({
+          ...fixture.openAttemptCommit,
+          attempt: pendingAttempt,
+          dispatchAfter: attemptingDispatch
+        });
+        await expect(
+          transportA.applyAttemptFenced({
+            outboxLease: fenceA,
+            commit: openCommit
+          })
+        ).resolves.toEqual({ kind: "committed" });
+
+        await db.execute(sql`select pg_sleep(3.2)`);
+        const claimedB = await outboxB.claimAvailable({
+          context: { tenantId: raceTenantId },
+          workerId: workerB,
+          leaseDurationSeconds: 30,
+          batchSize: 2
+        });
+        if (claimedB.outcome !== "claimed") {
+          throw new Error(
+            "Worker B did not reclaim the expired provider intent."
+          );
+        }
+        const providerClaimB = claimedB.claims.find(
+          (claim) => claim.work.intentId === providerIntent.id
+        );
+        if (
+          providerClaimB === undefined ||
+          providerClaimB.work.lease === null
+        ) {
+          throw new Error("Worker B provider claim is missing its lease.");
+        }
+        expect(providerClaimB.claimKind).toBe("reclaimed");
+        const fenceB = {
+          context: { tenantId: raceTenantId },
+          intentId: providerIntent.id,
+          workerId: workerB,
+          leaseToken: providerClaimB.leaseToken,
+          expectedLeaseRevision: providerClaimB.work.lease.leaseRevision,
+          expectedHandlerId: providerIntent.handlerId
+        } as const;
+
+        const acceptedAttempt = inboxV2OutboundDispatchAttemptSchema.parse({
+          ...pendingAttempt,
+          outcome: {
+            kind: "accepted",
+            completedAt: pendingAttempt.leaseExpiresAt,
+            providerAcknowledgementToken: `provider:late-ack-${runId}`
+          },
+          completionSource: "provider_result",
+          revision: "2"
+        });
+        const acceptedDispatch = inboxV2OutboundDispatchSchema.parse({
+          ...attemptingDispatch,
+          state: "accepted",
+          activeAttempt: null,
+          revision: "3",
+          updatedAt: pendingAttempt.leaseExpiresAt
+        });
+        const staleProviderResult =
+          inboxV2OutboundDispatchAttemptCommitSchema.parse({
+            kind: "complete_attempt",
+            tenantId: raceTenantId,
+            dispatchBefore: attemptingDispatch,
+            attemptBefore: pendingAttempt,
+            attemptAfter: acceptedAttempt,
+            completionSource: "provider_result",
+            completedByTrustedServiceId:
+              pendingAttempt.retrySafety.adapterContract
+                .loadedByTrustedServiceId,
+            dispatchAfter: acceptedDispatch
+          });
+        await expect(
+          transportA.applyAttemptFenced({
+            outboxLease: fenceA,
+            commit: staleProviderResult
+          })
+        ).resolves.toMatchObject({ kind: "outbox_stale_token" });
+
+        const stillPending = await db.execute<{
+          dispatch_state: string;
+          attempt_outcome: string;
+          attempt_count: string;
+        }>(sql`
+          select dispatch_row.state as dispatch_state,
+                 attempt_row.outcome_kind as attempt_outcome,
+                 (count(*) over ())::text as attempt_count
+            from inbox_v2_outbound_dispatches dispatch_row
+            join inbox_v2_outbound_dispatch_attempts attempt_row
+              on attempt_row.tenant_id = dispatch_row.tenant_id
+             and attempt_row.dispatch_id = dispatch_row.id
+           where dispatch_row.tenant_id = ${fixture.tenantId}
+             and dispatch_row.id = ${fixture.queuedDispatch.id}
+        `);
+        expect(stillPending.rows).toEqual([
+          {
+            dispatch_state: "attempting",
+            attempt_outcome: "pending",
+            attempt_count: "1"
+          }
+        ]);
+
+        const unknownCompletedAt = providerClaimB.work.lease.claimedAt;
+        const unknownAttempt = inboxV2OutboundDispatchAttemptSchema.parse({
+          ...pendingAttempt,
+          outcome: {
+            ...fixture.unknownAttempt.outcome,
+            completedAt: unknownCompletedAt
+          },
+          completionSource: "lease_expired",
+          revision: "2"
+        });
+        const unknownDispatch = inboxV2OutboundDispatchSchema.parse({
+          ...attemptingDispatch,
+          state: "outcome_unknown",
+          activeAttempt: null,
+          revision: "3",
+          updatedAt: unknownCompletedAt
+        });
+        const closeUnknown = inboxV2OutboundDispatchAttemptCommitSchema.parse({
+          kind: "complete_attempt",
+          tenantId: raceTenantId,
+          dispatchBefore: attemptingDispatch,
+          attemptBefore: pendingAttempt,
+          attemptAfter: unknownAttempt,
+          completionSource: "lease_expired",
+          completedByTrustedServiceId:
+            pendingAttempt.retrySafety.adapterContract.loadedByTrustedServiceId,
+          dispatchAfter: unknownDispatch
+        });
+        await expect(
+          transportB.applyAttemptFenced({
+            outboxLease: fenceB,
+            commit: closeUnknown
+          })
+        ).resolves.toEqual({ kind: "committed" });
+
+        const retryAt = new Date(
+          Date.parse(unknownCompletedAt) + 1_000
+        ).toISOString();
+        const decision = {
+          ...fixture.reconciliationDecision,
+          routeSnapshot: fixture.route,
+          unknownAttempt,
+          decidedAt: unknownCompletedAt,
+          result: {
+            ...fixture.reconciliationDecision.result,
+            retryAt
+          }
+        };
+        const reconciledDispatch = inboxV2OutboundDispatchSchema.parse({
+          ...unknownDispatch,
+          state: "retryable_failure",
+          retryAuthorization: {
+            tenantId: raceTenantId,
+            kind: "outbound_dispatch_reconciliation_decision",
+            id: decision.id
+          },
+          revision: "4",
+          updatedAt: decision.decidedAt
+        });
+        const reconcileCommit =
+          inboxV2OutboundDispatchReconciliationCommitSchema.parse({
+            tenantId: raceTenantId,
+            dispatchBefore: unknownDispatch,
+            decision,
+            dispatchAfter: reconciledDispatch
+          });
+        await expect(
+          transportB.reconcileFenced({
+            outboxLease: fenceB,
+            commit: reconcileCommit
+          })
+        ).resolves.toEqual({ kind: "committed" });
+
+        const finalState = await db.execute<{
+          dispatch_state: string;
+          dispatch_revision: string;
+          attempt_outcome: string;
+          attempt_revision: string;
+          attempt_count: string;
+          reconciliation_count: string;
+        }>(sql`
+          select dispatch_row.state as dispatch_state,
+                 dispatch_row.revision::text as dispatch_revision,
+                 attempt_row.outcome_kind as attempt_outcome,
+                 attempt_row.revision::text as attempt_revision,
+                 (count(*) over ())::text as attempt_count,
+                 (
+                   select count(*)::text
+                     from inbox_v2_outbound_dispatch_reconciliation_decisions d
+                    where d.tenant_id = dispatch_row.tenant_id
+                      and d.dispatch_id = dispatch_row.id
+                 ) as reconciliation_count
+            from inbox_v2_outbound_dispatches dispatch_row
+            join inbox_v2_outbound_dispatch_attempts attempt_row
+              on attempt_row.tenant_id = dispatch_row.tenant_id
+             and attempt_row.dispatch_id = dispatch_row.id
+           where dispatch_row.tenant_id = ${fixture.tenantId}
+             and dispatch_row.id = ${fixture.queuedDispatch.id}
+        `);
+        expect(finalState.rows).toEqual([
+          {
+            dispatch_state: "retryable_failure",
+            dispatch_revision: "4",
+            attempt_outcome: "outcome_unknown",
+            attempt_revision: "2",
+            attempt_count: "1",
+            reconciliation_count: "1"
+          }
+        ]);
+      } finally {
+        await Promise.all([
+          closeHuleeDatabase(workerADb),
+          closeHuleeDatabase(workerBDb)
+        ]);
+      }
     });
 
     it.each([

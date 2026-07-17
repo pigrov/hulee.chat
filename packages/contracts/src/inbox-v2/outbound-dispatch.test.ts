@@ -1138,7 +1138,7 @@ describe("Inbox V2 crash-safe outbound dispatch", () => {
       number: 2,
       openedAt: reopenedAt,
       leaseExpiresAt: authorityNotAfter,
-      retrySafety: safeRetrySafety("provider:idempotency-0002")
+      retrySafety: safeRetrySafety()
     });
     const afterOpen = {
       ...afterDecision,
@@ -1164,6 +1164,27 @@ describe("Inbox V2 crash-safe outbound dispatch", () => {
       inboxV2OutboundDispatchAttemptCommitSchema.safeParse({
         ...validOpen,
         retryAuthorizationDecision: null
+      }).success
+    ).toBe(false);
+    expect(
+      inboxV2OutboundDispatchAttemptCommitSchema.safeParse({
+        ...validOpen,
+        attempt: {
+          ...second,
+          retrySafety: safeRetrySafety("provider:idempotency-0002")
+        }
+      }).success
+    ).toBe(false);
+    expect(
+      inboxV2OutboundDispatchAttemptCommitSchema.safeParse({
+        ...validOpen,
+        attempt: {
+          ...second,
+          retrySafety: {
+            ...safeRetrySafety(),
+            mechanism: "recoverable_client_marker"
+          }
+        }
       }).success
     ).toBe(false);
   });

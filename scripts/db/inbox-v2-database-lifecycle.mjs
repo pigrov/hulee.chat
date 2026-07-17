@@ -69,6 +69,8 @@ const REQUIRED_CURRENT_RELATIONS = [
   "inbox_v2_projection_checkpoints",
   "inbox_v2_projection_heads",
   "inbox_v2_outbox_work_items",
+  "inbox_v2_outbox_outcomes",
+  "inbox_v2_outbox_terminal_payload_refs",
   "inbox_v2_database_reset_receipts"
 ];
 const REQUIRED_CURRENT_FUNCTIONS = [
@@ -103,6 +105,13 @@ const REQUIRED_CURRENT_FUNCTIONS = [
   "public.inbox_v2_repository_outbox_work_guard()",
   "public.inbox_v2_repository_outbox_finalize_coherence()",
   "public.inbox_v2_repository_outbox_outcome_immutable()",
+  "public.inbox_v2_outbox_terminal_payload_ref_immutable()",
+  "public.inbox_v2_outbox_terminal_payload_ref_coherence()",
+  "public.inbox_v2_outbox_terminal_payload_ref_insert_guard()",
+  "public.inbox_v2_outbox_terminal_payload_ref_delete()",
+  "public.inbox_v2_outbox_legacy_outcome_payload_bridge()",
+  "public.inbox_v2_outbox_legacy_work_payload_bridge()",
+  "public.inbox_v2_source_onboarding_terminal_payload_ref_guard()",
   "public.inbox_v2_repository_retention_advance_immutable()",
   "public.inbox_v2_advance_tenant_stream_retained_prefix_v1(text,text,bigint,bigint,bigint,bigint,text,text,timestamptz)",
   "public.inbox_v2_lock_conversation_membership_head_v1(text,text)",
@@ -366,6 +375,46 @@ const REQUIRED_CURRENT_TRIGGERS = [
     "inbox_v2_outbox_outcomes",
     "inbox_v2_outbox_outcome_immutable_trigger",
     "public.inbox_v2_repository_outbox_outcome_immutable()"
+  ],
+  [
+    "inbox_v2_outbox_terminal_payload_refs",
+    "inbox_v2_outbox_terminal_payload_refs_immutable_trigger",
+    "public.inbox_v2_outbox_terminal_payload_ref_immutable()"
+  ],
+  [
+    "inbox_v2_outbox_terminal_payload_refs",
+    "inbox_v2_outbox_terminal_payload_refs_insert_guard",
+    "public.inbox_v2_outbox_terminal_payload_ref_insert_guard()"
+  ],
+  [
+    "inbox_v2_outbox_terminal_payload_refs",
+    "inbox_v2_outbox_terminal_payload_refs_truncate_guard",
+    "public.inbox_v2_outbox_terminal_payload_ref_immutable()"
+  ],
+  [
+    "inbox_v2_outbox_terminal_payload_refs",
+    "inbox_v2_outbox_terminal_payload_refs_delete_trigger",
+    "public.inbox_v2_outbox_terminal_payload_ref_delete()"
+  ],
+  [
+    "inbox_v2_outbox_terminal_payload_refs",
+    "inbox_v2_outbox_terminal_payload_refs_coherence",
+    "public.inbox_v2_outbox_terminal_payload_ref_coherence()"
+  ],
+  [
+    "inbox_v2_outbox_outcomes",
+    "inbox_v2_outbox_legacy_outcome_payload_bridge_trigger",
+    "public.inbox_v2_outbox_legacy_outcome_payload_bridge()"
+  ],
+  [
+    "inbox_v2_outbox_work_items",
+    "inbox_v2_outbox_legacy_work_payload_bridge_trigger",
+    "public.inbox_v2_outbox_legacy_work_payload_bridge()"
+  ],
+  [
+    "inbox_v2_source_onboarding_result_snapshots",
+    "inbox_v2_source_onboarding_terminal_payload_ref_guard_trigger",
+    "public.inbox_v2_source_onboarding_terminal_payload_ref_guard()"
   ],
   [
     "inbox_v2_tenant_stream_retention_advances",
@@ -724,6 +773,14 @@ const REQUIRED_CURRENT_CONSTRAINTS = [
     ["tenant_id", "intent_id"],
     "inbox_v2_outbox_work_items",
     ["tenant_id", "intent_id"]
+  ),
+  foreignKeyContract(
+    "inbox_v2_outbox_terminal_payload_refs",
+    "inbox_v2_outbox_terminal_payload_refs_outcome_fk",
+    ["tenant_id", "intent_id", "outcome_revision"],
+    "inbox_v2_outbox_outcomes",
+    ["tenant_id", "intent_id", "outcome_revision"],
+    { deferrable: true, initiallyDeferred: true }
   ),
   {
     relation: "inbox_v2_outbox_work_items",
@@ -1990,8 +2047,12 @@ export async function assertCurrentInboxV2Schema(client, migrationBundle) {
     for (const [name, actual, contract] of [
       ["type", row.contype, constraint.type],
       ["validated", row.convalidated, true],
-      ["deferrable", row.condeferrable, false],
-      ["initially-deferred", row.condeferred, false],
+      ["deferrable", row.condeferrable, constraint.deferrable ?? false],
+      [
+        "initially-deferred",
+        row.condeferred,
+        constraint.initiallyDeferred ?? false
+      ],
       [
         "columns",
         constraint.columns === undefined
@@ -3148,7 +3209,12 @@ function foreignKeyContract(
   columns,
   referenceRelation,
   referenceColumns,
-  { onUpdate = "a", onDelete = "c" } = {}
+  {
+    onUpdate = "a",
+    onDelete = "c",
+    deferrable = false,
+    initiallyDeferred = false
+  } = {}
 ) {
   return Object.freeze({
     relation,
@@ -3158,7 +3224,9 @@ function foreignKeyContract(
     referenceRelation,
     referenceColumns,
     onUpdate,
-    onDelete
+    onDelete,
+    deferrable,
+    initiallyDeferred
   });
 }
 

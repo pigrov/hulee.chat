@@ -10,6 +10,10 @@ import {
   inboxV2ProjectionHeads,
   inboxV2TenantStreamRetentionAdvances
 } from "./inbox-v2/repository-foundation";
+import {
+  INBOX_V2_OUTBOX_TERMINAL_PAYLOAD_REF_INTEGRITY_SQL,
+  inboxV2OutboxTerminalPayloadRefs
+} from "./inbox-v2/outbox-terminal-payload";
 
 const tables = [
   inboxV2ProjectionGenerations,
@@ -17,17 +21,19 @@ const tables = [
   inboxV2ProjectionCheckpoints,
   inboxV2OutboxWorkItems,
   inboxV2OutboxOutcomes,
+  inboxV2OutboxTerminalPayloadRefs,
   inboxV2TenantStreamRetentionAdvances
 ] as const;
 
 describe("Inbox V2 repository persistence foundation schema", () => {
-  it("owns six tenant-prefixed projection, outbox and retention tables", () => {
+  it("owns seven tenant-prefixed projection, outbox and retention tables", () => {
     expect(tables.map((table) => getTableConfig(table).name)).toEqual([
       "inbox_v2_projection_generations",
       "inbox_v2_projection_heads",
       "inbox_v2_projection_checkpoints",
       "inbox_v2_outbox_work_items",
       "inbox_v2_outbox_outcomes",
+      "inbox_v2_outbox_terminal_payload_refs",
       "inbox_v2_tenant_stream_retention_advances"
     ]);
     for (const table of tables) {
@@ -52,6 +58,10 @@ describe("Inbox V2 repository persistence foundation schema", () => {
     expect(foreignKeyColumns(inboxV2OutboxWorkItems)).toContainEqual({
       local: ["tenant_id", "intent_id"],
       foreign: ["tenant_id", "id"]
+    });
+    expect(foreignKeyColumns(inboxV2OutboxTerminalPayloadRefs)).toContainEqual({
+      local: ["tenant_id", "intent_id", "outcome_revision"],
+      foreign: ["tenant_id", "intent_id", "outcome_revision"]
     });
     expect(foreignKeyColumns(inboxV2ProjectionCheckpoints)).toContainEqual({
       local: [
@@ -161,6 +171,61 @@ describe("Inbox V2 repository persistence foundation schema", () => {
     );
     expect(workColumns).not.toContain("lease_token");
     expect(outcomeColumns).not.toContain("lease_token");
+    expect(
+      getTableConfig(inboxV2OutboxTerminalPayloadRefs).columns.map(
+        (column) => column.name
+      )
+    ).toEqual([
+      "tenant_id",
+      "intent_id",
+      "outcome_revision",
+      "result_reference",
+      "recorded_at"
+    ]);
+  });
+
+  it("makes terminal payload references independently purgeable", () => {
+    const payloadChecks = getTableConfig(
+      inboxV2OutboxTerminalPayloadRefs
+    ).checks.map((candidate) =>
+      new PgDialect().sqlToQuery(candidate.value).sql.replace(/\s+/gu, " ")
+    );
+    expect(payloadChecks.join(" ")).toContain(
+      "inbox_v2_auth_payload_reference_safe"
+    );
+    expect(INBOX_V2_OUTBOX_TERMINAL_PAYLOAD_REF_INTEGRITY_SQL).toContain(
+      "before update on public.inbox_v2_outbox_terminal_payload_refs"
+    );
+    expect(INBOX_V2_OUTBOX_TERMINAL_PAYLOAD_REF_INTEGRITY_SQL).toContain(
+      "before insert on public.inbox_v2_outbox_terminal_payload_refs"
+    );
+    expect(INBOX_V2_OUTBOX_TERMINAL_PAYLOAD_REF_INTEGRITY_SQL).toContain(
+      "inbox_v2.outbox_terminal_payload_insert_not_finalizing"
+    );
+    expect(INBOX_V2_OUTBOX_TERMINAL_PAYLOAD_REF_INTEGRITY_SQL).toContain(
+      "before truncate on public.inbox_v2_outbox_terminal_payload_refs"
+    );
+    expect(INBOX_V2_OUTBOX_TERMINAL_PAYLOAD_REF_INTEGRITY_SQL).toContain(
+      "before delete on public.inbox_v2_outbox_terminal_payload_refs"
+    );
+    expect(INBOX_V2_OUTBOX_TERMINAL_PAYLOAD_REF_INTEGRITY_SQL).toContain(
+      "current_user = 'hulee_inbox_v2_retention_owner'"
+    );
+    expect(INBOX_V2_OUTBOX_TERMINAL_PAYLOAD_REF_INTEGRITY_SQL).not.toContain(
+      "grant select, insert, delete on table"
+    );
+    expect(INBOX_V2_OUTBOX_TERMINAL_PAYLOAD_REF_INTEGRITY_SQL).toContain(
+      "inbox_v2_source_onboarding_terminal_payload_ref_guard"
+    );
+    expect(INBOX_V2_OUTBOX_TERMINAL_PAYLOAD_REF_INTEGRITY_SQL).toContain(
+      "deferrable initially deferred"
+    );
+    expect(INBOX_V2_OUTBOX_TERMINAL_PAYLOAD_REF_INTEGRITY_SQL).toContain(
+      "inbox_v2_outbox_legacy_outcome_payload_bridge"
+    );
+    expect(INBOX_V2_OUTBOX_TERMINAL_PAYLOAD_REF_INTEGRITY_SQL).toContain(
+      "inbox_v2_outbox_legacy_work_payload_bridge"
+    );
   });
 
   it("installs contiguous checkpoint and token-fenced work guards", () => {

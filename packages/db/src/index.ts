@@ -10,11 +10,18 @@ export * from "./repositories/sql-inbox-v2-destructive-checkpoint-guard-reposito
 export * from "./repositories/sql-inbox-v2-deletion-run-state-repository";
 export * from "./repositories/sql-inbox-v2-erasure-restore-ledger-repository";
 export {
+  createSqlInboxV2FencedOutboundTransportRuntimeRepository,
   InboxV2RouteResolutionRollbackError,
   persistInboxV2RouteResolutionInTransaction
 } from "./repositories/sql-inbox-v2-outbound-transport-repository";
 export type {
+  ApplyInboxV2FencedDispatchAttemptResult,
+  ApplyInboxV2FencedReconciliationResult,
+  InboxV2FencedOutboundTransportRuntimeRepository,
+  InboxV2ProviderIoOutboxFenceFailure,
+  InboxV2ProviderIoOutboxLeaseFence,
   InboxV2RouteResolutionConflictResult,
+  LoadInboxV2ClaimedProviderIoResult,
   PersistInboxV2RouteResolutionResult
 } from "./repositories/sql-inbox-v2-outbound-transport-repository";
 export {

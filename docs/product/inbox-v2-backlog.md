@@ -1647,15 +1647,21 @@ participant set.
   - Verification: concurrent worker, stale-owner-after-reclaim, crash/renew,
     provider-timeout and retry-safe/non-idempotent fixtures prove durable outcome
     precedes `processed` and no duplicate external side effect. Evidence:
-    completed on `2026-07-17` with same-lease terminal replay authenticated by
-    the immutable outbox outcome row, digest-only lease-token fences, exact
-    terminal-instruction matching, stale/different-worker rejection and no
-    duplicate outcome insertion. Focused repository tests passed `2/2` files /
-    `30/30` tests; full unit tests passed `341/341` files / `3513/3513` tests;
-    the disposable PostgreSQL gate applied `47` migrations with contract
-    `sha256:5ef422f4f82cb320ca992ac246374bb5fe7eff017acd5f51b5cf88c797009b14`
-    and passed `29/29` files / `273/273` tests. `pnpm lint`, `pnpm typecheck`
-    and `pnpm db:check` passed. Detailed evidence is in
+    completed and re-audited on `2026-07-17` with a provider-neutral worker
+    coordinator, one-transaction outbox/provider cross-fence, durable
+    attempt-before-I/O and outcome-before-finalize ordering, no-provider-call
+    recovery paths, digest-only lease-token handling and exact same-lease
+    terminal replay. Migration `0047` separates purgeable payload references
+    from immutable safe outcome evidence, denies runtime purge and prevents
+    payload resurrection while retaining additive N-1 replay compatibility.
+    Focused tests passed `8/8` files / `115/115` tests; the disposable
+    PostgreSQL gate applied `48` migrations with contract
+    `sha256:629a81489efdd655c3024068a1a4cbd0ceee16713c32481a584a5235ea258f25`
+    and passed `29/29` files / `274/274` tests; live preserve/N-1/RBAC passed
+    `3/3` files / `17/17` tests; the N-1 runtime bundle and complete
+    `pnpm check` passed, including `343/343` default test files / `3540/3540`
+    tests. Independent final review returned `READY` with no P0/P1 findings.
+    Detailed evidence is in
     `docs/product/inbox-v2-src-009-outbox-lease-lifecycle.md`.
 
 - [ ] `INB2-EPIC-3-GATE` Verify Epic 3 exit gate.
@@ -3137,4 +3143,4 @@ the task state, checkbox and evidence above.
 | 2026-07-16 | `INB2-SRC-003`     | Normalize/complete; focused 5/66; PG 26/238; preserve 3/17; full 320/3281  | working tree | Codex + two independent reviews   |
 | 2026-07-17 | `INB2-SRC-004`     | Identity/claims; focused 11/537; PG 27/239; preserve 3/17; full 328/3334   | task commit  | Codex + two independent reviews   |
 | 2026-07-17 | `INB2-SRC-007`     | Atomic commit; focused 10/212; PG 29/273; preserve 3/17; full 341/3509     | task commit  | Codex + two independent reviews   |
-| 2026-07-17 | `INB2-SRC-009`     | Outbox lease lifecycle; focused 2/30; PG 29/273; full 341/3513 + gates     | task commit  | Codex                             |
+| 2026-07-17 | `INB2-SRC-009`     | Fenced provider I/O; focused 8/115; PG 29/274; preserve 3/17 + all gates   | task commit  | Codex + three independent reviews |

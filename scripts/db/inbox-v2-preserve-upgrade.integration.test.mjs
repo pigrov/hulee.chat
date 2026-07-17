@@ -76,6 +76,7 @@ const operationalSideEffectTableAllowlist = Object.freeze([
   "inbox_v2_outbound_routes",
   "inbox_v2_outbox_intents",
   "inbox_v2_outbox_outcomes",
+  "inbox_v2_outbox_terminal_payload_refs",
   "inbox_v2_outbox_work_items",
   "inbox_v2_participant_membership_episodes",
   "inbox_v2_participant_membership_transitions",
@@ -271,7 +272,7 @@ describePostgres("Inbox V2 representative V1 preserve upgrade", () => {
         expectedMigrationContract(checkedInMigrationsDirectory).length -
         (v1LastMigrationIndex + 1),
       maximumRelationBytes: 8 * 1024 * 1024,
-      violationCount: 1560,
+      violationCount: 1581,
       requiresOnlineBridge: true,
       overrideRequested: true,
       overrideAuthorized: true

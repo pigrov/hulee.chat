@@ -6,6 +6,8 @@ import {
   calculateInboxV2CanonicalSha256,
   inboxV2ApplyProjectionContiguousInputSchema,
   inboxV2CompareAndSetRetainedPrefixInputSchema,
+  inboxV2EntityRevisionSchema,
+  inboxV2FinalizeOutboxInputSchema,
   inboxV2OutboxIntentIdSchema,
   inboxV2OutboxWorkerIdSchema,
   inboxV2ProjectionCheckpointSchema,
@@ -29,6 +31,7 @@ import {
   type HuleeDatabase
 } from "../client";
 import {
+  createSqlInboxV2OutboxTerminalPayloadRetention,
   createSqlInboxV2RepositoryOutbox,
   type InboxV2RepositoryOutboxTransactionExecutor
 } from "./sql-inbox-v2-repository-outbox";
@@ -494,9 +497,10 @@ describePostgres("SQL Inbox V2 repository foundation (live PostgreSQL)", () => {
       const fixtureC = await createStreamFixture(executor, "outbox-concurrent");
       const seededA = await seedStreamCommit(executor, fixtureA, 1, true);
       const seededB = await seedStreamCommit(executor, fixtureB, 1, true);
-      await seedStreamCommit(executor, fixtureC, 1, true);
+      const seededC = await seedStreamCommit(executor, fixtureC, 1, true);
       const intentA = requiredIntent(seededA);
       const intentB = requiredIntent(seededB);
+      const intentC = requiredIntent(seededC);
 
       const pending = await executor.execute<{
         tenant_id: string;
@@ -566,6 +570,19 @@ describePostgres("SQL Inbox V2 repository foundation (live PostgreSQL)", () => {
         "claimed",
         "empty"
       ]);
+      const concurrentClaimResult = concurrentClaims.find(
+        (candidate) => candidate.outcome === "claimed"
+      );
+      if (concurrentClaimResult?.outcome !== "claimed") {
+        throw new Error("DB-007 concurrent fixture lost its winning claim.");
+      }
+      const concurrentClaim = concurrentClaimResult.claims[0];
+      if (
+        concurrentClaim === undefined ||
+        concurrentClaim.work.lease === null
+      ) {
+        throw new Error("DB-007 concurrent fixture lost its lease.");
+      }
 
       const firstClaim = await firstRepository.claimAvailable({
         context: { tenantId: fixtureA.tenantId },
@@ -704,50 +721,179 @@ describePostgres("SQL Inbox V2 repository foundation (live PostgreSQL)", () => {
       });
 
       const resultHash = digest("terminal-result");
-      await expect(
-        secondRepository.finalize({
-          context: { tenantId: fixtureA.tenantId },
-          intentId: intentA,
-          workerId: workerB,
-          leaseToken: leaseTokenB,
-          expectedLeaseRevision: renewedTwice.work.lease.leaseRevision,
-          instruction: {
-            kind: "processed",
-            resultHash,
-            resultReference: null
-          }
-        })
-      ).resolves.toMatchObject({
+      const terminalPayloadReference = {
+        tenantId: fixtureA.tenantId,
+        recordId: `outbox-result:${runId}`,
+        schemaId: "core:inbox-v2.outbox-result",
+        schemaVersion: "v1",
+        digest: digest("terminal-payload-reference")
+      } as const;
+      const terminalFinalizeInput = inboxV2FinalizeOutboxInputSchema.parse({
+        context: { tenantId: fixtureA.tenantId },
+        intentId: intentA,
+        workerId: workerB,
+        leaseToken: leaseTokenB,
+        expectedLeaseRevision: renewedTwice.work.lease.leaseRevision,
+        instruction: {
+          kind: "processed",
+          resultHash,
+          resultReference: terminalPayloadReference
+        }
+      });
+      const finalizedTerminal = await secondRepository.finalize(
+        terminalFinalizeInput
+      );
+      expect(finalizedTerminal).toMatchObject({
         outcome: "processed",
         work: {
           tenantId: fixtureA.tenantId,
           intentId: intentA,
           state: "processed",
           attemptCount: "2",
-          terminalResult: { kind: "processed", resultHash }
-        }
-      });
-
-      await expect(
-        secondRepository.finalize({
-          context: { tenantId: fixtureA.tenantId },
-          intentId: intentA,
-          workerId: workerB,
-          leaseToken: leaseTokenB,
-          expectedLeaseRevision: renewedTwice.work.lease.leaseRevision,
-          instruction: {
+          terminalResult: {
             kind: "processed",
             resultHash,
-            resultReference: null
+            resultReference: terminalPayloadReference
           }
-        })
+        }
+      });
+      if (finalizedTerminal.outcome !== "processed") {
+        throw new Error(
+          "SRC-009 terminal finalize did not persist processed work."
+        );
+      }
+      const terminalFinalizedAt =
+        finalizedTerminal.work.terminalResult?.finalizedAt;
+      if (terminalFinalizedAt === undefined) {
+        throw new Error("SRC-009 processed work lost its terminal timestamp.");
+      }
+
+      await expect(
+        secondRepository.finalize(terminalFinalizeInput)
       ).resolves.toMatchObject({
         outcome: "already_finalized",
         work: {
           tenantId: fixtureA.tenantId,
           intentId: intentA,
           state: "processed",
-          terminalResult: { kind: "processed", resultHash }
+          terminalResult: {
+            kind: "processed",
+            resultHash,
+            resultReference: terminalPayloadReference
+          }
+        }
+      });
+
+      const terminalStorageBeforePurge = await loadTerminalStorageBoundary(
+        executor,
+        fixtureA.tenantId,
+        intentA
+      );
+      expect(terminalStorageBeforePurge).toMatchObject({
+        work_legacy_reference_is_null: true,
+        outcome_legacy_reference_is_null: true,
+        payload_reference_recorded: true,
+        payload_count: 1
+      });
+      const terminalPayloadPrivileges = await executor.execute<{
+        runtime_delete_denied: boolean;
+        retention_delete_allowed: boolean;
+        retention_shadow_clear_allowed: boolean;
+      }>(sql`
+        select
+          not pg_catalog.has_table_privilege(
+            'hulee_inbox_v2_runtime',
+            'public.inbox_v2_outbox_terminal_payload_refs',
+            'DELETE'
+          ) as runtime_delete_denied,
+          pg_catalog.has_table_privilege(
+            'hulee_inbox_v2_retention_owner',
+            'public.inbox_v2_outbox_terminal_payload_refs',
+            'SELECT,DELETE'
+          ) as retention_delete_allowed,
+          pg_catalog.has_column_privilege(
+            'hulee_inbox_v2_retention_owner',
+            'public.inbox_v2_outbox_work_items',
+            'terminal_result_reference',
+            'UPDATE'
+          ) as retention_shadow_clear_allowed
+      `);
+      expect(terminalPayloadPrivileges.rows).toEqual([
+        {
+          runtime_delete_denied: true,
+          retention_delete_allowed: true,
+          retention_shadow_clear_allowed: true
+        }
+      ]);
+      await expectDatabaseFailure(
+        executor.transaction(async (transaction) => {
+          await transaction.execute(
+            sql.raw("set local role hulee_inbox_v2_runtime")
+          );
+          await transaction.execute(sql`
+            delete from inbox_v2_outbox_terminal_payload_refs
+             where tenant_id = ${fixtureA.tenantId}
+               and intent_id = ${intentA}
+               and outcome_revision = ${finalizedTerminal.work.revision}
+          `);
+        }),
+        "42501",
+        "permission denied"
+      );
+      const purgeCurrentTerminalPayload = () =>
+        executor.transaction(async (transaction) => {
+          await transaction.execute(
+            sql.raw("set local role hulee_inbox_v2_retention_owner")
+          );
+          return createSqlInboxV2OutboxTerminalPayloadRetention(
+            transaction as unknown as InboxV2RepositoryOutboxTransactionExecutor
+          ).purgeTerminalPayload({
+            context: { tenantId: fixtureA.tenantId },
+            intentId: intentA,
+            outcomeRevision: finalizedTerminal.work.revision
+          });
+        });
+      await expect(purgeCurrentTerminalPayload()).resolves.toMatchObject({
+        outcome: "purged"
+      });
+      await expectDatabaseFailure(
+        executor.transaction(async (transaction) => {
+          await transaction.execute(
+            sql.raw("set local role hulee_inbox_v2_runtime")
+          );
+          await transaction.execute(sql`
+            insert into inbox_v2_outbox_terminal_payload_refs (
+              tenant_id, intent_id, outcome_revision,
+              result_reference, recorded_at
+            ) values (
+              ${fixtureA.tenantId}, ${intentA},
+              ${finalizedTerminal.work.revision},
+              ${JSON.stringify(terminalPayloadReference)}::jsonb,
+              ${terminalFinalizedAt}::timestamptz
+            )
+          `);
+        }),
+        "23514",
+        "inbox_v2.outbox_terminal_payload_insert_not_finalizing"
+      );
+      await expect(purgeCurrentTerminalPayload()).resolves.toMatchObject({
+        outcome: "already_absent"
+      });
+      const terminalStorageAfterPurge = await loadTerminalStorageBoundary(
+        executor,
+        fixtureA.tenantId,
+        intentA
+      );
+      expect(terminalStorageAfterPurge.payload_count).toBe(0);
+      expect(terminalStorageAfterPurge.safe_skeleton).toEqual(
+        terminalStorageBeforePurge.safe_skeleton
+      );
+      await expect(
+        secondRepository.finalize(terminalFinalizeInput)
+      ).resolves.toMatchObject({
+        outcome: "already_finalized",
+        work: {
+          terminalResult: { resultHash, resultReference: null }
         }
       });
 
@@ -833,6 +979,227 @@ describePostgres("SQL Inbox V2 repository foundation (live PostgreSQL)", () => {
       expect(otherTenant.rows).toEqual([
         { state: "pending", attempt_count: "0", outcome_count: 0 }
       ]);
+
+      const legacyClaimResult = await firstRepository.claimAvailable({
+        context: { tenantId: fixtureB.tenantId },
+        workerId: workerA,
+        leaseDurationSeconds: 30,
+        batchSize: 1
+      });
+      if (legacyClaimResult.outcome !== "claimed") {
+        throw new Error("SRC-009 N-1 bridge fixture was not claimable.");
+      }
+      const legacyClaim = legacyClaimResult.claims[0];
+      if (legacyClaim === undefined || legacyClaim.work.lease === null) {
+        throw new Error("SRC-009 N-1 bridge fixture lost its lease.");
+      }
+      const legacyLease = legacyClaim.work.lease;
+      const legacyOutcomeRevision = inboxV2EntityRevisionSchema.parse(
+        (BigInt(legacyClaim.work.revision) + 1n).toString()
+      );
+      const legacyResultHash = digest("legacy-terminal-result");
+      const legacyReference = {
+        tenantId: fixtureB.tenantId,
+        recordId: `outbox-result:n1-${runId}`,
+        schemaId: "core:inbox-v2.outbox-result",
+        schemaVersion: "v1",
+        digest: digest("legacy-terminal-reference")
+      } as const;
+      await firstWorker.transaction(async (transaction) => {
+        const clock = await transaction.execute<{ db_now: Date | string }>(
+          sql`select clock_timestamp() as db_now`
+        );
+        const changedAt = timestampText(clock.rows[0]!.db_now);
+        await transaction.execute(sql`
+          insert into inbox_v2_outbox_outcomes (
+            tenant_id, intent_id, outcome_revision, kind,
+            lease_token_hash, worker_id, error_code, result_reference,
+            retry_at, outcome_hash, occurred_at, created_at
+          ) values (
+            ${fixtureB.tenantId}, ${intentB}, ${legacyOutcomeRevision},
+            'processed', ${legacyLease.leaseTokenHash}, ${workerA},
+            null, ${JSON.stringify(legacyReference)}::jsonb, null,
+            ${legacyResultHash}, ${changedAt}::timestamptz,
+            ${changedAt}::timestamptz
+          )
+        `);
+        await transaction.execute(sql`
+          update inbox_v2_outbox_work_items work
+             set state = 'processed',
+                 available_at = null,
+                 lease_owner_id = null,
+                 lease_token_hash = null,
+                 lease_revision = null,
+                 lease_claimed_at = null,
+                 lease_expires_at = null,
+                 terminal_result_hash = ${legacyResultHash},
+                 terminal_error_code = null,
+                 terminal_result_reference =
+                   ${JSON.stringify(legacyReference)}::jsonb,
+                 terminal_finalized_at = ${changedAt}::timestamptz,
+                 revision = ${legacyOutcomeRevision},
+                 updated_at = ${changedAt}::timestamptz
+           where work.tenant_id = ${fixtureB.tenantId}
+             and work.intent_id = ${intentB}
+             and work.state = 'leased'
+             and work.lease_token_hash =
+               ${legacyLease.leaseTokenHash}
+        `);
+        await transaction.execute(sql.raw("set constraints all immediate"));
+      });
+      const legacyStorageBeforePurge = await loadTerminalStorageBoundary(
+        executor,
+        fixtureB.tenantId,
+        intentB
+      );
+      expect(legacyStorageBeforePurge).toMatchObject({
+        work_legacy_reference_is_null: false,
+        outcome_legacy_reference_is_null: true,
+        payload_reference_recorded: true,
+        payload_count: 1
+      });
+      const n1SameLeaseReplay = await firstWorker.execute<{
+        instruction_matches: boolean;
+        outcome_matches: boolean;
+      }>(sql`
+        select
+          work.state = 'processed'
+            and work.terminal_result_hash = ${legacyResultHash}
+            and work.terminal_result_reference =
+              ${JSON.stringify(legacyReference)}::jsonb
+            as instruction_matches,
+          exists (
+            select 1
+              from inbox_v2_outbox_outcomes outcome
+             where outcome.tenant_id = work.tenant_id
+               and outcome.intent_id = work.intent_id
+               and outcome.outcome_revision = work.revision
+               and outcome.kind = work.state::text::inbox_v2_outbox_outcome_kind
+               and outcome.lease_token_hash = ${legacyLease.leaseTokenHash}
+               and outcome.worker_id = ${workerA}
+          ) as outcome_matches
+          from inbox_v2_outbox_work_items work
+         where work.tenant_id = ${fixtureB.tenantId}
+           and work.intent_id = ${intentB}
+      `);
+      expect(n1SameLeaseReplay.rows).toEqual([
+        { instruction_matches: true, outcome_matches: true }
+      ]);
+
+      await expect(
+        executor.transaction(async (transaction) => {
+          await transaction.execute(
+            sql.raw("set local role hulee_inbox_v2_retention_owner")
+          );
+          return createSqlInboxV2OutboxTerminalPayloadRetention(
+            transaction as unknown as InboxV2RepositoryOutboxTransactionExecutor
+          ).purgeTerminalPayload({
+            context: { tenantId: fixtureB.tenantId },
+            intentId: intentB,
+            outcomeRevision: legacyOutcomeRevision
+          });
+        })
+      ).resolves.toMatchObject({ outcome: "purged" });
+      await expect(
+        loadTerminalStorageBoundary(executor, fixtureB.tenantId, intentB)
+      ).resolves.toMatchObject({
+        work_legacy_reference_is_null: true,
+        outcome_legacy_reference_is_null: true,
+        payload_reference_recorded: true,
+        payload_count: 0,
+        safe_skeleton: legacyStorageBeforePurge.safe_skeleton
+      });
+
+      const cascadeLease = concurrentClaim.work.lease;
+      const cascadeOutcomeRevision = inboxV2EntityRevisionSchema.parse(
+        (BigInt(concurrentClaim.work.revision) + 1n).toString()
+      );
+      const cascadeResultHash = digest("legacy-cascade-terminal-result");
+      const cascadeReference = {
+        tenantId: fixtureC.tenantId,
+        recordId: `outbox-result:n1-cascade-${runId}`,
+        schemaId: "core:inbox-v2.outbox-result",
+        schemaVersion: "v1",
+        digest: digest("legacy-cascade-terminal-reference")
+      } as const;
+      const cascadeWorker =
+        cascadeLease.workerId === workerA ? firstWorker : secondWorker;
+      await cascadeWorker.transaction(async (transaction) => {
+        const clock = await transaction.execute<{ db_now: Date | string }>(
+          sql`select clock_timestamp() as db_now`
+        );
+        const changedAt = timestampText(clock.rows[0]!.db_now);
+        await transaction.execute(sql`
+          insert into inbox_v2_outbox_outcomes (
+            tenant_id, intent_id, outcome_revision, kind,
+            lease_token_hash, worker_id, error_code, result_reference,
+            retry_at, outcome_hash, occurred_at, created_at
+          ) values (
+            ${fixtureC.tenantId}, ${intentC}, ${cascadeOutcomeRevision},
+            'processed', ${cascadeLease.leaseTokenHash},
+            ${cascadeLease.workerId}, null,
+            ${JSON.stringify(cascadeReference)}::jsonb, null,
+            ${cascadeResultHash}, ${changedAt}::timestamptz,
+            ${changedAt}::timestamptz
+          )
+        `);
+        await transaction.execute(sql`
+          update inbox_v2_outbox_work_items work
+             set state = 'processed',
+                 available_at = null,
+                 lease_owner_id = null,
+                 lease_token_hash = null,
+                 lease_revision = null,
+                 lease_claimed_at = null,
+                 lease_expires_at = null,
+                 terminal_result_hash = ${cascadeResultHash},
+                 terminal_error_code = null,
+                 terminal_result_reference =
+                   ${JSON.stringify(cascadeReference)}::jsonb,
+                 terminal_finalized_at = ${changedAt}::timestamptz,
+                 revision = ${cascadeOutcomeRevision},
+                 updated_at = ${changedAt}::timestamptz
+           where work.tenant_id = ${fixtureC.tenantId}
+             and work.intent_id = ${intentC}
+             and work.state = 'leased'
+             and work.lease_token_hash = ${cascadeLease.leaseTokenHash}
+        `);
+        await transaction.execute(sql.raw("set constraints all immediate"));
+      });
+      await expect(
+        loadTerminalStorageBoundary(executor, fixtureC.tenantId, intentC)
+      ).resolves.toMatchObject({
+        work_legacy_reference_is_null: false,
+        outcome_legacy_reference_is_null: true,
+        payload_reference_recorded: true,
+        payload_count: 1
+      });
+      await deleteFixtureTenant(db, fixtureCTenantId);
+      const cascadeRows = await executor.execute<{
+        tenant_count: number;
+        work_count: number;
+        outcome_count: number;
+        payload_count: number;
+      }>(sql`
+        select
+          (select count(*)::int from tenants
+            where id = ${fixtureC.tenantId}) as tenant_count,
+          (select count(*)::int from inbox_v2_outbox_work_items
+            where tenant_id = ${fixtureC.tenantId}) as work_count,
+          (select count(*)::int from inbox_v2_outbox_outcomes
+            where tenant_id = ${fixtureC.tenantId}) as outcome_count,
+          (select count(*)::int
+             from inbox_v2_outbox_terminal_payload_refs
+            where tenant_id = ${fixtureC.tenantId}) as payload_count
+      `);
+      expect(cascadeRows.rows).toEqual([
+        {
+          tenant_count: 0,
+          work_count: 0,
+          outcome_count: 0,
+          payload_count: 0
+        }
+      ]);
     } finally {
       await Promise.all([
         closeHuleeDatabase(firstWorkerDb),
@@ -844,7 +1211,7 @@ describePostgres("SQL Inbox V2 repository foundation (live PostgreSQL)", () => {
         deleteFixtureTenant(db, fixtureCTenantId)
       ]);
     }
-  }, 30_000);
+  }, 45_000);
 
   it("atomically prunes exact replay children, advances the retained prefix and keeps its audit immutable", async () => {
     const executor = db as unknown as FoundationExecutor;
@@ -1496,6 +1863,69 @@ async function streamReplayArtifacts(
      order by commit_row.position
   `);
   return result.rows;
+}
+
+type TerminalStorageBoundary = Readonly<{
+  safe_skeleton: Readonly<Record<string, unknown>>;
+  work_legacy_reference_is_null: boolean;
+  outcome_legacy_reference_is_null: boolean;
+  payload_reference_recorded: boolean;
+  payload_count: number;
+}>;
+
+async function loadTerminalStorageBoundary(
+  executor: RawSqlExecutor,
+  tenantId: string,
+  intentId: string
+): Promise<TerminalStorageBoundary> {
+  const result = await executor.execute<TerminalStorageBoundary>(sql`
+    select jsonb_build_object(
+             'work', jsonb_build_object(
+               'state', work.state::text,
+               'attemptCount', work.attempt_count::text,
+               'resultHash', work.terminal_result_hash,
+               'errorCode', work.terminal_error_code,
+               'finalizedAt', work.terminal_finalized_at,
+               'revision', work.revision::text,
+               'updatedAt', work.updated_at
+             ),
+             'outcome', jsonb_build_object(
+               'revision', outcome.outcome_revision::text,
+               'kind', outcome.kind::text,
+               'leaseTokenHash', outcome.lease_token_hash,
+               'workerId', outcome.worker_id,
+               'errorCode', outcome.error_code,
+               'payloadReferenceRecorded',
+                 outcome.payload_reference_recorded,
+               'outcomeHash', outcome.outcome_hash,
+               'occurredAt', outcome.occurred_at
+             )
+           ) as safe_skeleton,
+           work.terminal_result_reference is null
+             as work_legacy_reference_is_null,
+           outcome.result_reference is null
+             as outcome_legacy_reference_is_null,
+           outcome.payload_reference_recorded,
+           (
+             select count(*)::int
+               from inbox_v2_outbox_terminal_payload_refs payload
+              where payload.tenant_id = outcome.tenant_id
+                and payload.intent_id = outcome.intent_id
+                and payload.outcome_revision = outcome.outcome_revision
+           ) as payload_count
+      from inbox_v2_outbox_work_items work
+      join inbox_v2_outbox_outcomes outcome
+        on outcome.tenant_id = work.tenant_id
+       and outcome.intent_id = work.intent_id
+       and outcome.outcome_revision = work.revision
+     where work.tenant_id = ${tenantId}
+       and work.intent_id = ${intentId}
+  `);
+  const row = result.rows[0];
+  if (row === undefined) {
+    throw new Error("SRC-009 terminal storage boundary disappeared.");
+  }
+  return row;
 }
 
 async function streamHead(

@@ -3,6 +3,7 @@ import {
   inboxV2ClaimOutboxInputSchema,
   inboxV2FinalizeOutboxInputSchema,
   inboxV2OutboxWorkItemSchema,
+  inboxV2PurgeOutboxTerminalPayloadInputSchema,
   inboxV2RenewOutboxLeaseInputSchema
 } from "@hulee/contracts";
 import type { SQL } from "drizzle-orm";
@@ -14,8 +15,11 @@ import {
   buildFinalizeInboxV2OutboxSql,
   buildFindInboxV2OutboxTerminalReplaySql,
   buildInsertInboxV2OutboxOutcomeSql,
+  buildInsertInboxV2OutboxTerminalPayloadReferenceSql,
   buildLockInboxV2OutboxWorkSql,
+  buildPurgeInboxV2OutboxTerminalPayloadSql,
   buildRenewInboxV2OutboxLeaseSql,
+  createSqlInboxV2OutboxTerminalPayloadRetention,
   createSqlInboxV2RepositoryOutbox,
   InboxV2RepositoryOutboxPersistenceInvariantError,
   type InboxV2RepositoryOutboxTransactionExecutor
@@ -264,9 +268,13 @@ describe("SQL Inbox V2 repository outbox", () => {
     ];
 
     for (const testCase of cases) {
+      const hasTerminalPayload =
+        testCase.instruction.kind !== "retry" &&
+        testCase.instruction.resultReference !== null;
       const executor = new ScriptedTransactionExecutor([
         [{ ...leasedRow(), db_now: dbNow }],
         [{ outcome_revision: "3" }],
+        ...(hasTerminalPayload ? [[]] : []),
         [testCase.work],
         []
       ]);
@@ -276,7 +284,7 @@ describe("SQL Inbox V2 repository outbox", () => {
       const result = await repository.finalize(input);
 
       expect(result.outcome).toBe(testCase.resultOutcome);
-      expect(executor.queries).toHaveLength(4);
+      expect(executor.queries).toHaveLength(hasTerminalPayload ? 5 : 4);
       const statements = executor.renderedQueries.map(({ sql }) =>
         normalizeSql(sql)
       );
@@ -284,16 +292,26 @@ describe("SQL Inbox V2 repository outbox", () => {
       expect(statements[1]).toContain(
         "insert into public.inbox_v2_outbox_outcomes"
       );
-      expect(statements[2]).toContain(
+      const finalizeIndex = hasTerminalPayload ? 3 : 2;
+      if (hasTerminalPayload) {
+        expect(statements[2]).toContain(
+          "insert into public.inbox_v2_outbox_terminal_payload_refs"
+        );
+      }
+      expect(statements[finalizeIndex]).toContain(
         "update public.inbox_v2_outbox_work_items work"
       );
-      expect(statements[3]).toBe("set constraints all immediate");
-      expect(statements[2]).toContain("work.lease_owner_id =");
-      expect(statements[2]).toContain("work.lease_token_hash =");
-      expect(statements[2]).toContain("work.lease_revision =");
-      expect(statements[2]).toContain("work.lease_expires_at >");
+      expect(statements[finalizeIndex + 1]).toBe(
+        "set constraints all immediate"
+      );
+      expect(statements[finalizeIndex]).toContain("work.lease_owner_id =");
+      expect(statements[finalizeIndex]).toContain("work.lease_token_hash =");
+      expect(statements[finalizeIndex]).toContain("work.lease_revision =");
+      expect(statements[finalizeIndex]).toContain("work.lease_expires_at >");
       expect(executor.renderedQueries[1]!.params).toContain(tokenHashA);
-      expect(executor.renderedQueries[2]!.params).toContain(tokenHashA);
+      expect(executor.renderedQueries[finalizeIndex]!.params).toContain(
+        tokenHashA
+      );
       expect(
         executor.renderedQueries.flatMap(({ params }) => params)
       ).not.toContain(tokenA);
@@ -343,9 +361,78 @@ describe("SQL Inbox V2 repository outbox", () => {
     expect(replaySql).toContain("from public.inbox_v2_outbox_outcomes");
     expect(replaySql).toContain("outcome.lease_token_hash =");
     expect(replaySql).toContain("outcome.worker_id =");
+    expect(replaySql).toContain("outcome.payload_reference_recorded");
+    expect(replaySql).toContain("terminal_payload.result_reference =");
     expect(executor.renderedQueries[1]!.params).toContain(tokenHashA);
     expect(executor.renderedQueries[1]!.params).not.toContain(tokenA);
     executor.expectExhausted();
+  });
+
+  it("replays by the safe terminal skeleton after the payload was purged", async () => {
+    const terminal = {
+      ...terminalWorkRow("processed"),
+      terminal_result_reference: null
+    };
+    const executor = new ScriptedTransactionExecutor([
+      [{ ...terminal, db_now: dbNow }],
+      [{ outcome_revision: "3" }]
+    ]);
+
+    const result = await createSqlInboxV2RepositoryOutbox(executor).finalize(
+      finalizeInput({
+        kind: "processed",
+        resultHash: hashB,
+        resultReference: resultReference()
+      })
+    );
+
+    expect(result).toMatchObject({
+      outcome: "already_finalized",
+      work: {
+        terminalResult: { resultHash: hashB, resultReference: null }
+      }
+    });
+    expect(normalizeSql(executor.renderedQueries[1]!.sql)).toContain(
+      "terminal_payload.tenant_id is null"
+    );
+    executor.expectExhausted();
+  });
+
+  it("purges only the tenant and revision fenced terminal payload child", async () => {
+    const input = inboxV2PurgeOutboxTerminalPayloadInputSchema.parse({
+      context: { tenantId },
+      intentId: intent1,
+      outcomeRevision: "3"
+    });
+    for (const [row, outcome] of [
+      [{ outcome_found: true, payload_purged: true }, "purged"],
+      [{ outcome_found: true, payload_purged: false }, "already_absent"],
+      [{ outcome_found: false, payload_purged: false }, "not_found"]
+    ] as const) {
+      const executor = new ScriptedTransactionExecutor([[row]]);
+      expect(createSqlInboxV2RepositoryOutbox(executor)).not.toHaveProperty(
+        "purgeTerminalPayload"
+      );
+      await expect(
+        createSqlInboxV2OutboxTerminalPayloadRetention(
+          executor
+        ).purgeTerminalPayload(input)
+      ).resolves.toMatchObject({ outcome, tenantId, intentId: intent1 });
+      const rendered = executor.renderedQueries[0]!;
+      const statement = normalizeSql(rendered.sql);
+      expect(statement).not.toContain("for update of outcome");
+      expect(statement).toContain(
+        "delete from public.inbox_v2_outbox_terminal_payload_refs"
+      );
+      expect(statement).not.toContain(
+        "delete from public.inbox_v2_outbox_outcomes"
+      );
+      expect(statement).not.toContain(
+        "update public.inbox_v2_outbox_work_items"
+      );
+      expect(rendered.params).toEqual([tenantId, intent1, "3"]);
+      executor.expectExhausted();
+    }
   });
 
   it("does not treat terminal state as replay without the exact lease outcome", async () => {
@@ -462,6 +549,22 @@ describe("SQL Inbox V2 repository outbox", () => {
         outcomeRevision: "3"
       })
     );
+    const terminalPayload = renderQuery(
+      buildInsertInboxV2OutboxTerminalPayloadReferenceSql({
+        input: finalizedInput,
+        dbNow,
+        outcomeRevision: "3"
+      })
+    );
+    const purge = renderQuery(
+      buildPurgeInboxV2OutboxTerminalPayloadSql(
+        inboxV2PurgeOutboxTerminalPayloadInputSchema.parse({
+          context: { tenantId },
+          intentId: intent1,
+          outcomeRevision: "3"
+        })
+      )
+    );
     const finalize = renderQuery(
       buildFinalizeInboxV2OutboxSql({
         input: finalizedInput,
@@ -479,13 +582,28 @@ describe("SQL Inbox V2 repository outbox", () => {
       })
     );
 
-    for (const rendered of [renew, outcome, finalize, replay, lock]) {
+    for (const rendered of [
+      renew,
+      outcome,
+      terminalPayload,
+      finalize,
+      replay,
+      purge,
+      lock
+    ]) {
       expect(rendered.params).toContain(tenantId);
       expect(rendered.params).not.toContain(tokenA);
     }
     expect(outcome.params).toContain(tokenHashA);
     expect(finalize.params).toContain(tokenHashA);
     expect(replay.params).toContain(tokenHashA);
+    expect(normalizeSql(outcome.sql)).toContain("payload_reference_recorded");
+    expect(normalizeSql(outcome.sql)).not.toContain(
+      " result_reference, retry_at"
+    );
+    expect(normalizeSql(terminalPayload.sql)).toContain(
+      "inbox_v2_outbox_terminal_payload_refs"
+    );
     expect(normalizeSql(outcome.sql)).toContain("outcome_revision");
     expect(normalizeSql(finalize.sql)).toContain("and work.revision =");
     expect(normalizeSql(replay.sql)).toContain("outcome.outcome_revision =");

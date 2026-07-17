@@ -1,7 +1,15 @@
 import { type SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
-import { resolveInboxV2OutboundRoute } from "@hulee/contracts";
+import {
+  calculateInboxV2OutboxLeaseTokenHash,
+  inboxV2EntityRevisionSchema,
+  inboxV2OutboxIntentSchema,
+  inboxV2OutboxLeaseTokenSchema,
+  inboxV2OutboxWorkerIdSchema,
+  inboxV2OutboundDispatchAttemptCommitSchema,
+  resolveInboxV2OutboundRoute
+} from "@hulee/contracts";
 
 import {
   buildCompareAndSwapInboxV2OutboundDispatchAttemptSql,
@@ -548,6 +556,124 @@ describe("SQL Inbox V2 outbound transport repository", () => {
     );
   });
 
+  it("loads the exact provider intent and dispatch only under its live outbox lease", async () => {
+    const executor = new QueueOutboundExecutor([
+      [providerIoOutboxLeaseRow()],
+      [dispatchRow(fixture.queuedDispatch)]
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(
+        executor
+      ).loadClaimedProviderIo({ outboxLease: providerIoOutboxLeaseFence })
+    ).resolves.toEqual({
+      kind: "loaded",
+      intent: providerIoIntent,
+      dispatch: fixture.queuedDispatch
+    });
+    expect(executor.statementKinds()).toEqual([
+      "lock_provider_io_outbox",
+      "lock_dispatch"
+    ]);
+    const leaseLock = executor.queries[0]!;
+    expect(normalizeSql(leaseLock.sql)).toContain("for update of work");
+    expect(leaseLock.params).not.toContain(providerIoLeaseToken);
+  });
+
+  it("re-fences the outbox lease before opening an attempt", async () => {
+    const executor = new QueueOutboundExecutor([
+      [providerIoOutboxLeaseRow()],
+      [dispatchRow(fixture.queuedDispatch)],
+      [{ id: fixture.route.id }],
+      [bindingFenceRow(fixture)],
+      [{ id: fixture.pendingAttempt.id }],
+      [{ id: fixture.queuedDispatch.id }]
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(executor).applyAttemptFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        commit: fixture.openAttemptCommit
+      })
+    ).resolves.toEqual({ kind: "committed" });
+    expect(executor.statementKinds()).toEqual([
+      "lock_provider_io_outbox",
+      "lock_dispatch",
+      "lock_route",
+      "lock_binding_fence",
+      "insert_attempt",
+      "cas_dispatch"
+    ]);
+  });
+
+  it("rejects a reclaimed outbox token before any outbound transport write", async () => {
+    const executor = new QueueOutboundExecutor([
+      [
+        providerIoOutboxLeaseRow({
+          leaseTokenHash: calculateInboxV2OutboxLeaseTokenHash(
+            inboxV2OutboxLeaseTokenSchema.parse(
+              `lease-token:reclaimed-${"r".repeat(40)}`
+            )
+          )
+        })
+      ]
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(executor).applyAttemptFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        commit: fixture.openAttemptCommit
+      })
+    ).resolves.toEqual({
+      kind: "outbox_stale_token",
+      currentLeaseRevision: "1"
+    });
+    expect(executor.statementKinds()).toEqual(["lock_provider_io_outbox"]);
+  });
+
+  it("uses DB time to reject a future or premature attempt completion", async () => {
+    const executor = new QueueOutboundExecutor([
+      [
+        providerIoOutboxLeaseRow({
+          databaseNow: "2026-07-14T08:05:30.000Z"
+        })
+      ]
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(executor).applyAttemptFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        commit: fixture.completeUnknownCommit
+      })
+    ).resolves.toEqual({ kind: "outbox_attempt_lease_conflict" });
+    expect(executor.statementKinds()).toEqual(["lock_provider_io_outbox"]);
+  });
+
+  it("rejects a provider result once the attempt lease has expired in DB time", async () => {
+    const providerResultCommit =
+      inboxV2OutboundDispatchAttemptCommitSchema.parse({
+        ...fixture.completeUnknownCommit,
+        attemptAfter: fixture.acceptedAttempt,
+        completionSource: "provider_result",
+        dispatchAfter: fixture.acceptedDispatch
+      });
+    const executor = new QueueOutboundExecutor([
+      [
+        providerIoOutboxLeaseRow({
+          databaseNow: "2026-07-14T08:05:30.000Z"
+        })
+      ]
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(executor).applyAttemptFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        commit: providerResultCommit
+      })
+    ).resolves.toEqual({ kind: "outbox_attempt_lease_conflict" });
+    expect(executor.statementKinds()).toEqual(["lock_provider_io_outbox"]);
+  });
+
   it("completes a lease-expired claim as immutable outcome_unknown with two CAS fences", async () => {
     const attemptCas = renderQuery(
       buildCompareAndSwapInboxV2OutboundDispatchAttemptSql(
@@ -627,6 +753,24 @@ describe("SQL Inbox V2 outbound transport repository", () => {
         )
       )
     ).toBe(false);
+  });
+
+  it("rejects a reconciliation timestamp ahead of the fenced DB clock", async () => {
+    const executor = new QueueOutboundExecutor([
+      [
+        providerIoOutboxLeaseRow({
+          databaseNow: "2026-07-14T08:06:30.000Z"
+        })
+      ]
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(executor).reconcileFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        commit: fixture.reconciliationCommit
+      })
+    ).resolves.toEqual({ kind: "outbox_attempt_lease_conflict" });
+    expect(executor.statementKinds()).toEqual(["lock_provider_io_outbox"]);
   });
 
   it("keeps multiple artifacts append-only and builds both occurrence association orders", async () => {
@@ -1238,6 +1382,8 @@ class QueueOutboundExecutor implements InboxV2OutboundTransportTransactionExecut
 
 function classifyStatement(sql: string): string {
   const statement = normalizeSql(sql);
+  if (statement.includes("from public.inbox_v2_outbox_work_items"))
+    return "lock_provider_io_outbox";
   if (statement.includes("pg_advisory_xact_lock"))
     return "lock_policy_advisory";
   if (
@@ -1290,6 +1436,78 @@ function classifyStatement(sql: string): string {
   if (statement.startsWith("insert into inbox_v2_outbound_dispatch_artifacts"))
     return "insert_artifact";
   return `unknown:${statement.slice(0, 80)}`;
+}
+
+const providerIoLeaseToken = inboxV2OutboxLeaseTokenSchema.parse(
+  `lease-token:provider-io-unit-${"t".repeat(40)}`
+);
+const providerIoWorkerId = inboxV2OutboxWorkerIdSchema.parse(
+  "core:provider-dispatch-worker"
+);
+const providerIoIntent = inboxV2OutboxIntentSchema.parse({
+  tenantId: fixture.tenantId,
+  id: "outbox-intent:provider-io-unit",
+  typeId: "core:provider.dispatch",
+  handlerId: providerIoWorkerId,
+  effectClass: "provider_io",
+  commit: {
+    tenantId: fixture.tenantId,
+    streamEpoch: "stream-epoch:provider-io-unit",
+    commitId: "commit:provider-io-unit",
+    streamPosition: "1"
+  },
+  eventId: "event:provider-io-unit",
+  changeIds: ["change:provider-io-unit"],
+  payloadReference: {
+    tenantId: fixture.tenantId,
+    recordId: fixture.queuedDispatch.id,
+    schemaId: "core:inbox-v2.outbound-dispatch",
+    schemaVersion: "v1",
+    digest: `sha256:${"d".repeat(64)}`
+  },
+  consumerDedupeKey: `sha256:${"e".repeat(64)}`,
+  correlationId: "correlation:provider-io-unit",
+  availableAt: "2026-07-14T08:01:00.000Z",
+  intentHash: `sha256:${"f".repeat(64)}`
+});
+const providerIoOutboxLeaseFence = {
+  context: { tenantId: providerIoIntent.tenantId },
+  intentId: providerIoIntent.id,
+  workerId: providerIoWorkerId,
+  leaseToken: providerIoLeaseToken,
+  expectedLeaseRevision: inboxV2EntityRevisionSchema.parse("1"),
+  expectedHandlerId: providerIoIntent.handlerId
+} as const;
+
+function providerIoOutboxLeaseRow(input?: {
+  databaseNow?: string;
+  leaseTokenHash?: string;
+}) {
+  return {
+    state: "leased",
+    lease_owner_id: providerIoOutboxLeaseFence.workerId,
+    lease_token_hash:
+      input?.leaseTokenHash ??
+      calculateInboxV2OutboxLeaseTokenHash(providerIoLeaseToken),
+    lease_revision: providerIoOutboxLeaseFence.expectedLeaseRevision,
+    lease_claimed_at: "2026-07-14T08:01:30.000Z",
+    lease_expires_at: "2026-07-14T08:10:00.000Z",
+    database_now: input?.databaseNow ?? "2026-07-14T08:02:30.000Z",
+    intent_id: providerIoIntent.id,
+    intent_type_id: providerIoIntent.typeId,
+    intent_handler_id: providerIoIntent.handlerId,
+    intent_effect_class: providerIoIntent.effectClass,
+    intent_stream_commit_id: providerIoIntent.commit.commitId,
+    intent_stream_position: providerIoIntent.commit.streamPosition,
+    intent_stream_epoch: providerIoIntent.commit.streamEpoch,
+    intent_event_id: providerIoIntent.eventId,
+    intent_change_ids: providerIoIntent.changeIds,
+    intent_payload_reference: providerIoIntent.payloadReference,
+    intent_consumer_dedupe_key: providerIoIntent.consumerDedupeKey,
+    intent_correlation_id: providerIoIntent.correlationId,
+    intent_available_at: providerIoIntent.availableAt,
+    intent_hash: providerIoIntent.intentHash
+  };
 }
 
 function bindingFenceRow(input: typeof fixture) {

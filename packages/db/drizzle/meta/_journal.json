@@ -330,6 +330,13 @@
       "when": 1784277427163,
       "tag": "0046_inbox_v2_atomic_provider_io_closure",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1784310372530,
+      "tag": "0047_inbox_v2_outbox_terminal_payload_boundary",
+      "breakpoints": true
     }
   ]
 }

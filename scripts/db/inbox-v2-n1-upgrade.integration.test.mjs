@@ -106,9 +106,9 @@ describe("Inbox V2 pinned N-1 runtime artifact", () => {
       },
       upgradeTarget: {
         folder: "packages/db/drizzle",
-        count: 47,
+        count: 48,
         digest:
-          "sha256:5ef422f4f82cb320ca992ac246374bb5fe7eff017acd5f51b5cf88c797009b14"
+          "sha256:629a81489efdd655c3024068a1a4cbd0ceee16713c32481a584a5235ea258f25"
       }
     });
 

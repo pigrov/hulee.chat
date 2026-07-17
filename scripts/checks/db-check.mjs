@@ -210,6 +210,14 @@ const inboxV2AtomicProviderIoTableNames = [
   "public.inbox_v2_atomic_outbound_dispatch_materializations",
   "public.inbox_v2_atomic_source_resolution_materializations"
 ];
+const inboxV2OutboxTerminalPayloadFileName =
+  "0047_inbox_v2_outbox_terminal_payload_boundary.sql";
+const inboxV2OutboxTerminalPayloadMarker =
+  "-- INB2-SRC-009_OUTBOX_TERMINAL_PAYLOAD_PURGE_BOUNDARY_V1";
+const inboxV2OutboxTerminalPayloadInvariantName =
+  "INBOX_V2_OUTBOX_TERMINAL_PAYLOAD_REF_INTEGRITY_SQL";
+const inboxV2OutboxTerminalPayloadTableName =
+  "public.inbox_v2_outbox_terminal_payload_refs";
 const inboxV2SourceRegistryPrerequisiteUniqueConstraintNames = [
   "channel_auth_challenges_tenant_id_unique",
   "channel_auth_challenges_tenant_id_connector_unique",
@@ -322,6 +330,9 @@ const inboxV2SourceMessageReconciliationMigrations = migrationFiles.filter(
 const inboxV2AtomicProviderIoMigrations = migrationFiles.filter(
   ({ fileName }) => fileName === inboxV2AtomicProviderIoFileName
 );
+const inboxV2OutboxTerminalPayloadMigrations = migrationFiles.filter(
+  ({ fileName }) => fileName === inboxV2OutboxTerminalPayloadFileName
+);
 const inboxV2SchemaFileNames = (await readdir(inboxV2SchemaDirectory))
   .filter((fileName) => fileName.endsWith(".ts"))
   .sort();
@@ -403,6 +414,10 @@ const inboxV2SourceIdentityResolutionInvariantBlocks =
 const inboxV2SourceMessageReconciliationInvariantBlocks =
   inboxV2InvariantBlocks.filter(
     ({ name }) => name === inboxV2SourceMessageReconciliationInvariantName
+  );
+const inboxV2OutboxTerminalPayloadInvariantBlocks =
+  inboxV2InvariantBlocks.filter(
+    ({ name }) => name === inboxV2OutboxTerminalPayloadInvariantName
   );
 const inboxV2MembershipPrivilegeBoundaryBlock = extractInboxV2NamedSqlBlock(
   "membership-privilege-boundary.ts",
@@ -512,6 +527,12 @@ if (inboxV2SourceMessageReconciliationInvariantBlocks.length !== 1) {
   );
   process.exit(1);
 }
+if (inboxV2OutboxTerminalPayloadInvariantBlocks.length !== 1) {
+  console.error(
+    `Expected exactly one ${inboxV2OutboxTerminalPayloadInvariantName} schema block, found ${inboxV2OutboxTerminalPayloadInvariantBlocks.length}.`
+  );
+  process.exit(1);
+}
 const unownedInvariantBlocks = inboxV2InvariantBlocks.filter(
   ({ name }) =>
     !inboxV2FoundationInvariantNames.has(name) &&
@@ -527,7 +548,8 @@ const unownedInvariantBlocks = inboxV2InvariantBlocks.filter(
     name !== inboxV2SourceRawIngressInvariantName &&
     name !== inboxV2SourceNormalizationInvariantName &&
     name !== inboxV2SourceIdentityResolutionInvariantName &&
-    name !== inboxV2SourceMessageReconciliationInvariantName
+    name !== inboxV2SourceMessageReconciliationInvariantName &&
+    name !== inboxV2OutboxTerminalPayloadInvariantName
 );
 if (unownedInvariantBlocks.length > 0) {
   console.error(
@@ -686,6 +708,12 @@ if (inboxV2AtomicProviderIoMigrations.length !== 1) {
   );
   process.exit(1);
 }
+if (inboxV2OutboxTerminalPayloadMigrations.length !== 1) {
+  console.error(
+    `Expected exactly one outbox terminal-payload migration, found ${inboxV2OutboxTerminalPayloadMigrations.length}.`
+  );
+  process.exit(1);
+}
 
 try {
   assertGlobalMigrationArtifactBijection({
@@ -768,6 +796,16 @@ try {
     journal: drizzleJournal,
     targetIndex: 46,
     finalizedMigrationFileName: inboxV2AtomicProviderIoMigrations[0].fileName,
+    migrationFileNames,
+    snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
+      fileName.endsWith("_snapshot.json")
+    )
+  });
+  assertMigrationJournalArtifactParity({
+    journal: drizzleJournal,
+    targetIndex: 47,
+    finalizedMigrationFileName:
+      inboxV2OutboxTerminalPayloadMigrations[0].fileName,
     migrationFileNames,
     snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
       fileName.endsWith("_snapshot.json")
@@ -862,6 +900,10 @@ assertInboxV2SourceMessageReconciliationMigration(
   inboxV2SourceMessageReconciliationMigrations[0],
   inboxV2SourceMessageReconciliationInvariantBlocks[0]
 );
+assertInboxV2OutboxTerminalPayloadMigration(
+  inboxV2OutboxTerminalPayloadMigrations[0],
+  inboxV2OutboxTerminalPayloadInvariantBlocks[0]
+);
 assertInboxV2SecurityDenialMigration(inboxV2SecurityDenialMigrations[0]);
 assertInboxV2RepositoryFoundationMigration(
   inboxV2RepositoryFoundationMigrations[0]
@@ -899,6 +941,7 @@ try {
     inboxV2SourceMessageReconciliationMigrations[0]
   );
   await assertInboxV2AtomicProviderIoGeneratedSchemaParity();
+  await assertInboxV2OutboxTerminalPayloadGeneratedSchemaParity();
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
@@ -1455,12 +1498,110 @@ async function assertInboxV2AtomicProviderIoGeneratedSchemaParity() {
     baseIndex: 45,
     targetIndex: 46
   });
+  const historicalGenerated =
+    withoutInboxV2OutboxTerminalPayloadSchemaDelta(generated);
+  const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
+  assertDrizzleSnapshotParity(
+    historicalGenerated.snapshot,
+    checkedInSnapshot,
+    snapshotPath
+  );
+}
+
+async function assertInboxV2OutboxTerminalPayloadGeneratedSchemaParity() {
+  const snapshotPath = "packages/db/drizzle/meta/0047_snapshot.json";
+  const generated = await generateExpectedDrizzleMigration({
+    workspaceRoot: process.cwd(),
+    migrationDirectory,
+    baseIndex: 46,
+    targetIndex: 47
+  });
   const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
   assertDrizzleSnapshotParity(
     generated.snapshot,
     checkedInSnapshot,
     snapshotPath
   );
+}
+
+function assertInboxV2OutboxTerminalPayloadMigration(
+  migration,
+  invariantBlock
+) {
+  if (migration.fileName !== inboxV2OutboxTerminalPayloadFileName) {
+    throw new Error(
+      `${migration.fileName} must be the Inbox V2 terminal-payload migration at index 0047.`
+    );
+  }
+  const normalizedMigration = migration.sql
+    .replace(/--> statement-breakpoint/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  const normalizedInvariant = invariantBlock.sql.replace(/\s+/gu, " ").trim();
+  if (!normalizedMigration.includes(normalizedInvariant)) {
+    throw new Error(
+      `${migration.fileName} is stale against ${invariantBlock.name}.`
+    );
+  }
+  for (const fragment of [
+    inboxV2OutboxTerminalPayloadMarker,
+    'CREATE TABLE "inbox_v2_outbox_terminal_payload_refs"',
+    'ADD COLUMN "payload_reference_recorded" boolean DEFAULT false NOT NULL',
+    "inbox_v2.outbox_terminal_payload_legacy_incoherent",
+    "insert into public.inbox_v2_outbox_terminal_payload_refs",
+    "disable trigger inbox_v2_outbox_outcome_immutable_trigger",
+    "enable trigger inbox_v2_outbox_outcome_immutable_trigger",
+    "result_reference = null",
+    "terminal_result_reference = null",
+    "DEFERRABLE INITIALLY DEFERRED",
+    "inbox_v2_outbox_terminal_payload_refs_coherence",
+    "inbox_v2_outbox_terminal_payload_refs_insert_guard",
+    "inbox_v2.outbox_terminal_payload_insert_not_finalizing",
+    "inbox_v2_outbox_terminal_payload_refs_delete_trigger",
+    "current_user = 'hulee_inbox_v2_retention_owner'",
+    "inbox_v2_outbox_legacy_outcome_payload_bridge_trigger",
+    "inbox_v2_outbox_legacy_work_payload_bridge_trigger",
+    "inbox_v2_source_onboarding_terminal_payload_ref_guard_trigger",
+    "grant select, insert on table",
+    "grant update (terminal_result_reference) on table",
+    "inbox_v2.outbox_terminal_payload_retention_boundary_invalid"
+  ]) {
+    if (!migration.sql.includes(fragment)) {
+      throw new Error(
+        `${migration.fileName} is missing terminal-payload bridge SQL: ${fragment}.`
+      );
+    }
+  }
+  if (
+    /drop\s+column\s+(?:"?result_reference"?|"?terminal_result_reference"?)/iu.test(
+      migration.sql
+    )
+  ) {
+    throw new Error(
+      `${migration.fileName} must preserve N-1 legacy columns during expand.`
+    );
+  }
+  const positions = [
+    migration.sql.indexOf('ADD COLUMN "payload_reference_recorded"'),
+    migration.sql.indexOf("$outbox_terminal_payload_legacy_coherence$"),
+    migration.sql.indexOf(
+      "insert into public.inbox_v2_outbox_terminal_payload_refs"
+    ),
+    migration.sql.indexOf("update public.inbox_v2_outbox_outcomes"),
+    migration.sql.lastIndexOf(
+      'ADD CONSTRAINT "inbox_v2_outbox_outcomes_values_check"'
+    )
+  ];
+  if (
+    positions.some((position) => position < 0) ||
+    positions.some(
+      (position, index) => index > 0 && position <= positions[index - 1]
+    )
+  ) {
+    throw new Error(
+      `${migration.fileName} must backfill and clear legacy payload references before enforcing clean skeleton checks.`
+    );
+  }
 }
 
 function orderSourceRegistryGeneratedStatements(statements) {
@@ -1870,17 +2011,132 @@ function withoutInboxV2SourceMessageReconciliationSchemaDelta(generated) {
 }
 
 function withoutInboxV2AtomicProviderIoSchemaDelta(generated) {
-  const snapshot = structuredClone(generated.snapshot);
+  const withoutTerminalPayload =
+    withoutInboxV2OutboxTerminalPayloadSchemaDelta(generated);
+  const snapshot = structuredClone(withoutTerminalPayload.snapshot);
   for (const tableName of inboxV2AtomicProviderIoTableNames) {
     delete snapshot.tables[tableName];
   }
   const tableNames = inboxV2AtomicProviderIoTableNames.map((tableName) =>
     tableName.slice("public.".length)
   );
-  const statements = generated.statements.filter(
+  const statements = withoutTerminalPayload.statements.filter(
     (statement) =>
       !tableNames.some((tableName) => statement.includes(tableName))
   );
+  return { snapshot, statements };
+}
+
+function withoutInboxV2OutboxTerminalPayloadSchemaDelta(generated) {
+  const snapshot = structuredClone(generated.snapshot);
+  delete snapshot.tables[inboxV2OutboxTerminalPayloadTableName];
+
+  const outcome = snapshot.tables["public.inbox_v2_outbox_outcomes"];
+  const workItem = snapshot.tables["public.inbox_v2_outbox_work_items"];
+  if (
+    !outcome?.columns ||
+    !outcome.checkConstraints ||
+    !workItem?.checkConstraints
+  ) {
+    throw new Error(
+      "Generated schema is missing the terminal-payload predecessor tables."
+    );
+  }
+  delete outcome.columns.payload_reference_recorded;
+
+  const outcomeValues =
+    outcome.checkConstraints.inbox_v2_outbox_outcomes_values_check;
+  const workItemValues =
+    workItem.checkConstraints.inbox_v2_outbox_work_items_values_check;
+  if (!outcomeValues || !workItemValues) {
+    throw new Error(
+      "Generated schema is missing the terminal-payload predecessor constraints."
+    );
+  }
+  outcomeValues.value = replaceExactSchemaFragment(
+    outcomeValues.value,
+    '"inbox_v2_outbox_outcomes"."result_reference" is null',
+    '("inbox_v2_outbox_outcomes"."result_reference" is null\n' +
+      '          or jsonb_typeof("inbox_v2_outbox_outcomes"."result_reference") = \'object\')',
+    "outbox outcome legacy result reference"
+  );
+  outcomeValues.value = replaceExactSchemaFragment(
+    outcomeValues.value,
+    '\n            and not "inbox_v2_outbox_outcomes"."payload_reference_recorded"',
+    "",
+    "outbox outcome retry payload marker"
+  );
+  workItemValues.value = replaceExactSchemaFragment(
+    workItemValues.value,
+    '("inbox_v2_outbox_work_items"."terminal_result_reference" is null\n' +
+      "          or public.inbox_v2_auth_payload_reference_safe(\n" +
+      '            "inbox_v2_outbox_work_items"."terminal_result_reference", "inbox_v2_outbox_work_items"."tenant_id"\n' +
+      "          ))",
+    '("inbox_v2_outbox_work_items"."terminal_result_reference" is null\n' +
+      '          or jsonb_typeof("inbox_v2_outbox_work_items"."terminal_result_reference") = \'object\')',
+    "outbox work-item legacy terminal result reference"
+  );
+
+  const generatedConstraintNames = [
+    "inbox_v2_outbox_outcomes_values_check",
+    "inbox_v2_outbox_work_items_values_check"
+  ];
+  const tableName = inboxV2OutboxTerminalPayloadTableName.slice(
+    "public.".length
+  );
+  const statements = generated.statements
+    .filter((statement) => {
+      if (
+        statement.includes(tableName) ||
+        statement.includes('ADD COLUMN "payload_reference_recorded"')
+      ) {
+        return false;
+      }
+      return !(
+        statement.trimStart().startsWith("ALTER TABLE") &&
+        generatedConstraintNames.some((name) => statement.includes(name))
+      );
+    })
+    .map((statement) => {
+      if (statement.includes('CREATE TABLE "inbox_v2_outbox_outcomes"')) {
+        let historical = replaceExactSchemaFragment(
+          statement,
+          '\n\t"payload_reference_recorded" boolean DEFAULT false NOT NULL,',
+          "",
+          "outbox outcome payload marker column DDL"
+        );
+        historical = replaceExactSchemaFragment(
+          historical,
+          '"inbox_v2_outbox_outcomes"."result_reference" is null',
+          '("inbox_v2_outbox_outcomes"."result_reference" is null\n' +
+            '          or jsonb_typeof("inbox_v2_outbox_outcomes"."result_reference") = \'object\')',
+          "outbox outcome legacy result reference DDL"
+        );
+        return replaceExactSchemaFragment(
+          historical,
+          '\n            and not "inbox_v2_outbox_outcomes"."payload_reference_recorded"',
+          "",
+          "outbox outcome retry payload marker DDL"
+        );
+      }
+      if (statement.includes('CREATE TABLE "inbox_v2_outbox_work_items"')) {
+        return replaceExactSchemaFragment(
+          statement,
+          'and ("inbox_v2_outbox_work_items"."terminal_error_code" is null\n' +
+            '          or char_length("inbox_v2_outbox_work_items"."terminal_error_code") between 3 and 256)\n' +
+            '        and ("inbox_v2_outbox_work_items"."terminal_result_reference" is null\n' +
+            "          or public.inbox_v2_auth_payload_reference_safe(\n" +
+            '            "inbox_v2_outbox_work_items"."terminal_result_reference", "inbox_v2_outbox_work_items"."tenant_id"\n' +
+            "          ))",
+          'and ("inbox_v2_outbox_work_items"."terminal_error_code" is null\n' +
+            '          or char_length("inbox_v2_outbox_work_items"."terminal_error_code") between 3 and 256)\n' +
+            '        and ("inbox_v2_outbox_work_items"."terminal_result_reference" is null\n' +
+            '          or jsonb_typeof("inbox_v2_outbox_work_items"."terminal_result_reference") = \'object\')',
+          "outbox work-item legacy terminal result reference DDL"
+        );
+      }
+      return statement;
+    });
   return { snapshot, statements };
 }
 

@@ -29,6 +29,9 @@ describe("@hulee/db public export surface", () => {
     expect(
       publicDatabase.persistInboxV2RouteResolutionInTransaction
     ).toBeTypeOf("function");
+    expect(
+      publicDatabase.createSqlInboxV2FencedOutboundTransportRuntimeRepository
+    ).toBeTypeOf("function");
 
     expect(publicDatabase).not.toHaveProperty(
       "createSqlInboxV2TimelineMessageRepository"

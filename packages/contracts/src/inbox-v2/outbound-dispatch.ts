@@ -1320,6 +1320,21 @@ function addOpenDispatchAttemptCommitIssues(
       "Retry after outcome_unknown requires the exact retry-authorizing append-only decision."
     );
   }
+  if (
+    decision?.result.state === "retryable_failure" &&
+    decision.result.authorization.kind === "automatic" &&
+    (prior.retrySafety.providerCorrelationToken === null ||
+      commit.attempt.retrySafety.providerCorrelationToken !==
+        prior.retrySafety.providerCorrelationToken ||
+      commit.attempt.retrySafety.mechanism !== prior.retrySafety.mechanism ||
+      !commit.attempt.retrySafety.automaticRetryAllowed)
+  ) {
+    addIssue(
+      context,
+      ["attempt", "retrySafety"],
+      "Automatic retry after outcome_unknown must reuse the exact proven mechanism and non-null provider correlation token."
+    );
+  }
 }
 
 function addCompleteDispatchAttemptCommitIssues(

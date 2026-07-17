@@ -19,6 +19,8 @@ import {
   inboxV2OutboxWorkItemSchema,
   inboxV2ProjectionGenerationEnvelopeSchema,
   inboxV2ProjectionGenerationSnapshotSchema,
+  inboxV2PurgeOutboxTerminalPayloadInputSchema,
+  inboxV2PurgeOutboxTerminalPayloadResultSchema,
   inboxV2RenewOutboxLeaseInputSchema,
   inboxV2RenewOutboxLeaseResultSchema,
   inboxV2ReplayTenantStreamInputSchema,
@@ -854,6 +856,43 @@ describe("Inbox V2 repository foundation token-fenced outbox", () => {
       inboxV2FinalizeOutboxResultSchema.safeParse({
         outcome: "processed",
         work: terminalWork("dead")
+      }).success
+    ).toBe(false);
+  });
+
+  it("types the tenant and outcome-revision fenced terminal payload purge", () => {
+    const identity = {
+      tenantId,
+      intentId: "outbox-intent:intent-1",
+      outcomeRevision: "3"
+    };
+    expect(
+      inboxV2PurgeOutboxTerminalPayloadInputSchema.safeParse({
+        context: { tenantId },
+        intentId: identity.intentId,
+        outcomeRevision: identity.outcomeRevision
+      }).success
+    ).toBe(true);
+    expect(
+      inboxV2PurgeOutboxTerminalPayloadInputSchema.safeParse({
+        context: { tenantId },
+        intentId: identity.intentId,
+        outcomeRevision: "0"
+      }).success
+    ).toBe(false);
+    for (const outcome of ["purged", "already_absent", "not_found"] as const) {
+      expect(
+        inboxV2PurgeOutboxTerminalPayloadResultSchema.safeParse({
+          outcome,
+          ...identity
+        }).success
+      ).toBe(true);
+    }
+    expect(
+      inboxV2PurgeOutboxTerminalPayloadResultSchema.safeParse({
+        outcome: "purged",
+        ...identity,
+        payload: payloadReference(tenantId)
       }).success
     ).toBe(false);
   });

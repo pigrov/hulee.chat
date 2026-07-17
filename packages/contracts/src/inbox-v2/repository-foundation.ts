@@ -1292,6 +1292,41 @@ export const inboxV2FinalizeOutboxResultSchema = z.discriminatedUnion(
   ]
 );
 
+export const inboxV2PurgeOutboxTerminalPayloadInputSchema = z
+  .object({
+    context: inboxV2RepositoryTenantContextSchema,
+    intentId: inboxV2OutboxIntentIdSchema,
+    outcomeRevision: inboxV2EntityRevisionSchema
+  })
+  .strict();
+
+const inboxV2OutboxTerminalPayloadPurgeIdentitySchema = z
+  .object({
+    tenantId: inboxV2TenantIdSchema,
+    intentId: inboxV2OutboxIntentIdSchema,
+    outcomeRevision: inboxV2EntityRevisionSchema
+  })
+  .strict();
+
+export const inboxV2PurgeOutboxTerminalPayloadResultSchema =
+  z.discriminatedUnion("outcome", [
+    inboxV2OutboxTerminalPayloadPurgeIdentitySchema
+      .extend({
+        outcome: z.literal("purged")
+      })
+      .strict(),
+    inboxV2OutboxTerminalPayloadPurgeIdentitySchema
+      .extend({
+        outcome: z.literal("already_absent")
+      })
+      .strict(),
+    inboxV2OutboxTerminalPayloadPurgeIdentitySchema
+      .extend({
+        outcome: z.literal("not_found")
+      })
+      .strict()
+  ]);
+
 export interface InboxV2OutboxWorkRepositoryPort {
   claimAvailable(
     input: Readonly<InboxV2ClaimOutboxInput>
@@ -1302,6 +1337,16 @@ export interface InboxV2OutboxWorkRepositoryPort {
   finalize(
     input: Readonly<InboxV2FinalizeOutboxInput>
   ): Promise<InboxV2FinalizeOutboxResult>;
+}
+
+/**
+ * Destructive lifecycle boundary. Implementations must run with the dedicated
+ * retention-owner database role, never with the general outbox worker role.
+ */
+export interface InboxV2OutboxTerminalPayloadRetentionPort {
+  purgeTerminalPayload(
+    input: Readonly<InboxV2PurgeOutboxTerminalPayloadInput>
+  ): Promise<InboxV2PurgeOutboxTerminalPayloadResult>;
 }
 
 export type InboxV2RepositoryTenantContext = z.infer<
@@ -1395,6 +1440,12 @@ export type InboxV2FinalizeOutboxInput = z.infer<
 >;
 export type InboxV2FinalizeOutboxResult = z.infer<
   typeof inboxV2FinalizeOutboxResultSchema
+>;
+export type InboxV2PurgeOutboxTerminalPayloadInput = z.infer<
+  typeof inboxV2PurgeOutboxTerminalPayloadInputSchema
+>;
+export type InboxV2PurgeOutboxTerminalPayloadResult = z.infer<
+  typeof inboxV2PurgeOutboxTerminalPayloadResultSchema
 >;
 
 export type InboxV2RepositoryFoundationPorts = Readonly<{
