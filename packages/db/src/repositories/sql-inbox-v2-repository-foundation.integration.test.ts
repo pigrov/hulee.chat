@@ -728,6 +728,48 @@ describePostgres("SQL Inbox V2 repository foundation (live PostgreSQL)", () => {
         }
       });
 
+      await expect(
+        secondRepository.finalize({
+          context: { tenantId: fixtureA.tenantId },
+          intentId: intentA,
+          workerId: workerB,
+          leaseToken: leaseTokenB,
+          expectedLeaseRevision: renewedTwice.work.lease.leaseRevision,
+          instruction: {
+            kind: "processed",
+            resultHash,
+            resultReference: null
+          }
+        })
+      ).resolves.toMatchObject({
+        outcome: "already_finalized",
+        work: {
+          tenantId: fixtureA.tenantId,
+          intentId: intentA,
+          state: "processed",
+          terminalResult: { kind: "processed", resultHash }
+        }
+      });
+
+      await expect(
+        firstRepository.finalize({
+          context: { tenantId: fixtureA.tenantId },
+          intentId: intentA,
+          workerId: workerA,
+          leaseToken: leaseTokenA,
+          expectedLeaseRevision:
+            firstClaim.claims[0]!.work.lease!.leaseRevision,
+          instruction: {
+            kind: "processed",
+            resultHash: digest("wrong-terminal-replay"),
+            resultReference: null
+          }
+        })
+      ).resolves.toMatchObject({
+        outcome: "not_leased",
+        currentState: "processed"
+      });
+
       const terminal = await executor.execute<{
         state: string;
         revision: string;
@@ -762,6 +804,15 @@ describePostgres("SQL Inbox V2 repository foundation (live PostgreSQL)", () => {
       expect(timestampText(terminal.rows[0]!.occurred_at)).toBe(
         timestampText(terminal.rows[0]!.updated_at)
       );
+      const terminalOutcomeCount = await executor.execute<{
+        outcome_count: number;
+      }>(sql`
+          select count(*)::int as outcome_count
+            from inbox_v2_outbox_outcomes
+           where tenant_id = ${fixtureA.tenantId}
+             and intent_id = ${intentA}
+        `);
+      expect(terminalOutcomeCount.rows).toEqual([{ outcome_count: 1 }]);
 
       const otherTenant = await executor.execute<{
         state: string;

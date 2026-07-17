@@ -2,6 +2,7 @@ import {
   calculateInboxV2OutboxLeaseTokenHash,
   inboxV2ClaimOutboxInputSchema,
   inboxV2FinalizeOutboxInputSchema,
+  inboxV2OutboxWorkItemSchema,
   inboxV2RenewOutboxLeaseInputSchema
 } from "@hulee/contracts";
 import type { SQL } from "drizzle-orm";
@@ -11,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildClaimInboxV2OutboxSql,
   buildFinalizeInboxV2OutboxSql,
+  buildFindInboxV2OutboxTerminalReplaySql,
   buildInsertInboxV2OutboxOutcomeSql,
   buildLockInboxV2OutboxWorkSql,
   buildRenewInboxV2OutboxLeaseSql,
@@ -316,6 +318,99 @@ describe("SQL Inbox V2 repository outbox", () => {
     executor.expectExhausted();
   });
 
+  it("authenticates same-lease terminal replay from immutable outcome history", async () => {
+    const terminal = terminalWorkRow("processed");
+    const executor = new ScriptedTransactionExecutor([
+      [{ ...terminal, db_now: dbNow }],
+      [{ outcome_revision: "3" }]
+    ]);
+    const repository = createSqlInboxV2RepositoryOutbox(executor);
+
+    const result = await repository.finalize(
+      finalizeInput({
+        kind: "processed",
+        resultHash: hashB,
+        resultReference: resultReference()
+      })
+    );
+
+    expect(result).toMatchObject({
+      outcome: "already_finalized",
+      work: { tenantId, intentId: intent1, state: "processed", revision: "3" }
+    });
+    expect(executor.queries).toHaveLength(2);
+    const replaySql = normalizeSql(executor.renderedQueries[1]!.sql);
+    expect(replaySql).toContain("from public.inbox_v2_outbox_outcomes");
+    expect(replaySql).toContain("outcome.lease_token_hash =");
+    expect(replaySql).toContain("outcome.worker_id =");
+    expect(executor.renderedQueries[1]!.params).toContain(tokenHashA);
+    expect(executor.renderedQueries[1]!.params).not.toContain(tokenA);
+    executor.expectExhausted();
+  });
+
+  it("does not treat terminal state as replay without the exact lease outcome", async () => {
+    const executor = new ScriptedTransactionExecutor([
+      [{ ...terminalWorkRow("dead"), db_now: dbNow }],
+      []
+    ]);
+
+    const result = await createSqlInboxV2RepositoryOutbox(executor).finalize(
+      finalizeInput({
+        kind: "dead",
+        resultHash: hashB,
+        errorCode: "core:outbox.terminal",
+        resultReference: null
+      })
+    );
+
+    expect(result).toMatchObject({
+      outcome: "not_leased",
+      currentState: "dead"
+    });
+    expect(executor.queries).toHaveLength(2);
+    executor.expectExhausted();
+  });
+
+  it("does not replay a terminal result when the retried instruction differs", async () => {
+    const executor = new ScriptedTransactionExecutor([
+      [{ ...terminalWorkRow("processed"), db_now: dbNow }]
+    ]);
+
+    const result = await createSqlInboxV2RepositoryOutbox(executor).finalize(
+      finalizeInput({
+        kind: "processed",
+        resultHash: hashA,
+        resultReference: resultReference()
+      })
+    );
+
+    expect(result).toMatchObject({
+      outcome: "not_leased",
+      currentState: "processed"
+    });
+    expect(executor.queries).toHaveLength(1);
+    executor.expectExhausted();
+  });
+
+  it("rejects terminal replay builder for non-terminal work", () => {
+    expect(() =>
+      buildFindInboxV2OutboxTerminalReplaySql({
+        input: finalizeInput({
+          kind: "processed",
+          resultHash: hashB,
+          resultReference: null
+        }),
+        tokenHash: tokenHashA,
+        terminalWork: inboxV2OutboxWorkItemSchema.parse({
+          ...terminalWorkItem("processed"),
+          state: "pending",
+          terminalResult: null,
+          availableAt: t3
+        })
+      })
+    ).toThrow(InboxV2RepositoryOutboxPersistenceInvariantError);
+  });
+
   it("fails closed when a locked row crosses tenant or contains incoherent groups", async () => {
     const crossTenant = new ScriptedTransactionExecutor([
       [{ ...leasedRow({ tenantId: otherTenantId }), db_now: dbNow }]
@@ -352,6 +447,13 @@ describe("SQL Inbox V2 repository outbox", () => {
       resultHash: hashB,
       resultReference: resultReference()
     });
+    const replay = renderQuery(
+      buildFindInboxV2OutboxTerminalReplaySql({
+        input: finalizedInput,
+        tokenHash: tokenHashA,
+        terminalWork: terminalWorkItem("processed")
+      })
+    );
     const outcome = renderQuery(
       buildInsertInboxV2OutboxOutcomeSql({
         input: finalizedInput,
@@ -377,14 +479,16 @@ describe("SQL Inbox V2 repository outbox", () => {
       })
     );
 
-    for (const rendered of [renew, outcome, finalize, lock]) {
+    for (const rendered of [renew, outcome, finalize, replay, lock]) {
       expect(rendered.params).toContain(tenantId);
       expect(rendered.params).not.toContain(tokenA);
     }
     expect(outcome.params).toContain(tokenHashA);
     expect(finalize.params).toContain(tokenHashA);
+    expect(replay.params).toContain(tokenHashA);
     expect(normalizeSql(outcome.sql)).toContain("outcome_revision");
     expect(normalizeSql(finalize.sql)).toContain("and work.revision =");
+    expect(normalizeSql(replay.sql)).toContain("outcome.outcome_revision =");
   });
 });
 
@@ -528,6 +632,35 @@ function terminalWorkRow(state: "processed" | "dead") {
     revision: "3",
     updated_at: dbNow
   };
+}
+
+function terminalWorkItem(state: "processed" | "dead") {
+  return inboxV2OutboxWorkItemSchema.parse({
+    tenantId,
+    intentId: intent1,
+    state,
+    attemptCount: "1",
+    availableAt: null,
+    lease: null,
+    lastRetryResult: null,
+    terminalResult:
+      state === "processed"
+        ? {
+            kind: "processed" as const,
+            resultHash: hashB,
+            resultReference: resultReference(),
+            finalizedAt: dbNow
+          }
+        : {
+            kind: "dead" as const,
+            resultHash: hashB,
+            errorCode: "core:outbox.terminal",
+            resultReference: null,
+            finalizedAt: dbNow
+          },
+    revision: "3",
+    updatedAt: dbNow
+  });
 }
 
 class ScriptedTransactionExecutor implements InboxV2RepositoryOutboxTransactionExecutor {

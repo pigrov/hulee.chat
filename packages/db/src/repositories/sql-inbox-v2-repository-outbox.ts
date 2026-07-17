@@ -71,6 +71,7 @@ type ClaimedOutboxWorkRow = OutboxWorkRow & {
 
 type LockedOutboxWorkRow = OutboxWorkRow & { db_now: unknown };
 type InsertedOutcomeRow = { outcome_revision: unknown };
+type TerminalReplayOutcomeRow = { outcome_revision: unknown };
 
 export class InboxV2RepositoryOutboxPersistenceInvariantError extends Error {
   constructor(message: string) {
@@ -138,13 +139,13 @@ export function createSqlInboxV2RepositoryOutbox(
       const input = inboxV2FinalizeOutboxInputSchema.parse(rawInput);
       const tokenHash = calculateInboxV2OutboxLeaseTokenHash(input.leaseToken);
       return transactionExecutor.transaction(async (transaction) => {
-        const locked = await lockAndClassifyLease(
+        const locked = await lockAndClassifyFinalizeLease(
           transaction,
           input,
           tokenHash
         );
         if (locked.kind === "result") {
-          return asFinalizeFailure(locked.result);
+          return locked.result;
         }
 
         const outcomeRevision = incrementBigint(
@@ -301,6 +302,37 @@ export function buildLockInboxV2OutboxWorkSql(input: {
      where work.tenant_id = ${input.context.tenantId}
        and work.intent_id = ${input.intentId}
      for update of work
+  `;
+}
+
+export function buildFindInboxV2OutboxTerminalReplaySql(raw: {
+  input: InboxV2FinalizeOutboxInput;
+  tokenHash: string;
+  terminalWork: InboxV2OutboxWorkItem;
+}): SQL {
+  const input = inboxV2FinalizeOutboxInputSchema.parse(raw.input);
+  const tokenHash = inboxV2Sha256DigestSchema.parse(raw.tokenHash);
+  const terminalWork = inboxV2OutboxWorkItemSchema.parse(raw.terminalWork);
+  if (
+    terminalWork.tenantId !== input.context.tenantId ||
+    terminalWork.intentId !== input.intentId ||
+    (terminalWork.state !== "processed" && terminalWork.state !== "dead")
+  ) {
+    throw invariantError(
+      "Terminal outbox replay lookup requires the exact terminal work item."
+    );
+  }
+  return sql`
+    select outcome.outcome_revision::text as outcome_revision
+      from public.inbox_v2_outbox_outcomes outcome
+     where outcome.tenant_id = ${input.context.tenantId}
+       and outcome.intent_id = ${input.intentId}
+       and outcome.outcome_revision = ${terminalWork.revision}
+       and outcome.kind = ${terminalWork.state}
+             ::public.inbox_v2_outbox_outcome_kind
+       and outcome.lease_token_hash = ${tokenHash}
+       and outcome.worker_id = ${input.workerId}
+     limit 1
   `;
 }
 
@@ -483,6 +515,14 @@ type LockedLease =
       dbNow: string;
     }>;
 
+type LockedFinalizeLease =
+  | Readonly<{ kind: "result"; result: InboxV2FinalizeOutboxResult }>
+  | Readonly<{
+      kind: "locked";
+      work: InboxV2OutboxWorkItem & Readonly<{ state: "leased" }>;
+      dbNow: string;
+    }>;
+
 async function lockAndClassifyLease(
   executor: RawSqlExecutor,
   input: LeaseFenceInput,
@@ -565,6 +605,151 @@ async function lockAndClassifyLease(
   };
 }
 
+async function lockAndClassifyFinalizeLease(
+  executor: RawSqlExecutor,
+  input: InboxV2FinalizeOutboxInput,
+  tokenHash: string
+): Promise<LockedFinalizeLease> {
+  const result = await executor.execute<LockedOutboxWorkRow>(
+    buildLockInboxV2OutboxWorkSql(input)
+  );
+  if (result.rows.length > 1) {
+    throw invariantError("Outbox work lock returned more than one row.");
+  }
+  const row = result.rows[0];
+  if (row === undefined) {
+    return {
+      kind: "result",
+      result: asFinalizeFailure(
+        parseLeaseFailure({
+          outcome: "not_found",
+          tenantId: input.context.tenantId,
+          intentId: input.intentId
+        })
+      )
+    };
+  }
+
+  const work = mapOutboxWorkRow(input.context.tenantId, input.intentId, row);
+  const dbNow = timestampValue(row.db_now, "outbox database clock");
+  if (work.state === "processed" || work.state === "dead") {
+    if (!terminalInstructionMatches(input, work)) {
+      return {
+        kind: "result",
+        result: asFinalizeFailure(
+          parseLeaseFailure({
+            outcome: "not_leased",
+            tenantId: input.context.tenantId,
+            intentId: input.intentId,
+            currentState: work.state
+          })
+        )
+      };
+    }
+    const replay = await executor.execute<TerminalReplayOutcomeRow>(
+      buildFindInboxV2OutboxTerminalReplaySql({
+        input,
+        tokenHash,
+        terminalWork: work
+      })
+    );
+    if (replay.rows.length > 1) {
+      throw invariantError(
+        "Outbox terminal replay lookup returned too many rows."
+      );
+    }
+    if (replay.rows[0] !== undefined) {
+      const outcomeRevision = bigintText(replay.rows[0].outcome_revision);
+      if (outcomeRevision !== work.revision) {
+        throw invariantError(
+          "Outbox terminal replay outcome is not bound to the terminal work revision."
+        );
+      }
+      return {
+        kind: "result",
+        result: inboxV2FinalizeOutboxResultSchema.parse({
+          outcome: "already_finalized",
+          work
+        })
+      };
+    }
+    return {
+      kind: "result",
+      result: asFinalizeFailure(
+        parseLeaseFailure({
+          outcome: "not_leased",
+          tenantId: input.context.tenantId,
+          intentId: input.intentId,
+          currentState: work.state
+        })
+      )
+    };
+  }
+  if (work.state !== "leased") {
+    return {
+      kind: "result",
+      result: asFinalizeFailure(
+        parseLeaseFailure({
+          outcome: "not_leased",
+          tenantId: input.context.tenantId,
+          intentId: input.intentId,
+          currentState: work.state
+        })
+      )
+    };
+  }
+  if (work.lease === null) {
+    throw invariantError("Leased outbox work has no mapped lease.");
+  }
+  if (
+    work.lease.workerId !== input.workerId ||
+    work.lease.leaseTokenHash !== tokenHash
+  ) {
+    return {
+      kind: "result",
+      result: asFinalizeFailure(
+        parseLeaseFailure({
+          outcome: "stale_token",
+          tenantId: input.context.tenantId,
+          intentId: input.intentId,
+          currentLeaseRevision: work.lease.leaseRevision
+        })
+      )
+    };
+  }
+  if (Date.parse(work.lease.expiresAt) <= Date.parse(dbNow)) {
+    return {
+      kind: "result",
+      result: asFinalizeFailure(
+        parseLeaseFailure({
+          outcome: "lease_expired",
+          tenantId: input.context.tenantId,
+          intentId: input.intentId,
+          currentLeaseRevision: work.lease.leaseRevision
+        })
+      )
+    };
+  }
+  if (work.lease.leaseRevision !== input.expectedLeaseRevision) {
+    return {
+      kind: "result",
+      result: asFinalizeFailure(
+        parseLeaseFailure({
+          outcome: "lease_revision_conflict",
+          tenantId: input.context.tenantId,
+          intentId: input.intentId,
+          currentLeaseRevision: work.lease.leaseRevision
+        })
+      )
+    };
+  }
+  return {
+    kind: "locked",
+    work: work as InboxV2OutboxWorkItem & Readonly<{ state: "leased" }>,
+    dbNow
+  };
+}
+
 function parseLeaseFailure(input: unknown): LeaseFenceFailure {
   const result = inboxV2RenewOutboxLeaseResultSchema.parse(input);
   if (result.outcome === "renewed") {
@@ -577,6 +762,36 @@ function asFinalizeFailure(
   result: LeaseFenceFailure
 ): InboxV2FinalizeOutboxResult {
   return inboxV2FinalizeOutboxResultSchema.parse(result);
+}
+
+function terminalInstructionMatches(
+  input: InboxV2FinalizeOutboxInput,
+  work: InboxV2OutboxWorkItem
+): boolean {
+  const terminal = work.terminalResult;
+  const instruction = input.instruction;
+  if (terminal === null || terminal.kind !== instruction.kind) return false;
+  if (terminal.resultHash !== instruction.resultHash) return false;
+  if (
+    terminal.kind === "processed" &&
+    instruction.kind === "processed" &&
+    !sameJsonValue(terminal.resultReference, instruction.resultReference)
+  ) {
+    return false;
+  }
+  if (
+    terminal.kind === "dead" &&
+    instruction.kind === "dead" &&
+    (terminal.errorCode !== instruction.errorCode ||
+      !sameJsonValue(terminal.resultReference, instruction.resultReference))
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function sameJsonValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 type ClaimToken = Readonly<{ rawToken: string; tokenHash: string }>;
