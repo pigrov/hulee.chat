@@ -295,14 +295,10 @@ export function createSqlInboxV2SourceIdentityResolutionRepository(
 
   return {
     async readNormalizedEventForResolution(input) {
-      const tenantId = inboxV2TenantIdSchema.parse(input.tenantId);
-      const normalizedEventId = inboxV2NormalizedInboundEventIdSchema.parse(
-        input.normalizedEventId
+      return readInboxV2NormalizedEventForResolutionInTransaction(
+        transactionExecutor,
+        input
       );
-      return loadNormalizedEventForResolution(transactionExecutor, {
-        tenantId,
-        normalizedEventId
-      }).then((loaded) => loaded?.event ?? null);
     },
 
     async applyAssessment(input) {
@@ -535,6 +531,26 @@ export function buildReadInboxV2NormalizedEventForIdentityResolutionSql(input: {
     where envelope.tenant_id = ${input.tenantId}
       and envelope.normalized_event_id = ${input.normalizedEventId}
   `;
+}
+
+/**
+ * Reprojects the persisted, HMAC-pinned normalized envelope without opening
+ * its own transaction. Composite source materializers call it through their
+ * transaction-local executor rather than trusting a caller-authored snapshot.
+ */
+export async function readInboxV2NormalizedEventForResolutionInTransaction(
+  executor: RawSqlExecutor,
+  input: { tenantId: InboxV2TenantId | string; normalizedEventId: string }
+): Promise<InboxV2SourceNormalizedEventForIdentityResolution | null> {
+  const tenantId = inboxV2TenantIdSchema.parse(input.tenantId);
+  const normalizedEventId = inboxV2NormalizedInboundEventIdSchema.parse(
+    input.normalizedEventId
+  );
+  const loaded = await loadNormalizedEventForResolution(executor, {
+    tenantId,
+    normalizedEventId
+  });
+  return loaded?.event ?? null;
 }
 
 export function buildAcquireInboxV2SourceIdentityAssessmentLocksSql(

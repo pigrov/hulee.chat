@@ -518,6 +518,17 @@ export {
   createInboxV2TrustedSourceIdentityMaterializer,
   InboxV2SourceIdentityResolutionProcessorError
 } from "./source-identity-resolution-processor";
+export {
+  buildInboxV2SourceConversationMaterializationAuthorizationPreimage,
+  createInboxV2TrustedSourceConversationResolutionMaterializer,
+  deriveInboxV2SourceConversationMaterializationAuthorizationDigest,
+  InboxV2SourceConversationResolutionMaterializerError,
+  isInboxV2TrustedSourceConversationResolutionMaterializer
+} from "./source-conversation-resolution-materializer";
+export {
+  createInboxV2SourceConversationMaterializationPlanVerifier,
+  isInboxV2TrustedSourceConversationMaterializationPlanVerifier
+} from "./source-conversation-resolution-plan-verifier";
 export { createInboxV2SourceParticipantMaterializer } from "./source-participant-materialization";
 export {
   createSecurityDenialRetentionDatabaseConfig,
@@ -618,6 +629,17 @@ export type {
   InboxV2SourceIdentityNamespaceDeriver,
   InboxV2TrustedSourceIdentityMaterializer
 } from "./source-identity-resolution-processor";
+export type {
+  InboxV2SourceConversationMaterializationAuthorizationInput,
+  InboxV2SourceConversationMaterializationClock,
+  InboxV2SourceConversationNamespaceDeriver,
+  InboxV2SourceConversationNamespacePurpose,
+  InboxV2SourceConversationResolutionMaterializerErrorCode,
+  InboxV2SourceConversationThreadPlan,
+  InboxV2SourceConversationThreadPlanResolver,
+  InboxV2TrustedSourceConversationResolutionMaterializer
+} from "./source-conversation-resolution-materializer";
+export type { InboxV2SourceConversationMaterializationPlanVerifier } from "./source-conversation-resolution-plan-verifier";
 export type {
   InboxV2ParticipantIdFactory,
   InboxV2SourceParticipantMaterializer,

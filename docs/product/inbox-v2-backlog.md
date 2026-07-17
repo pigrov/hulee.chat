@@ -1565,14 +1565,22 @@ participant set.
     Detailed evidence is in
     `docs/product/inbox-v2-src-004-identity-resolution.md`.
 
-- [ ] `INB2-SRC-005` Implement canonical direct/group conversation resolution.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-SRC-003`, `INB2-DB-003`.
+- [x] `INB2-SRC-005` Implement canonical direct/group conversation resolution.
+  - State: `done`; Priority: `P0`; Started: `2026-07-17`;
+    Finished: `2026-07-17`; Owner: `Codex`; Depends on: `INB2-SRC-003`,
+    `INB2-DB-003`.
   - Acceptance: adapter thread realm/object/scope selects or creates exactly one
     canonical thread, conversation and binding; Client/sender/title never merge
     unrelated threads and group destination never comes from sender identity.
   - Verification: private/group, multi-account, cross-connection group,
     case-sensitive opaque ID and client-multichannel races are deterministic.
-    Evidence: -
+    Evidence: contract/worker/SQL focused suites passed `7/7` files and
+    `69/69` tests; the disposable PostgreSQL gate applied `45` migrations and
+    passed `28/28` files / `245/245` tests, including `6/6` SRC-005
+    multi-connection, concurrency, alias and rollback scenarios; preserve/N-1
+    passed `3/3` files / `17/17` tests; full `pnpm check` passed `332` files /
+    `3374` executed tests. Detailed evidence is in
+    `docs/product/inbox-v2-src-005-conversation-resolution.md`.
 
 - [ ] `INB2-SRC-006` Implement canonical dedupe and out-of-order reconciliation.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-SRC-005`.

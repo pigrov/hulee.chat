@@ -1,11 +1,15 @@
 import {
   inboxV2SourceThreadBindingCreationCommitSchema,
   inboxV2SourceThreadBindingCurrentProjectionSchema,
+  inboxV2ExternalThreadIdSchema,
+  inboxV2SourceAccountIdSchema,
   inboxV2SourceThreadBindingIdSchema,
   inboxV2SourceThreadBindingTransitionCommitSchema,
   inboxV2TenantIdSchema,
   type InboxV2SourceThreadBindingCreationCommit,
   type InboxV2SourceThreadBindingCurrentProjection,
+  type InboxV2ExternalThreadId,
+  type InboxV2SourceAccountId,
   type InboxV2SourceThreadBindingId,
   type InboxV2SourceThreadBindingTransitionCommit,
   type InboxV2TenantId
@@ -40,6 +44,12 @@ const SUPPORTED_EVIDENCE_KINDS = new Set([
 export type FindCurrentInboxV2SourceThreadBindingInput = Readonly<{
   tenantId: InboxV2TenantId;
   bindingId: InboxV2SourceThreadBindingId | string;
+}>;
+
+export type FindCurrentInboxV2SourceThreadBindingByTargetInput = Readonly<{
+  tenantId: InboxV2TenantId;
+  externalThreadId: InboxV2ExternalThreadId | string;
+  sourceAccountId: InboxV2SourceAccountId | string;
 }>;
 
 export type ResolveOrCreateInboxV2SourceThreadBindingResult =
@@ -87,6 +97,9 @@ export type InboxV2SourceThreadBindingTransactionExecutor = RawSqlExecutor & {
 export type InboxV2SourceThreadBindingRepository = Readonly<{
   findCurrent(
     input: FindCurrentInboxV2SourceThreadBindingInput
+  ): Promise<InboxV2SourceThreadBindingCurrentProjection | null>;
+  findCurrentByTarget(
+    input: FindCurrentInboxV2SourceThreadBindingByTargetInput
   ): Promise<InboxV2SourceThreadBindingCurrentProjection | null>;
   resolveOrCreate(
     commit: InboxV2SourceThreadBindingCreationCommit
@@ -189,6 +202,13 @@ export function createSqlInboxV2SourceThreadBindingRepository(
       return loaded?.projection ?? null;
     },
 
+    async findCurrentByTarget(input) {
+      return findCurrentInboxV2SourceThreadBindingByTargetInTransaction(
+        transactionExecutor,
+        input
+      );
+    },
+
     async resolveOrCreate(input) {
       const commit =
         inboxV2SourceThreadBindingCreationCommitSchema.parse(input);
@@ -196,114 +216,12 @@ export function createSqlInboxV2SourceThreadBindingRepository(
       assertRouteDescriptorDigest(
         commit.initialProjection.binding.routeDescriptor
       );
-
-      return runBindingTransaction(transactionExecutor, async (transaction) => {
-        const binding = commit.initialProjection.binding;
-        await transaction.execute(buildAcquireBindingTargetLockSql(commit));
-
-        const existingTarget = await loadProjectionByTarget(transaction, {
-          tenantId: commit.tenantId,
-          externalThreadId: binding.externalThread.id,
-          sourceAccountId: binding.sourceAccount.id,
-          lock: true
-        });
-        if (existingTarget !== null) {
-          return sameValue(existingTarget.projection, commit.initialProjection)
-            ? {
-                kind: "already_exists" as const,
-                projection: existingTarget.projection
-              }
-            : {
-                kind: "binding_target_conflict" as const,
-                existingProjection: existingTarget.projection
-              };
-        }
-
-        const existingId = await loadProjection(transaction, {
-          tenantId: commit.tenantId,
-          bindingId: binding.id,
-          lock: true
-        });
-        if (existingId !== null) {
-          return {
-            kind: "binding_id_conflict" as const,
-            existingProjection: existingId.projection
-          };
-        }
-
-        const identity = await lockSourceAccountIdentity(transaction, {
-          tenantId: commit.tenantId,
-          sourceAccountId: binding.sourceAccount.id
-        });
-        if (identity === null) {
-          return { kind: "source_account_identity_not_found" as const };
-        }
-        if (!identityMatchesCreationCommit(identity, commit)) {
-          return { kind: "source_account_identity_conflict" as const };
-        }
-
-        const thread = await lockExternalThread(transaction, {
-          tenantId: commit.tenantId,
-          externalThreadId: binding.externalThread.id
-        });
-        if (thread === null) {
-          return { kind: "external_thread_not_found" as const };
-        }
-        if (!threadMatchesCreationCommit(thread, commit)) {
-          return { kind: "external_thread_mapping_conflict" as const };
-        }
-
-        const materialization = creationMaterialization(commit);
-        const inserted = await transaction.execute<{ id: unknown }>(
-          buildInsertBindingAnchorSql(commit)
-        );
-        if (inserted.rows.length !== 1) {
-          const raced = await loadProjectionByTarget(transaction, {
-            tenantId: commit.tenantId,
-            externalThreadId: binding.externalThread.id,
-            sourceAccountId: binding.sourceAccount.id,
-            lock: true
-          });
-          if (raced === null) {
-            const racedId = await loadProjection(transaction, {
-              tenantId: commit.tenantId,
-              bindingId: binding.id,
-              lock: true
-            });
-            if (racedId !== null) {
-              return {
-                kind: "binding_id_conflict" as const,
-                existingProjection: racedId.projection
-              };
-            }
-            throw invariantError(
-              "SourceThreadBinding insert conflicted without a durable target or id."
-            );
-          }
-          return sameValue(raced.projection, commit.initialProjection)
-            ? { kind: "already_exists" as const, projection: raced.projection }
-            : {
-                kind: "binding_target_conflict" as const,
-                existingProjection: raced.projection
-              };
-        }
-
-        await insertCreationAggregate(transaction, commit, materialization);
-        const created = await loadProjection(transaction, {
-          tenantId: commit.tenantId,
-          bindingId: binding.id,
-          lock: false
-        });
-        if (
-          created === null ||
-          !sameValue(created.projection, commit.initialProjection)
-        ) {
-          throw invariantError(
-            "SourceThreadBinding creation did not round-trip its contract projection."
-          );
-        }
-        return { kind: "created" as const, projection: created.projection };
-      });
+      return runBindingTransaction(transactionExecutor, (transaction) =>
+        resolveOrCreateInboxV2SourceThreadBindingInTransaction(
+          transaction,
+          commit
+        )
+      );
     },
 
     async applyTransition(input) {
@@ -438,6 +356,143 @@ export function createSqlInboxV2SourceThreadBindingRepository(
   };
 }
 
+/**
+ * Transaction-local binding resolver. It performs no nested transaction and
+ * owns no retry loop; a source materialization coordinator can therefore
+ * compose it with ExternalThread/Conversation creation atomically.
+ */
+export async function resolveOrCreateInboxV2SourceThreadBindingInTransaction(
+  transaction: RawSqlExecutor,
+  input: InboxV2SourceThreadBindingCreationCommit
+): Promise<ResolveOrCreateInboxV2SourceThreadBindingResult> {
+  const commit = inboxV2SourceThreadBindingCreationCommitSchema.parse(input);
+  assertPersistableProjectionEvidence(commit.initialProjection);
+  assertRouteDescriptorDigest(commit.initialProjection.binding.routeDescriptor);
+
+  const binding = commit.initialProjection.binding;
+  await acquireInboxV2SourceThreadBindingTargetLockInTransaction(transaction, {
+    tenantId: commit.tenantId,
+    externalThreadId: binding.externalThread.id,
+    sourceAccountId: binding.sourceAccount.id
+  });
+
+  const existingTarget = await loadProjectionByTarget(transaction, {
+    tenantId: commit.tenantId,
+    externalThreadId: binding.externalThread.id,
+    sourceAccountId: binding.sourceAccount.id,
+    lock: true
+  });
+  if (existingTarget !== null) {
+    return sameValue(existingTarget.projection, commit.initialProjection)
+      ? {
+          kind: "already_exists" as const,
+          projection: existingTarget.projection
+        }
+      : {
+          kind: "binding_target_conflict" as const,
+          existingProjection: existingTarget.projection
+        };
+  }
+
+  const existingId = await loadProjection(transaction, {
+    tenantId: commit.tenantId,
+    bindingId: binding.id,
+    lock: true
+  });
+  if (existingId !== null) {
+    return {
+      kind: "binding_id_conflict" as const,
+      existingProjection: existingId.projection
+    };
+  }
+
+  const identity = await lockSourceAccountIdentity(transaction, {
+    tenantId: commit.tenantId,
+    sourceAccountId: binding.sourceAccount.id
+  });
+  if (identity === null) {
+    return { kind: "source_account_identity_not_found" as const };
+  }
+  if (!identityMatchesCreationCommit(identity, commit)) {
+    return { kind: "source_account_identity_conflict" as const };
+  }
+
+  const thread = await lockExternalThread(transaction, {
+    tenantId: commit.tenantId,
+    externalThreadId: binding.externalThread.id
+  });
+  if (thread === null) {
+    return { kind: "external_thread_not_found" as const };
+  }
+  if (!threadMatchesCreationCommit(thread, commit)) {
+    return { kind: "external_thread_mapping_conflict" as const };
+  }
+
+  const materialization = creationMaterialization(commit);
+  const inserted = await transaction.execute<{ id: unknown }>(
+    buildInsertBindingAnchorSql(commit)
+  );
+  if (inserted.rows.length !== 1) {
+    const raced = await loadProjectionByTarget(transaction, {
+      tenantId: commit.tenantId,
+      externalThreadId: binding.externalThread.id,
+      sourceAccountId: binding.sourceAccount.id,
+      lock: true
+    });
+    if (raced === null) {
+      const racedId = await loadProjection(transaction, {
+        tenantId: commit.tenantId,
+        bindingId: binding.id,
+        lock: true
+      });
+      if (racedId !== null) {
+        return {
+          kind: "binding_id_conflict" as const,
+          existingProjection: racedId.projection
+        };
+      }
+      throw invariantError(
+        "SourceThreadBinding insert conflicted without a durable target or id."
+      );
+    }
+    return sameValue(raced.projection, commit.initialProjection)
+      ? { kind: "already_exists" as const, projection: raced.projection }
+      : {
+          kind: "binding_target_conflict" as const,
+          existingProjection: raced.projection
+        };
+  }
+
+  await insertCreationAggregate(transaction, commit, materialization);
+  const created = await loadProjection(transaction, {
+    tenantId: commit.tenantId,
+    bindingId: binding.id,
+    lock: false
+  });
+  if (
+    created === null ||
+    !sameValue(created.projection, commit.initialProjection)
+  ) {
+    throw invariantError(
+      "SourceThreadBinding creation did not round-trip its contract projection."
+    );
+  }
+  return { kind: "created" as const, projection: created.projection };
+}
+
+export async function findCurrentInboxV2SourceThreadBindingByTargetInTransaction(
+  transaction: RawSqlExecutor,
+  input: FindCurrentInboxV2SourceThreadBindingByTargetInput,
+  options: Readonly<{ lock?: boolean }> = {}
+): Promise<InboxV2SourceThreadBindingCurrentProjection | null> {
+  const normalized = normalizeFindByTargetInput(input);
+  const loaded = await loadProjectionByTarget(transaction, {
+    ...normalized,
+    lock: options.lock ?? false
+  });
+  return loaded?.projection ?? null;
+}
+
 function normalizeFindInput(
   input: FindCurrentInboxV2SourceThreadBindingInput
 ): FindCurrentInboxV2SourceThreadBindingInput {
@@ -455,6 +510,34 @@ function normalizeFindInput(
   return {
     tenantId: inboxV2TenantIdSchema.parse(input.tenantId),
     bindingId: inboxV2SourceThreadBindingIdSchema.parse(input.bindingId)
+  };
+}
+
+function normalizeFindByTargetInput(
+  input: FindCurrentInboxV2SourceThreadBindingByTargetInput
+): FindCurrentInboxV2SourceThreadBindingByTargetInput {
+  if (
+    typeof input !== "object" ||
+    input === null ||
+    Object.keys(input).some(
+      (key) =>
+        key !== "tenantId" &&
+        key !== "externalThreadId" &&
+        key !== "sourceAccountId"
+    )
+  ) {
+    throw new CoreError(
+      "validation.failed",
+      "SourceThreadBinding target lookup accepts only tenantId, externalThreadId and sourceAccountId."
+    );
+  }
+
+  return {
+    tenantId: inboxV2TenantIdSchema.parse(input.tenantId),
+    externalThreadId: inboxV2ExternalThreadIdSchema.parse(
+      input.externalThreadId
+    ),
+    sourceAccountId: inboxV2SourceAccountIdSchema.parse(input.sourceAccountId)
   };
 }
 
@@ -503,10 +586,21 @@ export function buildAcquireBindingTargetLockSql(
   commit: InboxV2SourceThreadBindingCreationCommit
 ): SQL {
   const binding = commit.initialProjection.binding;
+  return buildAcquireInboxV2SourceThreadBindingTargetLockSql({
+    tenantId: commit.tenantId,
+    externalThreadId: binding.externalThread.id,
+    sourceAccountId: binding.sourceAccount.id
+  });
+}
+
+export function buildAcquireInboxV2SourceThreadBindingTargetLockSql(
+  input: FindCurrentInboxV2SourceThreadBindingByTargetInput
+): SQL {
+  const normalized = normalizeFindByTargetInput(input);
   const key = JSON.stringify([
-    commit.tenantId,
-    binding.externalThread.id,
-    binding.sourceAccount.id
+    normalized.tenantId,
+    normalized.externalThreadId,
+    normalized.sourceAccountId
   ]);
 
   return sql`
@@ -514,6 +608,15 @@ export function buildAcquireBindingTargetLockSql(
       hashtextextended(${`inbox-v2:source-thread-binding:${key}`}, 0)
     )
   `;
+}
+
+export async function acquireInboxV2SourceThreadBindingTargetLockInTransaction(
+  transaction: RawSqlExecutor,
+  input: FindCurrentInboxV2SourceThreadBindingByTargetInput
+): Promise<void> {
+  await transaction.execute(
+    buildAcquireInboxV2SourceThreadBindingTargetLockSql(input)
+  );
 }
 
 export function buildAcquireBindingTransitionLockSql(
@@ -1579,7 +1682,7 @@ function routeAttributesDigest(
   );
 }
 
-function routeDescriptorDigest(
+export function computeInboxV2SourceThreadBindingRouteDescriptorDigest(
   descriptor: InboxV2SourceThreadBindingCurrentProjection["binding"]["routeDescriptor"]
 ): string {
   const adapter = descriptor.adapterContract;
@@ -1607,7 +1710,8 @@ function routeDescriptorDigest(
 function assertRouteDescriptorDigest(
   descriptor: InboxV2SourceThreadBindingCurrentProjection["binding"]["routeDescriptor"]
 ): void {
-  const calculated = routeDescriptorDigest(descriptor);
+  const calculated =
+    computeInboxV2SourceThreadBindingRouteDescriptorDigest(descriptor);
   if (calculated !== descriptor.descriptorDigestSha256) {
     throw new CoreError(
       "validation.failed",

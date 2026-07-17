@@ -142,7 +142,7 @@ type KeyRegistryRow = {
   registry_updated_at: unknown;
 };
 
-type KeyReservation = Readonly<{
+export type InboxV2ExternalThreadExactKeyReservation = Readonly<{
   tenantId: InboxV2TenantId;
   id: string;
   entryKind: "canonical" | "alias";
@@ -151,6 +151,15 @@ type KeyReservation = Readonly<{
   canonicalThreadId: InboxV2ExternalThreadId;
   canonicalConversationId: InboxV2ConversationId;
 }>;
+
+export type ReserveInboxV2ExternalThreadExactKeyResult =
+  | Readonly<{ kind: "not_found" | "digest_collision" }>
+  | Readonly<{
+      kind: "reserved";
+      reservation: InboxV2ExternalThreadExactKeyReservation;
+    }>;
+
+type KeyReservation = InboxV2ExternalThreadExactKeyReservation;
 
 type MappingRow = KeyRegistryRow & {
   thread_tenant_id: unknown;
@@ -262,165 +271,12 @@ export function createSqlInboxV2ExternalThreadRepository(
   return {
     async resolveOrCreateExactMapping(input) {
       const normalized = normalizeResolveInput(input);
-      const { mapping } = normalized;
-      const tenantId = mapping.tenantId;
-      const keyDigest = computeInboxV2ExternalThreadKeyDigest(
-        mapping.thread.key
+      return transactionExecutor.transaction((transaction) =>
+        resolveOrCreateInboxV2ExternalThreadExactMappingInTransaction(
+          transaction,
+          normalized
+        )
       );
-
-      return transactionExecutor.transaction(async (transaction) => {
-        // The registry has an immediate FK to Conversation, so an advisory
-        // tenant+digest reservation is the first race boundary. The durable
-        // registry row is inserted after the candidate Conversation exists.
-        await acquireAdvisoryLock(transaction, "key", tenantId, keyDigest);
-
-        const reservation = await loadKeyReservation(transaction, {
-          tenantId,
-          keyDigest,
-          lock: true
-        });
-        if (reservation !== null) {
-          if (!sameExternalThreadKey(reservation.key, mapping.thread.key)) {
-            return { kind: "digest_collision" };
-          }
-
-          const existingMapping = await requireMappingByReservation(
-            transaction,
-            reservation
-          );
-          if (reservation.entryKind === "alias") {
-            return { kind: "key_reserved_as_alias", existingMapping };
-          }
-
-          return sameMapping(existingMapping, mapping)
-            ? { kind: "already_exists", mapping: existingMapping }
-            : { kind: "exact_key_conflict", existingMapping };
-        }
-
-        await acquireAdvisoryLock(
-          transaction,
-          "thread",
-          tenantId,
-          mapping.thread.id
-        );
-        const existingByThreadId = await loadMappingById(transaction, {
-          tenantId,
-          threadId: mapping.thread.id,
-          lock: true
-        });
-        if (existingByThreadId !== null) {
-          return {
-            kind: "thread_id_conflict",
-            existingMapping: existingByThreadId
-          };
-        }
-
-        await acquireAdvisoryLock(
-          transaction,
-          "conversation",
-          tenantId,
-          mapping.conversation.id
-        );
-        const conversationLock = await lockConversation(transaction, {
-          tenantId,
-          conversationId: mapping.conversation.id
-        });
-        const conversationOwner = await findThreadByConversation(transaction, {
-          tenantId,
-          conversationId: mapping.conversation.id
-        });
-        if (conversationOwner !== null) {
-          return {
-            kind: "conversation_conflict",
-            existingThreadId: conversationOwner,
-            conversationId: mapping.conversation.id
-          };
-        }
-
-        if (conversationLock === null) {
-          const insertedConversation = await transaction.execute<IdRow>(
-            buildInsertInboxV2ExternalThreadConversationSql(normalized)
-          );
-          requireSingleInsertedRow(
-            insertedConversation,
-            "Candidate Conversation insert lost an uncoordinated unique race."
-          );
-          const insertedHead = await transaction.execute<IdRow>(
-            buildInsertInboxV2ExternalThreadConversationHeadSql(normalized)
-          );
-          requireSingleInsertedRow(
-            insertedHead,
-            "Candidate ConversationHead insert did not produce exactly one row."
-          );
-          const insertedMembershipHead = await transaction.execute<IdRow>(
-            buildInsertInboxV2ConversationMembershipHeadSql({
-              tenantId,
-              conversationId: mapping.conversation.id,
-              createdAt: mapping.conversation.createdAt
-            })
-          );
-          requireSingleInsertedRow(
-            insertedMembershipHead,
-            "Candidate Conversation membership head insert did not produce exactly one row."
-          );
-        } else {
-          const existingConversation = await loadConversationById(transaction, {
-            tenantId,
-            conversationId: mapping.conversation.id
-          });
-          if (existingConversation === null) {
-            throw invariantError(
-              "Locked Conversation is missing its mandatory ConversationHead."
-            );
-          }
-          // Creation owns the Conversation + Head atomically. A pre-existing,
-          // currently unowned Conversation is therefore not an idempotent
-          // continuation: accepting it would let a caller attach an arbitrary
-          // aggregate by choosing its ID.
-          return {
-            kind: "conversation_identity_conflict",
-            existingConversation
-          };
-        }
-
-        const registryId = externalThreadKeyRegistryId(keyDigest);
-        const insertedRegistry = await transaction.execute<IdRow>(
-          buildInsertInboxV2ExternalThreadKeyRegistrySql({
-            tenantId,
-            registryId,
-            entryKind: "canonical",
-            key: mapping.thread.key,
-            canonicalThreadId: mapping.thread.id,
-            canonicalConversationId: mapping.conversation.id,
-            createdAt: mapping.thread.createdAt
-          })
-        );
-        requireSingleInsertedRow(
-          insertedRegistry,
-          "Canonical key reservation lost an uncoordinated unique race."
-        );
-
-        const insertedThread = await transaction.execute<IdRow>(
-          buildInsertInboxV2ExternalThreadSql(mapping, registryId)
-        );
-        requireSingleInsertedRow(
-          insertedThread,
-          "ExternalThread insert lost an uncoordinated ID/Conversation race."
-        );
-
-        const created = await loadMappingById(transaction, {
-          tenantId,
-          threadId: mapping.thread.id,
-          lock: false
-        });
-        if (created === null) {
-          throw invariantError(
-            "ExternalThread create did not produce a complete mapping."
-          );
-        }
-
-        return { kind: "created", mapping: created };
-      });
     },
 
     async appendAliases(commit) {
@@ -634,46 +490,12 @@ export function createSqlInboxV2ExternalThreadRepository(
       ) {
         throw new CoreError("tenant.boundary_violation");
       }
-      const keyDigest = computeInboxV2ExternalThreadKeyDigest(key);
-
-      return transactionExecutor.transaction(async (transaction) => {
-        await acquireAdvisoryLock(transaction, "key", tenantId, keyDigest);
-        const reservation = await loadKeyReservation(transaction, {
+      return transactionExecutor.transaction((transaction) =>
+        findInboxV2ExternalThreadByExactKeyInTransaction(transaction, {
           tenantId,
-          keyDigest,
-          lock: true
-        });
-        if (reservation === null) {
-          return { kind: "not_found" };
-        }
-        if (!sameExternalThreadKey(reservation.key, key)) {
-          return { kind: "digest_collision" };
-        }
-
-        const mapping = await requireMappingByReservation(
-          transaction,
-          reservation
-        );
-        const matchedAlias =
-          reservation.entryKind === "alias"
-            ? await loadAliasByRegistryId(transaction, {
-                tenantId,
-                registryId: reservation.id
-              })
-            : null;
-        if (reservation.entryKind === "alias" && matchedAlias === null) {
-          throw invariantError(
-            "Alias key resolution found no immutable alias record."
-          );
-        }
-
-        return {
-          kind: "found",
-          reservationKind: reservation.entryKind,
-          mapping,
-          matchedAlias
-        };
-      });
+          key
+        })
+      );
     },
 
     async findById(input) {
@@ -687,6 +509,242 @@ export function createSqlInboxV2ExternalThreadRepository(
       });
     }
   };
+}
+
+export async function findInboxV2ExternalThreadByExactKeyInTransaction(
+  transaction: RawSqlExecutor,
+  input: {
+    tenantId: InboxV2TenantId | string;
+    key: InboxV2ExternalThreadKey;
+  }
+): Promise<FindInboxV2ExternalThreadByExactKeyResult> {
+  const reserved = await reserveInboxV2ExternalThreadExactKeyInTransaction(
+    transaction,
+    input
+  );
+  if (reserved.kind !== "reserved") return reserved;
+  const reservation = reserved.reservation;
+  const tenantId = reservation.tenantId;
+
+  const mapping = await requireMappingByReservation(transaction, reservation);
+  const matchedAlias =
+    reservation.entryKind === "alias"
+      ? await loadAliasByRegistryId(transaction, {
+          tenantId,
+          registryId: reservation.id
+        })
+      : null;
+  if (reservation.entryKind === "alias" && matchedAlias === null) {
+    throw invariantError(
+      "Alias key resolution found no immutable alias record."
+    );
+  }
+
+  return {
+    kind: "found",
+    reservationKind: reservation.entryKind,
+    mapping,
+    matchedAlias
+  };
+}
+
+/**
+ * Reserves an exact key without locking its ExternalThread, Conversation or
+ * ConversationHead. Composite materializers use the immutable target IDs to
+ * acquire BindingHead and account-identity locks first, preserving the global
+ * BindingHead -> SourceAccountIdentity -> ExternalThread lock order.
+ */
+export async function reserveInboxV2ExternalThreadExactKeyInTransaction(
+  transaction: RawSqlExecutor,
+  input: {
+    tenantId: InboxV2TenantId | string;
+    key: InboxV2ExternalThreadKey;
+  }
+): Promise<ReserveInboxV2ExternalThreadExactKeyResult> {
+  assertStrictObject(input, FIND_BY_KEY_INPUT_KEYS, "findByExactKey input");
+  const tenantId = inboxV2TenantIdSchema.parse(input.tenantId);
+  const key = inboxV2ExternalThreadKeySchema.parse(input.key);
+  if (key.scope.kind !== "provider" && key.scope.owner.tenantId !== tenantId) {
+    throw new CoreError("tenant.boundary_violation");
+  }
+  const keyDigest = computeInboxV2ExternalThreadKeyDigest(key);
+
+  await acquireAdvisoryLock(transaction, "key", tenantId, keyDigest);
+  const reservation = await loadKeyReservation(transaction, {
+    tenantId,
+    keyDigest,
+    // The key advisory lock serializes every canonical/alias registry writer.
+    // Registry rows are immutable routing reservations, so a row lock here
+    // would add no safety and would precede the canonical binding lock order.
+    lock: false
+  });
+  if (reservation === null) return { kind: "not_found" };
+  if (!sameExternalThreadKey(reservation.key, key)) {
+    return { kind: "digest_collision" };
+  }
+  return { kind: "reserved", reservation };
+}
+
+/**
+ * Transaction-local exact mapping resolver. The caller owns the surrounding
+ * transaction and any retry policy so thread, Conversation and later binding
+ * materialization can share one all-or-nothing boundary.
+ */
+export async function resolveOrCreateInboxV2ExternalThreadExactMappingInTransaction(
+  transaction: RawSqlExecutor,
+  input: ResolveOrCreateInboxV2ExternalThreadInput
+): Promise<ResolveOrCreateInboxV2ExternalThreadResult> {
+  const normalized = normalizeResolveInput(input);
+  const { mapping } = normalized;
+  const tenantId = mapping.tenantId;
+  const keyDigest = computeInboxV2ExternalThreadKeyDigest(mapping.thread.key);
+
+  // The registry has an immediate FK to Conversation, so an advisory
+  // tenant+digest reservation is the first race boundary. The durable
+  // registry row is inserted after the candidate Conversation exists.
+  await acquireAdvisoryLock(transaction, "key", tenantId, keyDigest);
+
+  const reservation = await loadKeyReservation(transaction, {
+    tenantId,
+    keyDigest,
+    lock: true
+  });
+  if (reservation !== null) {
+    if (!sameExternalThreadKey(reservation.key, mapping.thread.key)) {
+      return { kind: "digest_collision" };
+    }
+
+    const existingMapping = await requireMappingByReservation(
+      transaction,
+      reservation
+    );
+    if (reservation.entryKind === "alias") {
+      return { kind: "key_reserved_as_alias", existingMapping };
+    }
+
+    return sameMapping(existingMapping, mapping)
+      ? { kind: "already_exists", mapping: existingMapping }
+      : { kind: "exact_key_conflict", existingMapping };
+  }
+
+  await acquireAdvisoryLock(transaction, "thread", tenantId, mapping.thread.id);
+  const existingByThreadId = await loadMappingById(transaction, {
+    tenantId,
+    threadId: mapping.thread.id,
+    lock: true
+  });
+  if (existingByThreadId !== null) {
+    return {
+      kind: "thread_id_conflict",
+      existingMapping: existingByThreadId
+    };
+  }
+
+  await acquireAdvisoryLock(
+    transaction,
+    "conversation",
+    tenantId,
+    mapping.conversation.id
+  );
+  const conversationLock = await lockConversation(transaction, {
+    tenantId,
+    conversationId: mapping.conversation.id
+  });
+  const conversationOwner = await findThreadByConversation(transaction, {
+    tenantId,
+    conversationId: mapping.conversation.id
+  });
+  if (conversationOwner !== null) {
+    return {
+      kind: "conversation_conflict",
+      existingThreadId: conversationOwner,
+      conversationId: mapping.conversation.id
+    };
+  }
+
+  if (conversationLock === null) {
+    const insertedConversation = await transaction.execute<IdRow>(
+      buildInsertInboxV2ExternalThreadConversationSql(normalized)
+    );
+    requireSingleInsertedRow(
+      insertedConversation,
+      "Candidate Conversation insert lost an uncoordinated unique race."
+    );
+    const insertedHead = await transaction.execute<IdRow>(
+      buildInsertInboxV2ExternalThreadConversationHeadSql(normalized)
+    );
+    requireSingleInsertedRow(
+      insertedHead,
+      "Candidate ConversationHead insert did not produce exactly one row."
+    );
+    const insertedMembershipHead = await transaction.execute<IdRow>(
+      buildInsertInboxV2ConversationMembershipHeadSql({
+        tenantId,
+        conversationId: mapping.conversation.id,
+        createdAt: mapping.conversation.createdAt
+      })
+    );
+    requireSingleInsertedRow(
+      insertedMembershipHead,
+      "Candidate Conversation membership head insert did not produce exactly one row."
+    );
+  } else {
+    const existingConversation = await loadConversationById(transaction, {
+      tenantId,
+      conversationId: mapping.conversation.id
+    });
+    if (existingConversation === null) {
+      throw invariantError(
+        "Locked Conversation is missing its mandatory ConversationHead."
+      );
+    }
+    // Creation owns the Conversation + Head atomically. A pre-existing,
+    // currently unowned Conversation is therefore not an idempotent
+    // continuation: accepting it would let a caller attach an arbitrary
+    // aggregate by choosing its ID.
+    return {
+      kind: "conversation_identity_conflict",
+      existingConversation
+    };
+  }
+
+  const registryId = externalThreadKeyRegistryId(keyDigest);
+  const insertedRegistry = await transaction.execute<IdRow>(
+    buildInsertInboxV2ExternalThreadKeyRegistrySql({
+      tenantId,
+      registryId,
+      entryKind: "canonical",
+      key: mapping.thread.key,
+      canonicalThreadId: mapping.thread.id,
+      canonicalConversationId: mapping.conversation.id,
+      createdAt: mapping.thread.createdAt
+    })
+  );
+  requireSingleInsertedRow(
+    insertedRegistry,
+    "Canonical key reservation lost an uncoordinated unique race."
+  );
+
+  const insertedThread = await transaction.execute<IdRow>(
+    buildInsertInboxV2ExternalThreadSql(mapping, registryId)
+  );
+  requireSingleInsertedRow(
+    insertedThread,
+    "ExternalThread insert lost an uncoordinated ID/Conversation race."
+  );
+
+  const created = await loadMappingById(transaction, {
+    tenantId,
+    threadId: mapping.thread.id,
+    lock: false
+  });
+  if (created === null) {
+    throw invariantError(
+      "ExternalThread create did not produce a complete mapping."
+    );
+  }
+
+  return { kind: "created", mapping: created };
 }
 
 export function computeInboxV2ExternalThreadKeyDigest(

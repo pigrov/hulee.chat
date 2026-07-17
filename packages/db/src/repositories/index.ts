@@ -281,15 +281,28 @@ export {
   buildLockInboxV2SourceThreadBindingIdentitySql,
   buildLockInboxV2SourceThreadBindingThreadSql,
   buildUpdateBindingHeadCasSql,
+  computeInboxV2SourceThreadBindingRouteDescriptorDigest,
   createSqlInboxV2SourceThreadBindingRepository
 } from "./sql-inbox-v2-source-thread-binding-repository";
 export type {
   ApplyInboxV2SourceThreadBindingTransitionResult,
+  FindCurrentInboxV2SourceThreadBindingByTargetInput,
   FindCurrentInboxV2SourceThreadBindingInput,
   InboxV2SourceThreadBindingRepository,
   InboxV2SourceThreadBindingTransactionExecutor,
   ResolveOrCreateInboxV2SourceThreadBindingResult
 } from "./sql-inbox-v2-source-thread-binding-repository";
+export {
+  buildFindInboxV2SourceConversationAccountIdentitySql,
+  createSqlInboxV2SourceConversationResolutionRepository
+} from "./sql-inbox-v2-source-conversation-resolution-repository";
+export type {
+  CreateSqlInboxV2SourceConversationResolutionRepositoryOptions,
+  InboxV2SourceConversationMaterializationPlanAuthorizationVerifier,
+  InboxV2SourceConversationResolutionRepository,
+  InboxV2SourceConversationResolutionTransactionExecutor,
+  ResolveInboxV2SourceConversationInput
+} from "./sql-inbox-v2-source-conversation-resolution-repository";
 export {
   buildFindInboxV2ProviderRosterEvidenceByIdSql,
   buildFindInboxV2ProviderRosterMemberIdsSql,
