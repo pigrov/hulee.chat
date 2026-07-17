@@ -1,6 +1,11 @@
 import {
-  inboxV2BigintCounterSchema,
+  INBOX_V2_MESSAGE_SCHEMA_ID,
+  INBOX_V2_MESSAGE_SCHEMA_VERSION,
+  INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
+  INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
+  inboxV2EntityRevisionSchema,
   inboxV2MessageCreationCommitSchema,
+  inboxV2NamespacedIdSchema,
   inboxV2OutboundDispatchArtifactAssociationCommitSchema,
   inboxV2OutboundDispatchAttemptCommitSchema,
   inboxV2OutboundDispatchAttemptSchema,
@@ -9,6 +14,8 @@ import {
   inboxV2OutboundRouteResolutionCommitSchema,
   inboxV2OutboundRouteResolutionInputSchema,
   inboxV2OutboundRouteSchema,
+  inboxV2OutboxIntentIdSchema,
+  inboxV2Sha256DigestSchema,
   inboxV2ThreadRoutePolicySchema,
   inboxV2TimelineContentHeadOf,
   inboxV2TimelineContentSchema,
@@ -16,6 +23,7 @@ import {
   type InboxV2OutboundDispatchArtifactAssociationCommit
 } from "@hulee/contracts";
 import { sql, type SQL } from "drizzle-orm";
+import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -27,8 +35,25 @@ import {
   createHuleeDatabase,
   type HuleeDatabase
 } from "../client";
-import { createSqlInboxV2OutboundTransportRepository } from "./sql-inbox-v2-outbound-transport-repository";
-import { createSqlInboxV2TimelineMessageRepository } from "./sql-inbox-v2-timeline-message-repository";
+import {
+  computeInboxV2LeafHashDigest,
+  computeInboxV2TenantStreamManifestDigest,
+  createSqlInboxV2AuthorizedCommandCoordinator,
+  type WithInboxV2AuthorizedCommandMutationInput
+} from "./sql-inbox-v2-authorization-repository";
+import {
+  buildCompareAndSwapInboxV2OutboundDispatchSql,
+  buildInsertInboxV2OutboundDispatchAttemptSql,
+  buildInsertInboxV2OutboundDispatchSql,
+  buildInsertInboxV2OutboundRouteSql,
+  createSqlInboxV2OutboundTransportRepository,
+  persistInboxV2RouteResolutionInTransaction
+} from "./sql-inbox-v2-outbound-transport-repository";
+import {
+  computeInboxV2TimelineMessageCommitDigest,
+  prepareInboxV2MessageCreation,
+  sealInboxV2PreparedMessageCreation
+} from "./sql-inbox-v2-timeline-message-repository";
 import {
   createOutboundTransportContractFixture,
   OUTBOUND_TEST_TIMES
@@ -131,6 +156,568 @@ describePostgres(
       await closeHuleeDatabase(db);
     });
 
+    it("commits route, Message, queued dispatch and provider intent atomically before provider I/O", async () => {
+      const fixture = fixtureFor("atomic-producer");
+      tenantIds.push(fixture.tenantId);
+      await seedOutboundAnchors(db, fixture);
+      const input = authorizedExternalSendInput(fixture);
+      const coordinator = createSqlInboxV2AuthorizedCommandCoordinator(db);
+      let prepareCount = 0;
+      let sealCount = 0;
+      let failAfterMessageSeal = true;
+
+      const materialize = () =>
+        coordinator.withAuthorizedAtomicMaterialization(
+          input,
+          async (context) => {
+            prepareCount += 1;
+            const route = await persistInboxV2RouteResolutionInTransaction(
+              context,
+              fixture.routeCommit
+            );
+            if (route.kind !== "committed" && route.kind !== "already_exists") {
+              throw new Error(`Atomic route preparation failed: ${route.kind}`);
+            }
+            const prepared = await prepareInboxV2MessageCreation(context, {
+              commit: fixture.messageCreationCommit
+            });
+            if (prepared.kind !== "ready") {
+              throw new Error(
+                `Atomic Message preparation failed: ${prepared.kind}`
+              );
+            }
+            return prepared.capability;
+          },
+          async (context, capability) => {
+            sealCount += 1;
+            const sealed = await sealInboxV2PreparedMessageCreation(context, {
+              capability
+            });
+            if (failAfterMessageSeal) {
+              throw new Error("injected failure after outbound Message seal");
+            }
+            return {
+              result: {
+                messageId: sealed.message.id,
+                dispatchId: fixture.queuedDispatch.id
+              },
+              receipt: sealed.receipt
+            };
+          }
+        );
+
+      await expect(materialize()).rejects.toThrow(
+        "injected failure after outbound Message seal"
+      );
+      expect(await loadAtomicOutboundProducerCounts(db, fixture)).toMatchObject(
+        {
+          commands: "0",
+          stream_commits: "0",
+          stream_heads: "1",
+          stream_position: "1",
+          policy_versions: "1",
+          policy_heads: "1",
+          routes: "0",
+          messages: "0",
+          dispatches: "0",
+          atomic_dispatch_materializations: "0",
+          attempts: "0",
+          outbox_intents: "0",
+          outbox_work: "0"
+        }
+      );
+
+      failAfterMessageSeal = false;
+      await expect(materialize()).resolves.toMatchObject({
+        kind: "applied",
+        result: {
+          messageId: fixture.references.message.id,
+          dispatchId: fixture.queuedDispatch.id
+        },
+        status: { streamPosition: "2" }
+      });
+      expect(await loadAtomicOutboundProducerCounts(db, fixture)).toEqual({
+        commands: "1",
+        stream_commits: "1",
+        stream_heads: "1",
+        stream_position: "2",
+        changes: "2",
+        events: "1",
+        policy_versions: "1",
+        policy_heads: "1",
+        routes: "1",
+        messages: "1",
+        dispatches: "1",
+        atomic_dispatch_materializations: "1",
+        queued_dispatches: "1",
+        attempts: "0",
+        outbox_intents: "2",
+        provider_intents: "1",
+        outbox_work: "2"
+      });
+
+      await expect(
+        coordinator.withAuthorizedAtomicMaterialization(
+          input,
+          async () => {
+            throw new Error("committed replay must not prepare domain state");
+          },
+          async () => {
+            throw new Error("committed replay must not seal domain state");
+          }
+        )
+      ).resolves.toMatchObject({
+        kind: "already_applied",
+        status: { streamPosition: "2" }
+      });
+      expect(prepareCount).toBe(2);
+      expect(sealCount).toBe(2);
+    });
+
+    it.each([
+      "missing_provider_intent",
+      "duplicate_provider_intents",
+      "revision_2_dispatch_change",
+      "dispatch_row_without_change_or_provider_intent"
+    ] as const)(
+      "rejects an incomplete atomic provider closure: %s",
+      async (failureKind) => {
+        const fixture = fixtureFor(`atomic-reject-${failureKind}`);
+        tenantIds.push(fixture.tenantId);
+        await seedOutboundAnchors(db, fixture);
+        const baseInput = authorizedExternalSendInput(fixture);
+        const input = atomicProviderClosureFailureInput(
+          baseInput,
+          fixture,
+          failureKind
+        );
+        const coordinator = createSqlInboxV2AuthorizedCommandCoordinator(db);
+
+        const materialization = coordinator.withAuthorizedAtomicMaterialization(
+          input,
+          async (context) => {
+            const route = await persistInboxV2RouteResolutionInTransaction(
+              context,
+              fixture.routeCommit
+            );
+            if (route.kind !== "committed" && route.kind !== "already_exists") {
+              throw new Error(`Atomic route preparation failed: ${route.kind}`);
+            }
+            const prepared = await prepareInboxV2MessageCreation(context, {
+              commit: fixture.messageCreationCommit
+            });
+            if (prepared.kind !== "ready") {
+              throw new Error(
+                `Atomic Message preparation failed: ${prepared.kind}`
+              );
+            }
+            return prepared.capability;
+          },
+          async (context, capability) => {
+            const sealed = await sealInboxV2PreparedMessageCreation(context, {
+              capability
+            });
+            return { result: null, receipt: sealed.receipt };
+          }
+        );
+
+        await expect(materialization).rejects.toThrow(
+          "atomic Message seal manifest does not match"
+        );
+        expect(
+          await loadAtomicOutboundProducerCounts(db, fixture)
+        ).toMatchObject({
+          commands: "0",
+          stream_commits: "0",
+          stream_heads: "1",
+          stream_position: "1",
+          policy_versions: "1",
+          policy_heads: "1",
+          routes: "0",
+          messages: "0",
+          dispatches: "0",
+          atomic_dispatch_materializations: "0",
+          attempts: "0",
+          outbox_intents: "0",
+          outbox_work: "0"
+        });
+      }
+    );
+
+    it("rejects a coherent duplicate Message projection in the deferred database closure", async () => {
+      const fixture = fixtureFor("atomic-raw-duplicate-message-projection");
+      tenantIds.push(fixture.tenantId);
+      await seedOutboundAnchors(db, fixture);
+      const input = authorizedExternalSendInput(fixture);
+      await expect(
+        persistAtomicOutboundProducer(db, fixture)
+      ).resolves.toMatchObject({ kind: "applied" });
+      const messageChange = input.records.changes.find(
+        ({ entity }) => entity.entityTypeId === "core:message"
+      );
+      const messageEvent = input.records.events.find(
+        ({ typeId }) => typeId === "core:message.changed"
+      );
+      const projectionIntent = input.records.outboxIntents.find(
+        ({ effectClass }) => effectClass === "projection"
+      );
+      if (
+        messageChange === undefined ||
+        messageEvent === undefined ||
+        projectionIntent === undefined
+      ) {
+        throw new Error(
+          "Atomic outbound fixture requires its Message projection closure."
+        );
+      }
+      const duplicateProjection = {
+        ...projectionIntent,
+        id: inboxV2OutboxIntentIdSchema.parse(
+          `outbox-intent:atomic-message-projection-duplicate-${fixture.suffix}`
+        ),
+        ordinal: input.records.outboxIntents.length + 1,
+        handlerId: inboxV2NamespacedIdSchema.parse(
+          "core:inbox-projection-duplicate"
+        ),
+        consumerDedupeKey: inboxV2Sha256DigestSchema.parse(
+          sha256(`${fixture.suffix}:message-projection-duplicate-dedupe`)
+        ),
+        intentHash: inboxV2Sha256DigestSchema.parse(
+          sha256(`${fixture.suffix}:message-projection-duplicate-intent`)
+        )
+      };
+
+      await expectDatabaseFailure(
+        insertCoherentDuplicateProjectionAndRecheckDomainClosure(
+          db,
+          input,
+          duplicateProjection
+        ),
+        /23514 inbox_v2\.domain_mutation_stream_child_mismatch/u
+      );
+      expect(await loadAtomicOutboundProducerCounts(db, fixture)).toMatchObject(
+        {
+          outbox_intents: "2",
+          outbox_work: "2"
+        }
+      );
+    });
+
+    it.each([
+      ["missing exact route policy", "missing"],
+      ["unpublished next route-policy revision", "next_revision"]
+    ] as const)(
+      "keeps the live authorized route seam read-only for %s",
+      async (_label, policyState) => {
+        const fixture = fixtureFor(`atomic-read-only-policy-${policyState}`);
+        tenantIds.push(fixture.tenantId);
+        await seedOutboundAnchors(db, fixture);
+        if (policyState === "missing") {
+          await db.transaction(async (transaction) => {
+            await transaction.execute(
+              sql`set local session_replication_role = replica`
+            );
+            await transaction.execute(sql`
+              delete from inbox_v2_thread_route_policy_heads
+               where tenant_id = ${fixture.tenantId}
+                 and policy_id = ${fixture.routePolicy.id}
+            `);
+            await transaction.execute(sql`
+              delete from inbox_v2_thread_route_policy_versions
+               where tenant_id = ${fixture.tenantId}
+                 and policy_id = ${fixture.routePolicy.id}
+            `);
+            await transaction.execute(
+              sql`set local session_replication_role = origin`
+            );
+          });
+        }
+        const routeCommit =
+          policyState === "next_revision"
+            ? routeCommitAtPolicyRevision(fixture, "2")
+            : fixture.routeCommit;
+        const coordinator = createSqlInboxV2AuthorizedCommandCoordinator(db);
+        let routeResultKind: string | null = null;
+        let sealCount = 0;
+
+        const materialization = coordinator.withAuthorizedAtomicMaterialization(
+          authorizedExternalSendInput(fixture),
+          async (context) => {
+            const routeResult =
+              await persistInboxV2RouteResolutionInTransaction(
+                context,
+                routeCommit
+              );
+            routeResultKind = routeResult.kind;
+            if (routeResult.kind !== "policy_conflict") {
+              throw new Error(
+                `Expected a read-only policy conflict, received ${routeResult.kind}.`
+              );
+            }
+            throw new Error("route policy probe completed");
+          },
+          async () => {
+            sealCount += 1;
+            throw new Error("route policy probe must not reach seal");
+          }
+        );
+
+        await expect(materialization).rejects.toThrow(
+          "route policy probe completed"
+        );
+        expect(routeResultKind).toBe("policy_conflict");
+        expect(sealCount).toBe(0);
+        expect(
+          await loadAtomicOutboundProducerCounts(db, fixture)
+        ).toMatchObject({
+          commands: "0",
+          stream_commits: "0",
+          stream_heads: "1",
+          stream_position: "1",
+          policy_versions: policyState === "missing" ? "0" : "1",
+          policy_heads: policyState === "missing" ? "0" : "1",
+          routes: "0",
+          messages: "0",
+          dispatches: "0",
+          atomic_dispatch_materializations: "0",
+          outbox_intents: "0",
+          outbox_work: "0"
+        });
+      }
+    );
+
+    it("rejects a raw revision-2 dispatch with a nonzero attempt as an atomic outbound creation", async () => {
+      const fixture = fixtureFor("atomic-raw-attempting-dispatch");
+      tenantIds.push(fixture.tenantId);
+      await seedOutboundAnchors(db, fixture);
+      await expect(
+        persistAtomicOutboundProducer(db, fixture)
+      ).resolves.toMatchObject({ kind: "applied" });
+      await db.transaction(async (transaction) => {
+        await transaction.execute(
+          sql`set local session_replication_role = replica`
+        );
+        await transaction.execute(sql`
+          delete from inbox_v2_atomic_outbound_dispatch_materializations
+           where tenant_id = ${fixture.tenantId}
+             and dispatch_id = ${fixture.queuedDispatch.id}
+        `);
+        await transaction.execute(sql`
+          delete from inbox_v2_outbound_dispatches
+           where tenant_id = ${fixture.tenantId}
+             and id = ${fixture.queuedDispatch.id}
+        `);
+        await transaction.execute(
+          sql`set local session_replication_role = origin`
+        );
+      });
+
+      await expectDatabaseFailure(
+        db.transaction(async (transaction) => {
+          await transaction.execute(
+            buildInsertInboxV2OutboundDispatchSql({
+              dispatch: fixture.queuedDispatch,
+              conversationId: fixture.references.conversation.id,
+              timelineItemId: fixture.references.timelineItem.id
+            })
+          );
+          await transaction.execute(
+            buildInsertInboxV2OutboundDispatchAttemptSql(fixture.pendingAttempt)
+          );
+          await transaction.execute(
+            buildCompareAndSwapInboxV2OutboundDispatchSql(
+              fixture.queuedDispatch,
+              fixture.attemptingDispatch
+            )
+          );
+          await transaction.execute(sql`set constraints all immediate`);
+        }),
+        /23514 inbox_v2\.atomic_outbound_creation_closure_missing/u
+      );
+      expect(await loadAtomicOutboundProducerCounts(db, fixture)).toMatchObject(
+        {
+          commands: "1",
+          stream_commits: "1",
+          stream_heads: "1",
+          stream_position: "2",
+          routes: "1",
+          messages: "1",
+          dispatches: "0",
+          atomic_dispatch_materializations: "0",
+          attempts: "0"
+        }
+      );
+    });
+
+    it("does not treat an already persisted OutboundRoute as a live route proof", async () => {
+      const fixture = fixtureFor("atomic-existing-route-no-proof");
+      tenantIds.push(fixture.tenantId);
+      await seedOutboundAnchors(db, fixture);
+      await seedExistingOutboundRoute(db, fixture);
+      const coordinator = createSqlInboxV2AuthorizedCommandCoordinator(db);
+      let rejectedExistingRoute = false;
+
+      const materialization = coordinator.withAuthorizedAtomicMaterialization(
+        authorizedExternalSendInput(fixture),
+        async (context) => {
+          try {
+            await persistInboxV2RouteResolutionInTransaction(
+              context,
+              fixture.routeCommit
+            );
+            throw new Error("Expected the live route seam to reject replay.");
+          } catch (error) {
+            if (
+              !(error instanceof Error) ||
+              !/must commit a new exact OutboundRoute/iu.test(error.message)
+            ) {
+              throw error;
+            }
+            rejectedExistingRoute = true;
+          }
+          const prepared = await prepareInboxV2MessageCreation(context, {
+            commit: fixture.messageCreationCommit
+          });
+          if (prepared.kind !== "ready") {
+            throw new Error(
+              `Atomic Message preparation failed: ${prepared.kind}`
+            );
+          }
+          return prepared.capability;
+        },
+        async (context, capability) => {
+          const sealed = await sealInboxV2PreparedMessageCreation(context, {
+            capability
+          });
+          return { result: null, receipt: sealed.receipt };
+        }
+      );
+
+      await expect(materialization).rejects.toThrow(
+        /requires exactly one matching live outbound route proof/iu
+      );
+      expect(rejectedExistingRoute).toBe(true);
+      expect(await loadAtomicOutboundProducerCounts(db, fixture)).toMatchObject(
+        {
+          commands: "0",
+          stream_commits: "0",
+          stream_heads: "1",
+          stream_position: "1",
+          policy_versions: "1",
+          policy_heads: "1",
+          routes: "1",
+          messages: "0",
+          dispatches: "0",
+          atomic_dispatch_materializations: "0",
+          outbox_intents: "0",
+          outbox_work: "0"
+        }
+      );
+    });
+
+    it("rejects a standalone fresh OutboundRoute without its atomic producer closure", async () => {
+      const fixture = fixtureFor("atomic-raw-route-inverse");
+      tenantIds.push(fixture.tenantId);
+      await seedOutboundAnchors(db, fixture);
+
+      await expectDatabaseFailure(
+        db.transaction(async (transaction) => {
+          await transaction.execute(
+            buildInsertInboxV2OutboundRouteSql(fixture.route, {
+              binding_id: fixture.references.binding.id,
+              external_thread_id: fixture.references.externalThread.id,
+              source_connection_id: fixture.references.sourceConnection.id,
+              source_account_id: fixture.references.sourceAccount.id,
+              binding_revision: "1",
+              account_generation: fixture.route.bindingFence.accountGeneration,
+              binding_generation: fixture.route.bindingFence.bindingGeneration,
+              remote_access_revision:
+                fixture.route.bindingFence.remoteAccessRevision,
+              administrative_revision:
+                fixture.route.bindingFence.administrativeRevision,
+              capability_revision:
+                fixture.route.bindingFence.capabilityRevision,
+              route_descriptor_revision:
+                fixture.route.bindingFence.routeDescriptorRevision,
+              remote_access_state: "active",
+              administrative_state: "enabled",
+              runtime_health_state: "ready"
+            })
+          );
+          await transaction.execute(sql`set constraints all immediate`);
+        }),
+        /23514 inbox_v2\.atomic_outbound_creation_closure_missing/u
+      );
+      expect(await loadAtomicOutboundProducerCounts(db, fixture)).toMatchObject(
+        {
+          routes: "0",
+          messages: "0",
+          dispatches: "0",
+          atomic_dispatch_materializations: "0"
+        }
+      );
+    });
+
+    it("rejects a forged route destination that differs from the persisted binding snapshot", async () => {
+      const fixture = fixtureFor("atomic-forged-destination");
+      tenantIds.push(fixture.tenantId);
+      await seedOutboundAnchors(db, fixture);
+      const forgedCommit = routeCommitWithDestinationSubject(
+        fixture,
+        `${fixture.route.routeDescriptor.destinationSubject}-forged`
+      );
+      const coordinator = createSqlInboxV2AuthorizedCommandCoordinator(db);
+      let sealCount = 0;
+
+      const materialization = coordinator.withAuthorizedAtomicMaterialization(
+        authorizedExternalSendInput(fixture),
+        async (context) => {
+          await persistInboxV2RouteResolutionInTransaction(
+            context,
+            forgedCommit
+          );
+          const prepared = await prepareInboxV2MessageCreation(context, {
+            commit: fixture.messageCreationCommit
+          });
+          if (prepared.kind !== "ready") {
+            throw new Error(
+              `Atomic Message preparation failed: ${prepared.kind}`
+            );
+          }
+          return prepared.capability;
+        },
+        async (context, capability) => {
+          sealCount += 1;
+          const sealed = await sealInboxV2PreparedMessageCreation(context, {
+            capability
+          });
+          return { result: null, receipt: sealed.receipt };
+        }
+      );
+
+      await expectDatabaseFailure(
+        materialization,
+        /40001 inbox_v2\.outbound_route_binding_fence_conflict/u
+      );
+      expect(sealCount).toBe(0);
+      expect(await loadAtomicOutboundProducerCounts(db, fixture)).toMatchObject(
+        {
+          commands: "0",
+          stream_commits: "0",
+          stream_heads: "1",
+          stream_position: "1",
+          policy_versions: "1",
+          policy_heads: "1",
+          routes: "0",
+          messages: "0",
+          dispatches: "0",
+          atomic_dispatch_materializations: "0",
+          outbox_intents: "0",
+          outbox_work: "0"
+        }
+      );
+    });
+
     it("commits route -> queued dispatch -> durable attempt -> outcome_unknown -> reconciliation", async () => {
       const fixture = fixtureFor("lifecycle");
       tenantIds.push(fixture.tenantId);
@@ -138,11 +725,8 @@ describePostgres(
       const repository = createSqlInboxV2OutboundTransportRepository(db);
 
       await expect(
-        repository.persistRouteResolution(fixture.routeCommit)
-      ).resolves.toEqual({ kind: "committed", route: fixture.route });
-      await expect(
-        persistCanonicalOutboundMessage(db, fixture)
-      ).resolves.toMatchObject({ kind: "created" });
+        persistAtomicOutboundProducer(db, fixture)
+      ).resolves.toMatchObject({ kind: "applied" });
       await expect(
         repository.createDispatch(fixture.queuedDispatch)
       ).resolves.toEqual({
@@ -222,10 +806,9 @@ describePostgres(
         tenantIds.push(fixture.tenantId);
         await seedOutboundAnchors(db, fixture);
         const repository = createSqlInboxV2OutboundTransportRepository(db);
-        await repository.persistRouteResolution(fixture.routeCommit);
         await expect(
-          persistCanonicalOutboundMessage(db, fixture)
-        ).resolves.toMatchObject({ kind: "created" });
+          persistAtomicOutboundProducer(db, fixture)
+        ).resolves.toMatchObject({ kind: "applied" });
         await expect(
           repository.createDispatch(fixture.queuedDispatch)
         ).resolves.toEqual({
@@ -313,10 +896,9 @@ describePostgres(
       tenantIds.push(fixture.tenantId);
       await seedOutboundAnchors(db, fixture);
       const repository = createSqlInboxV2OutboundTransportRepository(db);
-      await repository.persistRouteResolution(fixture.routeCommit);
       await expect(
-        persistCanonicalOutboundMessage(db, fixture)
-      ).resolves.toMatchObject({ kind: "created" });
+        persistAtomicOutboundProducer(db, fixture)
+      ).resolves.toMatchObject({ kind: "applied" });
       await expect(
         repository.createDispatch(fixture.queuedDispatch)
       ).resolves.toEqual({
@@ -378,10 +960,9 @@ describePostgres(
       tenantIds.push(fixture.tenantId);
       await seedOutboundAnchors(db, fixture);
       const repository = createSqlInboxV2OutboundTransportRepository(db);
-      await repository.persistRouteResolution(fixture.routeCommit);
       await expect(
-        persistCanonicalOutboundMessage(db, fixture)
-      ).resolves.toMatchObject({ kind: "created" });
+        persistAtomicOutboundProducer(db, fixture)
+      ).resolves.toMatchObject({ kind: "applied" });
       await expect(
         repository.createDispatch(fixture.queuedDispatch)
       ).resolves.toEqual({
@@ -420,10 +1001,9 @@ describePostgres(
       tenantIds.push(fixture.tenantId);
       await seedOutboundAnchors(db, fixture);
       const repository = createSqlInboxV2OutboundTransportRepository(db);
-      await repository.persistRouteResolution(fixture.routeCommit);
       await expect(
-        persistCanonicalOutboundMessage(db, fixture)
-      ).resolves.toMatchObject({ kind: "created" });
+        persistAtomicOutboundProducer(db, fixture)
+      ).resolves.toMatchObject({ kind: "applied" });
       await expect(
         repository.createDispatch(fixture.queuedDispatch)
       ).resolves.toEqual({
@@ -489,6 +1069,9 @@ function fixtureFor(label: string): OutboundFixture {
 function canonicalOutboundFixture(fixture: RawOutboundFixture) {
   const operationId = "core:message.send" as const;
   const requiredPermissionId = "core:message.send_external" as const;
+  const authorizationNotAfter = new Date(
+    Date.now() + 60 * 60 * 1_000
+  ).toISOString();
   const candidate = fixture.routeInput.candidates.soleEligibleCandidate;
   if (candidate === null) {
     throw new Error(
@@ -503,11 +1086,13 @@ function canonicalOutboundFixture(fixture: RawOutboundFixture) {
     ...candidate.conversationAuthorization,
     target: canonicalTarget,
     requiredPermissionId,
-    matchedPermissionIds: [requiredPermissionId]
+    matchedPermissionIds: [requiredPermissionId],
+    notAfter: authorizationNotAfter
   };
   const sourceAccountAuthorization = {
     ...candidate.sourceAccountAuthorization,
-    target: canonicalTarget
+    target: canonicalTarget,
+    notAfter: authorizationNotAfter
   };
   const canonicalCandidate = {
     ...candidate,
@@ -527,6 +1112,7 @@ function canonicalOutboundFixture(fixture: RawOutboundFixture) {
     candidates: {
       ...fixture.routeInput.candidates,
       operationId,
+      notAfter: authorizationNotAfter,
       soleEligibleCandidate: canonicalCandidate
     }
   });
@@ -542,7 +1128,8 @@ function canonicalOutboundFixture(fixture: RawOutboundFixture) {
     sourceAccountAuthorization,
     selection: {
       ...fixture.route.selection,
-      reason: routeResult.selectionReason
+      reason: routeResult.selectionReason,
+      candidateSnapshotNotAfter: authorizationNotAfter
     }
   });
   const routeCommit = inboxV2OutboundRouteResolutionCommitSchema.parse({
@@ -589,6 +1176,77 @@ function canonicalOutboundFixture(fixture: RawOutboundFixture) {
     echoAssociation,
     responseAssociation
   };
+}
+
+function routeCommitAtPolicyRevision(
+  fixture: OutboundFixture,
+  revision: string
+) {
+  const routePolicy = inboxV2ThreadRoutePolicySchema.parse({
+    ...fixture.routeCommit.input.routePolicy,
+    revision
+  });
+  const input = inboxV2OutboundRouteResolutionInputSchema.parse({
+    ...fixture.routeCommit.input,
+    routePolicy,
+    candidates: {
+      ...fixture.routeCommit.input.candidates,
+      routePolicyRevision: revision
+    }
+  });
+  const result = resolveInboxV2OutboundRoute(input);
+  if (result.kind !== "selected") {
+    throw new Error("Advanced route-policy fixture must remain selectable.");
+  }
+  return inboxV2OutboundRouteResolutionCommitSchema.parse({
+    input,
+    result,
+    route: {
+      ...fixture.route,
+      routePolicyRevision: revision
+    }
+  });
+}
+
+function routeCommitWithDestinationSubject(
+  fixture: OutboundFixture,
+  destinationSubject: string
+) {
+  const candidate = fixture.routeCommit.input.candidates.soleEligibleCandidate;
+  if (candidate === null) {
+    throw new Error("Forged destination fixture requires one route candidate.");
+  }
+  const routeDescriptor = {
+    ...candidate.routeDescriptor,
+    destinationSubject
+  };
+  const input = inboxV2OutboundRouteResolutionInputSchema.parse({
+    ...fixture.routeCommit.input,
+    candidates: {
+      ...fixture.routeCommit.input.candidates,
+      soleEligibleCandidate: {
+        ...candidate,
+        routeDescriptor
+      }
+    }
+  });
+  const result = resolveInboxV2OutboundRoute(input);
+  if (result.kind !== "selected") {
+    throw new Error("Forged destination fixture must remain selectable.");
+  }
+  return inboxV2OutboundRouteResolutionCommitSchema.parse({
+    input,
+    result,
+    route: {
+      ...fixture.route,
+      routeDescriptor,
+      selection: {
+        ...fixture.route.selection,
+        reason: result.selectionReason,
+        fallbackPolicyOrdinal: result.fallbackPolicyOrdinal
+      }
+    }
+  });
 }
 
 function canonicalMessageCreationCommit(
@@ -843,17 +1501,623 @@ function replaceFixtureTenant<T>(value: T, tenantId: string): T {
   ) as T;
 }
 
-function position(value: string) {
-  return inboxV2BigintCounterSchema.parse(value);
+function authorizedExternalSendInput(
+  fixture: OutboundFixture
+): WithInboxV2AuthorizedCommandMutationInput {
+  const tenantId = fixture.tenantId;
+  const occurredAt =
+    fixture.messageCreationCommit.timelineAllocation.committedAt;
+  const authorizedAt = occurredAt;
+  const conversationAuthorization = fixture.route.conversationAuthorization;
+  const sourceAccountAuthorization = fixture.route.sourceAccountAuthorization;
+  const notAfter = conversationAuthorization.notAfter;
+  const expiresAt = new Date(
+    Date.parse(occurredAt) + 24 * 60 * 60 * 1_000
+  ).toISOString();
+  const token = fixture.suffix;
+  const commandId = `command:atomic-${token}`;
+  const clientMutationId = `mutation:atomic-${token}`;
+  const mutationId = `authorization-mutation:atomic-${token}`;
+  const streamCommitId = `commit:atomic-${token}`;
+  const correlationId = `correlation:atomic-${token}`;
+  const messageChangeId = `change:atomic-message-${token}`;
+  const dispatchChangeId = `change:atomic-dispatch-${token}`;
+  const eventId = `event:atomic-message-${token}`;
+  const projectionIntentId = `outbox-intent:atomic-projection-${token}`;
+  const providerIntentId = `outbox-intent:atomic-provider-${token}`;
+  const decision = {
+    tenantId,
+    id: `authorization-decision:atomic-${token}`,
+    authorizationEpoch: fixture.route.authorizationEpoch,
+    principal: {
+      kind: "employee" as const,
+      employee: fixture.references.employee
+    },
+    permissionId: fixture.route.requiredConversationPermissionId,
+    resourceScopeId: "core:conversation",
+    resource: {
+      tenantId,
+      entityTypeId: "core:conversation",
+      entityId: fixture.references.conversation.id
+    },
+    resourceAccessRevision: "1",
+    decisionRevision: conversationAuthorization.decisionRevision,
+    decisionHash: sha256(`${token}:authorization-decision`),
+    outcome: "allowed" as const,
+    decidedAt: conversationAuthorization.decidedAt,
+    notAfter
+  };
+  const sourceAccountDecision = {
+    ...decision,
+    id: `authorization-decision:atomic-source-account-${token}`,
+    permissionId: "core:source_account.use",
+    resourceScopeId: "core:source-account",
+    resource: {
+      tenantId,
+      entityTypeId: "core:source-account",
+      entityId: fixture.references.sourceAccount.id
+    },
+    decisionRevision: sourceAccountAuthorization.decisionRevision,
+    decisionHash: sha256(`${token}:source-account-authorization-decision`),
+    decidedAt: sourceAccountAuthorization.decidedAt,
+    notAfter: sourceAccountAuthorization.notAfter
+  };
+  const authorizationDecisionRefs = [decision, sourceAccountDecision].sort(
+    (left, right) => (left.id === right.id ? 0 : left.id < right.id ? -1 : 1)
+  );
+  const messageReference = {
+    tenantId,
+    recordId: fixture.references.message.id,
+    schemaId: INBOX_V2_MESSAGE_SCHEMA_ID,
+    schemaVersion: INBOX_V2_MESSAGE_SCHEMA_VERSION,
+    digest: `sha256:${computeInboxV2TimelineMessageCommitDigest(
+      fixture.messageCreationCommit.message
+    )}` as const
+  };
+  const dispatchReference = {
+    tenantId,
+    recordId: fixture.queuedDispatch.id,
+    schemaId: INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
+    schemaVersion: INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
+    digest: `sha256:${computeInboxV2TimelineMessageCommitDigest(
+      fixture.queuedDispatch
+    )}` as const
+  };
+  const domainCommitReference = {
+    tenantId,
+    recordId: fixture.messageCreationCommit.initialRevision.id,
+    schemaId: "core:inbox-v2.message-creation-commit",
+    schemaVersion: "v1",
+    digest: `sha256:${computeInboxV2TimelineMessageCommitDigest(
+      fixture.messageCreationCommit
+    )}` as const
+  };
+  const changes = [
+    {
+      id: messageChangeId,
+      ordinal: 1,
+      entity: {
+        tenantId,
+        entityTypeId: "core:message",
+        entityId: fixture.references.message.id
+      },
+      resultingRevision: "1",
+      timeline: {
+        conversation: fixture.references.conversation,
+        timelineSequence:
+          fixture.messageCreationCommit.timelineAllocation.items[0]!
+            .timelineSequence
+      },
+      audience: "conversation_external" as const,
+      state: {
+        kind: "upsert" as const,
+        stateSchemaId: INBOX_V2_MESSAGE_SCHEMA_ID,
+        stateSchemaVersion: INBOX_V2_MESSAGE_SCHEMA_VERSION,
+        stateHash: messageReference.digest,
+        payloadReference: messageReference,
+        domainCommitReference
+      }
+    },
+    {
+      id: dispatchChangeId,
+      ordinal: 2,
+      entity: {
+        tenantId,
+        entityTypeId: "core:outbound-dispatch",
+        entityId: fixture.queuedDispatch.id
+      },
+      resultingRevision: "1",
+      timeline: null,
+      audience: "conversation_external" as const,
+      state: {
+        kind: "upsert" as const,
+        stateSchemaId: INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
+        stateSchemaVersion: INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
+        stateHash: dispatchReference.digest,
+        payloadReference: dispatchReference,
+        domainCommitReference
+      }
+    }
+  ];
+  const event = {
+    id: eventId,
+    typeId: "core:message.changed" as const,
+    payloadSchemaId: domainCommitReference.schemaId,
+    payloadSchemaVersion: domainCommitReference.schemaVersion,
+    ordinal: "1",
+    changeIds: [messageChangeId, dispatchChangeId],
+    subjects: changes.map((change) => change.entity),
+    payloadReference: domainCommitReference,
+    correlationId,
+    commandIds: [commandId],
+    clientMutationIds: [clientMutationId],
+    authorizationDecisionRefs,
+    accessEffect: { kind: "none" as const },
+    occurredAt: fixture.messageCreationCommit.initialRevision.occurredAt,
+    recordedAt: fixture.messageCreationCommit.initialRevision.recordedAt,
+    eventHash: sha256(`${token}:message-event`)
+  };
+  const internalReference = (purpose: string) =>
+    `internal-ref:${createHash("sha256")
+      .update(`${token}:${purpose}`, "utf8")
+      .digest("hex")
+      .slice(0, 32)}`;
+
+  return {
+    tenantId,
+    command: {
+      id: commandId,
+      requestId: `request:atomic-${token}`,
+      clientMutationId,
+      commandTypeId: "core:message.send",
+      requestHash: sha256(`${token}:request`),
+      actor: {
+        kind: "employee",
+        employeeId: fixture.references.employee.id
+      },
+      authorizationDecisionId: decision.id,
+      authorizationEpoch: decision.authorizationEpoch,
+      authorizedAt,
+      publicResultCode: "core:message.queued",
+      resultReference: messageReference,
+      sensitiveResultReference: null
+    },
+    revisions: {
+      expectedTenantRbacRevision: "1",
+      expectedSharedAccessRevision: "1",
+      advanceTenantRbac: false,
+      advanceSharedAccess: false,
+      employees: [
+        {
+          employeeId: fixture.references.employee.id,
+          expectedEmployeeAccessRevision: "1",
+          expectedEmployeeInboxRelationRevision: "1",
+          advanceEmployeeAccess: false,
+          advanceEmployeeInboxRelation: false
+        }
+      ],
+      resources: [
+        {
+          resourceKind: "conversation",
+          resourceId: fixture.references.conversation.id,
+          resourceHeadId: `authorization-resource:atomic-${token}`,
+          expectedResourceAccessRevision: "1",
+          advance: "none"
+        },
+        {
+          resourceKind: "source_account",
+          resourceId: fixture.references.sourceAccount.id,
+          resourceHeadId: `authorization-resource:atomic-source-account-${token}`,
+          expectedResourceAccessRevision: "1",
+          advance: "none"
+        }
+      ]
+    },
+    records: {
+      mutationId,
+      relationKind: null,
+      streamCommitId,
+      expectedStreamEpoch: `stream-epoch:atomic-${token}`,
+      audienceImpact: { kind: "none" },
+      commitHash: sha256(`${token}:stream-commit`),
+      correlationId,
+      changes,
+      events: [event],
+      outboxIntents: [
+        {
+          id: projectionIntentId,
+          ordinal: 1,
+          typeId: "core:projection.update",
+          handlerId: "core:inbox-projection",
+          effectClass: "projection",
+          eventId,
+          changeIds: [messageChangeId, dispatchChangeId],
+          payloadReference: null,
+          consumerDedupeKey: sha256(`${token}:projection-dedupe`),
+          correlationId,
+          availableAt: occurredAt,
+          intentHash: sha256(`${token}:projection-intent`)
+        },
+        {
+          id: providerIntentId,
+          ordinal: 2,
+          typeId: "core:provider.dispatch",
+          handlerId: "core:provider-dispatch-worker",
+          effectClass: "provider_io",
+          eventId,
+          changeIds: [dispatchChangeId],
+          payloadReference: dispatchReference,
+          consumerDedupeKey: sha256(`${token}:provider-dedupe`),
+          correlationId,
+          availableAt: occurredAt,
+          intentHash: sha256(`${token}:provider-intent`)
+        }
+      ],
+      audit: {
+        id: `authorization-audit:atomic-${token}`,
+        actionId: "core:message.send",
+        target: {
+          tenantId,
+          entityTypeId: "core:outbound-dispatch",
+          entityId: internalReference("audit-target")
+        },
+        reasonCodeId: "core:message-send-requested",
+        matchedPermissionIds: authorizationDecisionRefs
+          .map(({ permissionId }) => permissionId)
+          .sort(comparePostgresCText),
+        grantSourceIds: [internalReference("grant-source")],
+        authorizationScopeIds: authorizationDecisionRefs
+          .map(({ resourceScopeId }) => resourceScopeId)
+          .sort(comparePostgresCText),
+        overrideReasonCodeId: null,
+        policyVersion: "v1",
+        evidenceReference: domainCommitReference,
+        authorizationDecisionRefs,
+        correlationId,
+        outcome: "succeeded",
+        revisionDeltaHash: computeInboxV2LeafHashDigest([]),
+        previousAuditHash: null,
+        auditHash: sha256(`${token}:audit`),
+        occurredAt,
+        recordedAt: occurredAt,
+        expiresAt,
+        facets: [
+          {
+            ordinal: 1,
+            dimension: "tenant",
+            reference: {
+              tenantId,
+              entityTypeId: "core:tenant",
+              entityId: internalReference("tenant-facet")
+            },
+            relation: "affected",
+            facetHash: sha256(`${token}:audit-facet`)
+          }
+        ]
+      }
+    },
+    occurredAt
+  } as unknown as WithInboxV2AuthorizedCommandMutationInput;
 }
 
-async function persistCanonicalOutboundMessage(
+function withoutAtomicProviderIntent(
+  input: WithInboxV2AuthorizedCommandMutationInput
+): WithInboxV2AuthorizedCommandMutationInput {
+  return {
+    ...input,
+    records: {
+      ...input.records,
+      outboxIntents: input.records.outboxIntents.filter(
+        ({ effectClass }) => effectClass !== "provider_io"
+      )
+    }
+  };
+}
+
+function atomicProviderClosureFailureInput(
+  input: WithInboxV2AuthorizedCommandMutationInput,
+  fixture: OutboundFixture,
+  failureKind:
+    | "missing_provider_intent"
+    | "duplicate_provider_intents"
+    | "revision_2_dispatch_change"
+    | "dispatch_row_without_change_or_provider_intent"
+): WithInboxV2AuthorizedCommandMutationInput {
+  switch (failureKind) {
+    case "missing_provider_intent":
+      return withoutAtomicProviderIntent(input);
+    case "duplicate_provider_intents":
+      return duplicateAtomicProviderClosure(input, fixture);
+    case "revision_2_dispatch_change":
+      return withRevision2DispatchChangeWithoutProviderIntent(input);
+    case "dispatch_row_without_change_or_provider_intent":
+      return withoutAtomicDispatchChangeAndProviderIntent(input);
+  }
+}
+
+function withRevision2DispatchChangeWithoutProviderIntent(
+  input: WithInboxV2AuthorizedCommandMutationInput
+): WithInboxV2AuthorizedCommandMutationInput {
+  const withoutProviderIntent = withoutAtomicProviderIntent(input);
+  return {
+    ...withoutProviderIntent,
+    records: {
+      ...withoutProviderIntent.records,
+      changes: withoutProviderIntent.records.changes.map((change) =>
+        change.entity.entityTypeId === "core:outbound-dispatch"
+          ? {
+              ...change,
+              resultingRevision: inboxV2EntityRevisionSchema.parse("2")
+            }
+          : change
+      )
+    }
+  };
+}
+
+function withoutAtomicDispatchChangeAndProviderIntent(
+  input: WithInboxV2AuthorizedCommandMutationInput
+): WithInboxV2AuthorizedCommandMutationInput {
+  const dispatchChangeIds = new Set(
+    input.records.changes
+      .filter(({ entity }) => entity.entityTypeId === "core:outbound-dispatch")
+      .map(({ id }) => String(id))
+  );
+  return {
+    ...input,
+    records: {
+      ...input.records,
+      changes: input.records.changes.filter(
+        ({ id }) => !dispatchChangeIds.has(String(id))
+      ),
+      events: input.records.events.map((event) => ({
+        ...event,
+        changeIds: event.changeIds.filter(
+          (changeId) => !dispatchChangeIds.has(String(changeId))
+        ),
+        subjects: event.subjects.filter(
+          ({ entityTypeId }) => entityTypeId !== "core:outbound-dispatch"
+        )
+      })),
+      outboxIntents: input.records.outboxIntents
+        .filter(({ effectClass }) => effectClass !== "provider_io")
+        .map((intent) => ({
+          ...intent,
+          changeIds: intent.changeIds.filter(
+            (changeId) => !dispatchChangeIds.has(String(changeId))
+          )
+        }))
+    }
+  };
+}
+
+function duplicateAtomicProviderClosure(
+  input: WithInboxV2AuthorizedCommandMutationInput,
+  fixture: OutboundFixture
+): WithInboxV2AuthorizedCommandMutationInput {
+  const dispatchChange = input.records.changes.find(
+    ({ entity }) => entity.entityTypeId === "core:outbound-dispatch"
+  );
+  const providerIntent = input.records.outboxIntents.find(
+    ({ effectClass }) => effectClass === "provider_io"
+  );
+  if (dispatchChange === undefined || providerIntent === undefined) {
+    throw new Error("Atomic outbound fixture lacks its provider closure.");
+  }
+  const duplicateChange = {
+    ...dispatchChange,
+    id: `change:atomic-dispatch-duplicate-${fixture.suffix}`,
+    ordinal: input.records.changes.length + 1
+  };
+  const duplicateIntent = {
+    ...providerIntent,
+    id: `outbox-intent:atomic-provider-duplicate-${fixture.suffix}`,
+    ordinal: input.records.outboxIntents.length + 1,
+    changeIds: [duplicateChange.id],
+    consumerDedupeKey: sha256(`${fixture.suffix}:provider-duplicate-dedupe`),
+    intentHash: sha256(`${fixture.suffix}:provider-duplicate-intent`)
+  };
+  return {
+    ...input,
+    records: {
+      ...input.records,
+      changes: [...input.records.changes, duplicateChange],
+      events: input.records.events.map((event) =>
+        event.id === providerIntent.eventId
+          ? {
+              ...event,
+              changeIds: [...event.changeIds, duplicateChange.id]
+            }
+          : event
+      ),
+      outboxIntents: [...input.records.outboxIntents, duplicateIntent]
+    }
+  } as unknown as WithInboxV2AuthorizedCommandMutationInput;
+}
+
+function sha256(value: string): `sha256:${string}` {
+  return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`;
+}
+
+function comparePostgresCText(left: string, right: string): number {
+  return left === right ? 0 : left < right ? -1 : 1;
+}
+
+async function loadAtomicOutboundProducerCounts(
   db: HuleeDatabase,
   fixture: OutboundFixture
 ) {
-  return createSqlInboxV2TimelineMessageRepository(db).createMessage({
-    commit: fixture.messageCreationCommit,
-    streamPosition: position("2")
+  const result = await db.execute<Record<string, string>>(sql`
+    select
+      (select count(*)::text from inbox_v2_auth_command_records
+        where tenant_id = ${fixture.tenantId}) as commands,
+      (select count(*)::text from inbox_v2_tenant_stream_commits
+        where tenant_id = ${fixture.tenantId}) as stream_commits,
+      (select count(*)::text from inbox_v2_tenant_stream_heads
+        where tenant_id = ${fixture.tenantId}) as stream_heads,
+      coalesce((select last_position::text from inbox_v2_tenant_stream_heads
+        where tenant_id = ${fixture.tenantId}), '0') as stream_position,
+      (select count(*)::text from inbox_v2_tenant_stream_changes
+        where tenant_id = ${fixture.tenantId}) as changes,
+      (select count(*)::text from inbox_v2_domain_events
+        where tenant_id = ${fixture.tenantId}) as events,
+      (select count(*)::text from inbox_v2_thread_route_policy_versions
+        where tenant_id = ${fixture.tenantId}) as policy_versions,
+      (select count(*)::text from inbox_v2_thread_route_policy_heads
+        where tenant_id = ${fixture.tenantId}) as policy_heads,
+      (select count(*)::text from inbox_v2_outbound_routes
+        where tenant_id = ${fixture.tenantId}) as routes,
+      (select count(*)::text from inbox_v2_messages
+        where tenant_id = ${fixture.tenantId}) as messages,
+      (select count(*)::text from inbox_v2_outbound_dispatches
+        where tenant_id = ${fixture.tenantId}) as dispatches,
+      (select count(*)::text
+         from inbox_v2_atomic_outbound_dispatch_materializations
+        where tenant_id = ${fixture.tenantId})
+        as atomic_dispatch_materializations,
+      (select count(*)::text from inbox_v2_outbound_dispatches
+        where tenant_id = ${fixture.tenantId} and state = 'queued'
+          and attempt_count = 0) as queued_dispatches,
+      (select count(*)::text from inbox_v2_outbound_dispatch_attempts
+        where tenant_id = ${fixture.tenantId}) as attempts,
+      (select count(*)::text from inbox_v2_outbox_intents
+        where tenant_id = ${fixture.tenantId}) as outbox_intents,
+      (select count(*)::text from inbox_v2_outbox_intents
+        where tenant_id = ${fixture.tenantId}
+          and effect_class = 'provider_io') as provider_intents,
+      (select count(*)::text from inbox_v2_outbox_work_items
+        where tenant_id = ${fixture.tenantId}) as outbox_work
+  `);
+  return result.rows[0]!;
+}
+
+async function persistAtomicOutboundProducer(
+  db: HuleeDatabase,
+  fixture: OutboundFixture
+) {
+  return createSqlInboxV2AuthorizedCommandCoordinator(
+    db
+  ).withAuthorizedAtomicMaterialization(
+    authorizedExternalSendInput(fixture),
+    async (context) => {
+      const route = await persistInboxV2RouteResolutionInTransaction(
+        context,
+        fixture.routeCommit
+      );
+      if (route.kind !== "committed") {
+        throw new Error(`Atomic route preparation failed: ${route.kind}`);
+      }
+      const prepared = await prepareInboxV2MessageCreation(context, {
+        commit: fixture.messageCreationCommit
+      });
+      if (prepared.kind !== "ready") {
+        throw new Error(`Atomic Message preparation failed: ${prepared.kind}`);
+      }
+      return prepared.capability;
+    },
+    async (context, capability) => {
+      const sealed = await sealInboxV2PreparedMessageCreation(context, {
+        capability
+      });
+      return {
+        result: { messageId: sealed.message.id },
+        receipt: sealed.receipt
+      };
+    }
+  );
+}
+
+async function insertCoherentDuplicateProjectionAndRecheckDomainClosure(
+  db: HuleeDatabase,
+  input: WithInboxV2AuthorizedCommandMutationInput,
+  duplicateProjection: WithInboxV2AuthorizedCommandMutationInput["records"]["outboxIntents"][number]
+): Promise<void> {
+  const outboxIntents = [...input.records.outboxIntents, duplicateProjection];
+  const manifestDigest = computeInboxV2TenantStreamManifestDigest({
+    ...input.records,
+    outboxIntents
+  });
+  const projectionIntentCount = outboxIntents.filter(
+    ({ effectClass }) => effectClass === "projection"
+  ).length;
+
+  await db.transaction(async (transaction) => {
+    await transaction.execute(sql`
+      create temporary table inbox_v2_test_mutation_backup
+      on commit drop
+      as select *
+           from inbox_v2_auth_mutation_commits
+          where tenant_id = ${input.tenantId}
+            and mutation_id = ${input.records.mutationId}
+    `);
+    await transaction.execute(sql`
+      insert into inbox_v2_outbox_intents (
+        tenant_id, id, mutation_id, stream_commit_id, stream_position,
+        ordinal, type_id, handler_id, effect_class, event_id, change_ids,
+        payload_reference, consumer_dedupe_key, correlation_id, available_at,
+        intent_hash, created_at
+      )
+      select original_intent.tenant_id,
+             ${duplicateProjection.id},
+             original_intent.mutation_id,
+             original_intent.stream_commit_id,
+             original_intent.stream_position,
+             ${duplicateProjection.ordinal},
+             ${duplicateProjection.typeId},
+             ${duplicateProjection.handlerId},
+             ${duplicateProjection.effectClass},
+             ${duplicateProjection.eventId},
+             ${JSON.stringify(duplicateProjection.changeIds)}::jsonb,
+             ${
+               duplicateProjection.payloadReference === null
+                 ? null
+                 : JSON.stringify(duplicateProjection.payloadReference)
+             }::jsonb,
+             ${duplicateProjection.consumerDedupeKey},
+             ${duplicateProjection.correlationId},
+             ${duplicateProjection.availableAt},
+             ${duplicateProjection.intentHash},
+             original_intent.created_at
+        from inbox_v2_outbox_intents original_intent
+       where original_intent.tenant_id = ${input.tenantId}
+         and original_intent.id = ${input.records.outboxIntents[0]!.id}
+    `);
+    await transaction.execute(
+      sql`set local session_replication_role = replica`
+    );
+    await transaction.execute(sql`
+      update inbox_v2_tenant_stream_commits
+         set outbox_intent_count = ${outboxIntents.length},
+             outbox_intent_ids = ${JSON.stringify(
+               outboxIntents.map(({ id }) => id)
+             )}::jsonb,
+             manifest_digest_sha256 = ${manifestDigest}
+       where tenant_id = ${input.tenantId}
+         and id = ${input.records.streamCommitId}
+         and mutation_id = ${input.records.mutationId}
+    `);
+    await transaction.execute(sql`
+      delete from inbox_v2_auth_mutation_commits
+       where tenant_id = ${input.tenantId}
+         and mutation_id = ${input.records.mutationId}
+    `);
+    await transaction.execute(sql`set local session_replication_role = origin`);
+    await transaction.execute(sql`
+      insert into inbox_v2_auth_mutation_commits (
+        tenant_id, mutation_id, command_record_id, stream_commit_id,
+        audit_event_id, revision_effect_count,
+        revision_effect_digest_sha256, relation_write_count,
+        relation_write_digest_sha256, projection_intent_count,
+        manifest_digest_sha256, committed_at, created_at
+      )
+      select tenant_id, mutation_id, command_record_id, stream_commit_id,
+             audit_event_id, revision_effect_count,
+             revision_effect_digest_sha256, relation_write_count,
+             relation_write_digest_sha256, ${projectionIntentCount},
+             manifest_digest_sha256, committed_at, created_at
+        from inbox_v2_test_mutation_backup
+    `);
+    await transaction.execute(sql`set constraints all immediate`);
   });
 }
 
@@ -863,6 +2127,7 @@ async function seedOutboundAnchors(
 ): Promise<void> {
   const refs = fixture.references;
   const adapter = fixture.adapterContract;
+  const policy = fixture.routeCommit.input.routePolicy;
   const label = fixture.suffix;
   const threadDeclaration = JSON.stringify({
     adapterContract: adapter,
@@ -891,6 +2156,15 @@ async function seedOutboundAnchors(
       values (
         ${refs.employee.id}, ${fixture.tenantId},
         ${`outbound-${label}@example.test`}, ${`Outbound ${label}`}
+      )
+    `);
+    await transaction.execute(sql`
+      insert into inbox_v2_tenant_stream_heads (
+        tenant_id, stream_epoch, last_position, min_retained_position,
+        revision, created_at, updated_at
+      ) values (
+        ${fixture.tenantId}, ${`stream-epoch:atomic-${label}`}, 1, 0, 1,
+        ${OUTBOUND_TEST_TIMES.loadedAt}, ${OUTBOUND_TEST_TIMES.loadedAt}
       )
     `);
     await transaction.execute(sql`
@@ -1058,6 +2332,67 @@ async function seedOutboundAnchors(
         null, 0, ${`source_thread_binding_evidence_set:capability-${label}`}
       )
     `);
+    await transaction.execute(sql`
+      insert into inbox_v2_thread_route_policy_versions (
+        tenant_id, policy_id, revision, conversation_id, external_thread_id,
+        external_thread_revision, operation_id, content_kind_id,
+        route_policy_catalog_id, required_conversation_permission_id,
+        preferred_binding_id, preferred_source_connection_id,
+        preferred_source_account_id, fallback_kind, fallback_binding_count,
+        fallback_bindings_digest_sha256, created_at, updated_at
+      ) values (
+        ${fixture.tenantId}, ${policy.id}, ${BigInt(policy.revision)},
+        ${policy.conversation.id}, ${policy.externalThread.id}, 1,
+        ${policy.operationId}, ${policy.contentKindId}, ${policy.policyId},
+        ${policy.requiredConversationPermissionId}, null, null, null,
+        'none', 0, null, ${policy.createdAt}, ${policy.updatedAt}
+      )
+    `);
+    await transaction.execute(sql`
+      insert into inbox_v2_thread_route_policy_heads (
+        tenant_id, policy_id, conversation_id, external_thread_id,
+        operation_id, content_kind_id, revision, updated_at
+      ) values (
+        ${fixture.tenantId}, ${policy.id}, ${policy.conversation.id},
+        ${policy.externalThread.id}, ${policy.operationId},
+        ${policy.contentKindId}, ${BigInt(policy.revision)}, ${policy.updatedAt}
+      )
+    `);
+    await transaction.execute(sql`set local session_replication_role = origin`);
+  });
+}
+
+async function seedExistingOutboundRoute(
+  db: HuleeDatabase,
+  fixture: OutboundFixture
+): Promise<void> {
+  await db.transaction(async (transaction) => {
+    await transaction.execute(
+      sql`set local session_replication_role = replica`
+    );
+    const inserted = await transaction.execute(
+      buildInsertInboxV2OutboundRouteSql(fixture.route, {
+        binding_id: fixture.references.binding.id,
+        external_thread_id: fixture.references.externalThread.id,
+        source_connection_id: fixture.references.sourceConnection.id,
+        source_account_id: fixture.references.sourceAccount.id,
+        binding_revision: "1",
+        account_generation: fixture.route.bindingFence.accountGeneration,
+        binding_generation: fixture.route.bindingFence.bindingGeneration,
+        remote_access_revision: fixture.route.bindingFence.remoteAccessRevision,
+        administrative_revision:
+          fixture.route.bindingFence.administrativeRevision,
+        capability_revision: fixture.route.bindingFence.capabilityRevision,
+        route_descriptor_revision:
+          fixture.route.bindingFence.routeDescriptorRevision,
+        remote_access_state: "active",
+        administrative_state: "enabled",
+        runtime_health_state: "ready"
+      })
+    );
+    if (inserted.rows.length !== 1) {
+      throw new Error("Expected one pre-existing outbound route fixture.");
+    }
     await transaction.execute(sql`set local session_replication_role = origin`);
   });
 }

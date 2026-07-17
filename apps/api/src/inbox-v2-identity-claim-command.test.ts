@@ -1608,7 +1608,11 @@ function inMemoryCoordinator(): InboxV2AuthorizedCommandCoordinator & {
         clientMutationId: input.command.clientMutationId,
         commandTypeId: input.command.commandTypeId,
         actor: input.command.actor,
+        authorizationEpoch: input.command.authorizationEpoch,
         authorizationDecisionId: input.command.authorizationDecisionId,
+        authorizationDecisionRefs:
+          input.records.audit.authorizationDecisionRefs,
+        authorizationResourceRevisionFences: input.revisions.resources,
         authorizedAt: input.command.authorizedAt,
         occurredAt: input.occurredAt,
         mutationId: input.records.mutationId,

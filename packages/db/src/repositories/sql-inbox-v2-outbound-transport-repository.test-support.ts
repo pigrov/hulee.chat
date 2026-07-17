@@ -32,6 +32,8 @@ export const OUTBOUND_TEST_TIMES = {
 type FixtureOptions = Readonly<{
   tenantId?: string;
   suffix?: string;
+  operationId?: string;
+  requiredPermissionId?: string;
 }>;
 
 export function createOutboundTransportContractFixture(
@@ -103,9 +105,10 @@ export function createOutboundTransportContractFixture(
     capabilityRevision: "1",
     routeDescriptorRevision: "1"
   } as const;
-  const operationId = "core:reply";
+  const operationId = options.operationId ?? "core:reply";
   const contentKindId = "core:text";
-  const requiredPermissionId = "core:message.reply_external";
+  const requiredPermissionId =
+    options.requiredPermissionId ?? "core:message.reply_external";
   const authorizationEpoch = `authorization:outbound-${suffix}`;
   const routePolicyReference = reference(
     "thread_route_policy",

@@ -1,11 +1,21 @@
 import {
+  INBOX_V2_MESSAGE_CREATION_COMMIT_SCHEMA_ID,
+  INBOX_V2_MESSAGE_SCHEMA_ID,
+  INBOX_V2_MESSAGE_SCHEMA_VERSION,
+  INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
+  INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
+  INBOX_V2_TIMELINE_MESSAGE_COMMIT_SCHEMA_VERSION,
   inboxV2CatalogIdSchema,
-  inboxV2Sha256DigestSchema
+  inboxV2MessageCreationCommitSchema,
+  inboxV2OutboxIntentIdSchema,
+  inboxV2Sha256DigestSchema,
+  type InboxV2MessageCreationCommit
 } from "@hulee/contracts";
 import { PgDialect } from "drizzle-orm/pg-core";
-import type { SQL } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
+import { fixtureInternalCreationCommit } from "../../../contracts/src/inbox-v2/timeline-message-fixtures.type-fixture";
 import type {
   RawSqlExecutor,
   RawSqlQueryResult
@@ -20,13 +30,25 @@ import {
   computeInboxV2AuthorizationMutationManifestDigest,
   computeInboxV2LeafHashDigest,
   computeInboxV2TenantStreamManifestDigest,
+  assertInboxV2AuthorizedAtomicMaterializationContext,
   assertInboxV2AuthorizedCommandMutationContext,
   createSqlInboxV2AuthorizedCommandCoordinator,
   createSqlInboxV2AuthorizationRepository,
   type InboxV2AuthorizationTransactionExecutor,
+  type InboxV2AuthorizedAtomicMaterializationContext,
+  type InboxV2AuthorizedAtomicMaterializationSealResult,
   type InboxV2AuthorizedCommandMutationContext,
   type WithPrivilegedAuthorizationMutationInput
 } from "./sql-inbox-v2-authorization-repository";
+import {
+  issueInboxV2AtomicMaterializationSealReceipt,
+  type InboxV2AtomicMaterializationSealReceipt,
+  type InboxV2AtomicMessageCreationSealManifest
+} from "./sql-inbox-v2-atomic-materialization-internal";
+import {
+  computeInboxV2TimelineMessageCommitDigest,
+  prepareInboxV2MessageCreation
+} from "./sql-inbox-v2-timeline-message-repository";
 
 const tenantId = "tenant:tenant-1";
 const otherTenantId = "tenant:tenant-2";
@@ -35,8 +57,39 @@ const occurredAt = "2026-07-15T09:00:00.000Z";
 const expiresAt = "2027-07-15T09:00:00.000Z";
 const hashA = inboxV2Sha256DigestSchema.parse(`sha256:${"a".repeat(64)}`);
 const hashB = inboxV2Sha256DigestSchema.parse(`sha256:${"b".repeat(64)}`);
+const hashC = inboxV2Sha256DigestSchema.parse(`sha256:${"c".repeat(64)}`);
+const hashD = inboxV2Sha256DigestSchema.parse(`sha256:${"d".repeat(64)}`);
 const internalRoleId = `internal-ref:${"1".repeat(32)}`;
 const internalTenantId = `internal-ref:${"2".repeat(32)}`;
+
+function atomicSealResult<TResult>(
+  context: Pick<
+    InboxV2AuthorizedAtomicMaterializationContext,
+    "atomicMaterializationToken"
+  >,
+  result: TResult,
+  manifest: InboxV2AtomicMessageCreationSealManifest = atomicMessageCreationSealManifest()
+): InboxV2AuthorizedAtomicMaterializationSealResult<TResult> {
+  return {
+    result,
+    receipt: issueInboxV2AtomicMaterializationSealReceipt(
+      context.atomicMaterializationToken,
+      manifest
+    )
+  };
+}
+
+function expectNoAtomicStreamClosure(
+  executor: RoutingAuthorizationExecutor
+): void {
+  expect(executor.commitCount).toBe(0);
+  expect(executor.rollbackCount).toBe(1);
+  expect(executor.timeline).not.toContain("insert_stream_commit");
+  expect(executor.timeline).not.toContain("insert_stream_changes");
+  expect(executor.timeline).not.toContain("insert_domain_events");
+  expect(executor.timeline).not.toContain("insert_outbox_intents");
+  expect(executor.timeline).not.toContain("advance_stream_head");
+}
 
 describe("SQL Inbox V2 authorization mutation repository", () => {
   it("claims idempotency first, takes the tenant stream lock last and persists FK-safe closure", async () => {
@@ -469,6 +522,1120 @@ describe("SQL Inbox V2 authorization mutation repository", () => {
     expect(relationWriteInsert).toBeDefined();
     expect(jsonRecordsetRowCount(revisionEffectInsert!)).toBe(0);
     expect(jsonRecordsetRowCount(relationWriteInsert!)).toBe(0);
+  });
+
+  it.each(["message_change", "provider_intent"] as const)(
+    "rejects the one-phase public coordinator bypass for %s before opening a transaction",
+    async (bypassKind) => {
+      const base = domainMutationInput();
+      const input =
+        bypassKind === "message_change"
+          ? atomicMessageMutationInput()
+          : withProviderIo(base);
+      const executor = new RoutingAuthorizationExecutor();
+      let callbackCount = 0;
+      await expect(
+        createSqlInboxV2AuthorizedCommandCoordinator(
+          executor
+        ).withAuthorizedCommandMutation(input, async () => {
+          callbackCount += 1;
+          return { result: null };
+        })
+      ).rejects.toThrow(
+        "Message and provider-dispatch mutations require withAuthorizedAtomicMaterialization"
+      );
+      expect(callbackCount).toBe(0);
+      expect(executor.transactionCount).toBe(0);
+    }
+  );
+
+  it("allows provider I/O only for domain materialization while retaining a projection intent", async () => {
+    const domainExecutor = new RoutingAuthorizationExecutor();
+    const domainInput = atomicProviderIoMutationInput();
+    const providerSealManifest = atomicProviderIoSealManifest(domainInput);
+
+    const applied = await createSqlInboxV2AuthorizedCommandCoordinator(
+      domainExecutor
+    ).withAuthorizedAtomicMaterialization(
+      domainInput,
+      async () => ({ dispatchId: "outbound_dispatch:dispatch-1" }),
+      async (context, prepared) =>
+        atomicSealResult(context, prepared, providerSealManifest)
+    );
+
+    expect(applied).toMatchObject({
+      kind: "applied",
+      result: { dispatchId: "outbound_dispatch:dispatch-1" }
+    });
+    expect(
+      domainInput.records.outboxIntents.map(({ effectClass }) => effectClass)
+    ).toEqual(["projection", "provider_io"]);
+    const outboxInsert = domainExecutor.queries.find(
+      (query) =>
+        statementKind(normalizeSql(renderQuery(query).sql)) ===
+        "insert_outbox_intents"
+    );
+    expect(jsonRecordsetRowCount(outboxInsert!)).toBe(2);
+
+    const relationExecutor = new RoutingAuthorizationExecutor();
+    let relationCallbackCount = 0;
+    await expect(
+      createSqlInboxV2AuthorizationRepository(
+        relationExecutor
+      ).withPrivilegedAuthorizationMutation(
+        withProviderIo(roleMutationInput()),
+        async () => {
+          relationCallbackCount += 1;
+          return { result: null };
+        }
+      )
+    ).rejects.toThrow(
+      "authorization-relation mutations cannot dispatch provider I/O"
+    );
+    expect(relationCallbackCount).toBe(0);
+    expect(relationExecutor.transactionCount).toBe(0);
+  });
+
+  it("prepares before the final stream lock and seals with a live allocated-position capability", async () => {
+    const executor = new RoutingAuthorizationExecutor();
+    const coordinator = createSqlInboxV2AuthorizedCommandCoordinator(executor);
+    let capturedPrepareContext:
+      | InboxV2AuthorizedCommandMutationContext
+      | undefined;
+    let capturedSealContext:
+      | InboxV2AuthorizedAtomicMaterializationContext
+      | undefined;
+    let atomicMaterializationToken: object | undefined;
+
+    const result = await coordinator.withAuthorizedAtomicMaterialization(
+      atomicMessageMutationInput(),
+      async (context) => {
+        capturedPrepareContext = context;
+        executor.timeline.push("prepare_domain");
+        assertInboxV2AuthorizedCommandMutationContext(context);
+        expect(context).toMatchObject({
+          tenantId,
+          commandId: "command:command-1",
+          mutationId: "authorization-mutation:mutation-1",
+          profile: "domain",
+          revisionEffects: []
+        });
+        expect(Object.hasOwn(context, "streamPosition")).toBe(false);
+        atomicMaterializationToken = context.atomicMaterializationToken;
+        expect(atomicMaterializationToken).toBeDefined();
+        return { sourceConnectionId: "source_connection:source-1" };
+      },
+      async (context, prepared) => {
+        capturedSealContext = context;
+        executor.timeline.push("seal_domain");
+        expect(() =>
+          assertInboxV2AuthorizedCommandMutationContext(context as never)
+        ).toThrow("requires a live authorized-command context");
+        assertInboxV2AuthorizedAtomicMaterializationContext(context);
+        expect(prepared).toEqual({
+          sourceConnectionId: "source_connection:source-1"
+        });
+        expect(context).toMatchObject({
+          streamCommitId: "commit:commit-1",
+          streamEpoch: "stream:epoch-1",
+          previousPosition: "0",
+          streamPosition: "1"
+        });
+        expect(Object.hasOwn(context, "executor")).toBe(false);
+        expect(context.atomicMaterializationToken).toBe(
+          atomicMaterializationToken
+        );
+        return atomicSealResult(context, prepared);
+      }
+    );
+
+    expect(result).toMatchObject({
+      kind: "applied",
+      result: { sourceConnectionId: "source_connection:source-1" },
+      status: {
+        streamCommitId: "commit:commit-1",
+        streamEpoch: "stream:epoch-1",
+        streamPosition: "1"
+      },
+      revisionEffects: []
+    });
+    expectInOrder(executor.timeline, [
+      "claim_command",
+      "lock_tenant_head",
+      "lock_employee_heads",
+      "decision_time_fence",
+      "prepare_domain",
+      "lock_stream_head",
+      "seal_domain",
+      "insert_stream_commit",
+      "insert_stream_changes",
+      "insert_domain_events",
+      "insert_outbox_intents",
+      "complete_command",
+      "insert_audit",
+      "insert_mutation_commit",
+      "insert_revision_effects",
+      "insert_relation_writes",
+      "advance_stream_head"
+    ]);
+    expect(
+      executor.timeline.filter((kind) => kind === "decision_time_fence")
+    ).toHaveLength(3);
+    expect(() =>
+      assertInboxV2AuthorizedCommandMutationContext(capturedPrepareContext!)
+    ).toThrow("requires a live authorized-command context");
+    expect(() =>
+      assertInboxV2AuthorizedAtomicMaterializationContext(capturedSealContext!)
+    ).toThrow("requires a live stream-position context");
+
+    const revisionEffectInsert = executor.queries.find(
+      (query) =>
+        statementKind(normalizeSql(renderQuery(query).sql)) ===
+        "insert_revision_effects"
+    );
+    const relationWriteInsert = executor.queries.find(
+      (query) =>
+        statementKind(normalizeSql(renderQuery(query).sql)) ===
+        "insert_relation_writes"
+    );
+    expect(jsonRecordsetRowCount(revisionEffectInsert!)).toBe(0);
+    expect(jsonRecordsetRowCount(relationWriteInsert!)).toBe(0);
+  });
+
+  it("rejects a seal result without a repository-issued receipt before stream closure", async () => {
+    const executor = new RoutingAuthorizationExecutor();
+
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        executor
+      ).withAuthorizedAtomicMaterialization(
+        atomicMessageMutationInput(),
+        async () => null,
+        async () => ({ result: null }) as never
+      )
+    ).rejects.toThrow("must contain exactly result and receipt");
+
+    expectNoAtomicStreamClosure(executor);
+  });
+
+  it("rejects a forged atomic seal receipt before stream closure", async () => {
+    const executor = new RoutingAuthorizationExecutor();
+
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        executor
+      ).withAuthorizedAtomicMaterialization(
+        domainMutationInput(),
+        async () => null,
+        async () => ({
+          result: null,
+          receipt: Object.freeze(
+            {}
+          ) as unknown as InboxV2AtomicMaterializationSealReceipt
+        })
+      )
+    ).rejects.toThrow("was not issued or is no longer live");
+
+    expectNoAtomicStreamClosure(executor);
+  });
+
+  it("rejects a consumed atomic seal receipt when it is reused", async () => {
+    const firstExecutor = new RoutingAuthorizationExecutor();
+    let consumedReceipt: InboxV2AtomicMaterializationSealReceipt | undefined;
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        firstExecutor
+      ).withAuthorizedAtomicMaterialization(
+        atomicMessageMutationInput(),
+        async () => null,
+        async (context) => {
+          const sealed = atomicSealResult(context, null);
+          consumedReceipt = sealed.receipt;
+          return sealed;
+        }
+      )
+    ).resolves.toMatchObject({ kind: "applied" });
+    expect(consumedReceipt).toBeDefined();
+
+    const reuseExecutor = new RoutingAuthorizationExecutor();
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        reuseExecutor
+      ).withAuthorizedAtomicMaterialization(
+        domainMutationInput(),
+        async () => null,
+        async () => ({ result: null, receipt: consumedReceipt! })
+      )
+    ).rejects.toThrow("was not issued or is no longer live");
+
+    expectNoAtomicStreamClosure(reuseExecutor);
+  });
+
+  it("rejects an atomic seal receipt issued for a different token", async () => {
+    const executor = new RoutingAuthorizationExecutor();
+
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        executor
+      ).withAuthorizedAtomicMaterialization(
+        domainMutationInput(),
+        async () => null,
+        async () => ({
+          result: null,
+          receipt: issueInboxV2AtomicMaterializationSealReceipt(
+            Object.freeze({}),
+            atomicMessageCreationSealManifest()
+          )
+        })
+      )
+    ).rejects.toThrow("belongs to a different atomic materialization");
+
+    expectNoAtomicStreamClosure(executor);
+  });
+
+  it("allows one token to issue only one canonical seal receipt", async () => {
+    const executor = new RoutingAuthorizationExecutor();
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        executor
+      ).withAuthorizedAtomicMaterialization(
+        atomicMessageMutationInput(),
+        async () => null,
+        async (context) => {
+          atomicSealResult(context, null);
+          return atomicSealResult(context, null);
+        }
+      )
+    ).rejects.toThrow("already issued a canonical seal receipt");
+    expectNoAtomicStreamClosure(executor);
+  });
+
+  it.each([
+    "message_payload_digest",
+    "message_event_type",
+    "message_projection",
+    "second_message_change"
+  ] as const)(
+    "rejects a seal receipt whose canonical stream manifest differs at %s",
+    async (mismatch) => {
+      const base = atomicMessageMutationInput();
+      const change = base.records.changes[0]!;
+      const event = base.records.events[0]!;
+      const projection = base.records.outboxIntents[0]!;
+      const secondaryEntity = {
+        ...change.entity,
+        entityTypeId:
+          mismatch === "message_projection"
+            ? "core:conversation"
+            : "core:message",
+        entityId:
+          mismatch === "message_projection"
+            ? "conversation:projection-owner"
+            : "message:duplicate"
+      };
+      const secondaryChange = {
+        ...change,
+        id:
+          mismatch === "message_projection"
+            ? "change:projection-owner"
+            : "change:message-duplicate",
+        ordinal: 2,
+        entity: secondaryEntity
+      };
+      const secondaryEvent = {
+        ...event,
+        id:
+          mismatch === "message_projection"
+            ? "event:projection-owner"
+            : "event:message-duplicate",
+        typeId:
+          mismatch === "message_projection"
+            ? ("core:conversation.changed" as const)
+            : ("core:message.changed" as const),
+        ordinal: "2",
+        changeIds: [secondaryChange.id],
+        subjects: [secondaryEntity]
+      };
+      const input = {
+        ...base,
+        records: {
+          ...base.records,
+          changes:
+            mismatch === "message_payload_digest"
+              ? [
+                  {
+                    ...change,
+                    state:
+                      change.state.kind === "upsert"
+                        ? {
+                            ...change.state,
+                            payloadReference: {
+                              ...change.state.payloadReference,
+                              digest: hashB
+                            }
+                          }
+                        : change.state
+                  }
+                ]
+              : mismatch === "second_message_change"
+                ? [change, secondaryChange]
+                : mismatch === "message_projection"
+                  ? [change, secondaryChange]
+                  : [change],
+          events: [
+            mismatch === "message_event_type"
+              ? { ...event, typeId: "core:conversation.changed" }
+              : event,
+            ...(mismatch === "message_projection" ||
+            mismatch === "second_message_change"
+              ? [secondaryEvent]
+              : [])
+          ],
+          outboxIntents: [
+            mismatch === "message_projection"
+              ? {
+                  ...projection,
+                  eventId: secondaryEvent.id,
+                  changeIds: [secondaryChange.id]
+                }
+              : projection
+          ]
+        }
+      } as unknown as WithPrivilegedAuthorizationMutationInput;
+      const executor = new RoutingAuthorizationExecutor();
+      await expect(
+        createSqlInboxV2AuthorizedCommandCoordinator(
+          executor
+        ).withAuthorizedAtomicMaterialization(
+          input,
+          async () => null,
+          async (context) => atomicSealResult(context, null)
+        )
+      ).rejects.toThrow("atomic Message seal manifest does not match");
+      expectNoAtomicStreamClosure(executor);
+    }
+  );
+
+  it("rejects multiple matching projections for the canonical Message change", async () => {
+    const base = atomicMessageMutationInput();
+    const projection = base.records.outboxIntents[0]!;
+    const input = {
+      ...base,
+      records: {
+        ...base.records,
+        outboxIntents: [
+          projection,
+          {
+            ...projection,
+            id: "outbox-intent:message-projection-2",
+            ordinal: 2,
+            consumerDedupeKey: hashC,
+            intentHash: hashC
+          }
+        ]
+      }
+    } as unknown as WithPrivilegedAuthorizationMutationInput;
+    const executor = new RoutingAuthorizationExecutor();
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        executor
+      ).withAuthorizedAtomicMaterialization(
+        input,
+        async () => null,
+        async (context) => atomicSealResult(context, null)
+      )
+    ).rejects.toThrow("atomic Message seal manifest does not match");
+    expectNoAtomicStreamClosure(executor);
+  });
+
+  it("accepts legitimate non-projection Message work beside the exact projection", async () => {
+    const base = atomicMessageMutationInput();
+    const projection = base.records.outboxIntents[0]!;
+    const input = {
+      ...base,
+      records: {
+        ...base.records,
+        outboxIntents: [
+          projection,
+          {
+            ...projection,
+            id: "outbox-intent:message-notification",
+            ordinal: 2,
+            typeId: "core:notification.evaluate",
+            handlerId: "core:message-notification",
+            effectClass: "notification",
+            consumerDedupeKey: hashD,
+            intentHash: hashD
+          }
+        ]
+      }
+    } as unknown as WithPrivilegedAuthorizationMutationInput;
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        new RoutingAuthorizationExecutor()
+      ).withAuthorizedAtomicMaterialization(
+        input,
+        async () => null,
+        async (context) => atomicSealResult(context, null)
+      )
+    ).resolves.toMatchObject({ kind: "applied" });
+  });
+
+  it.each([
+    "dispatch_state_hash",
+    "dispatch_payload_digest",
+    "duplicate_provider_intent",
+    "provider_type_with_non_provider_effect",
+    "provider_effect_with_other_type",
+    "provider_extra_change",
+    "provider_wrong_event"
+  ] as const)(
+    "rejects an external seal when canonical %s differs from its receipt",
+    async (mismatch) => {
+      const base = atomicProviderIoMutationInput();
+      const manifest = atomicProviderIoSealManifest(base);
+      const messageChange = base.records.changes.find(
+        (change) => change.entity.entityTypeId === "core:message"
+      );
+      const dispatchChange = base.records.changes.find(
+        (change) => change.entity.entityTypeId === "core:outbound-dispatch"
+      );
+      const providerIntent = base.records.outboxIntents.find(
+        (intent) => intent.typeId === "core:provider.dispatch"
+      );
+      const messageEvent = base.records.events[0];
+      if (
+        messageChange === undefined ||
+        dispatchChange?.state.kind !== "upsert" ||
+        providerIntent === undefined ||
+        messageEvent === undefined
+      ) {
+        throw new Error(
+          "Provider fixture requires an outbound dispatch change."
+        );
+      }
+      const changedPayloadReference = {
+        ...dispatchChange.state.payloadReference,
+        digest: hashD
+      };
+      const changes = base.records.changes.map((change) =>
+        change.id === dispatchChange.id &&
+        (mismatch === "dispatch_state_hash" ||
+          mismatch === "dispatch_payload_digest")
+          ? {
+              ...change,
+              state: {
+                ...dispatchChange.state,
+                ...(mismatch === "dispatch_state_hash"
+                  ? { stateHash: hashD }
+                  : { payloadReference: changedPayloadReference })
+              }
+            }
+          : change
+      );
+      const wrongOwningEvent = {
+        ...messageEvent,
+        id: "event:outbound-dispatch-only",
+        typeId: "core:message.changed",
+        ordinal: "2",
+        changeIds: [dispatchChange.id],
+        subjects: [dispatchChange.entity],
+        eventHash: hashD
+      };
+      const outboxIntents = base.records.outboxIntents.map((intent) => {
+        if (intent.id !== providerIntent.id) return intent;
+        if (mismatch === "dispatch_payload_digest") {
+          return { ...intent, payloadReference: changedPayloadReference };
+        }
+        if (mismatch === "provider_type_with_non_provider_effect") {
+          return { ...intent, effectClass: "notification" as const };
+        }
+        if (mismatch === "provider_effect_with_other_type") {
+          return { ...intent, typeId: "core:notification.evaluate" };
+        }
+        if (mismatch === "provider_extra_change") {
+          return {
+            ...intent,
+            changeIds: [dispatchChange.id, messageChange.id]
+          };
+        }
+        if (mismatch === "provider_wrong_event") {
+          return { ...intent, eventId: wrongOwningEvent.id };
+        }
+        return intent;
+      });
+      if (mismatch === "duplicate_provider_intent") {
+        outboxIntents.push({
+          ...providerIntent,
+          id: inboxV2OutboxIntentIdSchema.parse(
+            "outbox-intent:dispatch-duplicate"
+          ),
+          ordinal: outboxIntents.length + 1,
+          consumerDedupeKey: hashD,
+          intentHash: hashD
+        });
+      }
+      const input = {
+        ...base,
+        records: {
+          ...base.records,
+          changes,
+          events:
+            mismatch === "provider_wrong_event"
+              ? [...base.records.events, wrongOwningEvent]
+              : base.records.events,
+          outboxIntents
+        }
+      } as unknown as WithPrivilegedAuthorizationMutationInput;
+      const executor = new RoutingAuthorizationExecutor();
+      const rejection = expect(
+        createSqlInboxV2AuthorizedCommandCoordinator(
+          executor
+        ).withAuthorizedAtomicMaterialization(
+          input,
+          async () => null,
+          async (context) => atomicSealResult(context, null, manifest)
+        )
+      ).rejects;
+      if (
+        mismatch === "provider_type_with_non_provider_effect" ||
+        mismatch === "provider_effect_with_other_type"
+      ) {
+        await rejection.toThrow();
+        expect(executor.transactionCount).toBe(0);
+        expect(executor.commitCount).toBe(0);
+      } else {
+        await rejection.toThrow("atomic Message seal manifest does not match");
+        expectNoAtomicStreamClosure(executor);
+      }
+    }
+  );
+
+  it.each(["internal", "source"] as const)(
+    "rejects a null dispatch manifest when %s Message input contains provider closure rows",
+    async (origin) => {
+      const input = withProviderIo(
+        messageDomainMutationInput(
+          internalMessageCreationCommitAt(occurredAt),
+          origin === "source" ? "core:message.receive" : "core:message.send"
+        )
+      );
+      const executor = new RoutingAuthorizationExecutor();
+      await expect(
+        createSqlInboxV2AuthorizedCommandCoordinator(
+          executor
+        ).withAuthorizedAtomicMaterialization(
+          input,
+          async () => null,
+          async (context) => atomicSealResult(context, null)
+        )
+      ).rejects.toThrow("atomic Message seal manifest does not match");
+      expectNoAtomicStreamClosure(executor);
+    }
+  );
+
+  it("deep-clones and freezes the normalized atomic input before callbacks run", async () => {
+    const input = atomicMessageMutationInput();
+    const originalChange = input.records.changes[0]!;
+    if (originalChange.state.kind !== "upsert") {
+      throw new Error("Atomic Message fixture requires an upsert change.");
+    }
+    const originalState = originalChange.state;
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        new RoutingAuthorizationExecutor()
+      ).withAuthorizedAtomicMaterialization(
+        input,
+        async () => {
+          (originalState.payloadReference as { digest: string }).digest = hashB;
+          return null;
+        },
+        async (context) => atomicSealResult(context, null)
+      )
+    ).resolves.toMatchObject({ kind: "applied" });
+    expect(originalState.payloadReference.digest).toBe(hashB);
+  });
+
+  it("exposes independent recursively frozen authorization facts in every live context", async () => {
+    const actorSnapshots: object[] = [];
+    const decisionSnapshots: object[] = [];
+    const assertImmutableAuthorizationFacts = (
+      context: Pick<
+        InboxV2AuthorizedCommandMutationContext,
+        "actor" | "authorizationDecisionRefs"
+      >,
+      source: WithPrivilegedAuthorizationMutationInput
+    ) => {
+      const sourceActor = source.command.actor;
+      const sourceDecision = source.records.audit.authorizationDecisionRefs[0];
+      const decision = context.authorizationDecisionRefs[0];
+      expect(sourceDecision).toBeDefined();
+      expect(decision).toBeDefined();
+      if (sourceDecision === undefined || decision === undefined) {
+        throw new Error(
+          "Authorization snapshot fixture requires one decision."
+        );
+      }
+
+      for (const previous of actorSnapshots) {
+        expect(context.actor).not.toBe(previous);
+      }
+      for (const previous of decisionSnapshots) {
+        expect(decision).not.toBe(previous);
+      }
+      actorSnapshots.push(context.actor);
+      decisionSnapshots.push(decision);
+
+      expect(context.actor).not.toBe(sourceActor);
+      expect(context.authorizationDecisionRefs).not.toBe(
+        source.records.audit.authorizationDecisionRefs
+      );
+      expect(decision).not.toBe(sourceDecision);
+      expect(Object.isFrozen(context.actor)).toBe(true);
+      expect(Object.isFrozen(context.authorizationDecisionRefs)).toBe(true);
+      expect(Object.isFrozen(decision)).toBe(true);
+      expect(Object.isFrozen(decision.principal)).toBe(true);
+      expect(Object.isFrozen(decision.resource)).toBe(true);
+
+      expect(sourceActor.kind).toBe("employee");
+      expect(context.actor.kind).toBe("employee");
+      if (
+        sourceActor.kind !== "employee" ||
+        context.actor.kind !== "employee"
+      ) {
+        throw new Error("Authorization snapshot fixture requires an Employee.");
+      }
+      const originalEmployeeId = sourceActor.employeeId;
+      expect(Reflect.set(context.actor, "employeeId", "employee:forged")).toBe(
+        false
+      );
+      expect(context.actor.employeeId).toBe(originalEmployeeId);
+      expect(source.command.actor).toEqual(sourceActor);
+
+      expect(decision.principal.kind).toBe("employee");
+      if (decision.principal.kind !== "employee") {
+        throw new Error(
+          "Authorization snapshot fixture requires an Employee decision."
+        );
+      }
+      expect(Object.isFrozen(decision.principal.employee)).toBe(true);
+      const originalPrincipalId = decision.principal.employee.id;
+      const originalResourceId = decision.resource.entityId;
+      expect(
+        Reflect.set(
+          decision.principal.employee,
+          "id",
+          "employee:forged-principal"
+        )
+      ).toBe(false);
+      expect(
+        Reflect.set(decision.resource, "entityId", "source_connection:forged")
+      ).toBe(false);
+      expect(
+        Reflect.set(
+          context.authorizationDecisionRefs,
+          "0",
+          authorizationDecision()
+        )
+      ).toBe(false);
+      expect(decision.principal.employee.id).toBe(originalPrincipalId);
+      expect(decision.resource.entityId).toBe(originalResourceId);
+      expect(sourceDecision.principal).toEqual(
+        source.records.audit.authorizationDecisionRefs[0]?.principal
+      );
+      expect(sourceDecision.resource.entityId).toBe(originalResourceId);
+    };
+
+    const callbackInput = domainMutationInput();
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        new RoutingAuthorizationExecutor()
+      ).withAuthorizedCommandMutation(callbackInput, async (context) => {
+        assertImmutableAuthorizationFacts(context, callbackInput);
+        return { result: null };
+      })
+    ).resolves.toMatchObject({ kind: "applied" });
+
+    const replayInput = domainMutationInput();
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        new RoutingAuthorizationExecutor({ replayRequestHash: hashA })
+      ).withAuthorizedCommandMutation(
+        replayInput,
+        async () => {
+          throw new Error("Committed replay must skip the mutation callback.");
+        },
+        async (context) => {
+          assertImmutableAuthorizationFacts(context, replayInput);
+          return null;
+        }
+      )
+    ).resolves.toMatchObject({ kind: "already_applied", result: null });
+
+    const atomicInput = atomicMessageMutationInput();
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        new RoutingAuthorizationExecutor()
+      ).withAuthorizedAtomicMaterialization(
+        atomicInput,
+        async (context) => {
+          assertImmutableAuthorizationFacts(context, atomicInput);
+          return null;
+        },
+        async (context) => {
+          assertImmutableAuthorizationFacts(context, atomicInput);
+          return atomicSealResult(context, null);
+        }
+      )
+    ).resolves.toMatchObject({ kind: "applied", result: null });
+
+    expect(actorSnapshots).toHaveLength(4);
+    expect(decisionSnapshots).toHaveLength(4);
+  });
+
+  it("revokes a prepare executor captured through the generic prepared value", async () => {
+    const executor = new RoutingAuthorizationExecutor();
+
+    const result = await createSqlInboxV2AuthorizedCommandCoordinator(
+      executor
+    ).withAuthorizedAtomicMaterialization(
+      atomicMessageMutationInput(),
+      async (context) => ({
+        prepareExecutor: context.executor,
+        reflectedExecutors: Object.getOwnPropertySymbols(context).map(
+          (key) => Reflect.get(context, key) as unknown
+        )
+      }),
+      async (context, captured) => {
+        expect(Object.hasOwn(context, "executor")).toBe(false);
+        expect(captured.reflectedExecutors).toEqual([]);
+        await expect(
+          captured.prepareExecutor.execute(
+            sql`select id from inbox_v2_conversations for update`
+          )
+        ).rejects.toThrow("atomic prepare executor is no longer live");
+        return atomicSealResult(context, null);
+      }
+    );
+
+    expect(result).toMatchObject({
+      kind: "applied",
+      status: { streamPosition: "1" }
+    });
+    expect(executor.commitCount).toBe(1);
+    expect(executor.rollbackCount).toBe(0);
+    expect(
+      executor.queries.some((query) =>
+        renderQuery(query).sql.includes("select id from inbox_v2_conversations")
+      )
+    ).toBe(false);
+  });
+
+  it("rejects a cross-tenant Message commit before any domain query", async () => {
+    const executor = new RoutingAuthorizationExecutor();
+    const fixture = fixtureInternalCreationCommit();
+    const crossTenantCommit = inboxV2MessageCreationCommitSchema.parse(
+      JSON.parse(
+        JSON.stringify(fixture).replaceAll(fixture.tenantId, otherTenantId)
+      )
+    );
+
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        executor
+      ).withAuthorizedAtomicMaterialization(
+        atomicMessageMutationInput(),
+        async (context) => {
+          await prepareInboxV2MessageCreation(context, {
+            commit: crossTenantCommit
+          });
+          throw new Error("cross-tenant preparation must not return");
+        },
+        async (context) => atomicSealResult(context, null)
+      )
+    ).rejects.toThrow("cannot cross the authorized tenant boundary");
+
+    expect(executor.commitCount).toBe(0);
+    expect(executor.rollbackCount).toBe(1);
+    expect(
+      executor.queries.some((query) =>
+        renderQuery(query).sql.includes("inbox_v2_conversation_heads")
+      )
+    ).toBe(false);
+    expect(executor.timeline).not.toContain("lock_stream_head");
+  });
+
+  it("rejects a Message origin and command-type mismatch before any domain query", async () => {
+    const executor = new RoutingAuthorizationExecutor();
+    const commit = internalMessageCreationCommitAt(occurredAt);
+
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        executor
+      ).withAuthorizedAtomicMaterialization(
+        messageDomainMutationInput(commit, "core:message.receive"),
+        async (context) => {
+          await prepareInboxV2MessageCreation(context, { commit });
+          throw new Error("mismatched Message preparation must not return");
+        },
+        async (context) => atomicSealResult(context, null)
+      )
+    ).rejects.toThrow(
+      "Inbox V2 Message origin does not match the authorized command type."
+    );
+
+    expect(executor.commitCount).toBe(0);
+    expect(executor.rollbackCount).toBe(1);
+    expect(
+      executor.queries.some((query) =>
+        renderQuery(query).sql.includes("inbox_v2_conversation_heads")
+      )
+    ).toBe(false);
+    expect(executor.timeline).not.toContain("lock_stream_head");
+  });
+
+  it("rejects a Message commit-time mismatch before any domain query", async () => {
+    const executor = new RoutingAuthorizationExecutor();
+    const commit = inboxV2MessageCreationCommitSchema.parse(
+      fixtureInternalCreationCommit()
+    );
+    const mutationInput = messageDomainMutationInput(commit);
+    const normalizedMutationInput = {
+      ...mutationInput,
+      records: {
+        ...mutationInput.records,
+        events: mutationInput.records.events.map((event) => ({
+          ...event,
+          occurredAt,
+          recordedAt: occurredAt
+        }))
+      }
+    } as WithPrivilegedAuthorizationMutationInput;
+
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        executor
+      ).withAuthorizedAtomicMaterialization(
+        normalizedMutationInput,
+        async (context) => {
+          await prepareInboxV2MessageCreation(context, { commit });
+          throw new Error("stale Message preparation must not return");
+        },
+        async (context) => atomicSealResult(context, null)
+      )
+    ).rejects.toThrow(
+      "Inbox V2 Message commit time must match the authorized command time."
+    );
+
+    expect(executor.commitCount).toBe(0);
+    expect(executor.rollbackCount).toBe(1);
+    expect(
+      executor.queries.some((query) =>
+        renderQuery(query).sql.includes("inbox_v2_conversation_heads")
+      )
+    ).toBe(false);
+    expect(executor.timeline).not.toContain("lock_stream_head");
+  });
+
+  it("rechecks the database-clock authorization fence after sealing", async () => {
+    const executor = new RoutingAuthorizationExecutor({
+      databaseNowValues: [occurredAt, occurredAt, "2026-07-15T10:00:00.000Z"]
+    });
+    let sealCount = 0;
+
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        executor
+      ).withAuthorizedAtomicMaterialization(
+        atomicMessageMutationInput(),
+        async () => null,
+        async (context) => {
+          sealCount += 1;
+          executor.timeline.push("seal_domain");
+          return atomicSealResult(context, null);
+        }
+      )
+    ).resolves.toMatchObject({
+      kind: "revision_conflict",
+      conflicts: [{ kind: "authorization_decision_time" }]
+    });
+    expect(sealCount).toBe(1);
+    expect(executor.commitCount).toBe(0);
+    expect(executor.rollbackCount).toBe(1);
+    expect(
+      executor.timeline.lastIndexOf("decision_time_fence")
+    ).toBeGreaterThan(executor.timeline.indexOf("seal_domain"));
+    expect(executor.timeline).not.toContain("insert_stream_commit");
+  });
+
+  it("replays an atomic materialization without invoking prepare or seal", async () => {
+    const executor = new RoutingAuthorizationExecutor({
+      replayRequestHash: hashA
+    });
+    let prepareCount = 0;
+    let sealCount = 0;
+
+    const result = await createSqlInboxV2AuthorizedCommandCoordinator(
+      executor
+    ).withAuthorizedAtomicMaterialization(
+      atomicMessageMutationInput(),
+      async () => {
+        prepareCount += 1;
+        throw new Error("prepare must not run on replay");
+      },
+      async () => {
+        sealCount += 1;
+        throw new Error("seal must not run on replay");
+      }
+    );
+
+    expect(result).toMatchObject({
+      kind: "already_applied",
+      status: {
+        mutationId: "authorization-mutation:mutation-1",
+        streamPosition: "1"
+      }
+    });
+    expect(prepareCount).toBe(0);
+    expect(sealCount).toBe(0);
+    expect(executor.timeline).toEqual(["claim_command", "replay_by_scope"]);
+  });
+
+  it("rolls back both phases and reruns them safely after a retryable seal failure", async () => {
+    const prepareFailure = new RoutingAuthorizationExecutor();
+    let prepareFailureSealCount = 0;
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        prepareFailure
+      ).withAuthorizedAtomicMaterialization(
+        domainMutationInput(),
+        async () => {
+          throw new Error("injected prepare failure");
+        },
+        async (context) => {
+          prepareFailureSealCount += 1;
+          return atomicSealResult(context, null);
+        }
+      )
+    ).rejects.toThrow("injected prepare failure");
+    expect(prepareFailure.rollbackCount).toBe(1);
+    expect(prepareFailureSealCount).toBe(0);
+    expect(prepareFailure.timeline).not.toContain("lock_stream_head");
+
+    const retry = new RoutingAuthorizationExecutor();
+    let prepareCount = 0;
+    let sealCount = 0;
+    const retried = await createSqlInboxV2AuthorizedCommandCoordinator(
+      retry
+    ).withAuthorizedAtomicMaterialization(
+      atomicMessageMutationInput(),
+      async () => {
+        prepareCount += 1;
+        retry.timeline.push(`prepare_domain_${prepareCount}`);
+        return { attempt: prepareCount };
+      },
+      async (context, prepared) => {
+        sealCount += 1;
+        retry.timeline.push(`seal_domain_${sealCount}`);
+        expect(prepared.attempt).toBe(sealCount);
+        if (sealCount === 1) throw sqlStateError("40001", true);
+        return atomicSealResult(context, { attempt: sealCount });
+      }
+    );
+
+    expect(retried).toMatchObject({
+      kind: "applied",
+      result: { attempt: 2 }
+    });
+    expect(prepareCount).toBe(2);
+    expect(sealCount).toBe(2);
+    expect(retry.transactionCount).toBe(2);
+    expect(retry.rollbackCount).toBe(1);
+    expect(retry.commitCount).toBe(1);
+    expect(
+      retry.timeline.filter((kind) => kind === "insert_stream_commit")
+    ).toHaveLength(1);
+    expect(
+      retry.timeline.filter((kind) => kind === "advance_stream_head")
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    "insert_stream_commit",
+    "insert_stream_changes",
+    "insert_domain_events",
+    "insert_outbox_intents",
+    "complete_command",
+    "insert_audit",
+    "insert_audit_facets",
+    "insert_mutation_commit",
+    "insert_revision_effects",
+    "insert_relation_writes",
+    "advance_stream_head"
+  ])(
+    "rolls back the complete materialization closure when %s fails",
+    async (kind) => {
+      const executor = new RoutingAuthorizationExecutor({ failKind: kind });
+      let prepareCount = 0;
+      let sealCount = 0;
+
+      await expect(
+        createSqlInboxV2AuthorizedCommandCoordinator(
+          executor
+        ).withAuthorizedAtomicMaterialization(
+          atomicMessageMutationInput(),
+          async () => {
+            prepareCount += 1;
+            return null;
+          },
+          async (context) => {
+            sealCount += 1;
+            return atomicSealResult(context, null);
+          }
+        )
+      ).rejects.toThrow(`injected ${kind} failure`);
+
+      expect(prepareCount).toBe(1);
+      expect(sealCount).toBe(1);
+      expect(executor.commitCount).toBe(0);
+      expect(executor.rollbackCount).toBe(1);
+      expect(executor.timeline).toContain(kind);
+    }
+  );
+
+  it("rejects authorization-relation profiles and seal-side relation write smuggling", async () => {
+    const relationExecutor = new RoutingAuthorizationExecutor();
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        relationExecutor
+      ).withAuthorizedAtomicMaterialization(
+        roleMutationInput(),
+        async () => null,
+        async (context) => atomicSealResult(context, null)
+      )
+    ).rejects.toThrow(
+      "Atomic domain materialization requires the provider-neutral domain profile"
+    );
+    expect(relationExecutor.transactionCount).toBe(0);
+
+    const smuggledWrite = new RoutingAuthorizationExecutor();
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        smuggledWrite
+      ).withAuthorizedAtomicMaterialization(
+        domainMutationInput(),
+        async () => null,
+        async (context) =>
+          ({
+            ...atomicSealResult(context, null),
+            relationWrites: [relationWrite("role:role-1")]
+          }) as never
+      )
+    ).rejects.toThrow(
+      "atomic materialization seal result contains unsupported fields"
+    );
+    expect(smuggledWrite.rollbackCount).toBe(1);
+    expect(smuggledWrite.timeline).not.toContain("insert_stream_commit");
   });
 
   it("rolls back callback, audit and stale stream failures without a partial commit", async () => {
@@ -1492,6 +2659,7 @@ class RoutingAuthorizationExecutor implements InboxV2AuthorizationTransactionExe
       employeeAccessRevision?: string;
       employeeInboxRelationRevision?: string;
       databaseNow?: string;
+      databaseNowValues?: readonly string[];
       persistedRolePermissionRows?: readonly Record<string, unknown>[];
       currentRoleBindingRows?: readonly Record<string, unknown>[];
       persistedRoleBindingRows?: readonly Record<string, unknown>[];
@@ -1507,6 +2675,7 @@ class RoutingAuthorizationExecutor implements InboxV2AuthorizationTransactionExe
 
   private workItemResourceRead = 0;
   private sqlStateFailureCount = 0;
+  private decisionTimeFenceRead = 0;
 
   async execute<Row extends Record<string, unknown>>(
     query: SQL
@@ -1656,7 +2825,12 @@ class RoutingAuthorizationExecutor implements InboxV2AuthorizationTransactionExe
       ];
     }
     if (kind === "decision_time_fence") {
-      return [{ database_now: this.options.databaseNow ?? occurredAt }];
+      const databaseNow =
+        this.options.databaseNowValues?.[this.decisionTimeFenceRead] ??
+        this.options.databaseNow ??
+        occurredAt;
+      this.decisionTimeFenceRead += 1;
+      return [{ database_now: databaseNow }];
     }
     if (
       kind.startsWith("insert_") ||
@@ -1852,6 +3026,324 @@ function domainMutationInput(): WithPrivilegedAuthorizationMutationInput {
         reasonCodeId: "core:source-connection-created",
         matchedPermissionIds: [decision.permissionId]
       }
+    }
+  } as never;
+}
+
+function internalMessageCreationCommitAt(
+  committedAt: string
+): InboxV2MessageCreationCommit {
+  const fixture = fixtureInternalCreationCommit();
+  return inboxV2MessageCreationCommitSchema.parse(
+    JSON.parse(
+      JSON.stringify(fixture).replaceAll(
+        fixture.timelineAllocation.committedAt,
+        committedAt
+      )
+    )
+  );
+}
+
+function messageDomainMutationInput(
+  commit: InboxV2MessageCreationCommit,
+  commandTypeId = "core:message.send"
+): WithPrivilegedAuthorizationMutationInput {
+  const base = domainMutationInput();
+  const appActor = commit.message.appActor;
+  if (appActor?.kind !== "employee") {
+    throw new Error("Internal Message fixture requires an Employee app actor.");
+  }
+  const parsedCommandTypeId = inboxV2CatalogIdSchema.parse(commandTypeId);
+  const decision = {
+    ...authorizationDecision(),
+    authorizationEpoch: appActor.authorizationEpoch,
+    permissionId: "core:message.send_internal",
+    resourceScopeId: "core:permission-scope.conversation",
+    resource: {
+      tenantId,
+      entityTypeId: "core:conversation",
+      entityId: commit.message.conversation.id
+    },
+    resourceAccessRevision: "4"
+  };
+  const timelineItem = commit.timelineAllocation.items.find(
+    (item) =>
+      item.subject.kind === "message" &&
+      item.subject.message.id === commit.message.id
+  );
+  if (timelineItem === undefined) {
+    throw new Error("Message mutation fixture requires its TimelineItem.");
+  }
+  const messageEntity = {
+    tenantId,
+    entityTypeId: "core:message",
+    entityId: commit.message.id
+  } as const;
+  const messagePayloadReference = {
+    tenantId,
+    recordId: commit.message.id,
+    schemaId: INBOX_V2_MESSAGE_SCHEMA_ID,
+    schemaVersion: INBOX_V2_MESSAGE_SCHEMA_VERSION,
+    digest: inboxV2Sha256DigestSchema.parse(
+      `sha256:${computeInboxV2TimelineMessageCommitDigest(commit.message)}`
+    )
+  };
+  const domainCommitReference = {
+    tenantId,
+    recordId: commit.initialRevision.id,
+    schemaId: INBOX_V2_MESSAGE_CREATION_COMMIT_SCHEMA_ID,
+    schemaVersion: INBOX_V2_TIMELINE_MESSAGE_COMMIT_SCHEMA_VERSION,
+    digest: inboxV2Sha256DigestSchema.parse(
+      `sha256:${computeInboxV2TimelineMessageCommitDigest(commit)}`
+    )
+  };
+  const change = {
+    ...base.records.changes[0]!,
+    entity: messageEntity,
+    resultingRevision: commit.message.revision,
+    timeline: {
+      conversation: commit.message.conversation,
+      timelineSequence: timelineItem.timelineSequence
+    },
+    audience: timelineItem.visibility,
+    state: {
+      kind: "upsert" as const,
+      stateSchemaId: INBOX_V2_MESSAGE_SCHEMA_ID,
+      stateSchemaVersion: INBOX_V2_MESSAGE_SCHEMA_VERSION,
+      stateHash: messagePayloadReference.digest,
+      payloadReference: messagePayloadReference,
+      domainCommitReference
+    }
+  };
+  const event = {
+    ...base.records.events[0]!,
+    typeId: "core:message.changed" as const,
+    payloadSchemaId: domainCommitReference.schemaId,
+    payloadSchemaVersion: domainCommitReference.schemaVersion,
+    changeIds: [change.id],
+    subjects: [messageEntity],
+    payloadReference: domainCommitReference,
+    occurredAt: commit.initialRevision.occurredAt,
+    recordedAt: commit.initialRevision.recordedAt,
+    authorizationDecisionRefs: [decision]
+  };
+  return {
+    ...base,
+    command: {
+      ...base.command,
+      commandTypeId: parsedCommandTypeId,
+      authorizationDecisionId: decision.id,
+      authorizationEpoch: decision.authorizationEpoch,
+      resultReference: messagePayloadReference
+    },
+    revisions: {
+      ...base.revisions,
+      resources: [
+        {
+          resourceKind: "conversation",
+          resourceId: commit.message.conversation.id,
+          resourceHeadId: "authorization-resource:conversation-1",
+          expectedResourceAccessRevision: decision.resourceAccessRevision,
+          advance: "none"
+        }
+      ]
+    },
+    records: {
+      ...base.records,
+      changes: [change],
+      events: [event],
+      outboxIntents: [
+        {
+          ...base.records.outboxIntents[0]!,
+          handlerId: "core:inbox-projection",
+          eventId: event.id,
+          changeIds: [change.id]
+        }
+      ],
+      audit: {
+        ...base.records.audit,
+        actionId: parsedCommandTypeId,
+        matchedPermissionIds: [decision.permissionId],
+        evidenceReference: domainCommitReference,
+        authorizationDecisionRefs: [decision]
+      }
+    }
+  } as never;
+}
+
+function atomicMessageMutationInput(): WithPrivilegedAuthorizationMutationInput {
+  return messageDomainMutationInput(
+    internalMessageCreationCommitAt(occurredAt)
+  );
+}
+
+function atomicProviderIoMutationInput(): WithPrivilegedAuthorizationMutationInput {
+  const base = atomicMessageMutationInput();
+  return withProviderIo({
+    ...base,
+    records: {
+      ...base.records,
+      changes: base.records.changes.map((change) =>
+        change.entity.entityTypeId === "core:message"
+          ? { ...change, audience: "conversation_external" as const }
+          : change
+      )
+    }
+  } as WithPrivilegedAuthorizationMutationInput);
+}
+
+function atomicMessageCreationSealManifest(): InboxV2AtomicMessageCreationSealManifest {
+  const commit = internalMessageCreationCommitAt(occurredAt);
+  const input = messageDomainMutationInput(commit);
+  const change = input.records.changes[0];
+  const event = input.records.events[0];
+  const timelineItem = commit.timelineAllocation.items.find(
+    (item) =>
+      item.subject.kind === "message" &&
+      item.subject.message.id === commit.message.id
+  );
+  if (
+    timelineItem === undefined ||
+    change === undefined ||
+    change.state.kind !== "upsert" ||
+    event === undefined ||
+    event.payloadReference === null
+  ) {
+    throw new Error("Message seal fixture requires its TimelineItem.");
+  }
+  if (
+    timelineItem.visibility !== "conversation_external" &&
+    timelineItem.visibility !== "internal_participants"
+  ) {
+    throw new Error("Message seal fixture requires a Message audience.");
+  }
+  return {
+    kind: "message_creation",
+    tenantId: commit.tenantId,
+    messageId: commit.message.id,
+    messageRevision: commit.message.revision,
+    conversationId: commit.message.conversation.id,
+    timelineSequence: timelineItem.timelineSequence,
+    audience: timelineItem.visibility,
+    stateSchemaId: INBOX_V2_MESSAGE_SCHEMA_ID,
+    stateSchemaVersion: INBOX_V2_MESSAGE_SCHEMA_VERSION,
+    stateHash: change.state.stateHash,
+    payloadReference: change.state.payloadReference,
+    domainCommitReference: change.state.domainCommitReference,
+    event: {
+      typeId: event.typeId,
+      payloadSchemaId: event.payloadSchemaId,
+      payloadSchemaVersion: event.payloadSchemaVersion,
+      payloadReference: event.payloadReference,
+      occurredAt: event.occurredAt,
+      recordedAt: event.recordedAt
+    },
+    outboundDispatch: null,
+    sourceOccurrence: null
+  };
+}
+
+function atomicProviderIoSealManifest(
+  input: WithPrivilegedAuthorizationMutationInput
+): InboxV2AtomicMessageCreationSealManifest {
+  const messageChange = input.records.changes.find(
+    (change) => change.entity.entityTypeId === "core:message"
+  );
+  const dispatchChange = input.records.changes.find(
+    (change) => change.entity.entityTypeId === "core:outbound-dispatch"
+  );
+  if (
+    (messageChange?.audience !== "conversation_external" &&
+      messageChange?.audience !== "internal_participants") ||
+    dispatchChange?.state.kind !== "upsert"
+  ) {
+    throw new Error("Provider fixture requires an outbound dispatch change.");
+  }
+  return {
+    ...atomicMessageCreationSealManifest(),
+    audience: messageChange.audience,
+    outboundDispatch: {
+      dispatchId: String(dispatchChange.entity.entityId),
+      resultingRevision: String(dispatchChange.resultingRevision),
+      stateSchemaId: dispatchChange.state.stateSchemaId,
+      stateSchemaVersion: dispatchChange.state.stateSchemaVersion,
+      stateHash: dispatchChange.state.stateHash,
+      payloadReference: dispatchChange.state.payloadReference
+    }
+  };
+}
+
+function withProviderIo(
+  input: WithPrivilegedAuthorizationMutationInput
+): WithPrivilegedAuthorizationMutationInput {
+  const owningEvent = input.records.events[0]!;
+  const messageChange = input.records.changes.find(
+    (change) => change.entity.entityTypeId === "core:message"
+  );
+  const dispatchDomainCommitReference =
+    messageChange?.state.kind === "upsert"
+      ? messageChange.state.domainCommitReference
+      : {
+          ...payloadReference("outbound-dispatch-commit:dispatch-1"),
+          schemaId: "core:inbox-v2.outbound-dispatch-commit"
+        };
+  const dispatchEntity = {
+    tenantId,
+    entityTypeId: "core:outbound-dispatch",
+    entityId: "outbound_dispatch:dispatch-1"
+  };
+  const dispatchPayloadReference = {
+    ...payloadReference("outbound-dispatch:dispatch-1"),
+    schemaId: INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
+    schemaVersion: INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
+    digest: hashB
+  };
+  const dispatchChange = {
+    id: "change:dispatch-1",
+    ordinal: input.records.changes.length + 1,
+    entity: dispatchEntity,
+    resultingRevision: "1",
+    timeline: null,
+    audience: "conversation_external" as const,
+    state: {
+      kind: "upsert" as const,
+      stateSchemaId: INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
+      stateSchemaVersion: INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
+      stateHash: hashB,
+      payloadReference: dispatchPayloadReference,
+      domainCommitReference: dispatchDomainCommitReference
+    }
+  };
+  return {
+    ...input,
+    records: {
+      ...input.records,
+      changes: [...input.records.changes, dispatchChange],
+      events: [
+        {
+          ...owningEvent,
+          changeIds: [...owningEvent.changeIds, dispatchChange.id],
+          subjects: [...owningEvent.subjects, dispatchEntity]
+        },
+        ...input.records.events.slice(1)
+      ],
+      outboxIntents: [
+        ...input.records.outboxIntents,
+        {
+          id: "outbox-intent:dispatch-1",
+          ordinal: input.records.outboxIntents.length + 1,
+          typeId: "core:provider.dispatch",
+          handlerId: "core:provider-dispatch-handler",
+          effectClass: "provider_io",
+          eventId: owningEvent.id,
+          changeIds: [dispatchChange.id],
+          payloadReference: dispatchPayloadReference,
+          consumerDedupeKey: hashA,
+          correlationId: input.records.correlationId,
+          availableAt: input.occurredAt,
+          intentHash: hashA
+        }
+      ]
     }
   } as never;
 }

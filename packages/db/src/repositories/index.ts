@@ -11,7 +11,18 @@ export * from "./sql-inbox-v2-privacy-export-lifecycle-repository";
 export * from "./sql-inbox-v2-destructive-checkpoint-guard-repository";
 export * from "./sql-inbox-v2-deletion-run-state-repository";
 export * from "./sql-inbox-v2-erasure-restore-ledger-repository";
-export * from "./sql-inbox-v2-timeline-message-repository";
+export {
+  InboxV2TimelineMessagePersistenceInvariantError,
+  prepareInboxV2MessageCreation,
+  sealInboxV2PreparedMessageCreation
+} from "./sql-inbox-v2-timeline-message-repository";
+export type {
+  InboxV2MessageCreationCommit,
+  InboxV2PreparedMessageCreationCapability,
+  PrepareInboxV2MessageCreationInput,
+  PrepareInboxV2MessageCreationResult,
+  SealInboxV2PreparedMessageCreationResult
+} from "./sql-inbox-v2-timeline-message-repository";
 export * from "./sql-inbox-v2-employee-conversation-state-repository";
 export * from "./sql-inbox-v2-work-item-repository";
 export { createDrizzlePersistenceExecutor } from "./drizzle-persistence-executor";
@@ -259,8 +270,9 @@ export {
   buildInsertInboxV2SourceOccurrenceResolutionTransitionSql,
   buildInsertInboxV2ThreadRoutePolicyVersionSql,
   computeInboxV2ExternalMessageKeyDigest,
-  createSqlInboxV2OutboundTransportRepository,
-  findInboxV2ExternalMessageReferenceCandidatesInTransaction
+  findInboxV2ExternalMessageReferenceCandidatesInTransaction,
+  InboxV2RouteResolutionRollbackError,
+  persistInboxV2RouteResolutionInTransaction
 } from "./sql-inbox-v2-outbound-transport-repository";
 export type {
   AppendInboxV2DispatchArtifactResult,
@@ -269,8 +281,7 @@ export type {
   AssociateInboxV2DispatchArtifactResult,
   CreateInboxV2MultiSendResult,
   CreateInboxV2OutboundDispatchResult,
-  InboxV2OutboundTransportRepository,
-  InboxV2OutboundTransportTransactionExecutor,
+  InboxV2RouteResolutionConflictResult,
   PersistInboxV2RoutePolicyResult,
   PersistInboxV2RouteResolutionResult
 } from "./sql-inbox-v2-outbound-transport-repository";

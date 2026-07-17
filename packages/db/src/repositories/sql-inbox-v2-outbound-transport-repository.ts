@@ -38,6 +38,11 @@ import { sql, type SQL } from "drizzle-orm";
 import { createHash } from "node:crypto";
 
 import type { HuleeDatabase } from "../client";
+import { registerInboxV2AtomicOutboundRouteProof } from "./sql-inbox-v2-atomic-materialization-internal";
+import {
+  assertInboxV2AuthorizedCommandMutationContext,
+  type InboxV2AuthorizedCommandMutationContext
+} from "./sql-inbox-v2-authorization-repository";
 import { InboxV2PersistenceInvariantError } from "./sql-inbox-v2-conversation-repository";
 import type { RawSqlExecutor } from "./sql-outbox-repository";
 
@@ -88,7 +93,7 @@ export type PersistInboxV2RouteResolutionResult =
         | "binding_inactive";
     }>;
 
-type InboxV2RouteResolutionConflictResult = Readonly<{
+export type InboxV2RouteResolutionConflictResult = Readonly<{
   kind:
     | "route_id_conflict"
     | "route_token_conflict"
@@ -98,10 +103,10 @@ type InboxV2RouteResolutionConflictResult = Readonly<{
     | "binding_inactive";
 }>;
 
-class RouteResolutionRollbackError extends Error {
+export class InboxV2RouteResolutionRollbackError extends Error {
   constructor(readonly result: InboxV2RouteResolutionConflictResult) {
     super(`Rollback route resolution: ${result.kind}`);
-    this.name = "RouteResolutionRollbackError";
+    this.name = "InboxV2RouteResolutionRollbackError";
   }
 }
 
@@ -398,88 +403,16 @@ export function createSqlInboxV2OutboundTransportRepository(
     },
 
     async persistRouteResolution(input) {
-      const commit = inboxV2OutboundRouteResolutionCommitSchema.parse(input);
-      if (commit.result.kind === "failed") {
-        return { kind: "not_selected" } as const;
-      }
-      if (commit.route === null) {
-        throw invariantError("Selected route resolution has no route.");
-      }
-      const route = commit.route;
-
       try {
         return await runTransportTransaction(
           transactionExecutor,
-          async (transaction) => {
-            const policyResult = await persistRoutePolicyInTransaction(
-              transaction,
-              commit.input.routePolicy
-            );
-            if (
-              policyResult.kind !== "committed" &&
-              policyResult.kind !== "already_exists"
-            ) {
-              return {
-                kind:
-                  policyResult.kind === "binding_not_found"
-                    ? "binding_not_found"
-                    : "policy_conflict"
-              } as const;
-            }
-
-            const fence = await lockBindingFence(transaction, route);
-            if (fence === null) {
-              return abortRouteResolutionAfterPolicyWrite(policyResult, {
-                kind: "binding_not_found"
-              });
-            }
-            if (!bindingAnchorMatchesRoute(fence, route)) {
-              return abortRouteResolutionAfterPolicyWrite(policyResult, {
-                kind: "binding_fence_conflict"
-              });
-            }
-            if (!bindingFenceMatchesRoute(fence, route)) {
-              return abortRouteResolutionAfterPolicyWrite(policyResult, {
-                kind: "binding_fence_conflict"
-              });
-            }
-            if (
-              fence.remote_access_state !== "active" ||
-              fence.administrative_state !== "enabled" ||
-              (fence.runtime_health_state !== "ready" &&
-                fence.runtime_health_state !== "degraded")
-            ) {
-              return abortRouteResolutionAfterPolicyWrite(policyResult, {
-                kind: "binding_inactive"
-              });
-            }
-
-            const inserted = await transaction.execute<IdRow>(
-              buildInsertInboxV2OutboundRouteSql(route, fence)
-            );
-            if (inserted.rows.length === 1) {
-              return { kind: "committed", route } as const;
-            }
-
-            const existing = await loadExistingRoute(transaction, route);
-            if (existing === null) {
-              return abortRouteResolutionAfterPolicyWrite(policyResult, {
-                kind: "route_token_conflict"
-              });
-            }
-            if (!existingRouteMatches(existing, route, fence)) {
-              return abortRouteResolutionAfterPolicyWrite(policyResult, {
-                kind:
-                  String(existing.id) === String(route.id)
-                    ? "route_id_conflict"
-                    : "route_token_conflict"
-              });
-            }
-            return { kind: "already_exists", route } as const;
-          }
+          (transaction) =>
+            persistInboxV2RouteResolutionRawInTransaction(transaction, input)
         );
       } catch (error) {
-        if (error instanceof RouteResolutionRollbackError) return error.result;
+        if (error instanceof InboxV2RouteResolutionRollbackError) {
+          return error.result;
+        }
         throw error;
       }
     },
@@ -563,14 +496,372 @@ export function createSqlInboxV2OutboundTransportRepository(
   };
 }
 
+/**
+ * Persists the exact route-policy revision and immutable outbound route inside
+ * an existing transaction. The caller owns commit/rollback and must allow an
+ * InboxV2RouteResolutionRollbackError to escape that transaction before it
+ * converts the error to the stable conflict result.
+ */
+export async function persistInboxV2RouteResolutionInTransaction(
+  context: InboxV2AuthorizedCommandMutationContext,
+  input: InboxV2OutboundRouteResolutionCommit
+): Promise<PersistInboxV2RouteResolutionResult> {
+  assertInboxV2AuthorizedCommandMutationContext(context);
+  if (context.profile !== "domain") {
+    throw invariantError(
+      "Inbox V2 route resolution requires an authorized domain context."
+    );
+  }
+  const commit = inboxV2OutboundRouteResolutionCommitSchema.parse(input);
+  assertInboxV2RouteResolutionAuthorizedContext(context, commit);
+  const result = await persistInboxV2RouteResolutionRawInTransaction(
+    context.executor,
+    commit,
+    "require_existing_policy"
+  );
+  if (result.kind === "already_exists") {
+    throw invariantError(
+      "Inbox V2 atomic route resolution must commit a new exact OutboundRoute."
+    );
+  }
+  if (result.kind === "committed") {
+    registerInboxV2AtomicOutboundRouteProof(
+      context.atomicMaterializationToken!,
+      {
+        tenantId: result.route.tenantId,
+        routeId: result.route.id,
+        conversationId: result.route.conversation.id,
+        sourceAccountId: result.route.sourceAccount.id,
+        routePolicyId: result.route.routePolicy.id,
+        routePolicyRevision: result.route.routePolicyRevision,
+        routeDigest: computeInboxV2OutboundRouteDigest(result.route)
+      }
+    );
+  }
+  return result;
+}
+
+function assertInboxV2RouteResolutionAuthorizedContext(
+  context: InboxV2AuthorizedCommandMutationContext,
+  commit: InboxV2OutboundRouteResolutionCommit
+): void {
+  const principalMatches =
+    context.actor.kind === "employee"
+      ? commit.input.principal.kind === "employee" &&
+        commit.input.principal.employee.id === context.actor.employeeId
+      : commit.input.principal.kind === "trusted_service" &&
+        commit.input.principal.trustedServiceId ===
+          context.actor.trustedServiceId;
+  const matchingConversationDecisions =
+    context.authorizationDecisionRefs.filter(
+      (decision) =>
+        decision.id === context.authorizationDecisionId &&
+        decision.tenantId === context.tenantId &&
+        decision.authorizationEpoch === context.authorizationEpoch &&
+        decision.outcome === "allowed" &&
+        decision.permissionId ===
+          commit.input.routePolicy.requiredConversationPermissionId &&
+        decision.resourceScopeId === "core:conversation" &&
+        decision.resource.tenantId === context.tenantId &&
+        decision.resource.entityTypeId === "core:conversation" &&
+        String(decision.resource.entityId) ===
+          String(commit.input.conversation.id) &&
+        authorizationDecisionPrincipalMatchesContext(decision, context)
+    );
+  const selectedRoute = commit.route;
+  const matchingSourceAccountDecisions =
+    selectedRoute === null
+      ? []
+      : context.authorizationDecisionRefs.filter(
+          (decision) =>
+            decision.tenantId === context.tenantId &&
+            decision.authorizationEpoch === context.authorizationEpoch &&
+            decision.outcome === "allowed" &&
+            decision.permissionId === "core:source_account.use" &&
+            decision.resourceScopeId === "core:source-account" &&
+            decision.resource.tenantId === context.tenantId &&
+            decision.resource.entityTypeId === "core:source-account" &&
+            String(decision.resource.entityId) ===
+              String(selectedRoute.sourceAccount.id) &&
+            authorizationDecisionPrincipalMatchesContext(decision, context)
+        );
+  const selectedConversationAuthorizationMatches =
+    selectedRoute === null ||
+    (matchingConversationDecisions.length === 1 &&
+      routeAuthorizationSnapshotMatchesDecision(
+        selectedRoute.conversationAuthorization,
+        matchingConversationDecisions[0]!,
+        "conversation",
+        selectedRoute.conversation.id
+      ));
+  const selectedSourceAccountAuthorizationMatches =
+    selectedRoute === null ||
+    (matchingSourceAccountDecisions.length === 1 &&
+      routeAuthorizationSnapshotMatchesDecision(
+        selectedRoute.sourceAccountAuthorization,
+        matchingSourceAccountDecisions[0]!,
+        "source_account",
+        selectedRoute.sourceAccount.id
+      ));
+
+  if (
+    context.atomicMaterializationToken === undefined ||
+    context.commandTypeId !== "core:message.send" ||
+    context.tenantId !== commit.input.tenantId ||
+    !principalMatches ||
+    context.authorizationEpoch !== commit.input.authorizationEpoch ||
+    context.occurredAt !== commit.input.requestedAt ||
+    commit.input.operationId !== "core:message.send" ||
+    commit.input.routePolicy.requiredConversationPermissionId !==
+      "core:message.send_external" ||
+    matchingConversationDecisions.length !== 1 ||
+    (selectedRoute !== null && matchingSourceAccountDecisions.length !== 1) ||
+    !selectedConversationAuthorizationMatches ||
+    !selectedSourceAccountAuthorizationMatches
+  ) {
+    throw invariantError(
+      "Inbox V2 route resolution crossed its authorized message-send context."
+    );
+  }
+}
+
+type InboxV2RouteAuthorizationSnapshot =
+  | InboxV2OutboundRoute["conversationAuthorization"]
+  | InboxV2OutboundRoute["sourceAccountAuthorization"];
+
+function routeAuthorizationSnapshotMatchesDecision(
+  snapshot: InboxV2RouteAuthorizationSnapshot,
+  decision: InboxV2AuthorizedCommandMutationContext["authorizationDecisionRefs"][number],
+  resourceKind: "conversation" | "source_account",
+  resourceId: string
+): boolean {
+  const snapshotResourceId =
+    resourceKind === "conversation"
+      ? snapshot.target.conversation.id
+      : snapshot.target.sourceAccount.id;
+  const expectedEntityTypeId =
+    resourceKind === "conversation"
+      ? "core:conversation"
+      : "core:source-account";
+
+  return (
+    snapshot.tenantId === decision.tenantId &&
+    routeAuthorizationPrincipalsMatch(snapshot.principal, decision.principal) &&
+    snapshot.effect === (decision.outcome === "allowed" ? "allow" : "deny") &&
+    snapshot.requiredPermissionId === decision.permissionId &&
+    snapshot.matchedPermissionIds.length === 1 &&
+    snapshot.matchedPermissionIds[0] === decision.permissionId &&
+    snapshot.decisionRevision === decision.decisionRevision &&
+    snapshot.decidedAt === decision.decidedAt &&
+    snapshot.notAfter === decision.notAfter &&
+    snapshot.target.authorizationEpoch === decision.authorizationEpoch &&
+    decision.resource.entityTypeId === expectedEntityTypeId &&
+    String(decision.resource.entityId) === String(resourceId) &&
+    String(snapshotResourceId) === String(resourceId)
+  );
+}
+
+function routeAuthorizationPrincipalsMatch(
+  routePrincipal: InboxV2RouteAuthorizationSnapshot["principal"],
+  decisionPrincipal: InboxV2AuthorizedCommandMutationContext["authorizationDecisionRefs"][number]["principal"]
+): boolean {
+  if (routePrincipal.kind !== decisionPrincipal.kind) return false;
+  return routePrincipal.kind === "employee" &&
+    decisionPrincipal.kind === "employee"
+    ? routePrincipal.employee.tenantId ===
+        decisionPrincipal.employee.tenantId &&
+        routePrincipal.employee.id === decisionPrincipal.employee.id
+    : routePrincipal.kind === "trusted_service" &&
+        decisionPrincipal.kind === "trusted_service" &&
+        routePrincipal.trustedServiceId === decisionPrincipal.trustedServiceId;
+}
+
+function authorizationDecisionPrincipalMatchesContext(
+  decision: InboxV2AuthorizedCommandMutationContext["authorizationDecisionRefs"][number],
+  context: InboxV2AuthorizedCommandMutationContext
+): boolean {
+  return context.actor.kind === "employee"
+    ? decision.principal.kind === "employee" &&
+        decision.principal.employee.id === context.actor.employeeId
+    : decision.principal.kind === "trusted_service" &&
+        decision.principal.trustedServiceId === context.actor.trustedServiceId;
+}
+
+async function persistInboxV2RouteResolutionRawInTransaction(
+  transaction: RawSqlExecutor,
+  input: InboxV2OutboundRouteResolutionCommit,
+  policyMode: "persist_policy" | "require_existing_policy" = "persist_policy"
+): Promise<PersistInboxV2RouteResolutionResult> {
+  const commit = inboxV2OutboundRouteResolutionCommitSchema.parse(input);
+  if (commit.result.kind === "failed") {
+    return { kind: "not_selected" } as const;
+  }
+  if (commit.route === null) {
+    throw invariantError("Selected route resolution has no route.");
+  }
+  const route = commit.route;
+  const policyResult =
+    policyMode === "persist_policy"
+      ? await persistRoutePolicyInTransaction(
+          transaction,
+          commit.input.routePolicy
+        )
+      : await requireExistingRoutePolicyInTransaction(
+          transaction,
+          commit.input.routePolicy
+        );
+  if (
+    policyResult.kind !== "committed" &&
+    policyResult.kind !== "already_exists"
+  ) {
+    return {
+      kind:
+        policyResult.kind === "binding_not_found"
+          ? "binding_not_found"
+          : "policy_conflict"
+    } as const;
+  }
+
+  const fence = await lockBindingFence(transaction, route);
+  if (fence === null) {
+    return abortRouteResolutionAfterPolicyWrite(policyResult, {
+      kind: "binding_not_found"
+    });
+  }
+  if (!bindingAnchorMatchesRoute(fence, route)) {
+    return abortRouteResolutionAfterPolicyWrite(policyResult, {
+      kind: "binding_fence_conflict"
+    });
+  }
+  if (!bindingFenceMatchesRoute(fence, route)) {
+    return abortRouteResolutionAfterPolicyWrite(policyResult, {
+      kind: "binding_fence_conflict"
+    });
+  }
+  if (
+    fence.remote_access_state !== "active" ||
+    fence.administrative_state !== "enabled" ||
+    (fence.runtime_health_state !== "ready" &&
+      fence.runtime_health_state !== "degraded")
+  ) {
+    return abortRouteResolutionAfterPolicyWrite(policyResult, {
+      kind: "binding_inactive"
+    });
+  }
+
+  const inserted = await transaction.execute<IdRow>(
+    buildInsertInboxV2OutboundRouteSql(route, fence)
+  );
+  if (inserted.rows.length === 1) {
+    return { kind: "committed", route } as const;
+  }
+
+  const existing = await loadExistingRoute(transaction, route);
+  if (existing === null) {
+    return abortRouteResolutionAfterPolicyWrite(policyResult, {
+      kind: "route_token_conflict"
+    });
+  }
+  if (!existingRouteMatches(existing, route, fence)) {
+    return abortRouteResolutionAfterPolicyWrite(policyResult, {
+      kind:
+        String(existing.id) === String(route.id)
+          ? "route_id_conflict"
+          : "route_token_conflict"
+    });
+  }
+  return { kind: "already_exists", route } as const;
+}
+
 function abortRouteResolutionAfterPolicyWrite(
   policyResult: Readonly<{ kind: "committed" | "already_exists" }>,
   result: InboxV2RouteResolutionConflictResult
 ): InboxV2RouteResolutionConflictResult {
   if (policyResult.kind === "committed") {
-    throw new RouteResolutionRollbackError(result);
+    throw new InboxV2RouteResolutionRollbackError(result);
   }
   return result;
+}
+
+async function requireExistingRoutePolicyInTransaction(
+  transaction: RawSqlExecutor,
+  policy: InboxV2ThreadRoutePolicy
+): Promise<PersistInboxV2RoutePolicyResult> {
+  const bindingIds = [
+    ...(policy.preferredBinding === null
+      ? []
+      : [String(policy.preferredBinding.id)]),
+    ...(policy.fallback.kind === "none"
+      ? []
+      : policy.fallback.allowedBindings.map((binding) => String(binding.id)))
+  ];
+  const anchors = await lockBindingAnchors(
+    transaction,
+    policy.tenantId,
+    bindingIds
+  );
+  if (anchors.size !== new Set(bindingIds).size) {
+    return { kind: "binding_not_found" };
+  }
+  if (
+    [...anchors.values()].some(
+      (anchor) =>
+        String(anchor.external_thread_id) !== String(policy.externalThread.id)
+    )
+  ) {
+    return { kind: "binding_scope_conflict" };
+  }
+
+  const head = await transaction.execute<{
+    revision: unknown;
+    conversation_id: unknown;
+    external_thread_id: unknown;
+    operation_id: unknown;
+    content_kind_id: unknown;
+  }>(sql`
+    select revision, conversation_id, external_thread_id, operation_id,
+           content_kind_id
+      from inbox_v2_thread_route_policy_heads
+     where tenant_id = ${policy.tenantId}
+       and policy_id = ${policy.id}
+     for share
+  `);
+  const headRow = head.rows[0];
+  if (headRow === undefined) return { kind: "policy_id_conflict" };
+  if (
+    String(headRow.conversation_id) !== String(policy.conversation.id) ||
+    String(headRow.external_thread_id) !== String(policy.externalThread.id) ||
+    String(headRow.operation_id) !== String(policy.operationId) ||
+    nullableString(headRow.content_kind_id) !==
+      nullableString(policy.contentKindId)
+  ) {
+    return { kind: "policy_scope_conflict" };
+  }
+  if (BigInt(String(headRow.revision)) !== BigInt(policy.revision)) {
+    return { kind: "stale_policy_revision" };
+  }
+
+  const fallbackIds =
+    policy.fallback.kind === "none"
+      ? []
+      : policy.fallback.allowedBindings.map((binding) => String(binding.id));
+  const preferredAnchor =
+    policy.preferredBinding === null
+      ? null
+      : (anchors.get(String(policy.preferredBinding.id)) ?? null);
+  const version = await loadExistingPolicyVersion(transaction, policy);
+  if (
+    version === null ||
+    !existingPolicyMatches(
+      version,
+      policy,
+      preferredAnchor,
+      digestOrdinalIds(fallbackIds)
+    )
+  ) {
+    return { kind: "policy_id_conflict" };
+  }
+  return { kind: "already_exists" };
 }
 
 async function persistRoutePolicyInTransaction(
@@ -1356,6 +1647,28 @@ export function buildInsertInboxV2OutboundDispatchSql(input: {
     )
     on conflict do nothing
     returning id
+  `;
+}
+
+export function buildInsertInboxV2AtomicOutboundDispatchMaterializationSql(input: {
+  tenantId: string;
+  dispatchId: string;
+  mutationId: string;
+  streamCommitId: string;
+  streamPosition: string;
+  resultingRevision: string;
+  createdAt: string;
+}): SQL {
+  return sql`
+    insert into inbox_v2_atomic_outbound_dispatch_materializations (
+      tenant_id, dispatch_id, mutation_id, stream_commit_id, stream_position,
+      resulting_revision, created_at
+    ) values (
+      ${input.tenantId}, ${input.dispatchId}, ${input.mutationId},
+      ${input.streamCommitId}, ${BigInt(input.streamPosition)},
+      ${BigInt(input.resultingRevision)}, ${toDate(input.createdAt)}
+    )
+    returning dispatch_id as id
   `;
 }
 
@@ -2353,7 +2666,8 @@ async function associateArtifactInTransaction(
     return result;
   }
 
-  const transitionId = deriveOccurrenceResolutionTransitionId(resolution);
+  const transitionId =
+    deriveInboxV2SourceOccurrenceResolutionTransitionId(resolution);
   const candidates = resolutionCandidates(resolution);
   const candidateDigest = digestOrdinalIds(candidates);
   await requireSingleInsert(
@@ -2455,6 +2769,44 @@ export function buildInsertInboxV2ExternalMessageReferenceSql(
      where message_row.tenant_id = ${reference.tenantId}
        and message_row.id = ${reference.message.id}
        and message_row.timeline_item_id = ${reference.timelineItem.id}
+    on conflict do nothing
+    returning id
+  `;
+}
+
+/**
+ * Post-stream-head variant for a Message that was inserted earlier in the same
+ * transaction. The caller already owns the exact Conversation lock and supplies
+ * the commit-bound Conversation ID, so this statement has no read/lock tail.
+ */
+export function buildInsertInboxV2ExternalMessageReferenceValuesSql(input: {
+  reference: ExternalMessageReference;
+  conversationId: string;
+  keyDigest?: string;
+}): SQL {
+  const { reference } = input;
+  const scope = externalMessageScopeColumns(reference.key.scope);
+  const keyDigest =
+    input.keyDigest ?? computeInboxV2ExternalMessageKeyDigest(reference.key);
+  return sql`
+    insert into inbox_v2_external_message_references (
+      tenant_id, id, realm_id, realm_version, canonicalization_version,
+      scope_kind, scope_source_account_id, scope_source_thread_binding_id,
+      object_kind_id, canonical_external_subject, message_key_digest_sha256,
+      identity_declaration, external_thread_id, external_thread_revision,
+      conversation_id, timeline_item_id, message_id, revision, created_at
+    ) values (
+      ${reference.tenantId}, ${reference.id}, ${reference.key.realm.realmId},
+      ${reference.key.realm.realmVersion},
+      ${reference.key.realm.canonicalizationVersion}, ${scope.kind},
+      ${scope.sourceAccountId}, ${scope.sourceThreadBindingId},
+      ${reference.key.objectKindId},
+      ${reference.key.canonicalExternalSubject}, ${keyDigest},
+      ${toJson(reference.identityDeclaration)}::jsonb,
+      ${reference.key.externalThread.id}, 1, ${input.conversationId},
+      ${reference.timelineItem.id}, ${reference.message.id},
+      ${BigInt(reference.revision)}, ${toDate(reference.createdAt)}
+    )
     on conflict do nothing
     returning id
   `;
@@ -2829,7 +3181,7 @@ function resolutionCandidates(
 
 export function buildInsertInboxV2SourceOccurrenceResolutionTransitionSql(
   commit: InboxV2SourceOccurrenceResolutionCommit,
-  transitionId = deriveOccurrenceResolutionTransitionId(commit),
+  transitionId = deriveInboxV2SourceOccurrenceResolutionTransitionId(commit),
   candidates = resolutionCandidates(commit),
   candidateDigest = digestOrdinalIds(candidates)
 ): SQL {
@@ -3261,7 +3613,13 @@ export function computeInboxV2ExternalMessageKeyDigest(
   return sha256Hex(value);
 }
 
-function deriveOccurrenceResolutionTransitionId(
+export function computeInboxV2OutboundRouteDigest(
+  route: InboxV2OutboundRoute
+): string {
+  return `sha256:${sha256Hex(stableJson(route))}`;
+}
+
+export function deriveInboxV2SourceOccurrenceResolutionTransitionId(
   commit: InboxV2SourceOccurrenceResolutionCommit
 ): string {
   const digest = sha256Hex(

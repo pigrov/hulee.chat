@@ -204,6 +204,12 @@ const inboxV2SourceMessageReconciliationEnumNames = [
   "public.inbox_v2_deferred_source_action_ordering_outcome",
   "public.inbox_v2_deferred_source_action_state"
 ];
+const inboxV2AtomicProviderIoFileName =
+  "0046_inbox_v2_atomic_provider_io_closure.sql";
+const inboxV2AtomicProviderIoTableNames = [
+  "public.inbox_v2_atomic_outbound_dispatch_materializations",
+  "public.inbox_v2_atomic_source_resolution_materializations"
+];
 const inboxV2SourceRegistryPrerequisiteUniqueConstraintNames = [
   "channel_auth_challenges_tenant_id_unique",
   "channel_auth_challenges_tenant_id_connector_unique",
@@ -312,6 +318,9 @@ const inboxV2SourceIdentityResolutionMigrations = migrationFiles.filter(
 );
 const inboxV2SourceMessageReconciliationMigrations = migrationFiles.filter(
   ({ fileName }) => fileName === inboxV2SourceMessageReconciliationFileName
+);
+const inboxV2AtomicProviderIoMigrations = migrationFiles.filter(
+  ({ fileName }) => fileName === inboxV2AtomicProviderIoFileName
 );
 const inboxV2SchemaFileNames = (await readdir(inboxV2SchemaDirectory))
   .filter((fileName) => fileName.endsWith(".ts"))
@@ -671,6 +680,12 @@ if (inboxV2SourceMessageReconciliationMigrations.length !== 1) {
   );
   process.exit(1);
 }
+if (inboxV2AtomicProviderIoMigrations.length !== 1) {
+  console.error(
+    `Expected exactly one atomic provider-I/O migration, found ${inboxV2AtomicProviderIoMigrations.length}.`
+  );
+  process.exit(1);
+}
 
 try {
   assertGlobalMigrationArtifactBijection({
@@ -744,6 +759,15 @@ try {
     targetIndex: 45,
     finalizedMigrationFileName:
       inboxV2SourceMessageReconciliationMigrations[0].fileName,
+    migrationFileNames,
+    snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
+      fileName.endsWith("_snapshot.json")
+    )
+  });
+  assertMigrationJournalArtifactParity({
+    journal: drizzleJournal,
+    targetIndex: 46,
+    finalizedMigrationFileName: inboxV2AtomicProviderIoMigrations[0].fileName,
     migrationFileNames,
     snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
       fileName.endsWith("_snapshot.json")
@@ -874,6 +898,7 @@ try {
   await assertInboxV2SourceMessageReconciliationGeneratedSchemaParity(
     inboxV2SourceMessageReconciliationMigrations[0]
   );
+  await assertInboxV2AtomicProviderIoGeneratedSchemaParity();
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
@@ -1405,18 +1430,36 @@ async function assertInboxV2SourceMessageReconciliationGeneratedSchemaParity(
     baseIndex: 44,
     targetIndex: 45
   });
+  const historicalGenerated =
+    withoutInboxV2AtomicProviderIoSchemaDelta(generated);
   const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
   assertDrizzleSnapshotParity(
-    generated.snapshot,
+    historicalGenerated.snapshot,
     checkedInSnapshot,
     snapshotPath
   );
 
   const checkedInStatements = splitMigrationStatements(migration.sql);
   assertExactSqlSequence(
-    generated.statements,
+    historicalGenerated.statements,
     checkedInStatements.slice(0, -1),
     "Inbox V2 SRC-006 ordered generated migration DDL"
+  );
+}
+
+async function assertInboxV2AtomicProviderIoGeneratedSchemaParity() {
+  const snapshotPath = "packages/db/drizzle/meta/0046_snapshot.json";
+  const generated = await generateExpectedDrizzleMigration({
+    workspaceRoot: process.cwd(),
+    migrationDirectory,
+    baseIndex: 45,
+    targetIndex: 46
+  });
+  const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
+  assertDrizzleSnapshotParity(
+    generated.snapshot,
+    checkedInSnapshot,
+    snapshotPath
   );
 }
 
@@ -1807,7 +1850,9 @@ function withoutInboxV2SourceIdentityResolutionSchemaDelta(generated) {
 }
 
 function withoutInboxV2SourceMessageReconciliationSchemaDelta(generated) {
-  const snapshot = structuredClone(generated.snapshot);
+  const withoutAtomicProviderIo =
+    withoutInboxV2AtomicProviderIoSchemaDelta(generated);
+  const snapshot = structuredClone(withoutAtomicProviderIo.snapshot);
   for (const tableName of inboxV2SourceMessageReconciliationTableNames) {
     delete snapshot.tables[tableName];
   }
@@ -1818,8 +1863,23 @@ function withoutInboxV2SourceMessageReconciliationSchemaDelta(generated) {
     ...inboxV2SourceMessageReconciliationTableNames,
     ...inboxV2SourceMessageReconciliationEnumNames
   ].map((name) => name.slice("public.".length));
-  const statements = generated.statements.filter(
+  const statements = withoutAtomicProviderIo.statements.filter(
     (statement) => !reconciliationNames.some((name) => statement.includes(name))
+  );
+  return { snapshot, statements };
+}
+
+function withoutInboxV2AtomicProviderIoSchemaDelta(generated) {
+  const snapshot = structuredClone(generated.snapshot);
+  for (const tableName of inboxV2AtomicProviderIoTableNames) {
+    delete snapshot.tables[tableName];
+  }
+  const tableNames = inboxV2AtomicProviderIoTableNames.map((tableName) =>
+    tableName.slice("public.".length)
+  );
+  const statements = generated.statements.filter(
+    (statement) =>
+      !tableNames.some((tableName) => statement.includes(tableName))
   );
   return { snapshot, statements };
 }

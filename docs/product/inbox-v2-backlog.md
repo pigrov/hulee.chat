@@ -2,7 +2,7 @@
 
 Status: `active`  
 Canonical task tracker: this file  
-Last updated: `2026-07-16`
+Last updated: `2026-07-17`
 
 ## Purpose
 
@@ -1599,15 +1599,25 @@ participant set.
     `pnpm check` `338` passed files / `3,424` passed tests. Detailed evidence is
     in `docs/product/inbox-v2-src-006-message-reconciliation.md`.
 
-- [ ] `INB2-SRC-007` Materialize V2 state and outbox atomically.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-SRC-004` through `INB2-SRC-006`.
+- [x] `INB2-SRC-007` Materialize V2 state and outbox atomically.
+  - State: `done`; Priority: `P0`; Started: `2026-07-17`; Finished:
+    `2026-07-17`; Owner: `Codex`; Depends on: `INB2-SRC-004` through
+    `INB2-SRC-006`.
   - Acceptance: canonical revisions/sequence, one immutable tenant commit/change
     set, domain events, idempotency result and durable outbox commit together or
-    not at all; external send atomically stores Message, immutable route,
-    dispatch/attempt state and outbox intent before provider I/O.
+    not at all; external send atomically stores Message, immutable route, the
+    initial revision-1 queued dispatch with zero attempts and its outbox intent
+    before provider I/O. Attempt creation and leasing start in `INB2-SRC-009`.
   - Verification: failure injection at every boundary and retry show no missing
     event/change/outbox, half-materialized message or consumed stream gap.
-    Evidence: -
+    Evidence: completed on `2026-07-17` with the authorized two-phase atomic
+    coordinator, one-shot route/message seal capabilities, exact stream and
+    provider-I/O closure, and row-driven database inverse constraints; focused
+    `10` files / `212` tests, runtime review `6` / `132`, migration/finalizer
+    `11` / `11`, fresh PostgreSQL `29` / `273`, preserve/N-1 `3` / `17`, and
+    full unit `341` / `3509` plus the complete `pnpm check` passed. Detailed
+    evidence is in
+    `docs/product/inbox-v2-src-007-atomic-materialization.md`.
 
 - [ ] `INB2-SRC-008` Complete replay, DLQ, redacted diagnostics and backpressure.
   - State: `planned`; Priority: `P1`; Depends on: `INB2-SRC-007`.
@@ -3115,3 +3125,4 @@ the task state, checkbox and evidence above.
 | 2026-07-16 | `INB2-SRC-002`     | Raw ingress/lease; PG 25/232; preserve 3/17; full 316/3229 + all gates     | working tree | Codex + three independent reviews |
 | 2026-07-16 | `INB2-SRC-003`     | Normalize/complete; focused 5/66; PG 26/238; preserve 3/17; full 320/3281  | working tree | Codex + two independent reviews   |
 | 2026-07-17 | `INB2-SRC-004`     | Identity/claims; focused 11/537; PG 27/239; preserve 3/17; full 328/3334   | task commit  | Codex + two independent reviews   |
+| 2026-07-17 | `INB2-SRC-007`     | Atomic commit; focused 10/212; PG 29/273; preserve 3/17; full 341/3509     | task commit  | Codex + two independent reviews   |

@@ -3,6 +3,7 @@ import {
   inboxV2ConversationIdSchema,
   inboxV2EntityRevisionSchema,
   inboxV2MessageActionAttributionSchema,
+  inboxV2MessageCreationCommitSchema,
   inboxV2MessageIdSchema,
   inboxV2ProviderSemanticOrderingHeadSchema,
   inboxV2ReactionSemanticSlotKeyFor,
@@ -15,10 +16,23 @@ import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
 import {
+  fixtureHuleeCreationCommit,
+  fixtureInternalCreationCommit,
+  fixtureSourceCreationCommit
+} from "../../../contracts/src/inbox-v2/timeline-message-fixtures.type-fixture";
+import type {
+  RawSqlExecutor,
+  RawSqlQueryResult
+} from "./sql-outbox-repository";
+
+import {
   actionAttributionRowMatches,
+  assertInboxV2MessageCreationAuthority,
   buildAdvanceInboxV2ProviderSemanticOrderingHeadSql,
+  buildInboxV2AtomicSourceMessageResolutionSql,
   buildFindInboxV2ProviderSemanticOrderingHeadSql,
   buildFindInboxV2MessageCreationDispatchSql,
+  buildFindInboxV2MessageSourceOccurrenceSql,
   buildFindInboxV2OutboundRouteConsumptionSql,
   buildFindInboxV2MessageTransportFactCommitSql,
   buildInboxV2SafeGenericEnvelope,
@@ -40,13 +54,17 @@ import {
   computeInboxV2TimelineMessageCommitDigest,
   decodeInboxV2AuxiliaryReadCursor,
   decodeInboxV2AuxiliaryReadSnapshotToken,
+  deriveInboxV2MessageCreationSourceOccurrenceFence,
   encodeInboxV2AuxiliaryReadCursor,
   encodeInboxV2AuxiliaryReadSnapshotToken,
+  inboxV2MessageCreationSourceOccurrenceFenceRowMatches,
   mapProviderLifecycleOperationReadRow,
   mapProviderSemanticOrderingHeadRow,
   mapQueryableReactionReadRow,
   mapQueryableTransportFactReadRow,
   messageCreationDispatchRowMatches,
+  prepareInboxV2MessageCreation,
+  sealInboxV2PreparedMessageCreation,
   type InboxV2MessageCreationCommit,
   type InboxV2MessageCreationDispatchRow,
   type InboxV2MessageProviderLifecycleCreationCommit,
@@ -67,6 +85,365 @@ const timelineSequence = inboxV2TimelineSequenceSchema.parse("17");
 const now = "2026-07-14T09:00:00.000Z";
 
 describe("SQL Inbox V2 timeline/message repository", () => {
+  it("binds Message creation to the exact command, actor, epoch and Conversation decision", () => {
+    const internalCommit = inboxV2MessageCreationCommitSchema.parse(
+      fixtureInternalCreationCommit()
+    );
+    const externalCommit = inboxV2MessageCreationCommitSchema.parse(
+      fixtureHuleeCreationCommit()
+    );
+    const sourceCommit = inboxV2MessageCreationCommitSchema.parse(
+      fixtureSourceCreationCommit()
+    );
+
+    for (const commit of [internalCommit, externalCommit, sourceCommit]) {
+      expect(() =>
+        assertInboxV2MessageCreationAuthority(
+          messageCreationAuthorityContext(commit),
+          commit
+        )
+      ).not.toThrow();
+    }
+
+    const context = messageCreationAuthorityContext(internalCommit);
+    expect(() =>
+      assertInboxV2MessageCreationAuthority(
+        { ...context, commandTypeId: "core:message.receive" },
+        internalCommit
+      )
+    ).toThrow(/authorized command type/iu);
+    expect(() =>
+      assertInboxV2MessageCreationAuthority(
+        {
+          ...context,
+          actor: { kind: "employee", employeeId: "employee:spoofed" }
+        },
+        internalCommit
+      )
+    ).toThrow(/exact allowed Conversation authorization decision/iu);
+    expect(() =>
+      assertInboxV2MessageCreationAuthority(
+        { ...context, authorizationEpoch: "authorization:spoofed" },
+        internalCommit
+      )
+    ).toThrow(/exact allowed Conversation authorization decision/iu);
+    expect(() =>
+      assertInboxV2MessageCreationAuthority(
+        { ...context, occurredAt: "2026-07-14T09:00:00.001Z" },
+        internalCommit
+      )
+    ).toThrow(/commit time must match/iu);
+    expect(() =>
+      assertInboxV2MessageCreationAuthority(
+        {
+          ...context,
+          authorizationDecisionRefs: context.authorizationDecisionRefs.map(
+            (decision) => ({
+              ...decision,
+              resource: {
+                ...decision.resource,
+                entityId: "conversation:spoofed"
+              }
+            })
+          )
+        } as never,
+        internalCommit
+      )
+    ).toThrow(/exact allowed Conversation authorization decision/iu);
+    expect(() =>
+      assertInboxV2MessageCreationAuthority(
+        {
+          ...context,
+          authorizationDecisionRefs: context.authorizationDecisionRefs.map(
+            (decision) => ({
+              ...decision,
+              resourceScopeId: "core:permission-scope.tenant"
+            })
+          )
+        } as never,
+        internalCommit
+      )
+    ).toThrow(/exact allowed Conversation authorization decision/iu);
+    expect(() =>
+      assertInboxV2MessageCreationAuthority(
+        {
+          ...context,
+          authorizationDecisionRefs: context.authorizationDecisionRefs.map(
+            (decision) => ({
+              ...decision,
+              permissionId: "core:message.send_external"
+            })
+          )
+        } as never,
+        internalCommit
+      )
+    ).toThrow(/exact allowed Conversation authorization decision/iu);
+
+    const trustedServiceCommit = {
+      ...internalCommit,
+      message: {
+        ...internalCommit.message,
+        appActor: {
+          kind: "trusted_service" as const,
+          trustedServiceId: "core:message-service"
+        }
+      }
+    } as unknown as InboxV2MessageCreationCommit;
+    expect(() =>
+      assertInboxV2MessageCreationAuthority(
+        {
+          ...context,
+          actor: {
+            kind: "trusted_service",
+            trustedServiceId: "core:spoofed-service"
+          },
+          authorizationDecisionRefs: context.authorizationDecisionRefs.map(
+            (decision) => ({
+              ...decision,
+              principal: {
+                kind: "trusted_service" as const,
+                trustedServiceId: "core:spoofed-service"
+              }
+            })
+          )
+        } as never,
+        trustedServiceCommit
+      )
+    ).toThrow(/authenticated command actor/iu);
+
+    expect(() =>
+      assertInboxV2MessageCreationAuthority(context, {
+        ...internalCommit,
+        message: {
+          ...internalCommit.message,
+          origin: {
+            kind: "migration",
+            provenance: {
+              sourceSystemId: "legacy:test",
+              sourceRecordId: "message:legacy",
+              importedAt: now
+            }
+          }
+        }
+      } as unknown as InboxV2MessageCreationCommit)
+    ).toThrow(/dedicated authorized command contract/iu);
+  });
+
+  it("independently binds an external Message to current Conversation and SourceAccount route authority", () => {
+    const commit = inboxV2MessageCreationCommitSchema.parse(
+      fixtureHuleeCreationCommit()
+    );
+    const context = messageCreationAuthorityContext(commit);
+    const route = commit.outboundRoute;
+    if (route === null) throw new Error("External fixture requires a route.");
+
+    expect(() =>
+      assertInboxV2MessageCreationAuthority(context, commit)
+    ).not.toThrow();
+    expect(() =>
+      assertInboxV2MessageCreationAuthority(
+        {
+          ...context,
+          authorizationDecisionRefs: context.authorizationDecisionRefs.filter(
+            ({ permissionId }) => permissionId !== "core:source_account.use"
+          )
+        },
+        commit
+      )
+    ).toThrow(/SourceAccount authorization decision/iu);
+    expect(() =>
+      assertInboxV2MessageCreationAuthority(
+        {
+          ...context,
+          authorizationResourceRevisionFences:
+            context.authorizationResourceRevisionFences.filter(
+              ({ resourceKind }) => resourceKind !== "source_account"
+            )
+        },
+        commit
+      )
+    ).toThrow(/SourceAccount authorization decision/iu);
+    expect(() =>
+      assertInboxV2MessageCreationAuthority(
+        {
+          ...context,
+          authorizationResourceRevisionFences:
+            context.authorizationResourceRevisionFences.filter(
+              ({ resourceKind }) => resourceKind !== "conversation"
+            )
+        },
+        commit
+      )
+    ).toThrow(/Conversation authorization decision/iu);
+
+    for (const field of [
+      "sourceAccountAuthorization",
+      "conversationAuthorization"
+    ] as const) {
+      expect(() =>
+        assertInboxV2MessageCreationAuthority(context, {
+          ...commit,
+          outboundRoute: {
+            ...route,
+            [field]: {
+              ...route[field],
+              decisionRevision: "2"
+            }
+          }
+        } as InboxV2MessageCreationCommit)
+      ).toThrow(/SourceAccount authorization decision/iu);
+    }
+  });
+
+  it("requires live coordinator contexts and locks SourceOccurrence before stream allocation", async () => {
+    const commit = inboxV2MessageCreationCommitSchema.parse(
+      fixtureInternalCreationCommit()
+    );
+    const statements: string[] = [];
+    const executor = messageCreationSeamExecutor(commit, statements);
+
+    await expect(
+      prepareInboxV2MessageCreation(executor as never, {
+        commit
+      })
+    ).rejects.toThrow(/live authorized-command context/iu);
+    await expect(
+      sealInboxV2PreparedMessageCreation({} as never, {
+        capability: Object.freeze({}) as never
+      })
+    ).rejects.toThrow(/live stream-position context/iu);
+    expect(statements).toHaveLength(0);
+
+    const sourceLock = renderQuery(
+      buildFindInboxV2MessageSourceOccurrenceSql({
+        tenantId,
+        sourceOccurrenceId: "source_occurrence:db005-unit"
+      })
+    ).sql;
+    expect(normalizeSql(sourceLock)).toContain(
+      "select id, resolution_state, revision, updated_at"
+    );
+    expect(normalizeSql(sourceLock)).toContain("for update");
+  });
+
+  it("derives the exact pending or conflicted SourceOccurrence CAS fence from the Message commit", () => {
+    const pendingCommit = inboxV2MessageCreationCommitSchema.parse(
+      fixtureSourceCreationCommit()
+    );
+    const pendingResolution = pendingCommit.sourceResolutionCommit;
+    if (pendingResolution === null) {
+      throw new Error("Expected a source resolution commit fixture.");
+    }
+    expect(
+      deriveInboxV2MessageCreationSourceOccurrenceFence(pendingCommit)
+    ).toEqual({
+      sourceOccurrenceId: pendingResolution.before.id,
+      expectedRevision: pendingResolution.expectedRevision,
+      expectedResolutionState: "pending",
+      expectedUpdatedAt: pendingResolution.before.updatedAt
+    });
+
+    const resolvedReference = pendingResolution.after.resolution;
+    if (resolvedReference.state !== "resolved") {
+      throw new Error("Expected a resolved source occurrence fixture.");
+    }
+    const conflictedBefore = {
+      ...pendingResolution.before,
+      resolution: {
+        state: "conflicted" as const,
+        candidateExternalMessageReferences: [
+          resolvedReference.externalMessageReference,
+          {
+            ...resolvedReference.externalMessageReference,
+            id: "external_message_reference:conflict-candidate-2"
+          }
+        ],
+        diagnostic: {
+          codeId: "core:message-reference-conflicted",
+          retryable: false,
+          correlationToken: "correlation:source-reference-conflicted",
+          safeOperatorHintId: "core:inspect-source-evidence"
+        }
+      }
+    };
+    const conflictedCommit = inboxV2MessageCreationCommitSchema.parse({
+      ...pendingCommit,
+      sourceResolutionCommit: {
+        ...pendingResolution,
+        before: conflictedBefore
+      }
+    });
+    expect(
+      deriveInboxV2MessageCreationSourceOccurrenceFence(conflictedCommit)
+    ).toEqual({
+      sourceOccurrenceId: conflictedBefore.id,
+      expectedRevision: pendingResolution.expectedRevision,
+      expectedResolutionState: "conflicted",
+      expectedUpdatedAt: conflictedBefore.updatedAt
+    });
+  });
+
+  it("rejects SourceOccurrence rows with a mismatched revision or updatedAt fence", () => {
+    const commit = inboxV2MessageCreationCommitSchema.parse(
+      fixtureSourceCreationCommit()
+    );
+    const fence = deriveInboxV2MessageCreationSourceOccurrenceFence(commit);
+    if (fence === null) {
+      throw new Error("Expected a source occurrence fence.");
+    }
+    const exactRow = {
+      resolution_state: fence.expectedResolutionState,
+      revision: fence.expectedRevision,
+      updated_at: new Date(fence.expectedUpdatedAt)
+    };
+    expect(
+      inboxV2MessageCreationSourceOccurrenceFenceRowMatches(exactRow, fence)
+    ).toBe(true);
+    expect(
+      inboxV2MessageCreationSourceOccurrenceFenceRowMatches(
+        { ...exactRow, revision: "2" },
+        fence
+      )
+    ).toBe(false);
+    expect(
+      inboxV2MessageCreationSourceOccurrenceFenceRowMatches(
+        { ...exactRow, updated_at: new Date("2026-07-14T09:00:00.001Z") },
+        fence
+      )
+    ).toBe(false);
+  });
+
+  it("builds the source-originated atomic seal tail as VALUES-only writes", () => {
+    const sourceCommit = inboxV2MessageCreationCommitSchema.parse(
+      fixtureSourceCreationCommit()
+    );
+    const statements = buildInboxV2AtomicSourceMessageResolutionSql(
+      sourceCommit
+    ).map((statement) => normalizeSql(renderQuery(statement).sql));
+
+    expect(statements).toHaveLength(3);
+    expect(statements[0]).toMatch(
+      /^insert into inbox_v2_external_message_references/iu
+    );
+    expect(statements[0]).toContain(") values (");
+    expect(statements[1]).toMatch(
+      /^insert into inbox_v2_source_occurrence_resolution_transitions/iu
+    );
+    expect(statements[2]).toMatch(/^update inbox_v2_source_occurrences/iu);
+    for (const statement of statements) {
+      expect(statement).not.toMatch(
+        /\bselect\b|\bwith\b|\bfor\s+(?:update|share)|\bpg_[a-z0-9_]*\s*\(/iu
+      );
+    }
+
+    const internalCommit = inboxV2MessageCreationCommitSchema.parse(
+      fixtureInternalCreationCommit()
+    );
+    expect(
+      buildInboxV2AtomicSourceMessageResolutionSql(internalCommit)
+    ).toEqual([]);
+  });
+
   it("keeps the generic envelope content-free and position-only", () => {
     const envelope = buildInboxV2SafeGenericEnvelope({
       tenantId,
@@ -1249,6 +1626,152 @@ function providerReceiptSemanticProof() {
     recordedAt: now,
     revision
   } as const;
+}
+
+function messageCreationAuthorityContext(
+  commit: InboxV2MessageCreationCommit
+): Parameters<typeof assertInboxV2MessageCreationAuthority>[0] {
+  const sourceOriginated = commit.message.origin.kind === "source_originated";
+  const appActor = commit.message.appActor;
+  const employeeId =
+    appActor?.kind === "employee"
+      ? appActor.employee.id
+      : "employee:source-coordinator";
+  const authorizationEpoch =
+    appActor?.kind === "employee"
+      ? appActor.authorizationEpoch
+      : "authorization:source-coordinator";
+  const authorizationDecisionId =
+    "authorization-decision:message-creation-authority";
+  const route = commit.outboundRoute;
+  const conversationSnapshot = route?.conversationAuthorization;
+  const conversationDecision = {
+    tenantId: commit.tenantId,
+    id: authorizationDecisionId,
+    authorizationEpoch,
+    principal: {
+      kind: "employee" as const,
+      employee: {
+        tenantId: commit.tenantId,
+        kind: "employee" as const,
+        id: employeeId
+      }
+    },
+    permissionId: sourceOriginated
+      ? "core:message.receive_external"
+      : commit.message.origin.kind === "hulee_external"
+        ? "core:message.send_external"
+        : "core:message.send_internal",
+    resourceScopeId: "core:conversation",
+    resource: {
+      tenantId: commit.tenantId,
+      entityTypeId: "core:conversation",
+      entityId: commit.message.conversation.id
+    },
+    resourceAccessRevision: "1",
+    decisionRevision: conversationSnapshot?.decisionRevision ?? "1",
+    decisionHash: "a".repeat(64),
+    outcome: "allowed" as const,
+    decidedAt: conversationSnapshot?.decidedAt ?? "2026-07-14T08:00:00.000Z",
+    notAfter: conversationSnapshot?.notAfter ?? "2026-07-14T10:00:00.000Z"
+  };
+  const sourceAccountDecision =
+    route === null
+      ? null
+      : {
+          ...conversationDecision,
+          id: "authorization-decision:message-source-account-authority",
+          permissionId: "core:source_account.use",
+          resourceScopeId: "core:source-account",
+          resource: {
+            tenantId: commit.tenantId,
+            entityTypeId: "core:source-account",
+            entityId: route.sourceAccount.id
+          },
+          decisionRevision: route.sourceAccountAuthorization.decisionRevision,
+          decisionHash: "b".repeat(64),
+          decidedAt: route.sourceAccountAuthorization.decidedAt,
+          notAfter: route.sourceAccountAuthorization.notAfter
+        };
+  return {
+    tenantId: commit.tenantId,
+    commandTypeId: sourceOriginated
+      ? "core:message.receive"
+      : "core:message.send",
+    actor: { kind: "employee", employeeId },
+    authorizationEpoch,
+    authorizationDecisionId,
+    occurredAt: commit.timelineAllocation.committedAt,
+    authorizationDecisionRefs: [
+      conversationDecision,
+      ...(sourceAccountDecision === null ? [] : [sourceAccountDecision])
+    ],
+    authorizationResourceRevisionFences: [
+      {
+        resourceKind: "conversation",
+        resourceId: commit.message.conversation.id,
+        resourceHeadId: "authorization-resource:message-conversation",
+        expectedResourceAccessRevision: "1",
+        advance: "none"
+      },
+      ...(route === null
+        ? []
+        : [
+            {
+              resourceKind: "source_account" as const,
+              resourceId: route.sourceAccount.id,
+              resourceHeadId: "authorization-resource:message-source-account",
+              expectedResourceAccessRevision: "1",
+              advance: "none" as const
+            }
+          ])
+    ]
+  } as unknown as Parameters<typeof assertInboxV2MessageCreationAuthority>[0];
+}
+
+function messageCreationSeamExecutor(
+  commit: InboxV2MessageCreationCommit,
+  statements: string[]
+): RawSqlExecutor {
+  const before = commit.timelineAllocation.conversationBefore.head;
+  return {
+    async execute<Row extends Record<string, unknown>>(
+      query: SQL
+    ): Promise<RawSqlQueryResult<Row>> {
+      const statement = normalizeSql(renderQuery(query).sql);
+      statements.push(statement);
+      let rows: readonly Record<string, unknown>[];
+      if (statement.includes("from inbox_v2_conversations c")) {
+        rows = [
+          {
+            id: commit.message.conversation.id,
+            revision: before.revision,
+            latest_timeline_sequence: before.latestTimelineSequence,
+            latest_activity_item_id: before.latestActivityItemId,
+            latest_activity_timeline_sequence:
+              before.latestActivityTimelineSequence,
+            latest_activity_at: before.latestActivityAt,
+            updated_at: before.updatedAt
+          }
+        ];
+      } else if (statement.includes("from inbox_v2_messages message_row")) {
+        rows = [];
+      } else if (statement.includes("from inbox_v2_outbound_dispatches")) {
+        rows = [];
+      } else if (
+        statement.includes("from inbox_v2_message_revisions revision_row")
+      ) {
+        rows = [];
+      } else if (
+        statement.includes("from inbox_v2_conversation_participants")
+      ) {
+        rows = [{ id: commit.authorParticipant.id }];
+      } else {
+        rows = [{ id: "inbox-v2-message-creation-write" }];
+      }
+      return { rows: rows as readonly Row[] };
+    }
+  };
 }
 
 function renderQuery(query: SQL): { sql: string; params: unknown[] } {

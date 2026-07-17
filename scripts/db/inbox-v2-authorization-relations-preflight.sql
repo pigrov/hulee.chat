@@ -303,6 +303,8 @@ begin
           'inbox_v2_tenant_stream_heads',
           'inbox_v2_tenant_stream_commits',
           'inbox_v2_tenant_stream_changes',
+          'inbox_v2_atomic_outbound_dispatch_materializations',
+          'inbox_v2_atomic_source_resolution_materializations',
           'inbox_v2_domain_events',
           'inbox_v2_outbox_intents',
           'inbox_v2_auth_audit_events',

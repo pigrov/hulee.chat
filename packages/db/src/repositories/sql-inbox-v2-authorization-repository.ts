@@ -41,8 +41,17 @@ import {
   type InboxV2RoleRevisionPlanDecision
 } from "@hulee/core";
 import { sql, type SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 
 import type { HuleeDatabase } from "../client";
+import {
+  consumeInboxV2AtomicMaterializationSealReceipt,
+  registerInboxV2AtomicSealExecutor,
+  revokeInboxV2AtomicOutboundRouteProofs,
+  revokeInboxV2AtomicSealExecutor,
+  type InboxV2AtomicMaterializationSealReceipt,
+  type InboxV2AtomicMessageCreationSealManifest
+} from "./sql-inbox-v2-atomic-materialization-internal";
 import type {
   RawSqlExecutor,
   RawSqlQueryResult
@@ -62,6 +71,50 @@ const POSTGRES_BIGINT_MAX_DECIMAL = POSTGRES_BIGINT_MAX.toString();
 const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/u;
 const INTERNAL_DOMAIN_ID_PATTERN =
   /^[a-z][a-z0-9_-]{1,63}:[A-Za-z0-9][A-Za-z0-9._~-]{0,191}$/u;
+const POST_HEAD_SQL_DIALECT = new PgDialect();
+const POST_HEAD_INSERT_TABLES = new Set([
+  "inbox_v2_action_attributions",
+  "inbox_v2_atomic_outbound_dispatch_materializations",
+  "inbox_v2_atomic_source_resolution_materializations",
+  "inbox_v2_external_message_references",
+  "inbox_v2_message_reference_canonical_targets",
+  "inbox_v2_message_reference_contexts",
+  "inbox_v2_message_reference_external_targets",
+  "inbox_v2_message_reference_unresolved_candidates",
+  "inbox_v2_message_reference_unresolved_targets",
+  "inbox_v2_message_revisions",
+  "inbox_v2_message_transport_link_heads",
+  "inbox_v2_message_transport_links",
+  "inbox_v2_messages",
+  "inbox_v2_outbound_dispatches",
+  "inbox_v2_outbound_route_consumptions",
+  "inbox_v2_source_occurrence_resolution_transitions",
+  "inbox_v2_timeline_content_contact_values",
+  "inbox_v2_timeline_content_payloads",
+  "inbox_v2_timeline_content_revisions",
+  "inbox_v2_timeline_contents",
+  "inbox_v2_timeline_items"
+]);
+const POST_HEAD_FORBIDDEN_SQL_PATTERN =
+  /(?:;|--|\/\*|\*\/|\b(?:select|with|merge|delete|truncate|alter|create|drop|grant|revoke|copy|call|lock|from|using|join|union|intersect|except)\b|\bfor\s+(?:update|no\s+key\s+update|share|key\s+share)\b|\bpg_[a-z0-9_]*\s*\()/iu;
+const POST_HEAD_INSERT_PATTERN =
+  /^insert\s+into\s+(?:(?:public)\.)?([a-z][a-z0-9_]*)\b/iu;
+const POST_HEAD_UPDATE_PATTERN =
+  /^update\s+(?:(?:public)\.)?([a-z][a-z0-9_]*)\b/iu;
+const POST_HEAD_UPDATE_CAS_PREDICATES = new Map<string, readonly RegExp[]>([
+  [
+    "inbox_v2_conversation_heads",
+    [
+      /\bwhere\s+tenant_id\s*=\s*\$\d+\s+and\s+conversation_id\s*=\s*\$\d+\s+and\s+revision\s*=\s*\$\d+\s+and\s+latest_timeline_sequence\s*=\s*\$\d+\s+returning\s+conversation_id\s+as\s+id\s*$/iu
+    ]
+  ],
+  [
+    "inbox_v2_source_occurrences",
+    [
+      /\bwhere\s+tenant_id\s*=\s*\$\d+\s+and\s+id\s*=\s*\$\d+\s+and\s+resolution_state\s*=\s*\$\d+\s+and\s+revision\s*=\s*\$\d+\s+and\s+updated_at\s*=\s*\$\d+\s+returning\s+id\s*$/iu
+    ]
+  ]
+]);
 
 export type InboxV2AuthorizationActor =
   | Readonly<{ kind: "employee"; employeeId: string }>
@@ -266,6 +319,12 @@ export type InboxV2PrivilegedAuthorizationMutationCallbackResult<TResult> =
 
 export type InboxV2PrivilegedAuthorizationMutationContext = Readonly<{
   executor: RawSqlExecutor;
+  /**
+   * Present only for the prepare phase of the two-phase atomic coordinator.
+   * Repositories bind opaque prepared capabilities to this exact transaction
+   * token instead of exposing the transaction executor during the seal phase.
+   */
+  atomicMaterializationToken?: object;
   tenantId: string;
   commandId: string;
   clientMutationId: string;
@@ -276,7 +335,10 @@ export type InboxV2PrivilegedAuthorizationMutationContext = Readonly<{
    * of trusting actor/service identifiers repeated in command payloads.
    */
   actor: InboxV2AuthorizationActor;
+  authorizationEpoch: string;
   authorizationDecisionId: string;
+  authorizationDecisionRefs: readonly InboxV2AuthorizationDecisionReference[];
+  authorizationResourceRevisionFences: readonly InboxV2AuthorizationResourceRevisionExpectation[];
   authorizedAt: string;
   occurredAt: string;
   mutationId: string;
@@ -285,6 +347,43 @@ export type InboxV2PrivilegedAuthorizationMutationContext = Readonly<{
 }>;
 
 const authorizedCommandMutationContexts = new WeakSet<object>();
+const authorizedAtomicMaterializationContexts = new WeakSet<object>();
+
+function recursivelyFrozenAuthorizationSnapshot<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return Object.freeze(
+      value.map((item) => recursivelyFrozenAuthorizationSnapshot(item))
+    ) as T;
+  }
+  if (typeof value === "object" && value !== null) {
+    const snapshot = Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        recursivelyFrozenAuthorizationSnapshot(item)
+      ])
+    );
+    return Object.freeze(snapshot) as T;
+  }
+  return value;
+}
+
+function snapshotInboxV2AuthorizationActor(
+  actor: InboxV2AuthorizationActor
+): InboxV2AuthorizationActor {
+  return recursivelyFrozenAuthorizationSnapshot(actor);
+}
+
+function snapshotInboxV2AuthorizationDecisionRefs(
+  decisions: readonly InboxV2AuthorizationDecisionReference[]
+): readonly InboxV2AuthorizationDecisionReference[] {
+  return recursivelyFrozenAuthorizationSnapshot(decisions);
+}
+
+function snapshotInboxV2AuthorizationResourceRevisionFences(
+  fences: readonly InboxV2AuthorizationResourceRevisionExpectation[]
+): readonly InboxV2AuthorizationResourceRevisionExpectation[] {
+  return recursivelyFrozenAuthorizationSnapshot(fences);
+}
 
 /**
  * Runtime capability check for repositories that may write only from the
@@ -304,6 +403,153 @@ export function assertInboxV2AuthorizedCommandMutationContext(
       "Inbox V2 domain persistence requires a live authorized-command context."
     );
   }
+}
+
+export type InboxV2AuthorizedAtomicMaterializationContext = Readonly<{
+  atomicMaterializationToken: object;
+  tenantId: string;
+  commandId: string;
+  clientMutationId: string;
+  commandTypeId: string;
+  actor: InboxV2AuthorizationActor;
+  authorizationEpoch: string;
+  authorizationDecisionId: string;
+  authorizationDecisionRefs: readonly InboxV2AuthorizationDecisionReference[];
+  authorizationResourceRevisionFences: readonly InboxV2AuthorizationResourceRevisionExpectation[];
+  authorizedAt: string;
+  occurredAt: string;
+  mutationId: string;
+  profile: "domain";
+  revisionEffects: readonly [];
+  streamCommitId: string;
+  streamEpoch: string;
+  previousPosition: string;
+  streamPosition: string;
+}>;
+
+/**
+ * Runtime capability check for the second, stream-position-aware phase of an
+ * atomic domain materialization. The capability exists only while the
+ * coordinator owns both the database transaction and the locked tenant stream
+ * head; callers therefore cannot forge a position and persist canonical rows
+ * outside the commit that publishes them.
+ */
+export function assertInboxV2AuthorizedAtomicMaterializationContext(
+  context: InboxV2AuthorizedAtomicMaterializationContext
+): void {
+  if (
+    typeof context !== "object" ||
+    context === null ||
+    !authorizedAtomicMaterializationContexts.has(context)
+  ) {
+    throw new TypeError(
+      "Inbox V2 atomic materialization requires a live stream-position context."
+    );
+  }
+}
+
+function createInboxV2AtomicMaterializationPhaseExecutor(
+  transaction: RawSqlExecutor
+): Readonly<{
+  prepareExecutor: RawSqlExecutor;
+  sealExecutor: RawSqlExecutor;
+  closePreparePhase(): void;
+  enterPostHeadWritePhase(): void;
+  closePostHeadWritePhase(): void;
+}> {
+  let preparePhaseOpen = true;
+  let postHeadWritePhaseOpen = false;
+  const prepareExecutor: RawSqlExecutor = Object.freeze({
+    async execute<Row extends Record<string, unknown>>(
+      query: SQL
+    ): Promise<RawSqlQueryResult<Row>> {
+      if (!preparePhaseOpen) {
+        throw invariantError(
+          "Inbox V2 atomic prepare executor is no longer live."
+        );
+      }
+      return transaction.execute<Row>(query);
+    }
+  });
+  const sealExecutor: RawSqlExecutor = Object.freeze({
+    async execute<Row extends Record<string, unknown>>(
+      query: SQL
+    ): Promise<RawSqlQueryResult<Row>> {
+      if (!postHeadWritePhaseOpen) {
+        throw invariantError("Inbox V2 atomic seal executor is not live.");
+      }
+      assertInboxV2PostHeadWriteStatement(
+        POST_HEAD_SQL_DIALECT.sqlToQuery(query).sql.trim()
+      );
+      return transaction.execute<Row>(query);
+    }
+  });
+  return Object.freeze({
+    prepareExecutor,
+    sealExecutor,
+    closePreparePhase(): void {
+      preparePhaseOpen = false;
+    },
+    enterPostHeadWritePhase(): void {
+      if (preparePhaseOpen) {
+        throw invariantError(
+          "Inbox V2 atomic seal cannot open before prepare is revoked."
+        );
+      }
+      postHeadWritePhaseOpen = true;
+    },
+    closePostHeadWritePhase(): void {
+      postHeadWritePhaseOpen = false;
+    }
+  });
+}
+
+function assertInboxV2PostHeadWriteStatement(statement: string): void {
+  const normalized = statement.replaceAll('"', "").replace(/\s+/gu, " ").trim();
+  if (POST_HEAD_FORBIDDEN_SQL_PATTERN.test(normalized)) {
+    throw invalidPostHeadWrite();
+  }
+
+  const insert = POST_HEAD_INSERT_PATTERN.exec(normalized);
+  if (insert !== null) {
+    const table = insert[1];
+    if (
+      table === undefined ||
+      !POST_HEAD_INSERT_TABLES.has(table.toLowerCase()) ||
+      !/\)\s+values\s*\(/iu.test(normalized) ||
+      (/\bon\s+conflict\b/iu.test(normalized) &&
+        !/\bon\s+conflict\s+do\s+nothing\s+returning\b/iu.test(normalized)) ||
+      !/\breturning\s+[a-z][a-z0-9_]*(?:\s+as\s+id)?\s*$/iu.test(normalized)
+    ) {
+      throw invalidPostHeadWrite();
+    }
+    return;
+  }
+
+  const update = POST_HEAD_UPDATE_PATTERN.exec(normalized);
+  if (update !== null) {
+    const table = update[1]?.toLowerCase();
+    const predicates =
+      table === undefined
+        ? undefined
+        : POST_HEAD_UPDATE_CAS_PREDICATES.get(table);
+    if (
+      predicates === undefined ||
+      normalized.includes(" or ") ||
+      predicates.some((predicate) => !predicate.test(normalized))
+    ) {
+      throw invalidPostHeadWrite();
+    }
+    return;
+  }
+
+  throw invalidPostHeadWrite();
+}
+
+function invalidPostHeadWrite(): Error {
+  return invariantError(
+    "Inbox V2 post-stream-head materialization permits only allowlisted append inserts and exact compare-and-swap updates prepared before the tenant stream-head lock."
+  );
 }
 
 export type InboxV2PrivilegedAuthorizationMutationReplayStatus = Readonly<{
@@ -396,6 +642,12 @@ export type InboxV2AuthorizedCommandMutationContext =
 export type InboxV2AuthorizedCommandMutationResult<TResult> =
   WithPrivilegedAuthorizationMutationResult<TResult>;
 
+export type InboxV2AuthorizedAtomicMaterializationSealResult<TResult> =
+  Readonly<{
+    result: TResult;
+    receipt: InboxV2AtomicMaterializationSealReceipt;
+  }>;
+
 export type InboxV2AuthorizationTransactionExecutor = RawSqlExecutor & {
   transaction<TResult>(
     work: (transaction: RawSqlExecutor) => Promise<TResult>,
@@ -422,6 +674,31 @@ export type InboxV2AuthorizedCommandCoordinator = Readonly<{
     ) => Promise<TResult>
   ): Promise<InboxV2AuthorizedCommandMutationResult<TResult>>;
 }>;
+
+export type InboxV2AuthorizedAtomicMaterializationCoordinator = Readonly<
+  InboxV2AuthorizedCommandCoordinator & {
+    /**
+     * Runs a provider-neutral command in two DB-only phases. `prepare` may lock
+     * and mutate canonical domain aggregates, but runs before the tenant stream
+     * head lock. `seal` receives the coordinator-allocated stream position but
+     * no raw executor: repositories may consume only opaque write capabilities
+     * prepared in this exact transaction. Provider/network I/O is forbidden in
+     * both callbacks and belongs behind the durable outbox.
+     *
+     * A retry reruns both callbacks. A committed idempotency replay runs neither.
+     */
+    withAuthorizedAtomicMaterialization<TPrepared, TResult>(
+      input: WithInboxV2AuthorizedCommandMutationInput,
+      prepareDomainMutation: (
+        context: InboxV2AuthorizedCommandMutationContext
+      ) => Promise<TPrepared>,
+      sealDomainMutation: (
+        context: InboxV2AuthorizedAtomicMaterializationContext,
+        prepared: TPrepared
+      ) => Promise<InboxV2AuthorizedAtomicMaterializationSealResult<TResult>>
+    ): Promise<InboxV2AuthorizedCommandMutationResult<TResult>>;
+  }
+>;
 
 export type InboxV2AuthorizationRepository = Readonly<{
   withPrivilegedAuthorizationMutation<TResult>(
@@ -550,7 +827,7 @@ export function createSqlInboxV2AuthorizationRepository(
 
 export function createSqlInboxV2AuthorizedCommandCoordinator(
   executor: InboxV2AuthorizationTransactionExecutor | HuleeDatabase
-): InboxV2AuthorizedCommandCoordinator {
+): InboxV2AuthorizedAtomicMaterializationCoordinator {
   const transactionExecutor =
     executor as unknown as InboxV2AuthorizationTransactionExecutor;
 
@@ -561,6 +838,7 @@ export function createSqlInboxV2AuthorizedCommandCoordinator(
       loadCommittedResult
     ) {
       const normalized = normalizeMutationInput(input);
+      assertInboxV2OnePhaseMutationDoesNotBypassAtomicMessageSeam(normalized);
       return runAuthorizationMutationTransaction(
         transactionExecutor,
         async (transaction) =>
@@ -571,8 +849,378 @@ export function createSqlInboxV2AuthorizedCommandCoordinator(
             loadCommittedResult
           )
       );
+    },
+    async withAuthorizedAtomicMaterialization(
+      input,
+      prepareDomainMutation,
+      sealDomainMutation
+    ) {
+      const normalized = normalizeMutationInput(input);
+      if (authorizedCommandMutationProfile(normalized.records) !== "domain") {
+        throw new TypeError(
+          "Atomic domain materialization requires the provider-neutral domain profile."
+        );
+      }
+      return runAuthorizationMutationTransaction(
+        transactionExecutor,
+        async (transaction) =>
+          persistAuthorizedAtomicMaterialization(
+            transaction,
+            normalized,
+            prepareDomainMutation,
+            sealDomainMutation
+          )
+      );
     }
   };
+}
+
+function assertInboxV2OnePhaseMutationDoesNotBypassAtomicMessageSeam(
+  input: WithPrivilegedAuthorizationMutationInput
+): void {
+  const commandTypeId = input.command.commandTypeId;
+  const hasAtomicMessageChange = input.records.changes.some(
+    ({ entity }) =>
+      entity.entityTypeId === "core:message" ||
+      entity.entityTypeId === "core:outbound-dispatch"
+  );
+  const hasProviderDispatchIntent = input.records.outboxIntents.some(
+    (intent) =>
+      intent.effectClass === "provider_io" ||
+      intent.typeId === "core:provider.dispatch"
+  );
+  if (
+    commandTypeId === "core:message.send" ||
+    commandTypeId === "core:message.receive" ||
+    hasAtomicMessageChange ||
+    hasProviderDispatchIntent
+  ) {
+    throw new TypeError(
+      "Message and provider-dispatch mutations require withAuthorizedAtomicMaterialization."
+    );
+  }
+}
+
+async function persistAuthorizedAtomicMaterialization<TPrepared, TResult>(
+  transaction: RawSqlExecutor,
+  input: WithPrivilegedAuthorizationMutationInput,
+  prepareDomainMutation: (
+    context: InboxV2AuthorizedCommandMutationContext
+  ) => Promise<TPrepared>,
+  sealDomainMutation: (
+    context: InboxV2AuthorizedAtomicMaterializationContext,
+    prepared: TPrepared
+  ) => Promise<InboxV2AuthorizedAtomicMaterializationSealResult<TResult>>
+): Promise<WithPrivilegedAuthorizationMutationResult<TResult>> {
+  const claim = await transaction.execute<CommandClaimRow>(
+    buildClaimInboxV2AuthorizationCommandSql(input)
+  );
+  assertAtMostOneRow(claim, "atomic materialization command claim");
+  if (claim.rows.length === 0) {
+    const replay = await loadAuthorizationCommandByIdempotencyScope(
+      transaction,
+      input
+    );
+    if (replay === null) {
+      const commandIdCollision = await loadAuthorizationCommandById(
+        transaction,
+        input.tenantId,
+        input.command.id
+      );
+      if (commandIdCollision === null) {
+        throw invariantError(
+          "Atomic materialization command claim lost without a persisted conflict row."
+        );
+      }
+      return idempotencyConflict();
+    }
+    if (
+      asString(replay.request_hash, "command request hash") !==
+      input.command.requestHash
+    ) {
+      return idempotencyConflict();
+    }
+    const mutationId = nullableString(replay.mutation_id);
+    if (mutationId === null) {
+      throw invariantError(
+        "A visible atomic materialization command remained pending outside its transaction."
+      );
+    }
+    return {
+      kind: "already_applied",
+      status: mapReplayStatus(replay, mutationId)
+    };
+  }
+
+  const locked = await lockAndCheckAuthorizationRevisions(transaction, input);
+  if (locked.kind !== "locked") {
+    throw new AuthorizationMutationAbort(locked.result);
+  }
+  if (locked.effects.length !== 0) {
+    throw invariantError(
+      "Atomic domain materialization produced authorization revision effects."
+    );
+  }
+  await assertAuthorizationDecisionTemporalFence(transaction, input);
+
+  const materializationPhase =
+    createInboxV2AtomicMaterializationPhaseExecutor(transaction);
+  const atomicMaterializationToken = Object.freeze({});
+
+  try {
+    const prepareContext: InboxV2AuthorizedCommandMutationContext =
+      Object.freeze({
+        executor: materializationPhase.prepareExecutor,
+        atomicMaterializationToken,
+        tenantId: input.tenantId,
+        commandId: input.command.id,
+        clientMutationId: input.command.clientMutationId,
+        commandTypeId: input.command.commandTypeId,
+        actor: snapshotInboxV2AuthorizationActor(input.command.actor),
+        authorizationEpoch: input.command.authorizationEpoch,
+        authorizationDecisionId: input.command.authorizationDecisionId,
+        authorizationDecisionRefs: snapshotInboxV2AuthorizationDecisionRefs(
+          input.records.audit.authorizationDecisionRefs
+        ),
+        authorizationResourceRevisionFences:
+          snapshotInboxV2AuthorizationResourceRevisionFences(
+            input.revisions.resources
+          ),
+        authorizedAt: input.command.authorizedAt,
+        occurredAt: input.occurredAt,
+        mutationId: input.records.mutationId,
+        profile: "domain",
+        revisionEffects: []
+      });
+    registerInboxV2AtomicSealExecutor(
+      prepareContext,
+      materializationPhase.sealExecutor
+    );
+    authorizedCommandMutationContexts.add(prepareContext);
+    let prepared: TPrepared;
+    try {
+      prepared = await prepareDomainMutation(prepareContext);
+    } finally {
+      authorizedCommandMutationContexts.delete(prepareContext);
+      revokeInboxV2AtomicSealExecutor(prepareContext);
+      materializationPhase.closePreparePhase();
+    }
+    await verifyCallbackManagedResourceRevisions(transaction, input);
+
+    // ADR 0012: allocate the tenant position only after every preparatory domain
+    // lock/write. Nothing before this point can consume a stream position.
+    await ensureTenantStreamHead(transaction, input);
+    const streamHead = await lockTenantStreamHead(transaction, input.tenantId);
+    if (streamHead === null) {
+      throw invariantError(
+        "Tenant stream head bootstrap did not produce a row."
+      );
+    }
+    const previousPosition = positiveOrZeroCounter(
+      streamHead.last_position,
+      "tenant stream last position"
+    );
+    const streamPosition = (BigInt(previousPosition) + 1n).toString();
+    const streamEpoch = asString(
+      streamHead.stream_epoch,
+      "tenant stream epoch"
+    );
+    if (streamEpoch !== input.records.expectedStreamEpoch) {
+      throw new AuthorizationMutationAbort({
+        kind: "revision_conflict",
+        code: "revision.conflict",
+        conflicts: [
+          {
+            kind: "tenant_stream_epoch",
+            expectedRevision: input.records.expectedStreamEpoch,
+            currentRevision: streamEpoch
+          }
+        ]
+      });
+    }
+    const streamHeadRevision = positiveCounter(
+      streamHead.revision,
+      "tenant stream head revision"
+    );
+
+    await assertAuthorizationDecisionTemporalFence(transaction, input);
+    materializationPhase.enterPostHeadWritePhase();
+
+    const sealContext: InboxV2AuthorizedAtomicMaterializationContext =
+      Object.freeze({
+        atomicMaterializationToken,
+        tenantId: input.tenantId,
+        commandId: input.command.id,
+        clientMutationId: input.command.clientMutationId,
+        commandTypeId: input.command.commandTypeId,
+        actor: snapshotInboxV2AuthorizationActor(input.command.actor),
+        authorizationEpoch: input.command.authorizationEpoch,
+        authorizationDecisionId: input.command.authorizationDecisionId,
+        authorizationDecisionRefs: snapshotInboxV2AuthorizationDecisionRefs(
+          input.records.audit.authorizationDecisionRefs
+        ),
+        authorizationResourceRevisionFences:
+          snapshotInboxV2AuthorizationResourceRevisionFences(
+            input.revisions.resources
+          ),
+        authorizedAt: input.command.authorizedAt,
+        occurredAt: input.occurredAt,
+        mutationId: input.records.mutationId,
+        profile: "domain",
+        revisionEffects: [] as const,
+        streamCommitId: input.records.streamCommitId,
+        streamEpoch,
+        previousPosition,
+        streamPosition
+      });
+    authorizedAtomicMaterializationContexts.add(sealContext);
+    let sealed: InboxV2AuthorizedAtomicMaterializationSealResult<TResult>;
+    try {
+      sealed = await sealDomainMutation(sealContext, prepared);
+      assertInboxV2AtomicMaterializationSealResult(sealed);
+      const sealManifest = consumeInboxV2AtomicMaterializationSealReceipt(
+        sealed.receipt,
+        atomicMaterializationToken
+      );
+      assertInboxV2AtomicMessageCreationSealManifest(input, sealManifest);
+    } finally {
+      authorizedAtomicMaterializationContexts.delete(sealContext);
+      materializationPhase.closePostHeadWritePhase();
+    }
+    await assertAuthorizationDecisionTemporalFence(transaction, input);
+
+    await persistAtomicMutationClosure(transaction, {
+      input,
+      streamEpoch,
+      previousPosition,
+      streamPosition,
+      streamHeadRevision,
+      revisionEffects: [],
+      relationWrites: []
+    });
+
+    return {
+      kind: "applied",
+      result: sealed.result,
+      status: {
+        commandId: input.command.id,
+        mutationId: input.records.mutationId,
+        publicResultCode: input.command.publicResultCode,
+        resultReference: input.command.resultReference,
+        sensitiveResultReference: input.command.sensitiveResultReference,
+        streamCommitId: input.records.streamCommitId,
+        streamEpoch,
+        streamPosition,
+        committedAt: input.occurredAt
+      },
+      revisionEffects: []
+    };
+  } finally {
+    revokeInboxV2AtomicOutboundRouteProofs(atomicMaterializationToken);
+  }
+}
+
+async function persistAtomicMutationClosure(
+  transaction: RawSqlExecutor,
+  closure: Readonly<{
+    input: WithPrivilegedAuthorizationMutationInput;
+    streamEpoch: string;
+    previousPosition: string;
+    streamPosition: string;
+    streamHeadRevision: string;
+    revisionEffects: readonly InboxV2AuthorizationRevisionEffect[];
+    relationWrites: readonly InboxV2AuthorizationRelationRevisionEffect[];
+  }>
+): Promise<void> {
+  const { input, streamEpoch, previousPosition, streamPosition } = closure;
+  await expectOneRow(
+    transaction,
+    buildInsertInboxV2TenantStreamCommitSql({
+      input,
+      streamEpoch,
+      streamPosition,
+      previousPosition
+    }),
+    "tenant stream commit"
+  );
+  await expectExactRows(
+    transaction,
+    buildInsertInboxV2TenantStreamChangesSql({ input, streamPosition }),
+    input.records.changes.length,
+    "tenant stream changes"
+  );
+  await expectExactRows(
+    transaction,
+    buildInsertInboxV2DomainEventsSql({ input, streamPosition }),
+    input.records.events.length,
+    "domain events"
+  );
+  if (input.records.outboxIntents.length > 0) {
+    await expectExactRows(
+      transaction,
+      buildInsertInboxV2OutboxIntentsSql({ input, streamPosition }),
+      input.records.outboxIntents.length,
+      "outbox intents"
+    );
+  }
+  // The audit and mutation-commit FKs include mutation_id. Complete the
+  // still-transaction-local command before inserting either child. The row is
+  // not observable until this whole transaction commits.
+  await expectOneRow(
+    transaction,
+    buildCompleteInboxV2AuthorizationCommandSql(input),
+    "authorization command completion"
+  );
+  await expectOneRow(
+    transaction,
+    buildInsertInboxV2AuthorizationAuditEventSql(input),
+    "authorization audit event"
+  );
+  await expectExactRows(
+    transaction,
+    buildInsertInboxV2AuthorizationAuditFacetsSql(input),
+    input.records.audit.facets.length,
+    "authorization audit facets"
+  );
+  await expectOneRow(
+    transaction,
+    buildInsertInboxV2AuthorizationMutationCommitSql({
+      input,
+      revisionEffects: closure.revisionEffects,
+      relationWrites: closure.relationWrites
+    }),
+    "authorization mutation commit"
+  );
+  await expectExactRows(
+    transaction,
+    buildInsertInboxV2AuthorizationRevisionEffectsSql(
+      input,
+      closure.revisionEffects
+    ),
+    closure.revisionEffects.length,
+    "authorization revision effects"
+  );
+  await expectExactRows(
+    transaction,
+    buildInsertInboxV2AuthorizationRelationWritesSql(
+      input,
+      closure.relationWrites
+    ),
+    closure.relationWrites.length,
+    "authorization relation writes"
+  );
+  await expectOneRow(
+    transaction,
+    buildAdvanceInboxV2TenantStreamHeadSql({
+      tenantId: input.tenantId,
+      streamEpoch,
+      previousPosition,
+      streamPosition,
+      expectedHeadRevision: closure.streamHeadRevision,
+      occurredAt: input.occurredAt
+    }),
+    "tenant stream head advance"
+  );
 }
 
 async function persistPrivilegedAuthorizationMutation<TResult>(
@@ -648,8 +1296,16 @@ async function persistPrivilegedAuthorizationMutation<TResult>(
         commandId: status.commandId,
         clientMutationId: input.command.clientMutationId,
         commandTypeId: input.command.commandTypeId,
-        actor: input.command.actor,
+        actor: snapshotInboxV2AuthorizationActor(input.command.actor),
+        authorizationEpoch: input.command.authorizationEpoch,
         authorizationDecisionId: input.command.authorizationDecisionId,
+        authorizationDecisionRefs: snapshotInboxV2AuthorizationDecisionRefs(
+          input.records.audit.authorizationDecisionRefs
+        ),
+        authorizationResourceRevisionFences:
+          snapshotInboxV2AuthorizationResourceRevisionFences(
+            input.revisions.resources
+          ),
         authorizedAt: input.command.authorizedAt,
         occurredAt: input.occurredAt,
         mutationId: status.mutationId,
@@ -687,8 +1343,16 @@ async function persistPrivilegedAuthorizationMutation<TResult>(
       commandId: input.command.id,
       clientMutationId: input.command.clientMutationId,
       commandTypeId: input.command.commandTypeId,
-      actor: input.command.actor,
+      actor: snapshotInboxV2AuthorizationActor(input.command.actor),
+      authorizationEpoch: input.command.authorizationEpoch,
       authorizationDecisionId: input.command.authorizationDecisionId,
+      authorizationDecisionRefs: snapshotInboxV2AuthorizationDecisionRefs(
+        input.records.audit.authorizationDecisionRefs
+      ),
+      authorizationResourceRevisionFences:
+        snapshotInboxV2AuthorizationResourceRevisionFences(
+          input.revisions.resources
+        ),
       authorizedAt: input.command.authorizedAt,
       occurredAt: input.occurredAt,
       mutationId: input.records.mutationId,
@@ -751,91 +1415,15 @@ async function persistPrivilegedAuthorizationMutation<TResult>(
   await assertAuthorizationDecisionTemporalFence(transaction, input);
 
   await applyAuthorizationRevisionAdvances(transaction, input, locked);
-  await expectOneRow(
-    transaction,
-    buildInsertInboxV2TenantStreamCommitSql({
-      input,
-      streamEpoch,
-      streamPosition,
-      previousPosition
-    }),
-    "tenant stream commit"
-  );
-  await expectExactRows(
-    transaction,
-    buildInsertInboxV2TenantStreamChangesSql({
-      input,
-      streamPosition
-    }),
-    input.records.changes.length,
-    "tenant stream changes"
-  );
-  await expectExactRows(
-    transaction,
-    buildInsertInboxV2DomainEventsSql({ input, streamPosition }),
-    input.records.events.length,
-    "domain events"
-  );
-  if (input.records.outboxIntents.length > 0) {
-    await expectExactRows(
-      transaction,
-      buildInsertInboxV2OutboxIntentsSql({ input, streamPosition }),
-      input.records.outboxIntents.length,
-      "outbox intents"
-    );
-  }
-  // The audit and mutation-commit FKs include mutation_id. Complete the
-  // still-transaction-local command before inserting either child. The row is
-  // not observable until this whole transaction commits.
-  await expectOneRow(
-    transaction,
-    buildCompleteInboxV2AuthorizationCommandSql(input),
-    "authorization command completion"
-  );
-  await expectOneRow(
-    transaction,
-    buildInsertInboxV2AuthorizationAuditEventSql(input),
-    "authorization audit event"
-  );
-  await expectExactRows(
-    transaction,
-    buildInsertInboxV2AuthorizationAuditFacetsSql(input),
-    input.records.audit.facets.length,
-    "authorization audit facets"
-  );
-  await expectOneRow(
-    transaction,
-    buildInsertInboxV2AuthorizationMutationCommitSql({
-      input,
-      revisionEffects: locked.effects,
-      relationWrites
-    }),
-    "authorization mutation commit"
-  );
-  await expectExactRows(
-    transaction,
-    buildInsertInboxV2AuthorizationRevisionEffectsSql(input, locked.effects),
-    locked.effects.length,
-    "authorization revision effects"
-  );
-  await expectExactRows(
-    transaction,
-    buildInsertInboxV2AuthorizationRelationWritesSql(input, relationWrites),
-    relationWrites.length,
-    "authorization relation writes"
-  );
-  await expectOneRow(
-    transaction,
-    buildAdvanceInboxV2TenantStreamHeadSql({
-      tenantId: input.tenantId,
-      streamEpoch,
-      previousPosition,
-      streamPosition,
-      expectedHeadRevision: streamHeadRevision,
-      occurredAt: input.occurredAt
-    }),
-    "tenant stream head advance"
-  );
+  await persistAtomicMutationClosure(transaction, {
+    input,
+    streamEpoch,
+    previousPosition,
+    streamPosition,
+    streamHeadRevision,
+    revisionEffects: locked.effects,
+    relationWrites
+  });
   return {
     kind: "applied",
     result: callbackResult.result,
@@ -1288,7 +1876,7 @@ function normalizeMutationInput(
     records
   };
   assertDecisionResourceRevisionFences(normalized);
-  return normalized;
+  return recursivelyFrozenAuthorizationSnapshot(normalized);
 }
 
 function normalizeMutationRecords(
@@ -1512,12 +2100,13 @@ function normalizeMutationRecords(
     });
     if (
       intent.correlationId !== records.correlationId ||
-      intent.effectClass === "provider_io" ||
+      (authorizedCommandMutationProfile(records) === "authorization_relation" &&
+        intent.effectClass === "provider_io") ||
       !events.some(({ id }) => id === intent.eventId) ||
       Date.parse(intent.availableAt) < Date.parse(input.occurredAt)
     ) {
       throw new TypeError(
-        "Authorization outbox intent must be non-provider, correlated and event-backed."
+        "Outbox intent must be correlated and event-backed; authorization-relation mutations cannot dispatch provider I/O."
       );
     }
     assertUnique(intent.changeIds.map(String), "outbox intent change IDs");
@@ -5973,6 +6562,275 @@ function assertExactKeys(
       `${label} contains unsupported fields: ${extras.sort(comparePostgresCText).join(", ")}.`
     );
   }
+}
+
+function assertInboxV2AtomicMaterializationSealResult(
+  value: unknown
+): asserts value is InboxV2AuthorizedAtomicMaterializationSealResult<unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError(
+      "Inbox V2 atomic materialization seal result must contain exactly result and receipt."
+    );
+  }
+  assertExactKeys(
+    value,
+    ["result", "receipt"],
+    "atomic materialization seal result"
+  );
+  if (!Object.hasOwn(value, "result") || !Object.hasOwn(value, "receipt")) {
+    throw new TypeError(
+      "Inbox V2 atomic materialization seal result must contain exactly result and receipt."
+    );
+  }
+}
+
+function assertInboxV2AtomicMessageCreationSealManifest(
+  input: WithPrivilegedAuthorizationMutationInput,
+  manifest: InboxV2AtomicMessageCreationSealManifest
+): void {
+  const messageChanges = input.records.changes.filter(
+    (change) => change.entity.entityTypeId === "core:message"
+  );
+  const matchingChanges = messageChanges.filter(
+    (change) =>
+      change.entity.tenantId === manifest.tenantId &&
+      String(change.entity.entityId) === String(manifest.messageId)
+  );
+  const change = matchingChanges[0];
+  const state = change?.state;
+  const timeline = change?.timeline;
+  const payloadReference =
+    state?.kind === "upsert" ? state.payloadReference : null;
+  const domainCommitReference = state?.domainCommitReference;
+  const commandResultReference = input.command.resultReference;
+  const changeMatches =
+    input.tenantId === manifest.tenantId &&
+    messageChanges.length === 1 &&
+    matchingChanges.length === 1 &&
+    change !== undefined &&
+    String(change.resultingRevision) === manifest.messageRevision &&
+    change.audience === manifest.audience &&
+    timeline !== null &&
+    timeline.conversation.tenantId === manifest.tenantId &&
+    String(timeline.conversation.id) === String(manifest.conversationId) &&
+    String(timeline.timelineSequence) === manifest.timelineSequence &&
+    state?.kind === "upsert" &&
+    state.stateSchemaId === manifest.stateSchemaId &&
+    state.stateSchemaVersion === manifest.stateSchemaVersion &&
+    state.stateHash === manifest.stateHash &&
+    payloadReference !== null &&
+    payloadReferencesMatch(payloadReference, manifest.payloadReference) &&
+    domainCommitReference !== undefined &&
+    payloadReferencesMatch(
+      domainCommitReference,
+      manifest.domainCommitReference
+    ) &&
+    commandResultReference !== null &&
+    payloadReferencesMatch(commandResultReference, payloadReference);
+  if (!changeMatches) throw atomicMessageSealManifestMismatch();
+
+  const messageEvent = assertInboxV2AtomicEntityEventAndProjectionClosure(
+    input,
+    change,
+    manifest.event
+  );
+
+  assertInboxV2AtomicOutboundDispatchClosure(input, manifest, messageEvent);
+
+  const sourceOccurrenceManifest = manifest.sourceOccurrence;
+  const sourceOccurrenceChanges = input.records.changes.filter(
+    (candidate) => candidate.entity.entityTypeId === "core:source-occurrence"
+  );
+  if (sourceOccurrenceManifest === null) {
+    if (sourceOccurrenceChanges.length !== 0) {
+      throw atomicMessageSealManifestMismatch();
+    }
+    return;
+  }
+  const sourceOccurrenceChange = sourceOccurrenceChanges.find(
+    (candidate) =>
+      candidate.entity.tenantId === manifest.tenantId &&
+      String(candidate.entity.entityId) ===
+        String(sourceOccurrenceManifest.sourceOccurrenceId)
+  );
+  const occurrenceState = sourceOccurrenceChange?.state;
+  if (
+    sourceOccurrenceChanges.length !== 1 ||
+    sourceOccurrenceChange === undefined ||
+    String(sourceOccurrenceChange.resultingRevision) !==
+      sourceOccurrenceManifest.resultingRevision ||
+    sourceOccurrenceChange.timeline !== null ||
+    sourceOccurrenceChange.audience !== sourceOccurrenceManifest.audience ||
+    occurrenceState?.kind !== "upsert" ||
+    occurrenceState.stateSchemaId !== sourceOccurrenceManifest.stateSchemaId ||
+    occurrenceState.stateSchemaVersion !==
+      sourceOccurrenceManifest.stateSchemaVersion ||
+    occurrenceState.stateHash !== sourceOccurrenceManifest.stateHash ||
+    !payloadReferencesMatch(
+      occurrenceState.payloadReference,
+      sourceOccurrenceManifest.payloadReference
+    ) ||
+    !payloadReferencesMatch(
+      occurrenceState.domainCommitReference,
+      sourceOccurrenceManifest.domainCommitReference
+    )
+  ) {
+    throw atomicMessageSealManifestMismatch();
+  }
+  assertInboxV2AtomicEntityEventAndProjectionClosure(
+    input,
+    sourceOccurrenceChange,
+    sourceOccurrenceManifest.event
+  );
+}
+
+function assertInboxV2AtomicEntityEventAndProjectionClosure(
+  input: WithPrivilegedAuthorizationMutationInput,
+  change: InboxV2AuthorizationStreamChangeInput,
+  manifest: InboxV2AtomicMessageCreationSealManifest["event"]
+): InboxV2AuthorizationDomainEventInput {
+  const events = input.records.events.filter(
+    (event) =>
+      event.changeIds.some(
+        (changeId) => String(changeId) === String(change.id)
+      ) ||
+      event.subjects.some(
+        (subject) =>
+          subject.tenantId === change.entity.tenantId &&
+          subject.entityTypeId === change.entity.entityTypeId &&
+          String(subject.entityId) === String(change.entity.entityId)
+      )
+  );
+  const event = events[0];
+  if (
+    events.length !== 1 ||
+    event === undefined ||
+    event.typeId !== manifest.typeId ||
+    event.payloadSchemaId !== manifest.payloadSchemaId ||
+    event.payloadSchemaVersion !== manifest.payloadSchemaVersion ||
+    event.occurredAt !== manifest.occurredAt ||
+    event.recordedAt !== manifest.recordedAt ||
+    event.payloadReference === null ||
+    !payloadReferencesMatch(
+      event.payloadReference,
+      manifest.payloadReference
+    ) ||
+    !event.changeIds.some(
+      (changeId) => String(changeId) === String(change.id)
+    ) ||
+    !event.subjects.some(
+      (subject) =>
+        subject.tenantId === change.entity.tenantId &&
+        subject.entityTypeId === change.entity.entityTypeId &&
+        String(subject.entityId) === String(change.entity.entityId)
+    )
+  ) {
+    throw atomicMessageSealManifestMismatch();
+  }
+  const matchingProjections = input.records.outboxIntents.filter(
+    (intent) =>
+      intent.effectClass === "projection" &&
+      intent.typeId === "core:projection.update" &&
+      String(intent.eventId) === String(event.id) &&
+      intent.changeIds.some(
+        (changeId) => String(changeId) === String(change.id)
+      )
+  );
+  if (matchingProjections.length !== 1) {
+    throw atomicMessageSealManifestMismatch();
+  }
+  return event;
+}
+
+function assertInboxV2AtomicOutboundDispatchClosure(
+  input: WithPrivilegedAuthorizationMutationInput,
+  manifest: InboxV2AtomicMessageCreationSealManifest,
+  messageEvent: InboxV2AuthorizationDomainEventInput
+): void {
+  const dispatchChanges = input.records.changes.filter(
+    (change) => change.entity.entityTypeId === "core:outbound-dispatch"
+  );
+  const providerIntents = input.records.outboxIntents.filter(
+    (intent) =>
+      intent.typeId === "core:provider.dispatch" ||
+      intent.effectClass === "provider_io"
+  );
+  const dispatchManifest = manifest.outboundDispatch;
+  if (dispatchManifest === null) {
+    if (dispatchChanges.length !== 0 || providerIntents.length !== 0) {
+      throw atomicMessageSealManifestMismatch();
+    }
+    return;
+  }
+  if (manifest.audience !== "conversation_external") {
+    throw atomicMessageSealManifestMismatch();
+  }
+
+  const dispatchChange = dispatchChanges.find(
+    (candidate) =>
+      candidate.entity.tenantId === manifest.tenantId &&
+      String(candidate.entity.entityId) === String(dispatchManifest.dispatchId)
+  );
+  const dispatchState = dispatchChange?.state;
+  if (
+    dispatchChanges.length !== 1 ||
+    dispatchChange === undefined ||
+    String(dispatchChange.resultingRevision) !==
+      dispatchManifest.resultingRevision ||
+    dispatchChange.timeline !== null ||
+    dispatchChange.audience !== "conversation_external" ||
+    dispatchState?.kind !== "upsert" ||
+    dispatchState.stateSchemaId !== dispatchManifest.stateSchemaId ||
+    dispatchState.stateSchemaVersion !== dispatchManifest.stateSchemaVersion ||
+    dispatchState.stateHash !== dispatchManifest.stateHash ||
+    !payloadReferencesMatch(
+      dispatchState.payloadReference,
+      dispatchManifest.payloadReference
+    ) ||
+    !payloadReferencesMatch(
+      dispatchState.domainCommitReference,
+      manifest.domainCommitReference
+    )
+  ) {
+    throw atomicMessageSealManifestMismatch();
+  }
+
+  const providerIntent = providerIntents[0];
+  if (
+    providerIntents.length !== 1 ||
+    providerIntent === undefined ||
+    providerIntent.typeId !== "core:provider.dispatch" ||
+    providerIntent.effectClass !== "provider_io" ||
+    String(providerIntent.eventId) !== String(messageEvent.id) ||
+    providerIntent.changeIds.length !== 1 ||
+    String(providerIntent.changeIds[0]) !== String(dispatchChange.id) ||
+    providerIntent.payloadReference === null ||
+    !payloadReferencesMatch(
+      providerIntent.payloadReference,
+      dispatchManifest.payloadReference
+    )
+  ) {
+    throw atomicMessageSealManifestMismatch();
+  }
+}
+
+function payloadReferencesMatch(
+  reference: InboxV2PayloadReference,
+  expected: InboxV2PayloadReference
+): boolean {
+  return (
+    reference.tenantId === expected.tenantId &&
+    String(reference.recordId) === String(expected.recordId) &&
+    reference.schemaId === expected.schemaId &&
+    reference.schemaVersion === expected.schemaVersion &&
+    reference.digest === expected.digest
+  );
+}
+
+function atomicMessageSealManifestMismatch(): Error {
+  return invariantError(
+    "Inbox V2 atomic Message seal manifest does not match the exact stream change, event and projection closure."
+  );
 }
 
 function assertConsecutiveOrdinals(

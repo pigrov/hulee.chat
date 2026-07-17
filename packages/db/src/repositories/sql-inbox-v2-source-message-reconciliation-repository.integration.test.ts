@@ -365,34 +365,36 @@ describePostgres(
             externalMessageKey: exactPlan.messageKey
           })
         ).resolves.toMatch(/registered|already_exists/u);
-        const referenceInsert = await executor.execute(
-          buildInsertInboxV2ExternalMessageReferenceSql(target)
-        );
-        expect(referenceInsert.rows).toHaveLength(1);
-        await expect(
-          persistInboxV2DeferredMessageSourceActionInTransaction(
-            executor,
-            exactAction
-          )
-        ).resolves.toMatchObject({ kind: "created" });
-        await expect(
-          commitInboxV2DeferredMessageSourceActionInTransaction(
-            executor,
-            terminalCommit
-          )
-        ).resolves.toMatchObject({
-          kind: "committed",
-          action: { state: { state: "expired" } }
+        await withHistoricalReconciliationFixture(executor, async () => {
+          const referenceInsert = await executor.execute(
+            buildInsertInboxV2ExternalMessageReferenceSql(target)
+          );
+          expect(referenceInsert.rows).toHaveLength(1);
+          await expect(
+            persistInboxV2DeferredMessageSourceActionInTransaction(
+              executor,
+              exactAction
+            )
+          ).resolves.toMatchObject({ kind: "created" });
+          await expect(
+            commitInboxV2DeferredMessageSourceActionInTransaction(
+              executor,
+              terminalCommit
+            )
+          ).resolves.toMatchObject({
+            kind: "committed",
+            action: { state: { state: "expired" } }
+          });
+          await expect(
+            resolveReconciliationOccurrence(
+              executor,
+              exactPlan,
+              target,
+              "origin",
+              "missing"
+            )
+          ).resolves.toMatchObject({ kind: "committed" });
         });
-        await expect(
-          resolveReconciliationOccurrence(
-            executor,
-            exactPlan,
-            target,
-            "origin",
-            "missing"
-          )
-        ).resolves.toMatchObject({ kind: "committed" });
       });
 
       let applyCalls = 0;
@@ -1164,36 +1166,40 @@ function createPostgresReconciliationRepository(
 ) {
   const callbacks: InboxV2SourceMessageReconciliationCallbacks = {
     async createMessage(transaction, input) {
-      const inserted = await transaction.execute(
-        buildInsertInboxV2ExternalMessageReferenceSql(
-          input.candidateExternalMessageReference
-        )
-      );
-      if (inserted.rows.length !== 1) {
-        return {
-          kind: "conflict",
-          code: "source.message_reconciliation.callback_conflict"
-        };
-      }
-      return resolveReconciliationOccurrence(
-        transaction,
-        input.plan,
-        input.candidateExternalMessageReference,
-        input.plan.intent.transportRole,
-        options.transportLinkMode ?? "valid"
-      );
+      return withHistoricalReconciliationFixture(transaction, async () => {
+        const inserted = await transaction.execute(
+          buildInsertInboxV2ExternalMessageReferenceSql(
+            input.candidateExternalMessageReference
+          )
+        );
+        if (inserted.rows.length !== 1) {
+          return {
+            kind: "conflict" as const,
+            code: "source.message_reconciliation.callback_conflict" as const
+          };
+        }
+        return resolveReconciliationOccurrence(
+          transaction,
+          input.plan,
+          input.candidateExternalMessageReference,
+          input.plan.intent.transportRole,
+          options.transportLinkMode ?? "valid"
+        );
+      });
     },
     async attachOccurrence(transaction, input) {
-      return resolveReconciliationOccurrence(
-        transaction,
-        input.plan,
-        input.targetExternalMessageReference,
-        input.reason === "exact_message_reuse" &&
-          input.plan.intent.kind === "message_create" &&
-          input.plan.intent.transportRole === "origin"
-          ? "additional_artifact"
-          : input.plan.intent.transportRole,
-        options.transportLinkMode ?? "valid"
+      return withHistoricalReconciliationFixture(transaction, () =>
+        resolveReconciliationOccurrence(
+          transaction,
+          input.plan,
+          input.targetExternalMessageReference,
+          input.reason === "exact_message_reuse" &&
+            input.plan.intent.kind === "message_create" &&
+            input.plan.intent.transportRole === "origin"
+            ? "additional_artifact"
+            : input.plan.intent.transportRole,
+          options.transportLinkMode ?? "valid"
+        )
       );
     },
     async applySourceAction() {
@@ -1220,6 +1226,18 @@ function createPostgresReconciliationRepository(
       }),
     callbacks
   });
+}
+
+async function withHistoricalReconciliationFixture<TResult>(
+  transaction: RawSqlExecutor,
+  work: () => Promise<TResult>
+): Promise<TResult> {
+  // This repository-local suite preserves pre-SRC-007 reconciliation fixtures.
+  // Product Message creation goes through the authorized atomic coordinator.
+  await transaction.execute(sql`set local session_replication_role = replica`);
+  const result = await work();
+  await transaction.execute(sql`set local session_replication_role = origin`);
+  return result;
 }
 
 function scopeReconciliationFixture<T>(value: T, suffix: string): T {

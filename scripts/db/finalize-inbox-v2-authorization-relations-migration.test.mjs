@@ -48,7 +48,7 @@ describe("Inbox V2 authorization-relations migration finalizer", () => {
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain(
-      "verified 27 tables, 17 enums, 19 functions, 8 foundation trigger fingerprints"
+      "verified 29 tables, 17 enums, 19 functions, 8 foundation trigger fingerprints"
     );
     const finalized = await readFile(fixture.migrationPath, "utf8");
     expect(countOccurrences(finalized, finalizedMarker)).toBe(1);

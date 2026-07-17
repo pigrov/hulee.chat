@@ -1,6 +1,7 @@
 import { type SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
+import { resolveInboxV2OutboundRoute } from "@hulee/contracts";
 
 import {
   buildCompareAndSwapInboxV2OutboundDispatchAttemptSql,
@@ -21,11 +22,37 @@ import {
   buildListInboxV2MessageDispatchesSql,
   computeInboxV2ExternalMessageKeyDigest,
   createSqlInboxV2OutboundTransportRepository,
+  persistInboxV2RouteResolutionInTransaction,
   type InboxV2OutboundTransportTransactionExecutor
 } from "./sql-inbox-v2-outbound-transport-repository";
+import {
+  createSqlInboxV2AuthorizedCommandCoordinator,
+  type InboxV2AuthorizationTransactionExecutor,
+  type InboxV2AuthorizedCommandMutationContext,
+  type WithInboxV2AuthorizedCommandMutationInput
+} from "./sql-inbox-v2-authorization-repository";
 import { createOutboundTransportContractFixture } from "./sql-inbox-v2-outbound-transport-repository.test-support";
+import type {
+  RawSqlExecutor,
+  RawSqlQueryResult
+} from "./sql-outbox-repository";
 
 const fixture = createOutboundTransportContractFixture();
+const authorizedRouteFixture = createOutboundTransportContractFixture({
+  suffix: "authorized-route",
+  operationId: "core:message.send",
+  requiredPermissionId: "core:message.send_external"
+});
+const wrongOperationRouteFixture = createOutboundTransportContractFixture({
+  suffix: "wrong-operation-route",
+  operationId: "core:reply",
+  requiredPermissionId: "core:message.send_external"
+});
+const wrongPermissionRouteFixture = createOutboundTransportContractFixture({
+  suffix: "wrong-permission-route",
+  operationId: "core:message.send",
+  requiredPermissionId: "core:message.read"
+});
 
 describe("SQL Inbox V2 outbound transport repository", () => {
   it("matches the PostgreSQL external-message digest for opaque backslashes", () => {
@@ -129,6 +156,166 @@ describe("SQL Inbox V2 outbound transport repository", () => {
       { isolationLevel: "read committed" }
     ]);
   });
+
+  it("requires a live authorized context for caller-owned route materialization", async () => {
+    const executor = new QueueOutboundExecutor([
+      [],
+      [],
+      [{ id: fixture.routePolicy.id }],
+      [{ id: fixture.routePolicy.id }],
+      [bindingFenceRow(fixture)],
+      [{ id: fixture.route.id }]
+    ]);
+
+    await expect(
+      persistInboxV2RouteResolutionInTransaction(
+        executor as never,
+        fixture.routeCommit
+      )
+    ).rejects.toThrow(/live authorized-command context/iu);
+    expect(executor.queries).toHaveLength(0);
+
+    const conflictExecutor = new QueueOutboundExecutor([
+      [],
+      [],
+      [{ id: fixture.routePolicy.id }],
+      [{ id: fixture.routePolicy.id }],
+      []
+    ]);
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(
+        conflictExecutor
+      ).persistRouteResolution(fixture.routeCommit)
+    ).resolves.toEqual({ kind: "binding_not_found" });
+    expect(conflictExecutor.transactionConfigs).toEqual([
+      { isolationLevel: "read committed" }
+    ]);
+  });
+
+  it.each([
+    ["cross-tenant", { tenantId: "tenant:outbound-other" }],
+    ["wrong actor", { employeeId: "employee:outbound-other" }],
+    [
+      "wrong authorization epoch",
+      { authorizationEpoch: "authorization:outbound-other" }
+    ],
+    [
+      "wrong command occurrence time",
+      { occurredAt: "2026-07-14T08:01:01.000Z" }
+    ],
+    ["wrong command", { commandTypeId: "core:message.edit" }],
+    [
+      "wrong Conversation resource",
+      { conversationId: "conversation:outbound-other" }
+    ],
+    ["wrong permission", { permissionId: "core:message.read" }],
+    [
+      "wrong Conversation resource scope",
+      { conversationResourceScopeId: "core:permission-scope.tenant" }
+    ],
+    ["missing source-account decision", { sourceAccountDecision: "missing" }],
+    [
+      "wrong source-account permission",
+      { sourceAccountDecision: "wrong_permission" }
+    ],
+    [
+      "wrong SourceAccount resource",
+      { sourceAccountDecision: "wrong_resource" }
+    ]
+  ] as const)(
+    "rejects a live route context with %s before the public seam issues SQL",
+    async (_case, overrides) => {
+      const input = authorizedRouteContextInput(overrides);
+      await expectRouteContextRejectedBeforeSql(
+        input,
+        authorizedRouteFixture.routeCommit,
+        "atomic"
+      );
+    }
+  );
+
+  it("rejects a source-account decision without its revision fence before any SQL", async () => {
+    const input = authorizedRouteContextInput({
+      omitSourceAccountResourceFence: true
+    });
+    const executor = new RouteAuthorizationContextExecutor(input);
+    const coordinator = createSqlInboxV2AuthorizedCommandCoordinator(executor);
+
+    await expect(
+      coordinator.withAuthorizedAtomicMaterialization(
+        input,
+        async () => ({ kind: "prepared" as const }),
+        async () => {
+          throw new Error("route authorization unexpectedly reached seal");
+        }
+      )
+    ).rejects.toThrow(
+      "Privileged command must fence every authorization-decision resource revision."
+    );
+    expect(executor.queries).toEqual([]);
+  });
+
+  it.each(["conversation", "source_account"] as const)(
+    "rejects a caller-forged %s authorization snapshot before route SQL",
+    async (authorizationKind) => {
+      await expectRouteContextRejectedBeforeSql(
+        authorizedRouteContextInput(),
+        withAdditionalRouteAuthorizationPermission(
+          authorizedRouteFixture.routeCommit,
+          authorizationKind
+        ),
+        "atomic"
+      );
+    }
+  );
+
+  it.each([
+    ["conversation", "decision_revision"],
+    ["conversation", "decided_at"],
+    ["conversation", "not_after"],
+    ["source_account", "decision_revision"],
+    ["source_account", "decided_at"],
+    ["source_account", "not_after"]
+  ] as const)(
+    "rejects a %s decision with a snapshot-mismatched %s before route SQL",
+    async (decisionKind, mismatch) => {
+      await expectRouteContextRejectedBeforeSql(
+        authorizedRouteContextInput(
+          decisionKind === "conversation"
+            ? { conversationDecisionMismatch: mismatch }
+            : { sourceAccountDecisionMismatch: mismatch }
+        ),
+        authorizedRouteFixture.routeCommit,
+        "atomic"
+      );
+    }
+  );
+
+  it("rejects an ordinary authorized-command context before route SQL", async () => {
+    await expectRouteContextRejectedBeforeSql(
+      authorizedRouteContextInput(),
+      authorizedRouteFixture.routeCommit,
+      "ordinary"
+    );
+  });
+
+  it.each(["wrong operation", "caller-selected permission"] as const)(
+    "rejects a route commit with %s even when its authorization proof agrees",
+    async (kind) => {
+      const callerSelectedPermission = kind === "caller-selected permission";
+      await expectRouteContextRejectedBeforeSql(
+        authorizedRouteContextInput(
+          callerSelectedPermission
+            ? { permissionId: "core:message.read" }
+            : undefined
+        ),
+        callerSelectedPermission
+          ? wrongPermissionRouteFixture.routeCommit
+          : wrongOperationRouteFixture.routeCommit,
+        "atomic"
+      );
+    }
+  );
 
   it("creates one queued dispatch only after locking its message and route", async () => {
     const query = renderQuery(
@@ -536,6 +723,481 @@ describe("SQL Inbox V2 outbound transport repository", () => {
     );
   });
 });
+
+type AuthorizedRouteContextOverrides = Readonly<{
+  tenantId?: string;
+  employeeId?: string;
+  authorizationEpoch?: string;
+  occurredAt?: string;
+  commandTypeId?: string;
+  conversationId?: string;
+  permissionId?: string;
+  conversationResourceScopeId?: string;
+  sourceAccountDecision?: "missing" | "wrong_permission" | "wrong_resource";
+  conversationDecisionMismatch?: RouteDecisionSnapshotMismatch;
+  sourceAccountDecisionMismatch?: RouteDecisionSnapshotMismatch;
+  omitSourceAccountResourceFence?: boolean;
+}>;
+
+type RouteDecisionSnapshotMismatch =
+  | "decision_revision"
+  | "decided_at"
+  | "not_after";
+
+function authorizedRouteContextInput(
+  overrides: AuthorizedRouteContextOverrides = {}
+): WithInboxV2AuthorizedCommandMutationInput {
+  const tenantId = overrides.tenantId ?? authorizedRouteFixture.tenantId;
+  const employeeId =
+    overrides.employeeId ?? authorizedRouteFixture.references.employee.id;
+  const authorizationEpoch =
+    overrides.authorizationEpoch ??
+    authorizedRouteFixture.route.authorizationEpoch;
+  const commandTypeId = overrides.commandTypeId ?? "core:message.send";
+  const conversationId =
+    overrides.conversationId ??
+    authorizedRouteFixture.references.conversation.id;
+  const permissionId =
+    overrides.permissionId ??
+    authorizedRouteFixture.route.requiredConversationPermissionId;
+  const occurredAt =
+    overrides.occurredAt ??
+    authorizedRouteFixture.routeCommit.input.requestedAt;
+  const conversationAuthorization =
+    authorizedRouteFixture.route.conversationAuthorization;
+  const sourceAccountAuthorization =
+    authorizedRouteFixture.route.sourceAccountAuthorization;
+  const notAfter = conversationAuthorization.notAfter;
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60_000).toISOString();
+  const commandId = "command:route-context";
+  const clientMutationId = "mutation:route-context";
+  const correlationId = "correlation:route-context";
+  const changeId = "change:route-context";
+  const eventId = "event:route-context";
+  const decision = {
+    tenantId,
+    id: "authorization-decision:route-context",
+    authorizationEpoch,
+    principal: {
+      kind: "employee" as const,
+      employee: {
+        tenantId,
+        kind: "employee" as const,
+        id: employeeId
+      }
+    },
+    permissionId,
+    resourceScopeId:
+      overrides.conversationResourceScopeId ?? "core:conversation",
+    resource: {
+      tenantId,
+      entityTypeId: "core:conversation",
+      entityId: conversationId
+    },
+    resourceAccessRevision: "1",
+    decisionRevision:
+      overrides.conversationDecisionMismatch === "decision_revision"
+        ? "2"
+        : conversationAuthorization.decisionRevision,
+    decisionHash: routeContextHash("a"),
+    outcome: "allowed" as const,
+    decidedAt:
+      overrides.conversationDecisionMismatch === "decided_at"
+        ? "2026-07-14T08:00:01.000Z"
+        : conversationAuthorization.decidedAt,
+    notAfter:
+      overrides.conversationDecisionMismatch === "not_after"
+        ? "2026-07-14T09:59:00.000Z"
+        : notAfter
+  };
+  const sourceAccountDecisionResourceId =
+    overrides.sourceAccountDecision === "wrong_resource"
+      ? "source_account:outbound-other"
+      : authorizedRouteFixture.references.sourceAccount.id;
+  const sourceAccountDecision = {
+    ...decision,
+    id: "authorization-decision:route-context-source-account",
+    permissionId:
+      overrides.sourceAccountDecision === "wrong_permission"
+        ? "core:message.read"
+        : "core:source_account.use",
+    resourceScopeId: "core:source-account",
+    resource: {
+      tenantId,
+      entityTypeId: "core:source-account",
+      entityId: sourceAccountDecisionResourceId
+    },
+    decisionRevision:
+      overrides.sourceAccountDecisionMismatch === "decision_revision"
+        ? "2"
+        : sourceAccountAuthorization.decisionRevision,
+    decisionHash: routeContextHash("0"),
+    decidedAt:
+      overrides.sourceAccountDecisionMismatch === "decided_at"
+        ? "2026-07-14T08:00:01.000Z"
+        : sourceAccountAuthorization.decidedAt,
+    notAfter:
+      overrides.sourceAccountDecisionMismatch === "not_after"
+        ? "2026-07-14T09:59:00.000Z"
+        : sourceAccountAuthorization.notAfter
+  };
+  const authorizationDecisionRefs =
+    overrides.sourceAccountDecision === "missing"
+      ? [decision]
+      : [decision, sourceAccountDecision];
+  const sourceEntity = {
+    tenantId,
+    entityTypeId: "core:source-connection",
+    entityId: "source_connection:route-context"
+  };
+  const sourceStateReference = {
+    tenantId,
+    recordId: "source-connection-state:route-context",
+    schemaId: "core:inbox-v2.source-connection-registry-state",
+    schemaVersion: "v1",
+    digest: routeContextHash("b")
+  };
+  const sourceTransitionReference = {
+    tenantId,
+    recordId: "source-connection-transition:route-context",
+    schemaId: "core:inbox-v2.source-registry-transition",
+    schemaVersion: "v1",
+    digest: routeContextHash("c")
+  };
+
+  return {
+    tenantId,
+    command: {
+      id: commandId,
+      requestId: "request:route-context",
+      clientMutationId,
+      commandTypeId,
+      requestHash: routeContextHash("d"),
+      actor: { kind: "employee", employeeId },
+      authorizationDecisionId: decision.id,
+      authorizationEpoch,
+      authorizedAt: occurredAt,
+      publicResultCode: "core:message.queued",
+      resultReference: sourceTransitionReference,
+      sensitiveResultReference: null
+    },
+    revisions: {
+      expectedTenantRbacRevision: "1",
+      expectedSharedAccessRevision: "1",
+      advanceTenantRbac: false,
+      advanceSharedAccess: false,
+      employees: [
+        {
+          employeeId,
+          expectedEmployeeAccessRevision: "1",
+          expectedEmployeeInboxRelationRevision: "1",
+          advanceEmployeeAccess: false,
+          advanceEmployeeInboxRelation: false
+        }
+      ],
+      resources: [
+        {
+          resourceKind: "conversation",
+          resourceId: conversationId,
+          resourceHeadId: "authorization-resource:route-context",
+          expectedResourceAccessRevision: "1",
+          advance: "none"
+        },
+        ...(overrides.omitSourceAccountResourceFence ||
+        overrides.sourceAccountDecision === "missing"
+          ? []
+          : [
+              {
+                resourceKind: "source_account" as const,
+                resourceId: sourceAccountDecisionResourceId,
+                resourceHeadId:
+                  "authorization-resource:route-context-source-account",
+                expectedResourceAccessRevision: "1",
+                advance: "none" as const
+              }
+            ])
+      ]
+    },
+    records: {
+      mutationId: "authorization-mutation:route-context",
+      relationKind: null,
+      streamCommitId: "commit:route-context",
+      expectedStreamEpoch: "stream:epoch-route-context",
+      audienceImpact: { kind: "none" },
+      commitHash: routeContextHash("e"),
+      correlationId,
+      changes: [
+        {
+          id: changeId,
+          ordinal: 1,
+          entity: sourceEntity,
+          resultingRevision: "1",
+          timeline: null,
+          audience: "staff_only",
+          state: {
+            kind: "upsert",
+            stateSchemaId: "core:inbox-v2.source-connection-registry-state",
+            stateSchemaVersion: "v1",
+            stateHash: routeContextHash("f"),
+            payloadReference: sourceStateReference,
+            domainCommitReference: sourceTransitionReference
+          }
+        }
+      ],
+      events: [
+        {
+          id: eventId,
+          typeId: "core:source-connection.changed",
+          payloadSchemaId: "core:inbox-v2.source-connection-change",
+          payloadSchemaVersion: "v1",
+          ordinal: "1",
+          changeIds: [changeId],
+          subjects: [sourceEntity],
+          payloadReference: null,
+          correlationId,
+          commandIds: [commandId],
+          clientMutationIds: [clientMutationId],
+          authorizationDecisionRefs,
+          accessEffect: { kind: "none" },
+          occurredAt,
+          recordedAt: occurredAt,
+          eventHash: routeContextHash("1")
+        }
+      ],
+      outboxIntents: [
+        {
+          id: "outbox-intent:route-context",
+          ordinal: 1,
+          typeId: "core:projection.update",
+          handlerId: "core:source-connection-projection",
+          effectClass: "projection",
+          eventId,
+          changeIds: [changeId],
+          payloadReference: null,
+          consumerDedupeKey: routeContextHash("2"),
+          correlationId,
+          availableAt: occurredAt,
+          intentHash: routeContextHash("3")
+        }
+      ],
+      audit: {
+        id: "authorization-audit:route-context",
+        actionId: commandTypeId,
+        target: {
+          tenantId,
+          entityTypeId: "core:source-connection",
+          entityId: `internal-ref:${"4".repeat(32)}`
+        },
+        reasonCodeId: "core:message-send-requested",
+        matchedPermissionIds: authorizationDecisionRefs
+          .map(({ permissionId: matchedPermissionId }) => matchedPermissionId)
+          .sort(),
+        grantSourceIds: [`internal-ref:${"5".repeat(32)}`],
+        authorizationScopeIds: authorizationDecisionRefs
+          .map(({ resourceScopeId }) => resourceScopeId)
+          .sort(),
+        overrideReasonCodeId: null,
+        policyVersion: "v1",
+        evidenceReference: sourceTransitionReference,
+        authorizationDecisionRefs,
+        correlationId,
+        outcome: "succeeded",
+        revisionDeltaHash: routeContextHash("6"),
+        previousAuditHash: null,
+        auditHash: routeContextHash("7"),
+        occurredAt,
+        recordedAt: occurredAt,
+        expiresAt,
+        facets: [
+          {
+            ordinal: 1,
+            dimension: "tenant",
+            reference: {
+              tenantId,
+              entityTypeId: "core:tenant",
+              entityId: `internal-ref:${"8".repeat(32)}`
+            },
+            relation: "affected",
+            facetHash: routeContextHash("9")
+          }
+        ]
+      }
+    },
+    occurredAt
+  } as unknown as WithInboxV2AuthorizedCommandMutationInput;
+}
+
+async function expectRouteContextRejectedBeforeSql(
+  input: WithInboxV2AuthorizedCommandMutationInput,
+  commit: Parameters<typeof persistInboxV2RouteResolutionInTransaction>[1],
+  mode: "atomic" | "ordinary"
+): Promise<void> {
+  const executor = new RouteAuthorizationContextExecutor(input);
+  const coordinator = createSqlInboxV2AuthorizedCommandCoordinator(executor);
+  let seamQueries:
+    | readonly Readonly<{ sql: string; params: readonly unknown[] }>[]
+    | undefined;
+  const persistRoute = async (
+    context: InboxV2AuthorizedCommandMutationContext
+  ) => {
+    const queryCountBeforeSeam = executor.queries.length;
+    try {
+      return {
+        result: await persistInboxV2RouteResolutionInTransaction(
+          context,
+          commit
+        )
+      };
+    } finally {
+      seamQueries = executor.queries.slice(queryCountBeforeSeam);
+    }
+  };
+  const result =
+    mode === "atomic"
+      ? coordinator.withAuthorizedAtomicMaterialization(
+          input,
+          persistRoute,
+          async () => {
+            throw new Error("route authorization unexpectedly reached seal");
+          }
+        )
+      : coordinator.withAuthorizedCommandMutation(input, persistRoute);
+
+  await expect(result).rejects.toThrow(
+    mode === "atomic"
+      ? "Inbox V2 route resolution crossed its authorized message-send context."
+      : "Message and provider-dispatch mutations require withAuthorizedAtomicMaterialization."
+  );
+  expect(seamQueries).toEqual(mode === "atomic" ? [] : undefined);
+}
+
+function withAdditionalRouteAuthorizationPermission(
+  commit: Parameters<typeof persistInboxV2RouteResolutionInTransaction>[1],
+  authorizationKind: "conversation" | "source_account"
+): Parameters<typeof persistInboxV2RouteResolutionInTransaction>[1] {
+  if (commit.route === null) {
+    throw new Error("Authorized route fixture has no selected route.");
+  }
+  const candidate = commit.input.candidates.soleEligibleCandidate;
+  if (candidate === null) {
+    throw new Error("Authorized route fixture has no selected candidate.");
+  }
+  const field =
+    authorizationKind === "conversation"
+      ? "conversationAuthorization"
+      : "sourceAccountAuthorization";
+  const authorization = {
+    ...candidate[field],
+    matchedPermissionIds: [
+      ...candidate[field].matchedPermissionIds,
+      "core:inbox.read"
+    ]
+  };
+  const input = {
+    ...commit,
+    input: {
+      ...commit.input,
+      candidates: {
+        ...commit.input.candidates,
+        soleEligibleCandidate: {
+          ...candidate,
+          [field]: authorization
+        }
+      }
+    },
+    route: {
+      ...commit.route,
+      [field]: authorization
+    }
+  };
+  return {
+    ...input,
+    result: resolveInboxV2OutboundRoute(input.input)
+  };
+}
+
+class RouteAuthorizationContextExecutor implements InboxV2AuthorizationTransactionExecutor {
+  readonly queries: Array<{ sql: string; params: unknown[] }> = [];
+
+  constructor(
+    private readonly input: WithInboxV2AuthorizedCommandMutationInput
+  ) {}
+
+  async transaction<TResult>(
+    work: (transaction: RawSqlExecutor) => Promise<TResult>,
+    config: Readonly<{ isolationLevel: "read committed" }>
+  ): Promise<TResult> {
+    expect(config).toEqual({ isolationLevel: "read committed" });
+    return work(this);
+  }
+
+  async execute<Row extends Record<string, unknown>>(
+    query: SQL
+  ): Promise<RawSqlQueryResult<Row>> {
+    const rendered = renderQuery(query);
+    this.queries.push(rendered);
+    const statement = normalizeSql(rendered.sql);
+    const employee = this.input.revisions.employees[0]!;
+    let rows: readonly Record<string, unknown>[];
+
+    if (statement.startsWith("insert into inbox_v2_auth_command_records")) {
+      rows = [{ id: this.input.command.id }];
+    } else if (
+      statement.startsWith("insert into inbox_v2_auth_tenant_heads") ||
+      statement.includes("insert into inbox_v2_auth_employee_heads") ||
+      statement.includes("insert into inbox_v2_auth_resource_heads")
+    ) {
+      rows = [];
+    } else if (
+      statement.includes("from inbox_v2_auth_tenant_heads") &&
+      statement.includes("for update")
+    ) {
+      rows = [
+        {
+          tenant_rbac_revision: "1",
+          shared_access_revision: "1",
+          revision: "1"
+        }
+      ];
+    } else if (
+      statement.includes("inbox_v2_auth_employee_heads head") &&
+      statement.includes("for update")
+    ) {
+      rows = [
+        {
+          employee_id: employee.employeeId,
+          employee_access_revision: "1",
+          employee_inbox_relation_revision: "1",
+          revision: "1"
+        }
+      ];
+    } else if (
+      statement.includes("inbox_v2_auth_resource_heads head") &&
+      statement.includes("for update")
+    ) {
+      rows = this.input.revisions.resources.map((resource) => ({
+        head_id: resource.resourceHeadId,
+        resource_kind: resource.resourceKind,
+        resource_id: resource.resourceId,
+        work_item_cycle: null,
+        resource_access_revision: "1",
+        structural_relation_revision: "1",
+        collaborator_set_revision: "1",
+        revision: "1"
+      }));
+    } else if (statement === "select clock_timestamp() as database_now") {
+      rows = [{ database_now: this.input.occurredAt }];
+    } else {
+      throw new Error(`Unexpected authorization SQL: ${statement}`);
+    }
+
+    return { rows: rows as readonly Row[] };
+  }
+}
+
+function routeContextHash(character: string): string {
+  return `sha256:${character.repeat(64)}`;
+}
 
 class QueueOutboundExecutor implements InboxV2OutboundTransportTransactionExecutor {
   readonly queries: Array<{ sql: string; params: unknown[] }> = [];

@@ -370,6 +370,12 @@ describe("Inbox V2 tenant stream", () => {
     expect(
       inboxV2DomainEventSchema.safeParse({
         ...event(),
+        typeId: "core:source-occurrence.changed"
+      }).success
+    ).toBe(true);
+    expect(
+      inboxV2DomainEventSchema.safeParse({
+        ...event(),
         typeId: "core:telegram.message-received"
       }).success
     ).toBe(false);

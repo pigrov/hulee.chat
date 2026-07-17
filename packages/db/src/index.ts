@@ -9,8 +9,26 @@ export * from "./repositories/sql-inbox-v2-privacy-export-lifecycle-repository";
 export * from "./repositories/sql-inbox-v2-destructive-checkpoint-guard-repository";
 export * from "./repositories/sql-inbox-v2-deletion-run-state-repository";
 export * from "./repositories/sql-inbox-v2-erasure-restore-ledger-repository";
-export * from "./repositories/sql-inbox-v2-outbound-transport-repository";
-export * from "./repositories/sql-inbox-v2-timeline-message-repository";
+export {
+  InboxV2RouteResolutionRollbackError,
+  persistInboxV2RouteResolutionInTransaction
+} from "./repositories/sql-inbox-v2-outbound-transport-repository";
+export type {
+  InboxV2RouteResolutionConflictResult,
+  PersistInboxV2RouteResolutionResult
+} from "./repositories/sql-inbox-v2-outbound-transport-repository";
+export {
+  InboxV2TimelineMessagePersistenceInvariantError,
+  prepareInboxV2MessageCreation,
+  sealInboxV2PreparedMessageCreation
+} from "./repositories/sql-inbox-v2-timeline-message-repository";
+export type {
+  InboxV2MessageCreationCommit,
+  InboxV2PreparedMessageCreationCapability,
+  PrepareInboxV2MessageCreationInput,
+  PrepareInboxV2MessageCreationResult,
+  SealInboxV2PreparedMessageCreationResult
+} from "./repositories/sql-inbox-v2-timeline-message-repository";
 export {
   assertTenantScopedRows,
   buildApplyInboxV2ParticipantMembershipMutationSql,

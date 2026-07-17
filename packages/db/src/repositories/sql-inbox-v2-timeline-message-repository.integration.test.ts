@@ -1,4 +1,9 @@
 import {
+  INBOX_V2_MESSAGE_SCHEMA_ID,
+  INBOX_V2_MESSAGE_SCHEMA_VERSION,
+  INBOX_V2_EXTERNAL_MESSAGE_SCHEMA_VERSION,
+  INBOX_V2_SOURCE_OCCURRENCE_RESOLUTION_COMMIT_SCHEMA_ID,
+  INBOX_V2_SOURCE_OCCURRENCE_SCHEMA_ID,
   INBOX_V2_CORE_CONVERSATION_CLIENT_ROLE_IDS,
   inboxV2BigintCounterSchema,
   inboxV2CatalogIdSchema,
@@ -20,11 +25,13 @@ import {
   inboxV2MessageReactionCommitSchema,
   inboxV2MessageTransportAssociationCommitSchema,
   inboxV2MessageTransportFactCommitSchema,
+  inboxV2NamespacedIdSchema,
   inboxV2ParticipantMembershipEpisodeIdSchema,
   inboxV2ParticipantMembershipReasonIdSchema,
   inboxV2ParticipantMembershipTransitionIdSchema,
   inboxV2ReactionSemanticSlotKeyFor,
   inboxV2SchemaVersionTokenSchema,
+  inboxV2Sha256DigestSchema,
   inboxV2SourceIdentityObjectKindIdSchema,
   inboxV2SourceIdentityRealmIdSchema,
   inboxV2SourceAccountIdSchema,
@@ -36,6 +43,7 @@ import {
   inboxV2SourceThreadBindingCreationCommitSchema,
   inboxV2SourceThreadBindingIdSchema,
   inboxV2OutboundRouteSchema,
+  inboxV2OutboxIntentIdSchema,
   inboxV2ThreadRoutePolicySchema,
   inboxV2TimelineContentHeadOf,
   inboxV2TimelineContentSchema,
@@ -46,7 +54,7 @@ import {
   type InboxV2EmployeeId,
   type InboxV2MessageCreationCommit
 } from "@hulee/contracts";
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
@@ -93,12 +101,19 @@ import { createSqlInboxV2ConversationClientLinkRepository } from "./sql-inbox-v2
 import { createSqlInboxV2ConversationRepository } from "./sql-inbox-v2-conversation-repository";
 import { createSqlInboxV2ExternalThreadRepository } from "./sql-inbox-v2-external-thread-repository";
 import {
+  computeInboxV2LeafHashDigest,
+  computeInboxV2TenantStreamManifestDigest,
+  createSqlInboxV2AuthorizedCommandCoordinator,
+  type WithInboxV2AuthorizedCommandMutationInput
+} from "./sql-inbox-v2-authorization-repository";
+import {
   buildCompareAndSwapInboxV2SourceOccurrenceResolutionSql,
   buildInsertInboxV2ExternalMessageReferenceSql,
   buildInsertInboxV2OutboundDispatchSql,
   buildInsertInboxV2OutboundRouteSql,
   buildInsertInboxV2SourceOccurrenceResolutionTransitionSql,
-  createSqlInboxV2OutboundTransportRepository
+  createSqlInboxV2OutboundTransportRepository,
+  deriveInboxV2SourceOccurrenceResolutionTransitionId
 } from "./sql-inbox-v2-outbound-transport-repository";
 import { createSqlInboxV2SourceExternalIdentityRepository } from "./sql-inbox-v2-source-external-identity-repository";
 import { createSqlInboxV2SourceOccurrenceRepository } from "./sql-inbox-v2-source-occurrence-repository";
@@ -131,12 +146,15 @@ import {
   buildInsertInboxV2TimelineItemSql,
   buildPurgeInboxV2TimelineContentPayloadSql,
   computeInboxV2TimelineMessageCommitDigest,
-  createSqlInboxV2TimelineMessageRepository
+  createSqlInboxV2TimelineMessageRepository,
+  prepareInboxV2MessageCreation,
+  sealInboxV2PreparedMessageCreation
 } from "./sql-inbox-v2-timeline-message-repository";
 import type {
   InboxV2MessageTransportFactCommit,
   InboxV2TimelineMessageTransactionExecutor
 } from "./sql-inbox-v2-timeline-message-repository";
+import type { RawSqlExecutor } from "./sql-outbox-repository";
 
 const describePostgres =
   process.env.HULEE_DB_INTEGRATION === "1" ? describe : describe.skip;
@@ -310,6 +328,13 @@ describePostgres(
   "SQL Inbox V2 timeline/message repository (PostgreSQL)",
   () => {
     let db: HuleeDatabase;
+    let acceptedAtomicSource:
+      | {
+          creation: InboxV2MessageCreationCommit;
+          authorized: ReturnType<typeof authorizedSourceMaterializationFixture>;
+          context: Awaited<ReturnType<typeof seedExternalCreationAnchors>>;
+        }
+      | undefined;
 
     beforeAll(async () => {
       db = createHuleeDatabase();
@@ -350,13 +375,328 @@ describePostgres(
       await closeHuleeDatabase(db);
     });
 
+    it("atomically seals a source-originated Message with its source, stream, event and outbox closure", async () => {
+      const suffix = "atomic-source-seal";
+      const creation = inboxV2MessageCreationCommitSchema.parse(
+        namespaceFixture(fixtureSourceCreationCommit(), suffix)
+      );
+      const context = await seedExternalCreationAnchors(db, creation, suffix);
+      const operator = await seedProviderResultOperator(db, creation, suffix);
+      const authorized = authorizedSourceMaterializationFixture({
+        creation,
+        operator,
+        suffix
+      });
+      await db.transaction(async (transaction) => {
+        // The existing Conversation anchor already consumes position 1. Seed
+        // the matching historical stream checkpoint without replaying a second
+        // synthetic command through the acceptance's coordinator under test.
+        await transaction.execute(
+          sql`set local session_replication_role = replica`
+        );
+        await transaction.execute(sql`
+          insert into inbox_v2_tenant_stream_heads (
+            tenant_id, stream_epoch, last_position, min_retained_position,
+            revision, created_at, updated_at
+          ) values (
+            ${tenantId}, ${authorized.streamEpoch}, 1, 0, 1,
+            ${creation.timelineAllocation.conversationBefore.createdAt},
+            ${creation.timelineAllocation.conversationBefore.createdAt}
+          )
+        `);
+        await transaction.execute(
+          sql`set local session_replication_role = origin`
+        );
+      });
+
+      const coordinator = createSqlInboxV2AuthorizedCommandCoordinator(db);
+      let failAfterSeal = true;
+      const materialize = () =>
+        coordinator.withAuthorizedAtomicMaterialization(
+          authorized.input,
+          async (context) => {
+            const prepared = await prepareInboxV2MessageCreation(context, {
+              commit: creation
+            });
+            if (prepared.kind !== "ready") {
+              throw new Error(
+                `Atomic source Message preparation failed: ${prepared.kind}`
+              );
+            }
+            return prepared.capability;
+          },
+          async (context, capability) => {
+            const sealed = await sealInboxV2PreparedMessageCreation(context, {
+              capability
+            });
+            if (failAfterSeal) {
+              throw new Error("injected failure after source Message seal");
+            }
+            return {
+              result: { messageId: sealed.message.id },
+              receipt: sealed.receipt
+            };
+          }
+        );
+
+      await expect(materialize()).rejects.toThrow(
+        "injected failure after source Message seal"
+      );
+      expect(
+        await loadAtomicSourceMaterializationState(db, creation, authorized)
+      ).toEqual({
+        commands: "0",
+        stream_commits: "0",
+        stream_position: "1",
+        changes: "0",
+        events: "0",
+        outbox_intents: "0",
+        outbox_work: "0",
+        messages: "0",
+        timeline_items: "0",
+        timeline_contents: "0",
+        message_revisions: "0",
+        external_references: "0",
+        resolution_transitions: "0",
+        source_resolution_materializations: "0",
+        transport_links: "0",
+        occurrence_state: "pending",
+        occurrence_revision: "1",
+        occurrence_reference_id: null
+      });
+
+      failAfterSeal = false;
+      await expect(materialize()).resolves.toMatchObject({
+        kind: "applied",
+        result: { messageId: creation.message.id },
+        status: { streamPosition: "2" }
+      });
+      expect(
+        await loadAtomicSourceMaterializationState(db, creation, authorized)
+      ).toEqual({
+        commands: "1",
+        stream_commits: "1",
+        stream_position: "2",
+        changes: "2",
+        events: "2",
+        outbox_intents: "2",
+        outbox_work: "2",
+        messages: "1",
+        timeline_items: "1",
+        timeline_contents: "1",
+        message_revisions: "1",
+        external_references: "1",
+        resolution_transitions: "1",
+        source_resolution_materializations: "1",
+        transport_links: "1",
+        occurrence_state: "resolved",
+        occurrence_revision: "2",
+        occurrence_reference_id: creation.externalMessageReference?.id ?? null
+      });
+      const expectedOccurrenceChange = authorized.input.records.changes.find(
+        ({ entity }) => entity.entityTypeId === "core:source-occurrence"
+      );
+      const expectedOccurrenceEvent = authorized.input.records.events.find(
+        ({ typeId }) => typeId === "core:source-occurrence.changed"
+      );
+      if (
+        expectedOccurrenceChange === undefined ||
+        expectedOccurrenceChange.state.kind !== "upsert" ||
+        expectedOccurrenceEvent === undefined
+      ) {
+        throw new Error(
+          "Atomic source fixture requires its occurrence change and event."
+        );
+      }
+      const occurrenceClosure = await db.execute<{
+        audience: string;
+        state_hash: string;
+        event_type_id: string;
+        event_occurred_at: string;
+      }>(sql`
+        select change_row.audience::text as audience,
+               change_row.state_hash,
+               event_row.type_id as event_type_id,
+               to_char(
+                 event_row.occurred_at at time zone 'UTC',
+                 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+               ) as event_occurred_at
+          from inbox_v2_tenant_stream_changes change_row
+          join inbox_v2_domain_events event_row
+            on event_row.tenant_id = change_row.tenant_id
+           and event_row.stream_commit_id = change_row.stream_commit_id
+           and event_row.change_ids ? change_row.id
+         where change_row.tenant_id = ${tenantId}
+           and change_row.id = ${expectedOccurrenceChange.id}
+      `);
+      expect(occurrenceClosure.rows).toEqual([
+        {
+          audience: "policy_filtered",
+          state_hash: expectedOccurrenceChange.state.stateHash,
+          event_type_id: "core:source-occurrence.changed",
+          event_occurred_at: expectedOccurrenceEvent.occurredAt
+        }
+      ]);
+      acceptedAtomicSource = { creation, authorized, context };
+    });
+
+    it("rejects a coherent duplicate SourceOccurrence projection in the deferred database closure", async () => {
+      const fixture = requireAcceptedAtomicSource(acceptedAtomicSource);
+      const occurrenceChange = fixture.authorized.input.records.changes.find(
+        ({ entity }) => entity.entityTypeId === "core:source-occurrence"
+      );
+      const occurrenceEvent = fixture.authorized.input.records.events.find(
+        ({ typeId }) => typeId === "core:source-occurrence.changed"
+      );
+      const occurrenceProjection =
+        fixture.authorized.input.records.outboxIntents.find(
+          (intent) =>
+            intent.effectClass === "projection" &&
+            intent.eventId === occurrenceEvent?.id
+        );
+      if (
+        occurrenceChange === undefined ||
+        occurrenceEvent === undefined ||
+        occurrenceProjection === undefined
+      ) {
+        throw new Error(
+          "Atomic source fixture requires its SourceOccurrence projection closure."
+        );
+      }
+      const duplicateProjection = {
+        ...occurrenceProjection,
+        id: inboxV2OutboxIntentIdSchema.parse(
+          `outbox-intent:atomic-source-projection-duplicate-${runId}`
+        ),
+        ordinal: fixture.authorized.input.records.outboxIntents.length + 1,
+        handlerId: inboxV2NamespacedIdSchema.parse(
+          "core:source-occurrence-projection-duplicate"
+        ),
+        consumerDedupeKey: inboxV2Sha256DigestSchema.parse(
+          atomicSourceSha256(
+            `atomic-source-projection-duplicate-dedupe-${runId}`
+          )
+        ),
+        intentHash: inboxV2Sha256DigestSchema.parse(
+          atomicSourceSha256(
+            `atomic-source-projection-duplicate-intent-${runId}`
+          )
+        )
+      };
+
+      const error = await capturePostgresError(
+        insertCoherentDuplicateProjectionAndRecheckDomainClosure(
+          db,
+          fixture.authorized.input,
+          duplicateProjection
+        )
+      );
+      expect(postgresSqlState(error)).toBe("23514");
+      expect(postgresErrorText(error)).toContain(
+        "inbox_v2.domain_mutation_stream_child_mismatch"
+      );
+      const persisted = await db.execute<{ count: string }>(sql`
+        select count(*)::text as count
+          from inbox_v2_outbox_intents
+         where tenant_id = ${tenantId}
+           and id = ${duplicateProjection.id}
+      `);
+      expect(persisted.rows).toEqual([{ count: "0" }]);
+    });
+
+    it("rejects a cross-wired source-resolution materialization", async () => {
+      const fixture = requireAcceptedAtomicSource(acceptedAtomicSource);
+      const suffix = "atomic-source-forged-post-fact-ledger";
+      const additionalResolution = additionalProviderOccurrenceResolution(
+        fixture.creation,
+        suffix
+      );
+      const additionalOccurrence =
+        await seedAdditionalProviderSemanticOccurrence({
+          db,
+          creation: fixture.creation,
+          context: fixture.context,
+          resolution: additionalResolution,
+          suffix
+        });
+      const originOccurrence = requireSourceOccurrence(fixture.creation);
+      const transitionId =
+        deriveInboxV2SourceOccurrenceResolutionTransitionId(
+          additionalResolution
+        );
+
+      const error = await capturePostgresError(
+        db.transaction(async (transaction) => {
+          await transaction.execute(sql`
+            insert into inbox_v2_atomic_source_resolution_materializations (
+              tenant_id, source_occurrence_id, resolution_transition_id,
+              external_message_reference_id, message_id, mutation_id,
+              stream_commit_id, stream_position, resulting_revision, created_at
+            )
+            select source_materialization.tenant_id,
+                   ${additionalOccurrence.id},
+                   ${transitionId},
+                   ${fixture.creation.externalMessageReference!.id},
+                   ${fixture.creation.message.id},
+                   source_materialization.mutation_id,
+                   source_materialization.stream_commit_id,
+                   source_materialization.stream_position,
+                   ${additionalOccurrence.revision},
+                   source_materialization.created_at
+              from inbox_v2_atomic_source_resolution_materializations
+                source_materialization
+             where source_materialization.tenant_id = ${tenantId}
+               and source_materialization.source_occurrence_id =
+                 ${originOccurrence.id}
+          `);
+          await transaction.execute(sql`set constraints all immediate`);
+        })
+      );
+      expect(postgresSqlState(error)).toBe("23514");
+      expect(postgresErrorText(error)).toContain(
+        "inbox_v2.atomic_source_resolution_closure_missing"
+      );
+      const persisted = await db.execute<{ count: string }>(sql`
+        select count(*)::text as count
+          from inbox_v2_atomic_source_resolution_materializations
+         where tenant_id = ${tenantId}
+           and source_occurrence_id = ${additionalOccurrence.id}
+      `);
+      expect(persisted.rows).toEqual([{ count: "0" }]);
+    });
+
+    it("rejects a standalone fresh Message written without its atomic producer closure", async () => {
+      const suffix = "atomic-raw-message-inverse";
+      const creation = creationCommit(suffix);
+      await seedCrossFeatureCreationAnchors(db, creation, suffix);
+      const repository = createSqlInboxV2TimelineMessageRepository(db);
+
+      const error = await capturePostgresError(
+        repository.createMessage({
+          commit: creation,
+          streamPosition: position("10")
+        })
+      );
+      expect(postgresSqlState(error)).toBe("23514");
+      expect(postgresErrorText(error)).toContain(
+        "inbox_v2.atomic_message_creation_closure_missing"
+      );
+      const persisted = await db.execute<{ count: string }>(sql`
+        select count(*)::text as count
+          from inbox_v2_messages
+         where tenant_id = ${tenantId}
+           and id = ${creation.message.id}
+      `);
+      expect(persisted.rows).toEqual([{ count: "0" }]);
+    });
+
     it("purges classified payloads for privacy erasure while preserving immutable history and safe event metadata", async () => {
       const creation = creationCommit("privacy");
       await seedCrossFeatureCreationAnchors(db, creation, "privacy");
       const repository = createSqlInboxV2TimelineMessageRepository(db);
 
       await expect(
-        repository.createMessage({
+        historicalTimelineFixtureRepository(db).createMessage({
           commit: creation,
           streamPosition: position("10")
         })
@@ -539,7 +879,7 @@ describePostgres(
       await seedCreationAnchors(db, creation);
       const repository = createSqlInboxV2TimelineMessageRepository(db);
       await expect(
-        repository.createMessage({
+        historicalTimelineFixtureRepository(db).createMessage({
           commit: creation,
           streamPosition: position("20")
         })
@@ -656,7 +996,9 @@ describePostgres(
       );
       const repository = createSqlInboxV2TimelineMessageRepository(db);
 
-      const targetCreated = await repository.createMessage({
+      const targetCreated = await historicalTimelineFixtureRepository(
+        db
+      ).createMessage({
         commit: referenceTarget,
         streamPosition: position("100")
       });
@@ -664,7 +1006,9 @@ describePostgres(
         kind: "created",
         envelope: { streamPosition: "100", entityRevision: "1" }
       });
-      const created = await repository.createMessage({
+      const created = await historicalTimelineFixtureRepository(
+        db
+      ).createMessage({
         commit: creation,
         streamPosition: position("101")
       });
@@ -1102,10 +1446,18 @@ describePostgres(
       await seedExternalCreationAnchors(db, receiptCreation, "fact-receipt");
       const repository = createSqlInboxV2TimelineMessageRepository(db);
       expect(
-        await createSourceMessage(repository, deliveryCreation, "201")
+        await createSourceMessage(
+          historicalTimelineFixtureRepository(db),
+          deliveryCreation,
+          "201"
+        )
       ).toMatchObject({ kind: "created" });
       expect(
-        await createSourceMessage(repository, receiptCreation, "202")
+        await createSourceMessage(
+          historicalTimelineFixtureRepository(db),
+          receiptCreation,
+          "202"
+        )
       ).toMatchObject({ kind: "created" });
 
       expect(
@@ -1378,7 +1730,7 @@ describePostgres(
         suffix: happySuffix
       });
       await expect(
-        repository.createMessage({
+        historicalTimelineFixtureRepository(db).createMessage({
           commit: happyCommit,
           streamPosition: position("650")
         })
@@ -1456,8 +1808,9 @@ describePostgres(
         invalidCommit.initialRevision.id
       );
 
-      const missingDispatchError = await capturePostgresError(
-        db.transaction(async (transaction) => {
+      const missingDispatchError = await captureLegacyMessageCreationError(
+        db,
+        async (transaction) => {
           await insertRawMessageCreationGraph(
             transaction,
             invalidCommit,
@@ -1465,7 +1818,7 @@ describePostgres(
             { includeDispatch: false }
           );
           await transaction.execute(sql`set constraints all immediate`);
-        })
+        }
       );
       expect(postgresSqlState(missingDispatchError)).toBe("23514");
       expect(postgresErrorText(missingDispatchError)).toMatch(
@@ -1491,8 +1844,9 @@ describePostgres(
           id: crossWireRoute.id
         }
       };
-      const crossWireError = await capturePostgresError(
-        db.transaction(async (transaction) => {
+      const crossWireError = await captureLegacyMessageCreationError(
+        db,
+        async (transaction) => {
           await insertRawMessageCreationGraph(
             transaction,
             invalidCommit,
@@ -1500,7 +1854,7 @@ describePostgres(
             { dispatch: crossWiredDispatch }
           );
           await transaction.execute(sql`set constraints all immediate`);
-        })
+        }
       );
       expect(postgresSqlState(crossWireError)).toBe("23514");
       expect(postgresErrorText(crossWireError)).toMatch(
@@ -1520,8 +1874,9 @@ describePostgres(
         ...invalidCommit.initialRevision.actionAttribution,
         actionParticipant: invalidScaffold.message.authorParticipant
       };
-      const wrongAuthorError = await capturePostgresError(
-        db.transaction(async (transaction) => {
+      const wrongAuthorError = await captureLegacyMessageCreationError(
+        db,
+        async (transaction) => {
           await insertRawMessageCreationGraph(
             transaction,
             invalidCommit,
@@ -1529,7 +1884,7 @@ describePostgres(
             { attribution: wrongAuthorAttribution }
           );
           await transaction.execute(sql`set constraints all immediate`);
-        })
+        }
       );
       expect(postgresSqlState(wrongAuthorError)).toBe("23514");
       expect(postgresErrorText(wrongAuthorError)).toMatch(
@@ -1551,7 +1906,7 @@ describePostgres(
       const canonicalTarget = creationCommit("reply-target-canonical");
       await seedCreationAnchors(db, canonicalTarget);
       await expect(
-        repository.createMessage({
+        historicalTimelineFixtureRepository(db).createMessage({
           commit: canonicalTarget,
           streamPosition: position("670")
         })
@@ -1566,7 +1921,11 @@ describePostgres(
         "reply-target-external"
       );
       await expect(
-        createSourceMessage(repository, externalTarget, "671")
+        createSourceMessage(
+          historicalTimelineFixtureRepository(db),
+          externalTarget,
+          "671"
+        )
       ).resolves.toMatchObject({ kind: "created" });
       const externalMessageReference = externalTarget.externalMessageReference;
       const sourceOccurrence = externalTarget.sourceOccurrence;
@@ -1610,8 +1969,9 @@ describePostgres(
         "action_attribution",
         reply.initialRevision.id
       );
-      const identityError = await capturePostgresError(
-        db.transaction(async (transaction) => {
+      const identityError = await captureLegacyMessageCreationError(
+        db,
+        async (transaction) => {
           await insertRawMessageCreationGraph(
             transaction,
             reply,
@@ -1619,7 +1979,7 @@ describePostgres(
             { message: mismatchedMessage }
           );
           await transaction.execute(sql`set constraints all immediate`);
-        })
+        }
       );
       expect(postgresSqlState(identityError)).toBe("23514");
       expect(postgresErrorText(identityError)).toMatch(
@@ -1640,7 +2000,7 @@ describePostgres(
       const reactionCreation = creationCommit("reaction-recovery");
       await seedCreationAnchors(db, reactionCreation);
       await expect(
-        repository.createMessage({
+        historicalTimelineFixtureRepository(db).createMessage({
           commit: reactionCreation,
           streamPosition: position("700")
         })
@@ -1783,7 +2143,11 @@ describePostgres(
         "provider-lifecycle-recovery"
       );
       await expect(
-        createSourceMessage(repository, lifecycleMessage, "710")
+        createSourceMessage(
+          historicalTimelineFixtureRepository(db),
+          lifecycleMessage,
+          "710"
+        )
       ).resolves.toMatchObject({ kind: "created" });
       const lifecycleCreation = providerObservedLifecycleCreationCommit(
         lifecycleMessage,
@@ -1923,7 +2287,11 @@ describePostgres(
         "provider-semantic-sequential"
       );
       await expect(
-        createSourceMessage(repository, sequentialMessage, "720")
+        createSourceMessage(
+          historicalTimelineFixtureRepository(db),
+          sequentialMessage,
+          "720"
+        )
       ).resolves.toMatchObject({ kind: "created" });
 
       const firstCommit = providerObservedLifecycleCreationCommit(
@@ -2086,7 +2454,11 @@ describePostgres(
         "provider-semantic-race"
       );
       await expect(
-        createSourceMessage(repository, raceMessage, "730")
+        createSourceMessage(
+          historicalTimelineFixtureRepository(db),
+          raceMessage,
+          "730"
+        )
       ).resolves.toMatchObject({ kind: "created" });
       const raceCommitA = providerObservedLifecycleCreationCommit(
         raceMessage,
@@ -2286,7 +2658,11 @@ describePostgres(
         "provider-reaction-shared-head"
       );
       await expect(
-        createSourceMessage(repository, creation, "800")
+        createSourceMessage(
+          historicalTimelineFixtureRepository(db),
+          creation,
+          "800"
+        )
       ).resolves.toMatchObject({ kind: "created" });
 
       const lifecycleCommit = providerObservedLifecycleCreationCommit(
@@ -2630,7 +3006,7 @@ describePostgres(
       const creation = creationCommit(suffix);
       await seedCreationAnchors(db, creation);
       await expect(
-        repository.createMessage({
+        historicalTimelineFixtureRepository(db).createMessage({
           commit: creation,
           streamPosition: position("870")
         })
@@ -2766,7 +3142,11 @@ describePostgres(
       const creation = sourceOutboundCreationCommit(suffix);
       const context = await seedExternalCreationAnchors(db, creation, suffix);
       await expect(
-        createSourceMessage(repository, creation, "850")
+        createSourceMessage(
+          historicalTimelineFixtureRepository(db),
+          creation,
+          "850"
+        )
       ).resolves.toMatchObject({ kind: "created" });
 
       const firstCommit = providerObservedReactionSetCommit(
@@ -3020,7 +3400,11 @@ describePostgres(
       const creation = sourceOutboundCreationCommit(suffix);
       await seedExternalCreationAnchors(db, creation, suffix);
       await expect(
-        createSourceMessage(repository, creation, "880")
+        createSourceMessage(
+          historicalTimelineFixtureRepository(db),
+          creation,
+          "880"
+        )
       ).resolves.toMatchObject({ kind: "created" });
       const lifecycleCreation = providerObservedLifecycleCreationCommit(
         creation,
@@ -3120,7 +3504,11 @@ describePostgres(
         })
       );
       await expect(
-        createSourceMessage(repository, creation, "860")
+        createSourceMessage(
+          historicalTimelineFixtureRepository(db),
+          creation,
+          "860"
+        )
       ).resolves.toMatchObject({ kind: "created" });
       const operator = await seedProviderResultOperator(db, creation, suffix);
       const route = await seedProviderResultOutboundRoute({
@@ -3400,7 +3788,11 @@ describePostgres(
         "provider-cross-account-head"
       );
       await expect(
-        createSourceMessage(repository, creation, "900")
+        createSourceMessage(
+          historicalTimelineFixtureRepository(db),
+          creation,
+          "900"
+        )
       ).resolves.toMatchObject({ kind: "created" });
 
       const firstCommit = providerObservedLifecycleCreationCommit(
@@ -3558,7 +3950,11 @@ describePostgres(
       const creation = sourceOutboundCreationCommit(suffix);
       const context = await seedExternalCreationAnchors(db, creation, suffix);
       await expect(
-        createSourceMessage(repository, creation, "920")
+        createSourceMessage(
+          historicalTimelineFixtureRepository(db),
+          creation,
+          "920"
+        )
       ).resolves.toMatchObject({ kind: "created" });
       const systemResolution = additionalProviderOccurrenceResolution(
         creation,
@@ -3649,7 +4045,11 @@ describePostgres(
       const creation = sourceOutboundCreationCommit(suffix);
       const context = await seedExternalCreationAnchors(db, creation, suffix);
       await expect(
-        createSourceMessage(repository, creation, "930")
+        createSourceMessage(
+          historicalTimelineFixtureRepository(db),
+          creation,
+          "930"
+        )
       ).resolves.toMatchObject({ kind: "created" });
       const systemResolution = additionalProviderOccurrenceResolution(
         creation,
@@ -6637,7 +7037,7 @@ async function seedExternalCreationAnchors(
         ${eventOrigin.normalizedInboundEvent.id}, ${tenantId},
         ${eventOrigin.rawInboundEvent.id}, ${sourceConnection.id},
         ${sourceAccount.id}, 'messenger', 'synthetic', 'message',
-        'outbound', 'private', 'v1', '{}'::jsonb, '{}'::jsonb,
+        ${occurrence.direction}, 'private', 'v1', '{}'::jsonb, '{}'::jsonb,
         ${`db005-source-normalized-${suffix}-${runId}`}, 'processed',
         ${occurrence.recordedAt}, ${occurrence.recordedAt}
       )
@@ -6720,6 +7120,504 @@ async function seedProviderResultOperator(
     `);
   });
   return operator;
+}
+
+function authorizedSourceMaterializationFixture(input: {
+  creation: InboxV2MessageCreationCommit;
+  operator: ReturnType<typeof fixtureParticipant>;
+  suffix: string;
+}) {
+  if (input.operator.subject.kind !== "employee") {
+    throw new Error("Atomic source fixture requires an employee coordinator.");
+  }
+  const occurredAt = input.creation.timelineAllocation.committedAt;
+  const token = `${input.suffix}-${runId}`;
+  const commandId = `command:atomic-source-${token}`;
+  const clientMutationId = `mutation:atomic-source-${token}`;
+  const mutationId = `authorization-mutation:atomic-source-${token}`;
+  const streamCommitId = `commit:atomic-source-${token}`;
+  const streamEpoch = `stream-epoch:atomic-source-${token}`;
+  const correlationId = `correlation:atomic-source-${token}`;
+  const messageChangeId = `change:atomic-source-message-${token}`;
+  const occurrenceChangeId = `change:atomic-source-occurrence-${token}`;
+  const eventId = `event:atomic-source-message-${token}`;
+  const occurrenceEventId = `event:atomic-source-occurrence-${token}`;
+  const projectionIntentId = `outbox-intent:atomic-source-message-${token}`;
+  const occurrenceProjectionIntentId = `outbox-intent:atomic-source-occurrence-${token}`;
+  const authorizationEpoch = `authorization:atomic-source-${token}`;
+  const decisionId = `authorization-decision:atomic-source-${token}`;
+  const notAfter = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
+  const employee = input.operator.subject.employee;
+  const conversation = input.creation.message.conversation;
+  const resolution = input.creation.sourceResolutionCommit;
+  if (resolution === null) {
+    throw new Error("Atomic source fixture requires a resolution commit.");
+  }
+  const messageReference = {
+    tenantId,
+    recordId: input.creation.message.id,
+    schemaId: INBOX_V2_MESSAGE_SCHEMA_ID,
+    schemaVersion: INBOX_V2_MESSAGE_SCHEMA_VERSION,
+    digest: atomicSourcePayloadDigest(input.creation.message)
+  };
+  const domainCommitReference = {
+    tenantId,
+    recordId: input.creation.initialRevision.id,
+    schemaId: "core:inbox-v2.message-creation-commit",
+    schemaVersion: "v1",
+    digest: atomicSourcePayloadDigest(input.creation)
+  };
+  const occurrenceReference = {
+    tenantId,
+    recordId: resolution.after.id,
+    schemaId: INBOX_V2_SOURCE_OCCURRENCE_SCHEMA_ID,
+    schemaVersion: INBOX_V2_EXTERNAL_MESSAGE_SCHEMA_VERSION,
+    digest: atomicSourcePayloadDigest(resolution.after)
+  };
+  const occurrenceResolutionReference = {
+    tenantId,
+    recordId: deriveInboxV2SourceOccurrenceResolutionTransitionId(resolution),
+    schemaId: INBOX_V2_SOURCE_OCCURRENCE_RESOLUTION_COMMIT_SCHEMA_ID,
+    schemaVersion: INBOX_V2_EXTERNAL_MESSAGE_SCHEMA_VERSION,
+    digest: atomicSourcePayloadDigest(resolution)
+  };
+  const decision = {
+    tenantId,
+    id: decisionId,
+    authorizationEpoch,
+    principal: { kind: "employee" as const, employee },
+    permissionId: "core:message.receive_external",
+    resourceScopeId: "core:conversation",
+    resource: {
+      tenantId,
+      entityTypeId: "core:conversation",
+      entityId: conversation.id
+    },
+    resourceAccessRevision: "1",
+    decisionRevision: "1",
+    decisionHash: atomicSourceSha256(`${token}:authorization-decision`),
+    outcome: "allowed" as const,
+    decidedAt: occurredAt,
+    notAfter
+  };
+  const change = {
+    id: messageChangeId,
+    ordinal: 1,
+    entity: {
+      tenantId,
+      entityTypeId: "core:message",
+      entityId: input.creation.message.id
+    },
+    resultingRevision: "1",
+    timeline: {
+      conversation,
+      timelineSequence:
+        input.creation.timelineAllocation.items[0]?.timelineSequence
+    },
+    audience: "conversation_external" as const,
+    state: {
+      kind: "upsert" as const,
+      stateSchemaId: INBOX_V2_MESSAGE_SCHEMA_ID,
+      stateSchemaVersion: INBOX_V2_MESSAGE_SCHEMA_VERSION,
+      stateHash: messageReference.digest,
+      payloadReference: messageReference,
+      domainCommitReference
+    }
+  };
+  const occurrenceChange = {
+    id: occurrenceChangeId,
+    ordinal: 2,
+    entity: {
+      tenantId,
+      entityTypeId: "core:source-occurrence",
+      entityId: resolution.after.id
+    },
+    resultingRevision: resolution.resultingRevision,
+    timeline: null,
+    audience: "policy_filtered" as const,
+    state: {
+      kind: "upsert" as const,
+      stateSchemaId: INBOX_V2_SOURCE_OCCURRENCE_SCHEMA_ID,
+      stateSchemaVersion: INBOX_V2_EXTERNAL_MESSAGE_SCHEMA_VERSION,
+      stateHash: occurrenceReference.digest,
+      payloadReference: occurrenceReference,
+      domainCommitReference: occurrenceResolutionReference
+    }
+  };
+  const internalReference = (purpose: string) =>
+    `internal-ref:${createHash("sha256")
+      .update(`${token}:${purpose}`, "utf8")
+      .digest("hex")
+      .slice(0, 32)}`;
+
+  return {
+    commandId,
+    streamCommitId,
+    streamEpoch,
+    eventId,
+    projectionIntentId,
+    input: {
+      tenantId,
+      command: {
+        id: commandId,
+        requestId: `request:atomic-source-${token}`,
+        clientMutationId,
+        commandTypeId: "core:message.receive",
+        requestHash: atomicSourceSha256(`${token}:request`),
+        actor: { kind: "employee", employeeId: employee.id },
+        authorizationDecisionId: decisionId,
+        authorizationEpoch,
+        authorizedAt: occurredAt,
+        publicResultCode: "core:message.received",
+        resultReference: messageReference,
+        sensitiveResultReference: null
+      },
+      revisions: {
+        expectedTenantRbacRevision: "1",
+        expectedSharedAccessRevision: "1",
+        advanceTenantRbac: false,
+        advanceSharedAccess: false,
+        employees: [
+          {
+            employeeId: employee.id,
+            expectedEmployeeAccessRevision: "1",
+            expectedEmployeeInboxRelationRevision: "1",
+            advanceEmployeeAccess: false,
+            advanceEmployeeInboxRelation: false
+          }
+        ],
+        resources: [
+          {
+            resourceKind: "conversation",
+            resourceId: conversation.id,
+            resourceHeadId: `authorization-resource:atomic-source-${token}`,
+            expectedResourceAccessRevision: "1",
+            advance: "none"
+          }
+        ]
+      },
+      records: {
+        mutationId,
+        relationKind: null,
+        streamCommitId,
+        expectedStreamEpoch: streamEpoch,
+        audienceImpact: { kind: "none" },
+        commitHash: atomicSourceSha256(`${token}:stream-commit`),
+        correlationId,
+        changes: [change, occurrenceChange],
+        events: [
+          {
+            id: eventId,
+            typeId: "core:message.changed",
+            payloadSchemaId: domainCommitReference.schemaId,
+            payloadSchemaVersion: domainCommitReference.schemaVersion,
+            ordinal: "1",
+            changeIds: [messageChangeId],
+            subjects: [change.entity],
+            payloadReference: domainCommitReference,
+            correlationId,
+            commandIds: [commandId],
+            clientMutationIds: [clientMutationId],
+            authorizationDecisionRefs: [decision],
+            accessEffect: { kind: "none" },
+            occurredAt: input.creation.initialRevision.occurredAt,
+            recordedAt: input.creation.initialRevision.recordedAt,
+            eventHash: atomicSourceSha256(`${token}:message-event`)
+          },
+          {
+            id: occurrenceEventId,
+            typeId: "core:source-occurrence.changed",
+            payloadSchemaId: occurrenceResolutionReference.schemaId,
+            payloadSchemaVersion: occurrenceResolutionReference.schemaVersion,
+            ordinal: "2",
+            changeIds: [occurrenceChangeId],
+            subjects: [occurrenceChange.entity],
+            payloadReference: occurrenceResolutionReference,
+            correlationId,
+            commandIds: [commandId],
+            clientMutationIds: [clientMutationId],
+            authorizationDecisionRefs: [decision],
+            accessEffect: { kind: "none" },
+            occurredAt: resolution.changedAt,
+            recordedAt: occurredAt,
+            eventHash: atomicSourceSha256(`${token}:occurrence-event`)
+          }
+        ],
+        outboxIntents: [
+          {
+            id: projectionIntentId,
+            ordinal: 1,
+            typeId: "core:projection.update",
+            handlerId: "core:inbox-projection",
+            effectClass: "projection",
+            eventId,
+            changeIds: [messageChangeId],
+            payloadReference: null,
+            consumerDedupeKey: atomicSourceSha256(`${token}:projection-dedupe`),
+            correlationId,
+            availableAt: occurredAt,
+            intentHash: atomicSourceSha256(`${token}:projection-intent`)
+          },
+          {
+            id: occurrenceProjectionIntentId,
+            ordinal: 2,
+            typeId: "core:projection.update",
+            handlerId: "core:source-occurrence-projection",
+            effectClass: "projection",
+            eventId: occurrenceEventId,
+            changeIds: [occurrenceChangeId],
+            payloadReference: null,
+            consumerDedupeKey: atomicSourceSha256(
+              `${token}:occurrence-projection-dedupe`
+            ),
+            correlationId,
+            availableAt: occurredAt,
+            intentHash: atomicSourceSha256(
+              `${token}:occurrence-projection-intent`
+            )
+          }
+        ],
+        audit: {
+          id: `authorization-audit:atomic-source-${token}`,
+          actionId: "core:message.receive",
+          target: {
+            tenantId,
+            entityTypeId: "core:message",
+            entityId: internalReference("audit-target")
+          },
+          reasonCodeId: "core:source-message-materialized",
+          matchedPermissionIds: [decision.permissionId],
+          grantSourceIds: [internalReference("grant-source")],
+          authorizationScopeIds: [decision.resourceScopeId],
+          overrideReasonCodeId: null,
+          policyVersion: "v1",
+          evidenceReference: domainCommitReference,
+          authorizationDecisionRefs: [decision],
+          correlationId,
+          outcome: "succeeded",
+          revisionDeltaHash: computeInboxV2LeafHashDigest([]),
+          previousAuditHash: null,
+          auditHash: atomicSourceSha256(`${token}:audit`),
+          occurredAt,
+          recordedAt: occurredAt,
+          expiresAt,
+          facets: [
+            {
+              ordinal: 1,
+              dimension: "tenant",
+              reference: {
+                tenantId,
+                entityTypeId: "core:tenant",
+                entityId: internalReference("tenant-facet")
+              },
+              relation: "affected",
+              facetHash: atomicSourceSha256(`${token}:audit-facet`)
+            }
+          ]
+        }
+      },
+      occurredAt
+    } as unknown as WithInboxV2AuthorizedCommandMutationInput
+  };
+}
+
+async function loadAtomicSourceMaterializationState(
+  db: HuleeDatabase,
+  creation: InboxV2MessageCreationCommit,
+  authorized: ReturnType<typeof authorizedSourceMaterializationFixture>
+) {
+  const occurrence = creation.sourceResolutionCommit?.before;
+  const timelineItem = creation.timelineAllocation.items[0];
+  if (occurrence === undefined || timelineItem === undefined) {
+    throw new Error(
+      "Atomic source fixture requires one pending occurrence/item."
+    );
+  }
+  const result = await db.execute<Record<string, string | null>>(sql`
+    select
+      (select count(*)::text from inbox_v2_auth_command_records
+        where tenant_id = ${tenantId} and id = ${authorized.commandId})
+        as commands,
+      (select count(*)::text from inbox_v2_tenant_stream_commits
+        where tenant_id = ${tenantId} and id = ${authorized.streamCommitId})
+        as stream_commits,
+      (select last_position::text from inbox_v2_tenant_stream_heads
+        where tenant_id = ${tenantId}) as stream_position,
+      (select count(*)::text from inbox_v2_tenant_stream_changes
+        where tenant_id = ${tenantId}
+          and stream_commit_id = ${authorized.streamCommitId}) as changes,
+      (select count(*)::text from inbox_v2_domain_events
+        where tenant_id = ${tenantId}
+          and stream_commit_id = ${authorized.streamCommitId}) as events,
+      (select count(*)::text from inbox_v2_outbox_intents
+        where tenant_id = ${tenantId}
+          and stream_commit_id = ${authorized.streamCommitId}) as outbox_intents,
+      (select count(*)::text
+         from inbox_v2_outbox_work_items work_item
+         inner join inbox_v2_outbox_intents intent
+           on intent.tenant_id = work_item.tenant_id
+          and intent.id = work_item.intent_id
+        where work_item.tenant_id = ${tenantId}
+          and intent.stream_commit_id = ${authorized.streamCommitId})
+        as outbox_work,
+      (select count(*)::text from inbox_v2_messages
+        where tenant_id = ${tenantId} and id = ${creation.message.id})
+        as messages,
+      (select count(*)::text from inbox_v2_timeline_items
+        where tenant_id = ${tenantId} and id = ${timelineItem.id})
+        as timeline_items,
+      (select count(*)::text from inbox_v2_timeline_contents
+        where tenant_id = ${tenantId} and id = ${creation.content.id})
+        as timeline_contents,
+      (select count(*)::text from inbox_v2_message_revisions
+        where tenant_id = ${tenantId}
+          and message_id = ${creation.message.id}) as message_revisions,
+      (select count(*)::text from inbox_v2_external_message_references
+        where tenant_id = ${tenantId}
+          and id = ${creation.externalMessageReference?.id ?? ""})
+        as external_references,
+      (select count(*)::text
+        from inbox_v2_source_occurrence_resolution_transitions
+        where tenant_id = ${tenantId}
+          and source_occurrence_id = ${occurrence.id}) as resolution_transitions,
+      (select count(*)::text
+        from inbox_v2_atomic_source_resolution_materializations
+        where tenant_id = ${tenantId}
+          and source_occurrence_id = ${occurrence.id})
+        as source_resolution_materializations,
+      (select count(*)::text from inbox_v2_message_transport_links
+        where tenant_id = ${tenantId}
+          and source_occurrence_id = ${occurrence.id}) as transport_links,
+      (select resolution_state::text from inbox_v2_source_occurrences
+        where tenant_id = ${tenantId} and id = ${occurrence.id})
+        as occurrence_state,
+      (select revision::text from inbox_v2_source_occurrences
+        where tenant_id = ${tenantId} and id = ${occurrence.id})
+        as occurrence_revision,
+      (select resolved_external_message_reference_id
+        from inbox_v2_source_occurrences
+        where tenant_id = ${tenantId} and id = ${occurrence.id})
+        as occurrence_reference_id
+  `);
+  return result.rows[0]!;
+}
+
+function requireAcceptedAtomicSource(
+  fixture:
+    | {
+        creation: InboxV2MessageCreationCommit;
+        authorized: ReturnType<typeof authorizedSourceMaterializationFixture>;
+        context: Awaited<ReturnType<typeof seedExternalCreationAnchors>>;
+      }
+    | undefined
+) {
+  if (fixture === undefined) {
+    throw new Error("The accepted atomic source fixture is not available.");
+  }
+  return fixture;
+}
+
+async function insertCoherentDuplicateProjectionAndRecheckDomainClosure(
+  db: HuleeDatabase,
+  input: WithInboxV2AuthorizedCommandMutationInput,
+  duplicateProjection: WithInboxV2AuthorizedCommandMutationInput["records"]["outboxIntents"][number]
+): Promise<void> {
+  const outboxIntents = [...input.records.outboxIntents, duplicateProjection];
+  const manifestDigest = computeInboxV2TenantStreamManifestDigest({
+    ...input.records,
+    outboxIntents
+  });
+  const projectionIntentCount = outboxIntents.filter(
+    ({ effectClass }) => effectClass === "projection"
+  ).length;
+
+  await db.transaction(async (transaction) => {
+    await transaction.execute(sql`
+      create temporary table inbox_v2_test_mutation_backup
+      on commit drop
+      as select *
+           from inbox_v2_auth_mutation_commits
+          where tenant_id = ${input.tenantId}
+            and mutation_id = ${input.records.mutationId}
+    `);
+    await transaction.execute(sql`
+      insert into inbox_v2_outbox_intents (
+        tenant_id, id, mutation_id, stream_commit_id, stream_position,
+        ordinal, type_id, handler_id, effect_class, event_id, change_ids,
+        payload_reference, consumer_dedupe_key, correlation_id, available_at,
+        intent_hash, created_at
+      )
+      select original_intent.tenant_id,
+             ${duplicateProjection.id},
+             original_intent.mutation_id,
+             original_intent.stream_commit_id,
+             original_intent.stream_position,
+             ${duplicateProjection.ordinal},
+             ${duplicateProjection.typeId},
+             ${duplicateProjection.handlerId},
+             ${duplicateProjection.effectClass},
+             ${duplicateProjection.eventId},
+             ${JSON.stringify(duplicateProjection.changeIds)}::jsonb,
+             ${
+               duplicateProjection.payloadReference === null
+                 ? null
+                 : JSON.stringify(duplicateProjection.payloadReference)
+             }::jsonb,
+             ${duplicateProjection.consumerDedupeKey},
+             ${duplicateProjection.correlationId},
+             ${duplicateProjection.availableAt},
+             ${duplicateProjection.intentHash},
+             original_intent.created_at
+        from inbox_v2_outbox_intents original_intent
+       where original_intent.tenant_id = ${input.tenantId}
+         and original_intent.id = ${input.records.outboxIntents[0]!.id}
+    `);
+    await transaction.execute(
+      sql`set local session_replication_role = replica`
+    );
+    await transaction.execute(sql`
+      update inbox_v2_tenant_stream_commits
+         set outbox_intent_count = ${outboxIntents.length},
+             outbox_intent_ids = ${JSON.stringify(
+               outboxIntents.map(({ id }) => id)
+             )}::jsonb,
+             manifest_digest_sha256 = ${manifestDigest}
+       where tenant_id = ${input.tenantId}
+         and id = ${input.records.streamCommitId}
+         and mutation_id = ${input.records.mutationId}
+    `);
+    await transaction.execute(sql`
+      delete from inbox_v2_auth_mutation_commits
+       where tenant_id = ${input.tenantId}
+         and mutation_id = ${input.records.mutationId}
+    `);
+    await transaction.execute(sql`set local session_replication_role = origin`);
+    await transaction.execute(sql`
+      insert into inbox_v2_auth_mutation_commits (
+        tenant_id, mutation_id, command_record_id, stream_commit_id,
+        audit_event_id, revision_effect_count,
+        revision_effect_digest_sha256, relation_write_count,
+        relation_write_digest_sha256, projection_intent_count,
+        manifest_digest_sha256, committed_at, created_at
+      )
+      select tenant_id, mutation_id, command_record_id, stream_commit_id,
+             audit_event_id, revision_effect_count,
+             revision_effect_digest_sha256, relation_write_count,
+             relation_write_digest_sha256, ${projectionIntentCount},
+             manifest_digest_sha256, committed_at, created_at
+        from inbox_v2_test_mutation_backup
+    `);
+    await transaction.execute(sql`set constraints all immediate`);
+  });
+}
+
+function atomicSourceSha256(value: string): `sha256:${string}` {
+  return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`;
+}
+
+function atomicSourcePayloadDigest(value: unknown): `sha256:${string}` {
+  return `sha256:${computeInboxV2TimelineMessageCommitDigest(value)}`;
 }
 
 async function seedProviderSystemParticipant(
@@ -6951,7 +7849,8 @@ async function seedProviderResultOutboundRoute(input: {
   if (fence === undefined) {
     throw new Error("Provider result route requires a binding fence.");
   }
-  const insert = await input.db.execute(
+  const insert = await executeHistoricalFixtureSql(
+    input.db,
     buildInsertInboxV2OutboundRouteSql(route, fence)
   );
   expect(insert.rows).toHaveLength(1);
@@ -7099,8 +7998,12 @@ async function seedMessageSendOutboundRoute(input: {
     throw new Error("Message-send route requires a binding fence.");
   }
   expect(
-    (await input.db.execute(buildInsertInboxV2OutboundRouteSql(route, fence)))
-      .rows
+    (
+      await executeHistoricalFixtureSql(
+        input.db,
+        buildInsertInboxV2OutboundRouteSql(route, fence)
+      )
+    ).rows
   ).toHaveLength(1);
   return route;
 }
@@ -8289,7 +9192,7 @@ async function attemptRawMessageMutationWithAttribution(
 }
 
 async function insertRawMessageCreationGraph(
-  executor: Pick<HuleeDatabase, "execute">,
+  executor: RawSqlExecutor,
   commit: InboxV2MessageCreationCommit,
   streamPosition: ReturnType<typeof position>,
   options: {
@@ -8792,6 +9695,79 @@ async function createSourceMessage(
       expect(occurrenceUpdate.rows).toHaveLength(1);
     }
   );
+}
+
+function historicalTimelineFixtureRepository(db: HuleeDatabase) {
+  return createSqlInboxV2TimelineMessageRepository({
+    execute: db.execute.bind(db),
+    transaction: <TResult>(
+      work: (transaction: unknown) => Promise<TResult>,
+      config: Readonly<{
+        isolationLevel: "read committed" | "repeatable read";
+      }>
+    ) =>
+      db.transaction(async (transaction) => {
+        await transaction.execute(
+          sql`set local session_replication_role = replica`
+        );
+        try {
+          return await work(transaction);
+        } finally {
+          await transaction.execute(
+            sql`set local session_replication_role = origin`
+          );
+        }
+      }, config)
+  } as never);
+}
+
+async function executeHistoricalFixtureSql(db: HuleeDatabase, statement: SQL) {
+  return db.transaction(async (transaction) => {
+    await transaction.execute(
+      sql`set local session_replication_role = replica`
+    );
+    try {
+      return await transaction.execute(statement);
+    } finally {
+      await transaction.execute(
+        sql`set local session_replication_role = origin`
+      );
+    }
+  });
+}
+
+async function captureLegacyMessageCreationError(
+  db: HuleeDatabase,
+  work: Parameters<InboxV2TimelineMessageTransactionExecutor["transaction"]>[0]
+) {
+  await db.transaction(async (transaction) => {
+    await transaction.execute(sql`
+      alter table public.inbox_v2_messages
+        disable trigger inbox_v2_atomic_message_creation_constraint
+    `);
+    await transaction.execute(sql`
+      alter table public.inbox_v2_outbound_dispatches
+        disable trigger inbox_v2_atomic_outbound_dispatch_constraint
+    `);
+  });
+  try {
+    return await capturePostgresError(
+      db.transaction((transaction) =>
+        work(transaction as unknown as RawSqlExecutor)
+      )
+    );
+  } finally {
+    await db.transaction(async (transaction) => {
+      await transaction.execute(sql`
+        alter table public.inbox_v2_outbound_dispatches
+          enable trigger inbox_v2_atomic_outbound_dispatch_constraint
+      `);
+      await transaction.execute(sql`
+        alter table public.inbox_v2_messages
+          enable trigger inbox_v2_atomic_message_creation_constraint
+      `);
+    });
+  }
 }
 
 async function loadProviderSemanticOrderingHeads(
