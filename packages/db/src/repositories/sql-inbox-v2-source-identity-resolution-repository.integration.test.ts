@@ -41,10 +41,6 @@ const suffix = `src004-${process.pid}-${Date.now().toString(36)}`;
 const t0 = "2026-07-16T08:00:00.000Z";
 const t1 = "2026-07-16T08:00:01.000Z";
 const t2 = "2026-07-16T08:00:02.000Z";
-const t3 = "2026-07-18T08:00:00.000Z";
-const t4 = "2026-07-18T08:00:01.000Z";
-const t5 = "2026-07-18T08:00:02.000Z";
-const t6 = "2026-07-18T08:00:03.000Z";
 const digestKeyGeneration = "src004-test-v1";
 const digestKey = new TextEncoder().encode(
   "src004-integration-test-tenant-key-material-00000000000000000000"
@@ -124,6 +120,7 @@ describePostgres(
       if (event === null || observation === undefined) {
         throw new Error("Expected one normalized author observation.");
       }
+      const { t3, t4, t5, t6 } = assessmentTimesAfter(event.recordedAt);
 
       const identityId = inboxV2SourceExternalIdentityIdSchema.parse(
         `source_external_identity:${suffix}`
@@ -305,7 +302,10 @@ describePostgres(
         expect(serialized).not.toContain(`materialize-${suffix}`);
       }
 
-      await appendTwoAssessmentsInOneTransaction(database, ids, identityId);
+      await appendTwoAssessmentsInOneTransaction(database, ids, identityId, {
+        t5,
+        t6
+      });
       await expect(
         resolutionRepository.findCurrentAssessment({
           tenantId: ids.tenantId,
@@ -366,7 +366,8 @@ type LeasedRaw = Awaited<ReturnType<typeof recordAndClaim>>;
 async function appendTwoAssessmentsInOneTransaction(
   database: HuleeDatabase,
   ids: Scope,
-  identityId: string
+  identityId: string,
+  assessmentTimes: { t5: string; t6: string }
 ): Promise<void> {
   const appends = [
     {
@@ -375,7 +376,7 @@ async function appendTwoAssessmentsInOneTransaction(
       assessmentId: `source_identity_assessment:${suffix}-batch-3`,
       digest: `sha256:${"3".repeat(64)}`,
       idempotencyKey: `source:v2:identity-resolution:${"d".repeat(64)}`,
-      assessedAt: t5
+      assessedAt: assessmentTimes.t5
     },
     {
       previousVersion: "3",
@@ -383,7 +384,7 @@ async function appendTwoAssessmentsInOneTransaction(
       assessmentId: `source_identity_assessment:${suffix}-batch-4`,
       digest: `sha256:${"4".repeat(64)}`,
       idempotencyKey: `source:v2:identity-resolution:${"e".repeat(64)}`,
-      assessedAt: t6
+      assessedAt: assessmentTimes.t6
     }
   ] as const;
 
@@ -432,6 +433,26 @@ async function appendTwoAssessmentsInOneTransaction(
       `);
     }
   });
+}
+
+function assessmentTimesAfter(recordedAt: string): {
+  t3: string;
+  t4: string;
+  t5: string;
+  t6: string;
+} {
+  const recordedAtMilliseconds = Date.parse(recordedAt);
+  if (!Number.isFinite(recordedAtMilliseconds)) {
+    throw new TypeError(
+      "Expected a finite normalized-event recordedAt timestamp."
+    );
+  }
+  return {
+    t3: new Date(recordedAtMilliseconds + 1_000).toISOString(),
+    t4: new Date(recordedAtMilliseconds + 2_000).toISOString(),
+    t5: new Date(recordedAtMilliseconds + 3_000).toISOString(),
+    t6: new Date(recordedAtMilliseconds + 4_000).toISOString()
+  };
 }
 
 function scope() {
