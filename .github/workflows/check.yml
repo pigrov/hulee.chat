@@ -20,6 +20,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
+      - name: Verify Inbox V2 Epic 3 source corpus
+        run: pnpm test:inbox-v2:source
 
   inbox-v2-preserve-upgrade:
     runs-on: ubuntu-latest

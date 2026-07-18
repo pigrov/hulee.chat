@@ -2,7 +2,7 @@
 
 Status: `active`  
 Canonical task tracker: this file  
-Last updated: `2026-07-17`
+Last updated: `2026-07-18`
 
 ## Purpose
 
@@ -1415,7 +1415,7 @@ participant set.
     `docs/product/inbox-v2-src-010-source-registry.md`.
 
 - [x] `INB2-SRC-011` Wire standalone source onboarding through the authorized command protocol.
-  - State: `completed`; Priority: `P0`; Depends on: `INB2-CON-011`,
+  - State: `done`; Priority: `P0`; Depends on: `INB2-CON-011`,
     `INB2-SRC-010`, `INB2-DB-009`, `INB2-CON-010`, `INB2-RBAC-003`.
   - Acceptance: the versioned standalone-onboarding API requires a stable
     `clientMutationId`; the server computes the canonical request hash without
@@ -1680,11 +1680,22 @@ participant set.
     Detailed evidence is in
     `docs/product/inbox-v2-src-009-outbox-lease-lifecycle.md`.
 
-- [ ] `INB2-EPIC-3-GATE` Verify Epic 3 exit gate.
-  - State: `planned`; Priority: `P0`; Depends on: all required Epic 3 tasks.
+- [x] `INB2-EPIC-3-GATE` Verify Epic 3 exit gate.
+  - State: `done`; Priority: `P0`; Started: `2026-07-18`; Completed:
+    `2026-07-18`; Depends on: all required Epic 3 tasks.
   - Acceptance: any repeated/late fixture resolves to one canonical V2 state and
     unknown participants remain visible.
-  - Verification: source contract/integration suite and `pnpm check` pass. Evidence: -
+  - Verification: source contract/integration suite and `pnpm check` pass.
+    Evidence: the named cross-platform source manifest passed `82/82` files and
+    `1127/1127` tests; a fresh PostgreSQL database applied `49/49` migrations
+    and passed `30/30` files / `294` tests (`6` explicitly opt-in scenarios
+    skipped); preserve/N-1/RBAC passed `3/3` files / `17/17` tests; the pinned
+    N-1 bundle rebuilt without diff; clean `pnpm check` passed `352/352` default
+    files / `3679/3679` tests and every repository guard. Independent final
+    review returned `READY` with no P0/P1/P2 findings after the manifest's
+    traversal/containment boundary was hardened. Detailed evidence and the
+    explicit `MIG-002`/`MIG-005` cutover boundary are in
+    `docs/product/inbox-v2-epic-3-gate-review.md`.
 
 ## Epic 4. Timeline And Message Lifecycle
 
@@ -3160,3 +3171,4 @@ the task state, checkbox and evidence above.
 | 2026-07-17 | `INB2-SRC-004`     | Identity/claims; focused 11/537; PG 27/239; preserve 3/17; full 328/3334   | task commit  | Codex + two independent reviews   |
 | 2026-07-17 | `INB2-SRC-007`     | Atomic commit; focused 10/212; PG 29/273; preserve 3/17; full 341/3509     | task commit  | Codex + two independent reviews   |
 | 2026-07-17 | `INB2-SRC-009`     | Fenced provider I/O; focused 8/115; PG 29/274; preserve 3/17 + all gates   | task commit  | Codex + three independent reviews |
+| 2026-07-18 | `INB2-EPIC-3-GATE` | Source 82/1127; PG 30/294; preserve 3/17; clean full 352/3679 + all gates  | task commit  | Codex + independent final review  |
