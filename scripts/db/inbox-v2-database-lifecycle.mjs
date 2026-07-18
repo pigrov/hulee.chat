@@ -23,6 +23,8 @@ import {
 
 const { Client, Pool } = pg;
 const LIFECYCLE_LOCK_KEY = "hulee:inbox-v2:database-lifecycle:v1";
+const MSG002_OUTBOUND_SEND_AUTHORITY_MARKER =
+  "INB2-MSG-002_NORMAL_SEND_REPLY_AUTHORITY_V1";
 const MIGRATION_DDL_BUDGET_EVIDENCE_SCHEMA_ID =
   "core:inbox-v2.migration-ddl-budget-evidence@v1";
 const MAX_MIGRATION_LOCK_TIMEOUT_MS = 60_000;
@@ -57,6 +59,7 @@ const REQUIRED_CURRENT_RELATIONS = [
   "inbox_v2_source_thread_binding_transitions",
   "inbox_v2_source_thread_binding_snapshots",
   "inbox_v2_work_items",
+  "inbox_v2_conversation_work_heads",
   "inbox_v2_work_item_primary_assignments",
   "inbox_v2_messages",
   "inbox_v2_data_governance_contexts",
@@ -82,6 +85,10 @@ const REQUIRED_CURRENT_FUNCTIONS = [
   "public.inbox_v2_check_source_thread_binding_edge_integrity()",
   "public.inbox_v2_tm_head_guard()",
   "public.inbox_v2_tm_core_coherence()",
+  "public.inbox_v2_tm_outbound_route_action_valid(text,text,text,text,text,timestamptz,timestamptz,text,text,text,text,text,text,bigint,text,text,bigint,text,text,timestamptz,text,bigint,text,boolean)",
+  "public.inbox_v2_auth_domain_mutation_coherence()",
+  "public.inbox_v2_atomic_message_creation_coherence()",
+  "public.inbox_v2_atomic_outbound_creation_coherence()",
   "public.inbox_v2_system_event_timeline_binding_guard()",
   "public.inbox_v2_referenced_system_event_immutable_guard()",
   "public.inbox_v2_work_item_guard()",
@@ -89,6 +96,10 @@ const REQUIRED_CURRENT_FUNCTIONS = [
   "public.inbox_v2_work_assignment_non_overlap()",
   "public.inbox_v2_work_item_mutation_coherence()",
   "public.inbox_v2_work_item_aggregate_coherence()",
+  "public.inbox_v2_conversation_work_head_guard()",
+  "public.inbox_v2_conversation_work_head_bootstrap()",
+  "public.inbox_v2_conversation_work_head_advance()",
+  "public.inbox_v2_conversation_work_head_coherence()",
   "public.inbox_v2_assert_conversation_timeline_head(text,text)",
   "public.inbox_v2_lock_conversation_identity(text,text)",
   "public.inbox_v2_conversation_timeline_head_deferred()",
@@ -247,6 +258,36 @@ const REQUIRED_CURRENT_TRIGGERS = [
     "inbox_v2_work_items",
     "inbox_v2_work_items_guard_trigger",
     "public.inbox_v2_work_item_guard()"
+  ],
+  [
+    "inbox_v2_conversation_work_heads",
+    "inbox_v2_conversation_work_heads_guard_trigger",
+    "public.inbox_v2_conversation_work_head_guard()"
+  ],
+  [
+    "inbox_v2_conversations",
+    "inbox_v2_conversations_work_head_insert_trigger",
+    "public.inbox_v2_conversation_work_head_bootstrap()"
+  ],
+  [
+    "inbox_v2_work_item_creation_decisions",
+    "inbox_v2_work_creation_head_advance_trigger",
+    "public.inbox_v2_conversation_work_head_advance()"
+  ],
+  [
+    "inbox_v2_conversation_work_heads",
+    "inbox_v2_conversation_work_heads_coherence_constraint",
+    "public.inbox_v2_conversation_work_head_coherence()"
+  ],
+  [
+    "inbox_v2_work_items",
+    "inbox_v2_work_items_head_coherence_constraint",
+    "public.inbox_v2_conversation_work_head_coherence()"
+  ],
+  [
+    "inbox_v2_work_item_creation_decisions",
+    "inbox_v2_work_creation_head_coherence_constraint",
+    "public.inbox_v2_conversation_work_head_coherence()"
   ],
   [
     "inbox_v2_work_item_primary_assignments",
@@ -591,6 +632,71 @@ const REQUIRED_CURRENT_CONSTRAINTS = [
     ["tenant_id", "id"]
   ),
   {
+    relation: "inbox_v2_conversation_work_heads",
+    name: "inbox_v2_conversation_work_heads_pk",
+    type: "p",
+    columns: ["tenant_id", "id"]
+  },
+  {
+    relation: "inbox_v2_conversation_work_heads",
+    name: "inbox_v2_conversation_work_heads_conversation_unique",
+    type: "u",
+    columns: ["tenant_id", "conversation_id"]
+  },
+  foreignKeyContract(
+    "inbox_v2_conversation_work_heads",
+    "inbox_v2_conversation_work_heads_conversation_fk",
+    ["tenant_id", "conversation_id"],
+    "inbox_v2_conversations",
+    ["tenant_id", "id"],
+    { onDelete: "c" }
+  ),
+  {
+    relation: "inbox_v2_conversation_work_heads",
+    name: "inbox_v2_conversation_work_heads_identity_check",
+    type: "c",
+    definitionSha256:
+      "sha256:33cacd9cb4f062bdbbf0c27e75c34a905b839cb6201d4922ce698cc966a7a11c",
+    definitionFragments: [
+      "conversation_work_head:",
+      "sha256",
+      "chr(31)",
+      "tenant_id",
+      "conversation_id"
+    ]
+  },
+  {
+    relation: "inbox_v2_conversation_work_heads",
+    name: "inbox_v2_conversation_work_heads_state_check",
+    type: "c",
+    definitionSha256:
+      "sha256:0b63fb16881b06685f27c4e6c5c30b0b19d5cd8fc92cc46e3cee7b1d39e30758",
+    definitionFragments: [
+      "work_item_count >= 0",
+      "intake_decision_high_water >= 0",
+      "revision = ((1 + intake_decision_high_water) + work_item_count)",
+      "intake_decision_high_water >= work_item_count",
+      "pending_materialization_ordinal is null",
+      "pending_materialization_ordinal = (work_item_count + 1)",
+      "intake_decision_high_water >= pending_materialization_ordinal",
+      "current_outcome = 'pending_intake'",
+      "current_outcome = 'no_work_item'",
+      "current_outcome = 'create_work_item'"
+    ]
+  },
+  {
+    relation: "inbox_v2_conversation_work_heads",
+    name: "inbox_v2_conversation_work_heads_timestamps_check",
+    type: "c",
+    definitionSha256:
+      "sha256:dd2c4c9883e8c27d97b60040331681567ced5926db3764346329f14d0db5eef1",
+    definitionFragments: [
+      "isfinite(created_at)",
+      "isfinite(updated_at)",
+      "updated_at >= created_at"
+    ]
+  },
+  {
     relation: "inbox_v2_work_items",
     name: "inbox_v2_work_items_state_head_check",
     type: "c",
@@ -679,6 +785,21 @@ const REQUIRED_CURRENT_CONSTRAINTS = [
       "occurred_at <= received_at",
       "received_at <= created_at",
       "created_at <= updated_at"
+    ]
+  },
+  {
+    relation: "inbox_v2_outbound_routes",
+    name: "inbox_v2_outbound_routes_selection_check",
+    type: "c",
+    definitionSha256:
+      "sha256:1cd6a2e369f00076de7b794b83ac7e02675f23f3ea054842a148459ebef774de",
+    definitionFragments: [
+      "selection_intent_kind = 'explicit_reroute'",
+      "selection_reason = 'explicit_reroute'",
+      "selection_intent_snapshot #>> '{originalRoute,id}'",
+      "selection_intent_snapshot #>> '{originalDispatch,id}'",
+      "selection_intent_snapshot ->> 'expectedOriginalDispatchRevision'",
+      "'kind', 'outbound_dispatch'"
     ]
   },
   {
@@ -841,6 +962,13 @@ const REQUIRED_CURRENT_INDEXES = [
     definition:
       "create unique index inbox_v2_work_items_non_terminal_unique on public.inbox_v2_work_items using btree (tenant_id, conversation_id) where (state = any (array['new'::inbox_v2_work_item_state, 'assigned'::inbox_v2_work_item_state, 'in_progress'::inbox_v2_work_item_state, 'waiting'::inbox_v2_work_item_state]))",
     unique: true,
+    primary: false
+  }),
+  Object.freeze({
+    name: "inbox_v2_conversation_work_heads_state_idx",
+    definition:
+      "create index inbox_v2_conversation_work_heads_state_idx on public.inbox_v2_conversation_work_heads using btree (tenant_id, current_outcome, intake_decision_high_water, conversation_id)",
+    unique: false,
     primary: false
   }),
   Object.freeze({
@@ -3288,8 +3416,12 @@ function expectedFunctionContract(bundle, signature) {
       /^\s*set\s+([A-Za-z_][A-Za-z0-9_.]*)\s*=\s*([^\r\n]+)\s*$/gimu
     )
   ].map((match) => `${match[1]}=${match[2]}`);
+  let body = normalizeFunctionBody(bodyMatch[2]);
+  if (migrationBundleContains(bundle, MSG002_OUTBOUND_SEND_AUTHORITY_MARKER)) {
+    body = applyInboxV2Msg002ExpectedFunctionOverlay(signature, body, bundle);
+  }
   return Object.freeze({
-    body: normalizeFunctionBody(bodyMatch[2]),
+    body,
     language: language.toLowerCase(),
     resultType: normalizeFunctionResult(resultType),
     securityDefiner: /\bsecurity\s+definer\b/iu.test(header),
@@ -3309,6 +3441,172 @@ function expectedFunctionContract(bundle, signature) {
         : "u",
     config: normalizeFunctionConfig(config)
   });
+}
+
+function applyInboxV2Msg002ExpectedFunctionOverlay(signature, body, bundle) {
+  const replacements = (() => {
+    switch (signature) {
+      case "public.inbox_v2_tm_core_coherence()":
+        return [["core:message.send_external", "core:message.reply_external"]];
+      case "public.inbox_v2_tm_outbound_route_action_valid(text,text,text,text,text,timestamptz,timestamptz,text,text,text,text,text,text,bigint,text,text,bigint,text,text,timestamptz,text,bigint,text,boolean)":
+        return [
+          [
+            "       and binding_snapshot.runtime_health_state = 'ready'",
+            String.raw`       and binding_snapshot.runtime_health_state::text =
+         route_row.runtime_observation_snapshot #>> '{state}'
+       and binding_snapshot.runtime_health_revision::text =
+         route_row.runtime_observation_snapshot #>> '{revision}'
+       and binding_snapshot.runtime_health_checked_at =
+         (route_row.runtime_observation_snapshot #>>
+           '{observedAt}')::timestamptz`
+          ],
+          [
+            String.raw`       and route_row.runtime_observation_snapshot #>> '{state}' = 'ready'
+       and (route_row.runtime_observation_snapshot #>>
+         '{observedAt}')::timestamptz <= expected_authority_at`,
+            String.raw`       and (route_row.runtime_observation_snapshot #>>
+         '{observedAt}')::timestamptz <= expected_authority_at`
+          ]
+        ];
+      case "public.inbox_v2_auth_domain_mutation_coherence()":
+        return [
+          [
+            String.raw`  if v_command.command_type_id in ('core:message.send', 'core:message.receive')
+  then`,
+            String.raw`  if v_command.command_type_id in (
+    'core:message.send',
+    'core:message.receive',
+    'core:source.dispatch.reroute'
+  )
+  then`
+          ],
+          [
+            String.raw`         v_command.command_type_id = 'core:message.send'
+         and (
+           v_source_change_count <> 0
+           or v_source_materialization_count <> 0
+         )`,
+            String.raw`         v_command.command_type_id in (
+           'core:message.send',
+           'core:source.dispatch.reroute'
+         )
+         and (
+           v_source_change_count <> 0
+           or v_source_materialization_count <> 0
+         )`
+          ],
+          [
+            inboxV2Msg002MigrationFragment(
+              bundle,
+              "domain_mutation_dispatch_predecessor_fragment"
+            ),
+            inboxV2Msg002MigrationFragment(
+              bundle,
+              "domain_mutation_dispatch_successor_fragment"
+            )
+          ],
+          [
+            inboxV2Msg002MigrationFragment(
+              bundle,
+              "domain_mutation_audit_predecessor_fragment"
+            ),
+            inboxV2Msg002MigrationFragment(
+              bundle,
+              "domain_mutation_audit_successor_fragment"
+            )
+          ]
+        ];
+      case "public.inbox_v2_atomic_message_creation_coherence()":
+        return [
+          [
+            String.raw`         message_row.origin_kind = 'hulee_external'
+         and command_row.command_type_id = 'core:message.send'
+         and (`,
+            String.raw`         message_row.origin_kind = 'hulee_external'
+         and (
+           (
+             command_row.command_type_id = 'core:message.send'
+             and exists (
+               select 1
+                 from public.inbox_v2_outbound_routes route_row
+                where route_row.tenant_id = message_row.tenant_id
+                  and route_row.id = message_row.origin_outbound_route_id
+                  and route_row.selection_intent_kind <> 'explicit_reroute'
+             )
+           )
+           or (
+             command_row.command_type_id = 'core:source.dispatch.reroute'
+             and exists (
+               select 1
+                 from public.inbox_v2_outbound_routes route_row
+                where route_row.tenant_id = message_row.tenant_id
+                  and route_row.id = message_row.origin_outbound_route_id
+                  and route_row.selection_intent_kind = 'explicit_reroute'
+             )
+           )
+         )
+         and (`
+          ]
+        ];
+      case "public.inbox_v2_atomic_outbound_creation_coherence()":
+        return [
+          [
+            inboxV2Msg002MigrationFragment(
+              bundle,
+              "atomic_outbound_predecessor_fragment"
+            ),
+            inboxV2Msg002MigrationFragment(
+              bundle,
+              "atomic_outbound_successor_fragment"
+            )
+          ]
+        ];
+      default:
+        return [];
+    }
+  })();
+
+  return replacements.reduce((current, [predecessor, successor], index) => {
+    const firstIndex = current.indexOf(predecessor);
+    if (
+      firstIndex < 0 ||
+      current.indexOf(predecessor, firstIndex + predecessor.length) >= 0
+    ) {
+      throw lifecycleError(
+        "inbox_v2.database_lifecycle_invariant",
+        `MSG-002 expected-function overlay found an unreviewed ${signature} body at replacement ${index + 1}.`
+      );
+    }
+    return `${current.slice(0, firstIndex)}${successor}${current.slice(
+      firstIndex + predecessor.length
+    )}`;
+  }, body);
+}
+
+function inboxV2Msg002MigrationFragment(bundle, constantName) {
+  const statement = findLastMigrationStatement(
+    bundle,
+    (candidate) => candidate.includes(MSG002_OUTBOUND_SEND_AUTHORITY_MARKER),
+    "MSG-002 outbound-send authority overlay"
+  );
+  const pattern = new RegExp(
+    `${escapeRegExp(constantName)}\\s+constant\\s+text\\s*:=\\s*\\$fragment\\$([\\s\\S]*?)\\$fragment\\$`,
+    "u"
+  );
+  const match = pattern.exec(statement);
+  if (!match?.[1]) {
+    throw lifecycleError(
+      "inbox_v2.database_lifecycle_invariant",
+      `Cannot extract MSG-002 fragment ${constantName}.`
+    );
+  }
+  return normalizeFunctionBody(match[1]);
+}
+
+function migrationBundleContains(bundle, fragment) {
+  return bundle.migrations.some((migration) =>
+    migration.sql.some((statement) => statement.includes(fragment))
+  );
 }
 
 function expectedTriggerContract(bundle, triggerName) {

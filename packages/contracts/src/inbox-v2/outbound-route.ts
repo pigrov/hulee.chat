@@ -11,6 +11,7 @@ import {
   inboxV2EmployeeReferenceSchema,
   inboxV2ExternalMessageReferenceRefSchema,
   inboxV2ExternalThreadReferenceSchema,
+  inboxV2OutboundDispatchReferenceSchema,
   inboxV2OutboundRouteIdSchema,
   inboxV2OutboundRouteReferenceSchema,
   inboxV2SourceAccountReferenceSchema,
@@ -306,10 +307,24 @@ export const inboxV2OutboundRouteIntentSchema = z.discriminatedUnion("kind", [
     .object({
       kind: z.literal("explicit_reroute"),
       originalRoute: inboxV2OutboundRouteReferenceSchema,
+      originalDispatch: inboxV2OutboundDispatchReferenceSchema,
+      expectedOriginalDispatchRevision: inboxV2EntityRevisionSchema,
       replacementBinding: inboxV2SourceThreadBindingReferenceSchema,
       reasonId: inboxV2CatalogIdSchema
     })
     .strict()
+    .superRefine((intent, context) => {
+      if (
+        intent.originalRoute.tenantId !== intent.originalDispatch.tenantId ||
+        intent.originalRoute.tenantId !== intent.replacementBinding.tenantId
+      ) {
+        addIssue(
+          context,
+          ["originalDispatch"],
+          "Explicit reroute route, dispatch and replacement binding must belong to one tenant."
+        );
+      }
+    })
 ]);
 
 /** Trusted, bounded proof that the exact occurrence owns this reference. */
@@ -1101,6 +1116,75 @@ export type InboxV2OutboundRoute = z.infer<typeof inboxV2OutboundRouteSchema>;
 export type InboxV2OutboundRouteResolutionCommit = z.infer<
   typeof inboxV2OutboundRouteResolutionCommitSchema
 >;
+
+const inboxV2OutboundRouteMaterializationSchema = z
+  .object({
+    routeId: inboxV2OutboundRouteIdSchema,
+    selectedAt: inboxV2TimestampSchema
+  })
+  .strict();
+
+/**
+ * Materializes the pure resolver result into its exact immutable route commit.
+ * Failed resolution remains a route-less commit; the supplied route id is only
+ * consumed when the bounded resolver selects one candidate.
+ */
+export function materializeInboxV2OutboundRouteResolutionCommit(
+  input: unknown,
+  materialization: Readonly<{ routeId: string; selectedAt: string }>
+): InboxV2OutboundRouteResolutionCommit {
+  const request = inboxV2OutboundRouteResolutionInputSchema.parse(input);
+  const routeIdentity =
+    inboxV2OutboundRouteMaterializationSchema.parse(materialization);
+  const result = resolveInboxV2OutboundRoute(request);
+  const route =
+    result.kind === "failed"
+      ? null
+      : {
+          tenantId: request.tenantId,
+          id: routeIdentity.routeId,
+          principal: request.principal,
+          conversation: result.candidate.conversation,
+          externalThread: result.candidate.externalThread,
+          sourceThreadBinding: result.candidate.sourceThreadBinding,
+          sourceAccount: result.candidate.sourceAccount,
+          sourceConnection: result.candidate.sourceConnection,
+          operationId: request.operationId,
+          contentKindId: request.contentKindId,
+          authorizationEpoch: request.authorizationEpoch,
+          requiredConversationPermissionId:
+            request.routePolicy.requiredConversationPermissionId,
+          bindingFence: result.candidate.bindingFence,
+          adapterContract: result.candidate.adapterContract,
+          routeDescriptor: result.candidate.routeDescriptor,
+          routePolicy: policyReferenceOf(request.routePolicy),
+          routePolicyRevision: request.routePolicy.revision,
+          conversationAuthorization: result.candidate.conversationAuthorization,
+          sourceAccountAuthorization:
+            result.candidate.sourceAccountAuthorization,
+          referenceContext: request.referenceContext,
+          runtimeObservationAtResolution: result.candidate.runtimeObservation,
+          selection: {
+            intent: request.intent,
+            reason: result.selectionReason,
+            candidateSnapshotToken: request.candidates.snapshotToken,
+            candidateSnapshotNotAfter: request.candidates.notAfter,
+            fallbackPolicyOrdinal: result.fallbackPolicyOrdinal,
+            selectedAt: routeIdentity.selectedAt
+          },
+          mutationToken: request.mutationToken,
+          idempotencyToken: request.idempotencyToken,
+          correlationToken: request.correlationToken,
+          revision: "1",
+          createdAt: routeIdentity.selectedAt
+        };
+
+  return inboxV2OutboundRouteResolutionCommitSchema.parse({
+    input: request,
+    result,
+    route
+  });
+}
 
 type RouteAuthorizationDecision =
   | z.infer<typeof inboxV2ConversationRouteAuthorizationDecisionSchema>

@@ -351,6 +351,27 @@
       "when": 1784366628935,
       "tag": "0049_inbox_v2_monotonic_timeline",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1784374311294,
+      "tag": "0050_inbox_v2_outbound_send_authority",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1784390290015,
+      "tag": "0051_inbox_v2_outbound_reroute_intent_fence",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1784394964587,
+      "tag": "0052_inbox_v2_conversation_work_head",
+      "breakpoints": true
     }
   ]
 }

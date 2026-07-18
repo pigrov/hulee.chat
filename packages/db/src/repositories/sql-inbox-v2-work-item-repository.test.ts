@@ -14,6 +14,7 @@ import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
 import {
+  buildAdvanceInboxV2ConversationWorkHeadIntakeSql,
   buildAdvanceInboxV2WorkItemServicingTeamSql,
   buildFindInboxV2EmployeeAssignmentFenceVersionSql,
   buildFindInboxV2WorkItemSql,
@@ -26,6 +27,7 @@ import {
   buildListInboxV2WorkItemAssignmentHistorySql,
   buildListInboxV2WorkItemRecoveryCandidatesSql,
   buildLockInboxV2EmployeeAssignmentFencesSql,
+  buildLockInboxV2ConversationWorkHeadSql,
   buildLockInboxV2WorkItemTeamsSql,
   createSqlInboxV2WorkItemRepository,
   type InboxV2WorkItemTransactionExecutor
@@ -47,6 +49,48 @@ const occurredAtOffset = "2026-07-14T12:00:00.000+03:00";
 const occurredAtUtc = "2026-07-14T09:00:00.000Z";
 
 describe("SQL Inbox V2 WorkItem repository", () => {
+  it("locks and advances the Conversation Work head with exact intake CAS", () => {
+    const lock = renderQuery(
+      buildLockInboxV2ConversationWorkHeadSql({ tenantId, conversationId })
+    );
+    expect(normalizeSql(lock.sql)).toContain(
+      "from inbox_v2_conversation_work_heads"
+    );
+    expect(normalizeSql(lock.sql)).toContain("for update");
+    expect(lock.params).toEqual([tenantId, conversationId]);
+
+    const advance = renderQuery(
+      buildAdvanceInboxV2ConversationWorkHeadIntakeSql({
+        tenantId,
+        conversationId,
+        expectedWorkItemCount: "0",
+        expectedIntakeDecisionHighWater: "3",
+        expectedHeadRevision: "4",
+        resultingIntakeDecisionHighWater: "4",
+        outcome: "create_work_item",
+        decidedAt: occurredAtUtc
+      })
+    );
+    expect(normalizeSql(advance.sql)).toContain(
+      "and intake_decision_high_water ="
+    );
+    expect(normalizeSql(advance.sql)).toContain(
+      "and pending_materialization_ordinal is null"
+    );
+    expect(normalizeSql(advance.sql)).toContain("and revision =");
+    expect(advance.params).toEqual([
+      "create_work_item",
+      "4",
+      "1",
+      occurredAtUtc,
+      tenantId,
+      conversationId,
+      "0",
+      "3",
+      "4"
+    ]);
+  });
+
   it("keeps aggregate reads and bounded keyset pages tenant-scoped", () => {
     const statements = [
       buildFindInboxV2WorkItemSql({

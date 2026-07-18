@@ -1,8 +1,10 @@
 import type { z } from "zod";
 
 import { inboxV2CatalogIdSchema } from "./catalog";
+import { inboxV2EntityRevisionSchema } from "./entity-metadata";
 import { inboxV2SourceThreadBindingReferenceSchema } from "./ids";
 import type {
+  InboxV2OutboundDispatchReference,
   InboxV2OutboundRouteReference,
   InboxV2SourceOccurrenceReference,
   InboxV2SourceThreadBindingReference
@@ -157,6 +159,7 @@ const _runtimeInFence: InboxV2SourceThreadBindingFence = {
 declare const occurrenceReference: InboxV2SourceOccurrenceReference;
 declare const bindingReference: InboxV2SourceThreadBindingReference;
 declare const routeReference: InboxV2OutboundRouteReference;
+declare const dispatchReference: InboxV2OutboundDispatchReference;
 declare const policy: InboxV2ThreadRoutePolicy;
 declare const route: InboxV2OutboundRoute;
 declare const resolutionInput: InboxV2OutboundRouteResolutionInput;
@@ -169,6 +172,8 @@ const _occurrenceIntent: InboxV2OutboundRouteIntent = {
 const _rerouteIntent: InboxV2OutboundRouteIntent = {
   kind: "explicit_reroute",
   originalRoute: routeReference,
+  originalDispatch: dispatchReference,
+  expectedOriginalDispatchRevision: inboxV2EntityRevisionSchema.parse("1"),
   replacementBinding: bindingReference,
   reasonId: inboxV2CatalogIdSchema.parse("core:operator-reroute")
 };

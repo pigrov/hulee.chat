@@ -19,6 +19,7 @@ import {
   inboxV2SourceAccountRouteAuthorizationDecisionSchema,
   inboxV2ThreadRoutePolicyEnvelopeSchema,
   inboxV2ThreadRoutePolicySchema,
+  materializeInboxV2OutboundRouteResolutionCommit,
   resolveInboxV2OutboundRoute
 } from "./outbound-route";
 
@@ -620,6 +621,11 @@ describe("Inbox V2 outbound route contracts", () => {
       intent: {
         kind: "explicit_reroute",
         originalRoute: reference("outbound_route", "outbound_route:old"),
+        originalDispatch: reference(
+          "outbound_dispatch",
+          "outbound_dispatch:old"
+        ),
+        expectedOriginalDispatchRevision: "1",
         replacementBinding: binding("b"),
         reasonId: "core:operator-reroute"
       },
@@ -652,6 +658,64 @@ describe("Inbox V2 outbound route contracts", () => {
           candidates: snapshot({ count: 1, explicit: origin, sole: origin })
         })
       ).success
+    ).toBe(false);
+  });
+
+  it("pins an allowed explicit reroute to only the named replacement binding", () => {
+    const replacement = candidate("b");
+    const input = resolutionInput({
+      intent: {
+        kind: "explicit_reroute",
+        originalRoute: reference("outbound_route", "outbound_route:original"),
+        originalDispatch: reference(
+          "outbound_dispatch",
+          "outbound_dispatch:original"
+        ),
+        expectedOriginalDispatchRevision: "1",
+        replacementBinding: binding("b"),
+        reasonId: "core:operator-reroute"
+      },
+      candidates: snapshot({
+        count: 1,
+        explicit: replacement,
+        sole: candidate("a")
+      })
+    });
+
+    expect(resolveInboxV2OutboundRoute(input)).toMatchObject({
+      kind: "selected",
+      candidate: { sourceThreadBinding: binding("b") },
+      selectionReason: "explicit_reroute",
+      fallbackPolicyOrdinal: null
+    });
+    const commit = materializeInboxV2OutboundRouteResolutionCommit(input, {
+      routeId: "outbound_route:rerouted",
+      selectedAt: createdAt
+    });
+    expect(commit.route).toMatchObject({
+      id: "outbound_route:rerouted",
+      sourceThreadBinding: binding("b"),
+      selection: {
+        reason: "explicit_reroute",
+        intent: {
+          kind: "explicit_reroute",
+          replacementBinding: binding("b")
+        }
+      }
+    });
+
+    expect(
+      inboxV2OutboundRouteResolutionInputSchema.safeParse({
+        ...input,
+        intent: {
+          ...input.intent,
+          originalDispatch: reference(
+            "outbound_dispatch",
+            "outbound_dispatch:other-tenant",
+            otherTenantId
+          )
+        }
+      }).success
     ).toBe(false);
   });
 
@@ -703,11 +767,38 @@ describe("Inbox V2 outbound route contracts", () => {
     if (result.kind !== "selected") {
       throw new Error("Expected a structurally selected route.");
     }
-    const route = immutableRoute(input, result);
+    const commit = materializeInboxV2OutboundRouteResolutionCommit(input, {
+      routeId: "outbound_route:route-1",
+      selectedAt: createdAt
+    });
+    const route = commit.route;
+    if (route === null) {
+      throw new Error("Expected a materialized immutable route.");
+    }
     expect(inboxV2OutboundRouteSchema.safeParse(route).success).toBe(true);
+    expect(
+      inboxV2OutboundRouteResolutionCommitSchema.safeParse(commit).success
+    ).toBe(true);
     expect(route.sourceThreadBinding).toEqual(binding("a"));
     expect(route.runtimeObservationAtResolution.state).toBe("unavailable");
     expect("runtimeHealthRevision" in route.bindingFence).toBe(false);
+  });
+
+  it("materializes failed resolution without inventing a route", () => {
+    const input = resolutionInput({ candidates: snapshot({ count: 0 }) });
+    const commit = materializeInboxV2OutboundRouteResolutionCommit(input, {
+      routeId: "outbound_route:not-consumed",
+      selectedAt: createdAt
+    });
+
+    expect(commit.result).toEqual({
+      kind: "failed",
+      error: routeError("route.not_found")
+    });
+    expect(commit.route).toBeNull();
+    expect(
+      inboxV2OutboundRouteResolutionCommitSchema.safeParse(commit).success
+    ).toBe(true);
   });
 
   it("makes the standalone immutable route fail closed outside its commit", () => {

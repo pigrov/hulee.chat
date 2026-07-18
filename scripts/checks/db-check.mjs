@@ -206,6 +206,8 @@ const inboxV2SourceMessageReconciliationEnumNames = [
 ];
 const inboxV2AtomicProviderIoFileName =
   "0046_inbox_v2_atomic_provider_io_closure.sql";
+const inboxV2AtomicProviderIoInvariantName =
+  "INBOX_V2_AUTH_DOMAIN_PROVIDER_IO_CLOSURE_SQL";
 const inboxV2AtomicProviderIoTableNames = [
   "public.inbox_v2_atomic_outbound_dispatch_materializations",
   "public.inbox_v2_atomic_source_resolution_materializations"
@@ -227,6 +229,20 @@ const inboxV2MonotonicTimelineIndexName =
   "inbox_v2_timeline_subject_details_system_event_unique";
 const inboxV2MonotonicTimelineTailSha256 =
   "sha256:942378c4f479cd901d45c09e88c68ac18c0a569c96f112c8bc27c4bbe3946c5e";
+const inboxV2OutboundSendAuthorityFileName =
+  "0050_inbox_v2_outbound_send_authority.sql";
+const inboxV2OutboundSendAuthorityMarker =
+  "-- INB2-MSG-002_NORMAL_SEND_REPLY_AUTHORITY_V1";
+const inboxV2ConversationWorkHeadFileName =
+  "0052_inbox_v2_conversation_work_head.sql";
+const inboxV2ConversationWorkHeadMarker =
+  "-- INB2-MSG-002_CONVERSATION_WORK_HEAD_V1";
+const inboxV2ConversationWorkHeadInvariantName =
+  "INBOX_V2_CONVERSATION_WORK_HEAD_INVARIANTS_SQL";
+const inboxV2ConversationWorkHeadTableName =
+  "public.inbox_v2_conversation_work_heads";
+const inboxV2ConversationWorkHeadEnumName =
+  "public.inbox_v2_conversation_work_outcome";
 const inboxV2SourceProcessingRuntimeInvariantName =
   "INBOX_V2_SOURCE_PROCESSING_RUNTIME_INTEGRITY_SQL";
 const inboxV2SourceRawAdmissionInvariantName =
@@ -387,6 +403,16 @@ const inboxV2MonotonicTimelineMigrations = migrationFiles.filter(
     fileName === inboxV2MonotonicTimelineFileName &&
     sql.includes(inboxV2MonotonicTimelineMarker)
 );
+const inboxV2OutboundSendAuthorityMigrations = migrationFiles.filter(
+  ({ fileName, sql }) =>
+    fileName === inboxV2OutboundSendAuthorityFileName &&
+    sql.includes(inboxV2OutboundSendAuthorityMarker)
+);
+const inboxV2ConversationWorkHeadMigrations = migrationFiles.filter(
+  ({ fileName, sql }) =>
+    fileName === inboxV2ConversationWorkHeadFileName &&
+    sql.includes(inboxV2ConversationWorkHeadMarker)
+);
 const inboxV2SchemaFileNames = (await readdir(inboxV2SchemaDirectory))
   .filter((fileName) => fileName.endsWith(".ts"))
   .sort();
@@ -426,6 +452,10 @@ const inboxV2FoundationInvariantBlocks = inboxV2InvariantBlocks.filter(
 const inboxV2WorkItemInvariantBlocks = inboxV2InvariantBlocks.filter(
   ({ name }) => name === inboxV2WorkItemInvariantName
 );
+const inboxV2ConversationWorkHeadInvariantBlocks =
+  inboxV2InvariantBlocks.filter(
+    ({ name }) => name === inboxV2ConversationWorkHeadInvariantName
+  );
 const inboxV2TimelineMessageInvariantBlocks = inboxV2InvariantBlocks.filter(
   ({ name }) => inboxV2TimelineMessageInvariantNames.has(name)
 );
@@ -441,6 +471,9 @@ const inboxV2AuthorizationRelationsInvariantBlocks =
   inboxV2InvariantBlocks.filter(({ name }) =>
     inboxV2AuthorizationRelationsInvariantNames.has(name)
   );
+const inboxV2AtomicProviderIoInvariantBlocks = inboxV2InvariantBlocks.filter(
+  ({ name }) => name === inboxV2AtomicProviderIoInvariantName
+);
 const inboxV2SecurityDenialInvariantBlocks = inboxV2InvariantBlocks.filter(
   ({ name }) => name === inboxV2SecurityDenialInvariantName
 );
@@ -507,6 +540,12 @@ if (inboxV2WorkItemInvariantBlocks.length !== 1) {
   );
   process.exit(1);
 }
+if (inboxV2ConversationWorkHeadInvariantBlocks.length !== 1) {
+  console.error(
+    `Expected exactly one ${inboxV2ConversationWorkHeadInvariantName} schema block, found ${inboxV2ConversationWorkHeadInvariantBlocks.length}.`
+  );
+  process.exit(1);
+}
 if (
   inboxV2TimelineMessageInvariantBlocks.length !==
   inboxV2TimelineMessageInvariantNames.size
@@ -537,6 +576,12 @@ if (
 ) {
   console.error(
     `Expected ${inboxV2AuthorizationRelationsInvariantNames.size} Inbox V2 authorization-relations invariant SQL blocks, found ${inboxV2AuthorizationRelationsInvariantBlocks.length}.`
+  );
+  process.exit(1);
+}
+if (inboxV2AtomicProviderIoInvariantBlocks.length !== 1) {
+  console.error(
+    `Expected exactly one ${inboxV2AtomicProviderIoInvariantName} schema block, found ${inboxV2AtomicProviderIoInvariantBlocks.length}.`
   );
   process.exit(1);
 }
@@ -610,10 +655,12 @@ const unownedInvariantBlocks = inboxV2InvariantBlocks.filter(
   ({ name }) =>
     !inboxV2FoundationInvariantNames.has(name) &&
     name !== inboxV2WorkItemInvariantName &&
+    name !== inboxV2ConversationWorkHeadInvariantName &&
     !inboxV2TimelineMessageInvariantNames.has(name) &&
     name !== inboxV2EmployeeConversationStateInvariantName &&
     !inboxV2DataGovernancePrivacyInvariantNames.has(name) &&
     !inboxV2AuthorizationRelationsInvariantNames.has(name) &&
+    name !== inboxV2AtomicProviderIoInvariantName &&
     name !== inboxV2SecurityDenialInvariantName &&
     name !== inboxV2RepositoryFoundationInvariantName &&
     name !== inboxV2ConversationTimelineHeadInvariantName &&
@@ -801,6 +848,18 @@ if (inboxV2MonotonicTimelineMigrations.length !== 1) {
   );
   process.exit(1);
 }
+if (inboxV2OutboundSendAuthorityMigrations.length !== 1) {
+  console.error(
+    `Expected exactly one outbound-send-authority migration, found ${inboxV2OutboundSendAuthorityMigrations.length}.`
+  );
+  process.exit(1);
+}
+if (inboxV2ConversationWorkHeadMigrations.length !== 1) {
+  console.error(
+    `Expected exactly one Conversation Work head migration, found ${inboxV2ConversationWorkHeadMigrations.length}.`
+  );
+  process.exit(1);
+}
 
 try {
   assertGlobalMigrationArtifactBijection({
@@ -815,6 +874,26 @@ try {
     targetIndex: 34,
     finalizedMigrationFileName:
       inboxV2AuthorizationRelationsMigrations[0].fileName,
+    migrationFileNames,
+    snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
+      fileName.endsWith("_snapshot.json")
+    )
+  });
+  assertMigrationJournalArtifactParity({
+    journal: drizzleJournal,
+    targetIndex: 50,
+    finalizedMigrationFileName:
+      inboxV2OutboundSendAuthorityMigrations[0].fileName,
+    migrationFileNames,
+    snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
+      fileName.endsWith("_snapshot.json")
+    )
+  });
+  assertMigrationJournalArtifactParity({
+    journal: drizzleJournal,
+    targetIndex: 52,
+    finalizedMigrationFileName:
+      inboxV2ConversationWorkHeadMigrations[0].fileName,
     migrationFileNames,
     snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
       fileName.endsWith("_snapshot.json")
@@ -972,7 +1051,27 @@ try {
 
 assertInboxV2FoundationMigration(inboxV2FoundationMigrations[0]);
 assertInboxV2WorkItemMigration(inboxV2WorkItemMigrations[0]);
-assertInboxV2TimelineMessageMigration(inboxV2TimelineMessageMigrations[0]);
+assertInboxV2TimelineMessageMigration(
+  inboxV2TimelineMessageMigrations[0],
+  restoreInboxV2TimelineMessagePreMsg002InvariantBlocks(
+    inboxV2TimelineMessageInvariantBlocks
+  )
+);
+assertInboxV2AtomicProviderIoMigration(
+  inboxV2AtomicProviderIoMigrations[0],
+  restoreInboxV2AtomicProviderIoPreMsg002InvariantBlock(
+    inboxV2AtomicProviderIoInvariantBlocks[0]
+  )
+);
+assertInboxV2OutboundSendAuthorityMigration(
+  inboxV2OutboundSendAuthorityMigrations[0],
+  inboxV2TimelineMessageMigrations[0],
+  inboxV2AtomicProviderIoMigrations[0]
+);
+assertInboxV2ConversationWorkHeadMigration(
+  inboxV2ConversationWorkHeadMigrations[0],
+  inboxV2ConversationWorkHeadInvariantBlocks[0]
+);
 assertInboxV2EmployeeConversationStateMigration(
   inboxV2EmployeeConversationStateMigrations[0]
 );
@@ -1679,16 +1778,18 @@ async function assertInboxV2MonotonicTimelineGeneratedSchemaParity(migration) {
     baseIndex: 48,
     targetIndex: 49
   });
+  const historicalGenerated =
+    withoutInboxV2Msg002RerouteIntentSchemaDelta(generated);
   const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
   assertDrizzleSnapshotParity(
-    generated.snapshot,
+    historicalGenerated.snapshot,
     checkedInSnapshot,
     snapshotPath
   );
 
   const checkedInStatements = splitMigrationStatements(migration.sql);
   assertExactSqlSequence(
-    generated.statements,
+    historicalGenerated.statements,
     checkedInStatements.slice(0, 1),
     "Inbox V2 MSG-001 ordered generated migration DDL"
   );
@@ -2427,7 +2528,9 @@ function withoutInboxV2OutboxTerminalPayloadSchemaDelta(generated) {
 }
 
 function withoutInboxV2MonotonicTimelineSchemaDelta(generated) {
-  const snapshot = structuredClone(generated.snapshot);
+  const withoutMsg002RerouteIntent =
+    withoutInboxV2Msg002RerouteIntentSchemaDelta(generated);
+  const snapshot = structuredClone(withoutMsg002RerouteIntent.snapshot);
   const subjectDetails =
     snapshot.tables["public.inbox_v2_timeline_subject_details"];
   if (!subjectDetails?.indexes?.[inboxV2MonotonicTimelineIndexName]) {
@@ -2437,16 +2540,70 @@ function withoutInboxV2MonotonicTimelineSchemaDelta(generated) {
   }
   delete subjectDetails.indexes[inboxV2MonotonicTimelineIndexName];
 
-  const matchingStatements = generated.statements.filter((statement) =>
-    statement.includes(inboxV2MonotonicTimelineIndexName)
+  const matchingStatements = withoutMsg002RerouteIntent.statements.filter(
+    (statement) => statement.includes(inboxV2MonotonicTimelineIndexName)
   );
   if (matchingStatements.length !== 1) {
     throw new Error(
       `Generated MSG-001 schema must contain the system-event uniqueness index exactly once; found ${matchingStatements.length}.`
     );
   }
-  const statements = generated.statements.filter(
+  const statements = withoutMsg002RerouteIntent.statements.filter(
     (statement) => !statement.includes(inboxV2MonotonicTimelineIndexName)
+  );
+  return { snapshot, statements };
+}
+
+function withoutInboxV2Msg002RerouteIntentSchemaDelta(generated) {
+  const withoutConversationWorkHead =
+    withoutInboxV2ConversationWorkHeadSchemaDelta(generated);
+  const snapshot = structuredClone(withoutConversationWorkHead.snapshot);
+  const route = snapshot.tables["public.inbox_v2_outbound_routes"];
+  const constraintName = "inbox_v2_outbound_routes_selection_check";
+  const constraint = route?.checkConstraints?.[constraintName];
+  if (!constraint) {
+    throw new Error(
+      "Generated schema is missing the outbound-route selection constraint."
+    );
+  }
+  constraint.value = replaceExactSchemaFragment(
+    constraint.value,
+    '\n            and coalesce((char_length("inbox_v2_outbound_routes"."selection_intent_snapshot" #>> \'{originalDispatch,id}\') <= 256\n' +
+      "    and \"inbox_v2_outbound_routes\".\"selection_intent_snapshot\" #>> '{originalDispatch,id}' ~ '^outbound_dispatch:[A-Za-z0-9][A-Za-z0-9._~:-]{0,199}$'), false)\n" +
+      "            and coalesce((\"inbox_v2_outbound_routes\".\"selection_intent_snapshot\" ->> 'expectedOriginalDispatchRevision' ~ '^[1-9][0-9]{0,18}$'\n" +
+      "    and (\n" +
+      '      char_length("inbox_v2_outbound_routes"."selection_intent_snapshot" ->> \'expectedOriginalDispatchRevision\') < 19\n' +
+      "      or \"inbox_v2_outbound_routes\".\"selection_intent_snapshot\" ->> 'expectedOriginalDispatchRevision' <= '9223372036854775807'\n" +
+      "    )), false)",
+    "",
+    "MSG-002 original Dispatch selection fences"
+  );
+  constraint.value = replaceExactSchemaFragment(
+    constraint.value,
+    "\n              'originalDispatch', jsonb_build_object(\n" +
+      '                \'tenantId\', "inbox_v2_outbound_routes"."tenant_id",\n' +
+      "                'kind', 'outbound_dispatch',\n" +
+      "                'id', \"inbox_v2_outbound_routes\".\"selection_intent_snapshot\" #>> '{originalDispatch,id}'\n" +
+      "              ),\n" +
+      "              'expectedOriginalDispatchRevision',\n" +
+      '                "inbox_v2_outbound_routes"."selection_intent_snapshot" ->> \'expectedOriginalDispatchRevision\',',
+    "",
+    "MSG-002 canonical reroute intent fields"
+  );
+  const statements = withoutConversationWorkHead.statements.filter(
+    (statement) => !statement.includes(constraintName)
+  );
+  return { snapshot, statements };
+}
+
+function withoutInboxV2ConversationWorkHeadSchemaDelta(generated) {
+  const snapshot = structuredClone(generated.snapshot);
+  delete snapshot.tables[inboxV2ConversationWorkHeadTableName];
+  delete snapshot.enums[inboxV2ConversationWorkHeadEnumName];
+  const statements = generated.statements.filter(
+    (statement) =>
+      !statement.includes("inbox_v2_conversation_work_heads") &&
+      !statement.includes("inbox_v2_conversation_work_outcome")
   );
   return { snapshot, statements };
 }
@@ -2880,7 +3037,7 @@ function assertInboxV2WorkItemMigration(migration) {
   }
 }
 
-function assertInboxV2TimelineMessageMigration(migration) {
+function assertInboxV2TimelineMessageMigration(migration, invariantBlocks) {
   if (!migration.fileName.startsWith("0031_")) {
     console.error(
       `${migration.fileName} must be the finalized Inbox V2 Timeline/Message migration at index 0031.`
@@ -2891,7 +3048,7 @@ function assertInboxV2TimelineMessageMigration(migration) {
     migration,
     finalizedMarker: inboxV2TimelineMessageMarker,
     preflightMarker: inboxV2TimelineMessagePreflightMarker,
-    invariantBlocks: inboxV2TimelineMessageInvariantBlocks,
+    invariantBlocks,
     preflightDescription: "Timeline/Message"
   });
   try {
@@ -2913,6 +3070,407 @@ function assertInboxV2TimelineMessageMigration(migration) {
       `${migration.fileName}: ${error instanceof Error ? error.message : String(error)}`
     );
     process.exit(1);
+  }
+}
+
+function getInboxV2Msg002FunctionTransforms() {
+  return Object.freeze([
+    Object.freeze({
+      slug: "core_coherence",
+      owner: "timeline",
+      definitionSignature: "public.inbox_v2_tm_core_coherence()",
+      regprocedureSignature: "public.inbox_v2_tm_core_coherence()",
+      predecessorConstant: "core_predecessor_md5",
+      successorConstant: "core_successor_md5",
+      replacements: Object.freeze([
+        Object.freeze({
+          predecessor: "core:message.send_external",
+          successor: "core:message.reply_external"
+        })
+      ]),
+      restoreReplacements: Object.freeze([
+        Object.freeze({
+          predecessor: "when 'none' then 'core:message.reply_external'",
+          successor: "when 'none' then 'core:message.send_external'"
+        })
+      ])
+    }),
+    Object.freeze({
+      slug: "route_action",
+      owner: "timeline",
+      definitionSignature: "public.inbox_v2_tm_outbound_route_action_valid(",
+      regprocedureSignature:
+        "public.inbox_v2_tm_outbound_route_action_valid(text,text,text,text,text,timestamptz,timestamptz,text,text,text,text,text,text,bigint,text,text,bigint,text,text,timestamptz,text,bigint,text,boolean)",
+      predecessorConstant: "route_action_predecessor_md5",
+      successorConstant: "route_action_successor_md5",
+      replacements: Object.freeze([
+        Object.freeze({
+          predecessor:
+            "       and binding_snapshot.runtime_health_state = 'ready'",
+          successor: String.raw`       and binding_snapshot.runtime_health_state::text =
+         route_row.runtime_observation_snapshot #>> '{state}'
+       and binding_snapshot.runtime_health_revision::text =
+         route_row.runtime_observation_snapshot #>> '{revision}'
+       and binding_snapshot.runtime_health_checked_at =
+         (route_row.runtime_observation_snapshot #>>
+           '{observedAt}')::timestamptz`
+        }),
+        Object.freeze({
+          predecessor: String.raw`       and route_row.runtime_observation_snapshot #>> '{state}' = 'ready'
+       and (route_row.runtime_observation_snapshot #>>
+         '{observedAt}')::timestamptz <= expected_authority_at`,
+          successor: String.raw`       and (route_row.runtime_observation_snapshot #>>
+         '{observedAt}')::timestamptz <= expected_authority_at`
+        })
+      ])
+    }),
+    Object.freeze({
+      slug: "domain_mutation",
+      owner: "atomic",
+      definitionSignature: "public.inbox_v2_auth_domain_mutation_coherence()",
+      regprocedureSignature: "public.inbox_v2_auth_domain_mutation_coherence()",
+      predecessorConstant: "domain_mutation_predecessor_md5",
+      successorConstant: "domain_mutation_successor_md5",
+      replacements: Object.freeze([
+        Object.freeze({
+          predecessor: String.raw`  if v_command.command_type_id in ('core:message.send', 'core:message.receive')
+  then`,
+          successor: String.raw`  if v_command.command_type_id in (
+    'core:message.send',
+    'core:message.receive',
+    'core:source.dispatch.reroute'
+  )
+  then`
+        }),
+        Object.freeze({
+          predecessor: String.raw`         v_command.command_type_id = 'core:message.send'
+         and (
+           v_source_change_count <> 0
+           or v_source_materialization_count <> 0
+         )`,
+          successor: String.raw`         v_command.command_type_id in (
+           'core:message.send',
+           'core:source.dispatch.reroute'
+         )
+         and (
+           v_source_change_count <> 0
+           or v_source_materialization_count <> 0
+         )`
+        }),
+        Object.freeze({
+          predecessor: extractInboxV2Msg002MigrationFragment(
+            "domain_mutation_dispatch_predecessor_fragment"
+          ),
+          successor: extractInboxV2Msg002MigrationFragment(
+            "domain_mutation_dispatch_successor_fragment"
+          )
+        }),
+        Object.freeze({
+          predecessor: extractInboxV2Msg002MigrationFragment(
+            "domain_mutation_audit_predecessor_fragment"
+          ),
+          successor: extractInboxV2Msg002MigrationFragment(
+            "domain_mutation_audit_successor_fragment"
+          )
+        })
+      ])
+    }),
+    Object.freeze({
+      slug: "atomic_message",
+      owner: "atomic",
+      definitionSignature:
+        "public.inbox_v2_atomic_message_creation_coherence()",
+      regprocedureSignature:
+        "public.inbox_v2_atomic_message_creation_coherence()",
+      predecessorConstant: "atomic_message_predecessor_md5",
+      successorConstant: "atomic_message_successor_md5",
+      replacements: Object.freeze([
+        Object.freeze({
+          predecessor: String.raw`         message_row.origin_kind = 'hulee_external'
+         and command_row.command_type_id = 'core:message.send'
+         and (`,
+          successor: String.raw`         message_row.origin_kind = 'hulee_external'
+         and (
+           (
+             command_row.command_type_id = 'core:message.send'
+             and exists (
+               select 1
+                 from public.inbox_v2_outbound_routes route_row
+                where route_row.tenant_id = message_row.tenant_id
+                  and route_row.id = message_row.origin_outbound_route_id
+                  and route_row.selection_intent_kind <> 'explicit_reroute'
+             )
+           )
+           or (
+             command_row.command_type_id = 'core:source.dispatch.reroute'
+             and exists (
+               select 1
+                 from public.inbox_v2_outbound_routes route_row
+                where route_row.tenant_id = message_row.tenant_id
+                  and route_row.id = message_row.origin_outbound_route_id
+                  and route_row.selection_intent_kind = 'explicit_reroute'
+             )
+           )
+         )
+         and (`
+        })
+      ])
+    }),
+    Object.freeze({
+      slug: "atomic_outbound",
+      owner: "atomic",
+      definitionSignature:
+        "public.inbox_v2_atomic_outbound_creation_coherence()",
+      regprocedureSignature:
+        "public.inbox_v2_atomic_outbound_creation_coherence()",
+      predecessorConstant: "atomic_outbound_predecessor_md5",
+      successorConstant: "atomic_outbound_successor_md5",
+      replacements: Object.freeze([
+        Object.freeze({
+          predecessor: extractInboxV2Msg002MigrationFragment(
+            "atomic_outbound_predecessor_fragment"
+          ),
+          successor: extractInboxV2Msg002MigrationFragment(
+            "atomic_outbound_successor_fragment"
+          )
+        })
+      ])
+    })
+  ]);
+}
+
+function extractInboxV2Msg002MigrationFragment(constantName) {
+  const migration = inboxV2OutboundSendAuthorityMigrations[0];
+  if (!migration) {
+    throw new Error("Missing Inbox V2 MSG-002 migration.");
+  }
+  const pattern = new RegExp(
+    `${escapeRegExp(constantName)}\\s+constant\\s+text\\s*:=\\s*\\$fragment\\$([\\s\\S]*?)\\$fragment\\$`,
+    "u"
+  );
+  const match = pattern.exec(migration.sql.replaceAll("\r\n", "\n"));
+  if (!match?.[1]) {
+    throw new Error(`Missing MSG-002 fragment constant ${constantName}.`);
+  }
+  return match[1];
+}
+
+function assertInboxV2OutboundSendAuthorityMigration(
+  migration,
+  timelineMessageMigration,
+  atomicProviderIoMigration
+) {
+  if (migration.fileName !== inboxV2OutboundSendAuthorityFileName) {
+    throw new Error(
+      `${migration.fileName} must be the Inbox V2 outbound-send-authority migration at index 0050.`
+    );
+  }
+  const statements = splitMigrationStatements(migration.sql);
+  if (statements.length !== 1) {
+    throw new Error(
+      `${migration.fileName} must contain exactly one guarded function-rewrite statement.`
+    );
+  }
+  const requiredFragments = [
+    inboxV2OutboundSendAuthorityMarker,
+    "do $migration$",
+    "old_occurrence_count",
+    "new_occurrence_count"
+  ];
+  for (const transform of getInboxV2Msg002FunctionTransforms()) {
+    const ownerMigration =
+      transform.owner === "timeline"
+        ? timelineMessageMigration
+        : atomicProviderIoMigration;
+    const predecessorBody = extractMigrationFunctionBody(
+      ownerMigration.sql,
+      transform.definitionSignature
+    );
+    const successorBody = applyInboxV2Msg002Replacements(
+      predecessorBody,
+      transform.replacements,
+      `MSG-002 ${transform.slug} predecessor body`
+    );
+    const predecessorMd5 = createHash("md5")
+      .update(predecessorBody)
+      .digest("hex");
+    const successorMd5 = createHash("md5").update(successorBody).digest("hex");
+    requiredFragments.push(
+      transform.regprocedureSignature,
+      `${transform.predecessorConstant} constant text :=`,
+      `'${predecessorMd5}'`,
+      `${transform.successorConstant} constant text :=`,
+      `'${successorMd5}'`,
+      `inbox_v2.msg002_${transform.slug}_missing`,
+      `inbox_v2.msg002_${transform.slug}_successor_mismatch`,
+      `inbox_v2.msg002_${transform.slug}_unreviewed_shape`,
+      ...transform.replacements.flatMap(({ predecessor, successor }) => [
+        predecessor,
+        successor
+      ])
+    );
+  }
+  for (const fragment of requiredFragments) {
+    if (!migration.sql.includes(fragment)) {
+      throw new Error(
+        `${migration.fileName} is missing outbound-send authority SQL: ${fragment}.`
+      );
+    }
+  }
+}
+
+function assertInboxV2ConversationWorkHeadMigration(migration, invariantBlock) {
+  if (migration.fileName !== inboxV2ConversationWorkHeadFileName) {
+    throw new Error(
+      `${migration.fileName} must be the Conversation Work head migration at index 0052.`
+    );
+  }
+  const statements = splitMigrationStatements(migration.sql);
+  if (statements.length !== 17) {
+    throw new Error(
+      `${migration.fileName} must contain four generated DDL statements and thirteen reviewed Conversation Work head statements.`
+    );
+  }
+  const markerIndex = migration.sql.indexOf(inboxV2ConversationWorkHeadMarker);
+  if (
+    markerIndex < 0 ||
+    migration.sql.indexOf(
+      inboxV2ConversationWorkHeadMarker,
+      markerIndex + inboxV2ConversationWorkHeadMarker.length
+    ) >= 0
+  ) {
+    throw new Error(
+      `${migration.fileName} must contain its Conversation Work head marker exactly once.`
+    );
+  }
+  const normalizedTail = migration.sql
+    .slice(markerIndex)
+    .replaceAll("--> statement-breakpoint", " ")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .toLowerCase();
+  const normalizedInvariant = invariantBlock.sql
+    .replace(/\s+/gu, " ")
+    .trim()
+    .toLowerCase();
+  if (normalizedTail !== normalizedInvariant) {
+    throw new Error(
+      `${migration.fileName} is stale against ${invariantBlock.name}.`
+    );
+  }
+  for (const fragment of [
+    'CREATE TYPE "public"."inbox_v2_conversation_work_outcome"',
+    'CREATE TABLE "inbox_v2_conversation_work_heads"',
+    'ADD CONSTRAINT "inbox_v2_conversation_work_heads_conversation_fk"',
+    'CREATE INDEX "inbox_v2_conversation_work_heads_state_idx"',
+    '"pending_materialization_ordinal" bigint',
+    "\"current_outcome\" = 'pending_intake'",
+    "lock table public.inbox_v2_conversations,",
+    "on conflict (tenant_id, conversation_id) do update",
+    "create or replace function public.inbox_v2_conversation_work_head_guard()",
+    "create or replace function public.inbox_v2_conversation_work_head_bootstrap()",
+    "create or replace function public.inbox_v2_conversation_work_head_advance()",
+    "create or replace function public.inbox_v2_conversation_work_head_coherence()",
+    "create trigger inbox_v2_conversations_work_head_insert_trigger",
+    "create constraint trigger inbox_v2_conversation_work_heads_coherence_constraint",
+    "deferrable initially deferred",
+    "set search_path = pg_catalog, public, pg_temp"
+  ]) {
+    if (!migration.sql.toLowerCase().includes(fragment.toLowerCase())) {
+      throw new Error(
+        `${migration.fileName} is missing Conversation Work head SQL: ${fragment}.`
+      );
+    }
+  }
+  if (/\bDROP\s+(?:TABLE|COLUMN|TYPE)\b/iu.test(migration.sql)) {
+    throw new Error(`${migration.fileName} must remain additive.`);
+  }
+}
+
+function applyInboxV2Msg002Replacements(value, replacements, label) {
+  return replacements.reduce(
+    (current, { predecessor, successor }, index) =>
+      replaceExactSchemaFragment(
+        current,
+        predecessor,
+        successor,
+        `${label} replacement ${index + 1}`
+      ),
+    value
+  );
+}
+
+function extractMigrationFunctionBody(sql, signature) {
+  const normalized = sql.replaceAll("\r\n", "\n");
+  const signatureIndex = normalized.indexOf(
+    `create or replace function ${signature}`
+  );
+  const delimiter = "$function$";
+  const bodyStart = normalized.indexOf(`as ${delimiter}`, signatureIndex);
+  const bodyEnd = normalized.indexOf(
+    `${delimiter};`,
+    bodyStart + delimiter.length
+  );
+  if (signatureIndex < 0 || bodyStart < 0 || bodyEnd < 0) {
+    throw new Error(
+      `Cannot extract historical function body for ${signature}.`
+    );
+  }
+  return normalized.slice(bodyStart + `as ${delimiter}`.length, bodyEnd);
+}
+
+function restoreInboxV2TimelineMessagePreMsg002InvariantBlocks(blocks) {
+  return blocks.map((block) =>
+    block.name === "INBOX_V2_TIMELINE_MESSAGE_INVARIANTS_SQL"
+      ? restoreInboxV2Msg002FunctionBodies(block, "timeline")
+      : block
+  );
+}
+
+function restoreInboxV2AtomicProviderIoPreMsg002InvariantBlock(block) {
+  return restoreInboxV2Msg002FunctionBodies(block, "atomic");
+}
+
+function restoreInboxV2Msg002FunctionBodies(block, owner) {
+  let restoredSql = block.sql;
+  for (const transform of getInboxV2Msg002FunctionTransforms().filter(
+    (candidate) => candidate.owner === owner
+  )) {
+    const successorBody = extractMigrationFunctionBody(
+      restoredSql,
+      transform.definitionSignature
+    );
+    const reverseReplacements =
+      transform.restoreReplacements ??
+      [...transform.replacements]
+        .reverse()
+        .map(({ predecessor, successor }) => ({
+          predecessor: successor,
+          successor: predecessor
+        }));
+    const predecessorBody = applyInboxV2Msg002Replacements(
+      successorBody,
+      reverseReplacements,
+      `MSG-002 ${transform.slug} schema restore`
+    );
+    restoredSql = replaceExactSchemaFragment(
+      restoredSql,
+      successorBody,
+      predecessorBody,
+      `MSG-002 ${transform.slug} schema-owned function body`
+    );
+  }
+  return { ...block, sql: restoredSql };
+}
+
+function assertInboxV2AtomicProviderIoMigration(migration, invariantBlock) {
+  if (
+    normalizeSqlStatement(migration.sql) !==
+    normalizeSqlStatement(invariantBlock.sql)
+  ) {
+    throw new Error(
+      `${migration.fileName} is stale against schema block ${invariantBlock.name} from ${invariantBlock.fileName}.`
+    );
   }
 }
 
@@ -3366,7 +3924,7 @@ function assertInboxV2InvariantMigration({
 function extractInboxV2InvariantBlocks(fileName, source) {
   return [
     ...source.matchAll(
-      /export const (INBOX_V2_[A-Z0-9_]+(?:INTEGRITY|INVARIANTS)_SQL) = String\.raw`([\s\S]*?)`;/g
+      /export const (INBOX_V2_[A-Z0-9_]+(?:INTEGRITY|INVARIANTS|CLOSURE)_SQL) = String\.raw`([\s\S]*?)`;/g
     )
   ].map((match) => ({
     fileName,

@@ -29,6 +29,7 @@ import {
   inboxV2SourceOccurrenceReferenceSchema,
   inboxV2TenantIdSchema
 } from "./ids";
+import { inboxV2NamespacedIdSchema } from "./namespace";
 import {
   inboxV2SourceOccurrenceResolutionCommitSchema,
   type InboxV2SourceOccurrenceResolutionCommit
@@ -39,6 +40,7 @@ import {
   type InboxV2OutboundRoute
 } from "./outbound-route";
 import { inboxV2SourceThreadBindingCurrentHeadSchema } from "./source-thread-binding";
+import { calculateInboxV2CanonicalSha256 } from "./recipient-sync-hash";
 import { inboxV2AuthorizationEpochSchema } from "./authorization-epoch";
 import {
   inboxV2AdapterContractSnapshotSchema,
@@ -51,6 +53,10 @@ import {
   createInboxV2SchemaEnvelopeSchema,
   INBOX_V2_INITIAL_SCHEMA_VERSION
 } from "./schema-version";
+import {
+  inboxV2OutboxIntentIdSchema,
+  type InboxV2OutboxIntentId
+} from "./sync-primitives";
 
 export const INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID =
   "core:inbox-v2.outbound-dispatch" as const;
@@ -64,6 +70,8 @@ export const INBOX_V2_OUTBOUND_DISPATCH_RECONCILIATION_COMMIT_SCHEMA_ID =
   "core:inbox-v2.outbound-dispatch-reconciliation-commit" as const;
 export const INBOX_V2_OUTBOUND_DISPATCH_ROUTE_FAILURE_COMMIT_SCHEMA_ID =
   "core:inbox-v2.outbound-dispatch-route-failure-commit" as const;
+export const INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_ID =
+  "core:inbox-v2.outbound-dispatch-reroute-commit" as const;
 export const INBOX_V2_OUTBOUND_DISPATCH_ARTIFACT_SCHEMA_ID =
   "core:inbox-v2.outbound-dispatch-artifact" as const;
 export const INBOX_V2_OUTBOUND_DISPATCH_ARTIFACT_REFERENCE_LINK_SCHEMA_ID =
@@ -73,6 +81,8 @@ export const INBOX_V2_OUTBOUND_DISPATCH_ARTIFACT_ASSOCIATION_COMMIT_SCHEMA_ID =
 export const INBOX_V2_OUTBOUND_MULTI_SEND_OPERATION_SCHEMA_ID =
   "core:inbox-v2.outbound-multi-send-operation" as const;
 export const INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION =
+  INBOX_V2_INITIAL_SCHEMA_VERSION;
+export const INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_VERSION =
   INBOX_V2_INITIAL_SCHEMA_VERSION;
 
 export const inboxV2OutboundActorSchema = z.discriminatedUnion("kind", [
@@ -830,7 +840,7 @@ export const inboxV2OutboundDispatchReconciliationCommitSchema = z
     addReconciliationCommitIssues(commit, context);
   });
 
-/** Structural fail-closed transition with zero provider attempts or I/O. */
+/** Structural terminal transition or runtime retry proof with zero provider I/O. */
 export const inboxV2OutboundDispatchRouteFailureCommitSchema = z
   .object({
     tenantId: inboxV2TenantIdSchema,
@@ -846,6 +856,92 @@ export const inboxV2OutboundDispatchRouteFailureCommitSchema = z
   .superRefine((commit, context) => {
     addRouteFailureCommitIssues(commit, context);
   });
+
+/** Atomic proof that a queued dispatch was cancelled before its replacement. */
+export const inboxV2OutboundDispatchRerouteCommitSchema = z
+  .object({
+    tenantId: inboxV2TenantIdSchema,
+    original: z
+      .object({
+        dispatchBefore: inboxV2OutboundDispatchSchema,
+        dispatchAfter: inboxV2OutboundDispatchSchema,
+        outboxIntentId: inboxV2OutboxIntentIdSchema
+      })
+      .strict(),
+    replacement: z
+      .object({
+        message: inboxV2MessageReferenceSchema,
+        route: inboxV2OutboundRouteReferenceSchema,
+        dispatch: inboxV2OutboundDispatchReferenceSchema,
+        outboxIntentId: inboxV2OutboxIntentIdSchema
+      })
+      .strict(),
+    reasonId: inboxV2CatalogIdSchema,
+    changedAt: inboxV2TimestampSchema
+  })
+  .strict()
+  .superRefine((commit, context) => {
+    addRerouteCommitIssues(commit, context);
+  });
+
+/** One canonical outbox result shared by atomic persistence and worker replay. */
+export type InboxV2RouteFailureOutboxFinalization =
+  | Readonly<{
+      kind: "retry";
+      resultHash: ReturnType<typeof calculateInboxV2CanonicalSha256>;
+      errorCode: ReturnType<typeof inboxV2NamespacedIdSchema.parse>;
+      retryAfterSeconds: number;
+    }>
+  | Readonly<{
+      kind: "dead";
+      resultHash: ReturnType<typeof calculateInboxV2CanonicalSha256>;
+      errorCode: ReturnType<typeof inboxV2NamespacedIdSchema.parse>;
+      resultReference: null;
+    }>;
+
+export function deriveInboxV2RouteFailureOutboxFinalization(
+  input: Readonly<{
+    intentId: InboxV2OutboxIntentId;
+    commit: InboxV2OutboundDispatchRouteFailureCommit;
+  }>
+): InboxV2RouteFailureOutboxFinalization {
+  const intentId = inboxV2OutboxIntentIdSchema.parse(input.intentId);
+  const commit = inboxV2OutboundDispatchRouteFailureCommitSchema.parse(
+    input.commit
+  );
+  const resultHash = calculateInboxV2CanonicalSha256({
+    domain: "core:inbox-v2.provider-dispatch-route-failure",
+    hashVersion: "v1",
+    intentId,
+    commit
+  });
+  const errorCode = inboxV2NamespacedIdSchema.parse(
+    `core:${commit.error.code}`
+  );
+  return commit.error.code === "route.runtime_unavailable"
+    ? {
+        kind: "retry",
+        resultHash,
+        errorCode,
+        retryAfterSeconds: deterministicRuntimeRetrySeconds(resultHash)
+      }
+    : {
+        kind: "dead",
+        resultHash,
+        errorCode,
+        resultReference: null
+      };
+}
+
+function deterministicRuntimeRetrySeconds(resultHash: string): number {
+  const digest = resultHash.includes(":")
+    ? resultHash.slice(resultHash.lastIndexOf(":") + 1)
+    : resultHash;
+  const entropy = Number.parseInt(digest.slice(0, 8), 16);
+  const minimumSeconds = 5;
+  const maximumSeconds = 60;
+  return minimumSeconds + (entropy % (maximumSeconds - minimumSeconds + 1));
+}
 
 export const inboxV2OutboundDispatchArtifactSchema = z
   .object({
@@ -1079,6 +1175,12 @@ export const inboxV2OutboundDispatchRouteFailureCommitEnvelopeSchema =
     INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
     inboxV2OutboundDispatchRouteFailureCommitSchema
   );
+export const inboxV2OutboundDispatchRerouteCommitEnvelopeSchema =
+  createInboxV2SchemaEnvelopeSchema(
+    INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_ID,
+    INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_VERSION,
+    inboxV2OutboundDispatchRerouteCommitSchema
+  );
 export const inboxV2OutboundDispatchArtifactEnvelopeSchema =
   createInboxV2SchemaEnvelopeSchema(
     INBOX_V2_OUTBOUND_DISPATCH_ARTIFACT_SCHEMA_ID,
@@ -1121,6 +1223,9 @@ export type InboxV2OutboundDispatchReconciliationCommit = z.infer<
 >;
 export type InboxV2OutboundDispatchRouteFailureCommit = z.infer<
   typeof inboxV2OutboundDispatchRouteFailureCommitSchema
+>;
+export type InboxV2OutboundDispatchRerouteCommit = z.infer<
+  typeof inboxV2OutboundDispatchRerouteCommitSchema
 >;
 export type InboxV2OutboundDispatchArtifact = z.infer<
   typeof inboxV2OutboundDispatchArtifactSchema
@@ -1481,6 +1586,61 @@ function addReconciliationCommitIssues(
   }
 }
 
+function addRerouteCommitIssues(
+  commit: z.infer<typeof inboxV2OutboundDispatchRerouteCommitSchema>,
+  context: z.RefinementCtx
+): void {
+  const before = commit.original.dispatchBefore;
+  const after = commit.original.dispatchAfter;
+  const replacement = commit.replacement;
+  const oneTenant =
+    before.tenantId === commit.tenantId &&
+    after.tenantId === commit.tenantId &&
+    replacement.message.tenantId === commit.tenantId &&
+    replacement.route.tenantId === commit.tenantId &&
+    replacement.dispatch.tenantId === commit.tenantId;
+  if (!oneTenant) {
+    addIssue(
+      context,
+      ["tenantId"],
+      "Reroute cancellation and replacement identities must belong to one tenant."
+    );
+  }
+
+  const exactCancellation =
+    sameDispatchIdentity(before, after) &&
+    before.state === "queued" &&
+    before.revision === "1" &&
+    after.state === "cancelled" &&
+    after.revision === "2" &&
+    after.attemptCount === before.attemptCount &&
+    after.activeAttempt === null &&
+    after.lastAttempt === null &&
+    after.retryAuthorization === null &&
+    after.updatedAt === commit.changedAt &&
+    Date.parse(commit.changedAt) >= Date.parse(before.updatedAt);
+  if (!exactCancellation) {
+    addIssue(
+      context,
+      ["original", "dispatchAfter"],
+      "Reroute must CAS the exact untouched queued revision 1 dispatch to cancelled revision 2 at changedAt."
+    );
+  }
+
+  if (
+    sameReference(before.message, replacement.message) ||
+    sameReference(before.route, replacement.route) ||
+    sameReference(dispatchReferenceOf(before), replacement.dispatch) ||
+    commit.original.outboxIntentId === replacement.outboxIntentId
+  ) {
+    addIssue(
+      context,
+      ["replacement"],
+      "Reroute replacement Message, route, dispatch and outbox intent identities must be distinct from the original send."
+    );
+  }
+}
+
 function addRouteFailureCommitIssues(
   commit: z.infer<typeof inboxV2OutboundDispatchRouteFailureCommitSchema>,
   context: z.RefinementCtx
@@ -1490,11 +1650,32 @@ function addRouteFailureCommitIssues(
   const inactive =
     head.remoteAccess.state !== "active" ||
     head.administrative.state !== "enabled";
+  const runtimeUnavailable =
+    head.runtimeHealth.state !== "ready" &&
+    head.runtimeHealth.state !== "degraded";
   const expectedError = fenceChanged
     ? "route.binding_changed"
     : inactive
       ? "route.inactive"
-      : null;
+      : runtimeUnavailable
+        ? "route.runtime_unavailable"
+        : null;
+  const runtimeRetry = expectedError === "route.runtime_unavailable";
+  const validDispatchEffect = runtimeRetry
+    ? sameValue(commit.dispatchBefore, commit.dispatchAfter)
+    : sameDispatchIdentity(commit.dispatchBefore, commit.dispatchAfter) &&
+      commit.dispatchAfter.state === "terminal_failure" &&
+      commit.dispatchAfter.attemptCount ===
+        commit.dispatchBefore.attemptCount &&
+      commit.dispatchAfter.activeAttempt === null &&
+      sameNullableReference(
+        commit.dispatchAfter.lastAttempt,
+        commit.dispatchBefore.lastAttempt
+      ) &&
+      commit.dispatchAfter.retryAuthorization === null &&
+      BigInt(commit.dispatchAfter.revision) ===
+        BigInt(commit.dispatchBefore.revision) + 1n &&
+      commit.dispatchAfter.updatedAt === commit.failedAt;
   if (
     route.tenantId !== commit.tenantId ||
     head.tenantId !== commit.tenantId ||
@@ -1514,23 +1695,12 @@ function addRouteFailureCommitIssues(
       route.adapterContract.loadedByTrustedServiceId ||
     Date.parse(commit.failedAt) < Date.parse(head.updatedAt) ||
     Date.parse(commit.failedAt) < Date.parse(commit.dispatchBefore.updatedAt) ||
-    !sameDispatchIdentity(commit.dispatchBefore, commit.dispatchAfter) ||
-    commit.dispatchAfter.state !== "terminal_failure" ||
-    commit.dispatchAfter.attemptCount !== commit.dispatchBefore.attemptCount ||
-    commit.dispatchAfter.activeAttempt !== null ||
-    !sameNullableReference(
-      commit.dispatchAfter.lastAttempt,
-      commit.dispatchBefore.lastAttempt
-    ) ||
-    commit.dispatchAfter.retryAuthorization !== null ||
-    BigInt(commit.dispatchAfter.revision) !==
-      BigInt(commit.dispatchBefore.revision) + 1n ||
-    commit.dispatchAfter.updatedAt !== commit.failedAt
+    !validDispatchEffect
   ) {
     addIssue(
       context,
       ["dispatchAfter"],
-      "Structural route failure must terminate the exact dispatch without opening an attempt."
+      "Structural route failure must terminally CAS the exact dispatch; runtime unavailability must leave its pinned route and dispatch head unchanged."
     );
   }
 }

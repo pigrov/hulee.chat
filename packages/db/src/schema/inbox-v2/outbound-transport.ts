@@ -974,6 +974,13 @@ export const inboxV2OutboundRoutes = pgTable(
               sql`${table.selectionIntentSnapshot} #>> '{originalRoute,id}'`,
               "outbound_route"
             )}
+            and ${idSql(
+              sql`${table.selectionIntentSnapshot} #>> '{originalDispatch,id}'`,
+              "outbound_dispatch"
+            )}
+            and ${canonicalPositiveBigintTextSql(
+              sql`${table.selectionIntentSnapshot} ->> 'expectedOriginalDispatchRevision'`
+            )}
             and ${catalogIdSql(
               sql`${table.selectionIntentSnapshot} #>> '{reasonId}'`
             )}
@@ -984,6 +991,13 @@ export const inboxV2OutboundRoutes = pgTable(
                 'kind', 'outbound_route',
                 'id', ${table.selectionIntentSnapshot} #>> '{originalRoute,id}'
               ),
+              'originalDispatch', jsonb_build_object(
+                'tenantId', ${table.tenantId},
+                'kind', 'outbound_dispatch',
+                'id', ${table.selectionIntentSnapshot} #>> '{originalDispatch,id}'
+              ),
+              'expectedOriginalDispatchRevision',
+                ${table.selectionIntentSnapshot} ->> 'expectedOriginalDispatchRevision',
               'replacementBinding', jsonb_build_object(
                 'tenantId', ${table.tenantId},
                 'kind', 'source_thread_binding',

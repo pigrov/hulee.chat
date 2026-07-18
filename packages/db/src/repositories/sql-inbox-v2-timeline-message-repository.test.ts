@@ -295,6 +295,155 @@ describe("SQL Inbox V2 timeline/message repository", () => {
     }
   });
 
+  it("binds explicit-reroute Message creation to reroute primary and Conversation reply authority", () => {
+    const commit = explicitRerouteMessageCreationCommit();
+    const context = explicitRerouteMessageCreationAuthorityContext(commit);
+
+    expect(() =>
+      assertInboxV2MessageCreationAuthority(context, commit)
+    ).not.toThrow();
+  });
+
+  it("rejects a reroute command paired with an automatic OutboundRoute", () => {
+    const commit = inboxV2MessageCreationCommitSchema.parse(
+      fixtureHuleeCreationCommit()
+    );
+    const context = explicitRerouteMessageCreationAuthorityContext(commit);
+
+    expect(() =>
+      assertInboxV2MessageCreationAuthority(context, commit)
+    ).toThrow(/explicitly rerouted OutboundRoute/iu);
+  });
+
+  it("fails explicit-reroute Message creation without the exact Conversation reply authority", () => {
+    const commit = explicitRerouteMessageCreationCommit();
+    const context = explicitRerouteMessageCreationAuthorityContext(commit);
+    const replyDecision = context.authorizationDecisionRefs.find(
+      ({ permissionId }) => permissionId === "core:message.reply_external"
+    );
+    if (replyDecision === undefined) throw new Error("Reply decision fixture.");
+
+    const forgedContexts = [
+      {
+        ...context,
+        authorizationDecisionRefs: context.authorizationDecisionRefs.filter(
+          ({ id }) => id !== replyDecision.id
+        )
+      },
+      {
+        ...context,
+        authorizationDecisionRefs: context.authorizationDecisionRefs.map(
+          (decision) =>
+            decision.id === replyDecision.id
+              ? {
+                  ...decision,
+                  resource: {
+                    ...decision.resource,
+                    entityId: "conversation:forged"
+                  }
+                }
+              : decision
+        )
+      },
+      {
+        ...context,
+        authorizationResourceRevisionFences:
+          context.authorizationResourceRevisionFences.filter(
+            ({ resourceKind }) => resourceKind !== "conversation"
+          )
+      }
+    ];
+    for (const forged of forgedContexts) {
+      expect(() =>
+        assertInboxV2MessageCreationAuthority(forged as never, commit)
+      ).toThrow(/Conversation reply authorization decision/iu);
+    }
+
+    const route = commit.outboundRoute;
+    if (route === null) throw new Error("External route fixture.");
+    expect(() =>
+      assertInboxV2MessageCreationAuthority(context, {
+        ...commit,
+        outboundRoute: {
+          ...route,
+          conversationAuthorization: {
+            ...route.conversationAuthorization,
+            decisionRevision: "2"
+          }
+        }
+      } as InboxV2MessageCreationCommit)
+    ).toThrow(/route snapshot/iu);
+  });
+
+  it("fails explicit-reroute Message creation without exact selected SourceAccount-use authority", () => {
+    const commit = explicitRerouteMessageCreationCommit();
+    const context = explicitRerouteMessageCreationAuthorityContext(commit);
+    const route = commit.outboundRoute;
+    if (route === null) throw new Error("External route fixture.");
+    const selectedUseDecision = context.authorizationDecisionRefs.find(
+      (decision) =>
+        decision.permissionId === "core:source_account.use" &&
+        String(decision.resource.entityId) === String(route.sourceAccount.id)
+    );
+    if (selectedUseDecision === undefined) {
+      throw new Error("Selected SourceAccount-use decision fixture.");
+    }
+
+    for (const authorizationDecisionRefs of [
+      context.authorizationDecisionRefs.filter(
+        ({ id }) => id !== selectedUseDecision.id
+      ),
+      context.authorizationDecisionRefs.map((decision) =>
+        decision.id === selectedUseDecision.id
+          ? {
+              ...decision,
+              resource: {
+                ...decision.resource,
+                entityId: "source_account:forged"
+              }
+            }
+          : decision
+      )
+    ]) {
+      expect(() =>
+        assertInboxV2MessageCreationAuthority(
+          { ...context, authorizationDecisionRefs } as never,
+          commit
+        )
+      ).toThrow(/SourceAccount authorization decision/iu);
+    }
+  });
+
+  it("fails explicit-reroute Message creation when the primary decision is not exact reroute authority", () => {
+    const commit = explicitRerouteMessageCreationCommit();
+    const context = explicitRerouteMessageCreationAuthorityContext(commit);
+    const replyDecision = context.authorizationDecisionRefs.find(
+      ({ permissionId }) => permissionId === "core:message.reply_external"
+    );
+    if (replyDecision === undefined) throw new Error("Reply decision fixture.");
+
+    expect(() =>
+      assertInboxV2MessageCreationAuthority(
+        { ...context, authorizationDecisionId: replyDecision.id },
+        commit
+      )
+    ).toThrow(/exact allowed reroute authorization decision/iu);
+    expect(() =>
+      assertInboxV2MessageCreationAuthority(
+        {
+          ...context,
+          authorizationDecisionRefs: context.authorizationDecisionRefs.map(
+            (decision) =>
+              decision.id === context.authorizationDecisionId
+                ? { ...decision, outcome: "denied" as const }
+                : decision
+          )
+        },
+        commit
+      )
+    ).toThrow(/exact allowed reroute authorization decision/iu);
+  });
+
   it("requires live coordinator contexts and locks SourceOccurrence before stream allocation", async () => {
     const commit = inboxV2MessageCreationCommitSchema.parse(
       fixtureInternalCreationCommit()
@@ -1628,6 +1777,40 @@ function providerReceiptSemanticProof() {
   } as const;
 }
 
+function explicitRerouteMessageCreationCommit(): InboxV2MessageCreationCommit {
+  const commit = inboxV2MessageCreationCommitSchema.parse(
+    fixtureHuleeCreationCommit()
+  );
+  const route = commit.outboundRoute;
+  if (route === null) throw new Error("External route fixture.");
+  return inboxV2MessageCreationCommitSchema.parse({
+    ...commit,
+    outboundRoute: {
+      ...route,
+      selection: {
+        ...route.selection,
+        intent: {
+          kind: "explicit_reroute",
+          originalRoute: {
+            tenantId: commit.tenantId,
+            kind: "outbound_route",
+            id: "outbound_route:message-reroute-original"
+          },
+          originalDispatch: {
+            tenantId: commit.tenantId,
+            kind: "outbound_dispatch",
+            id: "outbound_dispatch:message-reroute-original"
+          },
+          expectedOriginalDispatchRevision: "1",
+          replacementBinding: route.sourceThreadBinding,
+          reasonId: "core:operator-reroute"
+        },
+        reason: "explicit_reroute"
+      }
+    }
+  });
+}
+
 function messageCreationAuthorityContext(
   commit: InboxV2MessageCreationCommit
 ): Parameters<typeof assertInboxV2MessageCreationAuthority>[0] {
@@ -1660,7 +1843,7 @@ function messageCreationAuthorityContext(
     permissionId: sourceOriginated
       ? "core:message.receive_external"
       : commit.message.origin.kind === "hulee_external"
-        ? "core:message.send_external"
+        ? "core:message.reply_external"
         : "core:message.send_internal",
     resourceScopeId: "core:conversation",
     resource: {
@@ -1727,6 +1910,33 @@ function messageCreationAuthorityContext(
           ])
     ]
   } as unknown as Parameters<typeof assertInboxV2MessageCreationAuthority>[0];
+}
+
+function explicitRerouteMessageCreationAuthorityContext(
+  commit: InboxV2MessageCreationCommit
+): Parameters<typeof assertInboxV2MessageCreationAuthority>[0] {
+  const context = messageCreationAuthorityContext(commit);
+  const sourceDecision = context.authorizationDecisionRefs.find(
+    ({ permissionId }) => permissionId === "core:source_account.use"
+  );
+  if (sourceDecision === undefined) {
+    throw new Error("Explicit reroute requires a SourceAccount fixture.");
+  }
+  const rerouteDecision = {
+    ...sourceDecision,
+    id: "authorization-decision:message-reroute-authority",
+    permissionId: "core:source.dispatch.reroute",
+    decisionHash: "c".repeat(64)
+  } as const;
+  return {
+    ...context,
+    commandTypeId: "core:source.dispatch.reroute",
+    authorizationDecisionId: rerouteDecision.id,
+    authorizationDecisionRefs: [
+      ...context.authorizationDecisionRefs,
+      rerouteDecision
+    ]
+  } as Parameters<typeof assertInboxV2MessageCreationAuthority>[0];
 }
 
 function messageCreationSeamExecutor(

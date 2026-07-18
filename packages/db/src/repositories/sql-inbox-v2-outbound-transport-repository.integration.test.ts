@@ -1,8 +1,12 @@
 import {
+  deriveInboxV2RouteFailureOutboxFinalization,
   INBOX_V2_MESSAGE_SCHEMA_ID,
   INBOX_V2_MESSAGE_SCHEMA_VERSION,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
+  INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_ID,
+  INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_VERSION,
+  inboxV2AuthorizationDecisionReferenceSchema,
   inboxV2EntityRevisionSchema,
   inboxV2MessageCreationCommitSchema,
   inboxV2NamespacedIdSchema,
@@ -10,6 +14,8 @@ import {
   inboxV2OutboundDispatchAttemptCommitSchema,
   inboxV2OutboundDispatchAttemptSchema,
   inboxV2OutboundDispatchReconciliationCommitSchema,
+  inboxV2OutboundDispatchRerouteCommitSchema,
+  inboxV2OutboundDispatchRouteFailureCommitSchema,
   inboxV2OutboundDispatchSchema,
   inboxV2OutboundRouteResolutionCommitSchema,
   inboxV2OutboundRouteResolutionInputSchema,
@@ -20,13 +26,16 @@ import {
   inboxV2ThreadRoutePolicySchema,
   inboxV2TimelineContentHeadOf,
   inboxV2TimelineContentSchema,
+  materializeInboxV2OutboundRouteResolutionCommit,
   resolveInboxV2OutboundRoute,
+  type InboxV2AuthorizationDecisionReference,
   type InboxV2OutboundDispatchArtifactAssociationCommit
 } from "@hulee/contracts";
 import { sql, type SQL } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { createInboxV2ProviderDispatchCoordinator } from "../../../../apps/worker/src/inbox-v2-provider-dispatch-coordinator";
 import {
   fixtureOutboundBindingSnapshot,
   fixtureReference
@@ -48,6 +57,7 @@ import {
   buildInsertInboxV2OutboundDispatchSql,
   buildInsertInboxV2OutboundRouteSql,
   createSqlInboxV2OutboundTransportRepository,
+  persistInboxV2ExplicitRerouteResolutionInTransaction,
   persistInboxV2RouteResolutionInTransaction
 } from "./sql-inbox-v2-outbound-transport-repository";
 import { createSqlInboxV2RepositoryOutbox } from "./sql-inbox-v2-repository-outbox";
@@ -275,6 +285,241 @@ describePostgres(
       expect(prepareCount).toBe(2);
       expect(sealCount).toBe(2);
     });
+
+    it("deduplicates a concurrent clientMutationId into one route, Message and dispatch", async () => {
+      const fixture = fixtureFor("atomic-concurrent-mutation");
+      tenantIds.push(fixture.tenantId);
+      await seedOutboundAnchors(db, fixture);
+
+      const results = await Promise.all([
+        persistAtomicOutboundProducer(db, fixture),
+        persistAtomicOutboundProducer(db, fixture)
+      ]);
+
+      expect(results.map(({ kind }) => kind).sort()).toEqual([
+        "already_applied",
+        "applied"
+      ]);
+      expect(await loadAtomicOutboundProducerCounts(db, fixture)).toEqual({
+        commands: "1",
+        stream_commits: "1",
+        stream_heads: "1",
+        stream_position: "2",
+        changes: "2",
+        events: "1",
+        policy_versions: "1",
+        policy_heads: "1",
+        routes: "1",
+        messages: "1",
+        dispatches: "1",
+        atomic_dispatch_materializations: "1",
+        queued_dispatches: "1",
+        attempts: "0",
+        outbox_intents: "2",
+        provider_intents: "1",
+        outbox_work: "2"
+      });
+    });
+
+    it.each(["ready", "degraded", "unknown", "unavailable"] as const)(
+      "atomically commits Message, route, queued dispatch and provider outbox when runtime health is %s",
+      async (runtimeHealthState) => {
+        const fixture = fixtureFor(
+          `atomic-runtime-health-${runtimeHealthState}`,
+          runtimeHealthState
+        );
+        tenantIds.push(fixture.tenantId);
+        await seedOutboundAnchors(db, fixture);
+
+        await expect(
+          persistAtomicOutboundProducer(db, fixture)
+        ).resolves.toMatchObject({
+          kind: "applied",
+          result: { messageId: fixture.references.message.id }
+        });
+        expect(await loadAtomicOutboundProducerCounts(db, fixture)).toEqual({
+          commands: "1",
+          stream_commits: "1",
+          stream_heads: "1",
+          stream_position: "2",
+          changes: "2",
+          events: "1",
+          policy_versions: "1",
+          policy_heads: "1",
+          routes: "1",
+          messages: "1",
+          dispatches: "1",
+          atomic_dispatch_materializations: "1",
+          queued_dispatches: "1",
+          attempts: "0",
+          outbox_intents: "2",
+          provider_intents: "1",
+          outbox_work: "2"
+        });
+        const runtimeEvidence = await db.execute<{
+          route_state: string;
+          binding_state: string;
+          binding_revision: string;
+          binding_checked_at: Date | string;
+        }>(sql`
+          select route_row.runtime_observation_snapshot #>> '{state}'
+                   as route_state,
+                 binding_snapshot.runtime_health_state::text
+                   as binding_state,
+                 binding_snapshot.runtime_health_revision::text
+                   as binding_revision,
+                 binding_snapshot.runtime_health_checked_at
+                   as binding_checked_at
+            from inbox_v2_outbound_routes route_row
+            join inbox_v2_source_thread_binding_snapshots binding_snapshot
+              on binding_snapshot.tenant_id = route_row.tenant_id
+             and binding_snapshot.binding_id =
+                 route_row.source_thread_binding_id
+             and binding_snapshot.revision = route_row.binding_revision
+           where route_row.tenant_id = ${fixture.tenantId}
+             and route_row.id = ${fixture.route.id}
+        `);
+        expect(runtimeEvidence.rows[0]).toMatchObject({
+          route_state: runtimeHealthState,
+          binding_state: runtimeHealthState,
+          binding_revision:
+            fixture.route.runtimeObservationAtResolution.revision
+        });
+        const bindingCheckedAt = runtimeEvidence.rows[0]?.binding_checked_at;
+        expect(
+          bindingCheckedAt instanceof Date
+            ? bindingCheckedAt.toISOString()
+            : new Date(bindingCheckedAt ?? "invalid").toISOString()
+        ).toBe(fixture.route.runtimeObservationAtResolution.observedAt);
+      }
+    );
+
+    it.each(["unknown", "unavailable"] as const)(
+      "keeps the same %s runtime route queued with zero attempts before provider I/O",
+      async (runtimeHealthState) => {
+        const fixture = fixtureFor(
+          `atomic-runtime-retry-${runtimeHealthState}`,
+          runtimeHealthState
+        );
+        tenantIds.push(fixture.tenantId);
+        await seedOutboundAnchors(db, fixture);
+        await expect(
+          persistAtomicOutboundProducer(db, fixture)
+        ).resolves.toMatchObject({ kind: "applied" });
+
+        const providerIntent = authorizedExternalSendInput(
+          fixture
+        ).records.outboxIntents.find(
+          (intent) => intent.typeId === "core:provider.dispatch"
+        );
+        if (providerIntent === undefined) {
+          throw new Error("Runtime retry fixture has no provider intent.");
+        }
+        const tenantId = inboxV2TenantIdSchema.parse(fixture.tenantId);
+        const workerId = inboxV2NamespacedIdSchema.parse(
+          `core:runtime-retry-worker-${runtimeHealthState}`
+        );
+        const outbox = createSqlInboxV2RepositoryOutbox(db, {
+          tokenSource: (count) =>
+            Array.from(
+              { length: count },
+              (_, index) =>
+                `lease-token:runtime-${runtimeHealthState}-${index}-${runId}-${"r".repeat(24)}`
+            )
+        });
+        const claimed = await outbox.claimAvailable({
+          context: { tenantId },
+          workerId,
+          leaseDurationSeconds: 30,
+          batchSize: 2
+        });
+        if (claimed.outcome !== "claimed") {
+          throw new Error("Runtime retry provider intent was not claimed.");
+        }
+        const providerClaim = claimed.claims.find(
+          (claim) => claim.work.intentId === providerIntent.id
+        );
+        if (providerClaim === undefined || providerClaim.work.lease === null) {
+          throw new Error("Runtime retry claim has no exact provider lease.");
+        }
+        const failedAt = providerClaim.work.lease.claimedAt;
+        const commit = inboxV2OutboundDispatchRouteFailureCommitSchema.parse({
+          tenantId: fixture.tenantId,
+          routeSnapshot: fixture.route,
+          bindingHeadSnapshot: {
+            ...fixture.bindingHeadSnapshot,
+            runtimeHealth: {
+              state: runtimeHealthState,
+              revision: fixture.route.runtimeObservationAtResolution.revision
+            },
+            updatedAt: OUTBOUND_TEST_TIMES.loadedAt
+          },
+          error: {
+            code: "route.runtime_unavailable",
+            retryability: "retryable_same_route",
+            diagnostic: null
+          },
+          dispatchBefore: fixture.queuedDispatch,
+          dispatchAfter: fixture.queuedDispatch,
+          failedByTrustedServiceId:
+            fixture.route.adapterContract.loadedByTrustedServiceId,
+          failedAt
+        });
+
+        await expect(
+          createSqlInboxV2OutboundTransportRepository(
+            db
+          ).applyRouteFailureFenced({
+            outboxLease: {
+              context: { tenantId },
+              intentId: providerIntent.id,
+              workerId,
+              leaseToken: providerClaim.leaseToken,
+              expectedLeaseRevision: providerClaim.work.lease.leaseRevision,
+              expectedHandlerId: providerIntent.handlerId
+            },
+            commit
+          })
+        ).resolves.toEqual({ kind: "committed" });
+
+        const state = await db.execute<{
+          dispatch_state: string;
+          route_id: string;
+          attempt_count: string;
+          provider_outbox_state: string;
+          provider_outcome_count: string;
+        }>(sql`
+          select dispatch_row.state::text as dispatch_state,
+                 dispatch_row.route_id,
+                 (
+                   select count(*)::text
+                     from inbox_v2_outbound_dispatch_attempts attempt_row
+                    where attempt_row.tenant_id = dispatch_row.tenant_id
+                      and attempt_row.dispatch_id = dispatch_row.id
+                 ) as attempt_count,
+                 work.state::text as provider_outbox_state,
+                 (
+                   select count(*)::text
+                     from inbox_v2_outbox_outcomes outcome_row
+                    where outcome_row.tenant_id = work.tenant_id
+                      and outcome_row.intent_id = work.intent_id
+                 ) as provider_outcome_count
+            from inbox_v2_outbound_dispatches dispatch_row
+            join inbox_v2_outbox_work_items work
+              on work.tenant_id = dispatch_row.tenant_id
+             and work.intent_id = ${providerIntent.id}
+           where dispatch_row.tenant_id = ${fixture.tenantId}
+             and dispatch_row.id = ${fixture.queuedDispatch.id}
+        `);
+        expect(state.rows[0]).toEqual({
+          dispatch_state: "queued",
+          route_id: fixture.route.id,
+          attempt_count: "0",
+          provider_outbox_state: "leased",
+          provider_outcome_count: "0"
+        });
+      }
+    );
 
     it.each([
       "missing_provider_intent",
@@ -720,6 +965,676 @@ describePostgres(
       );
     });
 
+    it.each([
+      ["live different-account bindings", false, "committed"],
+      ["an administratively drifted original binding", true, "committed"]
+    ] as const)(
+      "fences an explicit reroute across %s",
+      async (_label, driftOriginalBinding, expectedKind) => {
+        const fixture = fixtureFor(
+          `atomic-explicit-reroute-${driftOriginalBinding ? "drift" : "different-account"}`
+        );
+        tenantIds.push(fixture.tenantId);
+        await seedOutboundAnchors(db, fixture);
+        await persistAtomicOutboundProducer(db, fixture);
+        const reroute = explicitRerouteIntegrationFixture(fixture);
+        await seedReplacementBinding(db, fixture, reroute.replacement);
+        const rerouteFixture = explicitRerouteAtomicFixture(fixture, reroute);
+        if (driftOriginalBinding) {
+          await db.transaction(async (transaction) => {
+            await transaction.execute(
+              sql`set local session_replication_role = replica`
+            );
+            await transaction.execute(sql`
+              update inbox_v2_source_thread_binding_heads
+                 set administrative_state = 'disabled',
+                     administrative_revision = 2,
+                     revision = 2,
+                     updated_at = ${OUTBOUND_TEST_TIMES.openedAt}
+               where tenant_id = ${fixture.tenantId}
+                 and binding_id = ${fixture.references.binding.id}
+            `);
+            await transaction.execute(
+              sql`set local session_replication_role = origin`
+            );
+          });
+        }
+
+        const coordinator = createSqlInboxV2AuthorizedCommandCoordinator(db);
+        const input = authorizedExplicitRerouteIntegrationInput(
+          fixture,
+          rerouteFixture,
+          reroute
+        );
+        let routeResult:
+          | Awaited<
+              ReturnType<
+                typeof persistInboxV2ExplicitRerouteResolutionInTransaction
+              >
+            >
+          | undefined;
+        const materialization = coordinator.withAuthorizedAtomicMaterialization(
+          input,
+          async (context) => {
+            routeResult =
+              await persistInboxV2ExplicitRerouteResolutionInTransaction(
+                context,
+                {
+                  routeResolution: reroute.commit,
+                  rerouteCommit: reroute.rerouteCommit
+                }
+              );
+            throw new PostgresRerouteProbeComplete();
+          },
+          async () => {
+            throw new Error("Explicit reroute probe must not reach seal.");
+          }
+        );
+
+        await expect(materialization).rejects.toBeInstanceOf(
+          PostgresRerouteProbeComplete
+        );
+        expect(routeResult).toMatchObject({ kind: expectedKind });
+        const persisted = await db.execute<{
+          original_count: string;
+          replacement_count: string;
+        }>(sql`
+          select (
+                   select count(*)::text
+                     from inbox_v2_outbound_routes
+                    where tenant_id = ${fixture.tenantId}
+                      and id = ${fixture.route.id}
+                 ) as original_count,
+                 (
+                   select count(*)::text
+                     from inbox_v2_outbound_routes
+                    where tenant_id = ${fixture.tenantId}
+                      and id = ${reroute.commit.route!.id}
+                 ) as replacement_count
+        `);
+        expect(persisted.rows[0]).toEqual({
+          original_count: "1",
+          replacement_count: "0"
+        });
+      }
+    );
+
+    it("commits an allowed explicit reroute with Message, dispatch and provider outbox atomically", async () => {
+      const fixture = fixtureFor("atomic-explicit-reroute-full-commit");
+      tenantIds.push(fixture.tenantId);
+      await seedOutboundAnchors(db, fixture);
+      await persistAtomicOutboundProducer(db, fixture);
+      const reroute = explicitRerouteIntegrationFixture(fixture);
+      await seedReplacementBinding(db, fixture, reroute.replacement);
+      const atomicFixture = explicitRerouteAtomicFixture(fixture, reroute);
+      const coordinator = createSqlInboxV2AuthorizedCommandCoordinator(db);
+
+      await expect(
+        coordinator.withAuthorizedAtomicMaterialization(
+          authorizedExplicitRerouteIntegrationInput(
+            fixture,
+            atomicFixture,
+            reroute
+          ),
+          async (context) => {
+            const route =
+              await persistInboxV2ExplicitRerouteResolutionInTransaction(
+                context,
+                {
+                  routeResolution: reroute.commit,
+                  rerouteCommit: reroute.rerouteCommit
+                }
+              );
+            if (route.kind !== "committed") {
+              throw new Error(
+                `Explicit reroute preparation failed: ${route.kind}`
+              );
+            }
+            const prepared = await prepareInboxV2MessageCreation(context, {
+              commit: atomicFixture.messageCreationCommit
+            });
+            if (prepared.kind !== "ready") {
+              throw new Error(
+                `Explicit reroute Message preparation failed: ${prepared.kind}`
+              );
+            }
+            return prepared.capability;
+          },
+          async (context, capability) => {
+            const sealed = await sealInboxV2PreparedMessageCreation(context, {
+              capability
+            });
+            return {
+              result: { messageId: sealed.message.id },
+              receipt: sealed.receipt
+            };
+          }
+        )
+      ).resolves.toMatchObject({
+        kind: "applied",
+        result: { messageId: atomicFixture.references.message.id }
+      });
+      expect(
+        await loadAtomicOutboundProducerCounts(db, atomicFixture)
+      ).toMatchObject({
+        commands: "2",
+        routes: "2",
+        messages: "2",
+        dispatches: "2",
+        atomic_dispatch_materializations: "2",
+        queued_dispatches: "1",
+        attempts: "0",
+        outbox_intents: "5",
+        provider_intents: "2",
+        outbox_work: "5"
+      });
+      const dispatch = await db.execute<{
+        id: string;
+        route_id: string;
+        state: string;
+        revision: string;
+      }>(sql`
+        select id, route_id, state::text as state, revision::text as revision
+          from inbox_v2_outbound_dispatches
+         where tenant_id = ${fixture.tenantId}
+           and id in (${atomicFixture.queuedDispatch.id}, ${fixture.queuedDispatch.id})
+         order by id
+      `);
+      expect(dispatch.rows).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: atomicFixture.queuedDispatch.id,
+            route_id: reroute.commit.route!.id,
+            state: "queued",
+            revision: "1"
+          }),
+          expect.objectContaining({
+            id: fixture.queuedDispatch.id,
+            route_id: fixture.route.id,
+            state: "cancelled",
+            revision: "2"
+          })
+        ])
+      );
+      const originalWork = await db.execute<{ state: string }>(sql`
+        select state::text as state
+          from inbox_v2_outbox_work_items
+         where tenant_id = ${fixture.tenantId}
+           and intent_id = ${reroute.rerouteCommit.original.outboxIntentId}
+      `);
+      expect(originalWork.rows[0]?.state).toBe("pending");
+    });
+
+    it("lets explicit reroute win after a provider worker loaded the queued dispatch but before fenced open", async () => {
+      const fixture = fixtureFor("atomic-explicit-reroute-wins-open-race");
+      tenantIds.push(fixture.tenantId);
+      await seedOutboundAnchors(db, fixture);
+      await persistAtomicOutboundProducer(db, fixture);
+      const reroute = explicitRerouteIntegrationFixture(fixture);
+      await seedReplacementBinding(db, fixture, reroute.replacement);
+      const atomicFixture = explicitRerouteAtomicFixture(fixture, reroute);
+      const providerIntent = authorizedExternalSendInput(
+        fixture
+      ).records.outboxIntents.find(
+        (intent) => intent.typeId === "core:provider.dispatch"
+      );
+      if (providerIntent === undefined) {
+        throw new Error("Reroute-wins fixture has no provider intent.");
+      }
+
+      const tenantId = inboxV2TenantIdSchema.parse(fixture.tenantId);
+      const workerId = inboxV2NamespacedIdSchema.parse(
+        "core:provider-reroute-wins-worker"
+      );
+      const outbox = createSqlInboxV2RepositoryOutbox(db, {
+        tokenSource: (count) =>
+          Array.from(
+            { length: count },
+            (_, index) =>
+              `lease-token:reroute-wins-${index}-${runId}-${"r".repeat(32)}`
+          )
+      });
+      const claimed = await outbox.claimAvailable({
+        context: { tenantId },
+        workerId,
+        leaseDurationSeconds: 30,
+        batchSize: 2
+      });
+      if (claimed.outcome !== "claimed") {
+        throw new Error("Reroute-wins provider intent was not claimed.");
+      }
+      const providerClaim = claimed.claims.find(
+        (claim) => claim.work.intentId === providerIntent.id
+      );
+      if (providerClaim === undefined || providerClaim.work.lease === null) {
+        throw new Error("Reroute-wins provider claim has no exact lease.");
+      }
+      const providerLease = providerClaim.work.lease;
+      const pendingAttempt = inboxV2OutboundDispatchAttemptSchema.parse({
+        ...fixture.pendingAttempt,
+        openedAt: providerLease.claimedAt,
+        leaseExpiresAt: providerLease.expiresAt
+      });
+      const attemptingDispatch = inboxV2OutboundDispatchSchema.parse({
+        ...fixture.attemptingDispatch,
+        updatedAt: pendingAttempt.openedAt
+      });
+      const openCommit = inboxV2OutboundDispatchAttemptCommitSchema.parse({
+        ...fixture.openAttemptCommit,
+        attempt: pendingAttempt,
+        dispatchAfter: attemptingDispatch
+      });
+      if (openCommit.kind !== "open_attempt") {
+        throw new Error("Reroute-wins fixture did not build an open commit.");
+      }
+
+      let markPlannerLoaded!: () => void;
+      const plannerLoaded = new Promise<void>((resolve) => {
+        markPlannerLoaded = resolve;
+      });
+      let releasePlanner!: () => void;
+      const plannerGate = new Promise<void>((resolve) => {
+        releasePlanner = resolve;
+      });
+      let loadedDispatchState: string | undefined;
+      let adapterCallCount = 0;
+      const processing = createInboxV2ProviderDispatchCoordinator({
+        outbox,
+        transport: createSqlInboxV2OutboundTransportRepository(db),
+        planner: {
+          async plan({ loaded }) {
+            loadedDispatchState = loaded.dispatch.state;
+            markPlannerLoaded();
+            await plannerGate;
+            return {
+              kind: "open_attempt" as const,
+              commit: openCommit,
+              request: { text: "must-not-reach-provider" }
+            };
+          }
+        },
+        adapter: {
+          async dispatch() {
+            adapterCallCount += 1;
+            return {
+              outcome: "accepted" as const,
+              providerAcknowledgementToken: `provider:unexpected-${runId}`
+            };
+          }
+        },
+        completedByTrustedServiceId:
+          fixture.route.adapterContract.loadedByTrustedServiceId,
+        expectedHandlerId: providerIntent.handlerId,
+        providerDeadlineMs: 30_000
+      }).process(providerClaim);
+
+      await Promise.race([
+        plannerLoaded,
+        processing.then(
+          (result) => {
+            throw new Error(
+              `Provider worker completed before the planner gate: ${result.outcome}`
+            );
+          },
+          (error: unknown) => Promise.reject(error)
+        )
+      ]);
+      expect(loadedDispatchState).toBe("queued");
+
+      try {
+        const rerouteResult =
+          await createSqlInboxV2AuthorizedCommandCoordinator(
+            db
+          ).withAuthorizedAtomicMaterialization(
+            authorizedExplicitRerouteIntegrationInput(
+              fixture,
+              atomicFixture,
+              reroute
+            ),
+            async (context) => {
+              const route =
+                await persistInboxV2ExplicitRerouteResolutionInTransaction(
+                  context,
+                  {
+                    routeResolution: reroute.commit,
+                    rerouteCommit: reroute.rerouteCommit
+                  }
+                );
+              if (route.kind !== "committed") {
+                throw new Error(
+                  `Reroute-wins preparation failed: ${route.kind}`
+                );
+              }
+              const prepared = await prepareInboxV2MessageCreation(context, {
+                commit: atomicFixture.messageCreationCommit
+              });
+              if (prepared.kind !== "ready") {
+                throw new Error(
+                  `Reroute-wins Message preparation failed: ${prepared.kind}`
+                );
+              }
+              return prepared.capability;
+            },
+            async (context, capability) => {
+              const sealed = await sealInboxV2PreparedMessageCreation(context, {
+                capability
+              });
+              return {
+                result: { messageId: sealed.message.id },
+                receipt: sealed.receipt
+              };
+            }
+          );
+        expect(rerouteResult).toMatchObject({
+          kind: "applied",
+          result: { messageId: atomicFixture.references.message.id }
+        });
+      } finally {
+        releasePlanner();
+      }
+
+      await expect(processing).resolves.toMatchObject({
+        outcome: "finalized",
+        source: "rerouted",
+        result: { outcome: "processed" }
+      });
+      expect(adapterCallCount).toBe(0);
+
+      const state = await db.execute<{
+        original_dispatch_state: string;
+        original_dispatch_revision: string;
+        replacement_dispatch_state: string;
+        attempt_count: string;
+        original_work_state: string;
+        processed_outcome_count: string;
+      }>(sql`
+        select
+          (select state::text
+             from inbox_v2_outbound_dispatches
+            where tenant_id = ${fixture.tenantId}
+              and id = ${fixture.queuedDispatch.id})
+            as original_dispatch_state,
+          (select revision::text
+             from inbox_v2_outbound_dispatches
+            where tenant_id = ${fixture.tenantId}
+              and id = ${fixture.queuedDispatch.id})
+            as original_dispatch_revision,
+          (select state::text
+             from inbox_v2_outbound_dispatches
+            where tenant_id = ${fixture.tenantId}
+              and id = ${atomicFixture.queuedDispatch.id})
+            as replacement_dispatch_state,
+          (select count(*)::text
+             from inbox_v2_outbound_dispatch_attempts
+            where tenant_id = ${fixture.tenantId}
+              and dispatch_id = ${fixture.queuedDispatch.id})
+            as attempt_count,
+          (select state::text
+             from inbox_v2_outbox_work_items
+            where tenant_id = ${fixture.tenantId}
+              and intent_id = ${providerIntent.id})
+            as original_work_state,
+          (select count(*)::text
+             from inbox_v2_outbox_outcomes
+            where tenant_id = ${fixture.tenantId}
+              and intent_id = ${providerIntent.id}
+              and kind = 'processed')
+            as processed_outcome_count
+      `);
+      expect(state.rows[0]).toEqual({
+        original_dispatch_state: "cancelled",
+        original_dispatch_revision: "2",
+        replacement_dispatch_state: "queued",
+        attempt_count: "0",
+        original_work_state: "processed",
+        processed_outcome_count: "1"
+      });
+    });
+
+    it("rejects explicit reroute without replacement residue when fenced provider open wins first", async () => {
+      const fixture = fixtureFor("atomic-provider-open-wins-reroute-race");
+      tenantIds.push(fixture.tenantId);
+      await seedOutboundAnchors(db, fixture);
+      await persistAtomicOutboundProducer(db, fixture);
+      const reroute = explicitRerouteIntegrationFixture(fixture);
+      await seedReplacementBinding(db, fixture, reroute.replacement);
+      const atomicFixture = explicitRerouteAtomicFixture(fixture, reroute);
+      const providerIntent = authorizedExternalSendInput(
+        fixture
+      ).records.outboxIntents.find(
+        (intent) => intent.typeId === "core:provider.dispatch"
+      );
+      if (providerIntent === undefined) {
+        throw new Error("Open-wins fixture has no provider intent.");
+      }
+
+      const tenantId = inboxV2TenantIdSchema.parse(fixture.tenantId);
+      const workerId = inboxV2NamespacedIdSchema.parse(
+        "core:provider-open-wins-worker"
+      );
+      const outbox = createSqlInboxV2RepositoryOutbox(db, {
+        tokenSource: (count) =>
+          Array.from(
+            { length: count },
+            (_, index) =>
+              `lease-token:open-wins-${index}-${runId}-${"o".repeat(32)}`
+          )
+      });
+      const claimed = await outbox.claimAvailable({
+        context: { tenantId },
+        workerId,
+        leaseDurationSeconds: 30,
+        batchSize: 2
+      });
+      if (claimed.outcome !== "claimed") {
+        throw new Error("Open-wins provider intent was not claimed.");
+      }
+      const providerClaim = claimed.claims.find(
+        (claim) => claim.work.intentId === providerIntent.id
+      );
+      if (providerClaim === undefined || providerClaim.work.lease === null) {
+        throw new Error("Open-wins provider claim has no exact lease.");
+      }
+      const providerLease = providerClaim.work.lease;
+      const pendingAttempt = inboxV2OutboundDispatchAttemptSchema.parse({
+        ...fixture.pendingAttempt,
+        openedAt: providerLease.claimedAt,
+        leaseExpiresAt: providerLease.expiresAt
+      });
+      const attemptingDispatch = inboxV2OutboundDispatchSchema.parse({
+        ...fixture.attemptingDispatch,
+        updatedAt: pendingAttempt.openedAt
+      });
+      const openCommit = inboxV2OutboundDispatchAttemptCommitSchema.parse({
+        ...fixture.openAttemptCommit,
+        attempt: pendingAttempt,
+        dispatchAfter: attemptingDispatch
+      });
+      await expect(
+        createSqlInboxV2OutboundTransportRepository(db).applyAttemptFenced({
+          outboxLease: {
+            context: { tenantId },
+            intentId: providerIntent.id,
+            workerId,
+            leaseToken: providerClaim.leaseToken,
+            expectedLeaseRevision: providerLease.leaseRevision,
+            expectedHandlerId: providerIntent.handlerId
+          },
+          commit: openCommit
+        })
+      ).resolves.toEqual({ kind: "committed" });
+
+      let routeResult:
+        | Awaited<
+            ReturnType<
+              typeof persistInboxV2ExplicitRerouteResolutionInTransaction
+            >
+          >
+        | undefined;
+      const materialization = createSqlInboxV2AuthorizedCommandCoordinator(
+        db
+      ).withAuthorizedAtomicMaterialization(
+        authorizedExplicitRerouteIntegrationInput(
+          fixture,
+          atomicFixture,
+          reroute
+        ),
+        async (context) => {
+          routeResult =
+            await persistInboxV2ExplicitRerouteResolutionInTransaction(
+              context,
+              {
+                routeResolution: reroute.commit,
+                rerouteCommit: reroute.rerouteCommit
+              }
+            );
+          throw new PostgresRerouteProbeComplete();
+        },
+        async () => {
+          throw new Error("Open-wins reroute probe must not reach seal.");
+        }
+      );
+
+      await expect(materialization).rejects.toBeInstanceOf(
+        PostgresRerouteProbeComplete
+      );
+      expect(routeResult).toEqual({ kind: "original_dispatch_conflict" });
+
+      const state = await db.execute<{
+        original_dispatch_state: string;
+        original_dispatch_revision: string;
+        attempt_count: string;
+        replacement_route_count: string;
+        replacement_message_count: string;
+        replacement_dispatch_count: string;
+        replacement_intent_count: string;
+        replacement_work_count: string;
+      }>(sql`
+        select
+          (select state::text
+             from inbox_v2_outbound_dispatches
+            where tenant_id = ${fixture.tenantId}
+              and id = ${fixture.queuedDispatch.id})
+            as original_dispatch_state,
+          (select revision::text
+             from inbox_v2_outbound_dispatches
+            where tenant_id = ${fixture.tenantId}
+              and id = ${fixture.queuedDispatch.id})
+            as original_dispatch_revision,
+          (select count(*)::text
+             from inbox_v2_outbound_dispatch_attempts
+            where tenant_id = ${fixture.tenantId}
+              and dispatch_id = ${fixture.queuedDispatch.id})
+            as attempt_count,
+          (select count(*)::text
+             from inbox_v2_outbound_routes
+            where tenant_id = ${fixture.tenantId}
+              and id = ${reroute.commit.route!.id})
+            as replacement_route_count,
+          (select count(*)::text
+             from inbox_v2_messages
+            where tenant_id = ${fixture.tenantId}
+              and id = ${atomicFixture.references.message.id})
+            as replacement_message_count,
+          (select count(*)::text
+             from inbox_v2_outbound_dispatches
+            where tenant_id = ${fixture.tenantId}
+              and id = ${atomicFixture.queuedDispatch.id})
+            as replacement_dispatch_count,
+          (select count(*)::text
+             from inbox_v2_outbox_intents
+            where tenant_id = ${fixture.tenantId}
+              and id = ${reroute.rerouteCommit.replacement.outboxIntentId})
+            as replacement_intent_count,
+          (select count(*)::text
+             from inbox_v2_outbox_work_items
+            where tenant_id = ${fixture.tenantId}
+              and intent_id = ${reroute.rerouteCommit.replacement.outboxIntentId})
+            as replacement_work_count
+      `);
+      expect(state.rows[0]).toEqual({
+        original_dispatch_state: "attempting",
+        original_dispatch_revision: "2",
+        attempt_count: "1",
+        replacement_route_count: "0",
+        replacement_message_count: "0",
+        replacement_dispatch_count: "0",
+        replacement_intent_count: "0",
+        replacement_work_count: "0"
+      });
+    });
+
+    it("observes an admin-disable race before inserting the replacement route", async () => {
+      const fixture = fixtureFor("atomic-explicit-reroute-admin-race");
+      tenantIds.push(fixture.tenantId);
+      await seedOutboundAnchors(db, fixture);
+      await persistAtomicOutboundProducer(db, fixture);
+      const reroute = explicitRerouteIntegrationFixture(fixture);
+      await seedReplacementBinding(db, fixture, reroute.replacement);
+      const rerouteFixture = explicitRerouteAtomicFixture(fixture, reroute);
+      const heldDisable = holdBindingAdminDisable(
+        db,
+        fixture,
+        reroute.replacement.binding.id
+      );
+      await heldDisable.ready;
+
+      const coordinator = createSqlInboxV2AuthorizedCommandCoordinator(db);
+      let routeResult:
+        | Awaited<
+            ReturnType<
+              typeof persistInboxV2ExplicitRerouteResolutionInTransaction
+            >
+          >
+        | undefined;
+      const materialization = coordinator.withAuthorizedAtomicMaterialization(
+        authorizedExplicitRerouteIntegrationInput(
+          fixture,
+          rerouteFixture,
+          reroute
+        ),
+        async (context) => {
+          routeResult =
+            await persistInboxV2ExplicitRerouteResolutionInTransaction(
+              context,
+              {
+                routeResolution: reroute.commit,
+                rerouteCommit: reroute.rerouteCommit
+              }
+            );
+          throw new PostgresRerouteProbeComplete();
+        },
+        async () => {
+          throw new Error("Explicit reroute race probe must not reach seal.");
+        }
+      );
+      let settled = false;
+      void materialization.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        }
+      );
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(settled).toBe(false);
+      heldDisable.release();
+      await heldDisable.completed;
+
+      await expect(materialization).rejects.toBeInstanceOf(
+        PostgresRerouteProbeComplete
+      );
+      expect(routeResult).toEqual({ kind: "binding_fence_conflict" });
+      const replacement = await db.execute<{ count: string }>(sql`
+        select count(*)::text as count
+          from inbox_v2_outbound_routes
+         where tenant_id = ${fixture.tenantId}
+           and id = ${reroute.commit.route!.id}
+      `);
+      expect(replacement.rows[0]?.count).toBe("0");
+    });
+
     it("commits route -> queued dispatch -> durable attempt -> outcome_unknown -> reconciliation", async () => {
       const fixture = fixtureFor("lifecycle");
       tenantIds.push(fixture.tenantId);
@@ -1138,7 +2053,7 @@ describePostgres(
           closeHuleeDatabase(workerBDb)
         ]);
       }
-    });
+    }, 10_000);
 
     it.each([
       ["provider echo before response", ["echo", "response"]],
@@ -1299,6 +2214,170 @@ describePostgres(
       );
     });
 
+    it("atomically terminally finalizes a claimed provider intent after admin disable with zero attempts", async () => {
+      const fixture = fixtureFor("atomic-route-failure");
+      tenantIds.push(fixture.tenantId);
+      await seedOutboundAnchors(db, fixture);
+      await expect(
+        persistAtomicOutboundProducer(db, fixture)
+      ).resolves.toMatchObject({ kind: "applied" });
+
+      const commandInput = authorizedExternalSendInput(fixture);
+      const providerIntent = commandInput.records.outboxIntents.find(
+        (intent) => intent.typeId === "core:provider.dispatch"
+      );
+      if (providerIntent === undefined) {
+        throw new Error("Atomic route-failure fixture has no provider intent.");
+      }
+      const routeFailureTenantId = inboxV2TenantIdSchema.parse(
+        fixture.tenantId
+      );
+      const workerId = inboxV2NamespacedIdSchema.parse(
+        "core:provider-route-failure-worker"
+      );
+      const outbox = createSqlInboxV2RepositoryOutbox(db, {
+        tokenSource: (count) =>
+          Array.from(
+            { length: count },
+            (_, index) =>
+              `lease-token:route-failure-${index}-${runId}-${"r".repeat(32)}`
+          )
+      });
+      const claimed = await outbox.claimAvailable({
+        context: { tenantId: routeFailureTenantId },
+        workerId,
+        leaseDurationSeconds: 30,
+        batchSize: 2
+      });
+      if (claimed.outcome !== "claimed") {
+        throw new Error(
+          "Atomic route-failure provider intent was not claimed."
+        );
+      }
+      const providerClaim = claimed.claims.find(
+        (claim) => claim.work.intentId === providerIntent.id
+      );
+      if (providerClaim === undefined || providerClaim.work.lease === null) {
+        throw new Error("Atomic route-failure claim has no exact lease.");
+      }
+      const failedAt = providerClaim.work.lease.claimedAt;
+      await db.transaction(async (transaction) => {
+        await transaction.execute(
+          sql`set local session_replication_role = replica`
+        );
+        await transaction.execute(sql`
+          update inbox_v2_source_thread_binding_heads
+             set administrative_state = 'disabled',
+                 administrative_revision = 2,
+                 administrative_changed_at = ${failedAt},
+                 revision = 2,
+                 updated_at = ${failedAt}
+           where tenant_id = ${fixture.tenantId}
+             and binding_id = ${fixture.references.binding.id}
+        `);
+        await transaction.execute(
+          sql`set local session_replication_role = origin`
+        );
+      });
+
+      const bindingHeadSnapshot = {
+        ...fixture.bindingHeadSnapshot,
+        fence: {
+          ...fixture.bindingHeadSnapshot.fence,
+          administrativeRevision: "2"
+        },
+        administrative: { state: "disabled" as const, revision: "2" },
+        bindingRevision: "2",
+        updatedAt: failedAt
+      };
+      const dispatchAfter = inboxV2OutboundDispatchSchema.parse({
+        ...fixture.queuedDispatch,
+        state: "terminal_failure",
+        revision: "2",
+        updatedAt: failedAt
+      });
+      const commit = inboxV2OutboundDispatchRouteFailureCommitSchema.parse({
+        tenantId: fixture.tenantId,
+        routeSnapshot: fixture.route,
+        bindingHeadSnapshot,
+        error: {
+          code: "route.binding_changed",
+          retryability: "retryable_resolution",
+          diagnostic: null
+        },
+        dispatchBefore: fixture.queuedDispatch,
+        dispatchAfter,
+        failedByTrustedServiceId:
+          fixture.route.adapterContract.loadedByTrustedServiceId,
+        failedAt
+      });
+      const fence = {
+        context: { tenantId: routeFailureTenantId },
+        intentId: providerIntent.id,
+        workerId,
+        leaseToken: providerClaim.leaseToken,
+        expectedLeaseRevision: providerClaim.work.lease.leaseRevision,
+        expectedHandlerId: providerIntent.handlerId
+      } as const;
+
+      await expect(
+        createSqlInboxV2OutboundTransportRepository(db).applyRouteFailureFenced(
+          {
+            outboxLease: fence,
+            commit
+          }
+        )
+      ).resolves.toEqual({ kind: "committed" });
+
+      const expectedFinalization = deriveInboxV2RouteFailureOutboxFinalization({
+        intentId: providerIntent.id,
+        commit
+      });
+      const state = await db.execute<{
+        dispatch_state: string;
+        dispatch_revision: string;
+        attempt_count: string;
+        outbox_state: string;
+        terminal_error_code: string | null;
+        terminal_result_hash: string | null;
+        outcome_count: string;
+      }>(sql`
+        select dispatch_row.state::text as dispatch_state,
+               dispatch_row.revision::text as dispatch_revision,
+               (
+                 select count(*)::text
+                   from inbox_v2_outbound_dispatch_attempts attempt_row
+                  where attempt_row.tenant_id = dispatch_row.tenant_id
+                    and attempt_row.dispatch_id = dispatch_row.id
+               ) as attempt_count,
+               work.state::text as outbox_state,
+               work.terminal_error_code,
+               work.terminal_result_hash,
+               (
+                 select count(*)::text
+                   from inbox_v2_outbox_outcomes outcome_row
+                  where outcome_row.tenant_id = work.tenant_id
+                    and outcome_row.intent_id = work.intent_id
+                    and outcome_row.kind = 'dead'
+               ) as outcome_count
+          from inbox_v2_outbound_dispatches dispatch_row
+          join inbox_v2_outbox_work_items work
+            on work.tenant_id = dispatch_row.tenant_id
+           and work.intent_id = ${providerIntent.id}
+         where dispatch_row.tenant_id = ${fixture.tenantId}
+           and dispatch_row.id = ${fixture.queuedDispatch.id}
+      `);
+      expect(state.rows[0]).toEqual({
+        dispatch_state: "terminal_failure",
+        dispatch_revision: "2",
+        attempt_count: "0",
+        outbox_state: "dead",
+        terminal_error_code: "core:route.binding_changed",
+        terminal_result_hash: expectedFinalization.resultHash,
+        outcome_count: "1"
+      });
+    });
+
     it("rejects a stale binding fence before opening provider I/O", async () => {
       const fixture = fixtureFor("stale-fence");
       tenantIds.push(fixture.tenantId);
@@ -1331,6 +2410,66 @@ describePostgres(
       await expect(
         repository.applyAttempt(fixture.openAttemptCommit)
       ).resolves.toEqual({ kind: "binding_fence_conflict" });
+      const count = await db.execute<{ count: string }>(sql`
+        select count(*)::text as count
+        from inbox_v2_outbound_dispatch_attempts
+        where tenant_id = ${fixture.tenantId}
+          and dispatch_id = ${fixture.queuedDispatch.id}
+      `);
+      expect(count.rows[0]?.count).toBe("0");
+    });
+
+    it("rejects a same-id forged route snapshot before opening provider I/O", async () => {
+      const fixture = fixtureFor("forged-open-route");
+      tenantIds.push(fixture.tenantId);
+      await seedOutboundAnchors(db, fixture);
+      const repository = createSqlInboxV2OutboundTransportRepository(db);
+      await expect(
+        persistAtomicOutboundProducer(db, fixture)
+      ).resolves.toMatchObject({ kind: "applied" });
+      await expect(
+        repository.createDispatch(fixture.queuedDispatch)
+      ).resolves.toEqual({
+        kind: "already_exists",
+        dispatch: fixture.queuedDispatch
+      });
+      const commit = fixture.openAttemptCommit;
+      if (commit.kind !== "open_attempt") {
+        throw new Error("open attempt fixture");
+      }
+      const forgedBinding = {
+        ...commit.routeSnapshot.sourceThreadBinding,
+        id: `source_thread_binding:forged-open-${runId}`
+      };
+      const forgedCommit = inboxV2OutboundDispatchAttemptCommitSchema.parse({
+        ...commit,
+        routeSnapshot: {
+          ...commit.routeSnapshot,
+          sourceThreadBinding: forgedBinding,
+          conversationAuthorization: {
+            ...commit.routeSnapshot.conversationAuthorization,
+            target: {
+              ...commit.routeSnapshot.conversationAuthorization.target,
+              sourceThreadBinding: forgedBinding
+            }
+          },
+          sourceAccountAuthorization: {
+            ...commit.routeSnapshot.sourceAccountAuthorization,
+            target: {
+              ...commit.routeSnapshot.sourceAccountAuthorization.target,
+              sourceThreadBinding: forgedBinding
+            }
+          }
+        },
+        bindingHeadSnapshot: {
+          ...commit.bindingHeadSnapshot,
+          binding: forgedBinding
+        }
+      });
+
+      await expect(repository.applyAttempt(forgedCommit)).resolves.toEqual({
+        kind: "route_not_found"
+      });
       const count = await db.execute<{ count: string }>(sql`
         select count(*)::text as count
         from inbox_v2_outbound_dispatch_attempts
@@ -1399,20 +2538,32 @@ type RawOutboundFixture = ReturnType<
   typeof createOutboundTransportContractFixture
 >;
 type OutboundFixture = ReturnType<typeof canonicalOutboundFixture>;
+type OutboundRuntimeHealthState =
+  | "unknown"
+  | "ready"
+  | "degraded"
+  | "unavailable";
 
-function fixtureFor(label: string): OutboundFixture {
+function fixtureFor(
+  label: string,
+  runtimeHealthState: OutboundRuntimeHealthState = "ready"
+): OutboundFixture {
   const suffix = `${label}-${runId}`;
   return canonicalOutboundFixture(
     createOutboundTransportContractFixture({
       tenantId: `tenant:db003-outbound-${suffix}`,
       suffix
-    })
+    }),
+    runtimeHealthState
   );
 }
 
-function canonicalOutboundFixture(fixture: RawOutboundFixture) {
+function canonicalOutboundFixture(
+  fixture: RawOutboundFixture,
+  runtimeHealthState: OutboundRuntimeHealthState = "ready"
+) {
   const operationId = "core:message.send" as const;
-  const requiredPermissionId = "core:message.send_external" as const;
+  const requiredPermissionId = "core:message.reply_external" as const;
   const authorizationNotAfter = new Date(
     Date.now() + 60 * 60 * 1_000
   ).toISOString();
@@ -1438,11 +2589,26 @@ function canonicalOutboundFixture(fixture: RawOutboundFixture) {
     target: canonicalTarget,
     notAfter: authorizationNotAfter
   };
+  const runtimeObservation = {
+    state: runtimeHealthState,
+    revision: candidate.runtimeObservation.revision,
+    observedAt: candidate.runtimeObservation.observedAt,
+    diagnostic:
+      runtimeHealthState === "degraded" || runtimeHealthState === "unavailable"
+        ? {
+            codeId: `module:synthetic:runtime-${runtimeHealthState}`,
+            retryable: true,
+            correlationToken: `diagnostic:runtime-${runtimeHealthState}-${fixture.suffix}`,
+            safeOperatorHintId: "core:retry-same-route"
+          }
+        : null
+  };
   const canonicalCandidate = {
     ...candidate,
     operationId,
     conversationAuthorization,
-    sourceAccountAuthorization
+    sourceAccountAuthorization,
+    runtimeObservation
   };
   const routePolicy = inboxV2ThreadRoutePolicySchema.parse({
     ...fixture.routePolicy,
@@ -1470,6 +2636,7 @@ function canonicalOutboundFixture(fixture: RawOutboundFixture) {
     requiredConversationPermissionId: requiredPermissionId,
     conversationAuthorization,
     sourceAccountAuthorization,
+    runtimeObservationAtResolution: routeResult.candidate.runtimeObservation,
     selection: {
       ...fixture.route.selection,
       reason: routeResult.selectionReason,
@@ -1593,13 +2760,377 @@ function routeCommitWithDestinationSubject(
   });
 }
 
+function explicitRerouteIntegrationFixture(fixture: OutboundFixture) {
+  const candidate = fixture.routeCommit.input.candidates.soleEligibleCandidate;
+  if (candidate === null) {
+    throw new Error("Explicit reroute fixture requires one route candidate.");
+  }
+  const replacementBinding = {
+    ...candidate.sourceThreadBinding,
+    id: `source_thread_binding:outbound-reroute-${fixture.suffix}`
+  };
+  const replacementSourceConnection = {
+    ...candidate.sourceConnection,
+    id: `source_connection:outbound-reroute-${fixture.suffix}`
+  };
+  const replacementSourceAccount = {
+    ...candidate.sourceAccount,
+    id: `source_account:outbound-reroute-${fixture.suffix}`
+  };
+  const target = {
+    ...candidate.conversationAuthorization.target,
+    sourceThreadBinding: replacementBinding,
+    sourceConnection: replacementSourceConnection,
+    sourceAccount: replacementSourceAccount
+  };
+  const replacementCandidate = {
+    ...candidate,
+    sourceThreadBinding: replacementBinding,
+    sourceConnection: replacementSourceConnection,
+    sourceAccount: replacementSourceAccount,
+    conversationAuthorization: {
+      ...candidate.conversationAuthorization,
+      target
+    },
+    sourceAccountAuthorization: {
+      ...candidate.sourceAccountAuthorization,
+      target
+    }
+  };
+  const replacementSuffix = `${fixture.suffix}-reroute-replacement`;
+  const replacementMessageId = `message:${replacementSuffix}`;
+  const replacementDispatchId = `outbound_dispatch:${replacementSuffix}`;
+  const replacementProviderIntentId = `outbox-intent:atomic-provider-${replacementSuffix}`;
+  const input = inboxV2OutboundRouteResolutionInputSchema.parse({
+    ...fixture.routeCommit.input,
+    intent: {
+      kind: "explicit_reroute",
+      originalRoute: {
+        tenantId: fixture.tenantId,
+        kind: "outbound_route",
+        id: fixture.route.id
+      },
+      originalDispatch: {
+        tenantId: fixture.tenantId,
+        kind: "outbound_dispatch",
+        id: fixture.queuedDispatch.id
+      },
+      expectedOriginalDispatchRevision: fixture.queuedDispatch.revision,
+      replacementBinding,
+      reasonId: "core:operator-reroute"
+    },
+    candidates: {
+      ...fixture.routeCommit.input.candidates,
+      explicitTarget: replacementCandidate,
+      soleEligibleCandidate: replacementCandidate,
+      snapshotToken: `snapshot:outbound-reroute-${fixture.suffix}`
+    },
+    mutationToken: `mutation:outbound-reroute-${fixture.suffix}`,
+    idempotencyToken: `idempotency:outbound-reroute-${fixture.suffix}`,
+    correlationToken: `correlation:outbound-reroute-${fixture.suffix}`,
+    requestedAt: OUTBOUND_TEST_TIMES.openedAt
+  });
+  const commit = materializeInboxV2OutboundRouteResolutionCommit(input, {
+    routeId: `outbound_route:outbound-reroute-${fixture.suffix}`,
+    selectedAt: input.requestedAt
+  });
+  if (
+    commit.route === null ||
+    commit.route.selection.intent.kind !== "explicit_reroute"
+  ) {
+    throw new Error("Explicit reroute fixture did not select its replacement.");
+  }
+  const rerouteCommit = inboxV2OutboundDispatchRerouteCommitSchema.parse({
+    tenantId: fixture.tenantId,
+    original: {
+      dispatchBefore: fixture.queuedDispatch,
+      dispatchAfter: {
+        ...fixture.queuedDispatch,
+        state: "cancelled",
+        revision: "2",
+        updatedAt: commit.route.selection.selectedAt
+      },
+      outboxIntentId: `outbox-intent:atomic-provider-${fixture.suffix}`
+    },
+    replacement: {
+      message: {
+        tenantId: fixture.tenantId,
+        kind: "message",
+        id: replacementMessageId
+      },
+      route: {
+        tenantId: fixture.tenantId,
+        kind: "outbound_route",
+        id: commit.route.id
+      },
+      dispatch: {
+        tenantId: fixture.tenantId,
+        kind: "outbound_dispatch",
+        id: replacementDispatchId
+      },
+      outboxIntentId: replacementProviderIntentId
+    },
+    reasonId: commit.route.selection.intent.reasonId,
+    changedAt: commit.route.selection.selectedAt
+  });
+  return {
+    replacement: {
+      binding: replacementBinding,
+      sourceConnection: replacementSourceConnection,
+      sourceAccount: replacementSourceAccount
+    },
+    replacementSuffix,
+    replacementMessageId,
+    replacementDispatchId,
+    commit,
+    rerouteCommit
+  };
+}
+
+function explicitRerouteAtomicFixture(
+  fixture: OutboundFixture,
+  reroute: ReturnType<typeof explicitRerouteIntegrationFixture>
+): OutboundFixture {
+  const commit = reroute.commit;
+  if (commit.route === null) {
+    throw new Error(
+      "Explicit reroute atomic fixture requires a selected route."
+    );
+  }
+  const routeReference = {
+    tenantId: fixture.tenantId,
+    kind: "outbound_route" as const,
+    id: commit.route.id
+  };
+  const messageReference = {
+    tenantId: fixture.tenantId,
+    kind: "message" as const,
+    id: reroute.replacementMessageId
+  };
+  const timelineItemReference = {
+    tenantId: fixture.tenantId,
+    kind: "timeline_item" as const,
+    id: `timeline_item:${reroute.replacementSuffix}`
+  };
+  const queuedDispatch = inboxV2OutboundDispatchSchema.parse({
+    ...fixture.queuedDispatch,
+    id: reroute.replacementDispatchId,
+    message: messageReference,
+    route: routeReference,
+    createdAt: commit.route.createdAt,
+    updatedAt: commit.route.createdAt
+  });
+  const reroutedFixture = {
+    ...fixture,
+    suffix: reroute.replacementSuffix,
+    references: {
+      ...fixture.references,
+      message: messageReference,
+      timelineItem: timelineItemReference,
+      route: routeReference
+    },
+    route: commit.route,
+    routeCommit: commit,
+    queuedDispatch
+  };
+  return {
+    ...reroutedFixture,
+    messageCreationCommit: canonicalMessageCreationCommit(
+      reroutedFixture,
+      commit.route,
+      {
+        priorTimelineSequence: "1",
+        priorTimelineItemId: fixture.references.timelineItem.id,
+        priorActivityAt:
+          fixture.messageCreationCommit.timelineAllocation.committedAt,
+        committedAt: commit.route.selection.selectedAt,
+        authorParticipantId: fixture.messageCreationCommit.authorParticipant.id
+      }
+    )
+  };
+}
+
+function authorizedExplicitRerouteIntegrationInput(
+  originalFixture: OutboundFixture,
+  fixture: OutboundFixture,
+  reroute: ReturnType<typeof explicitRerouteIntegrationFixture>
+): WithInboxV2AuthorizedCommandMutationInput {
+  const commit = reroute.commit;
+  const rerouteCommit = reroute.rerouteCommit;
+  if (commit.route === null) {
+    throw new Error("Explicit reroute command requires a selected route.");
+  }
+  const base = authorizedExternalSendInput(fixture);
+  const decisions: InboxV2AuthorizationDecisionReference[] = [
+    ...base.records.audit.authorizationDecisionRefs
+  ];
+  const selectedUse = decisions.find(
+    (decision) => decision.permissionId === "core:source_account.use"
+  );
+  if (selectedUse === undefined) {
+    throw new Error("Explicit reroute input has no selected-account use.");
+  }
+  const originalUse = selectedUse;
+  const selectedReplacementUse: InboxV2AuthorizationDecisionReference =
+    inboxV2AuthorizationDecisionReferenceSchema.parse({
+      ...selectedUse,
+      id: `authorization-decision:atomic-reroute-replacement-use-${fixture.suffix}`,
+      resource: {
+        ...selectedUse.resource,
+        entityId: commit.route.sourceAccount.id
+      },
+      decisionHash: sha256(`${fixture.suffix}:reroute-replacement-use`)
+    });
+  const rerouteDecision: InboxV2AuthorizationDecisionReference =
+    inboxV2AuthorizationDecisionReferenceSchema.parse({
+      ...originalUse,
+      id: `authorization-decision:atomic-reroute-${fixture.suffix}`,
+      permissionId: "core:source.dispatch.reroute",
+      decisionHash: sha256(`${fixture.suffix}:reroute-permission`)
+    });
+  const sourceDecisionIndex = decisions.findIndex(
+    (decision) => decision.id === selectedUse.id
+  );
+  decisions.splice(sourceDecisionIndex, 1, selectedReplacementUse);
+  decisions.push(originalUse, rerouteDecision);
+  decisions.sort((left, right) => left.id.localeCompare(right.id));
+  const matchedPermissionIds = [
+    ...new Set(decisions.map((decision) => decision.permissionId))
+  ].sort();
+  const authorizationScopeIds = [
+    ...new Set(decisions.map((decision) => decision.resourceScopeId))
+  ].sort();
+  const originalAuthorization = authorizedExternalSendInput(originalFixture);
+  const resources: Array<
+    WithInboxV2AuthorizedCommandMutationInput["revisions"]["resources"][number]
+  > = [
+    ...originalAuthorization.revisions.resources,
+    {
+      resourceKind: "source_account",
+      resourceId: commit.route.sourceAccount.id,
+      resourceHeadId: `authorization-resource:atomic-reroute-${fixture.suffix}`,
+      expectedResourceAccessRevision: "1",
+      advance: "none"
+    }
+  ];
+  const rerouteCommitReference = {
+    tenantId: fixture.tenantId,
+    recordId: rerouteCommit.original.dispatchAfter.id,
+    schemaId: INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_ID,
+    schemaVersion: INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_VERSION,
+    digest: `sha256:${computeInboxV2TimelineMessageCommitDigest(
+      rerouteCommit
+    )}` as const
+  };
+  const originalDispatchReference = {
+    tenantId: fixture.tenantId,
+    recordId: rerouteCommit.original.dispatchAfter.id,
+    schemaId: INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
+    schemaVersion: INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
+    digest: `sha256:${computeInboxV2TimelineMessageCommitDigest(
+      rerouteCommit.original.dispatchAfter
+    )}` as const
+  };
+  const originalChange = {
+    id: `change:atomic-reroute-original-${fixture.suffix}`,
+    ordinal: base.records.changes.length + 1,
+    entity: {
+      tenantId: fixture.tenantId,
+      entityTypeId: "core:outbound-dispatch",
+      entityId: rerouteCommit.original.dispatchAfter.id
+    },
+    resultingRevision: rerouteCommit.original.dispatchAfter.revision,
+    timeline: null,
+    audience: "conversation_external" as const,
+    state: {
+      kind: "upsert" as const,
+      stateSchemaId: INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
+      stateSchemaVersion: INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
+      stateHash: originalDispatchReference.digest,
+      payloadReference: originalDispatchReference,
+      domainCommitReference: rerouteCommitReference
+    }
+  };
+  const originalEvent = {
+    ...base.records.events[0]!,
+    id: `event:atomic-reroute-original-${fixture.suffix}`,
+    ordinal: "2",
+    typeId: "core:outbound-dispatch.changed" as const,
+    payloadSchemaId: rerouteCommitReference.schemaId,
+    payloadSchemaVersion: rerouteCommitReference.schemaVersion,
+    changeIds: [originalChange.id],
+    subjects: [originalChange.entity],
+    payloadReference: rerouteCommitReference,
+    authorizationDecisionRefs: decisions,
+    occurredAt: rerouteCommit.changedAt,
+    recordedAt: rerouteCommit.changedAt,
+    eventHash: sha256(`${fixture.suffix}:reroute-original-event`)
+  };
+  const originalProjection = {
+    ...base.records.outboxIntents[0]!,
+    id: `outbox-intent:atomic-reroute-original-projection-${fixture.suffix}`,
+    ordinal: base.records.outboxIntents.length + 1,
+    eventId: originalEvent.id,
+    changeIds: [originalChange.id],
+    payloadReference: rerouteCommitReference,
+    consumerDedupeKey: sha256(
+      `${fixture.suffix}:reroute-original-projection-dedupe`
+    ),
+    intentHash: sha256(`${fixture.suffix}:reroute-original-projection-intent`)
+  };
+  return {
+    ...base,
+    command: {
+      ...base.command,
+      commandTypeId: rerouteDecision.permissionId,
+      authorizationDecisionId: rerouteDecision.id
+    },
+    revisions: { ...base.revisions, resources },
+    records: {
+      ...base.records,
+      expectedStreamEpoch: originalAuthorization.records.expectedStreamEpoch,
+      changes: [...base.records.changes, originalChange],
+      events: [
+        ...base.records.events.map((event) => ({
+          ...event,
+          authorizationDecisionRefs: decisions
+        })),
+        originalEvent
+      ],
+      outboxIntents: [...base.records.outboxIntents, originalProjection],
+      audit: {
+        ...base.records.audit,
+        actionId: rerouteDecision.permissionId,
+        reasonCodeId: rerouteCommit.reasonId,
+        matchedPermissionIds,
+        authorizationScopeIds,
+        evidenceReference: rerouteCommitReference,
+        authorizationDecisionRefs: decisions
+      }
+    }
+  } as unknown as WithInboxV2AuthorizedCommandMutationInput;
+}
+
+class PostgresRerouteProbeComplete extends Error {}
+
 function canonicalMessageCreationCommit(
   fixture: RawOutboundFixture,
-  route: ReturnType<typeof inboxV2OutboundRouteSchema.parse>
+  route: ReturnType<typeof inboxV2OutboundRouteSchema.parse>,
+  options: Readonly<{
+    priorTimelineSequence: string;
+    priorTimelineItemId: string;
+    priorActivityAt: string;
+    committedAt: string;
+    authorParticipantId?: string;
+  }> | null = null
 ) {
   const { references: refs, tenantId } = fixture;
   const createdAt = OUTBOUND_TEST_TIMES.loadedAt;
-  const committedAt = OUTBOUND_TEST_TIMES.selectedAt;
+  const committedAt = options?.committedAt ?? OUTBOUND_TEST_TIMES.selectedAt;
+  const timelineSequence = (
+    BigInt(options?.priorTimelineSequence ?? "0") + 1n
+  ).toString();
+  const headRevision = options === null ? "1" : "2";
   const conversation = {
     tenantId,
     id: refs.conversation.id,
@@ -1608,13 +3139,13 @@ function canonicalMessageCreationCommit(
     purposeId: "core:chat",
     lifecycle: "active" as const,
     head: {
-      latestTimelineSequence: "0",
-      latestActivityItemId: null,
-      latestActivityTimelineSequence: null,
-      latestActivityAt: null,
-      revision: "1",
+      latestTimelineSequence: options?.priorTimelineSequence ?? "0",
+      latestActivityItemId: options?.priorTimelineItemId ?? null,
+      latestActivityTimelineSequence: options?.priorTimelineSequence ?? null,
+      latestActivityAt: options?.priorActivityAt ?? null,
+      revision: headRevision,
       createdAt,
-      updatedAt: createdAt
+      updatedAt: options?.priorActivityAt ?? createdAt
     },
     revision: "1",
     createdAt,
@@ -1622,7 +3153,9 @@ function canonicalMessageCreationCommit(
   };
   const participant = {
     tenantId,
-    id: `conversation_participant:outbound-${fixture.suffix}`,
+    id:
+      options?.authorParticipantId ??
+      `conversation_participant:outbound-${fixture.suffix}`,
     conversation: refs.conversation,
     subject: { kind: "employee" as const, employee: refs.employee },
     revision: "1",
@@ -1653,7 +3186,7 @@ function canonicalMessageCreationCommit(
     tenantId,
     id: refs.timelineItem.id,
     conversation: refs.conversation,
-    timelineSequence: "1",
+    timelineSequence,
     subject: {
       kind: "message" as const,
       message: refs.message,
@@ -1744,7 +3277,10 @@ function canonicalMessageCreationCommit(
     },
     runtimeHealth: {
       ...rawBindingSnapshot.runtimeHealth,
-      checkedAt: createdAt
+      state: route.runtimeObservationAtResolution.state,
+      revision: route.runtimeObservationAtResolution.revision,
+      checkedAt: route.runtimeObservationAtResolution.observedAt,
+      diagnostic: route.runtimeObservationAtResolution.diagnostic
     },
     historySync: {
       ...rawBindingSnapshot.historySync,
@@ -1771,11 +3307,11 @@ function canonicalMessageCreationCommit(
         ...conversation,
         head: {
           ...conversation.head,
-          latestTimelineSequence: "1",
+          latestTimelineSequence: timelineSequence,
           latestActivityItemId: timelineItem.id,
-          latestActivityTimelineSequence: "1",
+          latestActivityTimelineSequence: timelineSequence,
           latestActivityAt: timelineItem.occurredAt,
-          revision: "2",
+          revision: (BigInt(headRevision) + 1n).toString(),
           updatedAt: committedAt
         }
       },
@@ -2610,6 +4146,9 @@ async function seedOutboundAnchors(
         administrative_state, administrative_revision,
         administrative_changed_at, runtime_health_state,
         runtime_health_revision, runtime_health_checked_at,
+        runtime_diagnostic_code_id, runtime_diagnostic_retryable,
+        runtime_diagnostic_correlation_token,
+        runtime_diagnostic_safe_operator_hint_id,
         history_sync_state, history_sync_revision, history_updated_at,
         provider_access_revision, provider_role_count,
         provider_roles_digest_sha256, provider_access_evidence_set_id,
@@ -2634,8 +4173,15 @@ async function seedOutboundAnchors(
         ${`source_thread_binding_remote_access_episode:${label}`}, 1,
         'active', 'direct_observation', 1, ${OUTBOUND_TEST_TIMES.loadedAt},
         ${`source_thread_binding_evidence_set:remote-${label}`},
-        'enabled', 1, ${OUTBOUND_TEST_TIMES.loadedAt}, 'ready', 1,
-        ${OUTBOUND_TEST_TIMES.loadedAt}, 'unsupported', 1,
+        'enabled', 1, ${OUTBOUND_TEST_TIMES.loadedAt},
+        ${fixture.route.runtimeObservationAtResolution.state},
+        ${BigInt(fixture.route.runtimeObservationAtResolution.revision)},
+        ${fixture.route.runtimeObservationAtResolution.observedAt},
+        ${fixture.route.runtimeObservationAtResolution.diagnostic?.codeId ?? null},
+        ${fixture.route.runtimeObservationAtResolution.diagnostic?.retryable ?? null},
+        ${fixture.route.runtimeObservationAtResolution.diagnostic?.correlationToken ?? null},
+        ${fixture.route.runtimeObservationAtResolution.diagnostic?.safeOperatorHintId ?? null},
+        'unsupported', 1,
         ${OUTBOUND_TEST_TIMES.loadedAt}, 1, 0, ${"0".repeat(64)},
         ${`source_thread_binding_evidence_set:provider-${label}`},
         ${OUTBOUND_TEST_TIMES.loadedAt}, ${adapter.contractId},
@@ -2739,6 +4285,164 @@ async function seedExistingOutboundRoute(
     }
     await transaction.execute(sql`set local session_replication_role = origin`);
   });
+}
+
+async function seedReplacementBinding(
+  db: HuleeDatabase,
+  fixture: OutboundFixture,
+  replacement: ReturnType<
+    typeof explicitRerouteIntegrationFixture
+  >["replacement"]
+): Promise<void> {
+  await db.transaction(async (transaction) => {
+    await transaction.execute(
+      sql`set local session_replication_role = replica`
+    );
+    await transaction.execute(sql`
+      update inbox_v2_external_threads
+         set scope_kind = 'provider',
+             scope_source_account_id = null,
+             scope_owner_key = 'provider',
+             identity_declaration = jsonb_set(
+               jsonb_set(
+                 identity_declaration,
+                 '{scopeKind}',
+                 '"provider"'::jsonb
+               ),
+               '{decisionStrength}',
+               '"authoritative"'::jsonb
+             )
+       where tenant_id = ${fixture.tenantId}
+         and id = ${fixture.references.externalThread.id}
+    `);
+    await transaction.execute(sql`
+      insert into source_connections (
+        id, tenant_id, source_type, source_name, display_name
+      ) values (
+        ${replacement.sourceConnection.id}, ${fixture.tenantId},
+        'messenger', 'synthetic',
+        ${`Reroute connection ${fixture.suffix}`}
+      )
+    `);
+    await transaction.execute(sql`
+      insert into source_accounts (
+        id, tenant_id, source_connection_id, account_type, display_name
+      ) values (
+        ${replacement.sourceAccount.id}, ${fixture.tenantId},
+        ${replacement.sourceConnection.id}, 'direct_number',
+        ${`Reroute account ${fixture.suffix}`}
+      )
+    `);
+    await transaction.execute(sql`
+      insert into inbox_v2_source_thread_bindings (
+        tenant_id, id, external_thread_id, source_connection_id,
+        source_account_id, created_at
+      ) values (
+        ${fixture.tenantId}, ${replacement.binding.id},
+        ${fixture.references.externalThread.id},
+        ${replacement.sourceConnection.id}, ${replacement.sourceAccount.id},
+        ${OUTBOUND_TEST_TIMES.loadedAt}
+      )
+    `);
+    await transaction.execute(sql`
+      insert into inbox_v2_source_thread_binding_heads
+      select (jsonb_populate_record(
+        null::inbox_v2_source_thread_binding_heads,
+        to_jsonb(head_row) || jsonb_build_object(
+          'binding_id', ${replacement.binding.id}::text,
+          'source_connection_id', ${replacement.sourceConnection.id}::text,
+          'source_account_id', ${replacement.sourceAccount.id}::text,
+          'account_verification_evidence_set_id',
+            ${`source_thread_binding_evidence_set:reroute-account-${fixture.suffix}`}::text,
+          'current_remote_access_episode_id',
+            ${`source_thread_binding_remote_access_episode:reroute-${fixture.suffix}`}::text,
+          'remote_access_evidence_set_id',
+            ${`source_thread_binding_evidence_set:reroute-remote-${fixture.suffix}`}::text,
+          'provider_access_evidence_set_id',
+            ${`source_thread_binding_evidence_set:reroute-provider-${fixture.suffix}`}::text
+        )
+      )).*
+        from inbox_v2_source_thread_binding_heads head_row
+       where head_row.tenant_id = ${fixture.tenantId}
+         and head_row.binding_id = ${fixture.references.binding.id}
+    `);
+    await transaction.execute(sql`
+      insert into inbox_v2_source_thread_binding_snapshots
+      select (jsonb_populate_record(
+        null::inbox_v2_source_thread_binding_snapshots,
+        to_jsonb(head_row) || jsonb_build_object(
+          'transition_id', null,
+          'expected_binding_revision', null
+        )
+      )).*
+        from inbox_v2_source_thread_binding_heads head_row
+       where head_row.tenant_id = ${fixture.tenantId}
+         and head_row.binding_id = ${replacement.binding.id}
+    `);
+    await transaction.execute(sql`
+      insert into inbox_v2_source_thread_binding_capability_entries (
+        tenant_id, binding_id, capability_revision,
+        materialized_by_binding_revision, ordinal, capability_id,
+        operation_id, content_kind_id, state, reference_portability,
+        valid_until, required_provider_role_count, evidence_set_id
+      )
+      select tenant_id, ${replacement.binding.id}, capability_revision,
+             materialized_by_binding_revision, ordinal, capability_id,
+             operation_id, content_kind_id, state, reference_portability,
+             valid_until, required_provider_role_count,
+             ${`source_thread_binding_evidence_set:reroute-capability-${fixture.suffix}`}
+        from inbox_v2_source_thread_binding_capability_entries
+       where tenant_id = ${fixture.tenantId}
+         and binding_id = ${fixture.references.binding.id}
+    `);
+    await transaction.execute(sql`set local session_replication_role = origin`);
+  });
+}
+
+function holdBindingAdminDisable(
+  db: HuleeDatabase,
+  fixture: OutboundFixture,
+  bindingId: string
+): Readonly<{
+  ready: Promise<void>;
+  release(): void;
+  completed: Promise<void>;
+}> {
+  let markReady!: () => void;
+  let failReady!: (error: unknown) => void;
+  const ready = new Promise<void>((resolve, reject) => {
+    markReady = resolve;
+    failReady = reject;
+  });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const completed = db
+    .transaction(async (transaction) => {
+      await transaction.execute(
+        sql`set local session_replication_role = replica`
+      );
+      await transaction.execute(sql`
+        update inbox_v2_source_thread_binding_heads
+           set administrative_state = 'disabled',
+               administrative_revision = 2,
+               revision = 2,
+               updated_at = ${OUTBOUND_TEST_TIMES.openedAt}
+         where tenant_id = ${fixture.tenantId}
+           and binding_id = ${bindingId}
+      `);
+      markReady();
+      await gate;
+      await transaction.execute(
+        sql`set local session_replication_role = origin`
+      );
+    })
+    .catch((error: unknown) => {
+      failReady(error);
+      throw error;
+    });
+  return { ready, release, completed };
 }
 
 async function seedAssociationOccurrences(

@@ -1722,8 +1722,9 @@ future non-chat items without a universal JSON message.
     returned `READY`. Detailed evidence is in
     `docs/product/inbox-v2-msg-001-monotonic-timeline.md`.
 
-- [ ] `INB2-MSG-002` Implement outbound send with explicit route and mutation ID.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-MSG-001`,
+- [x] `INB2-MSG-002` Implement outbound send with explicit route and mutation ID.
+  - State: `done`; Priority: `P0`; Started: `2026-07-18`; Completed:
+    `2026-07-18`; Owner: `Codex`; Depends on: `INB2-MSG-001`,
     `INB2-CON-005`, `INB2-SRC-009`, `INB2-RBAC-002`.
   - Acceptance: normal send resolves exactly one structurally eligible binding,
     persists one immutable opaque route/dispatch transaction and deduplicates
@@ -1731,7 +1732,23 @@ future non-chat items without a universal JSON message.
     conjunctive, and an explicit invalid/unauthorized route never falls back.
   - Verification: zero/multiple/invalid routes, admin disable or binding change
     before I/O, temporary-health retry and allowed reroute produce stable
-    outcomes with no implicit fan-out/account hop. Evidence: -
+    outcomes with no implicit fan-out/account hop. Evidence: authenticated
+    replay is structurally separated from new-route preparation; a canonical
+    scope-derived route token separates principals and send/reroute commands;
+    exact Conversation/WorkItem/SourceAccount authority, immutable
+    route/Message/dispatch/outbox creation, explicit superseding reroute and
+    deterministic 5-60 second same-route retry passed focused `16/16` files /
+    `373` tests. Real Work-head races, forced `40001` rollback/retry and the
+    pinned N-1 writer passed PostgreSQL verification. A clean database installed
+    `53/53` migrations with contract
+    `sha256:8ab43a884313994d40ef231e85cf8fff19a6f878711257ca72384e2328ffdbe6`;
+    the full PG gate passed `32/32` files / `322` tests (`6` opt-in scenarios
+    skipped). Preserve/N-1/RBAC passed `3/3` files / `17/17`; default Vitest
+    passed `356` files / `3808` tests (`42` files / `376` tests skipped).
+    Typecheck, `db:check`, N-1 reproducibility, task-scoped lint/formatting and
+    auxiliary gates passed; independent bridge/idempotency/final reviews
+    returned `READY`. Detailed evidence is in
+    `docs/product/inbox-v2-msg-002-outbound-send.md`.
 
 - [ ] `INB2-MSG-003` Implement typed content blocks and attachment materialization.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-MSG-001`.
@@ -3185,3 +3202,4 @@ the task state, checkbox and evidence above.
 | 2026-07-17 | `INB2-SRC-007`     | Atomic commit; focused 10/212; PG 29/273; preserve 3/17; full 341/3509     | task commit  | Codex + two independent reviews   |
 | 2026-07-17 | `INB2-SRC-009`     | Fenced provider I/O; focused 8/115; PG 29/274; preserve 3/17 + all gates   | task commit  | Codex + three independent reviews |
 | 2026-07-18 | `INB2-EPIC-3-GATE` | Source 82/1127; PG 30/294; preserve 3/17; clean full 352/3679 + all gates  | task commit  | Codex + independent final review  |
+| 2026-07-18 | `INB2-MSG-002`     | Scoped 16/373; PG 32/322; preserve 3/17; full 356/3808 + all gates         | task commit  | Codex + independent final reviews |

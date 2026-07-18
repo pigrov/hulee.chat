@@ -4,6 +4,8 @@ import {
   INBOX_V2_MESSAGE_SCHEMA_VERSION,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
+  INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_ID,
+  INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_VERSION,
   INBOX_V2_TIMELINE_MESSAGE_COMMIT_SCHEMA_VERSION,
   inboxV2CatalogIdSchema,
   inboxV2MessageCreationCommitSchema,
@@ -61,6 +63,7 @@ const hashA = inboxV2Sha256DigestSchema.parse(`sha256:${"a".repeat(64)}`);
 const hashB = inboxV2Sha256DigestSchema.parse(`sha256:${"b".repeat(64)}`);
 const hashC = inboxV2Sha256DigestSchema.parse(`sha256:${"c".repeat(64)}`);
 const hashD = inboxV2Sha256DigestSchema.parse(`sha256:${"d".repeat(64)}`);
+const hashE = inboxV2Sha256DigestSchema.parse(`sha256:${"e".repeat(64)}`);
 const internalRoleId = `internal-ref:${"1".repeat(32)}`;
 const internalTenantId = `internal-ref:${"2".repeat(32)}`;
 
@@ -912,6 +915,152 @@ describe("SQL Inbox V2 authorization mutation repository", () => {
           input,
           async () => null,
           async (context) => atomicSealResult(context, null)
+        )
+      ).rejects.toThrow("atomic Message seal manifest does not match");
+      expectNoAtomicStreamClosure(executor);
+    }
+  );
+
+  it("accepts exactly one old-dispatch cancellation closure beside the reroute replacement", async () => {
+    const fixture = atomicRerouteMutationFixture();
+    const executor = new RoutingAuthorizationExecutor();
+
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        executor
+      ).withAuthorizedAtomicMaterialization(
+        fixture.input,
+        async () => null,
+        async (context) => atomicSealResult(context, null, fixture.manifest)
+      )
+    ).resolves.toMatchObject({ kind: "applied" });
+    expect(executor.commitCount).toBe(1);
+    expect(executor.rollbackCount).toBe(0);
+  });
+
+  it.each([
+    "original_state_hash",
+    "wrong_original_event_time",
+    "missing_original_projection",
+    "provider_for_original",
+    "wrong_audit_target",
+    "wrong_audit_evidence",
+    "wrong_replacement_outbox"
+  ] as const)(
+    "rejects an explicit reroute with canonical %s outside its seal proof",
+    async (mismatch) => {
+      const fixture = atomicRerouteMutationFixture();
+      const originalChange = fixture.input.records.changes.find(
+        (change) =>
+          String(change.entity.entityId) ===
+          String(fixture.manifest.outboundReroute?.originalDispatch.dispatchId)
+      );
+      const originalEvent = fixture.input.records.events.find(
+        (event) => event.typeId === "core:outbound-dispatch.changed"
+      );
+      const originalProjection = fixture.input.records.outboxIntents.find(
+        (intent) =>
+          intent.effectClass === "projection" &&
+          String(intent.eventId) === String(originalEvent?.id)
+      );
+      const providerIntent = fixture.input.records.outboxIntents.find(
+        (intent) => intent.typeId === "core:provider.dispatch"
+      );
+      if (
+        originalChange?.state.kind !== "upsert" ||
+        originalEvent === undefined ||
+        originalProjection === undefined ||
+        providerIntent === undefined ||
+        fixture.manifest.outboundReroute === null
+      ) {
+        throw new Error("Atomic reroute fixture is incomplete.");
+      }
+      const changes = fixture.input.records.changes.map((change) =>
+        mismatch === "original_state_hash" && change.id === originalChange.id
+          ? {
+              ...change,
+              state: { ...originalChange.state, stateHash: hashD }
+            }
+          : change
+      );
+      const events = fixture.input.records.events.map((event) =>
+        mismatch === "wrong_original_event_time" &&
+        event.id === originalEvent.id
+          ? { ...event, occurredAt: "2026-07-15T08:59:59.000Z" }
+          : event
+      );
+      let outboxIntents =
+        mismatch === "missing_original_projection"
+          ? fixture.input.records.outboxIntents.filter(
+              (intent) => intent.id !== originalProjection.id
+            )
+          : mismatch === "provider_for_original"
+            ? [
+                ...fixture.input.records.outboxIntents,
+                {
+                  ...providerIntent,
+                  id: fixture.manifest.outboundReroute.originalOutboxIntentId,
+                  ordinal: fixture.input.records.outboxIntents.length + 1,
+                  eventId: originalEvent.id,
+                  changeIds: [originalChange.id],
+                  payloadReference: originalChange.state.payloadReference,
+                  consumerDedupeKey: hashE,
+                  intentHash: hashE
+                }
+              ]
+            : fixture.input.records.outboxIntents;
+      // Removing an ordinal-bearing record is itself valid test input only
+      // after the remaining outbox ordinals are made contiguous.
+      outboxIntents = outboxIntents.map((intent, index) => ({
+        ...intent,
+        ordinal: index + 1
+      }));
+      const audit = {
+        ...fixture.input.records.audit,
+        ...(mismatch === "wrong_audit_target"
+          ? {
+              target: {
+                ...fixture.input.records.audit.target,
+                entityTypeId: "core:message"
+              }
+            }
+          : {}),
+        ...(mismatch === "wrong_audit_evidence"
+          ? { evidenceReference: fixture.manifest.payloadReference }
+          : {})
+      };
+      const manifest =
+        mismatch === "wrong_replacement_outbox"
+          ? {
+              ...fixture.manifest,
+              outboundReroute: {
+                ...fixture.manifest.outboundReroute,
+                replacement: {
+                  ...fixture.manifest.outboundReroute.replacement,
+                  outboxIntentId: "outbox-intent:forged-reroute-replacement"
+                }
+              }
+            }
+          : fixture.manifest;
+      const input = {
+        ...fixture.input,
+        records: {
+          ...fixture.input.records,
+          changes,
+          events,
+          outboxIntents,
+          audit
+        }
+      } as unknown as WithPrivilegedAuthorizationMutationInput;
+      const executor = new RoutingAuthorizationExecutor();
+
+      await expect(
+        createSqlInboxV2AuthorizedCommandCoordinator(
+          executor
+        ).withAuthorizedAtomicMaterialization(
+          input,
+          async () => null,
+          async (context) => atomicSealResult(context, null, manifest)
         )
       ).rejects.toThrow("atomic Message seal manifest does not match");
       expectNoAtomicStreamClosure(executor);
@@ -3479,6 +3628,7 @@ function atomicMessageCreationSealManifest(): InboxV2AtomicMessageCreationSealMa
       recordedAt: event.recordedAt
     },
     outboundDispatch: null,
+    outboundReroute: null,
     sourceOccurrence: null
   };
 }
@@ -3509,7 +3659,149 @@ function atomicProviderIoSealManifest(
       stateSchemaVersion: dispatchChange.state.stateSchemaVersion,
       stateHash: dispatchChange.state.stateHash,
       payloadReference: dispatchChange.state.payloadReference
+    },
+    outboundReroute: null
+  };
+}
+
+function atomicRerouteMutationFixture(): Readonly<{
+  input: WithPrivilegedAuthorizationMutationInput;
+  manifest: InboxV2AtomicMessageCreationSealManifest;
+}> {
+  const base = atomicProviderIoMutationInput();
+  const replacementManifest = atomicProviderIoSealManifest(base);
+  const replacementDispatch = replacementManifest.outboundDispatch;
+  const providerIntent = base.records.outboxIntents.find(
+    (intent) => intent.typeId === "core:provider.dispatch"
+  );
+  const messageEvent = base.records.events[0];
+  const projection = base.records.outboxIntents.find(
+    (intent) => intent.effectClass === "projection"
+  );
+  if (
+    replacementDispatch === null ||
+    providerIntent === undefined ||
+    messageEvent === undefined ||
+    projection === undefined
+  ) {
+    throw new Error("Provider reroute fixture is incomplete.");
+  }
+  const originalEntity = {
+    tenantId,
+    entityTypeId: "core:outbound-dispatch",
+    entityId: "outbound_dispatch:reroute-original"
+  } as const;
+  const originalPayloadReference = {
+    tenantId,
+    recordId: originalEntity.entityId,
+    schemaId: INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
+    schemaVersion: INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
+    digest: hashC
+  };
+  const rerouteCommitReference = {
+    tenantId,
+    recordId: originalEntity.entityId,
+    schemaId: INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_ID,
+    schemaVersion: INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_VERSION,
+    digest: hashD
+  };
+  const originalChange = {
+    id: "change:reroute-original-cancelled",
+    ordinal: base.records.changes.length + 1,
+    entity: originalEntity,
+    resultingRevision: "2",
+    timeline: null,
+    audience: "conversation_external" as const,
+    state: {
+      kind: "upsert" as const,
+      stateSchemaId: originalPayloadReference.schemaId,
+      stateSchemaVersion: originalPayloadReference.schemaVersion,
+      stateHash: originalPayloadReference.digest,
+      payloadReference: originalPayloadReference,
+      domainCommitReference: rerouteCommitReference
     }
+  };
+  const originalEvent = {
+    ...messageEvent,
+    id: "event:reroute-original-cancelled",
+    ordinal: "2",
+    typeId: "core:outbound-dispatch.changed" as const,
+    changeIds: [originalChange.id],
+    subjects: [originalEntity],
+    payloadSchemaId: rerouteCommitReference.schemaId,
+    payloadSchemaVersion: rerouteCommitReference.schemaVersion,
+    payloadReference: rerouteCommitReference,
+    eventHash: hashD
+  };
+  const originalProjection = {
+    ...projection,
+    id: "outbox-intent:reroute-original-projection",
+    ordinal: base.records.outboxIntents.length + 1,
+    eventId: originalEvent.id,
+    changeIds: [originalChange.id],
+    payloadReference: rerouteCommitReference,
+    consumerDedupeKey: hashD,
+    intentHash: hashD
+  };
+  const rerouteManifest = {
+    originalRouteId: "outbound_route:reroute-original",
+    expectedOriginalDispatchRevision: "1",
+    originalDispatch: {
+      dispatchId: originalEntity.entityId,
+      resultingRevision: originalChange.resultingRevision,
+      stateSchemaId: originalPayloadReference.schemaId,
+      stateSchemaVersion: originalPayloadReference.schemaVersion,
+      stateHash: originalPayloadReference.digest,
+      payloadReference: originalPayloadReference
+    },
+    originalOutboxIntentId: "outbox-intent:reroute-original-provider",
+    replacement: {
+      messageId: replacementManifest.messageId,
+      routeId: "outbound_route:reroute-replacement",
+      dispatchId: replacementDispatch.dispatchId,
+      outboxIntentId: providerIntent.id
+    },
+    reasonId: "core:operator-reroute",
+    changedAt: occurredAt,
+    domainCommitReference: rerouteCommitReference,
+    event: {
+      typeId: originalEvent.typeId,
+      payloadSchemaId: originalEvent.payloadSchemaId,
+      payloadSchemaVersion: originalEvent.payloadSchemaVersion,
+      payloadReference: rerouteCommitReference,
+      occurredAt: originalEvent.occurredAt,
+      recordedAt: originalEvent.recordedAt
+    }
+  } as const;
+  return {
+    input: {
+      ...base,
+      command: {
+        ...base.command,
+        commandTypeId: "core:source.dispatch.reroute"
+      },
+      records: {
+        ...base.records,
+        changes: [...base.records.changes, originalChange],
+        events: [...base.records.events, originalEvent],
+        outboxIntents: [...base.records.outboxIntents, originalProjection],
+        audit: {
+          ...base.records.audit,
+          actionId: "core:source.dispatch.reroute",
+          target: {
+            tenantId,
+            entityTypeId: "core:outbound-dispatch",
+            entityId: `internal-ref:${"9".repeat(32)}`
+          },
+          reasonCodeId: rerouteManifest.reasonId,
+          evidenceReference: rerouteCommitReference
+        }
+      }
+    } as never,
+    manifest: {
+      ...replacementManifest,
+      outboundReroute: rerouteManifest
+    } as unknown as InboxV2AtomicMessageCreationSealManifest
   };
 }
 

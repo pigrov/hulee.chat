@@ -684,9 +684,8 @@ function requiredAuthorizationsForIntent(
   }
   const replyAuthority = replyAuthorityForIntent(intent);
   if (replyAuthority !== undefined && replyAuthority.kind !== "no_work_item") {
-    const actionAuthorization = requiredActionAuthorizationForIntent(intent);
     required.push({
-      permissionId: actionAuthorization.permissionId,
+      permissionId: "core:work.read",
       resourceScopeId: "core:work-item",
       resource: {
         tenantId: replyAuthority.workItem.tenantId,

@@ -261,6 +261,12 @@ export type {
   InboxV2SourceOccurrenceTransactionExecutor,
   MaterializeInboxV2SourceOccurrenceResult
 } from "./sql-inbox-v2-source-occurrence-repository";
+export { fenceInboxV2OutboundReplyAuthorityInTransaction } from "./sql-inbox-v2-outbound-reply-authority-repository";
+export type {
+  InboxV2OutboundReplyAuthorityFenceInput,
+  InboxV2OutboundReplyAuthorityFenceRejectionReason,
+  InboxV2OutboundReplyAuthorityFenceResult
+} from "./sql-inbox-v2-outbound-reply-authority-repository";
 export {
   buildFindInboxV2ExternalMessageReferenceCandidatesSql,
   buildCompareAndSwapInboxV2OutboundDispatchAttemptSql,
@@ -279,6 +285,7 @@ export {
   computeInboxV2ExternalMessageKeyDigest,
   findInboxV2ExternalMessageReferenceCandidatesInTransaction,
   InboxV2RouteResolutionRollbackError,
+  persistInboxV2ExplicitRerouteResolutionInTransaction,
   persistInboxV2RouteResolutionInTransaction
 } from "./sql-inbox-v2-outbound-transport-repository";
 export type {

@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 
 import { INBOX_V2_AUTHORIZATION_WORK_ITEM_BRIDGE_INTEGRITY_SQL } from "./inbox-v2/authorization-relations";
 import {
+  INBOX_V2_CONVERSATION_WORK_HEAD_INVARIANTS_SQL,
   INBOX_V2_WORK_ITEM_INVARIANTS_SQL,
+  inboxV2ConversationWorkHeads,
   inboxV2ConversationWorkItemSlots,
   inboxV2EmployeeAssignmentFenceHeads,
   inboxV2EmployeeAssignmentFenceVersions,
@@ -35,6 +37,7 @@ const workItemTables = [
   inboxV2EmployeeAssignmentFenceVersions,
   inboxV2EmployeeAssignmentFenceHeads,
   inboxV2WorkItems,
+  inboxV2ConversationWorkHeads,
   inboxV2ConversationWorkItemSlots,
   inboxV2WorkItemSlaSnapshots,
   inboxV2WorkQueueEligibilityDecisions,
@@ -53,6 +56,7 @@ describe("Inbox V2 WorkItem persistence schema", () => {
       "inbox_v2_employee_assignment_fence_versions",
       "inbox_v2_employee_assignment_fence_heads",
       "inbox_v2_work_items",
+      "inbox_v2_conversation_work_heads",
       "inbox_v2_conversation_work_item_slots",
       "inbox_v2_work_item_sla_snapshots",
       "inbox_v2_work_queue_eligibility_decisions",
@@ -104,6 +108,13 @@ describe("Inbox V2 WorkItem persistence schema", () => {
       inboxV2WorkQueueVersions,
       ["tenant_id", "queue_id", "queue_revision"],
       ["tenant_id", "work_queue_id", "revision"]
+    );
+    expectForeignKey(
+      inboxV2ConversationWorkHeads,
+      "inbox_v2_conversation_work_heads_conversation_fk",
+      inboxV2Conversations,
+      ["tenant_id", "conversation_id"],
+      ["tenant_id", "id"]
     );
     expectForeignKey(
       inboxV2WorkQueueEligibilityDecisions,
@@ -582,6 +593,62 @@ describe("Inbox V2 WorkItem persistence schema", () => {
     );
     expect(invariantSql).toContain("sha256");
     expect(invariantSql).not.toContain("md5(");
+  });
+
+  it("owns the fail-closed Conversation Work head outside immutable 0030 invariants", () => {
+    const headSql = INBOX_V2_CONVERSATION_WORK_HEAD_INVARIANTS_SQL;
+    expect(INBOX_V2_WORK_ITEM_INVARIANTS_SQL).not.toContain(
+      "INB2-MSG-002_CONVERSATION_WORK_HEAD_V1"
+    );
+    expect(headSql).toContain("INB2-MSG-002_CONVERSATION_WORK_HEAD_V1");
+    expect(headSql).toContain("inbox_v2_conversation_work_head_bootstrap");
+    expect(headSql).toContain("'pending_intake'");
+    expect(headSql).toContain("inbox_v2_conversation_work_head_guard");
+    expect(headSql).toContain("inbox_v2_conversation_work_head_advance");
+    expect(headSql).toContain("inbox_v2_conversation_work_head_coherence");
+    expect(headSql).toContain("pending_materialization_ordinal");
+    expect(headSql).toContain(
+      "v_head.pending_materialization_ordinal is not null"
+    );
+    const initialBackfill = headSql.indexOf(
+      "insert into public.inbox_v2_conversation_work_heads ("
+    );
+    const creationCapture = headSql.indexOf(
+      "create trigger inbox_v2_work_creation_head_advance_trigger"
+    );
+    const conversationLock = headSql.indexOf(
+      "lock table public.inbox_v2_conversations,"
+    );
+    const workItemLock = headSql.indexOf("public.inbox_v2_work_items,");
+    const creationDecisionLock = headSql.indexOf(
+      "public.inbox_v2_work_item_creation_decisions",
+      workItemLock + 1
+    );
+    const conversationCapture = headSql.indexOf(
+      "create trigger inbox_v2_conversations_work_head_insert_trigger"
+    );
+    const finalReconciliation = headSql.indexOf(
+      "-- Close the additive-expand visibility gap"
+    );
+    const guard = headSql.indexOf(
+      "create trigger inbox_v2_conversation_work_heads_guard_trigger"
+    );
+    expect(initialBackfill).toBeGreaterThanOrEqual(0);
+    expect(conversationLock).toBeGreaterThan(initialBackfill);
+    expect(workItemLock).toBeGreaterThan(conversationLock);
+    expect(creationDecisionLock).toBeGreaterThan(workItemLock);
+    expect(creationCapture).toBeGreaterThan(creationDecisionLock);
+    expect(conversationCapture).toBeGreaterThan(creationCapture);
+    expect(finalReconciliation).toBeGreaterThan(conversationCapture);
+    expect(guard).toBeGreaterThan(finalReconciliation);
+    expect(headSql).not.toContain("inbox_v2_conversation_slot_bootstrap");
+    const functionCount =
+      headSql.match(/create or replace function public\./g)?.length ?? 0;
+    const searchPathCount =
+      headSql.match(/set search_path = pg_catalog, public, pg_temp/g)?.length ??
+      0;
+    expect(functionCount).toBe(4);
+    expect(searchPathCount).toBe(functionCount);
   });
 
   it("lets WorkItem ownership drive creation-history cascade deterministically", () => {

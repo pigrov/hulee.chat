@@ -47,6 +47,7 @@ import type { HuleeDatabase } from "../client";
 import {
   consumeInboxV2AtomicMaterializationSealReceipt,
   registerInboxV2AtomicSealExecutor,
+  revokeInboxV2AtomicOutboundRerouteProofs,
   revokeInboxV2AtomicOutboundRouteProofs,
   revokeInboxV2AtomicSealExecutor,
   type InboxV2AtomicMaterializationSealReceipt,
@@ -1127,6 +1128,7 @@ async function persistAuthorizedAtomicMaterialization<TPrepared, TResult>(
       revisionEffects: []
     };
   } finally {
+    revokeInboxV2AtomicOutboundRerouteProofs(atomicMaterializationToken);
     revokeInboxV2AtomicOutboundRouteProofs(atomicMaterializationToken);
   }
 }
@@ -6842,7 +6844,11 @@ function assertInboxV2AtomicOutboundDispatchClosure(
   );
   const dispatchManifest = manifest.outboundDispatch;
   if (dispatchManifest === null) {
-    if (dispatchChanges.length !== 0 || providerIntents.length !== 0) {
+    if (
+      dispatchChanges.length !== 0 ||
+      providerIntents.length !== 0 ||
+      manifest.outboundReroute !== null
+    ) {
       throw atomicMessageSealManifestMismatch();
     }
     return;
@@ -6857,8 +6863,10 @@ function assertInboxV2AtomicOutboundDispatchClosure(
       String(candidate.entity.entityId) === String(dispatchManifest.dispatchId)
   );
   const dispatchState = dispatchChange?.state;
+  const rerouteManifest = manifest.outboundReroute;
+  const expectedDispatchChangeCount = rerouteManifest === null ? 1 : 2;
   if (
-    dispatchChanges.length !== 1 ||
+    dispatchChanges.length !== expectedDispatchChangeCount ||
     dispatchChange === undefined ||
     String(dispatchChange.resultingRevision) !==
       dispatchManifest.resultingRevision ||
@@ -6894,6 +6902,92 @@ function assertInboxV2AtomicOutboundDispatchClosure(
       providerIntent.payloadReference,
       dispatchManifest.payloadReference
     )
+  ) {
+    throw atomicMessageSealManifestMismatch();
+  }
+
+  if (rerouteManifest === null) return;
+  if (
+    rerouteManifest.originalDispatch.dispatchId ===
+      dispatchManifest.dispatchId ||
+    String(rerouteManifest.replacement.messageId) !==
+      String(manifest.messageId) ||
+    String(rerouteManifest.replacement.dispatchId) !==
+      String(dispatchManifest.dispatchId) ||
+    String(rerouteManifest.replacement.outboxIntentId) !==
+      String(providerIntent.id) ||
+    input.records.outboxIntents.some(
+      (intent) =>
+        String(intent.id) === String(rerouteManifest.originalOutboxIntentId)
+    ) ||
+    input.records.audit.actionId !== "core:source.dispatch.reroute" ||
+    input.records.audit.target.tenantId !== manifest.tenantId ||
+    input.records.audit.target.entityTypeId !== "core:outbound-dispatch" ||
+    String(input.records.audit.reasonCodeId) !==
+      String(rerouteManifest.reasonId) ||
+    input.records.audit.evidenceReference === null ||
+    !payloadReferencesMatch(
+      input.records.audit.evidenceReference,
+      rerouteManifest.domainCommitReference
+    )
+  ) {
+    throw atomicMessageSealManifestMismatch();
+  }
+
+  const originalChange = dispatchChanges.find(
+    (candidate) =>
+      candidate.entity.tenantId === manifest.tenantId &&
+      String(candidate.entity.entityId) ===
+        String(rerouteManifest.originalDispatch.dispatchId)
+  );
+  const originalState = originalChange?.state;
+  if (
+    originalChange === undefined ||
+    String(originalChange.resultingRevision) !==
+      rerouteManifest.originalDispatch.resultingRevision ||
+    originalChange.timeline !== null ||
+    originalChange.audience !== "conversation_external" ||
+    originalState?.kind !== "upsert" ||
+    originalState.stateSchemaId !==
+      rerouteManifest.originalDispatch.stateSchemaId ||
+    originalState.stateSchemaVersion !==
+      rerouteManifest.originalDispatch.stateSchemaVersion ||
+    originalState.stateHash !== rerouteManifest.originalDispatch.stateHash ||
+    !payloadReferencesMatch(
+      originalState.payloadReference,
+      rerouteManifest.originalDispatch.payloadReference
+    ) ||
+    !payloadReferencesMatch(
+      originalState.domainCommitReference,
+      rerouteManifest.domainCommitReference
+    )
+  ) {
+    throw atomicMessageSealManifestMismatch();
+  }
+
+  const originalEvent = assertInboxV2AtomicEntityEventAndProjectionClosure(
+    input,
+    originalChange,
+    rerouteManifest.event
+  );
+  const originalProjections = input.records.outboxIntents.filter(
+    (intent) =>
+      intent.effectClass === "projection" &&
+      intent.typeId === "core:projection.update" &&
+      String(intent.eventId) === String(originalEvent.id) &&
+      intent.changeIds.length === 1 &&
+      String(intent.changeIds[0]) === String(originalChange.id)
+  );
+  if (
+    String(originalEvent.id) === String(messageEvent.id) ||
+    originalEvent.changeIds.length !== 1 ||
+    String(originalEvent.changeIds[0]) !== String(originalChange.id) ||
+    originalEvent.subjects.length !== 1 ||
+    originalEvent.subjects[0]?.tenantId !== manifest.tenantId ||
+    originalEvent.subjects[0]?.entityTypeId !== "core:outbound-dispatch" ||
+    String(originalEvent.subjects[0]?.entityId) !==
+      String(rerouteManifest.originalDispatch.dispatchId) ||
+    originalProjections.length !== 1
   ) {
     throw atomicMessageSealManifestMismatch();
   }

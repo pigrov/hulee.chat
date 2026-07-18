@@ -1,5 +1,6 @@
 import {
   calculateInboxV2OutboxLeaseTokenHash,
+  deriveInboxV2RouteFailureOutboxFinalization,
   inboxV2EntityRevisionSchema,
   inboxV2NamespacedIdSchema,
   inboxV2OutboxClaimSchema,
@@ -8,6 +9,7 @@ import {
   inboxV2OutboxWorkerIdSchema,
   inboxV2OutboundDispatchAttemptCommitSchema,
   inboxV2OutboundDispatchAttemptSchema,
+  inboxV2OutboundDispatchRouteFailureCommitSchema,
   inboxV2OutboundDispatchSchema,
   inboxV2RoutingTrustedServiceIdSchema,
   type InboxV2OutboxClaim,
@@ -129,6 +131,7 @@ function createHarness(input: {
     ReturnType<InboxV2ProviderDispatchAdapterPort<{ text: string }>["dispatch"]>
   >;
   attemptResults?: readonly InboxV2ProviderDispatchFencedMutationResult[];
+  routeFailureResult?: InboxV2ProviderDispatchFencedMutationResult;
   reconciliationResult?: InboxV2ProviderDispatchFencedMutationResult;
   finalizeResult?: Awaited<
     ReturnType<InboxV2OutboxWorkRepositoryPort["finalize"]>
@@ -151,6 +154,10 @@ function createHarness(input: {
     events.push(commit.kind === "open_attempt" ? "open" : "complete");
     return attemptResults.shift() ?? ({ kind: "committed" } as const);
   });
+  const applyRouteFailureFenced = vi.fn(async () => {
+    events.push("route_failure");
+    return input.routeFailureResult ?? ({ kind: "committed" } as const);
+  });
   const reconcileFenced = vi.fn(async () => {
     events.push("reconcile");
     return input.reconciliationResult ?? ({ kind: "committed" } as const);
@@ -158,6 +165,7 @@ function createHarness(input: {
   const transport = {
     loadClaimedProviderIo,
     applyAttemptFenced,
+    applyRouteFailureFenced,
     reconcileFenced
   } satisfies InboxV2ProviderDispatchTransportPort;
   const planner = { plan: vi.fn(async () => input.plan) };
@@ -212,6 +220,7 @@ function createHarness(input: {
     coordinator,
     loadClaimedProviderIo,
     applyAttemptFenced,
+    applyRouteFailureFenced,
     reconcileFenced,
     planner,
     dispatch,
@@ -221,6 +230,75 @@ function createHarness(input: {
 }
 
 describe("Inbox V2 provider dispatch coordinator", () => {
+  it("finalizes an already rerouted dispatch without planning or provider I/O", async () => {
+    const cancelledDispatch = inboxV2OutboundDispatchSchema.parse({
+      ...fixture.queuedDispatch,
+      state: "cancelled",
+      revision: "2",
+      updatedAt: OUTBOUND_TEST_TIMES.openedAt
+    });
+    const harness = createHarness({
+      dispatch: cancelledDispatch,
+      plan: {
+        kind: "open_attempt",
+        commit: openAttemptCommit,
+        request: { text: "must-not-run" }
+      }
+    });
+
+    await expect(harness.coordinator.process(claim())).resolves.toMatchObject({
+      outcome: "finalized",
+      source: "rerouted",
+      result: { outcome: "processed" }
+    });
+
+    expect(harness.events).toEqual(["finalize"]);
+    expect(harness.planner.plan).not.toHaveBeenCalled();
+    expect(harness.applyAttemptFenced).not.toHaveBeenCalled();
+    expect(harness.dispatch).not.toHaveBeenCalled();
+    expect(harness.finalize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instruction: expect.objectContaining({
+          kind: "processed",
+          resultReference: null,
+          resultHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u)
+        })
+      })
+    );
+  });
+
+  it("finalizes the old work without provider I/O when reroute wins the open race", async () => {
+    const harness = createHarness({
+      dispatch: fixture.queuedDispatch,
+      plan: {
+        kind: "open_attempt",
+        commit: openAttemptCommit,
+        request: { text: "must-not-run" }
+      },
+      attemptResults: [{ kind: "dispatch_cancelled" }]
+    });
+
+    await expect(harness.coordinator.process(claim())).resolves.toMatchObject({
+      outcome: "finalized",
+      source: "rerouted",
+      result: { outcome: "processed" }
+    });
+
+    expect(harness.events).toEqual(["open", "finalize"]);
+    expect(harness.planner.plan).toHaveBeenCalledTimes(1);
+    expect(harness.applyAttemptFenced).toHaveBeenCalledTimes(1);
+    expect(harness.dispatch).not.toHaveBeenCalled();
+    expect(harness.finalize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instruction: expect.objectContaining({
+          kind: "processed",
+          resultReference: null,
+          resultHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u)
+        })
+      })
+    );
+  });
+
   it("commits open before provider I/O, commits outcome before outbox finalization and processes accepted delivery", async () => {
     const harness = createHarness({
       dispatch: fixture.queuedDispatch,
@@ -427,6 +505,127 @@ describe("Inbox V2 provider dispatch coordinator", () => {
     await expect(harness.coordinator.process(claim())).resolves.toEqual({
       outcome: "mutation_rejected",
       stage: "open",
+      reason: "outbox_stale_token"
+    });
+    expect(harness.dispatch).not.toHaveBeenCalled();
+    expect(harness.finalize).not.toHaveBeenCalled();
+  });
+
+  it("replays the atomic structural terminal finalization without invoking the adapter", async () => {
+    const commit = routeFailureCommit("structural");
+    const harness = createHarness({
+      dispatch: fixture.queuedDispatch,
+      plan: { kind: "route_failure", commit },
+      finalizeResult: {
+        outcome: "already_finalized",
+        work: claim().work
+      } as unknown as Awaited<
+        ReturnType<InboxV2OutboxWorkRepositoryPort["finalize"]>
+      >
+    });
+
+    await expect(harness.coordinator.process(claim())).resolves.toMatchObject({
+      outcome: "finalized",
+      source: "route_failure",
+      result: { outcome: "already_finalized" }
+    });
+    expect(harness.events).toEqual(["route_failure", "finalize"]);
+    expect(harness.applyRouteFailureFenced).toHaveBeenCalledWith({
+      outboxLease: expect.objectContaining({
+        intentId: intent.id,
+        expectedHandlerId: handlerId
+      }),
+      commit
+    });
+    expect(harness.applyAttemptFenced).not.toHaveBeenCalled();
+    expect(harness.dispatch).not.toHaveBeenCalled();
+    expect(harness.finalize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instruction: expect.objectContaining({
+          kind: "dead",
+          errorCode: "core:route.binding_changed"
+        })
+      })
+    );
+  });
+
+  it("durably terminates an administratively disabled binding before I/O", async () => {
+    const commit = routeFailureCommit("admin_disabled");
+    const harness = createHarness({
+      dispatch: fixture.queuedDispatch,
+      plan: { kind: "route_failure", commit }
+    });
+
+    await expect(harness.coordinator.process(claim())).resolves.toMatchObject({
+      outcome: "finalized",
+      source: "route_failure",
+      result: { outcome: "dead" }
+    });
+    expect(harness.applyAttemptFenced).not.toHaveBeenCalled();
+    expect(harness.dispatch).not.toHaveBeenCalled();
+    expect(harness.finalize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instruction: expect.objectContaining({
+          kind: "dead",
+          errorCode: "core:route.binding_changed"
+        })
+      })
+    );
+  });
+
+  it("retries temporary runtime unavailability on the same pinned route with zero provider calls", async () => {
+    const commit = routeFailureCommit("runtime");
+    const expectedFinalization = deriveInboxV2RouteFailureOutboxFinalization({
+      intentId: intent.id,
+      commit
+    });
+    if (expectedFinalization.kind !== "retry") {
+      throw new Error("Runtime-unavailable route must remain retryable.");
+    }
+    const harness = createHarness({
+      dispatch: fixture.queuedDispatch,
+      plan: { kind: "route_failure", commit }
+    });
+
+    await expect(harness.coordinator.process(claim())).resolves.toMatchObject({
+      outcome: "finalized",
+      source: "route_failure",
+      result: { outcome: "retry_scheduled" }
+    });
+    expect(commit.dispatchAfter).toMatchObject({
+      route: fixture.queuedDispatch.route,
+      state: "queued",
+      attemptCount: 0,
+      activeAttempt: null,
+      revision: "1"
+    });
+    expect(commit.dispatchAfter).toEqual(commit.dispatchBefore);
+    expect(harness.events).toEqual(["route_failure", "finalize"]);
+    expect(harness.applyAttemptFenced).not.toHaveBeenCalled();
+    expect(harness.dispatch).not.toHaveBeenCalled();
+    expect(harness.finalize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instruction: expect.objectContaining({
+          kind: "retry",
+          errorCode: "core:route.runtime_unavailable",
+          retryAfterSeconds: expectedFinalization.retryAfterSeconds
+        })
+      })
+    );
+    expect(expectedFinalization.retryAfterSeconds).toBeGreaterThanOrEqual(5);
+    expect(expectedFinalization.retryAfterSeconds).toBeLessThanOrEqual(60);
+  });
+
+  it("does not finalize or call the provider when the route-failure lease fence is stale", async () => {
+    const harness = createHarness({
+      dispatch: fixture.queuedDispatch,
+      plan: { kind: "route_failure", commit: routeFailureCommit("structural") },
+      routeFailureResult: { kind: "outbox_stale_token" }
+    });
+
+    await expect(harness.coordinator.process(claim())).resolves.toEqual({
+      outcome: "mutation_rejected",
+      stage: "route_failure",
       reason: "outbox_stale_token"
     });
     expect(harness.dispatch).not.toHaveBeenCalled();
@@ -659,6 +858,7 @@ describe("Inbox V2 provider dispatch coordinator", () => {
       transport: {
         loadClaimedProviderIo: harness.loadClaimedProviderIo,
         applyAttemptFenced: harness.applyAttemptFenced,
+        applyRouteFailureFenced: harness.applyRouteFailureFenced,
         reconcileFenced: harness.reconcileFenced
       },
       planner: harness.planner,
@@ -679,6 +879,61 @@ describe("Inbox V2 provider dispatch coordinator", () => {
     expect(harness.dispatch).not.toHaveBeenCalled();
   });
 });
+
+function routeFailureCommit(kind: "structural" | "admin_disabled" | "runtime") {
+  const failedAt = OUTBOUND_TEST_TIMES.openedAt;
+  const structural = kind === "structural";
+  const adminDisabled = kind === "admin_disabled";
+  const bindingHeadSnapshot = {
+    ...fixture.bindingHeadSnapshot,
+    fence: {
+      ...fixture.bindingHeadSnapshot.fence,
+      ...(structural ? { bindingGeneration: "2" } : {}),
+      ...(adminDisabled ? { administrativeRevision: "2" } : {})
+    },
+    administrative: adminDisabled
+      ? {
+          state: "disabled" as const,
+          revision: "2"
+        }
+      : fixture.bindingHeadSnapshot.administrative,
+    runtimeHealth:
+      kind === "runtime"
+        ? { state: "unavailable" as const, revision: "2" }
+        : fixture.bindingHeadSnapshot.runtimeHealth,
+    bindingRevision: "2",
+    updatedAt: failedAt
+  };
+  return inboxV2OutboundDispatchRouteFailureCommitSchema.parse({
+    tenantId: fixture.tenantId,
+    routeSnapshot: fixture.route,
+    bindingHeadSnapshot,
+    error:
+      structural || adminDisabled
+        ? {
+            code: "route.binding_changed",
+            retryability: "retryable_resolution",
+            diagnostic: null
+          }
+        : {
+            code: "route.runtime_unavailable",
+            retryability: "retryable_same_route",
+            diagnostic: null
+          },
+    dispatchBefore: fixture.queuedDispatch,
+    dispatchAfter:
+      kind === "runtime"
+        ? fixture.queuedDispatch
+        : {
+            ...fixture.queuedDispatch,
+            state: "terminal_failure",
+            revision: "2",
+            updatedAt: failedAt
+          },
+    failedByTrustedServiceId: trustedServiceId,
+    failedAt
+  });
+}
 
 function safeRetryOpenAttempt(): OpenAttemptCommit {
   const attemptReference = {

@@ -5520,7 +5520,13 @@ begin
        )
        and binding_snapshot.remote_access_state = 'active'
        and binding_snapshot.administrative_state = 'enabled'
-       and binding_snapshot.runtime_health_state = 'ready'
+       and binding_snapshot.runtime_health_state::text =
+         route_row.runtime_observation_snapshot #>> '{state}'
+       and binding_snapshot.runtime_health_revision::text =
+         route_row.runtime_observation_snapshot #>> '{revision}'
+       and binding_snapshot.runtime_health_checked_at =
+         (route_row.runtime_observation_snapshot #>>
+           '{observedAt}')::timestamptz
        and binding_snapshot.capability_contract_id =
          route_row.adapter_contract_id
        and binding_snapshot.capability_contract_version =
@@ -5615,7 +5621,6 @@ begin
                    required_role.provider_role_id
             )
        )
-       and route_row.runtime_observation_snapshot #>> '{state}' = 'ready'
        and (route_row.runtime_observation_snapshot #>>
          '{observedAt}')::timestamptz <= expected_authority_at
        and route_row.selected_at <= expected_authority_at
@@ -9109,7 +9114,7 @@ begin
                'core:message.forward_provider_native'
            end,
            case context_row.kind
-             when 'none' then 'core:message.send_external'
+             when 'none' then 'core:message.reply_external'
              when 'reply' then 'core:message.reply_external'
              when 'forward_content_copy' then
                'core:message.forward_content_copy_external'

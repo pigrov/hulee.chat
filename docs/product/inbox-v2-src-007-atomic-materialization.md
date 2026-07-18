@@ -84,7 +84,7 @@ and `updatedAt`; callers cannot provide a weaker or unrelated fence.
 Before any Message-domain SQL, the repository also binds the origin to its
 command and exact allowed Conversation decision: source-originated creation
 requires `core:message.receive` / `core:message.receive_external`, external
-send requires `core:message.send` / `core:message.send_external`, and internal
+send requires `core:message.send` / `core:message.reply_external`, and internal
 send requires `core:message.send` / `core:message.send_internal`. Employee or
 trusted-service attribution must match the authenticated actor and epoch.
 Migration origin fails closed until it has a dedicated authorized command

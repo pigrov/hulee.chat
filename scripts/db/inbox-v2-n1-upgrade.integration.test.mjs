@@ -73,6 +73,7 @@ describe("Inbox V2 pinned N-1 runtime artifact", () => {
           "N-1 internal inbox query, reply and routing services",
           "N-1 Web loadInboxViewModel with pinned session/config stubs and in-process fetch",
           "N-1 processOutboxBatch with a fake no-provider handler",
+          "N-1 WorkItem writer across expand capture and first plus sequential post-expand creation",
           "one N-1 database pool and backend across pre-expand, failed-expand and post-expand probes"
         ],
         doesNotExercise: [
@@ -106,9 +107,9 @@ describe("Inbox V2 pinned N-1 runtime artifact", () => {
       },
       upgradeTarget: {
         folder: "packages/db/drizzle",
-        count: 50,
+        count: 53,
         digest:
-          "sha256:a1c86bee22a9be596667d952cdfddef294517d19b3d73f677c79ee1c38995274"
+          "sha256:8ab43a884313994d40ef231e85cf8fff19a6f878711257ca72384e2328ffdbe6"
       }
     });
 
@@ -142,6 +143,16 @@ describe("Inbox V2 pinned N-1 runtime artifact", () => {
         path: "packages/db/src/repositories/external-message-repository.ts",
         sha256:
           "sha256:c9e4b84e524058a92911f4aa6114b7c99c9bff62b847e43dc0fdde50f51e32bc"
+      },
+      {
+        path: "packages/db/src/repositories/sql-inbox-v2-conversation-repository.ts",
+        sha256:
+          "sha256:ea75bdbcc66e7042dbd454818b83d945c1e220bb5e3d5c42785aa2f68a4649a1"
+      },
+      {
+        path: "packages/db/src/repositories/sql-inbox-v2-work-item-repository.ts",
+        sha256:
+          "sha256:472213eec8bbe6c08b396d565037f2f6ed641154dbb92df6a6e1d7edb52564d3"
       },
       {
         path: "packages/db/src/repositories/sql-outbox-repository.ts",
@@ -367,13 +378,62 @@ describePostgres("Inbox V2 source-bundled N-1 compatibility upgrade", () => {
         { status: "processed", count: 5 }
       ]);
 
-      const install = await installInboxV2Database({
+      const pauseGate = await installLegacyWorkItemInsertPause({
         databaseUrl: database.url,
-        migrationsFolder,
-        lockTimeoutMs: 2_345,
-        statementTimeoutMs: 6_789,
-        allowEphemeralBlockingDdlCompatibilityTest: true
+        tenantId: ready.workspace.tenantId,
+        workItemId: "work_item:db008-n1-migration-gap"
       });
+      let install;
+      try {
+        runtime.send({ command: "start-legacy-work-item-create" });
+        await expect(
+          runtime.readMessage("legacy-work-item-started")
+        ).resolves.toMatchObject({
+          type: "legacy-work-item-started",
+          conversationId: ready.workspace.migrationGapConversationId,
+          workItemId: "work_item:db008-n1-migration-gap"
+        });
+        await expectBackendAdvisoryWait(database.url, ready.backend.pid);
+
+        let installSettled = false;
+        const installPromise = installInboxV2Database({
+          databaseUrl: database.url,
+          migrationsFolder,
+          lockTimeoutMs: 2_345,
+          statementTimeoutMs: 6_789,
+          allowEphemeralBlockingDdlCompatibilityTest: true
+        });
+        void installPromise.then(
+          () => {
+            installSettled = true;
+          },
+          () => {
+            installSettled = true;
+          }
+        );
+        await expectUngrantableMigrationCaptureLock(
+          database.url,
+          ready.backend.pid
+        );
+        expect(installSettled).toBe(false);
+
+        await pauseGate.release();
+        runtime.send({ command: "await-legacy-work-item-create" });
+        await expect(
+          runtime.readMessage("legacy-work-item-created")
+        ).resolves.toMatchObject({
+          type: "legacy-work-item-created",
+          result: {
+            kind: "created",
+            workItemId: "work_item:db008-n1-migration-gap",
+            ordinal: "1",
+            slotRevision: "2"
+          }
+        });
+        install = await installPromise;
+      } finally {
+        await pauseGate.cleanup();
+      }
       expect(install).toMatchObject({
         action: "install",
         migrationCount: contract.upgradeTarget.count,
@@ -404,6 +464,18 @@ describePostgres("Inbox V2 source-bundled N-1 compatibility upgrade", () => {
       );
       expect(await captureV1Fingerprint(database.url)).toEqual(beforeFailure);
       await expectAppliedJournal(database.url, contract.upgradeTarget);
+      await expect(
+        readConversationWorkHead(
+          database.url,
+          ready.workspace.tenantId,
+          ready.workspace.migrationGapConversationId
+        )
+      ).resolves.toEqual({
+        workItemCount: 1,
+        intakeDecisionHighWater: 1,
+        pendingMaterializationOrdinal: null,
+        revision: 3
+      });
 
       runtime.send({ command: "after-expand" }, { end: true });
       const after = await runtime.readMessage("after-expand");
@@ -454,6 +526,45 @@ describePostgres("Inbox V2 source-bundled N-1 compatibility upgrade", () => {
           handler: "fake-no-provider",
           failed: 0,
           skippedDuplicates: 0
+        },
+        legacyWork: {
+          migrationGapReplay: {
+            kind: "already_applied",
+            workItemId: "work_item:db008-n1-migration-gap",
+            ordinal: "1",
+            slotRevision: "2"
+          },
+          migrationGapHead: {
+            conversation_id: ready.workspace.migrationGapConversationId,
+            work_item_count: "1",
+            intake_decision_high_water: "1",
+            pending_materialization_ordinal: null,
+            revision: "3"
+          },
+          first: {
+            kind: "created",
+            workItemId: "work_item:db008-n1-post-expand-first",
+            ordinal: "1",
+            slotRevision: "2"
+          },
+          close: {
+            kind: "applied",
+            workItemId: "work_item:db008-n1-post-expand-first",
+            state: "resolved",
+            slotRevision: "3"
+          },
+          second: {
+            kind: "created",
+            workItemId: "work_item:db008-n1-post-expand-second",
+            ordinal: "2",
+            slotRevision: "4"
+          },
+          head: {
+            work_item_count: "2",
+            intake_decision_high_water: "2",
+            pending_materialization_ordinal: null,
+            revision: "5"
+          }
         }
       });
       expect(after.api.postReply.messageId).not.toBe(
@@ -549,6 +660,169 @@ async function applyMigrations(databaseUrl, folder) {
   } finally {
     await pool.end();
   }
+}
+
+async function installLegacyWorkItemInsertPause(input) {
+  const advisoryKey = 820080052;
+  const functionName = "inbox_v2_db008_pause_legacy_work_insert";
+  const triggerName = "inbox_v2_db008_pause_legacy_work_insert_trigger";
+  const client = new Client({ connectionString: input.databaseUrl });
+  await client.connect();
+  let released = false;
+  try {
+    await client.query(`
+      create or replace function public.${functionName}()
+      returns trigger
+      language plpgsql
+      set search_path = pg_catalog, public, pg_temp
+      as $function$
+      begin
+        perform pg_catalog.pg_advisory_xact_lock(${advisoryKey});
+        return new;
+      end
+      $function$
+    `);
+    await client.query(`
+      create trigger ${triggerName}
+      after insert on public.inbox_v2_work_items
+      for each row
+      when (
+        new.tenant_id = '${escapeSqlLiteral(input.tenantId)}'
+        and new.id = '${escapeSqlLiteral(input.workItemId)}'
+      )
+      execute function public.${functionName}()
+    `);
+    await client.query("select pg_catalog.pg_advisory_lock($1)", [advisoryKey]);
+  } catch (error) {
+    await client.end().catch(() => {});
+    throw error;
+  }
+
+  return {
+    async release() {
+      if (released) return;
+      await client.query("select pg_catalog.pg_advisory_unlock($1)", [
+        advisoryKey
+      ]);
+      released = true;
+    },
+    async cleanup() {
+      if (!released) {
+        await client
+          .query("select pg_catalog.pg_advisory_unlock($1)", [advisoryKey])
+          .catch(() => {});
+        released = true;
+      }
+      await client
+        .query(
+          `drop trigger if exists ${triggerName} on public.inbox_v2_work_items`
+        )
+        .catch(() => {});
+      await client
+        .query(`drop function if exists public.${functionName}()`)
+        .catch(() => {});
+      await client.end();
+    }
+  };
+}
+
+async function expectBackendAdvisoryWait(databaseUrl, backendPid) {
+  const observation = await pollDatabase(databaseUrl, 1_500, async (client) => {
+    const result = await client.query(
+      `select wait_event_type, wait_event
+         from pg_catalog.pg_stat_activity
+        where pid = $1`,
+      [backendPid]
+    );
+    const row = result.rows[0];
+    return row?.wait_event_type === "Lock" && row.wait_event === "advisory"
+      ? row
+      : null;
+  });
+  expect(observation).toMatchObject({
+    wait_event_type: "Lock",
+    wait_event: "advisory"
+  });
+}
+
+async function expectUngrantableMigrationCaptureLock(
+  databaseUrl,
+  runtimeBackendPid
+) {
+  const observation = await pollDatabase(
+    databaseUrl,
+    15_000,
+    async (client) => {
+      const result = await client.query(
+        `
+      select lock_row.pid,
+             relation_row.relname as relation_name,
+             lock_row.mode,
+             lock_row.granted
+        from pg_catalog.pg_locks lock_row
+        join pg_catalog.pg_class relation_row
+          on relation_row.oid = lock_row.relation
+       where relation_row.relnamespace = 'public'::regnamespace
+         and lock_row.database = (
+           select database_row.oid
+             from pg_catalog.pg_database database_row
+            where database_row.datname = pg_catalog.current_database()
+         )
+         and relation_row.relname = 'inbox_v2_work_items'
+         and lock_row.mode = 'ShareRowExclusiveLock'
+         and not lock_row.granted
+         and lock_row.pid <> $1
+       order by lock_row.pid
+       limit 1
+    `,
+        [runtimeBackendPid]
+      );
+      return result.rows[0] ?? null;
+    }
+  );
+  expect(observation).toMatchObject({
+    relation_name: "inbox_v2_work_items",
+    mode: "ShareRowExclusiveLock",
+    granted: false
+  });
+}
+
+async function pollDatabase(databaseUrl, timeoutMs, observe) {
+  const client = new Client({ connectionString: databaseUrl });
+  await client.connect();
+  try {
+    const deadline = Date.now() + timeoutMs;
+    do {
+      const result = await observe(client);
+      if (result !== null) return result;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    } while (Date.now() < deadline);
+  } finally {
+    await client.end();
+  }
+  throw new Error(`Timed out after ${timeoutMs}ms waiting for database state.`);
+}
+
+async function readConversationWorkHead(databaseUrl, tenantId, conversationId) {
+  return withClient(databaseUrl, async (client) => {
+    const result = await client.query(
+      `select work_item_count::int as work_item_count,
+              intake_decision_high_water::int as intake_decision_high_water,
+              pending_materialization_ordinal::int as pending_materialization_ordinal,
+              revision::int as revision
+         from public.inbox_v2_conversation_work_heads
+        where tenant_id = $1 and conversation_id = $2`,
+      [tenantId, conversationId]
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      workItemCount: row.work_item_count,
+      intakeDecisionHighWater: row.intake_decision_high_water,
+      pendingMaterializationOrdinal: row.pending_materialization_ordinal,
+      revision: row.revision
+    };
+  });
 }
 
 async function expectAppliedJournal(databaseUrl, expected) {
@@ -701,8 +975,8 @@ function startN1Runtime(databaseUrl) {
         throw new Error("N-1 runtime stdin is already closed.");
       }
       commandCount += 1;
-      if (commandCount > 2) {
-        throw new Error("N-1 runtime accepts at most two probe commands.");
+      if (commandCount > 4) {
+        throw new Error("N-1 runtime accepts at most four probe commands.");
       }
       const line = `${JSON.stringify(command)}\n`;
       if (options.end === true) {

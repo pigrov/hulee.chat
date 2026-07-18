@@ -4,6 +4,8 @@ import {
   INBOX_V2_MESSAGE_SCHEMA_VERSION,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
+  INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_ID,
+  INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_VERSION,
   INBOX_V2_EXTERNAL_MESSAGE_SCHEMA_VERSION,
   INBOX_V2_SOURCE_OCCURRENCE_RESOLUTION_COMMIT_SCHEMA_ID,
   INBOX_V2_SOURCE_OCCURRENCE_SCHEMA_ID,
@@ -65,6 +67,7 @@ import {
   type InboxV2MessageContentBlock,
   type InboxV2MessageId,
   type InboxV2MessageRevision,
+  type InboxV2OutboundDispatchRerouteCommit,
   type InboxV2SourceOccurrenceId,
   type InboxV2TenantId,
   type InboxV2TimelineItem,
@@ -78,6 +81,7 @@ import { sql, type SQL } from "drizzle-orm";
 import type { HuleeDatabase } from "../client";
 import {
   consumeInboxV2AtomicOutboundRouteProof,
+  consumeInboxV2AtomicOutboundRerouteProof,
   issueInboxV2AtomicMaterializationSealReceipt,
   requireInboxV2AtomicSealExecutor,
   type InboxV2AtomicMaterializationSealReceipt
@@ -1989,6 +1993,10 @@ export async function sealInboxV2PreparedMessageCreation(
     context.atomicMaterializationToken,
     inboxV2AtomicOutboundRouteProofFromCommit(prepared.commit)
   );
+  const outboundReroute = consumeInboxV2AtomicOutboundRerouteProof(
+    context.atomicMaterializationToken,
+    inboxV2AtomicOutboundRerouteExpectationFromCommit(prepared.commit)
+  );
   const sealed = await sealInboxV2PreparedMessageCreationInTransaction(
     prepared.executor,
     {
@@ -2048,11 +2056,108 @@ export async function sealInboxV2PreparedMessageCreation(
         outboundDispatch: inboxV2AtomicOutboundDispatchSealManifest(
           prepared.commit
         ),
+        outboundReroute: inboxV2AtomicOutboundRerouteSealManifest(
+          prepared.commit,
+          outboundReroute
+        ),
         sourceOccurrence: inboxV2AtomicSourceOccurrenceSealManifest(
           prepared.commit
         )
       }
     )
+  };
+}
+
+function inboxV2AtomicOutboundRerouteExpectationFromCommit(
+  commit: InboxV2MessageCreationCommit
+) {
+  const route = commit.outboundRoute;
+  const dispatch = commit.outboundDispatch;
+  if (route?.selection.intent.kind !== "explicit_reroute") return null;
+  if (dispatch === null) {
+    throw invariantError(
+      "Inbox V2 explicit reroute Message seal requires its replacement dispatch."
+    );
+  }
+  const intent = route.selection.intent;
+  return {
+    tenantId: commit.tenantId,
+    originalRouteId: intent.originalRoute.id,
+    originalDispatchId: intent.originalDispatch.id,
+    expectedOriginalDispatchRevision: intent.expectedOriginalDispatchRevision,
+    replacementMessageId: commit.message.id,
+    replacementRouteId: route.id,
+    replacementDispatchId: dispatch.id,
+    reasonId: intent.reasonId
+  };
+}
+
+function inboxV2AtomicOutboundRerouteSealManifest(
+  commit: InboxV2MessageCreationCommit,
+  reroute: InboxV2OutboundDispatchRerouteCommit | null
+) {
+  const route = commit.outboundRoute;
+  const dispatch = commit.outboundDispatch;
+  if (reroute === null) {
+    if (route?.selection.intent.kind === "explicit_reroute") {
+      throw invariantError(
+        "Inbox V2 explicit reroute Message seal requires its live reroute proof."
+      );
+    }
+    return null;
+  }
+  if (
+    route?.selection.intent.kind !== "explicit_reroute" ||
+    dispatch === null
+  ) {
+    throw invariantError(
+      "Inbox V2 normal Message seal cannot carry an outbound reroute proof."
+    );
+  }
+  const originalPayloadReference = inboxV2AtomicPayloadReference({
+    tenantId: commit.tenantId,
+    recordId: reroute.original.dispatchAfter.id,
+    schemaId: INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
+    schemaVersion: INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
+    payload: reroute.original.dispatchAfter
+  });
+  const domainCommitReference = inboxV2AtomicPayloadReference({
+    tenantId: commit.tenantId,
+    recordId: reroute.original.dispatchAfter.id,
+    schemaId: INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_ID,
+    schemaVersion: INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_VERSION,
+    payload: reroute
+  });
+  return {
+    originalRouteId: reroute.original.dispatchBefore.route.id,
+    expectedOriginalDispatchRevision: reroute.original.dispatchBefore.revision,
+    originalDispatch: {
+      dispatchId: reroute.original.dispatchAfter.id,
+      resultingRevision: reroute.original.dispatchAfter.revision,
+      stateSchemaId: INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
+      stateSchemaVersion: INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
+      stateHash: originalPayloadReference.digest,
+      payloadReference: originalPayloadReference
+    },
+    originalOutboxIntentId: reroute.original.outboxIntentId,
+    replacement: {
+      messageId: reroute.replacement.message.id,
+      routeId: reroute.replacement.route.id,
+      dispatchId: reroute.replacement.dispatch.id,
+      outboxIntentId: reroute.replacement.outboxIntentId
+    },
+    reasonId: reroute.reasonId,
+    changedAt: reroute.changedAt,
+    domainCommitReference,
+    event: {
+      typeId: "core:outbound-dispatch.changed",
+      payloadSchemaId: INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_ID,
+      payloadSchemaVersion:
+        INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_VERSION,
+      payloadReference: domainCommitReference,
+      occurredAt: reroute.changedAt,
+      recordedAt: commit.timelineAllocation.committedAt
+    }
   };
 }
 
@@ -2189,6 +2294,14 @@ export function assertInboxV2MessageCreationAuthority(
       "Inbox V2 Message commit time must match the authorized command time."
     );
   }
+  if (
+    commit.message.origin.kind === "hulee_external" &&
+    context.commandTypeId === "core:source.dispatch.reroute"
+  ) {
+    assertInboxV2ExternalRerouteMessageCreationAuthority(context, commit);
+    assertInboxV2MessageAppActorMatchesContext(context, commit);
+    return;
+  }
   const requiredAuthority = (() => {
     switch (commit.message.origin.kind) {
       case "source_originated":
@@ -2199,7 +2312,7 @@ export function assertInboxV2MessageCreationAuthority(
       case "hulee_external":
         return {
           commandTypeId: "core:message.send",
-          permissionId: "core:message.send_external"
+          permissionId: "core:message.reply_external"
         } as const;
       case "internal":
         return {
@@ -2266,6 +2379,98 @@ export function assertInboxV2MessageCreationAuthority(
       decision
     );
   }
+  assertInboxV2MessageAppActorMatchesContext(context, commit);
+}
+
+function assertInboxV2ExternalRerouteMessageCreationAuthority(
+  context: Parameters<typeof assertInboxV2MessageCreationAuthority>[0],
+  commit: InboxV2MessageCreationCommit
+): void {
+  const route = commit.outboundRoute;
+  if (route?.selection.intent.kind !== "explicit_reroute") {
+    throw invariantError(
+      "Inbox V2 explicit reroute Message creation requires an explicitly rerouted OutboundRoute."
+    );
+  }
+  const primaryDecisions = context.authorizationDecisionRefs.filter(
+    (candidate) => candidate.id === context.authorizationDecisionId
+  );
+  const primaryDecision = primaryDecisions[0];
+  if (
+    primaryDecisions.length !== 1 ||
+    primaryDecision === undefined ||
+    primaryDecision.tenantId !== context.tenantId ||
+    primaryDecision.authorizationEpoch !== context.authorizationEpoch ||
+    primaryDecision.permissionId !== "core:source.dispatch.reroute" ||
+    primaryDecision.resourceScopeId !== "core:source-account" ||
+    primaryDecision.outcome !== "allowed" ||
+    primaryDecision.resource.tenantId !== context.tenantId ||
+    primaryDecision.resource.entityTypeId !== "core:source-account" ||
+    !messageAuthorizationDecisionPrincipalMatchesActor(
+      primaryDecision,
+      context.actor
+    )
+  ) {
+    throw invariantError(
+      "Inbox V2 explicit reroute Message creation requires the exact allowed reroute authorization decision."
+    );
+  }
+
+  const conversationDecisions = context.authorizationDecisionRefs.filter(
+    (candidate) =>
+      candidate.tenantId === context.tenantId &&
+      candidate.authorizationEpoch === context.authorizationEpoch &&
+      candidate.permissionId === "core:message.reply_external" &&
+      candidate.resourceScopeId === "core:conversation" &&
+      candidate.outcome === "allowed" &&
+      candidate.resource.tenantId === context.tenantId &&
+      candidate.resource.entityTypeId === "core:conversation" &&
+      String(candidate.resource.entityId) ===
+        String(commit.message.conversation.id) &&
+      messageAuthorizationDecisionPrincipalMatchesActor(
+        candidate,
+        context.actor
+      )
+  );
+  const conversationDecision = conversationDecisions[0];
+  const matchingConversationFences =
+    conversationDecision === undefined
+      ? []
+      : context.authorizationResourceRevisionFences.filter(
+          (fence) =>
+            fence.resourceKind === "conversation" &&
+            String(fence.resourceId) ===
+              String(commit.message.conversation.id) &&
+            String(fence.expectedResourceAccessRevision) ===
+              String(conversationDecision.resourceAccessRevision) &&
+            fence.advance === "none"
+        );
+  if (
+    conversationDecisions.length !== 1 ||
+    conversationDecision === undefined ||
+    matchingConversationFences.length !== 1 ||
+    !messageRouteAuthorizationSnapshotMatchesDecision(
+      route.conversationAuthorization,
+      conversationDecision,
+      route,
+      "conversation"
+    )
+  ) {
+    throw invariantError(
+      "Inbox V2 explicit reroute Message creation requires the exact allowed Conversation reply authorization decision, resource revision fence and route snapshot."
+    );
+  }
+  assertInboxV2ExternalMessageSourceAccountAuthority(
+    context,
+    commit,
+    conversationDecision
+  );
+}
+
+function assertInboxV2MessageAppActorMatchesContext(
+  context: Parameters<typeof assertInboxV2MessageCreationAuthority>[0],
+  commit: InboxV2MessageCreationCommit
+): void {
   const appActor = commit.message.appActor;
   const exactActor =
     context.actor.kind === "employee"

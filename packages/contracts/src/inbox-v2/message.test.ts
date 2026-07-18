@@ -193,6 +193,130 @@ describe("Inbox V2 Message and StaffNote contracts", () => {
     ).toBe(false);
   });
 
+  it("uses reply_external authority for a normal external send", () => {
+    const commit = fixtureHuleeCreationCommit();
+    expect(commit.outboundRoute.operationId).toBe("core:message.send");
+    expect(commit.outboundRoute.requiredConversationPermissionId).toBe(
+      "core:message.reply_external"
+    );
+    expect(inboxV2MessageCreationCommitSchema.safeParse(commit).success).toBe(
+      true
+    );
+
+    const legacyRoute = {
+      ...commit.outboundRoute,
+      requiredConversationPermissionId: "core:message.send_external",
+      conversationAuthorization: {
+        ...commit.outboundRoute.conversationAuthorization,
+        requiredPermissionId: "core:message.send_external",
+        matchedPermissionIds: ["core:message.send_external"]
+      }
+    };
+    expect(
+      inboxV2MessageCreationCommitSchema.safeParse({
+        ...commit,
+        outboundRoute: legacyRoute,
+        outboundBindingSnapshot: fixtureOutboundBindingSnapshot(legacyRoute)
+      }).success
+    ).toBe(false);
+  });
+
+  it("persists an unavailable selected route for same-route retry", () => {
+    const commit = fixtureHuleeCreationCommit();
+    const diagnostic = {
+      codeId: "core:runtime-unavailable",
+      retryable: true,
+      correlationToken: "runtime:message-create-1",
+      safeOperatorHintId: null
+    };
+    const unavailable = {
+      ...commit,
+      outboundRoute: {
+        ...commit.outboundRoute,
+        runtimeObservationAtResolution: {
+          state: "unavailable" as const,
+          revision: "2",
+          observedAt: fixtureT1,
+          diagnostic
+        }
+      },
+      outboundBindingSnapshot: {
+        ...commit.outboundBindingSnapshot,
+        runtimeHealth: {
+          state: "unavailable" as const,
+          revision: "2",
+          checkedAt: fixtureT1,
+          diagnostic
+        }
+      }
+    };
+
+    const parsed = inboxV2MessageCreationCommitSchema.safeParse(unavailable);
+    expect(parsed.success ? [] : parsed.error.issues).toEqual([]);
+    expect(unavailable.outboundRoute.sourceThreadBinding).toEqual(
+      commit.outboundRoute.sourceThreadBinding
+    );
+    expect(unavailable.outboundRoute.bindingFence).toEqual(
+      commit.outboundRoute.bindingFence
+    );
+    expect(unavailable.outboundDispatch.route).toEqual(
+      commit.outboundDispatch.route
+    );
+  });
+
+  it.each(["state", "revision", "checkedAt", "diagnostic"] as const)(
+    "rejects an outbound binding whose runtime %s differs from the pinned route observation",
+    (field) => {
+      const commit = fixtureHuleeCreationCommit();
+      const diagnostic = {
+        codeId: "core:runtime-unavailable",
+        retryable: true,
+        correlationToken: "runtime:message-create-mismatch",
+        safeOperatorHintId: null
+      };
+      const routeRuntime = {
+        state: "unavailable" as const,
+        revision: "2",
+        observedAt: fixtureT1,
+        diagnostic
+      };
+      const bindingRuntime = {
+        state: "unavailable" as const,
+        revision: "2",
+        checkedAt: fixtureT1,
+        diagnostic
+      };
+      const mismatchedRuntime =
+        field === "state"
+          ? { ...bindingRuntime, state: "degraded" as const }
+          : field === "revision"
+            ? { ...bindingRuntime, revision: "3" }
+            : field === "checkedAt"
+              ? { ...bindingRuntime, checkedAt: fixtureT0 }
+              : {
+                  ...bindingRuntime,
+                  diagnostic: {
+                    ...diagnostic,
+                    codeId: "core:runtime-unavailable-other"
+                  }
+                };
+
+      expect(
+        inboxV2MessageCreationCommitSchema.safeParse({
+          ...commit,
+          outboundRoute: {
+            ...commit.outboundRoute,
+            runtimeObservationAtResolution: routeRuntime
+          },
+          outboundBindingSnapshot: {
+            ...commit.outboundBindingSnapshot,
+            runtimeHealth: mismatchedRuntime
+          }
+        }).success
+      ).toBe(false);
+    }
+  );
+
   it("binds source Message timeline clocks to the exact SourceOccurrence", () => {
     const base = fixtureSourceCreationCommit();
     const timelineItem = base.timelineAllocation.items[0];

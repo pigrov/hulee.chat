@@ -340,6 +340,11 @@ export {
   createInboxV2IdentityClaimCommandService,
   createInboxV2IdentityClaimEvidenceManifest
 } from "./inbox-v2-identity-claim-command";
+export {
+  calculateInboxV2OutboundRouteIdempotencyToken,
+  calculateInboxV2OutboundSendIntentDigest,
+  createInboxV2OutboundSendCommandService
+} from "./inbox-v2-outbound-send-command";
 export { createInternalAccessDecisionService } from "./internal-access-decision-service";
 export { createInternalEgressStatusService } from "./internal-egress-status-service";
 export { createInternalFileService } from "./internal-file-service";
@@ -374,6 +379,17 @@ export type {
   InboxV2PreparedIdentityClaimAuthorizationBinding,
   InboxV2PreparedIdentityClaimCommand
 } from "./inbox-v2-identity-claim-command";
+export type {
+  InboxV2OutboundSendCommand,
+  InboxV2OutboundSendCommandPreparer,
+  InboxV2OutboundSendCommandResult,
+  InboxV2OutboundSendCommandService,
+  InboxV2OutboundSendCommandServiceOptions,
+  InboxV2OutboundSendIdempotencyScope,
+  InboxV2OutboundSendRequestScope,
+  InboxV2OutboundSendRouteIntent,
+  InboxV2PreparedOutboundSendCommand
+} from "./inbox-v2-outbound-send-command";
 export type {
   InternalAccessDecisionContext,
   InternalAccessDecisionService,

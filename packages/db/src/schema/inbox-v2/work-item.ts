@@ -77,6 +77,11 @@ export const inboxV2WorkItemLifecycleClass = pgEnum(
   ["non_terminal", "terminal"]
 );
 
+export const inboxV2ConversationWorkOutcome = pgEnum(
+  "inbox_v2_conversation_work_outcome",
+  ["pending_intake", "no_work_item", "create_work_item"]
+);
+
 export const inboxV2WorkItemLatestTerminalHandling = pgEnum(
   "inbox_v2_work_item_latest_terminal_handling",
   ["no_latest_work_item", "create_sequential"]
@@ -592,6 +597,95 @@ export const inboxV2WorkItems = pgTable(
       table.state,
       table.updatedAt.desc(),
       table.id
+    )
+  ]
+);
+
+/**
+ * Authoritative Conversation-level intake high-water. It serializes the
+ * never-work reply path with WorkItem creation independently from the slot,
+ * whose revision also changes for close/reopen lifecycle transitions.
+ */
+export const inboxV2ConversationWorkHeads = pgTable(
+  "inbox_v2_conversation_work_heads",
+  {
+    tenantId: text("tenant_id").notNull(),
+    id: text("id").notNull(),
+    conversationId: text("conversation_id").notNull(),
+    workItemCount: bigint("work_item_count", { mode: "bigint" }).notNull(),
+    currentOutcome: inboxV2ConversationWorkOutcome("current_outcome").notNull(),
+    intakeDecisionHighWater: bigint("intake_decision_high_water", {
+      mode: "bigint"
+    }).notNull(),
+    pendingMaterializationOrdinal: bigint("pending_materialization_ordinal", {
+      mode: "bigint"
+    }),
+    revision: bigint("revision", { mode: "bigint" }).notNull(),
+    createdAt: timestamp("created_at", {
+      withTimezone: true,
+      precision: 3
+    }).notNull(),
+    updatedAt: timestamp("updated_at", {
+      withTimezone: true,
+      precision: 3
+    }).notNull()
+  },
+  (table) => [
+    primaryKey({
+      name: "inbox_v2_conversation_work_heads_pk",
+      columns: [table.tenantId, table.id]
+    }),
+    unique("inbox_v2_conversation_work_heads_conversation_unique").on(
+      table.tenantId,
+      table.conversationId
+    ),
+    foreignKey({
+      name: "inbox_v2_conversation_work_heads_conversation_fk",
+      columns: [table.tenantId, table.conversationId],
+      foreignColumns: [inboxV2Conversations.tenantId, inboxV2Conversations.id]
+    }).onDelete("cascade"),
+    check(
+      "inbox_v2_conversation_work_heads_identity_check",
+      sql`${table.id} = 'conversation_work_head:' || encode(
+        sha256((${table.tenantId} || chr(31) || ${table.conversationId})::bytea),
+        'hex'
+      )`
+    ),
+    check(
+      "inbox_v2_conversation_work_heads_state_check",
+      sql`${table.workItemCount} >= 0
+        and ${table.intakeDecisionHighWater} >= 0
+        and ${table.revision} =
+          1 + ${table.intakeDecisionHighWater} + ${table.workItemCount}
+        and ${table.intakeDecisionHighWater} >= ${table.workItemCount}
+        and (${table.pendingMaterializationOrdinal} is null
+          or (${table.currentOutcome} = 'create_work_item'
+            and ${table.pendingMaterializationOrdinal} = ${table.workItemCount} + 1
+            and ${table.intakeDecisionHighWater} >= ${table.pendingMaterializationOrdinal}))
+        and (
+          (${table.currentOutcome} = 'pending_intake'
+            and ${table.workItemCount} = 0
+            and ${table.intakeDecisionHighWater} = 0
+            and ${table.pendingMaterializationOrdinal} is null)
+          or (${table.currentOutcome} = 'no_work_item'
+            and ${table.workItemCount} = 0
+            and ${table.intakeDecisionHighWater} >= 1
+            and ${table.pendingMaterializationOrdinal} is null)
+          or (${table.currentOutcome} = 'create_work_item'
+            and ${table.intakeDecisionHighWater} >= 1)
+        )`
+    ),
+    check(
+      "inbox_v2_conversation_work_heads_timestamps_check",
+      sql`isfinite(${table.createdAt})
+        and isfinite(${table.updatedAt})
+        and ${table.updatedAt} >= ${table.createdAt}`
+    ),
+    index("inbox_v2_conversation_work_heads_state_idx").on(
+      table.tenantId,
+      table.currentOutcome,
+      table.intakeDecisionHighWater,
+      table.conversationId
     )
   ]
 );
@@ -4694,4 +4788,327 @@ create constraint trigger inbox_v2_work_transition_slot_coherence_constraint
 after insert on public.inbox_v2_work_item_transitions
 deferrable initially deferred
 for each row execute function public.inbox_v2_conversation_work_item_slot_coherence();
+`;
+
+export const INBOX_V2_CONVERSATION_WORK_HEAD_INVARIANTS_SQL = String.raw`
+-- INB2-MSG-002_CONVERSATION_WORK_HEAD_V1
+insert into public.inbox_v2_conversation_work_heads (
+  tenant_id,
+  id,
+  conversation_id,
+  work_item_count,
+  current_outcome,
+  intake_decision_high_water,
+  pending_materialization_ordinal,
+  revision,
+  created_at,
+  updated_at
+)
+select
+  c.tenant_id,
+  'conversation_work_head:' || encode(
+    sha256((c.tenant_id || chr(31) || c.id)::bytea),
+    'hex'
+  ),
+  c.id,
+  count(w.id),
+  case when count(w.id) = 0
+    then 'pending_intake'::public.inbox_v2_conversation_work_outcome
+    else 'create_work_item'::public.inbox_v2_conversation_work_outcome
+  end,
+  count(w.id),
+  null,
+  1 + (2 * count(w.id)),
+  c.created_at,
+  greatest(c.created_at, coalesce(max(d.decided_at), c.created_at))
+from public.inbox_v2_conversations c
+left join public.inbox_v2_work_items w
+  on w.tenant_id = c.tenant_id and w.conversation_id = c.id
+left join public.inbox_v2_work_item_creation_decisions d
+  on d.tenant_id = w.tenant_id and d.work_item_id = w.id
+group by c.tenant_id, c.id, c.created_at
+on conflict do nothing;
+
+-- Acquire capture locks in the canonical legacy writer order. These locks are
+-- held to migration commit, so the final reconciliation has no visibility gap
+-- and cannot deadlock a Conversation -> WorkItem -> decision transaction.
+lock table public.inbox_v2_conversations,
+  public.inbox_v2_work_items,
+  public.inbox_v2_work_item_creation_decisions
+  in share row exclusive mode;
+
+create or replace function public.inbox_v2_conversation_work_head_guard()
+returns trigger
+language plpgsql
+set search_path = pg_catalog, public, pg_temp
+as $function$
+begin
+  if tg_op = 'DELETE' then
+    if not exists (
+      select 1 from public.inbox_v2_conversations c
+       where c.tenant_id = old.tenant_id and c.id = old.conversation_id
+    ) then
+      return old;
+    end if;
+    raise exception 'Conversation Work head cannot be deleted'
+      using errcode = '23514';
+  end if;
+
+  if tg_op = 'INSERT' then
+    if new.work_item_count <> 0
+       or new.current_outcome <> 'pending_intake'
+       or new.intake_decision_high_water <> 0
+       or new.pending_materialization_ordinal is not null
+       or new.revision <> 1 then
+      raise exception 'Conversation Work head must start pending at revision one'
+        using errcode = '23514';
+    end if;
+  elsif new.tenant_id is distinct from old.tenant_id
+     or new.id is distinct from old.id
+     or new.conversation_id is distinct from old.conversation_id
+     or new.created_at is distinct from old.created_at
+     or new.updated_at < old.updated_at
+     or not (
+       (
+         new.work_item_count = old.work_item_count
+         and old.pending_materialization_ordinal is null
+         and new.intake_decision_high_water =
+            old.intake_decision_high_water + 1
+         and new.revision = old.revision + 1
+         and (
+           (new.current_outcome = 'no_work_item'
+             and new.pending_materialization_ordinal is null)
+           or (new.current_outcome = 'create_work_item'
+             and new.pending_materialization_ordinal =
+                old.work_item_count + 1)
+         )
+       ) or (
+         old.current_outcome = 'create_work_item'
+         and new.current_outcome = 'create_work_item'
+         and new.work_item_count = old.work_item_count + 1
+         and new.intake_decision_high_water =
+            old.intake_decision_high_water
+         and new.revision = old.revision + 1
+         and old.pending_materialization_ordinal = new.work_item_count
+         and new.pending_materialization_ordinal is null
+       ) or (
+         new.current_outcome = 'create_work_item'
+         and new.work_item_count = old.work_item_count + 1
+         and new.intake_decision_high_water =
+            old.intake_decision_high_water + 1
+         and new.revision = old.revision + 2
+         and old.pending_materialization_ordinal is null
+         and new.pending_materialization_ordinal is null
+       )
+     ) then
+    raise exception 'Conversation Work head requires one intake or materialization advance'
+      using errcode = '23514';
+  end if;
+
+  return new;
+end
+$function$;
+
+create or replace function public.inbox_v2_conversation_work_head_bootstrap()
+returns trigger
+language plpgsql
+set search_path = pg_catalog, public, pg_temp
+as $function$
+begin
+  insert into public.inbox_v2_conversation_work_heads (
+    tenant_id,
+    id,
+    conversation_id,
+    work_item_count,
+    current_outcome,
+    intake_decision_high_water,
+    pending_materialization_ordinal,
+    revision,
+    created_at,
+    updated_at
+  ) values (
+    new.tenant_id,
+    'conversation_work_head:' || encode(
+      sha256((new.tenant_id || chr(31) || new.id)::bytea),
+      'hex'
+    ),
+    new.id,
+    0,
+    'pending_intake',
+    0,
+    null,
+    1,
+    new.created_at,
+    new.created_at
+  ) on conflict do nothing;
+  return new;
+end
+$function$;
+
+create or replace function public.inbox_v2_conversation_work_head_advance()
+returns trigger
+language plpgsql
+set search_path = pg_catalog, public, pg_temp
+as $function$
+declare
+  v_ordinal bigint;
+begin
+  select w.ordinal into strict v_ordinal
+    from public.inbox_v2_work_items w
+   where w.tenant_id = new.tenant_id and w.id = new.work_item_id;
+
+  update public.inbox_v2_conversation_work_heads h
+     set work_item_count = h.work_item_count + 1,
+         current_outcome = 'create_work_item',
+         intake_decision_high_water = case
+           when h.pending_materialization_ordinal is null
+             then h.intake_decision_high_water + 1
+           else h.intake_decision_high_water
+         end,
+         pending_materialization_ordinal = null,
+         revision = h.revision + case
+           when h.pending_materialization_ordinal is null then 2
+           else 1
+         end,
+         updated_at = greatest(h.updated_at, new.decided_at)
+   where h.tenant_id = new.tenant_id
+     and h.conversation_id = new.conversation_id
+     and h.work_item_count = v_ordinal - 1
+     and (
+       (h.pending_materialization_ordinal = v_ordinal
+         and h.current_outcome = 'create_work_item'
+         and h.intake_decision_high_water >= v_ordinal)
+       or h.pending_materialization_ordinal is null
+     )
+     and h.revision =
+       1 + h.intake_decision_high_water + h.work_item_count;
+  if not found then
+    raise exception 'WorkItem creation lost its Conversation Work head race'
+      using errcode = '40001';
+  end if;
+  return new;
+end
+$function$;
+
+create trigger inbox_v2_work_creation_head_advance_trigger
+after insert on public.inbox_v2_work_item_creation_decisions
+for each row execute function public.inbox_v2_conversation_work_head_advance();
+
+create trigger inbox_v2_conversations_work_head_insert_trigger
+after insert on public.inbox_v2_conversations
+for each row execute function public.inbox_v2_conversation_work_head_bootstrap();
+
+-- Close the additive-expand visibility gap after both capture locks are held.
+-- Writers that committed before CREATE TRIGGER are included; later writers
+-- wait for migration commit and then execute the compatibility trigger.
+insert into public.inbox_v2_conversation_work_heads (
+  tenant_id,
+  id,
+  conversation_id,
+  work_item_count,
+  current_outcome,
+  intake_decision_high_water,
+  pending_materialization_ordinal,
+  revision,
+  created_at,
+  updated_at
+)
+select
+  c.tenant_id,
+  'conversation_work_head:' || encode(
+    sha256((c.tenant_id || chr(31) || c.id)::bytea),
+    'hex'
+  ),
+  c.id,
+  count(w.id),
+  case when count(w.id) = 0
+    then 'pending_intake'::public.inbox_v2_conversation_work_outcome
+    else 'create_work_item'::public.inbox_v2_conversation_work_outcome
+  end,
+  count(w.id),
+  null,
+  1 + (2 * count(w.id)),
+  c.created_at,
+  greatest(c.created_at, coalesce(max(d.decided_at), c.created_at))
+from public.inbox_v2_conversations c
+left join public.inbox_v2_work_items w
+  on w.tenant_id = c.tenant_id and w.conversation_id = c.id
+left join public.inbox_v2_work_item_creation_decisions d
+  on d.tenant_id = w.tenant_id and d.work_item_id = w.id
+group by c.tenant_id, c.id, c.created_at
+on conflict (tenant_id, conversation_id) do update
+set work_item_count = excluded.work_item_count,
+    current_outcome = excluded.current_outcome,
+    intake_decision_high_water = excluded.intake_decision_high_water,
+    pending_materialization_ordinal = null,
+    revision = excluded.revision,
+    updated_at = greatest(
+      inbox_v2_conversation_work_heads.updated_at,
+      excluded.updated_at
+    );
+
+create trigger inbox_v2_conversation_work_heads_guard_trigger
+before insert or update or delete on public.inbox_v2_conversation_work_heads
+for each row execute function public.inbox_v2_conversation_work_head_guard();
+
+create or replace function public.inbox_v2_conversation_work_head_coherence()
+returns trigger
+language plpgsql
+set search_path = pg_catalog, public, pg_temp
+as $function$
+declare
+  v_tenant_id text;
+  v_conversation_id text;
+  v_head public.inbox_v2_conversation_work_heads%rowtype;
+  v_work_item_count bigint;
+  v_creation_count bigint;
+begin
+  v_tenant_id := new.tenant_id;
+  v_conversation_id := new.conversation_id;
+
+  select * into v_head
+    from public.inbox_v2_conversation_work_heads h
+   where h.tenant_id = v_tenant_id
+     and h.conversation_id = v_conversation_id;
+  if not found then
+    raise exception 'Conversation requires one authoritative Work head'
+      using errcode = '23514';
+  end if;
+
+  select count(*) into v_work_item_count
+    from public.inbox_v2_work_items w
+   where w.tenant_id = v_tenant_id
+     and w.conversation_id = v_conversation_id;
+  select count(*) into v_creation_count
+    from public.inbox_v2_work_item_creation_decisions d
+   where d.tenant_id = v_tenant_id
+     and d.conversation_id = v_conversation_id;
+
+  if v_head.work_item_count <> v_work_item_count
+     or v_creation_count <> v_work_item_count
+     or v_head.intake_decision_high_water < v_creation_count
+     or v_head.pending_materialization_ordinal is not null
+     or (v_work_item_count > 0
+       and v_head.current_outcome <> 'create_work_item') then
+    raise exception 'Conversation Work head is not coherent with intake materialization'
+      using errcode = '23514';
+  end if;
+  return null;
+end
+$function$;
+
+create constraint trigger inbox_v2_conversation_work_heads_coherence_constraint
+after insert or update on public.inbox_v2_conversation_work_heads
+deferrable initially deferred
+for each row execute function public.inbox_v2_conversation_work_head_coherence();
+
+create constraint trigger inbox_v2_work_items_head_coherence_constraint
+after insert on public.inbox_v2_work_items
+deferrable initially deferred
+for each row execute function public.inbox_v2_conversation_work_head_coherence();
+
+create constraint trigger inbox_v2_work_creation_head_coherence_constraint
+after insert on public.inbox_v2_work_item_creation_decisions
+deferrable initially deferred
+for each row execute function public.inbox_v2_conversation_work_head_coherence();
 `;

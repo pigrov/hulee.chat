@@ -3,12 +3,21 @@ import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 import {
   calculateInboxV2OutboxLeaseTokenHash,
+  INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
+  INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
+  inboxV2AuthorizationDecisionReferenceSchema,
   inboxV2EntityRevisionSchema,
   inboxV2OutboxIntentSchema,
   inboxV2OutboxLeaseTokenSchema,
   inboxV2OutboxWorkerIdSchema,
   inboxV2OutboundDispatchAttemptCommitSchema,
-  resolveInboxV2OutboundRoute
+  inboxV2OutboundDispatchRerouteCommitSchema,
+  inboxV2OutboundDispatchRouteFailureCommitSchema,
+  inboxV2OutboundDispatchSchema,
+  materializeInboxV2OutboundRouteResolutionCommit,
+  resolveInboxV2OutboundRoute,
+  type InboxV2AuthorizationDecisionReference,
+  type InboxV2OutboundRouteResolutionCommit
 } from "@hulee/contracts";
 
 import {
@@ -30,6 +39,7 @@ import {
   buildListInboxV2MessageDispatchesSql,
   computeInboxV2ExternalMessageKeyDigest,
   createSqlInboxV2OutboundTransportRepository,
+  persistInboxV2ExplicitRerouteResolutionInTransaction,
   persistInboxV2RouteResolutionInTransaction,
   type InboxV2OutboundTransportTransactionExecutor
 } from "./sql-inbox-v2-outbound-transport-repository";
@@ -39,7 +49,10 @@ import {
   type InboxV2AuthorizedCommandMutationContext,
   type WithInboxV2AuthorizedCommandMutationInput
 } from "./sql-inbox-v2-authorization-repository";
-import { createOutboundTransportContractFixture } from "./sql-inbox-v2-outbound-transport-repository.test-support";
+import {
+  createOutboundTransportContractFixture,
+  OUTBOUND_TEST_TIMES
+} from "./sql-inbox-v2-outbound-transport-repository.test-support";
 import type {
   RawSqlExecutor,
   RawSqlQueryResult
@@ -49,12 +62,12 @@ const fixture = createOutboundTransportContractFixture();
 const authorizedRouteFixture = createOutboundTransportContractFixture({
   suffix: "authorized-route",
   operationId: "core:message.send",
-  requiredPermissionId: "core:message.send_external"
+  requiredPermissionId: "core:message.reply_external"
 });
 const wrongOperationRouteFixture = createOutboundTransportContractFixture({
   suffix: "wrong-operation-route",
   operationId: "core:reply",
-  requiredPermissionId: "core:message.send_external"
+  requiredPermissionId: "core:message.reply_external"
 });
 const wrongPermissionRouteFixture = createOutboundTransportContractFixture({
   suffix: "wrong-permission-route",
@@ -165,6 +178,29 @@ describe("SQL Inbox V2 outbound transport repository", () => {
     ]);
   });
 
+  it("keeps temporary runtime health outside immutable route persistence", async () => {
+    const unavailableFence = {
+      ...bindingFenceRow(fixture),
+      runtime_health_state: "unavailable",
+      runtime_health_revision: "2"
+    };
+    const executor = new QueueOutboundExecutor([
+      [],
+      [],
+      [{ id: fixture.routePolicy.id }],
+      [{ id: fixture.routePolicy.id }],
+      [unavailableFence],
+      [{ id: fixture.route.id }]
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(
+        executor
+      ).persistRouteResolution(fixture.routeCommit)
+    ).resolves.toEqual({ kind: "committed", route: fixture.route });
+    expect(executor.statementKinds()).toContain("insert_route");
+  });
+
   it("requires a live authorized context for caller-owned route materialization", async () => {
     const executor = new QueueOutboundExecutor([
       [],
@@ -212,6 +248,10 @@ describe("SQL Inbox V2 outbound transport repository", () => {
       { occurredAt: "2026-07-14T08:01:01.000Z" }
     ],
     ["wrong command", { commandTypeId: "core:message.edit" }],
+    [
+      "reroute command on a normal send",
+      { commandTypeId: "core:source.dispatch.reroute" }
+    ],
     [
       "wrong Conversation resource",
       { conversationId: "conversation:outbound-other" }
@@ -277,6 +317,17 @@ describe("SQL Inbox V2 outbound transport repository", () => {
     }
   );
 
+  it("rejects a reroute command whose primary decision is still Conversation reply", async () => {
+    const reroute = explicitRerouteFixture({
+      authorizationFailure: "wrong_primary"
+    });
+
+    await expect(probeAuthorizedReroute(reroute)).rejects.toThrow(
+      /authorized message-send context/iu
+    );
+    expect(reroute.executor.routeStatementKinds()).toEqual([]);
+  });
+
   it.each([
     ["conversation", "decision_revision"],
     ["conversation", "decided_at"],
@@ -324,6 +375,118 @@ describe("SQL Inbox V2 outbound transport repository", () => {
       );
     }
   );
+
+  it("rejects explicit reroute through the non-authorized repository seam", async () => {
+    const reroute = explicitRerouteFixture();
+    const executor = new QueueOutboundExecutor([]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(
+        executor
+      ).persistRouteResolution(reroute.commit)
+    ).rejects.toThrow(
+      /explicit reroute.*authorized context and cancellation commit/iu
+    );
+    expect(executor.queries).toEqual([]);
+  });
+
+  it.each([false, true] as const)(
+    "locks the original dispatch and only the replacement binding for same-account=%s",
+    async (sameSourceAccount) => {
+      const reroute = explicitRerouteFixture({ sameSourceAccount });
+      const probe = await probeAuthorizedReroute(reroute);
+
+      expect(probe.result).toEqual({
+        kind: "committed",
+        route: reroute.commit.route
+      });
+      expect(probe.executor.routeStatementKinds()).toEqual([
+        "preflight_policy_head",
+        "lock_policy_version",
+        "lock_dispatch",
+        "lock_reroute_attempts",
+        "lock_reroute_provider_intent",
+        "lock_reroute_original_route",
+        "lock_binding_fence",
+        "insert_route",
+        "cas_dispatch"
+      ]);
+      const bindingLock = probe.executor.queries.find(
+        ({ sql }) => classifyStatement(sql) === "lock_binding_fence"
+      );
+      expect(normalizeSql(bindingLock?.sql ?? "")).toContain(
+        "head.binding_id ="
+      );
+      expect(bindingLock?.params).toContain(
+        reroute.commit.route!.sourceThreadBinding.id
+      );
+      expect(bindingLock?.params).not.toContain(
+        reroute.originalRoute.binding_id
+      );
+    }
+  );
+
+  it.each([
+    ["missing old-account use", "missing_original_use"],
+    ["duplicate new-account use", "duplicate_selected_use"]
+  ] as const)(
+    "rejects explicit reroute authorization with %s before binding locks",
+    async (_label, authorizationFailure) => {
+      const reroute = explicitRerouteFixture({ authorizationFailure });
+      const probe = probeAuthorizedReroute(reroute);
+
+      await expect(probe).rejects.toThrow(
+        /authorized explicit-reroute context/iu
+      );
+      const executor = reroute.executor;
+      expect(executor.routeStatementKinds()).toEqual([
+        "preflight_policy_head",
+        "lock_policy_version",
+        "lock_dispatch",
+        "lock_reroute_attempts",
+        "lock_reroute_provider_intent",
+        "lock_reroute_original_route"
+      ]);
+    }
+  );
+
+  it("rejects an explicit reroute without its primary reroute decision before SQL", async () => {
+    const reroute = explicitRerouteFixture({
+      authorizationFailure: "missing_reroute"
+    });
+
+    await expect(probeAuthorizedReroute(reroute)).rejects.toThrow(
+      /authorized message-send context/iu
+    );
+    expect(reroute.executor.routeStatementKinds()).toEqual([]);
+  });
+
+  it.each([
+    ["provider open wins", "original_fence", "original_dispatch_conflict"],
+    ["replacement admin disable", "selected_admin", "binding_fence_conflict"]
+  ] as const)(
+    "fails closed on %s without inserting a reroute",
+    async (_label, drift, expectedKind) => {
+      const reroute = explicitRerouteFixture({ drift });
+      const probe = await probeAuthorizedReroute(reroute);
+
+      expect(probe.result).toEqual({ kind: expectedKind });
+      expect(probe.executor.routeStatementKinds()).not.toContain(
+        "insert_route"
+      );
+      expect(probe.executor.routeStatementKinds()).not.toContain(
+        "cas_dispatch"
+      );
+    }
+  );
+
+  it("allows reroute when only the original binding is now disabled", async () => {
+    const reroute = explicitRerouteFixture({ drift: "original_admin" });
+
+    await expect(probeAuthorizedReroute(reroute)).resolves.toMatchObject({
+      result: { kind: "committed" }
+    });
+  });
 
   it("creates one queued dispatch only after locking its message and route", async () => {
     const query = renderQuery(
@@ -556,6 +719,60 @@ describe("SQL Inbox V2 outbound transport repository", () => {
     );
   });
 
+  it("rejects a forged same-id route snapshot before opening a provider attempt", async () => {
+    const commit = fixture.openAttemptCommit;
+    if (commit.kind !== "open_attempt") throw new Error("open attempt fixture");
+    const forgedBinding = {
+      ...commit.routeSnapshot.sourceThreadBinding,
+      id: "source_thread_binding:forged-open-binding"
+    };
+    const forgedRoute = {
+      ...commit.routeSnapshot,
+      sourceThreadBinding: forgedBinding,
+      conversationAuthorization: {
+        ...commit.routeSnapshot.conversationAuthorization,
+        target: {
+          ...commit.routeSnapshot.conversationAuthorization.target,
+          sourceThreadBinding: forgedBinding
+        }
+      },
+      sourceAccountAuthorization: {
+        ...commit.routeSnapshot.sourceAccountAuthorization,
+        target: {
+          ...commit.routeSnapshot.sourceAccountAuthorization.target,
+          sourceThreadBinding: forgedBinding
+        }
+      }
+    };
+    const forgedCommit = inboxV2OutboundDispatchAttemptCommitSchema.parse({
+      ...commit,
+      routeSnapshot: forgedRoute,
+      bindingHeadSnapshot: {
+        ...commit.bindingHeadSnapshot,
+        binding: forgedBinding
+      }
+    });
+    const executor = new QueueOutboundExecutor([
+      [dispatchRow(fixture.queuedDispatch)],
+      []
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(executor).applyAttempt(
+        forgedCommit
+      )
+    ).resolves.toEqual({ kind: "route_not_found" });
+    expect(executor.statementKinds()).toEqual(["lock_dispatch", "lock_route"]);
+    const routeLock = executor.queries[1]!;
+    const routeSql = normalizeSql(routeLock.sql);
+    expect(routeSql).toContain("route_row.source_thread_binding_id =");
+    expect(routeSql).toContain("route_row.adapter_contract_snapshot =");
+    expect(routeSql).toContain(
+      "route_row.conversation_authorization_snapshot ="
+    );
+    expect(routeLock.params).toContain(forgedBinding.id);
+  });
+
   it("loads the exact provider intent and dispatch only under its live outbox lease", async () => {
     const executor = new QueueOutboundExecutor([
       [providerIoOutboxLeaseRow()],
@@ -604,6 +821,208 @@ describe("SQL Inbox V2 outbound transport repository", () => {
       "insert_attempt",
       "cas_dispatch"
     ]);
+  });
+
+  it.each(["structural", "admin_disabled", "runtime"] as const)(
+    "applies a %s zero-I/O route failure only under its exact outbox and binding fences",
+    async (kind) => {
+      const commit = routeFailureCommit(kind);
+      const executor = new QueueOutboundExecutor([
+        [providerIoOutboxLeaseRow()],
+        [dispatchRow(fixture.queuedDispatch)],
+        [{ id: fixture.route.id }],
+        [bindingFenceRow(fixture, commit.bindingHeadSnapshot)],
+        ...(kind === "runtime"
+          ? []
+          : [
+              [{ id: fixture.queuedDispatch.id }],
+              [{ outcome_revision: "3" }],
+              [{ intent_id: providerIoIntent.id }]
+            ])
+      ]);
+
+      await expect(
+        createSqlInboxV2OutboundTransportRepository(
+          executor
+        ).applyRouteFailureFenced({
+          outboxLease: providerIoOutboxLeaseFence,
+          commit
+        })
+      ).resolves.toEqual({ kind: "committed" });
+      expect(executor.statementKinds()).toEqual([
+        "lock_provider_io_outbox",
+        "lock_dispatch",
+        "lock_route",
+        "lock_binding_fence",
+        ...(kind === "runtime"
+          ? []
+          : ["cas_dispatch", "insert_outbox_outcome", "finalize_outbox"])
+      ]);
+      expect(executor.transactionConfigs).toEqual([
+        { isolationLevel: "read committed" }
+      ]);
+      expect(executor.statementKinds()).not.toContain("insert_attempt");
+      expect(commit.dispatchAfter).toMatchObject({
+        route: fixture.queuedDispatch.route,
+        state: kind === "runtime" ? "queued" : "terminal_failure",
+        attemptCount: 0,
+        activeAttempt: null,
+        revision: kind === "runtime" ? "1" : "2"
+      });
+    }
+  );
+
+  it("closes the crash window by terminally finalizing outbox in the structural CAS transaction", async () => {
+    const commit = routeFailureCommit("structural");
+    const executor = new QueueOutboundExecutor([
+      [providerIoOutboxLeaseRow()],
+      [dispatchRow(fixture.queuedDispatch)],
+      [{ id: fixture.route.id }],
+      [bindingFenceRow(fixture, commit.bindingHeadSnapshot)],
+      [{ id: fixture.queuedDispatch.id }],
+      [{ outcome_revision: "3" }],
+      [{ intent_id: providerIoIntent.id }]
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(
+        executor
+      ).applyRouteFailureFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        commit
+      })
+    ).resolves.toEqual({ kind: "committed" });
+    expect(executor.statementKinds()).toEqual([
+      "lock_provider_io_outbox",
+      "lock_dispatch",
+      "lock_route",
+      "lock_binding_fence",
+      "cas_dispatch",
+      "insert_outbox_outcome",
+      "finalize_outbox"
+    ]);
+    expect(executor.transactionConfigs).toEqual([
+      { isolationLevel: "read committed" }
+    ]);
+  });
+
+  it("rejects a future route-failure decision before any dispatch write", async () => {
+    const commit = routeFailureCommit("runtime", {
+      failedAt: "2026-07-14T08:03:00.000Z"
+    });
+    const executor = new QueueOutboundExecutor([
+      [
+        providerIoOutboxLeaseRow({
+          databaseNow: "2026-07-14T08:02:30.000Z"
+        })
+      ]
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(
+        executor
+      ).applyRouteFailureFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        commit
+      })
+    ).resolves.toEqual({ kind: "outbox_attempt_lease_conflict" });
+    expect(executor.statementKinds()).toEqual(["lock_provider_io_outbox"]);
+  });
+
+  it("rejects runtime-unavailable evidence when the locked head remains ready", async () => {
+    const commit = routeFailureCommit("runtime");
+    const currentHead = {
+      ...commit.bindingHeadSnapshot,
+      runtimeHealth: {
+        state: "ready" as const,
+        revision: commit.bindingHeadSnapshot.runtimeHealth.revision
+      }
+    };
+    const executor = new QueueOutboundExecutor([
+      [providerIoOutboxLeaseRow()],
+      [dispatchRow(fixture.queuedDispatch)],
+      [{ id: fixture.route.id }],
+      [bindingFenceRow(fixture, currentHead)]
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(
+        executor
+      ).applyRouteFailureFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        commit
+      })
+    ).resolves.toEqual({ kind: "binding_fence_conflict" });
+    expect(executor.statementKinds()).toEqual([
+      "lock_provider_io_outbox",
+      "lock_dispatch",
+      "lock_route",
+      "lock_binding_fence"
+    ]);
+  });
+
+  it("rejects a forged same-id route snapshot before evaluating its binding", async () => {
+    const commit = routeFailureCommit("structural");
+    const forgedBinding = {
+      ...commit.routeSnapshot.sourceThreadBinding,
+      id: "source_thread_binding:forged-route-binding"
+    };
+    const forgedRoute = {
+      ...commit.routeSnapshot,
+      sourceThreadBinding: forgedBinding,
+      conversationAuthorization: {
+        ...commit.routeSnapshot.conversationAuthorization,
+        target: {
+          ...commit.routeSnapshot.conversationAuthorization.target,
+          sourceThreadBinding: forgedBinding
+        }
+      },
+      sourceAccountAuthorization: {
+        ...commit.routeSnapshot.sourceAccountAuthorization,
+        target: {
+          ...commit.routeSnapshot.sourceAccountAuthorization.target,
+          sourceThreadBinding: forgedBinding
+        }
+      }
+    };
+    const forgedCommit = inboxV2OutboundDispatchRouteFailureCommitSchema.parse({
+      ...commit,
+      routeSnapshot: forgedRoute,
+      bindingHeadSnapshot: {
+        ...commit.bindingHeadSnapshot,
+        binding: forgedBinding
+      }
+    });
+    const executor = new QueueOutboundExecutor([
+      [providerIoOutboxLeaseRow()],
+      [dispatchRow(fixture.queuedDispatch)],
+      []
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(
+        executor
+      ).applyRouteFailureFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        commit: forgedCommit
+      })
+    ).resolves.toEqual({ kind: "route_not_found" });
+    expect(executor.statementKinds()).toEqual([
+      "lock_provider_io_outbox",
+      "lock_dispatch",
+      "lock_route"
+    ]);
+    const routeLock = executor.queries[2]!;
+    const routeSql = normalizeSql(routeLock.sql);
+    expect(routeSql).toContain("route_row.source_thread_binding_id =");
+    expect(routeSql).toContain(
+      "route_row.content_kind_id is not distinct from"
+    );
+    expect(routeSql).toContain("route_row.adapter_contract_snapshot =");
+    expect(routeSql).toContain(
+      "route_row.conversation_authorization_snapshot ="
+    );
+    expect(routeLock.params).toContain(forgedBinding.id);
   });
 
   it("rejects a reclaimed outbox token before any outbound transport write", async () => {
@@ -1260,11 +1679,403 @@ function withAdditionalRouteAuthorizationPermission(
   };
 }
 
+type ExplicitRerouteAuthorizationFailure =
+  | "missing_reroute"
+  | "missing_original_use"
+  | "duplicate_selected_use"
+  | "wrong_primary";
+type ExplicitRerouteDrift =
+  | "original_fence"
+  | "original_admin"
+  | "selected_admin";
+
+function explicitRerouteFixture(
+  options: {
+    sameSourceAccount?: boolean;
+    authorizationFailure?: ExplicitRerouteAuthorizationFailure;
+    drift?: ExplicitRerouteDrift;
+  } = {}
+) {
+  const candidate =
+    authorizedRouteFixture.routeCommit.input.candidates.soleEligibleCandidate;
+  if (candidate === null) {
+    throw new Error("Authorized reroute fixture requires one candidate.");
+  }
+  const oldBindingId = "source_thread_binding:outbound-reroute-original";
+  const oldSourceAccountId = options.sameSourceAccount
+    ? authorizedRouteFixture.references.sourceAccount.id
+    : "source_account:outbound-reroute-original";
+  const oldSourceConnectionId = options.sameSourceAccount
+    ? authorizedRouteFixture.references.sourceConnection.id
+    : "source_connection:outbound-reroute-original";
+  const originalDispatchId = "outbound_dispatch:outbound-reroute-original";
+  const originalRouteId = "outbound_route:outbound-reroute-original";
+  const commit = materializeInboxV2OutboundRouteResolutionCommit(
+    {
+      ...authorizedRouteFixture.routeCommit.input,
+      intent: {
+        kind: "explicit_reroute",
+        originalRoute: {
+          tenantId: authorizedRouteFixture.tenantId,
+          kind: "outbound_route",
+          id: originalRouteId
+        },
+        originalDispatch: {
+          tenantId: authorizedRouteFixture.tenantId,
+          kind: "outbound_dispatch",
+          id: originalDispatchId
+        },
+        expectedOriginalDispatchRevision: "1",
+        replacementBinding: candidate.sourceThreadBinding,
+        reasonId: "core:operator-reroute"
+      },
+      candidates: {
+        ...authorizedRouteFixture.routeCommit.input.candidates,
+        explicitTarget: candidate
+      }
+    },
+    {
+      routeId: "outbound_route:outbound-reroute-replacement",
+      selectedAt: authorizedRouteFixture.route.createdAt
+    }
+  );
+  if (
+    commit.route === null ||
+    commit.route.selection.intent.kind !== "explicit_reroute"
+  ) {
+    throw new Error("Authorized reroute fixture must select a route.");
+  }
+  const originalRoute = {
+    id: commit.route.selection.intent.originalRoute.id,
+    conversation_id: commit.route.conversation.id,
+    external_thread_id: commit.route.externalThread.id,
+    binding_id: oldBindingId,
+    source_connection_id: oldSourceConnectionId,
+    source_account_id: oldSourceAccountId,
+    operation_id: commit.route.operationId,
+    content_kind_id: commit.route.contentKindId,
+    binding_revision: "1",
+    account_generation: "1",
+    binding_generation: "1",
+    remote_access_revision: "1",
+    administrative_revision: "1",
+    capability_revision: "1",
+    route_descriptor_revision: "1",
+    created_at: OUTBOUND_TEST_TIMES.loadedAt
+  };
+  const originalDispatch = inboxV2OutboundDispatchSchema.parse({
+    ...authorizedRouteFixture.queuedDispatch,
+    id: originalDispatchId,
+    message: {
+      ...authorizedRouteFixture.queuedDispatch.message,
+      id: "message:outbound-reroute-original"
+    },
+    route: {
+      ...authorizedRouteFixture.queuedDispatch.route,
+      id: originalRouteId
+    },
+    createdAt: OUTBOUND_TEST_TIMES.loadedAt,
+    updatedAt: OUTBOUND_TEST_TIMES.loadedAt
+  });
+  const rerouteCommit = inboxV2OutboundDispatchRerouteCommitSchema.parse({
+    tenantId: authorizedRouteFixture.tenantId,
+    original: {
+      dispatchBefore: originalDispatch,
+      dispatchAfter: {
+        ...originalDispatch,
+        state: "cancelled",
+        revision: "2",
+        updatedAt: commit.route.selection.selectedAt
+      },
+      outboxIntentId: "outbox-intent:outbound-reroute-original"
+    },
+    replacement: {
+      message: {
+        tenantId: authorizedRouteFixture.tenantId,
+        kind: "message",
+        id: "message:outbound-reroute-replacement"
+      },
+      route: {
+        tenantId: authorizedRouteFixture.tenantId,
+        kind: "outbound_route",
+        id: commit.route.id
+      },
+      dispatch: {
+        tenantId: authorizedRouteFixture.tenantId,
+        kind: "outbound_dispatch",
+        id: "outbound_dispatch:outbound-reroute-replacement"
+      },
+      outboxIntentId: "outbox-intent:outbound-reroute-replacement"
+    },
+    reasonId: commit.route.selection.intent.reasonId,
+    changedAt: commit.route.selection.selectedAt
+  });
+  const selectedHead = {
+    ...bindingFenceRow(authorizedRouteFixture),
+    ...(options.drift === "selected_admin"
+      ? {
+          binding_revision: "2",
+          administrative_revision: "2",
+          administrative_state: "disabled"
+        }
+      : {})
+  };
+  const input = authorizedExplicitRerouteInput(commit, {
+    originalSourceAccountId: oldSourceAccountId,
+    authorizationFailure: options.authorizationFailure
+  });
+  const routeRows = {
+    policyHead: {
+      revision: commit.input.routePolicy.revision,
+      conversation_id: commit.input.routePolicy.conversation.id,
+      external_thread_id: commit.input.routePolicy.externalThread.id,
+      operation_id: commit.input.routePolicy.operationId,
+      content_kind_id: commit.input.routePolicy.contentKindId
+    },
+    policyVersion: {
+      policy_id: commit.input.routePolicy.id,
+      revision: commit.input.routePolicy.revision,
+      conversation_id: commit.input.routePolicy.conversation.id,
+      external_thread_id: commit.input.routePolicy.externalThread.id,
+      operation_id: commit.input.routePolicy.operationId,
+      content_kind_id: commit.input.routePolicy.contentKindId,
+      route_policy_catalog_id: commit.input.routePolicy.policyId,
+      required_conversation_permission_id:
+        commit.input.routePolicy.requiredConversationPermissionId,
+      preferred_binding_id: null,
+      fallback_kind: "none",
+      fallback_binding_count: 0,
+      fallback_bindings_digest_sha256: null,
+      created_at: commit.input.routePolicy.createdAt,
+      updated_at: commit.input.routePolicy.updatedAt
+    },
+    originalRoute,
+    originalDispatch: {
+      id: originalDispatch.id,
+      message_id: originalDispatch.message.id,
+      route_id: originalDispatch.route.id,
+      multi_send_operation_id: null,
+      state:
+        options.drift === "original_fence"
+          ? "attempting"
+          : originalDispatch.state,
+      attempt_count:
+        options.drift === "original_fence" ? 1 : originalDispatch.attemptCount,
+      active_attempt_id:
+        options.drift === "original_fence"
+          ? "outbound_dispatch_attempt:open"
+          : null,
+      last_attempt_id:
+        options.drift === "original_fence"
+          ? "outbound_dispatch_attempt:open"
+          : null,
+      retry_authorization_decision_id: null,
+      revision:
+        options.drift === "original_fence" ? "2" : originalDispatch.revision,
+      created_at: originalDispatch.createdAt,
+      updated_at:
+        options.drift === "original_fence"
+          ? OUTBOUND_TEST_TIMES.openedAt
+          : originalDispatch.updatedAt
+    },
+    originalAttempts:
+      options.drift === "original_fence"
+        ? [{ id: "outbound_dispatch_attempt:open" }]
+        : [],
+    originalProviderIntent: {
+      id: rerouteCommit.original.outboxIntentId,
+      type_id: "core:provider.dispatch",
+      effect_class: "provider_io",
+      payload_reference: {
+        tenantId: originalDispatch.tenantId,
+        recordId: originalDispatch.id,
+        schemaId: INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
+        schemaVersion: INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
+        digest: routeContextHash("e")
+      },
+      work_state: "pending"
+    },
+    selectedHead,
+    insertedRouteId: commit.route.id,
+    cancelledDispatchId: originalDispatch.id
+  };
+  const executor = new RouteAuthorizationContextExecutor(input, routeRows);
+  return {
+    commit,
+    input,
+    originalRoute,
+    originalDispatch,
+    rerouteCommit,
+    executor
+  };
+}
+
+function authorizedExplicitRerouteInput(
+  commit: InboxV2OutboundRouteResolutionCommit,
+  input: {
+    originalSourceAccountId: string;
+    authorizationFailure?: ExplicitRerouteAuthorizationFailure;
+  }
+): WithInboxV2AuthorizedCommandMutationInput {
+  if (commit.route === null) {
+    throw new Error("Authorized reroute commit has no route.");
+  }
+  const base = authorizedRouteContextInput();
+  const decisions: InboxV2AuthorizationDecisionReference[] = [
+    ...base.records.audit.authorizationDecisionRefs
+  ];
+  const selectedUse = decisions.find(
+    (decision) => decision.permissionId === "core:source_account.use"
+  );
+  if (selectedUse === undefined) {
+    throw new Error("Authorized reroute fixture has no selected-account use.");
+  }
+  const originalUse = inboxV2AuthorizationDecisionReferenceSchema.parse({
+    ...selectedUse,
+    id: "authorization-decision:route-context-reroute-original-use",
+    resource: {
+      ...selectedUse.resource,
+      entityId: input.originalSourceAccountId
+    },
+    decisionRevision: (BigInt(selectedUse.decisionRevision) + 1n).toString(),
+    decisionHash: routeContextHash("b")
+  });
+  const rerouteDecision = inboxV2AuthorizationDecisionReferenceSchema.parse({
+    ...originalUse,
+    id: "authorization-decision:route-context-reroute",
+    permissionId: "core:source.dispatch.reroute",
+    decisionHash: routeContextHash("c")
+  });
+  if (input.authorizationFailure !== "missing_original_use") {
+    decisions.push(originalUse);
+  }
+  if (input.authorizationFailure !== "missing_reroute") {
+    decisions.push(rerouteDecision);
+  }
+  if (input.authorizationFailure === "duplicate_selected_use") {
+    decisions.push(
+      inboxV2AuthorizationDecisionReferenceSchema.parse({
+        ...selectedUse,
+        id: "authorization-decision:route-context-reroute-duplicate-selected",
+        decisionRevision: (
+          BigInt(selectedUse.decisionRevision) + 2n
+        ).toString(),
+        decisionHash: routeContextHash("d")
+      })
+    );
+  }
+  decisions.sort((left, right) =>
+    String(left.id).localeCompare(String(right.id))
+  );
+  const permissionIds = [
+    ...new Set(decisions.map((decision) => decision.permissionId))
+  ].sort();
+  const scopeIds = [
+    ...new Set(decisions.map((decision) => decision.resourceScopeId))
+  ].sort();
+  const resources: Array<
+    WithInboxV2AuthorizedCommandMutationInput["revisions"]["resources"][number]
+  > = [...base.revisions.resources];
+  if (
+    input.originalSourceAccountId !== commit.route.sourceAccount.id &&
+    !resources.some(
+      (resource) =>
+        resource.resourceKind === "source_account" &&
+        resource.resourceId === input.originalSourceAccountId
+    )
+  ) {
+    resources.push({
+      resourceKind: "source_account",
+      resourceId: input.originalSourceAccountId,
+      resourceHeadId: "authorization-resource:route-context-reroute-original",
+      expectedResourceAccessRevision: "1",
+      advance: "none"
+    });
+  }
+  return {
+    ...base,
+    command: {
+      ...base.command,
+      commandTypeId: "core:source.dispatch.reroute",
+      authorizationDecisionId:
+        input.authorizationFailure === "wrong_primary" ||
+        input.authorizationFailure === "missing_reroute"
+          ? base.command.authorizationDecisionId
+          : rerouteDecision.id
+    },
+    revisions: { ...base.revisions, resources },
+    records: {
+      ...base.records,
+      events: base.records.events.map((event) => ({
+        ...event,
+        authorizationDecisionRefs: decisions
+      })),
+      audit: {
+        ...base.records.audit,
+        actionId: "core:source.dispatch.reroute",
+        matchedPermissionIds: permissionIds,
+        authorizationScopeIds: scopeIds,
+        authorizationDecisionRefs: decisions
+      }
+    }
+  } as unknown as WithInboxV2AuthorizedCommandMutationInput;
+}
+
+class RerouteProbeComplete extends Error {}
+
+async function probeAuthorizedReroute(
+  reroute: ReturnType<typeof explicitRerouteFixture>
+) {
+  const coordinator = createSqlInboxV2AuthorizedCommandCoordinator(
+    reroute.executor
+  );
+  let result:
+    | Awaited<
+        ReturnType<typeof persistInboxV2ExplicitRerouteResolutionInTransaction>
+      >
+    | undefined;
+  try {
+    await coordinator.withAuthorizedAtomicMaterialization(
+      reroute.input,
+      async (context) => {
+        result = await persistInboxV2ExplicitRerouteResolutionInTransaction(
+          context,
+          {
+            routeResolution: reroute.commit,
+            rerouteCommit: reroute.rerouteCommit
+          }
+        );
+        throw new RerouteProbeComplete();
+      },
+      async () => {
+        throw new Error("Reroute probe must not reach seal.");
+      }
+    );
+  } catch (error) {
+    if (!(error instanceof RerouteProbeComplete)) throw error;
+  }
+  if (result === undefined) {
+    throw new Error("Reroute probe did not produce a repository result.");
+  }
+  return { result, executor: reroute.executor };
+}
+
 class RouteAuthorizationContextExecutor implements InboxV2AuthorizationTransactionExecutor {
   readonly queries: Array<{ sql: string; params: unknown[] }> = [];
 
   constructor(
-    private readonly input: WithInboxV2AuthorizedCommandMutationInput
+    private readonly input: WithInboxV2AuthorizedCommandMutationInput,
+    private readonly routeRows?: Readonly<{
+      policyHead: Readonly<Record<string, unknown>>;
+      policyVersion: Readonly<Record<string, unknown>>;
+      originalRoute: Readonly<Record<string, unknown>>;
+      originalDispatch: Readonly<Record<string, unknown>>;
+      originalAttempts: readonly Readonly<Record<string, unknown>>[];
+      originalProviderIntent: Readonly<Record<string, unknown>>;
+      selectedHead: Readonly<Record<string, unknown>>;
+      insertedRouteId: string;
+      cancelledDispatchId: string;
+    }>
   ) {}
 
   async transaction<TResult>(
@@ -1331,11 +2142,82 @@ class RouteAuthorizationContextExecutor implements InboxV2AuthorizationTransacti
       }));
     } else if (statement === "select clock_timestamp() as database_now") {
       rows = [{ database_now: this.input.occurredAt }];
+    } else if (
+      this.routeRows !== undefined &&
+      statement.includes("from inbox_v2_thread_route_policy_heads") &&
+      statement.includes("for share")
+    ) {
+      rows = [this.routeRows.policyHead];
+    } else if (
+      this.routeRows !== undefined &&
+      statement.includes("from inbox_v2_thread_route_policy_versions") &&
+      statement.includes("for share")
+    ) {
+      rows = [this.routeRows.policyVersion];
+    } else if (
+      this.routeRows !== undefined &&
+      statement.includes("from inbox_v2_outbound_dispatches") &&
+      statement.includes("for update")
+    ) {
+      rows = [this.routeRows.originalDispatch];
+    } else if (
+      this.routeRows !== undefined &&
+      statement.includes("from inbox_v2_outbound_dispatch_attempts attempt") &&
+      statement.includes("for share of attempt")
+    ) {
+      rows = this.routeRows.originalAttempts;
+    } else if (
+      this.routeRows !== undefined &&
+      statement.includes("from inbox_v2_outbox_intents intent") &&
+      statement.includes("join inbox_v2_outbox_work_items work")
+    ) {
+      rows = [this.routeRows.originalProviderIntent];
+    } else if (
+      this.routeRows !== undefined &&
+      statement.includes("from inbox_v2_outbound_routes route_row") &&
+      statement.includes("route_row.binding_revision") &&
+      statement.includes("for share of route_row")
+    ) {
+      rows = [this.routeRows.originalRoute];
+    } else if (
+      this.routeRows !== undefined &&
+      statement.includes("from inbox_v2_source_thread_binding_heads head") &&
+      statement.includes("head.binding_id =")
+    ) {
+      rows = [this.routeRows.selectedHead];
+    } else if (
+      this.routeRows !== undefined &&
+      statement.startsWith("insert into inbox_v2_outbound_routes")
+    ) {
+      rows = [{ id: this.routeRows.insertedRouteId }];
+    } else if (
+      this.routeRows !== undefined &&
+      statement.startsWith("update inbox_v2_outbound_dispatches")
+    ) {
+      rows = [{ id: this.routeRows.cancelledDispatchId }];
     } else {
       throw new Error(`Unexpected authorization SQL: ${statement}`);
     }
 
     return { rows: rows as readonly Row[] };
+  }
+
+  routeStatementKinds(): string[] {
+    return this.queries
+      .map(({ sql }) => classifyStatement(sql))
+      .filter((kind) =>
+        [
+          "preflight_policy_head",
+          "lock_policy_version",
+          "lock_dispatch",
+          "lock_reroute_attempts",
+          "lock_reroute_provider_intent",
+          "lock_reroute_original_route",
+          "lock_binding_fence",
+          "cas_dispatch",
+          "insert_route"
+        ].includes(kind)
+      );
   }
 }
 
@@ -1382,6 +2264,16 @@ class QueueOutboundExecutor implements InboxV2OutboundTransportTransactionExecut
 
 function classifyStatement(sql: string): string {
   const statement = normalizeSql(sql);
+  if (
+    statement.includes("from inbox_v2_outbox_intents intent") &&
+    statement.includes("join inbox_v2_outbox_work_items work")
+  )
+    return "lock_reroute_provider_intent";
+  if (
+    statement.includes("from inbox_v2_outbound_dispatch_attempts attempt") &&
+    statement.includes("for share of attempt")
+  )
+    return "lock_reroute_attempts";
   if (statement.includes("from public.inbox_v2_outbox_work_items"))
     return "lock_provider_io_outbox";
   if (statement.includes("pg_advisory_xact_lock"))
@@ -1391,10 +2283,20 @@ function classifyStatement(sql: string): string {
     statement.startsWith("select")
   )
     return "preflight_policy_head";
+  if (
+    statement.includes("from inbox_v2_thread_route_policy_versions") &&
+    statement.startsWith("select")
+  )
+    return "lock_policy_version";
   if (statement.startsWith("insert into inbox_v2_thread_route_policy_versions"))
     return "insert_policy";
   if (statement.startsWith("insert into inbox_v2_thread_route_policy_heads"))
     return "advance_policy_head";
+  if (
+    statement.includes("from inbox_v2_source_thread_binding_heads") &&
+    statement.includes("head.binding_id in")
+  )
+    return "lock_reroute_binding_fences";
   if (statement.includes("from inbox_v2_source_thread_binding_heads"))
     return "lock_binding_fence";
   if (statement.startsWith("insert into inbox_v2_outbound_routes"))
@@ -1404,6 +2306,12 @@ function classifyStatement(sql: string): string {
     statement.startsWith("select")
   )
     return "lock_message";
+  if (
+    statement.includes("from inbox_v2_outbound_routes route_row") &&
+    statement.includes("route_row.binding_revision") &&
+    statement.startsWith("select")
+  )
+    return "lock_reroute_original_route";
   if (
     statement.includes("from inbox_v2_outbound_routes") &&
     statement.startsWith("select")
@@ -1435,6 +2343,10 @@ function classifyStatement(sql: string): string {
     return "insert_reconciliation";
   if (statement.startsWith("insert into inbox_v2_outbound_dispatch_artifacts"))
     return "insert_artifact";
+  if (statement.startsWith("insert into public.inbox_v2_outbox_outcomes"))
+    return "insert_outbox_outcome";
+  if (statement.startsWith("update public.inbox_v2_outbox_work_items"))
+    return "finalize_outbox";
   return `unknown:${statement.slice(0, 80)}`;
 }
 
@@ -1485,6 +2397,7 @@ function providerIoOutboxLeaseRow(input?: {
 }) {
   return {
     state: "leased",
+    work_revision: "2",
     lease_owner_id: providerIoOutboxLeaseFence.workerId,
     lease_token_hash:
       input?.leaseTokenHash ??
@@ -1510,23 +2423,99 @@ function providerIoOutboxLeaseRow(input?: {
   };
 }
 
-function bindingFenceRow(input: typeof fixture) {
+function bindingFenceRow(
+  input: typeof fixture,
+  head: {
+    bindingRevision: string;
+    fence: {
+      accountGeneration: string;
+      bindingGeneration: string;
+      capabilityRevision: string;
+      routeDescriptorRevision: string;
+    };
+    remoteAccess: { revision: string; state: string };
+    administrative: { revision: string; state: string };
+    runtimeHealth: { revision: string; state: string };
+    updatedAt: string;
+  } = input.bindingHeadSnapshot
+) {
   return {
     binding_id: input.references.binding.id,
     external_thread_id: input.references.externalThread.id,
     source_connection_id: input.references.sourceConnection.id,
     source_account_id: input.references.sourceAccount.id,
-    binding_revision: input.bindingHeadSnapshot.bindingRevision,
-    account_generation: input.bindingFence.accountGeneration,
-    binding_generation: input.bindingFence.bindingGeneration,
-    remote_access_revision: input.bindingFence.remoteAccessRevision,
-    administrative_revision: input.bindingFence.administrativeRevision,
-    capability_revision: input.bindingFence.capabilityRevision,
-    route_descriptor_revision: input.bindingFence.routeDescriptorRevision,
-    remote_access_state: "active",
-    administrative_state: "enabled",
-    runtime_health_state: "ready"
+    binding_revision: head.bindingRevision,
+    account_generation: head.fence.accountGeneration,
+    binding_generation: head.fence.bindingGeneration,
+    remote_access_revision: head.remoteAccess.revision,
+    administrative_revision: head.administrative.revision,
+    capability_revision: head.fence.capabilityRevision,
+    route_descriptor_revision: head.fence.routeDescriptorRevision,
+    remote_access_state: head.remoteAccess.state,
+    administrative_state: head.administrative.state,
+    runtime_health_state: head.runtimeHealth.state,
+    runtime_health_revision: head.runtimeHealth.revision,
+    updated_at: head.updatedAt
   };
+}
+
+function routeFailureCommit(
+  kind: "structural" | "admin_disabled" | "runtime",
+  overrides: { failedAt?: string } = {}
+) {
+  const failedAt = overrides.failedAt ?? OUTBOUND_TEST_TIMES.openedAt;
+  const structural = kind === "structural";
+  const adminDisabled = kind === "admin_disabled";
+  const bindingHeadSnapshot = {
+    ...fixture.bindingHeadSnapshot,
+    fence: {
+      ...fixture.bindingHeadSnapshot.fence,
+      ...(structural ? { bindingGeneration: "2" } : {}),
+      ...(adminDisabled ? { administrativeRevision: "2" } : {})
+    },
+    runtimeHealth:
+      kind === "runtime"
+        ? { state: "unavailable" as const, revision: "2" }
+        : fixture.bindingHeadSnapshot.runtimeHealth,
+    administrative: adminDisabled
+      ? {
+          state: "disabled" as const,
+          revision: "2"
+        }
+      : fixture.bindingHeadSnapshot.administrative,
+    bindingRevision: "2",
+    updatedAt: OUTBOUND_TEST_TIMES.openedAt
+  };
+  return inboxV2OutboundDispatchRouteFailureCommitSchema.parse({
+    tenantId: fixture.tenantId,
+    routeSnapshot: fixture.route,
+    bindingHeadSnapshot,
+    error:
+      structural || adminDisabled
+        ? {
+            code: "route.binding_changed",
+            retryability: "retryable_resolution",
+            diagnostic: null
+          }
+        : {
+            code: "route.runtime_unavailable",
+            retryability: "retryable_same_route",
+            diagnostic: null
+          },
+    dispatchBefore: fixture.queuedDispatch,
+    dispatchAfter:
+      kind === "runtime"
+        ? fixture.queuedDispatch
+        : {
+            ...fixture.queuedDispatch,
+            state: "terminal_failure",
+            revision: "2",
+            updatedAt: failedAt
+          },
+    failedByTrustedServiceId:
+      fixture.route.adapterContract.loadedByTrustedServiceId,
+    failedAt
+  });
 }
 
 function dispatchRow(dispatch: typeof fixture.queuedDispatch) {

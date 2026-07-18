@@ -35,6 +35,8 @@ const runtimeSourcePaths = Object.freeze([
   "apps/worker/src/outbox-processor.ts",
   "packages/db/src/client.ts",
   "packages/db/src/repositories/external-message-repository.ts",
+  "packages/db/src/repositories/sql-inbox-v2-conversation-repository.ts",
+  "packages/db/src/repositories/sql-inbox-v2-work-item-repository.ts",
   "packages/db/src/repositories/sql-outbox-repository.ts"
 ]);
 const fixtureDirectory = dirname(fileURLToPath(import.meta.url));
@@ -152,6 +154,7 @@ try {
         "N-1 internal inbox query, reply and routing services",
         "N-1 Web loadInboxViewModel with pinned session/config stubs and in-process fetch",
         "N-1 processOutboxBatch with a fake no-provider handler",
+        "N-1 WorkItem writer across expand capture and first plus sequential post-expand creation",
         "one N-1 database pool and backend across pre-expand, failed-expand and post-expand probes"
       ],
       doesNotExercise: [

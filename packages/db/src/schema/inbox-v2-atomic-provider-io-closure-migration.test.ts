@@ -12,12 +12,13 @@ const migrationPath = new URL(
   import.meta.url
 );
 const migration = readFileSync(migrationPath, "utf8").replaceAll("\r\n", "\n");
+const historicalSchemaSql = restorePreMsg002AtomicProviderIoSql(
+  INBOX_V2_AUTH_DOMAIN_PROVIDER_IO_CLOSURE_SQL.trim()
+);
 
 describe("Inbox V2 atomic provider-I/O closure migration", () => {
   it("installs the reviewed domain-coherence SQL verbatim", () => {
-    expect(migration).toBe(
-      `${INBOX_V2_AUTH_DOMAIN_PROVIDER_IO_CLOSURE_SQL.trim()}\n`
-    );
+    expect(migration).toBe(`${historicalSchemaSql}\n`);
     expect(migration).toContain(
       "-- INB2-SRC-007_PROVIDER_IO_ATOMIC_CLOSURE_V1"
     );
@@ -197,4 +198,204 @@ describe("Inbox V2 atomic provider-I/O closure migration", () => {
         "      return null;"
     );
   });
+
+  it("requires explicit reroute to cancel the untouched original dispatch before replacement provider I/O", () => {
+    for (const fragment of [
+      "dispatch_change.resulting_revision = 2",
+      "dispatch_row.state = 'cancelled'",
+      "dispatch_change.state_reason_id is null",
+      "core:inbox-v2.outbound-dispatch-reroute-commit",
+      "'{originalDispatch,id}'",
+      "original_dispatch.state = 'cancelled'",
+      "original_dispatch.revision = 2",
+      "original_event.type_id =",
+      "'core:outbound-dispatch.changed'",
+      "projection_intent.effect_class = 'projection'",
+      "original_work.state in ('pending', 'leased')",
+      "forbidden_provider_intent.effect_class = 'provider_io'",
+      "reroute_audit.target_type_id =",
+      "reroute_audit.evidence_reference =",
+      "sibling_dispatch_change.entity_type_id ="
+    ]) {
+      expect(INBOX_V2_AUTH_DOMAIN_PROVIDER_IO_CLOSURE_SQL).toContain(fragment);
+    }
+  });
 });
+
+function restorePreMsg002AtomicProviderIoSql(current: string): string {
+  const withoutRerouteCancellation =
+    restoreMsg002RerouteCancellationSql(current);
+  const replacements: readonly (readonly [string, string])[] = [
+    [
+      `  if v_command.command_type_id in (
+    'core:message.send',
+    'core:message.receive',
+    'core:source.dispatch.reroute'
+  )
+  then`,
+      `  if v_command.command_type_id in ('core:message.send', 'core:message.receive')
+  then`
+    ],
+    [
+      `         v_command.command_type_id in (
+           'core:message.send',
+           'core:source.dispatch.reroute'
+         )
+         and (
+           v_source_change_count <> 0
+           or v_source_materialization_count <> 0
+         )`,
+      `         v_command.command_type_id = 'core:message.send'
+         and (
+           v_source_change_count <> 0
+           or v_source_materialization_count <> 0
+         )`
+    ],
+    [
+      `       or (
+         v_command.command_type_id <> 'core:source.dispatch.reroute'
+         and v_audit.evidence_reference is distinct from
+            message_change.domain_commit_reference
+       )`,
+      `       or v_audit.evidence_reference is distinct from
+          message_change.domain_commit_reference`
+    ],
+    [
+      `         message_row.origin_kind = 'hulee_external'
+         and (
+           (
+             command_row.command_type_id = 'core:message.send'
+             and exists (
+               select 1
+                 from public.inbox_v2_outbound_routes route_row
+                where route_row.tenant_id = message_row.tenant_id
+                  and route_row.id = message_row.origin_outbound_route_id
+                  and route_row.selection_intent_kind <> 'explicit_reroute'
+             )
+           )
+           or (
+             command_row.command_type_id = 'core:source.dispatch.reroute'
+             and exists (
+               select 1
+                 from public.inbox_v2_outbound_routes route_row
+                where route_row.tenant_id = message_row.tenant_id
+                  and route_row.id = message_row.origin_outbound_route_id
+                  and route_row.selection_intent_kind = 'explicit_reroute'
+             )
+           )
+         )
+         and (`,
+      `         message_row.origin_kind = 'hulee_external'
+         and command_row.command_type_id = 'core:message.send'
+         and (`
+    ],
+    [
+      `     and command_row.state = 'completed'
+     and (
+       (
+         command_row.command_type_id = 'core:message.send'
+         and route_row.selection_intent_kind <> 'explicit_reroute'
+       )
+       or (
+         command_row.command_type_id = 'core:source.dispatch.reroute'
+         and route_row.selection_intent_kind = 'explicit_reroute'
+         and (
+           select count(*)
+             from jsonb_array_elements(
+               command_row.authorization_decision_refs
+             ) decision_ref
+             join public.inbox_v2_outbound_routes original_route
+               on original_route.tenant_id = route_row.tenant_id
+              and original_route.id =
+                route_row.selection_intent_snapshot #>>
+                  '{originalRoute,id}'
+            where decision_ref->>'id' =
+                    command_row.authorization_decision_id
+              and decision_ref->>'authorizationEpoch' =
+                    command_row.authorization_epoch
+              and decision_ref->>'permissionId' =
+                    'core:source.dispatch.reroute'
+              and decision_ref->>'resourceScopeId' =
+                    'core:source-account'
+              and decision_ref->>'outcome' = 'allowed'
+              and decision_ref #>> '{resource,tenantId}' =
+                    route_row.tenant_id
+              and decision_ref #>> '{resource,entityTypeId}' =
+                    'core:source-account'
+              and decision_ref #>> '{resource,entityId}' =
+                    original_route.source_account_id
+         ) = 1
+       )
+     )
+    join public.inbox_v2_messages message_row`,
+      `     and command_row.state = 'completed'
+     and command_row.command_type_id = 'core:message.send'
+    join public.inbox_v2_messages message_row`
+    ]
+  ];
+
+  return replacements.reduce((value, [successor, predecessor], index) => {
+    const occurrences = value.split(successor).length - 1;
+    if (occurrences !== 1) {
+      throw new Error(
+        `MSG-002 historical 0046 restoration ${index + 1} matched ${occurrences} times.`
+      );
+    }
+    return value.replace(successor, predecessor);
+  }, withoutRerouteCancellation);
+}
+
+function restoreMsg002RerouteCancellationSql(current: string): string {
+  const dispatchStart =
+    `     and dispatch_change.entity_type_id = 'core:outbound-dispatch'\n` +
+    `     and not (\n`;
+  const dispatchEnd =
+    `     and (\n` + `       dispatch_change.resulting_revision <> 1`;
+  let restored = replaceExactBoundedSpan(
+    current,
+    dispatchStart,
+    dispatchEnd,
+    `     and dispatch_change.entity_type_id = 'core:outbound-dispatch'\n` +
+      dispatchEnd
+  );
+
+  const outboundStart =
+    `         ) = 1\n` +
+    `         and route_row.selection_intent_snapshot #>>\n` +
+    `               '{originalRoute,tenantId}' = route_row.tenant_id`;
+  const outboundEnd =
+    `         ) = 2\n` +
+    `       )\n` +
+    `     )\n` +
+    `    join public.inbox_v2_messages message_row`;
+  restored = replaceExactBoundedSpan(
+    restored,
+    outboundStart,
+    outboundEnd,
+    `         ) = 1\n` +
+      `       )\n` +
+      `     )\n` +
+      `    join public.inbox_v2_messages message_row`
+  );
+  return restored;
+}
+
+function replaceExactBoundedSpan(
+  input: string,
+  start: string,
+  end: string,
+  replacement: string
+): string {
+  const startOccurrences = input.split(start).length - 1;
+  if (startOccurrences !== 1) {
+    throw new Error(
+      `MSG-002 bounded restoration start matched ${startOccurrences} times.`
+    );
+  }
+  const startIndex = input.indexOf(start);
+  const endIndex = input.indexOf(end, startIndex + start.length);
+  if (endIndex < 0 || input.indexOf(end, endIndex + end.length) >= 0) {
+    throw new Error("MSG-002 bounded restoration end is missing or ambiguous.");
+  }
+  return `${input.slice(0, startIndex)}${replacement}${input.slice(endIndex + end.length)}`;
+}

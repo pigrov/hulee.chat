@@ -1,11 +1,13 @@
 import {
   calculateInboxV2CanonicalSha256,
+  deriveInboxV2RouteFailureOutboxFinalization,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
   inboxV2OutboxClaimSchema,
   inboxV2OutboxIntentSchema,
   inboxV2NamespacedIdSchema,
   inboxV2OutboundDispatchAttemptCommitSchema,
+  inboxV2OutboundDispatchRouteFailureCommitSchema,
   inboxV2OutboundDispatchReconciliationCommitSchema,
   inboxV2OutboundDispatchSchema,
   inboxV2RoutingTokenSchema,
@@ -18,6 +20,7 @@ import {
   type InboxV2OutboxWorkRepositoryPort,
   type InboxV2OutboundDispatch,
   type InboxV2OutboundDispatchAttemptCommit,
+  type InboxV2OutboundDispatchRouteFailureCommit,
   type InboxV2OutboundDispatchReconciliationCommit,
   type InboxV2OutboundRoute,
   type InboxV2SafeSourceDiagnostic
@@ -39,6 +42,8 @@ type FinalizationSource =
   | "provider_result"
   | "recover"
   | "reconcile"
+  | "route_failure"
+  | "rerouted"
   | "durable_outcome"
   | "recovery_turn";
 type SuccessfulFinalizeResult = Extract<
@@ -91,6 +96,7 @@ export type InboxV2ProviderDispatchFencedMutationResult =
         | "dispatch_not_found"
         | "route_not_found"
         | "binding_fence_conflict"
+        | "dispatch_cancelled"
         | "dispatch_state_conflict"
         | "attempt_id_conflict"
         | "attempt_number_conflict"
@@ -119,6 +125,10 @@ export type InboxV2ProviderDispatchTransportPort = Readonly<{
   applyAttemptFenced(input: {
     outboxLease: InboxV2ProviderDispatchLeaseFence;
     commit: InboxV2OutboundDispatchAttemptCommit;
+  }): Promise<InboxV2ProviderDispatchFencedMutationResult>;
+  applyRouteFailureFenced(input: {
+    outboxLease: InboxV2ProviderDispatchLeaseFence;
+    commit: InboxV2OutboundDispatchRouteFailureCommit;
   }): Promise<InboxV2ProviderDispatchFencedMutationResult>;
   reconcileFenced(input: {
     outboxLease: InboxV2ProviderDispatchLeaseFence;
@@ -157,6 +167,11 @@ export type InboxV2ProviderDispatchAdapterPort<TRequest = unknown> = Readonly<{
 }>;
 
 export type InboxV2ProviderDispatchPlan<TRequest = unknown> =
+  | Readonly<{
+      /** Exact structural/runtime preflight failure; never invokes an adapter. */
+      kind: "route_failure";
+      commit: InboxV2OutboundDispatchRouteFailureCommit;
+    }>
   | Readonly<{
       kind: "open_attempt";
       commit: OpenAttemptCommit;
@@ -225,7 +240,7 @@ export type InboxV2ProviderDispatchProcessResult =
     }>
   | Readonly<{
       outcome: "mutation_rejected";
-      stage: "open" | "complete" | "recover" | "reconcile";
+      stage: "open" | "complete" | "recover" | "reconcile" | "route_failure";
       reason: FencedMutationRejectionKind;
     }>
   | Readonly<{
@@ -327,6 +342,14 @@ export function createInboxV2ProviderDispatchCoordinator<TRequest = unknown>(
         loadedResult,
         options.expectedHandlerId
       );
+      if (loaded.dispatch.state === "cancelled") {
+        return finalize(
+          options.outbox,
+          fence,
+          deriveReroutedFinalization(loaded.intent, loaded.dispatch),
+          "rerouted"
+        );
+      }
       const plan = await options.planner.plan({
         claimKind: claim.claimKind,
         loaded
@@ -346,6 +369,14 @@ export function createInboxV2ProviderDispatchCoordinator<TRequest = unknown>(
           deriveFinalization(fence.intentId, durableOutcome),
           "durable_outcome"
         );
+      }
+      if (plan.kind === "route_failure") {
+        const commit = parseRouteFailureCommit(plan.commit, loaded.dispatch);
+        const applied = await options.transport.applyRouteFailureFenced({
+          outboxLease: fence,
+          commit
+        });
+        return finishRouteFailure(options.outbox, fence, applied, commit);
       }
       if (plan.kind === "recover_attempt") {
         const commit = parseRecoveryCommit(plan.commit, loaded.dispatch);
@@ -403,6 +434,14 @@ export function createInboxV2ProviderDispatchCoordinator<TRequest = unknown>(
         outboxLease: fence,
         commit: openCommit
       });
+      if (opened.kind === "dispatch_cancelled") {
+        return finalize(
+          options.outbox,
+          fence,
+          deriveReroutedFinalization(loaded.intent, loaded.dispatch),
+          "rerouted"
+        );
+      }
       if (opened.kind !== "committed" && opened.kind !== "already_applied") {
         return {
           outcome: "mutation_rejected",
@@ -538,6 +577,17 @@ function parseReconciliationCommit(
   loadedDispatch: InboxV2OutboundDispatch
 ): InboxV2OutboundDispatchReconciliationCommit {
   const commit = inboxV2OutboundDispatchReconciliationCommitSchema.parse(input);
+  if (!sameDispatchHead(commit.dispatchBefore, loadedDispatch)) {
+    throw coordinatorError("provider_dispatch.invalid_plan");
+  }
+  return commit;
+}
+
+function parseRouteFailureCommit(
+  input: InboxV2OutboundDispatchRouteFailureCommit,
+  loadedDispatch: InboxV2OutboundDispatch
+): InboxV2OutboundDispatchRouteFailureCommit {
+  const commit = inboxV2OutboundDispatchRouteFailureCommitSchema.parse(input);
   if (!sameDispatchHead(commit.dispatchBefore, loadedDispatch)) {
     throw coordinatorError("provider_dispatch.invalid_plan");
   }
@@ -855,6 +905,34 @@ async function finishMutation(
   return finalize(outbox, fence, instruction, source);
 }
 
+async function finishRouteFailure(
+  outbox: Pick<InboxV2OutboxWorkRepositoryPort, "finalize">,
+  fence: InboxV2ProviderDispatchLeaseFence,
+  mutation: InboxV2ProviderDispatchFencedMutationResult,
+  commit: InboxV2OutboundDispatchRouteFailureCommit
+): Promise<InboxV2ProviderDispatchProcessResult> {
+  if (mutation.kind !== "committed" && mutation.kind !== "already_applied") {
+    return {
+      outcome: "mutation_rejected",
+      stage: "route_failure",
+      reason: mutation.kind
+    };
+  }
+  return finalize(
+    outbox,
+    fence,
+    deriveRouteFailureFinalization(fence.intentId, commit),
+    "route_failure"
+  );
+}
+
+function deriveRouteFailureFinalization(
+  intentId: InboxV2ProviderDispatchLeaseFence["intentId"],
+  commit: InboxV2OutboundDispatchRouteFailureCommit
+): InboxV2OutboxFinalizeInstruction {
+  return deriveInboxV2RouteFailureOutboxFinalization({ intentId, commit });
+}
+
 function deriveFinalization(
   intentId: InboxV2ProviderDispatchLeaseFence["intentId"],
   durableOutcome:
@@ -944,6 +1022,24 @@ function deriveRecoveryTurnFinalization(
       "core:provider-recovery-turn-required"
     ),
     retryAfterSeconds: 1
+  };
+}
+
+function deriveReroutedFinalization(
+  intent: InboxV2OutboxIntent,
+  dispatch: InboxV2OutboundDispatch
+): InboxV2OutboxFinalizeInstruction {
+  return {
+    kind: "processed",
+    resultHash: calculateInboxV2CanonicalSha256({
+      domain: "core:inbox-v2.provider-dispatch-rerouted",
+      hashVersion: "v1",
+      intentId: intent.id,
+      intentHash: intent.intentHash,
+      dispatchId: dispatch.id,
+      routeId: dispatch.route.id
+    }),
+    resultReference: null
   };
 }
 

@@ -26,6 +26,7 @@
       "N-1 internal inbox query, reply and routing services",
       "N-1 Web loadInboxViewModel with pinned session/config stubs and in-process fetch",
       "N-1 processOutboxBatch with a fake no-provider handler",
+      "N-1 WorkItem writer across expand capture and first plus sequential post-expand creation",
       "one N-1 database pool and backend across pre-expand, failed-expand and post-expand probes"
     ],
     "doesNotExercise": [
@@ -54,6 +55,14 @@
       {
         "path": "packages/db/src/repositories/external-message-repository.ts",
         "sha256": "sha256:c9e4b84e524058a92911f4aa6114b7c99c9bff62b847e43dc0fdde50f51e32bc"
+      },
+      {
+        "path": "packages/db/src/repositories/sql-inbox-v2-conversation-repository.ts",
+        "sha256": "sha256:ea75bdbcc66e7042dbd454818b83d945c1e220bb5e3d5c42785aa2f68a4649a1"
+      },
+      {
+        "path": "packages/db/src/repositories/sql-inbox-v2-work-item-repository.ts",
+        "sha256": "sha256:472213eec8bbe6c08b396d565037f2f6ed641154dbb92df6a6e1d7edb52564d3"
       },
       {
         "path": "packages/db/src/repositories/sql-outbox-repository.ts",
@@ -92,21 +101,21 @@
   },
   "upgradeTarget": {
     "folder": "packages/db/drizzle",
-    "count": 50,
+    "count": 53,
     "first": {
       "hash": "8347f51723c429250051338c4e0c0ca7f849aac0f550c47d2f15df081a169a9d",
       "createdAt": "1782111649246"
     },
     "last": {
-      "hash": "30941f17fab441b4a17102a876d365e3a1bf8b1fef54928e917b0402257f3290",
-      "createdAt": "1784366628935"
+      "hash": "0c0414b8f3126401b0beba92d7c1b28c2920ba0ca0d3e502f7899c14d377d16e",
+      "createdAt": "1784394964587"
     },
-    "digest": "sha256:a1c86bee22a9be596667d952cdfddef294517d19b3d73f677c79ee1c38995274"
+    "digest": "sha256:8ab43a884313994d40ef231e85cf8fff19a6f878711257ca72384e2328ffdbe6"
   },
   "inputs": {
     "entry": {
       "path": "scripts/db/fixtures/inbox-v2/db008-n1-runtime-probe.entry.ts",
-      "sha256": "sha256:de4ee11eef9612311c8b10ff0a80880f37abb0adf045ab0d85425390b5576985"
+      "sha256": "sha256:362f7697c798da598bc44431ee0f0b77b519975c0222b6454fe90ca1de78810d"
     },
     "webSessionStub": {
       "path": "scripts/db/fixtures/inbox-v2/db008-n1-web-session-stub.ts",
@@ -119,6 +128,6 @@
   },
   "bundle": {
     "path": "scripts/db/fixtures/inbox-v2/db008-n1-runtime-probe.bundle.cjs",
-    "sha256": "sha256:cf68a8574f58d6ee02794cde7950d18d828a7b8d4e68f7a8949170225e55b51b"
+    "sha256": "sha256:ac2743b36ae701771ef319b6a67aaf06b27c524eb678f83e2ac987a31e67b841"
   }
 }

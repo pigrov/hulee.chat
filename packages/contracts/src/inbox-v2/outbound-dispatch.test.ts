@@ -8,10 +8,13 @@ import {
   INBOX_V2_OUTBOUND_DISPATCH_ATTEMPT_SCHEMA_ID,
   INBOX_V2_OUTBOUND_DISPATCH_RECONCILIATION_COMMIT_SCHEMA_ID,
   INBOX_V2_OUTBOUND_DISPATCH_RECONCILIATION_DECISION_SCHEMA_ID,
+  INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_ID,
+  INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_VERSION,
   INBOX_V2_OUTBOUND_DISPATCH_ROUTE_FAILURE_COMMIT_SCHEMA_ID,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
   INBOX_V2_OUTBOUND_MULTI_SEND_OPERATION_SCHEMA_ID,
+  deriveInboxV2RouteFailureOutboxFinalization,
   inboxV2OutboundDispatchArtifactAssociationCommitEnvelopeSchema,
   inboxV2OutboundDispatchArtifactAssociationCommitSchema,
   inboxV2OutboundDispatchArtifactEnvelopeSchema,
@@ -27,6 +30,8 @@ import {
   inboxV2OutboundDispatchReconciliationCommitSchema,
   inboxV2OutboundDispatchReconciliationDecisionEnvelopeSchema,
   inboxV2OutboundDispatchReconciliationDecisionSchema,
+  inboxV2OutboundDispatchRerouteCommitEnvelopeSchema,
+  inboxV2OutboundDispatchRerouteCommitSchema,
   inboxV2OutboundDispatchRouteFailureCommitEnvelopeSchema,
   inboxV2OutboundDispatchRouteFailureCommitSchema,
   inboxV2OutboundDispatchSchema,
@@ -35,6 +40,7 @@ import {
 } from "./outbound-dispatch";
 import { inboxV2SourceOccurrenceResolutionCommitSchema } from "./external-message-reference";
 import { inboxV2OutboundRouteSchema } from "./outbound-route";
+import { inboxV2OutboxIntentIdSchema } from "./sync-primitives";
 
 const tenantId = "tenant:tenant-1";
 const otherTenantId = "tenant:tenant-2";
@@ -289,6 +295,31 @@ function queuedDispatch() {
     revision: "1",
     createdAt: routeSelectedAt,
     updatedAt: routeSelectedAt
+  };
+}
+
+function rerouteCommit() {
+  const dispatchBefore = queuedDispatch();
+  return {
+    tenantId,
+    original: {
+      dispatchBefore,
+      dispatchAfter: {
+        ...dispatchBefore,
+        state: "cancelled" as const,
+        revision: "2",
+        updatedAt: openedAt
+      },
+      outboxIntentId: "outbox-intent:original-dispatch"
+    },
+    replacement: {
+      message: reference("message", "message:message-2"),
+      route: reference("outbound_route", "outbound_route:route-2"),
+      dispatch: reference("outbound_dispatch", "outbound_dispatch:dispatch-2"),
+      outboxIntentId: "outbox-intent:replacement-dispatch"
+    },
+    reasonId: "core:operator-reroute",
+    changedAt: openedAt
   };
 }
 
@@ -1252,7 +1283,7 @@ describe("Inbox V2 crash-safe outbound dispatch", () => {
     ).toBe(false);
   });
 
-  it("terminates stale or inactive routes without creating an attempt", () => {
+  it("records structural and runtime route failures without creating an attempt", () => {
     const before = queuedDispatch();
     const failedAt = openedAt;
     const after = {
@@ -1283,6 +1314,78 @@ describe("Inbox V2 crash-safe outbound dispatch", () => {
       inboxV2OutboundDispatchRouteFailureCommitSchema.safeParse(valid).success
     ).toBe(true);
     expect(after.attemptCount).toBe(0);
+
+    const adminDisabledFailure = {
+      ...valid,
+      bindingHeadSnapshot: bindingHead({
+        fence: { ...bindingFence, administrativeRevision: "2" },
+        administrativeState: "disabled"
+      }),
+      error: {
+        code: "route.binding_changed" as const,
+        retryability: "retryable_resolution" as const,
+        diagnostic: null
+      }
+    };
+    expect(
+      inboxV2OutboundDispatchRouteFailureCommitSchema.safeParse(
+        adminDisabledFailure
+      ).success
+    ).toBe(true);
+
+    const runtimeFailedAt = providerCompletedAt;
+    const runtimeHead = bindingHead({ runtimeState: "unavailable" });
+    const runtimeFailure =
+      inboxV2OutboundDispatchRouteFailureCommitSchema.parse({
+        ...valid,
+        bindingHeadSnapshot: {
+          ...runtimeHead,
+          runtimeHealth: {
+            state: "unavailable" as const,
+            revision: "12"
+          },
+          bindingRevision: "15",
+          updatedAt: openedAt
+        },
+        error: {
+          code: "route.runtime_unavailable" as const,
+          retryability: "retryable_same_route" as const,
+          diagnostic: null
+        },
+        dispatchAfter: before,
+        failedAt: runtimeFailedAt
+      });
+    expect(
+      inboxV2OutboundDispatchRouteFailureCommitSchema.safeParse(runtimeFailure)
+        .success
+    ).toBe(true);
+    expect(runtimeFailure.dispatchAfter).toMatchObject({
+      route: before.route,
+      state: "queued",
+      attemptCount: 0,
+      activeAttempt: null,
+      lastAttempt: null,
+      revision: "1"
+    });
+    const runtimeRetryDelay = (intentId: string) => {
+      const finalization = deriveInboxV2RouteFailureOutboxFinalization({
+        intentId: inboxV2OutboxIntentIdSchema.parse(intentId),
+        commit: runtimeFailure
+      });
+      if (finalization.kind !== "retry") {
+        throw new Error("Runtime-unavailable route must remain retryable.");
+      }
+      return finalization.retryAfterSeconds;
+    };
+    const retryDelays = Array.from({ length: 32 }, (_, index) =>
+      runtimeRetryDelay(`outbox-intent:runtime-unavailable-${index}`)
+    );
+    expect(retryDelays.every((delay) => delay >= 5 && delay <= 60)).toBe(true);
+    expect(new Set(retryDelays).size).toBeGreaterThan(1);
+    expect(runtimeRetryDelay("outbox-intent:runtime-unavailable-0")).toBe(
+      retryDelays[0]
+    );
+
     for (const invalid of [
       {
         ...valid,
@@ -1301,11 +1404,88 @@ describe("Inbox V2 crash-safe outbound dispatch", () => {
           retryability: "retryable_resolution",
           diagnostic: null
         }
+      },
+      {
+        ...runtimeFailure,
+        bindingHeadSnapshot: bindingHead({ runtimeState: "ready" })
+      },
+      {
+        ...runtimeFailure,
+        dispatchAfter: {
+          ...runtimeFailure.dispatchAfter,
+          state: "terminal_failure" as const
+        }
       }
     ]) {
       expect(
         inboxV2OutboundDispatchRouteFailureCommitSchema.safeParse(invalid)
           .success
+      ).toBe(false);
+    }
+  });
+
+  it("binds explicit reroute to one exact pre-I/O cancellation and distinct replacement", () => {
+    const valid = rerouteCommit();
+    expect(
+      inboxV2OutboundDispatchRerouteCommitSchema.safeParse(valid).success
+    ).toBe(true);
+
+    const before = valid.original.dispatchBefore;
+    for (const invalid of [
+      {
+        ...valid,
+        replacement: {
+          ...valid.replacement,
+          message: { ...valid.replacement.message, tenantId: otherTenantId }
+        }
+      },
+      {
+        ...valid,
+        original: {
+          ...valid.original,
+          dispatchAfter: {
+            ...valid.original.dispatchAfter,
+            id: "outbound_dispatch:forged-after"
+          }
+        }
+      },
+      {
+        ...valid,
+        original: {
+          ...valid.original,
+          dispatchAfter: {
+            ...valid.original.dispatchAfter,
+            state: "terminal_failure" as const
+          }
+        }
+      },
+      {
+        ...valid,
+        replacement: { ...valid.replacement, message: before.message }
+      },
+      {
+        ...valid,
+        replacement: { ...valid.replacement, route: before.route }
+      },
+      {
+        ...valid,
+        replacement: {
+          ...valid.replacement,
+          dispatch: dispatchReference
+        }
+      },
+      {
+        ...valid,
+        replacement: {
+          ...valid.replacement,
+          outboxIntentId: valid.original.outboxIntentId
+        }
+      },
+      { ...valid, changedAt: providerCompletedAt },
+      { ...valid, extra: true }
+    ]) {
+      expect(
+        inboxV2OutboundDispatchRerouteCommitSchema.safeParse(invalid).success
       ).toBe(false);
     }
   });
@@ -1431,6 +1611,9 @@ describe("Inbox V2 crash-safe outbound dispatch", () => {
   });
 
   it("binds dispatch recovery and artifact contracts to exact v1 envelopes", () => {
+    expect(INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_VERSION).toBe(
+      INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION
+    );
     const pending = pendingAttempt();
     const attempting = attemptingDispatch(queuedDispatch(), pending);
     const unknown = unknownAttempt(pending);
@@ -1499,6 +1682,11 @@ describe("Inbox V2 crash-safe outbound dispatch", () => {
         schema: inboxV2OutboundDispatchRouteFailureCommitEnvelopeSchema,
         schemaId: INBOX_V2_OUTBOUND_DISPATCH_ROUTE_FAILURE_COMMIT_SCHEMA_ID,
         payload: routeFailure
+      },
+      {
+        schema: inboxV2OutboundDispatchRerouteCommitEnvelopeSchema,
+        schemaId: INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_ID,
+        payload: rerouteCommit()
       },
       {
         schema: inboxV2OutboundDispatchArtifactEnvelopeSchema,

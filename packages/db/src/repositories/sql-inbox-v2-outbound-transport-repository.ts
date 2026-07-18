@@ -1,5 +1,6 @@
 import {
   calculateInboxV2OutboxLeaseTokenHash,
+  deriveInboxV2RouteFailureOutboxFinalization,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
   inboxV2ExternalMessageReferenceIdSchema,
@@ -11,6 +12,7 @@ import {
   inboxV2OutboundDispatchAttemptCommitSchema,
   inboxV2OutboundDispatchIdSchema,
   inboxV2OutboundDispatchReconciliationCommitSchema,
+  inboxV2OutboundDispatchRerouteCommitSchema,
   inboxV2OutboundDispatchRouteFailureCommitSchema,
   inboxV2OutboundDispatchSchema,
   inboxV2MessageIdSchema,
@@ -36,6 +38,7 @@ import {
   type InboxV2OutboundDispatchId,
   type InboxV2OutboundDispatchReconciliationCommit,
   type InboxV2OutboundDispatchReconciliationDecision,
+  type InboxV2OutboundDispatchRerouteCommit,
   type InboxV2OutboundDispatchRouteFailureCommit,
   type InboxV2OutboundMultiSendOperation,
   type InboxV2OutboundRoute,
@@ -53,12 +56,19 @@ import { sql, type SQL } from "drizzle-orm";
 import { createHash } from "node:crypto";
 
 import type { HuleeDatabase } from "../client";
-import { registerInboxV2AtomicOutboundRouteProof } from "./sql-inbox-v2-atomic-materialization-internal";
+import {
+  registerInboxV2AtomicOutboundRerouteProof,
+  registerInboxV2AtomicOutboundRouteProof
+} from "./sql-inbox-v2-atomic-materialization-internal";
 import {
   assertInboxV2AuthorizedCommandMutationContext,
   type InboxV2AuthorizedCommandMutationContext
 } from "./sql-inbox-v2-authorization-repository";
 import { InboxV2PersistenceInvariantError } from "./sql-inbox-v2-conversation-repository";
+import {
+  buildFinalizeInboxV2OutboxSql,
+  buildInsertInboxV2OutboxOutcomeSql
+} from "./sql-inbox-v2-repository-outbox";
 import type { RawSqlExecutor } from "./sql-outbox-repository";
 
 const TRANSPORT_TRANSACTION_CONFIG = {
@@ -105,7 +115,10 @@ export type PersistInboxV2RouteResolutionResult =
         | "policy_conflict"
         | "binding_not_found"
         | "binding_fence_conflict"
-        | "binding_inactive";
+        | "binding_inactive"
+        | "original_dispatch_not_found"
+        | "original_dispatch_conflict"
+        | "original_provider_intent_conflict";
     }>;
 
 export type InboxV2RouteResolutionConflictResult = Readonly<{
@@ -115,7 +128,10 @@ export type InboxV2RouteResolutionConflictResult = Readonly<{
     | "policy_conflict"
     | "binding_not_found"
     | "binding_fence_conflict"
-    | "binding_inactive";
+    | "binding_inactive"
+    | "original_dispatch_not_found"
+    | "original_dispatch_conflict"
+    | "original_provider_intent_conflict";
 }>;
 
 export class InboxV2RouteResolutionRollbackError extends Error {
@@ -154,6 +170,7 @@ export type ApplyInboxV2DispatchAttemptResult =
         | "dispatch_not_found"
         | "route_not_found"
         | "binding_fence_conflict"
+        | "dispatch_cancelled"
         | "dispatch_state_conflict"
         | "attempt_id_conflict"
         | "attempt_number_conflict"
@@ -302,6 +319,13 @@ export type InboxV2OutboundTransportRepository = Readonly<{
   applyRouteFailure(
     commit: InboxV2OutboundDispatchRouteFailureCommit
   ): Promise<ApplyInboxV2DispatchAttemptResult>;
+  /** Zero-I/O route failures must consume the same live provider-work lease. */
+  applyRouteFailureFenced(
+    input: Readonly<{
+      outboxLease: InboxV2ProviderIoOutboxLeaseFence;
+      commit: InboxV2OutboundDispatchRouteFailureCommit;
+    }>
+  ): Promise<ApplyInboxV2FencedDispatchAttemptResult>;
   reconcile(
     commit: InboxV2OutboundDispatchReconciliationCommit
   ): Promise<ApplyInboxV2ReconciliationResult>;
@@ -332,6 +356,7 @@ export type InboxV2FencedOutboundTransportRuntimeRepository = Readonly<
     | "findDispatch"
     | "loadClaimedProviderIo"
     | "applyAttemptFenced"
+    | "applyRouteFailureFenced"
     | "reconcileFenced"
   >
 >;
@@ -343,7 +368,7 @@ type BindingAnchorRow = {
   source_connection_id: unknown;
   source_account_id: unknown;
 };
-type BindingFenceRow = BindingAnchorRow & {
+type BindingRouteFenceRow = BindingAnchorRow & {
   binding_revision: unknown;
   account_generation: unknown;
   binding_generation: unknown;
@@ -354,6 +379,10 @@ type BindingFenceRow = BindingAnchorRow & {
   remote_access_state: unknown;
   administrative_state: unknown;
   runtime_health_state: unknown;
+};
+type BindingFenceRow = BindingRouteFenceRow & {
+  runtime_health_revision: unknown;
+  updated_at: unknown;
 };
 type ExistingPolicyRow = {
   policy_id: unknown;
@@ -384,6 +413,21 @@ type ExistingRouteRow = {
   binding_revision: unknown;
   created_at: unknown;
 };
+type ExistingRerouteOriginalRouteRow = BindingAnchorRow & {
+  id: unknown;
+  conversation_id: unknown;
+  external_thread_id: unknown;
+  operation_id: unknown;
+  content_kind_id: unknown;
+  binding_revision: unknown;
+  account_generation: unknown;
+  binding_generation: unknown;
+  remote_access_revision: unknown;
+  administrative_revision: unknown;
+  capability_revision: unknown;
+  route_descriptor_revision: unknown;
+  created_at: unknown;
+};
 type ExistingDispatchRow = {
   id: unknown;
   message_id: unknown;
@@ -400,6 +444,13 @@ type ExistingDispatchRow = {
 };
 type DispatchReadRow = ExistingDispatchRow & {
   tenant_id: unknown;
+};
+type ExistingRerouteProviderIntentRow = {
+  id: unknown;
+  type_id: unknown;
+  effect_class: unknown;
+  payload_reference: unknown;
+  work_state: unknown;
 };
 
 export function createSqlInboxV2OutboundTransportRepository(
@@ -588,6 +639,32 @@ export function createSqlInboxV2OutboundTransportRepository(
       );
     },
 
+    async applyRouteFailureFenced(input) {
+      const commit = inboxV2OutboundDispatchRouteFailureCommitSchema.parse(
+        input.commit
+      );
+      const outboxLease = parseProviderIoOutboxLeaseFence(input.outboxLease);
+      assertProviderIoFenceTenant(outboxLease, commit.tenantId);
+      return runTransportTransaction(
+        transactionExecutor,
+        async (transaction) => {
+          const fenced = await lockAndValidateProviderIoOutboxLease(
+            transaction,
+            outboxLease,
+            commit.dispatchBefore.id
+          );
+          if (fenced.kind !== "fenced") return fenced;
+          if (!providerRouteFailureTimeFenceMatches(commit, fenced)) {
+            return { kind: "outbox_attempt_lease_conflict" } as const;
+          }
+          return applyRouteFailureInTransaction(transaction, commit, {
+            fence: outboxLease,
+            lease: fenced
+          });
+        }
+      );
+    },
+
     async reconcile(input) {
       const commit =
         inboxV2OutboundDispatchReconciliationCommitSchema.parse(input);
@@ -674,6 +751,7 @@ export function createSqlInboxV2FencedOutboundTransportRuntimeRepository(
     findDispatch: repository.findDispatch,
     loadClaimedProviderIo: repository.loadClaimedProviderIo,
     applyAttemptFenced: repository.applyAttemptFenced,
+    applyRouteFailureFenced: repository.applyRouteFailureFenced,
     reconcileFenced: repository.reconcileFenced
   });
 }
@@ -695,11 +773,17 @@ export async function persistInboxV2RouteResolutionInTransaction(
     );
   }
   const commit = inboxV2OutboundRouteResolutionCommitSchema.parse(input);
+  if (commit.input.intent.kind === "explicit_reroute") {
+    throw invariantError(
+      "Inbox V2 explicit reroute requires the atomic dispatch-cancellation persistence seam."
+    );
+  }
   assertInboxV2RouteResolutionAuthorizedContext(context, commit);
   const result = await persistInboxV2RouteResolutionRawInTransaction(
     context.executor,
     commit,
-    "require_existing_policy"
+    "require_existing_policy",
+    context
   );
   if (result.kind === "already_exists") {
     throw invariantError(
@@ -723,6 +807,99 @@ export async function persistInboxV2RouteResolutionInTransaction(
   return result;
 }
 
+/**
+ * Atomically cancels the untouched original queued Dispatch and persists the
+ * immutable replacement route. The Message/replacement Dispatch/outbox half
+ * is sealed later by the same coordinator-owned transaction.
+ */
+export async function persistInboxV2ExplicitRerouteResolutionInTransaction(
+  context: InboxV2AuthorizedCommandMutationContext,
+  input: Readonly<{
+    routeResolution: InboxV2OutboundRouteResolutionCommit;
+    rerouteCommit: InboxV2OutboundDispatchRerouteCommit;
+  }>
+): Promise<PersistInboxV2RouteResolutionResult> {
+  assertInboxV2AuthorizedCommandMutationContext(context);
+  if (context.profile !== "domain") {
+    throw invariantError(
+      "Inbox V2 explicit reroute requires an authorized domain context."
+    );
+  }
+  const routeResolution = inboxV2OutboundRouteResolutionCommitSchema.parse(
+    input.routeResolution
+  );
+  const rerouteCommit = inboxV2OutboundDispatchRerouteCommitSchema.parse(
+    input.rerouteCommit
+  );
+  assertInboxV2RouteResolutionAuthorizedContext(context, routeResolution);
+  assertExplicitRerouteCommitMatchesResolution(
+    context,
+    routeResolution,
+    rerouteCommit
+  );
+  const result = await persistInboxV2RouteResolutionRawInTransaction(
+    context.executor,
+    routeResolution,
+    "require_existing_policy",
+    context,
+    rerouteCommit
+  );
+  if (result.kind === "already_exists") {
+    throw invariantError(
+      "Inbox V2 atomic explicit reroute must commit a new exact OutboundRoute."
+    );
+  }
+  if (result.kind === "committed") {
+    registerInboxV2AtomicOutboundRouteProof(
+      context.atomicMaterializationToken!,
+      {
+        tenantId: result.route.tenantId,
+        routeId: result.route.id,
+        conversationId: result.route.conversation.id,
+        sourceAccountId: result.route.sourceAccount.id,
+        routePolicyId: result.route.routePolicy.id,
+        routePolicyRevision: result.route.routePolicyRevision,
+        routeDigest: computeInboxV2OutboundRouteDigest(result.route)
+      }
+    );
+    registerInboxV2AtomicOutboundRerouteProof(
+      context.atomicMaterializationToken!,
+      rerouteCommit
+    );
+  }
+  return result;
+}
+
+function assertExplicitRerouteCommitMatchesResolution(
+  context: InboxV2AuthorizedCommandMutationContext,
+  resolution: InboxV2OutboundRouteResolutionCommit,
+  reroute: InboxV2OutboundDispatchRerouteCommit
+): void {
+  const route = resolution.route;
+  const intent = resolution.input.intent;
+  if (
+    resolution.result.kind !== "selected" ||
+    route === null ||
+    intent.kind !== "explicit_reroute" ||
+    reroute.tenantId !== context.tenantId ||
+    reroute.tenantId !== route.tenantId ||
+    String(reroute.original.dispatchBefore.id) !==
+      String(intent.originalDispatch.id) ||
+    String(reroute.original.dispatchBefore.route.id) !==
+      String(intent.originalRoute.id) ||
+    reroute.original.dispatchBefore.revision !==
+      intent.expectedOriginalDispatchRevision ||
+    String(reroute.replacement.route.id) !== String(route.id) ||
+    reroute.reasonId !== intent.reasonId ||
+    reroute.changedAt !== route.selection.selectedAt ||
+    reroute.changedAt !== context.occurredAt
+  ) {
+    throw invariantError(
+      "Inbox V2 explicit reroute commit does not close over its selected route and original dispatch fence."
+    );
+  }
+}
+
 function assertInboxV2RouteResolutionAuthorizedContext(
   context: InboxV2AuthorizedCommandMutationContext,
   commit: InboxV2OutboundRouteResolutionCommit
@@ -734,10 +911,10 @@ function assertInboxV2RouteResolutionAuthorizedContext(
       : commit.input.principal.kind === "trusted_service" &&
         commit.input.principal.trustedServiceId ===
           context.actor.trustedServiceId;
+  const selectedRoute = commit.route;
   const matchingConversationDecisions =
     context.authorizationDecisionRefs.filter(
       (decision) =>
-        decision.id === context.authorizationDecisionId &&
         decision.tenantId === context.tenantId &&
         decision.authorizationEpoch === context.authorizationEpoch &&
         decision.outcome === "allowed" &&
@@ -750,7 +927,20 @@ function assertInboxV2RouteResolutionAuthorizedContext(
           String(commit.input.conversation.id) &&
         authorizationDecisionPrincipalMatchesContext(decision, context)
     );
-  const selectedRoute = commit.route;
+  const explicitReroute =
+    commit.input.intent.kind === "explicit_reroute" && selectedRoute !== null;
+  const expectedCommandTypeId = explicitReroute
+    ? "core:source.dispatch.reroute"
+    : "core:message.send";
+  const primaryAuthorizationDecisionMatches = explicitReroute
+    ? context.authorizationDecisionRefs.some(
+        (decision) =>
+          decision.id === context.authorizationDecisionId &&
+          decision.permissionId === "core:source.dispatch.reroute" &&
+          rerouteSourceAccountDecisionMatchesContext(decision, context)
+      )
+    : matchingConversationDecisions.length === 1 &&
+      matchingConversationDecisions[0]!.id === context.authorizationDecisionId;
   const matchingSourceAccountDecisions =
     selectedRoute === null
       ? []
@@ -778,26 +968,35 @@ function assertInboxV2RouteResolutionAuthorizedContext(
       ));
   const selectedSourceAccountAuthorizationMatches =
     selectedRoute === null ||
-    (matchingSourceAccountDecisions.length === 1 &&
-      routeAuthorizationSnapshotMatchesDecision(
-        selectedRoute.sourceAccountAuthorization,
-        matchingSourceAccountDecisions[0]!,
-        "source_account",
-        selectedRoute.sourceAccount.id
-      ));
+    (matchingSourceAccountDecisions.length >= 1 &&
+      matchingSourceAccountDecisions.filter((decision) =>
+        routeAuthorizationSnapshotMatchesDecision(
+          selectedRoute.sourceAccountAuthorization,
+          decision,
+          "source_account",
+          selectedRoute.sourceAccount.id
+        )
+      ).length === 1);
+  const selectedSourceAccountDecisionCountMatches =
+    selectedRoute === null ||
+    (selectedRoute.selection.intent.kind === "explicit_reroute"
+      ? matchingSourceAccountDecisions.length >= 1 &&
+        matchingSourceAccountDecisions.length <= 2
+      : matchingSourceAccountDecisions.length === 1);
 
   if (
     context.atomicMaterializationToken === undefined ||
-    context.commandTypeId !== "core:message.send" ||
+    context.commandTypeId !== expectedCommandTypeId ||
     context.tenantId !== commit.input.tenantId ||
     !principalMatches ||
     context.authorizationEpoch !== commit.input.authorizationEpoch ||
     context.occurredAt !== commit.input.requestedAt ||
     commit.input.operationId !== "core:message.send" ||
     commit.input.routePolicy.requiredConversationPermissionId !==
-      "core:message.send_external" ||
+      "core:message.reply_external" ||
     matchingConversationDecisions.length !== 1 ||
-    (selectedRoute !== null && matchingSourceAccountDecisions.length !== 1) ||
+    !primaryAuthorizationDecisionMatches ||
+    !selectedSourceAccountDecisionCountMatches ||
     !selectedConversationAuthorizationMatches ||
     !selectedSourceAccountAuthorizationMatches
   ) {
@@ -872,7 +1071,9 @@ function authorizationDecisionPrincipalMatchesContext(
 async function persistInboxV2RouteResolutionRawInTransaction(
   transaction: RawSqlExecutor,
   input: InboxV2OutboundRouteResolutionCommit,
-  policyMode: "persist_policy" | "require_existing_policy" = "persist_policy"
+  policyMode: "persist_policy" | "require_existing_policy" = "persist_policy",
+  authorizedContext?: InboxV2AuthorizedCommandMutationContext,
+  rerouteCommit?: InboxV2OutboundDispatchRerouteCommit
 ): Promise<PersistInboxV2RouteResolutionResult> {
   const commit = inboxV2OutboundRouteResolutionCommitSchema.parse(input);
   if (commit.result.kind === "failed") {
@@ -882,6 +1083,15 @@ async function persistInboxV2RouteResolutionRawInTransaction(
     throw invariantError("Selected route resolution has no route.");
   }
   const route = commit.route;
+  const explicitReroute = route.selection.intent.kind === "explicit_reroute";
+  if (
+    explicitReroute !== (rerouteCommit !== undefined) ||
+    (explicitReroute && authorizedContext === undefined)
+  ) {
+    throw invariantError(
+      "Inbox V2 explicit reroute persistence requires one live authorized context and cancellation commit."
+    );
+  }
   const policyResult =
     policyMode === "persist_policy"
       ? await persistRoutePolicyInTransaction(
@@ -904,7 +1114,21 @@ async function persistInboxV2RouteResolutionRawInTransaction(
     } as const;
   }
 
-  const fence = await lockBindingFence(transaction, route);
+  const rerouteFence = explicitReroute
+    ? await lockAndValidateExplicitRerouteFences(
+        transaction,
+        route,
+        authorizedContext!,
+        rerouteCommit!
+      )
+    : null;
+  if (rerouteFence !== null && rerouteFence.kind !== "validated") {
+    return abortRouteResolutionAfterPolicyWrite(policyResult, rerouteFence);
+  }
+  const fence =
+    rerouteFence?.kind === "validated"
+      ? rerouteFence.selectedFence
+      : await lockBindingFence(transaction, route);
   if (fence === null) {
     return abortRouteResolutionAfterPolicyWrite(policyResult, {
       kind: "binding_not_found"
@@ -922,9 +1146,7 @@ async function persistInboxV2RouteResolutionRawInTransaction(
   }
   if (
     fence.remote_access_state !== "active" ||
-    fence.administrative_state !== "enabled" ||
-    (fence.runtime_health_state !== "ready" &&
-      fence.runtime_health_state !== "degraded")
+    fence.administrative_state !== "enabled"
   ) {
     return abortRouteResolutionAfterPolicyWrite(policyResult, {
       kind: "binding_inactive"
@@ -935,6 +1157,19 @@ async function persistInboxV2RouteResolutionRawInTransaction(
     buildInsertInboxV2OutboundRouteSql(route, fence)
   );
   if (inserted.rows.length === 1) {
+    if (rerouteFence?.kind === "validated") {
+      const cancelled = await transaction.execute<IdRow>(
+        buildCompareAndSwapInboxV2OutboundDispatchSql(
+          rerouteFence.rerouteCommit.original.dispatchBefore,
+          rerouteFence.rerouteCommit.original.dispatchAfter
+        )
+      );
+      if (cancelled.rows.length !== 1) {
+        throw new InboxV2RouteResolutionRollbackError({
+          kind: "original_dispatch_conflict"
+        });
+      }
+    }
     return { kind: "committed", route } as const;
   }
 
@@ -1431,7 +1666,8 @@ async function lockBindingFence(
            head.binding_generation, head.remote_access_revision,
            head.administrative_revision, head.capability_revision,
            head.route_descriptor_revision, head.remote_access_state,
-           head.administrative_state, head.runtime_health_state
+           head.administrative_state, head.runtime_health_state,
+           head.runtime_health_revision, head.updated_at
       from inbox_v2_source_thread_binding_heads head
      where head.tenant_id = ${route.tenantId}
        and head.binding_id = ${route.sourceThreadBinding.id}
@@ -1440,9 +1676,259 @@ async function lockBindingFence(
   return result.rows[0] ?? null;
 }
 
+type ExplicitRerouteFenceResult =
+  | Readonly<{
+      kind: "validated";
+      selectedFence: BindingFenceRow;
+      rerouteCommit: InboxV2OutboundDispatchRerouteCommit;
+    }>
+  | InboxV2RouteResolutionConflictResult;
+
+async function lockAndValidateExplicitRerouteFences(
+  transaction: RawSqlExecutor,
+  route: InboxV2OutboundRoute,
+  context: InboxV2AuthorizedCommandMutationContext,
+  rerouteCommit: InboxV2OutboundDispatchRerouteCommit
+): Promise<ExplicitRerouteFenceResult> {
+  if (route.selection.intent.kind !== "explicit_reroute") {
+    throw invariantError(
+      "Explicit reroute validation received another intent."
+    );
+  }
+  const originalDispatch = await lockAndValidateOriginalRerouteDispatch(
+    transaction,
+    rerouteCommit
+  );
+  if (originalDispatch.kind !== "validated") return originalDispatch;
+
+  const originalRoute = await lockExactRerouteOriginalRoute(
+    transaction,
+    route.tenantId,
+    route.selection.intent.originalRoute.id
+  );
+  if (
+    originalRoute === null ||
+    !rerouteOriginalRouteScopeMatches(originalRoute, route) ||
+    String(originalRoute.binding_id) === String(route.sourceThreadBinding.id)
+  ) {
+    return { kind: "binding_fence_conflict" };
+  }
+
+  assertExplicitRerouteAuthorizationContext(context, route, originalRoute);
+
+  // The old binding may be disabled or drifted; that is a reason to reroute,
+  // not a reason to strand the untouched dispatch. Only the replacement head
+  // is a live execution fence.
+  const selectedFence = await lockBindingFence(transaction, route);
+  if (selectedFence === null) {
+    return { kind: "binding_not_found" };
+  }
+  if (
+    !bindingAnchorMatchesRoute(selectedFence, route) ||
+    !bindingFenceMatchesRoute(selectedFence, route)
+  ) {
+    return { kind: "binding_fence_conflict" };
+  }
+  if (
+    selectedFence.remote_access_state !== "active" ||
+    selectedFence.administrative_state !== "enabled"
+  ) {
+    return { kind: "binding_inactive" };
+  }
+  return { kind: "validated", selectedFence, rerouteCommit };
+}
+
+async function lockAndValidateOriginalRerouteDispatch(
+  transaction: RawSqlExecutor,
+  reroute: InboxV2OutboundDispatchRerouteCommit
+): Promise<
+  | Readonly<{ kind: "validated" }>
+  | Readonly<{
+      kind:
+        | "original_dispatch_not_found"
+        | "original_dispatch_conflict"
+        | "original_provider_intent_conflict";
+    }>
+> {
+  const before = reroute.original.dispatchBefore;
+  const dispatch = await lockDispatch(transaction, before);
+  if (dispatch === null) return { kind: "original_dispatch_not_found" };
+  if (!existingDispatchMatches(dispatch, before)) {
+    return { kind: "original_dispatch_conflict" };
+  }
+
+  const attempts = await transaction.execute<IdRow>(sql`
+    select attempt.id
+      from inbox_v2_outbound_dispatch_attempts attempt
+     where attempt.tenant_id = ${before.tenantId}
+       and attempt.dispatch_id = ${before.id}
+     limit 1
+     for share of attempt
+  `);
+  if (attempts.rows.length !== 0) {
+    return { kind: "original_dispatch_conflict" };
+  }
+
+  const providerIntent =
+    await transaction.execute<ExistingRerouteProviderIntentRow>(sql`
+    select intent.id, intent.type_id, intent.effect_class::text as effect_class,
+           intent.payload_reference, work.state::text as work_state
+      from inbox_v2_outbox_intents intent
+      join inbox_v2_outbox_work_items work
+        on work.tenant_id = intent.tenant_id
+       and work.intent_id = intent.id
+     where intent.tenant_id = ${before.tenantId}
+       and intent.id = ${reroute.original.outboxIntentId}
+     for share of intent
+  `);
+  assertAtMostOneRow(
+    providerIntent.rows,
+    "Explicit reroute original provider intent lookup"
+  );
+  const intent = providerIntent.rows[0];
+  if (
+    intent === undefined ||
+    String(intent.id) !== String(reroute.original.outboxIntentId) ||
+    String(intent.type_id) !== "core:provider.dispatch" ||
+    String(intent.effect_class) !== "provider_io" ||
+    (String(intent.work_state) !== "pending" &&
+      String(intent.work_state) !== "leased")
+  ) {
+    return { kind: "original_provider_intent_conflict" };
+  }
+  const payloadReference = inboxV2PayloadReferenceSchema.safeParse(
+    intent.payload_reference
+  );
+  if (
+    !payloadReference.success ||
+    payloadReference.data.tenantId !== before.tenantId ||
+    String(payloadReference.data.recordId) !== String(before.id) ||
+    payloadReference.data.schemaId !== INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID ||
+    payloadReference.data.schemaVersion !==
+      INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION
+  ) {
+    return { kind: "original_provider_intent_conflict" };
+  }
+  return { kind: "validated" };
+}
+
+async function lockExactRerouteOriginalRoute(
+  transaction: RawSqlExecutor,
+  tenantId: string,
+  routeId: string
+): Promise<ExistingRerouteOriginalRouteRow | null> {
+  const result = await transaction.execute<ExistingRerouteOriginalRouteRow>(sql`
+    select route_row.id, route_row.conversation_id,
+           route_row.external_thread_id, route_row.source_thread_binding_id
+             as binding_id,
+           route_row.source_connection_id, route_row.source_account_id,
+           route_row.operation_id, route_row.content_kind_id,
+           route_row.binding_revision, route_row.account_generation,
+           route_row.binding_generation, route_row.remote_access_revision,
+           route_row.administrative_revision, route_row.capability_revision,
+           route_row.route_descriptor_revision, route_row.created_at
+      from inbox_v2_outbound_routes route_row
+     where route_row.tenant_id = ${tenantId}
+       and route_row.id = ${routeId}
+     for share of route_row
+  `);
+  assertAtMostOneRow(result.rows, "Explicit reroute original-route lookup");
+  return result.rows[0] ?? null;
+}
+
+function rerouteOriginalRouteScopeMatches(
+  original: ExistingRerouteOriginalRouteRow,
+  route: InboxV2OutboundRoute
+): boolean {
+  if (route.selection.intent.kind !== "explicit_reroute") return false;
+  const originalCreatedAt = timestampMilliseconds(original.created_at);
+  return (
+    String(original.id) === String(route.selection.intent.originalRoute.id) &&
+    String(original.conversation_id) === String(route.conversation.id) &&
+    String(original.external_thread_id) === String(route.externalThread.id) &&
+    String(original.operation_id) === String(route.operationId) &&
+    nullableString(original.content_kind_id) ===
+      nullableString(route.contentKindId) &&
+    Number.isFinite(originalCreatedAt) &&
+    originalCreatedAt <= timestampMilliseconds(route.createdAt)
+  );
+}
+
+function assertExplicitRerouteAuthorizationContext(
+  context: InboxV2AuthorizedCommandMutationContext,
+  route: InboxV2OutboundRoute,
+  original: ExistingRerouteOriginalRouteRow
+): void {
+  const sourceUseDecisions = context.authorizationDecisionRefs.filter(
+    (decision) =>
+      decision.permissionId === "core:source_account.use" &&
+      rerouteSourceAccountDecisionMatchesContext(decision, context)
+  );
+  const rerouteDecisions = context.authorizationDecisionRefs.filter(
+    (decision) =>
+      decision.permissionId === "core:source.dispatch.reroute" &&
+      rerouteSourceAccountDecisionMatchesContext(decision, context)
+  );
+  const originalSourceAccountId = String(original.source_account_id);
+  const selectedSourceAccountId = String(route.sourceAccount.id);
+  const originalUseDecisions = sourceUseDecisions.filter(
+    (decision) => String(decision.resource.entityId) === originalSourceAccountId
+  );
+  const selectedUseDecisions = sourceUseDecisions.filter(
+    (decision) => String(decision.resource.entityId) === selectedSourceAccountId
+  );
+  const originalRerouteDecisions = rerouteDecisions.filter(
+    (decision) => String(decision.resource.entityId) === originalSourceAccountId
+  );
+  const sameSourceAccount = originalSourceAccountId === selectedSourceAccountId;
+  const distinctDecisionIds = new Set(
+    [...sourceUseDecisions, ...rerouteDecisions].map((decision) => decision.id)
+  );
+  const selectedSnapshotMatchCount = selectedUseDecisions.filter((decision) =>
+    routeAuthorizationSnapshotMatchesDecision(
+      route.sourceAccountAuthorization,
+      decision,
+      "source_account",
+      route.sourceAccount.id
+    )
+  ).length;
+
+  if (
+    sourceUseDecisions.length !== 2 ||
+    rerouteDecisions.length !== 1 ||
+    originalRerouteDecisions.length !== 1 ||
+    originalRerouteDecisions[0]!.id !== context.authorizationDecisionId ||
+    (sameSourceAccount
+      ? originalUseDecisions.length !== 2 || selectedUseDecisions.length !== 2
+      : originalUseDecisions.length !== 1 ||
+        selectedUseDecisions.length !== 1) ||
+    selectedSnapshotMatchCount !== 1 ||
+    distinctDecisionIds.size !== sourceUseDecisions.length + 1
+  ) {
+    throw invariantError(
+      "Inbox V2 route resolution crossed its authorized explicit-reroute context."
+    );
+  }
+}
+
+function rerouteSourceAccountDecisionMatchesContext(
+  decision: InboxV2AuthorizedCommandMutationContext["authorizationDecisionRefs"][number],
+  context: InboxV2AuthorizedCommandMutationContext
+): boolean {
+  return (
+    decision.tenantId === context.tenantId &&
+    decision.authorizationEpoch === context.authorizationEpoch &&
+    decision.outcome === "allowed" &&
+    decision.resourceScopeId === "core:source-account" &&
+    decision.resource.tenantId === context.tenantId &&
+    decision.resource.entityTypeId === "core:source-account" &&
+    authorizationDecisionPrincipalMatchesContext(decision, context)
+  );
+}
+
 export function buildInsertInboxV2OutboundRouteSql(
   route: InboxV2OutboundRoute,
-  fence: BindingFenceRow
+  fence: BindingRouteFenceRow
 ): SQL {
   const principalEmployeeId =
     route.principal.kind === "employee" ? route.principal.employee.id : null;
@@ -1539,7 +2025,7 @@ async function loadExistingRoute(
 function existingRouteMatches(
   row: ExistingRouteRow,
   route: InboxV2OutboundRoute,
-  fence: BindingFenceRow
+  fence: BindingRouteFenceRow
 ): boolean {
   return (
     String(row.id) === String(route.id) &&
@@ -1571,7 +2057,7 @@ function bindingAnchorMatchesRoute(
 }
 
 function bindingFenceMatchesRoute(
-  row: BindingFenceRow,
+  row: BindingRouteFenceRow,
   route: InboxV2OutboundRoute
 ): boolean {
   return (
@@ -1923,6 +2409,7 @@ type CompleteAttemptCommit = Extract<
 
 type ProviderIoOutboxLeaseRow = {
   state: unknown;
+  work_revision: unknown;
   lease_owner_id: unknown;
   lease_token_hash: unknown;
   lease_revision: unknown;
@@ -1952,6 +2439,7 @@ type ValidatedProviderIoOutboxLease = Readonly<{
   databaseNow: string;
   leaseClaimedAt: string;
   leaseExpiresAt: string;
+  workRevision: string;
 }>;
 
 function parseProviderIoOutboxLeaseFence(
@@ -1990,6 +2478,7 @@ export function buildLockInboxV2ProviderIoOutboxLeaseSql(
       select clock_timestamp() as database_now
     )
     select work.state::text as state,
+           work.revision::text as work_revision,
            work.lease_owner_id,
            work.lease_token_hash,
            work.lease_revision::text as lease_revision,
@@ -2046,6 +2535,12 @@ async function lockAndValidateProviderIoOutboxLease(
     parsePositiveDatabaseBigint(
       row.lease_revision,
       "provider I/O outbox lease revision"
+    )
+  );
+  const workRevision = inboxV2EntityRevisionSchema.parse(
+    parsePositiveDatabaseBigint(
+      row.work_revision,
+      "provider I/O outbox work revision"
     )
   );
   const tokenHash = calculateInboxV2OutboxLeaseTokenHash(fence.leaseToken);
@@ -2129,7 +2624,8 @@ async function lockAndValidateProviderIoOutboxLease(
     dispatchId: parsedDispatchId.data,
     databaseNow,
     leaseClaimedAt,
-    leaseExpiresAt
+    leaseExpiresAt,
+    workRevision
   };
 }
 
@@ -2163,6 +2659,18 @@ function providerAttemptTimeFenceMatches(
     );
   }
   return commit.completionSource !== "lease_expired";
+}
+
+function providerRouteFailureTimeFenceMatches(
+  commit: InboxV2OutboundDispatchRouteFailureCommit,
+  fence: ValidatedProviderIoOutboxLease
+): boolean {
+  const failedAt = Date.parse(commit.failedAt);
+  return (
+    failedAt >= Date.parse(fence.leaseClaimedAt) &&
+    failedAt <= Date.parse(fence.databaseNow) &&
+    failedAt < Date.parse(fence.leaseExpiresAt)
+  );
 }
 
 function parseDatabasePayloadReference(
@@ -2211,18 +2719,21 @@ async function openAttemptInTransaction(
         ? { kind: "already_applied" }
         : { kind: "attempt_id_conflict" };
     }
+    if (existingDispatchIsCancellationOf(dispatchRow, commit.dispatchBefore)) {
+      return { kind: "dispatch_cancelled" };
+    }
     return { kind: "dispatch_state_conflict" };
   }
 
-  const routeResult = await transaction.execute<IdRow>(sql`
-    select id
-      from inbox_v2_outbound_routes
-     where tenant_id = ${commit.tenantId}
-       and id = ${commit.routeSnapshot.id}
-       and id = ${commit.dispatchBefore.route.id}
-     for share
-  `);
-  if (routeResult.rows.length !== 1) return { kind: "route_not_found" };
+  if (
+    !(await lockExactOutboundRouteSnapshot(
+      transaction,
+      commit.routeSnapshot,
+      commit.dispatchBefore.route.id
+    ))
+  ) {
+    return { kind: "route_not_found" };
+  }
   const fence = await lockBindingFence(transaction, commit.routeSnapshot);
   if (
     fence === null ||
@@ -2267,6 +2778,26 @@ async function openAttemptInTransaction(
     );
   }
   return { kind: "committed" };
+}
+
+function existingDispatchIsCancellationOf(
+  row: ExistingDispatchRow,
+  before: InboxV2OutboundDispatch
+): boolean {
+  return (
+    String(row.id) === String(before.id) &&
+    String(row.message_id) === String(before.message.id) &&
+    String(row.route_id) === String(before.route.id) &&
+    nullableString(row.multi_send_operation_id) ===
+      nullableString(before.multiSendOperation?.id ?? null) &&
+    String(row.state) === "cancelled" &&
+    Number(row.attempt_count) === before.attemptCount &&
+    row.active_attempt_id === null &&
+    row.last_attempt_id === null &&
+    row.retry_authorization_decision_id === null &&
+    BigInt(String(row.revision)) === BigInt(before.revision) + 1n &&
+    sameTimestamp(row.created_at, before.createdAt)
+  );
 }
 
 type AttemptRow = {
@@ -2598,50 +3129,260 @@ function classifyAttemptInsertConflict(
 
 async function applyRouteFailureInTransaction(
   transaction: RawSqlExecutor,
-  commit: InboxV2OutboundDispatchRouteFailureCommit
+  commit: InboxV2OutboundDispatchRouteFailureCommit,
+  atomicOutbox?: Readonly<{
+    fence: InboxV2ProviderIoOutboxLeaseFence;
+    lease: ValidatedProviderIoOutboxLease;
+  }>
 ): Promise<ApplyInboxV2DispatchAttemptResult> {
   const dispatchRow = await lockDispatch(transaction, commit.dispatchBefore);
   if (dispatchRow === null) return { kind: "dispatch_not_found" };
+  let alreadyApplied = false;
   if (!existingDispatchMatches(dispatchRow, commit.dispatchBefore)) {
-    return existingDispatchMatches(dispatchRow, commit.dispatchAfter)
-      ? { kind: "already_applied" }
-      : { kind: "dispatch_state_conflict" };
+    if (!existingDispatchMatches(dispatchRow, commit.dispatchAfter)) {
+      return { kind: "dispatch_state_conflict" };
+    }
+    alreadyApplied = true;
   }
-  const routeResult = await transaction.execute<IdRow>(sql`
-    select id
-      from inbox_v2_outbound_routes
-     where tenant_id = ${commit.tenantId}
-       and id = ${commit.routeSnapshot.id}
-     for share
-  `);
-  if (routeResult.rows.length !== 1) return { kind: "route_not_found" };
+  if (
+    !(await lockExactOutboundRouteSnapshot(
+      transaction,
+      commit.routeSnapshot,
+      commit.dispatchBefore.route.id
+    ))
+  ) {
+    return { kind: "route_not_found" };
+  }
   const fence = await lockBindingFence(transaction, commit.routeSnapshot);
   if (fence === null) return { kind: "binding_fence_conflict" };
 
-  // A structural failure is valid precisely because the current fence no
-  // longer equals the immutable route or because the selected binding is not
-  // provider-usable. Persisting the terminal/retryable dispatch transition
-  // never opens an attempt and therefore never performs provider I/O.
-  const fenceStillUsable =
-    bindingAnchorMatchesRoute(fence, commit.routeSnapshot) &&
-    bindingFenceMatchesRoute(fence, commit.routeSnapshot) &&
-    fence.remote_access_state === "active" &&
-    fence.administrative_state === "enabled" &&
-    (fence.runtime_health_state === "ready" ||
-      fence.runtime_health_state === "degraded");
-  if (fenceStillUsable && commit.error.code !== "route.runtime_unavailable") {
+  if (!bindingHeadMatchesRouteFailureEvidence(fence, commit)) {
     return { kind: "binding_fence_conflict" };
   }
 
-  const updated = await transaction.execute<IdRow>(
-    buildCompareAndSwapInboxV2OutboundDispatchSql(
-      commit.dispatchBefore,
-      commit.dispatchAfter
-    )
+  // A structural failure is valid precisely when the immutable route fence is
+  // no longer usable. Runtime unavailability is a retry instruction for the
+  // outbox, not a dispatch outcome: no attempt exists, so its pinned dispatch
+  // head remains unchanged.
+  const structurallyUsable =
+    bindingAnchorMatchesRoute(fence, commit.routeSnapshot) &&
+    bindingFenceMatchesRoute(fence, commit.routeSnapshot) &&
+    fence.remote_access_state === "active" &&
+    fence.administrative_state === "enabled";
+  const runtimeUsable =
+    fence.runtime_health_state === "ready" ||
+    fence.runtime_health_state === "degraded";
+  if (
+    (commit.error.code === "route.runtime_unavailable" &&
+      (!structurallyUsable || runtimeUsable)) ||
+    (commit.error.code !== "route.runtime_unavailable" && structurallyUsable)
+  ) {
+    return { kind: "binding_fence_conflict" };
+  }
+
+  if (commit.error.code === "route.runtime_unavailable") {
+    return { kind: "committed" };
+  }
+
+  if (!alreadyApplied) {
+    const updated = await transaction.execute<IdRow>(
+      buildCompareAndSwapInboxV2OutboundDispatchSql(
+        commit.dispatchBefore,
+        commit.dispatchAfter
+      )
+    );
+    if (updated.rows.length !== 1) {
+      return { kind: "dispatch_state_conflict" };
+    }
+  }
+  if (atomicOutbox !== undefined) {
+    await finalizeStructuralRouteFailureOutboxInTransaction(
+      transaction,
+      atomicOutbox,
+      commit
+    );
+  }
+  return { kind: alreadyApplied ? "already_applied" : "committed" };
+}
+
+async function lockExactOutboundRouteSnapshot(
+  transaction: RawSqlExecutor,
+  route: InboxV2OutboundRoute,
+  dispatchRouteId: InboxV2OutboundDispatch["route"]["id"]
+): Promise<boolean> {
+  const principalEmployeeId =
+    route.principal.kind === "employee" ? route.principal.employee.id : null;
+  const principalTrustedServiceId =
+    route.principal.kind === "trusted_service"
+      ? route.principal.trustedServiceId
+      : null;
+  const result = await transaction.execute<IdRow>(sql`
+    select route_row.id
+      from inbox_v2_outbound_routes route_row
+     where route_row.tenant_id = ${route.tenantId}
+       and route_row.id = ${route.id}
+       and route_row.id = ${dispatchRouteId}
+       and route_row.principal_kind = ${route.principal.kind}
+       and route_row.principal_employee_id is not distinct from
+           ${principalEmployeeId}
+       and route_row.principal_trusted_service_id is not distinct from
+           ${principalTrustedServiceId}
+       and route_row.conversation_id = ${route.conversation.id}
+       and route_row.external_thread_id = ${route.externalThread.id}
+       and route_row.external_thread_revision = 1
+       and route_row.source_thread_binding_id = ${route.sourceThreadBinding.id}
+       and route_row.source_connection_id = ${route.sourceConnection.id}
+       and route_row.source_account_id = ${route.sourceAccount.id}
+       and route_row.operation_id = ${route.operationId}
+       and route_row.content_kind_id is not distinct from ${route.contentKindId}
+       and route_row.authorization_epoch = ${route.authorizationEpoch}
+       and route_row.required_conversation_permission_id =
+           ${route.requiredConversationPermissionId}
+       and route_row.account_generation =
+           ${BigInt(route.bindingFence.accountGeneration)}
+       and route_row.binding_generation =
+           ${BigInt(route.bindingFence.bindingGeneration)}
+       and route_row.remote_access_revision =
+           ${BigInt(route.bindingFence.remoteAccessRevision)}
+       and route_row.administrative_revision =
+           ${BigInt(route.bindingFence.administrativeRevision)}
+       and route_row.capability_revision =
+           ${BigInt(route.bindingFence.capabilityRevision)}
+       and route_row.route_descriptor_revision =
+           ${BigInt(route.bindingFence.routeDescriptorRevision)}
+       and route_row.adapter_contract_id = ${route.adapterContract.contractId}
+       and route_row.adapter_contract_version =
+           ${route.adapterContract.contractVersion}
+       and route_row.adapter_declaration_revision =
+           ${BigInt(route.adapterContract.declarationRevision)}
+       and route_row.adapter_surface_id = ${route.adapterContract.surfaceId}
+       and route_row.adapter_loaded_by_trusted_service_id =
+           ${route.adapterContract.loadedByTrustedServiceId}
+       and route_row.adapter_loaded_at = ${toDate(route.adapterContract.loadedAt)}
+       and route_row.adapter_contract_snapshot =
+           ${toJson(route.adapterContract)}::jsonb
+       and route_row.route_descriptor_snapshot =
+           ${toJson(route.routeDescriptor)}::jsonb
+       and route_row.route_descriptor_digest_sha256 =
+           ${route.routeDescriptor.descriptorDigestSha256}
+       and route_row.route_policy_id = ${route.routePolicy.id}
+       and route_row.route_policy_revision = ${BigInt(route.routePolicyRevision)}
+       and route_row.conversation_authorization_snapshot =
+           ${toJson(route.conversationAuthorization)}::jsonb
+       and route_row.source_account_authorization_snapshot =
+           ${toJson(route.sourceAccountAuthorization)}::jsonb
+       and route_row.reference_context_snapshot =
+           ${toJson(route.referenceContext)}::jsonb
+       and route_row.runtime_observation_snapshot =
+           ${toJson(route.runtimeObservationAtResolution)}::jsonb
+       and route_row.selection_intent_kind = ${route.selection.intent.kind}
+       and route_row.selection_intent_snapshot =
+           ${toJson(route.selection.intent)}::jsonb
+       and route_row.selection_reason = ${route.selection.reason}
+       and route_row.candidate_snapshot_token =
+           ${route.selection.candidateSnapshotToken}
+       and route_row.candidate_snapshot_not_after =
+           ${toDate(route.selection.candidateSnapshotNotAfter)}
+       and route_row.fallback_policy_ordinal is not distinct from
+           ${route.selection.fallbackPolicyOrdinal}
+       and route_row.selected_at = ${toDate(route.selection.selectedAt)}
+       and route_row.mutation_token = ${route.mutationToken}
+       and route_row.idempotency_token = ${route.idempotencyToken}
+       and route_row.correlation_token = ${route.correlationToken}
+       and route_row.revision = ${BigInt(route.revision)}
+       and route_row.created_at = ${toDate(route.createdAt)}
+     for share of route_row
+  `);
+  return result.rows.length === 1;
+}
+
+async function finalizeStructuralRouteFailureOutboxInTransaction(
+  transaction: RawSqlExecutor,
+  atomicOutbox: Readonly<{
+    fence: InboxV2ProviderIoOutboxLeaseFence;
+    lease: ValidatedProviderIoOutboxLease;
+  }>,
+  commit: InboxV2OutboundDispatchRouteFailureCommit
+): Promise<void> {
+  const instruction = deriveInboxV2RouteFailureOutboxFinalization({
+    intentId: atomicOutbox.fence.intentId,
+    commit
+  });
+  if (instruction.kind !== "dead") {
+    throw invariantError(
+      "Atomic structural route failure requires a terminal outbox instruction."
+    );
+  }
+  const input = {
+    context: atomicOutbox.fence.context,
+    intentId: atomicOutbox.fence.intentId,
+    workerId: atomicOutbox.fence.workerId,
+    leaseToken: atomicOutbox.fence.leaseToken,
+    expectedLeaseRevision: atomicOutbox.fence.expectedLeaseRevision,
+    instruction
+  } satisfies InboxV2FinalizeOutboxInput;
+  const tokenHash = calculateInboxV2OutboxLeaseTokenHash(
+    atomicOutbox.fence.leaseToken
   );
-  return updated.rows.length === 1
-    ? { kind: "committed" }
-    : { kind: "dispatch_state_conflict" };
+  const outcomeRevision = inboxV2EntityRevisionSchema.parse(
+    (BigInt(atomicOutbox.lease.workRevision) + 1n).toString()
+  );
+  const inserted = await transaction.execute<Record<string, unknown>>(
+    buildInsertInboxV2OutboxOutcomeSql({
+      input,
+      tokenHash,
+      dbNow: atomicOutbox.lease.databaseNow,
+      outcomeRevision
+    })
+  );
+  if (inserted.rows.length !== 1) {
+    throw invariantError(
+      "Atomic route failure did not insert exactly one outbox outcome."
+    );
+  }
+  const finalized = await transaction.execute<Record<string, unknown>>(
+    buildFinalizeInboxV2OutboxSql({
+      input,
+      tokenHash,
+      dbNow: atomicOutbox.lease.databaseNow,
+      expectedWorkRevision: atomicOutbox.lease.workRevision,
+      outcomeRevision
+    })
+  );
+  if (finalized.rows.length !== 1) {
+    throw invariantError(
+      "Atomic route failure did not finalize exactly one outbox work item."
+    );
+  }
+}
+
+function bindingHeadMatchesRouteFailureEvidence(
+  row: BindingFenceRow,
+  commit: InboxV2OutboundDispatchRouteFailureCommit
+): boolean {
+  const head = commit.bindingHeadSnapshot;
+  return (
+    bindingAnchorMatchesRoute(row, commit.routeSnapshot) &&
+    BigInt(String(row.binding_revision)) === BigInt(head.bindingRevision) &&
+    BigInt(String(row.account_generation)) ===
+      BigInt(head.fence.accountGeneration) &&
+    BigInt(String(row.binding_generation)) ===
+      BigInt(head.fence.bindingGeneration) &&
+    BigInt(String(row.remote_access_revision)) ===
+      BigInt(head.remoteAccess.revision) &&
+    BigInt(String(row.administrative_revision)) ===
+      BigInt(head.administrative.revision) &&
+    BigInt(String(row.capability_revision)) ===
+      BigInt(head.fence.capabilityRevision) &&
+    BigInt(String(row.route_descriptor_revision)) ===
+      BigInt(head.fence.routeDescriptorRevision) &&
+    BigInt(String(row.runtime_health_revision)) ===
+      BigInt(head.runtimeHealth.revision) &&
+    String(row.remote_access_state) === head.remoteAccess.state &&
+    String(row.administrative_state) === head.administrative.state &&
+    String(row.runtime_health_state) === head.runtimeHealth.state &&
+    sameTimestamp(row.updated_at, head.updatedAt)
+  );
 }
 
 async function reconcileInTransaction(

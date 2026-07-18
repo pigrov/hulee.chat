@@ -470,6 +470,8 @@ export const initialTables = [
   // prettier-ignore
   { name: "inbox_v2_conversation_work_item_slots", scope: "tenant", requiresTenantId: true },
   // prettier-ignore
+  { name: "inbox_v2_conversation_work_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
   { name: "inbox_v2_work_item_sla_snapshots", scope: "tenant", requiresTenantId: true },
   // prettier-ignore
   { name: "inbox_v2_work_queue_eligibility_decisions", scope: "tenant", requiresTenantId: true },

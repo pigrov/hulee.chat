@@ -1169,7 +1169,7 @@ describe("Inbox V2 command protocol", () => {
     const baseEvidence = [
       ...conversationEvidence("core:message.reply_external"),
       routeEvidence(),
-      workItemEvidence("core:message.reply_external")
+      workItemEvidence("core:work.read")
     ];
 
     for (const replyAuthority of [primaryAuthority, collaboratorAuthority]) {

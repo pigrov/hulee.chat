@@ -500,6 +500,8 @@ function addOutboundBindingIssues(
     commit.message.referenceContext.kind === "forward_provider_native"
       ? commit.message.referenceContext
       : null;
+  // Runtime health is observational, not part of structural route eligibility.
+  // A temporarily unavailable route stays pinned for same-route worker retry.
   if (
     binding.id !== route.sourceThreadBinding.id ||
     binding.externalThread.id !== route.externalThread.id ||
@@ -513,11 +515,20 @@ function addOutboundBindingIssues(
     binding.capabilities.revision !== fence.capabilityRevision ||
     binding.routeDescriptor.descriptorRevision !==
       fence.routeDescriptorRevision ||
+    binding.runtimeHealth.state !==
+      route.runtimeObservationAtResolution.state ||
+    binding.runtimeHealth.revision !==
+      route.runtimeObservationAtResolution.revision ||
+    binding.runtimeHealth.checkedAt !==
+      route.runtimeObservationAtResolution.observedAt ||
+    !sameValue(
+      binding.runtimeHealth.diagnostic,
+      route.runtimeObservationAtResolution.diagnostic
+    ) ||
     !sameValue(binding.capabilities.adapterContract, route.adapterContract) ||
     !sameValue(binding.routeDescriptor, route.routeDescriptor) ||
     binding.remoteAccess.state !== "active" ||
     binding.administrative.state !== "enabled" ||
-    binding.runtimeHealth.state !== "ready" ||
     Date.parse(binding.updatedAt) > Date.parse(committedAt) ||
     Date.parse(binding.capabilities.capturedAt) > Date.parse(committedAt) ||
     capability === undefined ||
@@ -1349,7 +1360,7 @@ function expectedRouteAuthorityFor(
     case "none":
       return {
         operationId: "core:message.send",
-        permissionId: "core:message.send_external"
+        permissionId: "core:message.reply_external"
       };
     case "reply":
       return {

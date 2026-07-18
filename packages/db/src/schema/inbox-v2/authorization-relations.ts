@@ -8396,6 +8396,67 @@ begin
      and dispatch_change.stream_commit_id = new.stream_commit_id
      and dispatch_change.mutation_id = new.mutation_id
      and dispatch_change.entity_type_id = 'core:outbound-dispatch'
+     and not (
+       v_command.command_type_id = 'core:source.dispatch.reroute'
+       and dispatch_change.resulting_revision = 2
+       and dispatch_change.state_kind = 'upsert'
+       and dispatch_change.state_schema_id =
+          'core:inbox-v2.outbound-dispatch'
+       and dispatch_change.state_schema_version = 'v1'
+       and dispatch_change.payload_reference->>'tenantId' =
+          dispatch_change.tenant_id
+       and dispatch_change.payload_reference->>'recordId' =
+          dispatch_change.entity_id
+       and dispatch_change.payload_reference->>'schemaId' =
+          'core:inbox-v2.outbound-dispatch'
+       and dispatch_change.payload_reference->>'schemaVersion' = 'v1'
+       and dispatch_change.state_hash =
+          dispatch_change.payload_reference->>'digest'
+       and dispatch_change.domain_commit_reference->>'tenantId' =
+          dispatch_change.tenant_id
+       and dispatch_change.domain_commit_reference->>'recordId' =
+          dispatch_change.entity_id
+       and dispatch_change.domain_commit_reference->>'schemaId' =
+          'core:inbox-v2.outbound-dispatch-reroute-commit'
+       and dispatch_change.domain_commit_reference->>'schemaVersion' = 'v1'
+       and dispatch_change.domain_commit_reference =
+          v_audit.evidence_reference
+       and dispatch_row.id is not null
+       and dispatch_row.state = 'cancelled'
+       and dispatch_row.attempt_count = 0
+       and dispatch_row.active_attempt_id is null
+       and dispatch_row.last_attempt_id is null
+       and dispatch_row.retry_authorization_decision_id is null
+       and dispatch_row.revision = 2
+       and dispatch_row.updated_at = new.committed_at
+       and not exists (
+         select 1
+           from public.inbox_v2_outbound_dispatch_attempts attempt_row
+          where attempt_row.tenant_id = dispatch_change.tenant_id
+            and attempt_row.dispatch_id = dispatch_change.entity_id
+       )
+       and exists (
+         select 1
+           from public.inbox_v2_outbound_routes reroute_route
+           join public.inbox_v2_messages reroute_message
+             on reroute_message.tenant_id = reroute_route.tenant_id
+            and reroute_message.origin_outbound_route_id = reroute_route.id
+            and reroute_message.last_changed_stream_position =
+              dispatch_change.stream_position
+            and reroute_message.created_at = new.committed_at
+          where reroute_route.tenant_id = dispatch_change.tenant_id
+            and reroute_route.selection_intent_kind = 'explicit_reroute'
+            and reroute_route.selection_intent_snapshot #>>
+                '{originalDispatch,tenantId}' = dispatch_change.tenant_id
+            and reroute_route.selection_intent_snapshot #>>
+                '{originalDispatch,id}' = dispatch_change.entity_id
+            and reroute_route.selection_intent_snapshot ->>
+                'expectedOriginalDispatchRevision' = '1'
+            and reroute_route.selection_intent_snapshot #>>
+                '{originalRoute,id}' = dispatch_row.route_id
+            and dispatch_change.state_reason_id is null
+       )
+     )
      and (
        dispatch_change.resulting_revision <> 1
        or dispatch_change.state_kind <> 'upsert'
@@ -8625,8 +8686,11 @@ begin
           'core:inbox-v2.message-creation-commit'
        or message_change.domain_commit_reference->>'schemaVersion' is distinct
           from 'v1'
-       or v_audit.evidence_reference is distinct from
-          message_change.domain_commit_reference
+       or (
+         v_command.command_type_id <> 'core:source.dispatch.reroute'
+         and v_audit.evidence_reference is distinct from
+            message_change.domain_commit_reference
+       )
        or message_change.audience not in (
          'conversation_external', 'internal_participants'
        )
@@ -8959,7 +9023,11 @@ begin
        ) <> 1
      );
 
-  if v_command.command_type_id in ('core:message.send', 'core:message.receive')
+  if v_command.command_type_id in (
+    'core:message.send',
+    'core:message.receive',
+    'core:source.dispatch.reroute'
+  )
   then
     select count(*)::integer into v_message_change_count
       from public.inbox_v2_tenant_stream_changes message_change
@@ -9000,7 +9068,10 @@ begin
          )
        )
        or (
-         v_command.command_type_id = 'core:message.send'
+         v_command.command_type_id in (
+           'core:message.send',
+           'core:source.dispatch.reroute'
+         )
          and (
            v_source_change_count <> 0
            or v_source_materialization_count <> 0
@@ -9299,7 +9370,28 @@ begin
        )
        or (
          message_row.origin_kind = 'hulee_external'
-         and command_row.command_type_id = 'core:message.send'
+         and (
+           (
+             command_row.command_type_id = 'core:message.send'
+             and exists (
+               select 1
+                 from public.inbox_v2_outbound_routes route_row
+                where route_row.tenant_id = message_row.tenant_id
+                  and route_row.id = message_row.origin_outbound_route_id
+                  and route_row.selection_intent_kind <> 'explicit_reroute'
+             )
+           )
+           or (
+             command_row.command_type_id = 'core:source.dispatch.reroute'
+             and exists (
+               select 1
+                 from public.inbox_v2_outbound_routes route_row
+                where route_row.tenant_id = message_row.tenant_id
+                  and route_row.id = message_row.origin_outbound_route_id
+                  and route_row.selection_intent_kind = 'explicit_reroute'
+             )
+           )
+         )
          and (
            select count(*)
              from public.inbox_v2_atomic_outbound_dispatch_materializations
@@ -9441,7 +9533,213 @@ begin
      and command_row.id = mutation_row.command_record_id
      and command_row.mutation_id = mutation_row.mutation_id
      and command_row.state = 'completed'
-     and command_row.command_type_id = 'core:message.send'
+     and (
+       (
+         command_row.command_type_id = 'core:message.send'
+         and route_row.selection_intent_kind <> 'explicit_reroute'
+       )
+       or (
+         command_row.command_type_id = 'core:source.dispatch.reroute'
+         and route_row.selection_intent_kind = 'explicit_reroute'
+         and (
+           select count(*)
+             from jsonb_array_elements(
+               command_row.authorization_decision_refs
+             ) decision_ref
+             join public.inbox_v2_outbound_routes original_route
+               on original_route.tenant_id = route_row.tenant_id
+              and original_route.id =
+                route_row.selection_intent_snapshot #>>
+                  '{originalRoute,id}'
+            where decision_ref->>'id' =
+                    command_row.authorization_decision_id
+              and decision_ref->>'authorizationEpoch' =
+                    command_row.authorization_epoch
+              and decision_ref->>'permissionId' =
+                    'core:source.dispatch.reroute'
+              and decision_ref->>'resourceScopeId' =
+                    'core:source-account'
+              and decision_ref->>'outcome' = 'allowed'
+              and decision_ref #>> '{resource,tenantId}' =
+                    route_row.tenant_id
+              and decision_ref #>> '{resource,entityTypeId}' =
+                    'core:source-account'
+              and decision_ref #>> '{resource,entityId}' =
+                    original_route.source_account_id
+         ) = 1
+         and route_row.selection_intent_snapshot #>>
+               '{originalRoute,tenantId}' = route_row.tenant_id
+         and route_row.selection_intent_snapshot #>>
+               '{originalDispatch,tenantId}' = route_row.tenant_id
+         and route_row.selection_intent_snapshot ->>
+               'expectedOriginalDispatchRevision' = '1'
+         and route_row.selection_reason = 'explicit_reroute'
+         and route_row.selection_intent_snapshot #>>
+               '{originalRoute,id}' <> route_row.id
+         and route_row.selection_intent_snapshot #>>
+               '{originalDispatch,id}' <> dispatch_row.id
+         and (
+           select count(*)
+             from public.inbox_v2_outbound_routes original_route
+             join public.inbox_v2_outbound_dispatches original_dispatch
+               on original_dispatch.tenant_id = original_route.tenant_id
+              and original_dispatch.route_id = original_route.id
+              and original_dispatch.id =
+                route_row.selection_intent_snapshot #>>
+                  '{originalDispatch,id}'
+             join public.inbox_v2_tenant_stream_changes original_change
+               on original_change.tenant_id = stream_row.tenant_id
+              and original_change.stream_commit_id = stream_row.id
+              and original_change.mutation_id = stream_row.mutation_id
+              and original_change.stream_position = stream_row.position
+              and original_change.entity_type_id =
+                'core:outbound-dispatch'
+              and original_change.entity_id = original_dispatch.id
+              and original_change.resulting_revision =
+                original_dispatch.revision
+              and original_change.state_kind = 'upsert'
+              and original_change.state_schema_id =
+                'core:inbox-v2.outbound-dispatch'
+              and original_change.state_schema_version = 'v1'
+              and original_change.state_reason_id is null
+              and original_change.state_hash =
+                original_change.payload_reference->>'digest'
+              and original_change.payload_reference->>'tenantId' =
+                original_change.tenant_id
+              and original_change.payload_reference->>'recordId' =
+                original_dispatch.id
+              and original_change.payload_reference->>'schemaId' =
+                'core:inbox-v2.outbound-dispatch'
+              and original_change.payload_reference->>'schemaVersion' = 'v1'
+              and original_change.domain_commit_reference->>'tenantId' =
+                original_change.tenant_id
+              and original_change.domain_commit_reference->>'recordId' =
+                original_dispatch.id
+              and original_change.domain_commit_reference->>'schemaId' =
+                'core:inbox-v2.outbound-dispatch-reroute-commit'
+              and original_change.domain_commit_reference->>'schemaVersion' =
+                'v1'
+            where original_route.tenant_id = route_row.tenant_id
+              and original_route.id =
+                route_row.selection_intent_snapshot #>>
+                  '{originalRoute,id}'
+              and original_route.conversation_id = route_row.conversation_id
+              and original_route.external_thread_id =
+                route_row.external_thread_id
+              and original_route.source_thread_binding_id <>
+                route_row.source_thread_binding_id
+              and original_dispatch.message_id <> dispatch_row.message_id
+              and original_dispatch.state = 'cancelled'
+              and original_dispatch.attempt_count = 0
+              and original_dispatch.active_attempt_id is null
+              and original_dispatch.last_attempt_id is null
+              and original_dispatch.retry_authorization_decision_id is null
+              and original_dispatch.revision = 2
+              and original_dispatch.updated_at = stream_row.committed_at
+              and original_dispatch.created_at <= original_dispatch.updated_at
+              and not exists (
+                select 1
+                  from public.inbox_v2_outbound_dispatch_attempts
+                    original_attempt
+                 where original_attempt.tenant_id = original_dispatch.tenant_id
+                   and original_attempt.dispatch_id = original_dispatch.id
+              )
+              and (
+                select count(*)
+                  from public.inbox_v2_domain_events original_event
+                  join public.inbox_v2_outbox_intents projection_intent
+                    on projection_intent.tenant_id = original_event.tenant_id
+                   and projection_intent.event_id = original_event.id
+                   and projection_intent.stream_commit_id = stream_row.id
+                   and projection_intent.mutation_id = stream_row.mutation_id
+                   and projection_intent.effect_class = 'projection'
+                   and projection_intent.type_id = 'core:projection.update'
+                   and jsonb_array_length(projection_intent.change_ids) = 1
+                   and projection_intent.change_ids ? original_change.id
+                 where original_event.tenant_id = original_change.tenant_id
+                   and original_event.stream_commit_id = stream_row.id
+                   and original_event.mutation_id = stream_row.mutation_id
+                   and original_event.type_id =
+                     'core:outbound-dispatch.changed'
+                   and original_event.payload_schema_id =
+                     'core:inbox-v2.outbound-dispatch-reroute-commit'
+                   and original_event.payload_schema_version = 'v1'
+                   and original_event.payload_reference =
+                     original_change.domain_commit_reference
+                   and jsonb_array_length(original_event.change_ids) = 1
+                   and original_event.change_ids ? original_change.id
+                   and original_event.subjects @> jsonb_build_array(
+                     jsonb_build_object(
+                       'tenantId', original_dispatch.tenant_id,
+                       'entityTypeId', 'core:outbound-dispatch',
+                       'entityId', original_dispatch.id
+                     )
+                   )
+                   and original_event.occurred_at = stream_row.committed_at
+                   and original_event.recorded_at = stream_row.committed_at
+              ) = 1
+              and (
+                select count(*)
+                  from public.inbox_v2_outbox_intents original_intent
+                  join public.inbox_v2_outbox_work_items original_work
+                    on original_work.tenant_id = original_intent.tenant_id
+                   and original_work.intent_id = original_intent.id
+                   and original_work.state in ('pending', 'leased')
+                 where original_intent.tenant_id = original_dispatch.tenant_id
+                   and original_intent.effect_class = 'provider_io'
+                   and original_intent.type_id = 'core:provider.dispatch'
+                   and original_intent.payload_reference->>'tenantId' =
+                     original_dispatch.tenant_id
+                   and original_intent.payload_reference->>'recordId' =
+                     original_dispatch.id
+                   and original_intent.payload_reference->>'schemaId' =
+                     'core:inbox-v2.outbound-dispatch'
+                   and original_intent.payload_reference->>'schemaVersion' =
+                     'v1'
+              ) = 1
+              and not exists (
+                select 1
+                  from public.inbox_v2_outbox_intents forbidden_provider_intent
+                 where forbidden_provider_intent.tenant_id =
+                         original_change.tenant_id
+                   and forbidden_provider_intent.stream_commit_id =
+                         original_change.stream_commit_id
+                   and forbidden_provider_intent.mutation_id =
+                         original_change.mutation_id
+                   and forbidden_provider_intent.effect_class = 'provider_io'
+                   and forbidden_provider_intent.change_ids ?
+                         original_change.id
+              )
+              and (
+                select count(*)
+                  from public.inbox_v2_auth_audit_events reroute_audit
+                 where reroute_audit.tenant_id = original_change.tenant_id
+                   and reroute_audit.id = mutation_row.audit_event_id
+                   and reroute_audit.mutation_id = stream_row.mutation_id
+                   and reroute_audit.action_id =
+                     'core:source.dispatch.reroute'
+                   and reroute_audit.target_type_id =
+                     'core:outbound-dispatch'
+                   and reroute_audit.reason_code_id =
+                     route_row.selection_intent_snapshot ->> 'reasonId'
+                   and reroute_audit.evidence_reference =
+                     original_change.domain_commit_reference
+                   and reroute_audit.matched_permission_ids @>
+                     array['core:source.dispatch.reroute']::text[]
+              ) = 1
+         ) = 1
+         and (
+           select count(*)
+             from public.inbox_v2_tenant_stream_changes sibling_dispatch_change
+            where sibling_dispatch_change.tenant_id = stream_row.tenant_id
+              and sibling_dispatch_change.stream_commit_id = stream_row.id
+              and sibling_dispatch_change.mutation_id = stream_row.mutation_id
+              and sibling_dispatch_change.stream_position = stream_row.position
+              and sibling_dispatch_change.entity_type_id =
+                'core:outbound-dispatch'
+         ) = 2
+       )
+     )
     join public.inbox_v2_messages message_row
       on message_row.tenant_id = dispatch_row.tenant_id
      and message_row.id = dispatch_row.message_id

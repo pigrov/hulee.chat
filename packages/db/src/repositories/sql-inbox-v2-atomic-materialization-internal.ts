@@ -1,4 +1,8 @@
-import type { InboxV2PayloadReference } from "@hulee/contracts";
+import {
+  inboxV2OutboundDispatchRerouteCommitSchema,
+  type InboxV2OutboundDispatchRerouteCommit,
+  type InboxV2PayloadReference
+} from "@hulee/contracts";
 
 import type { RawSqlExecutor } from "./sql-outbox-repository";
 
@@ -14,6 +18,10 @@ const atomicSealReceiptTokens = new WeakSet<object>();
 const atomicOutboundRouteProofs = new WeakMap<
   object,
   readonly InboxV2AtomicOutboundRouteProof[]
+>();
+const atomicOutboundRerouteProofs = new WeakMap<
+  object,
+  readonly InboxV2OutboundDispatchRerouteCommit[]
 >();
 
 declare const inboxV2AtomicMaterializationSealReceiptBrand: unique symbol;
@@ -42,6 +50,7 @@ export type InboxV2AtomicMessageCreationSealManifest = Readonly<{
   domainCommitReference: InboxV2PayloadReference;
   event: InboxV2AtomicStreamEventManifest;
   outboundDispatch: InboxV2AtomicOutboundDispatchSealManifest | null;
+  outboundReroute: InboxV2AtomicOutboundRerouteSealManifest | null;
   sourceOccurrence: InboxV2AtomicSourceOccurrenceSealManifest | null;
 }>;
 
@@ -95,6 +104,34 @@ export type InboxV2AtomicOutboundDispatchSealManifest = Readonly<{
   stateSchemaVersion: string;
   stateHash: string;
   payloadReference: InboxV2PayloadReference;
+}>;
+
+export type InboxV2AtomicOutboundRerouteSealManifest = Readonly<{
+  originalRouteId: string;
+  expectedOriginalDispatchRevision: string;
+  originalDispatch: InboxV2AtomicOutboundDispatchSealManifest;
+  originalOutboxIntentId: string;
+  replacement: Readonly<{
+    messageId: string;
+    routeId: string;
+    dispatchId: string;
+    outboxIntentId: string;
+  }>;
+  reasonId: string;
+  changedAt: string;
+  domainCommitReference: InboxV2PayloadReference;
+  event: InboxV2AtomicStreamEventManifest;
+}>;
+
+export type InboxV2AtomicOutboundRerouteExpectation = Readonly<{
+  tenantId: string;
+  originalRouteId: string;
+  originalDispatchId: string;
+  expectedOriginalDispatchRevision: string;
+  replacementMessageId: string;
+  replacementRouteId: string;
+  replacementDispatchId: string;
+  reasonId: string;
 }>;
 
 /**
@@ -237,6 +274,76 @@ export function revokeInboxV2AtomicOutboundRouteProofs(
 }
 
 /**
+ * Registers the exact pre-I/O cancellation and replacement set persisted by
+ * the explicit-reroute transport seam. The proof is token-bound, one-shot and
+ * intentionally package-internal.
+ */
+export function registerInboxV2AtomicOutboundRerouteProof(
+  atomicMaterializationToken: object,
+  commit: InboxV2OutboundDispatchRerouteCommit
+): void {
+  assertObjectCapability(
+    atomicMaterializationToken,
+    "Inbox V2 atomic materialization token"
+  );
+  const frozenCommit = recursivelyFrozenValue(
+    inboxV2OutboundDispatchRerouteCommitSchema.parse(commit)
+  );
+  atomicOutboundRerouteProofs.set(
+    atomicMaterializationToken,
+    Object.freeze([
+      ...(atomicOutboundRerouteProofs.get(atomicMaterializationToken) ?? []),
+      frozenCommit
+    ])
+  );
+}
+
+/**
+ * Consumes the complete reroute-proof set once. Normal Message sends require
+ * none; an explicit reroute requires exactly one proof matching both the
+ * immutable original fence and the complete replacement identity.
+ */
+export function consumeInboxV2AtomicOutboundRerouteProof(
+  atomicMaterializationToken: object,
+  expected: InboxV2AtomicOutboundRerouteExpectation | null
+): InboxV2OutboundDispatchRerouteCommit | null {
+  assertObjectCapability(
+    atomicMaterializationToken,
+    "Inbox V2 atomic materialization token"
+  );
+  const proofs =
+    atomicOutboundRerouteProofs.get(atomicMaterializationToken) ?? [];
+  atomicOutboundRerouteProofs.delete(atomicMaterializationToken);
+  if (expected === null) {
+    if (proofs.length === 0) return null;
+    throw new TypeError(
+      "Inbox V2 non-reroute Message materialization cannot consume an outbound reroute proof."
+    );
+  }
+  const proof = proofs[0];
+  if (
+    proofs.length !== 1 ||
+    proof === undefined ||
+    !atomicOutboundRerouteProofMatches(proof, expected)
+  ) {
+    throw new TypeError(
+      "Inbox V2 explicit-reroute Message materialization requires exactly one matching live outbound reroute proof."
+    );
+  }
+  return proof;
+}
+
+export function revokeInboxV2AtomicOutboundRerouteProofs(
+  atomicMaterializationToken: object
+): void {
+  assertObjectCapability(
+    atomicMaterializationToken,
+    "Inbox V2 atomic materialization token"
+  );
+  atomicOutboundRerouteProofs.delete(atomicMaterializationToken);
+}
+
+/**
  * Consumes an exact-token receipt once. Deleting the WeakMap entry before the
  * coordinator publishes its stream closure makes replay fail closed even when
  * a caller retains the otherwise-empty frozen object.
@@ -336,6 +443,32 @@ function atomicOutboundRouteProofMatches(
     actual.routePolicyId === expected.routePolicyId &&
     actual.routePolicyRevision === expected.routePolicyRevision &&
     actual.routeDigest === expected.routeDigest
+  );
+}
+
+function atomicOutboundRerouteProofMatches(
+  actual: InboxV2OutboundDispatchRerouteCommit,
+  expected: InboxV2AtomicOutboundRerouteExpectation
+): boolean {
+  return (
+    actual.tenantId === expected.tenantId &&
+    actual.original.dispatchBefore.route.tenantId === expected.tenantId &&
+    String(actual.original.dispatchBefore.route.id) ===
+      String(expected.originalRouteId) &&
+    String(actual.original.dispatchBefore.id) ===
+      String(expected.originalDispatchId) &&
+    String(actual.original.dispatchBefore.revision) ===
+      String(expected.expectedOriginalDispatchRevision) &&
+    actual.replacement.message.tenantId === expected.tenantId &&
+    String(actual.replacement.message.id) ===
+      String(expected.replacementMessageId) &&
+    actual.replacement.route.tenantId === expected.tenantId &&
+    String(actual.replacement.route.id) ===
+      String(expected.replacementRouteId) &&
+    actual.replacement.dispatch.tenantId === expected.tenantId &&
+    String(actual.replacement.dispatch.id) ===
+      String(expected.replacementDispatchId) &&
+    String(actual.reasonId) === String(expected.reasonId)
   );
 }
 

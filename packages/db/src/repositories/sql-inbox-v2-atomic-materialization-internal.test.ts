@@ -1,9 +1,16 @@
-import { inboxV2OutboundRouteSchema } from "@hulee/contracts";
+import {
+  inboxV2OutboundDispatchRerouteCommitSchema,
+  inboxV2OutboundRouteSchema
+} from "@hulee/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
   consumeInboxV2AtomicOutboundRouteProof,
+  consumeInboxV2AtomicOutboundRerouteProof,
   registerInboxV2AtomicOutboundRouteProof,
+  registerInboxV2AtomicOutboundRerouteProof,
+  revokeInboxV2AtomicOutboundRerouteProofs,
+  type InboxV2AtomicOutboundRerouteExpectation,
   type InboxV2AtomicOutboundRouteProof
 } from "./sql-inbox-v2-atomic-materialization-internal";
 import { computeInboxV2OutboundRouteDigest } from "./sql-inbox-v2-outbound-transport-repository";
@@ -91,6 +98,70 @@ describe("Inbox V2 atomic materialization route proofs", () => {
       /exactly one matching live outbound route proof/iu
     );
   });
+
+  it("binds an explicit-reroute proof to the original CAS fence and complete replacement identity", () => {
+    const token = {};
+    const commit = rerouteCommit("matching");
+    const expected = rerouteExpectation(commit);
+
+    registerInboxV2AtomicOutboundRerouteProof(token, commit);
+    expect(consumeInboxV2AtomicOutboundRerouteProof(token, expected)).toEqual(
+      commit
+    );
+    expect(() =>
+      consumeInboxV2AtomicOutboundRerouteProof(token, expected)
+    ).toThrow(/exactly one matching live outbound reroute proof/iu);
+  });
+
+  it("consumes a mismatched reroute proof fail-closed and keeps it token-local", () => {
+    const tokenA = {};
+    const tokenB = {};
+    const commit = rerouteCommit("mismatch");
+    const expected = rerouteExpectation(commit);
+
+    registerInboxV2AtomicOutboundRerouteProof(tokenA, commit);
+    expect(() =>
+      consumeInboxV2AtomicOutboundRerouteProof(tokenB, expected)
+    ).toThrow(/exactly one matching live outbound reroute proof/iu);
+    expect(() =>
+      consumeInboxV2AtomicOutboundRerouteProof(tokenA, {
+        ...expected,
+        expectedOriginalDispatchRevision: "2"
+      })
+    ).toThrow(/exactly one matching live outbound reroute proof/iu);
+    expect(() =>
+      consumeInboxV2AtomicOutboundRerouteProof(tokenA, expected)
+    ).toThrow(/exactly one matching live outbound reroute proof/iu);
+  });
+
+  it("rejects reroute proofs on normal sends and revokes abandoned proof sets", () => {
+    const normalToken = {};
+    const abandonedToken = {};
+    const commit = rerouteCommit("normal");
+
+    registerInboxV2AtomicOutboundRerouteProof(normalToken, commit);
+    expect(() =>
+      consumeInboxV2AtomicOutboundRerouteProof(normalToken, null)
+    ).toThrow(/non-reroute Message materialization/iu);
+
+    registerInboxV2AtomicOutboundRerouteProof(abandonedToken, commit);
+    revokeInboxV2AtomicOutboundRerouteProofs(abandonedToken);
+    expect(
+      consumeInboxV2AtomicOutboundRerouteProof(abandonedToken, null)
+    ).toBeNull();
+  });
+
+  it("rejects duplicate reroute proofs for one Message seal", () => {
+    const token = {};
+    const commit = rerouteCommit("duplicate");
+    const expected = rerouteExpectation(commit);
+
+    registerInboxV2AtomicOutboundRerouteProof(token, commit);
+    registerInboxV2AtomicOutboundRerouteProof(token, commit);
+    expect(() =>
+      consumeInboxV2AtomicOutboundRerouteProof(token, expected)
+    ).toThrow(/exactly one matching live outbound reroute proof/iu);
+  });
 });
 
 function routeProof(
@@ -104,5 +175,81 @@ function routeProof(
     routePolicyId: route.routePolicy.id,
     routePolicyRevision: route.routePolicyRevision,
     routeDigest: computeInboxV2OutboundRouteDigest(route)
+  };
+}
+
+function rerouteCommit(suffix: string) {
+  const tenantId = `tenant:atomic-reroute-${suffix}`;
+  const changedAt = "2026-07-18T12:01:00.000Z";
+  const dispatchBefore = {
+    tenantId,
+    id: `outbound_dispatch:atomic-reroute-original-${suffix}`,
+    message: {
+      tenantId,
+      kind: "message" as const,
+      id: `message:atomic-reroute-original-${suffix}`
+    },
+    route: {
+      tenantId,
+      kind: "outbound_route" as const,
+      id: `outbound_route:atomic-reroute-original-${suffix}`
+    },
+    multiSendOperation: null,
+    state: "queued" as const,
+    attemptCount: 0,
+    activeAttempt: null,
+    lastAttempt: null,
+    retryAuthorization: null,
+    revision: "1",
+    createdAt: "2026-07-18T12:00:00.000Z",
+    updatedAt: "2026-07-18T12:00:00.000Z"
+  };
+  return inboxV2OutboundDispatchRerouteCommitSchema.parse({
+    tenantId,
+    original: {
+      dispatchBefore,
+      dispatchAfter: {
+        ...dispatchBefore,
+        state: "cancelled",
+        revision: "2",
+        updatedAt: changedAt
+      },
+      outboxIntentId: `outbox-intent:atomic-reroute-original-${suffix}`
+    },
+    replacement: {
+      message: {
+        tenantId,
+        kind: "message",
+        id: `message:atomic-reroute-replacement-${suffix}`
+      },
+      route: {
+        tenantId,
+        kind: "outbound_route",
+        id: `outbound_route:atomic-reroute-replacement-${suffix}`
+      },
+      dispatch: {
+        tenantId,
+        kind: "outbound_dispatch",
+        id: `outbound_dispatch:atomic-reroute-replacement-${suffix}`
+      },
+      outboxIntentId: `outbox-intent:atomic-reroute-replacement-${suffix}`
+    },
+    reasonId: "core:operator-reroute",
+    changedAt
+  });
+}
+
+function rerouteExpectation(
+  commit: ReturnType<typeof rerouteCommit>
+): InboxV2AtomicOutboundRerouteExpectation {
+  return {
+    tenantId: commit.tenantId,
+    originalRouteId: commit.original.dispatchBefore.route.id,
+    originalDispatchId: commit.original.dispatchBefore.id,
+    expectedOriginalDispatchRevision: commit.original.dispatchBefore.revision,
+    replacementMessageId: commit.replacement.message.id,
+    replacementRouteId: commit.replacement.route.id,
+    replacementDispatchId: commit.replacement.dispatch.id,
+    reasonId: commit.reasonId
   };
 }

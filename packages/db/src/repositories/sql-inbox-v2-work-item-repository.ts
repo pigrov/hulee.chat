@@ -88,6 +88,13 @@ const SERVICING_TEAM_RACE_CONSTRAINTS = new Set([
   "inbox_v2_work_item_servicing_team_active_unique"
 ]);
 
+class InboxV2WorkItemCreationRollback extends Error {
+  constructor(readonly result: PersistInboxV2WorkItemCreationResult<unknown>) {
+    super("Roll back the Conversation Work head intake CAS.");
+    this.name = "InboxV2WorkItemCreationRollback";
+  }
+}
+
 export type InboxV2WorkItemAssignmentHistoryPage = ReturnType<
   typeof inboxV2WorkItemAssignmentHistoryPageSchema.parse
 >;
@@ -333,6 +340,18 @@ type EmployeeFenceVersionRow = {
 };
 type LockedEmployeeFenceRow = EmployeeFenceHeadRow & {
   employee_id: unknown;
+};
+type ConversationWorkHeadRow = {
+  tenant_id: unknown;
+  id: unknown;
+  conversation_id: unknown;
+  work_item_count: unknown;
+  current_outcome: unknown;
+  intake_decision_high_water: unknown;
+  pending_materialization_ordinal: unknown;
+  revision: unknown;
+  created_at: unknown;
+  updated_at: unknown;
 };
 type WorkItemRow = {
   tenant_id: unknown;
@@ -999,182 +1018,305 @@ async function persistCreationCommit<TResult>(
   }) => Promise<TResult>,
   retrySafe: boolean
 ): Promise<PersistInboxV2WorkItemCreationResult<TResult>> {
-  return runWorkItemTransaction(
-    transactionExecutor,
-    async (transaction) => {
-      const conversationLock = await transaction.execute<IdRow>(
-        buildLockInboxV2WorkItemConversationSql({
-          tenantId: commit.tenantId,
-          conversationId: commit.createdWorkItem.conversation.id
-        })
-      );
-      assertAtMostOneRow(conversationLock, "WorkItem Conversation lock");
-      if (conversationLock.rows.length === 0) {
-        return { kind: "conversation_not_found" } as const;
-      }
-
-      let currentSlot = await loadWorkItemSlot(transaction, {
-        tenantId: commit.tenantId,
-        conversationId: commit.createdWorkItem.conversation.id,
-        lock: true
-      });
-
-      const existing = await loadWorkItem(transaction, {
-        tenantId: commit.tenantId,
-        workItemId: commit.createdWorkItem.id,
-        lock: false
-      });
-      if (existing !== null) {
-        if (currentSlot === null) {
-          return {
-            kind: "conflict",
-            code: "revision.conflict",
-            currentWorkItem: existing,
-            currentSlot: null
-          } as const;
-        }
-        const replay = await isCreationCommitReplay(
-          transaction,
-          commit,
-          existing
+  try {
+    return await runWorkItemTransaction(
+      transactionExecutor,
+      async (transaction) => {
+        const conversationId = commit.createdWorkItem.conversation.id;
+        const conversationLock = await transaction.execute<IdRow>(
+          buildLockInboxV2WorkItemConversationSql({
+            tenantId: commit.tenantId,
+            conversationId
+          })
         );
-        return replay
-          ? ({
-              kind: "already_applied",
-              workItem: commit.createdWorkItem,
-              slot: commit.slotAfter
-            } as const)
-          : ({
-              kind: "conflict",
-              code: "work.state_conflict",
-              currentWorkItem: existing,
-              currentSlot
-            } as const);
-      }
-      if (
-        currentSlot === null &&
-        (commit.slotBefore.latestWorkItem !== null ||
-          commit.slotBefore.currentNonTerminalWorkItem !== null)
-      ) {
-        return {
-          kind: "conflict",
-          code: "revision.conflict",
-          currentWorkItem: null,
-          currentSlot: null
-        } as const;
-      }
-      if (currentSlot !== null && !sameValue(currentSlot, commit.slotBefore)) {
-        const currentWorkItem =
-          currentSlot.currentNonTerminalWorkItem === null
-            ? null
-            : await loadWorkItem(transaction, {
-                tenantId: commit.tenantId,
-                workItemId: currentSlot.currentNonTerminalWorkItem.workItem.id,
-                lock: false
-              });
-        return {
-          kind: "conflict",
-          code:
-            currentSlot.currentNonTerminalWorkItem === null
-              ? "revision.conflict"
-              : "work.state_conflict",
-          currentWorkItem,
-          currentSlot
-        } as const;
-      }
+        assertAtMostOneRow(conversationLock, "WorkItem Conversation lock");
+        if (conversationLock.rows.length === 0) {
+          return { kind: "conversation_not_found" } as const;
+        }
 
-      if (commit.previousLatestWorkItem !== null) {
-        const previous = await loadWorkItem(transaction, {
+        const workHeadResult =
+          await transaction.execute<ConversationWorkHeadRow>(
+            buildLockInboxV2ConversationWorkHeadSql({
+              tenantId: commit.tenantId,
+              conversationId
+            })
+          );
+        assertAtMostOneRow(workHeadResult, "Conversation Work head lock");
+        const workHead = workHeadResult.rows[0];
+        if (workHead === undefined) {
+          throw invariantError(
+            "Conversation Work head is missing after Conversation bootstrap."
+          );
+        }
+
+        let currentSlot = await loadWorkItemSlot(transaction, {
           tenantId: commit.tenantId,
-          workItemId: commit.previousLatestWorkItem.id,
+          conversationId,
           lock: false
         });
+
+        const existing = await loadWorkItem(transaction, {
+          tenantId: commit.tenantId,
+          workItemId: commit.createdWorkItem.id,
+          lock: false
+        });
+        if (existing !== null) {
+          if (currentSlot === null) {
+            return {
+              kind: "conflict",
+              code: "revision.conflict",
+              currentWorkItem: existing,
+              currentSlot: null
+            } as const;
+          }
+          const replay = await isCreationCommitReplay(
+            transaction,
+            commit,
+            existing
+          );
+          return replay
+            ? ({
+                kind: "already_applied",
+                workItem: commit.createdWorkItem,
+                slot: commit.slotAfter
+              } as const)
+            : ({
+                kind: "conflict",
+                code: "work.state_conflict",
+                currentWorkItem: existing,
+                currentSlot
+              } as const);
+        }
         if (
-          previous === null ||
-          !sameValue(previous, commit.previousLatestWorkItem)
+          currentSlot === null &&
+          (commit.slotBefore.latestWorkItem !== null ||
+            commit.slotBefore.currentNonTerminalWorkItem !== null)
         ) {
           return {
             kind: "conflict",
             code: "revision.conflict",
-            currentWorkItem: previous,
+            currentWorkItem: null,
+            currentSlot: null
+          } as const;
+        }
+        if (
+          String(workHead.tenant_id) !== commit.tenantId ||
+          String(workHead.conversation_id) !== conversationId ||
+          !["pending_intake", "no_work_item", "create_work_item"].includes(
+            String(workHead.current_outcome)
+          )
+        ) {
+          return {
+            kind: "conflict",
+            code: "revision.conflict",
+            currentWorkItem: null,
             currentSlot
           } as const;
         }
-      }
+        const workItemCount = parseDatabaseBigint(
+          workHead.work_item_count,
+          "Conversation Work head WorkItem count"
+        );
+        const intakeDecisionHighWater = parseDatabaseBigint(
+          workHead.intake_decision_high_water,
+          "Conversation Work head intake high-water"
+        );
+        const workHeadRevision = parseDatabaseBigint(
+          workHead.revision,
+          "Conversation Work head revision"
+        );
+        const pendingMaterializationOrdinal =
+          workHead.pending_materialization_ordinal === null
+            ? null
+            : parseDatabaseBigint(
+                workHead.pending_materialization_ordinal,
+                "Conversation Work head pending materialization ordinal"
+              );
+        if (
+          workItemCount !==
+            (BigInt(commit.createdWorkItem.ordinal) - 1n).toString() ||
+          BigInt(intakeDecisionHighWater) < BigInt(workItemCount) ||
+          pendingMaterializationOrdinal !== null ||
+          BigInt(workHeadRevision) !==
+            1n + BigInt(intakeDecisionHighWater) + BigInt(workItemCount)
+        ) {
+          return {
+            kind: "conflict",
+            code: "revision.conflict",
+            currentWorkItem: null,
+            currentSlot
+          } as const;
+        }
+        if (
+          currentSlot !== null &&
+          !sameValue(currentSlot, commit.slotBefore)
+        ) {
+          const currentWorkItem =
+            currentSlot.currentNonTerminalWorkItem === null
+              ? null
+              : await loadWorkItem(transaction, {
+                  tenantId: commit.tenantId,
+                  workItemId:
+                    currentSlot.currentNonTerminalWorkItem.workItem.id,
+                  lock: false
+                });
+          return {
+            kind: "conflict",
+            code:
+              currentSlot.currentNonTerminalWorkItem === null
+                ? "revision.conflict"
+                : "work.state_conflict",
+            currentWorkItem,
+            currentSlot
+          } as const;
+        }
 
-      const queueResult = await persistQueueSnapshotInTransaction(
-        transaction,
-        commit.queueSnapshot
-      );
-      if (queueResult.kind === "queue_not_found") {
-        return { kind: "queue_not_found" } as const;
-      }
-      if (
-        queueResult.kind === "revision_conflict" ||
-        queueResult.kind === "identity_conflict"
-      ) {
-        return {
-          kind: "conflict",
-          code: "revision.conflict",
-          currentWorkItem: null,
-          currentSlot
-        } as const;
-      }
+        if (commit.previousLatestWorkItem !== null) {
+          const previous = await loadWorkItem(transaction, {
+            tenantId: commit.tenantId,
+            workItemId: commit.previousLatestWorkItem.id,
+            lock: false
+          });
+          if (
+            previous === null ||
+            !sameValue(previous, commit.previousLatestWorkItem)
+          ) {
+            return {
+              kind: "conflict",
+              code: "revision.conflict",
+              currentWorkItem: previous,
+              currentSlot
+            } as const;
+          }
+        }
 
-      if (currentSlot === null) {
         await expectOneRow(
           transaction,
-          buildInsertInboxV2WorkItemSlotSql(commit.slotBefore),
-          "Conversation WorkItem slot insert"
+          buildAdvanceInboxV2ConversationWorkHeadIntakeSql({
+            tenantId: commit.tenantId,
+            conversationId,
+            expectedWorkItemCount: workItemCount,
+            expectedIntakeDecisionHighWater: intakeDecisionHighWater,
+            expectedHeadRevision: workHeadRevision,
+            resultingIntakeDecisionHighWater: (
+              BigInt(intakeDecisionHighWater) + 1n
+            ).toString(),
+            outcome: "create_work_item",
+            decidedAt: commit.intakeDecision.decidedAt
+          }),
+          "Conversation Work head intake advance"
         );
-        currentSlot = commit.slotBefore;
-      }
 
-      await expectOneRow(
-        transaction,
-        buildInsertInboxV2WorkItemSql(commit.createdWorkItem, {
-          slaCycle: 1n,
-          slaSnapshotRevision: 1n
-        }),
-        "WorkItem insert"
-      );
-      await expectOneRow(
-        transaction,
-        buildInsertInboxV2WorkItemSlaSnapshotSql({
+        currentSlot = await loadWorkItemSlot(transaction, {
+          tenantId: commit.tenantId,
+          conversationId,
+          lock: true
+        });
+        if (
+          (currentSlot === null &&
+            (commit.slotBefore.latestWorkItem !== null ||
+              commit.slotBefore.currentNonTerminalWorkItem !== null)) ||
+          (currentSlot !== null && !sameValue(currentSlot, commit.slotBefore))
+        ) {
+          rollbackCreation<TResult>({
+            kind: "conflict",
+            code:
+              currentSlot?.currentNonTerminalWorkItem === null ||
+              currentSlot?.currentNonTerminalWorkItem === undefined
+                ? "revision.conflict"
+                : "work.state_conflict",
+            currentWorkItem: null,
+            currentSlot
+          });
+        }
+
+        const queueResult = await persistQueueSnapshotInTransaction(
+          transaction,
+          commit.queueSnapshot
+        );
+        if (queueResult.kind === "queue_not_found") {
+          rollbackCreation<TResult>({ kind: "queue_not_found" });
+        }
+        if (
+          queueResult.kind === "revision_conflict" ||
+          queueResult.kind === "identity_conflict"
+        ) {
+          rollbackCreation<TResult>({
+            kind: "conflict",
+            code: "revision.conflict",
+            currentWorkItem: null,
+            currentSlot
+          });
+        }
+
+        if (currentSlot === null) {
+          await expectOneRow(
+            transaction,
+            buildInsertInboxV2WorkItemSlotSql(commit.slotBefore),
+            "Conversation WorkItem slot insert"
+          );
+          currentSlot = commit.slotBefore;
+        }
+
+        await expectOneRow(
+          transaction,
+          buildInsertInboxV2WorkItemSql(commit.createdWorkItem, {
+            slaCycle: 1n,
+            slaSnapshotRevision: 1n
+          }),
+          "WorkItem insert"
+        );
+        await expectOneRow(
+          transaction,
+          buildInsertInboxV2WorkItemSlaSnapshotSql({
+            workItem: commit.createdWorkItem,
+            slaCycle: 1n,
+            revision: 1n,
+            createdAt: commit.occurredAt
+          }),
+          "WorkItem SLA snapshot insert"
+        );
+        await expectOneRow(
+          transaction,
+          buildInsertInboxV2WorkItemCreationDecisionSql(commit),
+          "WorkItem creation decision insert"
+        );
+        await expectOneRow(
+          transaction,
+          buildAdvanceInboxV2WorkItemSlotSql({
+            before: commit.slotBefore,
+            after: commit.slotAfter
+          }),
+          "Conversation WorkItem slot advance"
+        );
+
+        const result = await persist({
+          executor: transaction,
           workItem: commit.createdWorkItem,
-          slaCycle: 1n,
-          revision: 1n,
-          createdAt: commit.occurredAt
-        }),
-        "WorkItem SLA snapshot insert"
-      );
-      await expectOneRow(
-        transaction,
-        buildInsertInboxV2WorkItemCreationDecisionSql(commit),
-        "WorkItem creation decision insert"
-      );
-      await expectOneRow(
-        transaction,
-        buildAdvanceInboxV2WorkItemSlotSql({
-          before: commit.slotBefore,
-          after: commit.slotAfter
-        }),
-        "Conversation WorkItem slot advance"
-      );
+          slot: commit.slotAfter
+        });
+        return {
+          kind: "created",
+          workItem: commit.createdWorkItem,
+          slot: commit.slotAfter,
+          result
+        } as const;
+      },
+      retrySafe ? WORK_ITEM_TRANSACTION_ATTEMPTS : 1
+    );
+  } catch (error) {
+    if (error instanceof InboxV2WorkItemCreationRollback) {
+      return error.result as PersistInboxV2WorkItemCreationResult<TResult>;
+    }
+    throw error;
+  }
+}
 
-      const result = await persist({
-        executor: transaction,
-        workItem: commit.createdWorkItem,
-        slot: commit.slotAfter
-      });
-      return {
-        kind: "created",
-        workItem: commit.createdWorkItem,
-        slot: commit.slotAfter,
-        result
-      } as const;
-    },
-    retrySafe ? WORK_ITEM_TRANSACTION_ATTEMPTS : 1
+function rollbackCreation<TResult>(
+  result: PersistInboxV2WorkItemCreationResult<TResult>
+): never {
+  throw new InboxV2WorkItemCreationRollback(
+    result as PersistInboxV2WorkItemCreationResult<unknown>
   );
 }
 
@@ -2194,6 +2336,52 @@ export function buildLockInboxV2WorkItemConversationSql(input: {
     where tenant_id = ${input.tenantId}
       and id = ${input.conversationId}
     for no key update
+  `;
+}
+
+export function buildLockInboxV2ConversationWorkHeadSql(input: {
+  tenantId: InboxV2TenantId;
+  conversationId: InboxV2ConversationId;
+}): SQL {
+  return sql`
+    select tenant_id, id, conversation_id, work_item_count, current_outcome,
+      intake_decision_high_water, pending_materialization_ordinal, revision,
+      created_at, updated_at
+    from inbox_v2_conversation_work_heads
+    where tenant_id = ${input.tenantId}
+      and conversation_id = ${input.conversationId}
+    for update
+  `;
+}
+
+export function buildAdvanceInboxV2ConversationWorkHeadIntakeSql(input: {
+  tenantId: InboxV2TenantId;
+  conversationId: InboxV2ConversationId;
+  expectedWorkItemCount: string;
+  expectedIntakeDecisionHighWater: string;
+  expectedHeadRevision: string;
+  resultingIntakeDecisionHighWater: string;
+  outcome: "no_work_item" | "create_work_item";
+  decidedAt: string;
+}): SQL {
+  const pendingMaterializationOrdinal =
+    input.outcome === "create_work_item"
+      ? (BigInt(input.expectedWorkItemCount) + 1n).toString()
+      : null;
+  return sql`
+    update inbox_v2_conversation_work_heads
+    set current_outcome = ${input.outcome},
+        intake_decision_high_water = ${input.resultingIntakeDecisionHighWater},
+        pending_materialization_ordinal = ${pendingMaterializationOrdinal},
+        revision = revision + 1,
+        updated_at = greatest(updated_at, ${input.decidedAt})
+    where tenant_id = ${input.tenantId}
+      and conversation_id = ${input.conversationId}
+      and work_item_count = ${input.expectedWorkItemCount}
+      and intake_decision_high_water = ${input.expectedIntakeDecisionHighWater}
+      and pending_materialization_ordinal is null
+      and revision = ${input.expectedHeadRevision}
+    returning id
   `;
 }
 

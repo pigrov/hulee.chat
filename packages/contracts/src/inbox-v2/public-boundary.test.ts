@@ -428,6 +428,12 @@ describe("Inbox V2 public contract boundary", () => {
       publicContracts.inboxV2OutboundDispatchRouteFailureCommitSchema
     ).toBeDefined();
     expect(
+      publicContracts.inboxV2OutboundDispatchRerouteCommitSchema
+    ).toBeDefined();
+    expect(
+      publicContracts.inboxV2OutboundDispatchRerouteCommitEnvelopeSchema
+    ).toBeDefined();
+    expect(
       publicContracts.inboxV2OutboundDispatchArtifactReferenceLinkSchema
     ).toBeDefined();
     expect(

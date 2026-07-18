@@ -712,7 +712,7 @@ export function fixtureRoute() {
     operationId: "core:message.send",
     contentKindId: "core:text",
     authorizationEpoch: "authorization:route-epoch-1",
-    requiredConversationPermissionId: "core:message.send_external",
+    requiredConversationPermissionId: "core:message.reply_external",
     bindingFence,
     adapterContract: fixtureAdapterContract,
     routeDescriptor: {
@@ -733,8 +733,8 @@ export function fixtureRoute() {
     conversationAuthorization: {
       ...decisionBase,
       decisionKind: "conversation_action" as const,
-      requiredPermissionId: "core:message.send_external",
-      matchedPermissionIds: ["core:message.send_external"],
+      requiredPermissionId: "core:message.reply_external",
+      matchedPermissionIds: ["core:message.reply_external"],
       decisionToken: "decision:conversation-1"
     },
     sourceAccountAuthorization: {
