@@ -23,6 +23,17 @@ export type {
   PrepareInboxV2MessageCreationResult,
   SealInboxV2PreparedMessageCreationResult
 } from "./sql-inbox-v2-timeline-message-repository";
+export {
+  INBOX_V2_SYSTEM_EVENT_TIMELINE_COMMAND_TYPE_ID,
+  INBOX_V2_SYSTEM_EVENT_TIMELINE_PERMISSION_ID,
+  prepareInboxV2SystemEventTimelineCreation,
+  sealInboxV2PreparedSystemEventTimelineCreation
+} from "./sql-inbox-v2-timeline-system-event-repository";
+export type {
+  InboxV2PreparedSystemEventTimelineCreationCapability,
+  PrepareInboxV2SystemEventTimelineCreationResult,
+  SealInboxV2PreparedSystemEventTimelineCreationResult
+} from "./sql-inbox-v2-timeline-system-event-repository";
 export * from "./sql-inbox-v2-employee-conversation-state-repository";
 export * from "./sql-inbox-v2-work-item-repository";
 export * from "./sql-inbox-v2-source-processing-runtime-repository";
@@ -44,18 +55,13 @@ export {
   createSqlInboxV2ConversationRepository
 } from "./sql-inbox-v2-conversation-repository";
 export type {
-  AllocateInboxV2TimelineRangeInput,
-  AllocateInboxV2TimelineRangeResult,
   CompareAndSetInboxV2ConversationInput,
   CompareAndSetInboxV2ConversationResult,
   CreateInboxV2ConversationInput,
   CreateInboxV2ConversationResult,
   InboxV2ConversationPersistenceRecord,
   InboxV2ConversationRepository,
-  InboxV2ConversationTransactionExecutor,
-  InboxV2TimelineAllocationItem,
-  InboxV2TimelineRangeAllocation,
-  InboxV2TimelineSequenceAssignment
+  InboxV2ConversationTransactionExecutor
 } from "./sql-inbox-v2-conversation-repository";
 export {
   buildAdvanceClientMergeHeadSql,

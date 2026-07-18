@@ -1,9 +1,15 @@
 import {
+  INBOX_V2_CONVERSATION_SYSTEM_EVENT_PAYLOAD_SCHEMA_ID,
+  INBOX_V2_CONVERSATION_SYSTEM_EVENT_PAYLOAD_SCHEMA_VERSION,
   INBOX_V2_MESSAGE_SCHEMA_ID,
   INBOX_V2_MESSAGE_SCHEMA_VERSION,
   INBOX_V2_EXTERNAL_MESSAGE_SCHEMA_VERSION,
   INBOX_V2_SOURCE_OCCURRENCE_RESOLUTION_COMMIT_SCHEMA_ID,
   INBOX_V2_SOURCE_OCCURRENCE_SCHEMA_ID,
+  INBOX_V2_SYSTEM_EVENT_TIMELINE_CREATION_COMMIT_SCHEMA_ID,
+  INBOX_V2_SYSTEM_EVENT_TIMELINE_CREATION_COMMIT_SCHEMA_VERSION,
+  INBOX_V2_TIMELINE_ITEM_SCHEMA_ID,
+  INBOX_V2_TIMELINE_SCHEMA_VERSION,
   INBOX_V2_CORE_CONVERSATION_CLIENT_ROLE_IDS,
   inboxV2BigintCounterSchema,
   inboxV2CatalogIdSchema,
@@ -42,6 +48,7 @@ import {
   inboxV2StaffNoteMutationCommitSchema,
   inboxV2SourceThreadBindingCreationCommitSchema,
   inboxV2SourceThreadBindingIdSchema,
+  inboxV2SystemEventTimelineCreationCommitSchema,
   inboxV2OutboundRouteSchema,
   inboxV2OutboxIntentIdSchema,
   inboxV2ThreadRoutePolicySchema,
@@ -52,7 +59,8 @@ import {
   type InboxV2ClientId,
   type InboxV2ConversationId,
   type InboxV2EmployeeId,
-  type InboxV2MessageCreationCommit
+  type InboxV2MessageCreationCommit,
+  type InboxV2SystemEventTimelineCreationCommit
 } from "@hulee/contracts";
 import { sql, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
@@ -154,6 +162,12 @@ import type {
   InboxV2MessageTransportFactCommit,
   InboxV2TimelineMessageTransactionExecutor
 } from "./sql-inbox-v2-timeline-message-repository";
+import {
+  INBOX_V2_SYSTEM_EVENT_TIMELINE_COMMAND_TYPE_ID,
+  INBOX_V2_SYSTEM_EVENT_TIMELINE_PERMISSION_ID,
+  prepareInboxV2SystemEventTimelineCreation,
+  sealInboxV2PreparedSystemEventTimelineCreation
+} from "./sql-inbox-v2-timeline-system-event-repository";
 import type { RawSqlExecutor } from "./sql-outbox-repository";
 
 const describePostgres =
@@ -538,6 +552,667 @@ describePostgres(
         }
       ]);
       acceptedAtomicSource = { creation, authorized, context };
+    });
+
+    it("atomically seals, rolls back, replays and deduplicates a Conversation-bound system TimelineItem", async () => {
+      const accepted = requireAcceptedAtomicSource(acceptedAtomicSource);
+      const suffix = "atomic-system-timeline";
+      const anchor = creationCommit(suffix);
+      await seedCreationAnchors(db, anchor);
+      const fixture = systemEventTimelineFixture({
+        conversationBefore: anchor.timelineAllocation.conversationBefore,
+        suffix
+      });
+      const item = fixture.commit.timelineAllocation.items[0]!;
+      await seedSystemTimelineSourceEvent(db, fixture);
+      const authorized = authorizedSystemTimelineMaterializationFixture({
+        commit: fixture.commit,
+        suffix,
+        streamEpoch: accepted.authorized.streamEpoch
+      });
+      const coordinator = createSqlInboxV2AuthorizedCommandCoordinator(db);
+      let failAfterSeal = true;
+      const materialize = () =>
+        coordinator.withAuthorizedAtomicMaterialization(
+          authorized.input,
+          async (context) => {
+            const prepared = await prepareInboxV2SystemEventTimelineCreation(
+              context,
+              {
+                commit: fixture.commit
+              }
+            );
+            if (prepared.kind !== "ready") {
+              throw new Error(
+                `System TimelineItem preparation failed: ${prepared.kind}`
+              );
+            }
+            return prepared.capability;
+          },
+          async (context, capability) => {
+            const sealed = await sealInboxV2PreparedSystemEventTimelineCreation(
+              context,
+              {
+                capability
+              }
+            );
+            if (failAfterSeal) {
+              throw new Error(
+                "injected failure after system TimelineItem seal"
+              );
+            }
+            return {
+              result: { timelineItemId: sealed.timelineItem.id },
+              receipt: sealed.receipt
+            };
+          }
+        );
+
+      await expect(materialize()).rejects.toThrow(
+        "injected failure after system TimelineItem seal"
+      );
+      expect(
+        await loadAtomicSystemTimelineState(db, fixture, authorized)
+      ).toEqual({
+        commands: "0",
+        stream_commits: "0",
+        stream_position: "2",
+        changes: "0",
+        events: "0",
+        outbox_intents: "0",
+        timeline_items: "0",
+        subject_details: "0",
+        latest_sequence: "0",
+        head_revision: "1",
+        occurred_at: null,
+        received_at: null,
+        created_at: null
+      });
+
+      failAfterSeal = false;
+      await expect(materialize()).resolves.toMatchObject({
+        kind: "applied",
+        result: {
+          timelineItemId: fixture.commit.timelineAllocation.items[0]!.id
+        },
+        status: { streamPosition: "3" }
+      });
+      const committedState = await loadAtomicSystemTimelineState(
+        db,
+        fixture,
+        authorized
+      );
+      expect(committedState).toEqual({
+        commands: "1",
+        stream_commits: "1",
+        stream_position: "3",
+        changes: "1",
+        events: "1",
+        outbox_intents: "1",
+        timeline_items: "1",
+        subject_details: "1",
+        latest_sequence: "1",
+        head_revision: "2",
+        occurred_at: fixture.commit.source.occurredAt,
+        received_at: fixture.commit.source.recordedAt,
+        created_at: fixture.commit.timelineAllocation.committedAt
+      });
+
+      const sourceRewriteError = await capturePostgresError(
+        db.execute(sql`
+          update event_store
+             set payload = payload || '{"fact":{"kind":"rewritten"}}'::jsonb
+           where tenant_id = ${tenantId}
+             and id = ${fixture.commit.source.event.id}
+        `)
+      );
+      expect(postgresSqlState(sourceRewriteError)).toBe("23514");
+      expect(postgresErrorText(sourceRewriteError)).toContain(
+        "inbox_v2.referenced_system_event_immutable"
+      );
+
+      const duplicateItemId = `timeline_item:db005-system-duplicate-raw-${runId}`;
+      const duplicateEventError = await capturePostgresError(
+        db.transaction(async (transaction) => {
+          await transaction.execute(sql`
+            insert into inbox_v2_timeline_items (
+              tenant_id, id, conversation_id, timeline_sequence,
+              subject_kind, subject_id, visibility, activity_kind,
+              activity_reason_id, occurred_at, received_at, revision,
+              last_changed_stream_position, created_at, updated_at
+            ) values (
+              ${tenantId}, ${duplicateItemId}, ${item.conversation.id}, 2,
+              'system_event', ${fixture.commit.source.event.id},
+              'workforce_metadata', 'non_activity', 'core:system-metadata',
+              ${fixture.commit.source.occurredAt},
+              ${fixture.commit.source.recordedAt}, 1, 4,
+              ${fixture.commit.timelineAllocation.committedAt},
+              ${fixture.commit.timelineAllocation.committedAt}
+            )
+          `);
+          await transaction.execute(sql`
+            insert into inbox_v2_timeline_subject_details (
+              tenant_id, timeline_item_id, subject_kind, system_event_id,
+              system_actor_id, system_app_actor_kind,
+              system_app_trusted_service_id, record_revision, created_at
+            ) values (
+              ${tenantId}, ${duplicateItemId}, 'system_event',
+              ${fixture.commit.source.event.id}, 'core:timeline-system',
+              'trusted_service', 'core:timeline-runtime', 1,
+              ${fixture.commit.timelineAllocation.committedAt}
+            )
+          `);
+        })
+      );
+      expect(postgresSqlState(duplicateEventError)).toBe("23505");
+      expect(postgresErrorText(duplicateEventError)).toContain(
+        "inbox_v2_timeline_subject_details_system_event_unique"
+      );
+
+      await expect(
+        coordinator.withAuthorizedAtomicMaterialization(
+          authorized.input,
+          async () => {
+            throw new Error("system replay must skip prepare");
+          },
+          async () => {
+            throw new Error("system replay must skip seal");
+          }
+        )
+      ).resolves.toMatchObject({
+        kind: "already_applied",
+        status: { streamPosition: "3" }
+      });
+      expect(
+        await loadAtomicSystemTimelineState(db, fixture, authorized)
+      ).toEqual(committedState);
+
+      const current = await createSqlInboxV2ConversationRepository(db).findById(
+        {
+          tenantId,
+          conversationId: anchor.message.conversation.id
+        }
+      );
+      if (current === null) {
+        throw new Error("System TimelineItem Conversation disappeared.");
+      }
+      const duplicate = systemEventTimelineFixture({
+        conversationBefore: current.aggregate,
+        suffix: `${suffix}-duplicate`,
+        source: fixture
+      });
+      const duplicateAuthorized =
+        authorizedSystemTimelineMaterializationFixture({
+          commit: duplicate.commit,
+          suffix: `${suffix}-duplicate`,
+          streamEpoch: accepted.authorized.streamEpoch,
+          resourceHeadId: authorized.resourceHeadId
+        });
+      await expect(
+        coordinator.withAuthorizedAtomicMaterialization(
+          duplicateAuthorized.input,
+          async (context) => {
+            const prepared = await prepareInboxV2SystemEventTimelineCreation(
+              context,
+              {
+                commit: duplicate.commit
+              }
+            );
+            if (
+              prepared.kind === "conflict" &&
+              prepared.code === "timeline_item.identity_conflict"
+            ) {
+              throw new Error("duplicate system event rejected");
+            }
+            throw new Error(`Unexpected duplicate result: ${prepared.kind}`);
+          },
+          async () => {
+            throw new Error("duplicate system event must not seal");
+          }
+        )
+      ).rejects.toThrow("duplicate system event rejected");
+      expect(
+        await loadAtomicSystemTimelineState(db, fixture, authorized)
+      ).toEqual(committedState);
+    });
+
+    it("serializes real authorized inbound, provider-native outbound and system creation paths on one Conversation", async () => {
+      const suffix = "authorized-timeline-race";
+      const inbound = inboxV2MessageCreationCommitSchema.parse(
+        namespaceFixture(fixtureSourceCreationCommit(), `${suffix}-inbound`)
+      );
+      const context = await seedExternalCreationAnchors(
+        db,
+        inbound,
+        `${suffix}-inbound`
+      );
+      const operator = await seedProviderResultOperator(
+        db,
+        inbound,
+        `${suffix}-inbound`
+      );
+      const providerNativeOutbound = providerNativeOutboundCreationCommit({
+        anchor: inbound,
+        suffix: `${suffix}-native-outbound`
+      });
+      await seedAdditionalSourceCreationOccurrence({
+        db,
+        creation: providerNativeOutbound,
+        context,
+        suffix: `${suffix}-native-outbound`
+      });
+      const system = systemEventTimelineFixture({
+        conversationBefore: inbound.timelineAllocation.conversationBefore,
+        suffix: `${suffix}-system`
+      });
+      await seedSystemTimelineSourceEvent(db, system);
+
+      const requestedStreamEpoch = `stream-epoch:${suffix}-${runId}`;
+      await db.transaction(async (transaction) => {
+        await transaction.execute(
+          sql`set local session_replication_role = replica`
+        );
+        await transaction.execute(sql`
+          insert into inbox_v2_tenant_stream_heads (
+            tenant_id, stream_epoch, last_position, min_retained_position,
+            revision, created_at, updated_at
+          ) values (
+            ${tenantId}, ${requestedStreamEpoch}, 1, 0, 1,
+            ${inbound.timelineAllocation.committedAt},
+            ${inbound.timelineAllocation.committedAt}
+          )
+          on conflict (tenant_id) do nothing
+        `);
+        await transaction.execute(
+          sql`set local session_replication_role = origin`
+        );
+      });
+      const streamBefore = await db.execute<{
+        last_position: string;
+        stream_epoch: string;
+      }>(sql`
+        select last_position::text as last_position, stream_epoch
+          from inbox_v2_tenant_stream_heads
+         where tenant_id = ${tenantId}
+      `);
+      const previousStreamPosition = streamBefore.rows[0]?.last_position;
+      const streamEpoch = streamBefore.rows[0]?.stream_epoch;
+      if (previousStreamPosition === undefined || streamEpoch === undefined) {
+        throw new Error("Timeline race requires an existing tenant stream.");
+      }
+
+      const inboundAuthorized = authorizedSourceMaterializationFixture({
+        creation: inbound,
+        operator,
+        suffix: `${suffix}-inbound`,
+        streamEpoch
+      });
+      const outboundAuthorized = authorizedSourceMaterializationFixture({
+        creation: providerNativeOutbound,
+        operator,
+        resourceHeadId: inboundAuthorized.resourceHeadId,
+        streamEpoch,
+        suffix: `${suffix}-native-outbound`
+      });
+      const systemAuthorized = authorizedSystemTimelineMaterializationFixture({
+        commit: system.commit,
+        resourceHeadId: inboundAuthorized.resourceHeadId,
+        streamEpoch,
+        suffix: `${suffix}-system`
+      });
+      await db.execute(sql`
+        insert into inbox_v2_auth_resource_heads (
+          tenant_id, id, resource_kind, conversation_id,
+          resource_access_revision, structural_relation_revision,
+          collaborator_set_revision, revision, created_at, updated_at
+        ) values (
+          ${tenantId}, ${inboundAuthorized.resourceHeadId}, 'conversation',
+          ${inbound.message.conversation.id}, 1, 1, 1, 1,
+          ${inbound.timelineAllocation.committedAt},
+          ${inbound.timelineAllocation.committedAt}
+        )
+      `);
+      const coordinator = createSqlInboxV2AuthorizedCommandCoordinator(db);
+      const revisionConflict = Symbol("timeline-race-revision-conflict");
+
+      const attemptMessage = async (
+        creation: InboxV2MessageCreationCommit,
+        authorized: ReturnType<typeof authorizedSourceMaterializationFixture>,
+        afterPrepared?: () => Promise<void>
+      ) => {
+        try {
+          const result = await coordinator.withAuthorizedAtomicMaterialization(
+            authorized.input,
+            async (authorizedContext) => {
+              const prepared = await prepareInboxV2MessageCreation(
+                authorizedContext,
+                { commit: creation }
+              );
+              if (
+                prepared.kind === "conflict" &&
+                prepared.code === "revision.conflict"
+              ) {
+                throw revisionConflict;
+              }
+              if (prepared.kind !== "ready") {
+                throw new Error(
+                  `Timeline race Message preparation failed: ${prepared.kind}`
+                );
+              }
+              await afterPrepared?.();
+              return prepared.capability;
+            },
+            async (authorizedContext, capability) => {
+              const sealed = await sealInboxV2PreparedMessageCreation(
+                authorizedContext,
+                { capability }
+              );
+              return {
+                result: { timelineItemId: sealed.timelineItem.id },
+                receipt: sealed.receipt
+              };
+            }
+          );
+          return { kind: "result" as const, result };
+        } catch (error) {
+          if (error === revisionConflict) {
+            return { kind: "revision_conflict" as const };
+          }
+          throw error;
+        }
+      };
+      const attemptSystem = async (
+        fixture: SystemEventTimelineFixture,
+        authorized: ReturnType<
+          typeof authorizedSystemTimelineMaterializationFixture
+        >
+      ) => {
+        try {
+          const result = await coordinator.withAuthorizedAtomicMaterialization(
+            authorized.input,
+            async (authorizedContext) => {
+              const prepared = await prepareInboxV2SystemEventTimelineCreation(
+                authorizedContext,
+                { commit: fixture.commit }
+              );
+              if (
+                prepared.kind === "conflict" &&
+                prepared.code === "revision.conflict"
+              ) {
+                throw revisionConflict;
+              }
+              if (prepared.kind !== "ready") {
+                throw new Error(
+                  `Timeline race system preparation failed: ${prepared.kind}`
+                );
+              }
+              return prepared.capability;
+            },
+            async (authorizedContext, capability) => {
+              const sealed =
+                await sealInboxV2PreparedSystemEventTimelineCreation(
+                  authorizedContext,
+                  { capability }
+                );
+              return {
+                result: { timelineItemId: sealed.timelineItem.id },
+                receipt: sealed.receipt
+              };
+            }
+          );
+          return { kind: "result" as const, result };
+        } catch (error) {
+          if (error === revisionConflict) {
+            return { kind: "revision_conflict" as const };
+          }
+          throw error;
+        }
+      };
+
+      let signalInboundPrepared!: () => void;
+      const inboundPrepared = new Promise<void>((resolve) => {
+        signalInboundPrepared = resolve;
+      });
+      let releaseInbound!: () => void;
+      const inboundRelease = new Promise<void>((resolve) => {
+        releaseInbound = resolve;
+      });
+      const inboundAttempt = attemptMessage(
+        inbound,
+        inboundAuthorized,
+        async () => {
+          signalInboundPrepared();
+          await inboundRelease;
+        }
+      );
+      await inboundPrepared;
+      const outboundAttempt = attemptMessage(
+        providerNativeOutbound,
+        outboundAuthorized
+      );
+      const systemAttempt = attemptSystem(system, systemAuthorized);
+      await Promise.resolve();
+      releaseInbound();
+
+      const [inboundResult, outboundConflict, systemConflict] =
+        await Promise.all([inboundAttempt, outboundAttempt, systemAttempt]);
+      if (inboundResult.kind !== "result") {
+        throw new Error(
+          `Unexpected timeline race winner: ${JSON.stringify({
+            inboundResult,
+            outboundConflict,
+            systemConflict
+          })}`
+        );
+      }
+      expect(inboundResult).toMatchObject({
+        kind: "result",
+        result: {
+          kind: "applied",
+          result: {
+            timelineItemId: inbound.timelineAllocation.items[0]!.id
+          }
+        }
+      });
+      expect(outboundConflict).toEqual({ kind: "revision_conflict" });
+      expect(systemConflict).toEqual({ kind: "revision_conflict" });
+
+      const conversationRepository = createSqlInboxV2ConversationRepository(db);
+      const afterInbound = await conversationRepository.findById({
+        tenantId,
+        conversationId: inbound.message.conversation.id
+      });
+      if (afterInbound === null) {
+        throw new Error("Timeline race Conversation disappeared.");
+      }
+      const rebuiltOutbound = rebaseMessageCreationCommit(
+        providerNativeOutbound,
+        afterInbound.aggregate
+      );
+      const rebuiltOutboundAuthorized = authorizedSourceMaterializationFixture({
+        creation: rebuiltOutbound,
+        operator,
+        resourceHeadId: inboundAuthorized.resourceHeadId,
+        streamEpoch,
+        suffix: `${suffix}-native-outbound`
+      });
+      await expect(
+        attemptMessage(rebuiltOutbound, rebuiltOutboundAuthorized)
+      ).resolves.toMatchObject({
+        kind: "result",
+        result: {
+          kind: "applied",
+          result: {
+            timelineItemId: rebuiltOutbound.timelineAllocation.items[0]!.id
+          }
+        }
+      });
+
+      const afterOutbound = await conversationRepository.findById({
+        tenantId,
+        conversationId: inbound.message.conversation.id
+      });
+      if (afterOutbound === null) {
+        throw new Error("Timeline race Conversation disappeared.");
+      }
+      const rebuiltSystem = {
+        ...system,
+        commit: rebaseSystemEventTimelineCommit(
+          system.commit,
+          afterOutbound.aggregate
+        )
+      };
+      const rebuiltSystemAuthorized =
+        authorizedSystemTimelineMaterializationFixture({
+          commit: rebuiltSystem.commit,
+          resourceHeadId: inboundAuthorized.resourceHeadId,
+          streamEpoch,
+          suffix: `${suffix}-system`
+        });
+      await expect(
+        attemptSystem(rebuiltSystem, rebuiltSystemAuthorized)
+      ).resolves.toMatchObject({
+        kind: "result",
+        result: {
+          kind: "applied",
+          result: {
+            timelineItemId: rebuiltSystem.commit.timelineAllocation.items[0]!.id
+          }
+        }
+      });
+
+      const inboundOccurrence = requireSourceOccurrence(inbound);
+      const outboundOccurrence = requireSourceOccurrence(rebuiltOutbound);
+      const timeline = await db.execute<{
+        id: string;
+        last_changed_stream_position: string;
+        occurred_at: string;
+        received_at: string;
+        timeline_sequence: string;
+      }>(sql`
+        select item.id, item.timeline_sequence::text as timeline_sequence,
+               item.last_changed_stream_position::text
+                 as last_changed_stream_position,
+               to_char(item.occurred_at at time zone 'UTC',
+                 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as occurred_at,
+               to_char(item.received_at at time zone 'UTC',
+                 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as received_at
+          from inbox_v2_timeline_items item
+         where item.tenant_id = ${tenantId}
+           and item.conversation_id = ${inbound.message.conversation.id}
+         order by item.timeline_sequence
+      `);
+      const firstPosition = String(BigInt(previousStreamPosition) + 1n);
+      const secondPosition = String(BigInt(previousStreamPosition) + 2n);
+      const thirdPosition = String(BigInt(previousStreamPosition) + 3n);
+      expect(timeline.rows).toEqual([
+        {
+          id: inbound.timelineAllocation.items[0]!.id,
+          timeline_sequence: "1",
+          last_changed_stream_position: firstPosition,
+          occurred_at: inboundOccurrence.observedAt,
+          received_at: inboundOccurrence.recordedAt
+        },
+        {
+          id: rebuiltOutbound.timelineAllocation.items[0]!.id,
+          timeline_sequence: "2",
+          last_changed_stream_position: secondPosition,
+          occurred_at: outboundOccurrence.observedAt,
+          received_at: outboundOccurrence.recordedAt
+        },
+        {
+          id: rebuiltSystem.commit.timelineAllocation.items[0]!.id,
+          timeline_sequence: "3",
+          last_changed_stream_position: thirdPosition,
+          occurred_at: rebuiltSystem.commit.source.occurredAt,
+          received_at: rebuiltSystem.commit.source.recordedAt
+        }
+      ]);
+
+      const sourceClocks = await db.execute<{
+        id: string;
+        observed_at: string;
+        provider_timestamp: string;
+        recorded_at: string;
+      }>(sql`
+        select occurrence.id,
+               to_char(occurrence.observed_at at time zone 'UTC',
+                 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as observed_at,
+               to_char(occurrence.recorded_at at time zone 'UTC',
+                 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as recorded_at,
+               to_char(provider_clock.timestamp at time zone 'UTC',
+                 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as provider_timestamp
+          from inbox_v2_source_occurrences occurrence
+          join inbox_v2_source_occurrence_provider_timestamps provider_clock
+            on provider_clock.tenant_id = occurrence.tenant_id
+           and provider_clock.source_occurrence_id = occurrence.id
+         where occurrence.tenant_id = ${tenantId}
+           and occurrence.id in (${inboundOccurrence.id}, ${outboundOccurrence.id})
+         order by occurrence.id
+      `);
+      expect(sourceClocks.rows).toEqual(
+        [inboundOccurrence, outboundOccurrence]
+          .map((occurrence) => ({
+            id: occurrence.id,
+            observed_at: occurrence.observedAt,
+            recorded_at: occurrence.recordedAt,
+            provider_timestamp: occurrence.providerTimestamps[0]!.timestamp
+          }))
+          .sort((left, right) => left.id.localeCompare(right.id))
+      );
+      expect(
+        outboundOccurrence.providerTimestamps[0]!.timestamp <
+          inboundOccurrence.providerTimestamps[0]!.timestamp
+      ).toBe(true);
+
+      const streamClosure = await db.execute<{
+        id: string;
+        stream_position: string;
+      }>(sql`
+        select stream_commit.id,
+               stream_commit.position::text as stream_position
+          from inbox_v2_tenant_stream_commits stream_commit
+         where stream_commit.tenant_id = ${tenantId}
+           and stream_commit.id in (
+             ${inboundAuthorized.streamCommitId},
+             ${rebuiltOutboundAuthorized.streamCommitId},
+             ${rebuiltSystemAuthorized.streamCommitId}
+           )
+         order by stream_commit.position
+      `);
+      expect(streamClosure.rows).toEqual([
+        {
+          id: inboundAuthorized.streamCommitId,
+          stream_position: firstPosition
+        },
+        {
+          id: rebuiltOutboundAuthorized.streamCommitId,
+          stream_position: secondPosition
+        },
+        {
+          id: rebuiltSystemAuthorized.streamCommitId,
+          stream_position: thirdPosition
+        }
+      ]);
+      const finalHead = await db.execute<{
+        latest_timeline_sequence: string;
+        stream_position: string;
+      }>(sql`
+        select conversation_head.latest_timeline_sequence::text
+                 as latest_timeline_sequence,
+               stream_head.last_position::text as stream_position
+          from inbox_v2_conversation_heads conversation_head
+          join inbox_v2_tenant_stream_heads stream_head
+            on stream_head.tenant_id = conversation_head.tenant_id
+         where conversation_head.tenant_id = ${tenantId}
+           and conversation_head.conversation_id = ${inbound.message.conversation.id}
+      `);
+      expect(finalHead.rows).toEqual([
+        {
+          latest_timeline_sequence: "3",
+          stream_position: thirdPosition
+        }
+      ]);
     });
 
     it("rejects a coherent duplicate SourceOccurrence projection in the deferred database closure", async () => {
@@ -4529,6 +5204,246 @@ function sourceOutboundCreationCommit(
   });
 }
 
+function rebaseMessageCreationCommit(
+  commit: InboxV2MessageCreationCommit,
+  conversationBefore: InboxV2MessageCreationCommit["timelineAllocation"]["conversationBefore"]
+): InboxV2MessageCreationCommit {
+  const originalItem = commit.timelineAllocation.items[0];
+  if (originalItem === undefined) {
+    throw new Error("Timeline race fixture requires one Message item.");
+  }
+  const conversation = fixtureReference(
+    "conversation",
+    conversationBefore.id,
+    tenantId
+  );
+  const timelineSequence = String(
+    BigInt(conversationBefore.head.latestTimelineSequence) + 1n
+  );
+  const item = {
+    ...originalItem,
+    conversation,
+    timelineSequence
+  };
+  const authorParticipant = {
+    ...commit.authorParticipant,
+    conversation
+  };
+  const message = {
+    ...commit.message,
+    conversation,
+    authorParticipant: fixtureReference(
+      "conversation_participant",
+      authorParticipant.id,
+      tenantId
+    )
+  };
+  const conversationAfter = {
+    ...conversationBefore,
+    head: {
+      ...conversationBefore.head,
+      latestTimelineSequence: timelineSequence,
+      latestActivityItemId: item.id,
+      latestActivityTimelineSequence: timelineSequence,
+      latestActivityAt: item.occurredAt,
+      revision: String(BigInt(conversationBefore.head.revision) + 1n),
+      updatedAt: commit.timelineAllocation.committedAt
+    }
+  };
+  return inboxV2MessageCreationCommitSchema.parse({
+    ...commit,
+    timelineAllocation: {
+      tenantId,
+      conversationBefore,
+      items: [item],
+      conversationAfter,
+      committedAt: commit.timelineAllocation.committedAt
+    },
+    authorParticipant,
+    message,
+    initialRevision: {
+      ...commit.initialRevision,
+      actionAttribution: {
+        ...commit.initialRevision.actionAttribution,
+        actionParticipant: message.authorParticipant
+      }
+    },
+    externalThreadMapping:
+      commit.externalThreadMapping === null
+        ? null
+        : {
+            ...commit.externalThreadMapping,
+            conversation: conversationBefore
+          }
+  });
+}
+
+function providerNativeOutboundCreationCommit(input: {
+  anchor: InboxV2MessageCreationCommit;
+  suffix: string;
+}): InboxV2MessageCreationCommit {
+  const raw = sourceOutboundCreationCommit(input.suffix);
+  const rawOccurrence = requireSourceOccurrence(raw);
+  const anchorOccurrence = requireSourceOccurrence(input.anchor);
+  const rawResolution = raw.sourceResolutionCommit;
+  const rawReference = raw.externalMessageReference;
+  const rawLink = raw.originTransportLink;
+  if (
+    rawResolution === null ||
+    rawReference === null ||
+    rawLink === null ||
+    input.anchor.externalThreadMapping === null ||
+    anchorOccurrence.providerActor?.kind !== "source_external_identity"
+  ) {
+    throw new Error(
+      "Provider-native race fixture requires one resolved source transport graph."
+    );
+  }
+  if (
+    rawOccurrence.origin.kind === "provider_response" ||
+    rawOccurrence.origin.kind === "provider_echo"
+  ) {
+    throw new Error(
+      "Provider-native race fixture requires event-backed outbound evidence."
+    );
+  }
+  const occurrence = {
+    ...rawOccurrence,
+    messageKey: {
+      ...rawOccurrence.messageKey,
+      externalThread: anchorOccurrence.bindingContext.externalThread,
+      canonicalExternalSubject: `provider-native:${input.suffix}:${runId}`
+    },
+    bindingContext: anchorOccurrence.bindingContext,
+    origin: {
+      ...rawOccurrence.origin,
+      sourceAccount: anchorOccurrence.bindingContext.sourceAccount
+    },
+    providerActor: anchorOccurrence.providerActor,
+    providerTimestamps: rawOccurrence.providerTimestamps.map((timestamp) => ({
+      ...timestamp,
+      timestamp: fixtureT0
+    }))
+  };
+  const externalMessageReference = {
+    ...rawReference,
+    key: occurrence.messageKey,
+    externalThread: anchorOccurrence.bindingContext.externalThread
+  };
+  const sourceResolutionCommit = {
+    ...rawResolution,
+    before: {
+      ...occurrence,
+      resolution: rawResolution.before.resolution,
+      revision: rawResolution.before.revision
+    },
+    after: occurrence,
+    resolvedReference: externalMessageReference
+  };
+  const authorParticipant = input.anchor.authorParticipant;
+  const message = {
+    ...raw.message,
+    conversation: input.anchor.message.conversation,
+    authorParticipant: fixtureReference(
+      "conversation_participant",
+      authorParticipant.id,
+      tenantId
+    ),
+    origin: {
+      ...raw.message.origin,
+      originOccurrence: fixtureReference(
+        "source_occurrence",
+        occurrence.id,
+        tenantId
+      ),
+      direction: "outbound" as const
+    }
+  };
+  const originTransportLink = {
+    ...rawLink,
+    sourceOccurrence: fixtureReference(
+      "source_occurrence",
+      occurrence.id,
+      tenantId
+    ),
+    externalMessageReference: fixtureReference(
+      "external_message_reference",
+      externalMessageReference.id,
+      tenantId
+    )
+  };
+  return rebaseMessageCreationCommit(
+    {
+      ...raw,
+      authorParticipant,
+      message,
+      initialRevision: {
+        ...raw.initialRevision,
+        actionAttribution: {
+          ...raw.initialRevision.actionAttribution,
+          actionParticipant: message.authorParticipant,
+          sourceOccurrence: fixtureReference(
+            "source_occurrence",
+            occurrence.id,
+            tenantId
+          )
+        }
+      },
+      sourceOccurrence: occurrence,
+      sourceResolutionCommit,
+      externalMessageReference,
+      originTransportLink,
+      externalThreadMapping: input.anchor.externalThreadMapping
+    } as unknown as InboxV2MessageCreationCommit,
+    input.anchor.timelineAllocation.conversationBefore
+  );
+}
+
+function rebaseSystemEventTimelineCommit(
+  commit: InboxV2SystemEventTimelineCreationCommit,
+  conversationBefore: InboxV2SystemEventTimelineCreationCommit["timelineAllocation"]["conversationBefore"]
+): InboxV2SystemEventTimelineCreationCommit {
+  const originalItem = commit.timelineAllocation.items[0];
+  if (originalItem === undefined) {
+    throw new Error("Timeline race fixture requires one system item.");
+  }
+  const conversation = fixtureReference(
+    "conversation",
+    conversationBefore.id,
+    tenantId
+  );
+  const timelineSequence = String(
+    BigInt(conversationBefore.head.latestTimelineSequence) + 1n
+  );
+  const item = {
+    ...originalItem,
+    conversation,
+    timelineSequence
+  };
+  return inboxV2SystemEventTimelineCreationCommitSchema.parse({
+    ...commit,
+    timelineAllocation: {
+      tenantId,
+      conversationBefore,
+      items: [item],
+      conversationAfter: {
+        ...conversationBefore,
+        head: {
+          ...conversationBefore.head,
+          latestTimelineSequence: timelineSequence,
+          revision: String(BigInt(conversationBefore.head.revision) + 1n),
+          updatedAt: commit.timelineAllocation.committedAt
+        }
+      },
+      committedAt: commit.timelineAllocation.committedAt
+    },
+    source: {
+      ...commit.source,
+      conversation
+    }
+  });
+}
+
 function huleeExternalCreationCommit(input: {
   binding: Awaited<
     ReturnType<typeof seedExternalCreationAnchors>
@@ -7082,6 +7997,82 @@ async function seedExternalCreationAnchors(
   };
 }
 
+async function seedAdditionalSourceCreationOccurrence(input: {
+  db: HuleeDatabase;
+  creation: InboxV2MessageCreationCommit;
+  context: Awaited<ReturnType<typeof seedExternalCreationAnchors>>;
+  suffix: string;
+}): Promise<void> {
+  const occurrence = requireSourceOccurrence(input.creation);
+  const pendingOccurrence = input.creation.sourceResolutionCommit?.before;
+  const mapping = requireExternalThreadMapping(input.creation);
+  if (
+    pendingOccurrence === undefined ||
+    occurrence.origin.kind === "provider_response" ||
+    occurrence.origin.kind === "provider_echo"
+  ) {
+    throw new Error(
+      "Additional source creation fixture requires pending event-backed evidence."
+    );
+  }
+  const eventOrigin = occurrence.origin;
+  await input.db.transaction(async (transaction) => {
+    await insertRawInboundEvent(transaction, {
+      id: eventOrigin.rawInboundEvent.id,
+      sourceConnectionId: input.context.sourceConnection.id,
+      sourceAccountId: occurrence.bindingContext.sourceAccount.id,
+      idempotencyKey: `db005-source-race-raw-${input.suffix}-${runId}`,
+      observedAt: occurrence.recordedAt
+    });
+    await transaction.execute(sql`
+      insert into normalized_inbound_events (
+        id, tenant_id, raw_event_id, source_connection_id,
+        source_account_id, source_type, source_name, event_type,
+        direction, visibility, payload_version, normalized_payload,
+        reply_capability, idempotency_key, processing_status,
+        created_at, updated_at
+      ) values (
+        ${eventOrigin.normalizedInboundEvent.id}, ${tenantId},
+        ${eventOrigin.rawInboundEvent.id},
+        ${input.context.sourceConnection.id},
+        ${occurrence.bindingContext.sourceAccount.id}, 'messenger',
+        'synthetic', 'message', ${occurrence.direction}, 'private', 'v1',
+        '{}'::jsonb, '{}'::jsonb,
+        ${`db005-source-race-normalized-${input.suffix}-${runId}`},
+        'processed', ${occurrence.recordedAt}, ${occurrence.recordedAt}
+      )
+    `);
+  });
+  const materialization =
+    inboxV2SourceOccurrenceMaterializationCommitSchema.parse({
+      tenantId,
+      occurrence: pendingOccurrence,
+      bindingMaterialization: {
+        kind: "existing",
+        currentProjection: input.context.bindingProjection,
+        creationAuthority: null
+      },
+      externalThreadMapping: mapping,
+      sourceAccountIdentity: input.context.sourceAccountIdentity,
+      outboundDispatchAttempt: null,
+      outboundDispatch: null,
+      outboundRoute: null,
+      authority: {
+        kind: "trusted_service",
+        trustedServiceId:
+          occurrence.descriptor.adapterContract.loadedByTrustedServiceId,
+        authorizationToken: `materialize:db005-source-race-${input.suffix}-${runId}`,
+        authorizedAt: pendingOccurrence.createdAt
+      },
+      materializedAt: pendingOccurrence.createdAt
+    });
+  expect(
+    await createSqlInboxV2SourceOccurrenceRepository(input.db).materialize(
+      materialization
+    )
+  ).toMatchObject({ kind: "materialized" });
+}
+
 async function seedProviderResultOperator(
   db: HuleeDatabase,
   creation: InboxV2MessageCreationCommit,
@@ -7122,9 +8113,396 @@ async function seedProviderResultOperator(
   return operator;
 }
 
+type SystemEventTimelineFixture = Readonly<{
+  commit: InboxV2SystemEventTimelineCreationCommit;
+  payload: Readonly<Record<string, unknown>>;
+}>;
+
+function systemEventTimelineFixture(input: {
+  conversationBefore: InboxV2SystemEventTimelineCreationCommit["timelineAllocation"]["conversationBefore"];
+  suffix: string;
+  source?: SystemEventTimelineFixture;
+}): SystemEventTimelineFixture {
+  const conversationBefore = input.conversationBefore;
+  const conversation = {
+    tenantId,
+    kind: "conversation" as const,
+    id: conversationBefore.id
+  };
+  const event =
+    input.source?.commit.source.event ??
+    fixtureReference(
+      "event",
+      `event:db005-system-timeline-source-${input.suffix}-${runId}`,
+      tenantId
+    );
+  const occurredAt = input.source?.commit.source.occurredAt ?? fixtureT1;
+  const recordedAt = input.source?.commit.source.recordedAt ?? fixtureT2;
+  const committedAt = fixtureT2;
+  const payload = input.source?.payload ?? {
+    schemaId: INBOX_V2_CONVERSATION_SYSTEM_EVENT_PAYLOAD_SCHEMA_ID,
+    schemaVersion: INBOX_V2_CONVERSATION_SYSTEM_EVENT_PAYLOAD_SCHEMA_VERSION,
+    conversation,
+    recordedAt,
+    fact: {
+      kind: "assignment_observed",
+      value: `system-fact-${input.suffix}`
+    }
+  };
+  const timelineSequence = String(
+    BigInt(conversationBefore.head.latestTimelineSequence) + 1n
+  );
+  const item = fixtureTimelineItem(
+    conversationBefore.transport === "internal" ? "internal" : "external",
+    {
+      tenantId,
+      id: `timeline_item:db005-system-${input.suffix}-${runId}`,
+      conversation,
+      timelineSequence,
+      subject: {
+        kind: "system_event" as const,
+        event,
+        systemActorId: "core:timeline-system",
+        appActor: {
+          kind: "trusted_service" as const,
+          trustedServiceId: "core:timeline-runtime"
+        }
+      },
+      visibility: "workforce_metadata" as const,
+      activity: {
+        kind: "non_activity" as const,
+        reasonId: "core:system-metadata"
+      },
+      occurredAt,
+      receivedAt: recordedAt,
+      revision: "1",
+      createdAt: committedAt,
+      updatedAt: committedAt
+    }
+  );
+  const conversationAfter = {
+    ...conversationBefore,
+    head: {
+      ...conversationBefore.head,
+      latestTimelineSequence: timelineSequence,
+      revision: String(BigInt(conversationBefore.head.revision) + 1n),
+      updatedAt: committedAt
+    }
+  };
+  return {
+    payload,
+    commit: inboxV2SystemEventTimelineCreationCommitSchema.parse({
+      tenantId,
+      timelineAllocation: {
+        tenantId,
+        conversationBefore,
+        items: [item],
+        conversationAfter,
+        committedAt
+      },
+      source: {
+        event,
+        eventTypeId: "core:conversation.system_fact",
+        eventVersion: "v1",
+        conversation,
+        payloadDigest: atomicSourcePayloadDigest(payload),
+        occurredAt,
+        recordedAt
+      }
+    })
+  };
+}
+
+async function seedSystemTimelineSourceEvent(
+  db: HuleeDatabase,
+  fixture: SystemEventTimelineFixture
+): Promise<void> {
+  const source = fixture.commit.source;
+  await db.execute(sql`
+    insert into event_store (
+      id, tenant_id, type, version, occurred_at, idempotency_key,
+      payload, created_at, updated_at
+    ) values (
+      ${source.event.id}, ${tenantId}, ${source.eventTypeId},
+      ${source.eventVersion}, ${source.occurredAt},
+      ${`db005-system-timeline-${source.event.id}-${runId}`},
+      ${JSON.stringify(fixture.payload)}::jsonb,
+      ${source.recordedAt}, ${source.recordedAt}
+    )
+  `);
+}
+
+function authorizedSystemTimelineMaterializationFixture(input: {
+  commit: InboxV2SystemEventTimelineCreationCommit;
+  suffix: string;
+  streamEpoch: string;
+  resourceHeadId?: string;
+}) {
+  const token = `${input.suffix}-${runId}`;
+  const item = input.commit.timelineAllocation.items[0]!;
+  const commandId = `command:atomic-system-timeline-${token}`;
+  const clientMutationId = `mutation:atomic-system-timeline-${token}`;
+  const mutationId = `authorization-mutation:atomic-system-timeline-${token}`;
+  const streamCommitId = `commit:atomic-system-timeline-${token}`;
+  const changeId = `change:atomic-system-timeline-${token}`;
+  const eventId = `event:atomic-system-timeline-${token}`;
+  const projectionIntentId = `outbox-intent:atomic-system-timeline-${token}`;
+  const decisionId = `authorization-decision:atomic-system-timeline-${token}`;
+  const authorizationEpoch = `authorization:atomic-system-timeline-${token}`;
+  const correlationId = `correlation:atomic-system-timeline-${token}`;
+  const occurredAt = input.commit.timelineAllocation.committedAt;
+  const notAfter = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
+  const trustedServiceId = "core:timeline-runtime";
+  const resourceHeadId =
+    input.resourceHeadId ?? `authorization-resource:atomic-system-${token}`;
+  const internalReference = (purpose: string) =>
+    `internal-ref:${createHash("sha256")
+      .update(`${token}:${purpose}`, "utf8")
+      .digest("hex")
+      .slice(0, 32)}`;
+  const payloadReference = {
+    tenantId,
+    recordId: item.id,
+    schemaId: INBOX_V2_TIMELINE_ITEM_SCHEMA_ID,
+    schemaVersion: INBOX_V2_TIMELINE_SCHEMA_VERSION,
+    digest: atomicSourcePayloadDigest(item)
+  };
+  const domainCommitReference = {
+    tenantId,
+    recordId: item.id,
+    schemaId: INBOX_V2_SYSTEM_EVENT_TIMELINE_CREATION_COMMIT_SCHEMA_ID,
+    schemaVersion:
+      INBOX_V2_SYSTEM_EVENT_TIMELINE_CREATION_COMMIT_SCHEMA_VERSION,
+    digest: atomicSourcePayloadDigest(input.commit)
+  };
+  const decision = {
+    tenantId,
+    id: decisionId,
+    authorizationEpoch,
+    principal: { kind: "trusted_service" as const, trustedServiceId },
+    permissionId: INBOX_V2_SYSTEM_EVENT_TIMELINE_PERMISSION_ID,
+    resourceScopeId: "core:conversation",
+    resource: {
+      tenantId,
+      entityTypeId: "core:conversation",
+      entityId: item.conversation.id
+    },
+    resourceAccessRevision: "1",
+    decisionRevision: "1",
+    decisionHash: atomicSourceSha256(`${token}:decision`),
+    outcome: "allowed" as const,
+    decidedAt: occurredAt,
+    notAfter
+  };
+  const entity = {
+    tenantId,
+    entityTypeId: "core:timeline-item",
+    entityId: item.id
+  } as const;
+  const change = {
+    id: changeId,
+    ordinal: 1,
+    entity,
+    resultingRevision: item.revision,
+    timeline: {
+      conversation: item.conversation,
+      timelineSequence: item.timelineSequence
+    },
+    audience: "workforce_metadata" as const,
+    state: {
+      kind: "upsert" as const,
+      stateSchemaId: payloadReference.schemaId,
+      stateSchemaVersion: payloadReference.schemaVersion,
+      stateHash: payloadReference.digest,
+      payloadReference,
+      domainCommitReference
+    }
+  };
+  const event = {
+    id: eventId,
+    typeId: "core:timeline.changed" as const,
+    payloadSchemaId: domainCommitReference.schemaId,
+    payloadSchemaVersion: domainCommitReference.schemaVersion,
+    ordinal: "1",
+    changeIds: [changeId],
+    subjects: [entity],
+    payloadReference: domainCommitReference,
+    correlationId,
+    commandIds: [commandId],
+    clientMutationIds: [clientMutationId],
+    authorizationDecisionRefs: [decision],
+    accessEffect: { kind: "none" as const },
+    occurredAt: item.occurredAt,
+    recordedAt: occurredAt,
+    eventHash: atomicSourceSha256(`${token}:event`)
+  };
+  return {
+    commandId,
+    resourceHeadId,
+    streamCommitId,
+    streamEpoch: input.streamEpoch,
+    input: {
+      tenantId,
+      command: {
+        id: commandId,
+        requestId: `request:atomic-system-timeline-${token}`,
+        clientMutationId,
+        commandTypeId: INBOX_V2_SYSTEM_EVENT_TIMELINE_COMMAND_TYPE_ID,
+        requestHash: atomicSourceSha256(`${token}:request`),
+        actor: { kind: "trusted_service", trustedServiceId },
+        authorizationDecisionId: decisionId,
+        authorizationEpoch,
+        authorizedAt: occurredAt,
+        publicResultCode: "core:timeline.item_created",
+        resultReference: payloadReference,
+        sensitiveResultReference: null
+      },
+      revisions: {
+        expectedTenantRbacRevision: "1",
+        expectedSharedAccessRevision: "1",
+        advanceTenantRbac: false,
+        advanceSharedAccess: false,
+        employees: [],
+        resources: [
+          {
+            resourceKind: "conversation",
+            resourceId: item.conversation.id,
+            resourceHeadId,
+            expectedResourceAccessRevision: "1",
+            advance: "none"
+          }
+        ]
+      },
+      records: {
+        mutationId,
+        relationKind: null,
+        streamCommitId,
+        expectedStreamEpoch: input.streamEpoch,
+        audienceImpact: { kind: "none" },
+        commitHash: atomicSourceSha256(`${token}:stream-commit`),
+        correlationId,
+        changes: [change],
+        events: [event],
+        outboxIntents: [
+          {
+            id: projectionIntentId,
+            ordinal: 1,
+            typeId: "core:projection.update",
+            handlerId: "core:inbox-projection",
+            effectClass: "projection",
+            eventId,
+            changeIds: [changeId],
+            payloadReference: null,
+            consumerDedupeKey: atomicSourceSha256(`${token}:projection-dedupe`),
+            correlationId,
+            availableAt: occurredAt,
+            intentHash: atomicSourceSha256(`${token}:projection-intent`)
+          }
+        ],
+        audit: {
+          id: `authorization-audit:atomic-system-timeline-${token}`,
+          actionId: INBOX_V2_SYSTEM_EVENT_TIMELINE_COMMAND_TYPE_ID,
+          target: {
+            tenantId,
+            entityTypeId: "core:timeline-item",
+            entityId: internalReference("audit-target")
+          },
+          reasonCodeId: "core:system-timeline-item-created",
+          matchedPermissionIds: [decision.permissionId],
+          grantSourceIds: [internalReference("grant-source")],
+          authorizationScopeIds: [decision.resourceScopeId],
+          overrideReasonCodeId: null,
+          policyVersion: "v1",
+          evidenceReference: domainCommitReference,
+          authorizationDecisionRefs: [decision],
+          correlationId,
+          outcome: "succeeded",
+          revisionDeltaHash: computeInboxV2LeafHashDigest([]),
+          previousAuditHash: null,
+          auditHash: atomicSourceSha256(`${token}:audit`),
+          occurredAt,
+          recordedAt: occurredAt,
+          expiresAt,
+          facets: [
+            {
+              ordinal: 1,
+              dimension: "tenant",
+              reference: {
+                tenantId,
+                entityTypeId: "core:tenant",
+                entityId: internalReference("tenant-facet")
+              },
+              relation: "affected",
+              facetHash: atomicSourceSha256(`${token}:audit-facet`)
+            }
+          ]
+        }
+      },
+      occurredAt
+    } as unknown as WithInboxV2AuthorizedCommandMutationInput
+  };
+}
+
+async function loadAtomicSystemTimelineState(
+  db: HuleeDatabase,
+  fixture: SystemEventTimelineFixture,
+  authorized: ReturnType<typeof authorizedSystemTimelineMaterializationFixture>
+) {
+  const item = fixture.commit.timelineAllocation.items[0]!;
+  const result = await db.execute<Record<string, string | null>>(sql`
+    select
+      (select count(*)::text from inbox_v2_auth_command_records
+        where tenant_id = ${tenantId} and id = ${authorized.commandId})
+        as commands,
+      (select count(*)::text from inbox_v2_tenant_stream_commits
+        where tenant_id = ${tenantId} and id = ${authorized.streamCommitId})
+        as stream_commits,
+      (select last_position::text from inbox_v2_tenant_stream_heads
+        where tenant_id = ${tenantId}) as stream_position,
+      (select count(*)::text from inbox_v2_tenant_stream_changes
+        where tenant_id = ${tenantId}
+          and stream_commit_id = ${authorized.streamCommitId}) as changes,
+      (select count(*)::text from inbox_v2_domain_events
+        where tenant_id = ${tenantId}
+          and stream_commit_id = ${authorized.streamCommitId}) as events,
+      (select count(*)::text from inbox_v2_outbox_intents
+        where tenant_id = ${tenantId}
+          and stream_commit_id = ${authorized.streamCommitId}) as outbox_intents,
+      (select count(*)::text from inbox_v2_timeline_items
+        where tenant_id = ${tenantId} and id = ${item.id}) as timeline_items,
+      (select count(*)::text from inbox_v2_timeline_subject_details
+        where tenant_id = ${tenantId} and timeline_item_id = ${item.id}
+          and system_event_id = ${fixture.commit.source.event.id})
+        as subject_details,
+      (select latest_timeline_sequence::text
+         from inbox_v2_conversation_heads
+        where tenant_id = ${tenantId}
+          and conversation_id = ${item.conversation.id}) as latest_sequence,
+      (select revision::text from inbox_v2_conversation_heads
+        where tenant_id = ${tenantId}
+          and conversation_id = ${item.conversation.id}) as head_revision,
+      (select to_char(occurred_at at time zone 'UTC',
+          'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+         from inbox_v2_timeline_items
+        where tenant_id = ${tenantId} and id = ${item.id}) as occurred_at,
+      (select to_char(received_at at time zone 'UTC',
+          'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+         from inbox_v2_timeline_items
+        where tenant_id = ${tenantId} and id = ${item.id}) as received_at,
+      (select to_char(created_at at time zone 'UTC',
+          'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+         from inbox_v2_timeline_items
+        where tenant_id = ${tenantId} and id = ${item.id}) as created_at
+  `);
+  return result.rows[0]!;
+}
+
 function authorizedSourceMaterializationFixture(input: {
   creation: InboxV2MessageCreationCommit;
   operator: ReturnType<typeof fixtureParticipant>;
+  resourceHeadId?: string;
+  streamEpoch?: string;
   suffix: string;
 }) {
   if (input.operator.subject.kind !== "employee") {
@@ -7136,7 +8514,8 @@ function authorizedSourceMaterializationFixture(input: {
   const clientMutationId = `mutation:atomic-source-${token}`;
   const mutationId = `authorization-mutation:atomic-source-${token}`;
   const streamCommitId = `commit:atomic-source-${token}`;
-  const streamEpoch = `stream-epoch:atomic-source-${token}`;
+  const streamEpoch =
+    input.streamEpoch ?? `stream-epoch:atomic-source-${token}`;
   const correlationId = `correlation:atomic-source-${token}`;
   const messageChangeId = `change:atomic-source-message-${token}`;
   const occurrenceChangeId = `change:atomic-source-occurrence-${token}`;
@@ -7150,6 +8529,8 @@ function authorizedSourceMaterializationFixture(input: {
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
   const employee = input.operator.subject.employee;
   const conversation = input.creation.message.conversation;
+  const resourceHeadId =
+    input.resourceHeadId ?? `authorization-resource:atomic-source-${token}`;
   const resolution = input.creation.sourceResolutionCommit;
   if (resolution === null) {
     throw new Error("Atomic source fixture requires a resolution commit.");
@@ -7253,6 +8634,7 @@ function authorizedSourceMaterializationFixture(input: {
 
   return {
     commandId,
+    resourceHeadId,
     streamCommitId,
     streamEpoch,
     eventId,
@@ -7291,7 +8673,7 @@ function authorizedSourceMaterializationFixture(input: {
           {
             resourceKind: "conversation",
             resourceId: conversation.id,
-            resourceHeadId: `authorization-resource:atomic-source-${token}`,
+            resourceHeadId,
             expectedResourceAccessRevision: "1",
             advance: "none"
           }

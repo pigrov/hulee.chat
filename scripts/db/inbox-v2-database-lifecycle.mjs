@@ -82,6 +82,8 @@ const REQUIRED_CURRENT_FUNCTIONS = [
   "public.inbox_v2_check_source_thread_binding_edge_integrity()",
   "public.inbox_v2_tm_head_guard()",
   "public.inbox_v2_tm_core_coherence()",
+  "public.inbox_v2_system_event_timeline_binding_guard()",
+  "public.inbox_v2_referenced_system_event_immutable_guard()",
   "public.inbox_v2_work_item_guard()",
   "public.inbox_v2_work_assignment_guard()",
   "public.inbox_v2_work_assignment_non_overlap()",
@@ -230,6 +232,16 @@ const REQUIRED_CURRENT_TRIGGERS = [
     "inbox_v2_timeline_items",
     "inbox_v2_tm_timeline_coherence",
     "public.inbox_v2_tm_core_coherence()"
+  ],
+  [
+    "inbox_v2_timeline_subject_details",
+    "inbox_v2_system_event_timeline_binding_guard",
+    "public.inbox_v2_system_event_timeline_binding_guard()"
+  ],
+  [
+    "event_store",
+    "inbox_v2_referenced_system_event_immutable_guard",
+    "public.inbox_v2_referenced_system_event_immutable_guard()"
   ],
   [
     "inbox_v2_work_items",
@@ -850,6 +862,13 @@ const REQUIRED_CURRENT_INDEXES = [
     definition:
       "create index inbox_v2_timeline_items_eligible_activity_tail_idx on public.inbox_v2_timeline_items using btree (tenant_id, conversation_id, timeline_sequence desc nulls last, id, occurred_at) where (activity_kind = 'eligible'::inbox_v2_timeline_activity_kind)",
     unique: false,
+    primary: false
+  }),
+  Object.freeze({
+    name: "inbox_v2_timeline_subject_details_system_event_unique",
+    definition:
+      "create unique index inbox_v2_timeline_subject_details_system_event_unique on public.inbox_v2_timeline_subject_details using btree (tenant_id, system_event_id) where (system_event_id is not null)",
+    unique: true,
     primary: false
   }),
   Object.freeze({

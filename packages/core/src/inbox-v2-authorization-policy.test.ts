@@ -7129,7 +7129,7 @@ describe("Inbox V2 authorization policy", () => {
       Object.values(permissionSemanticCoverage).filter(
         (owner) => owner === "semantic_closure"
       )
-    ).toHaveLength(40);
+    ).toHaveLength(41);
   });
 
   it.each(inboxV2PermissionCatalog)(
@@ -9077,6 +9077,7 @@ const permissionSemanticCoverage = {
   "core:conversation.internal.break_glass.issue": "policy_suite",
   "core:conversation.access_binding.manage": "policy_suite",
   "core:conversation.access_binding.apply_policy": "semantic_closure",
+  "core:conversation.timeline_append_system": "semantic_closure",
   "core:conversation.collaborators.manage": "policy_suite",
   "core:notification.watch.self": "policy_suite",
   "core:notification.watchers.manage": "policy_suite",

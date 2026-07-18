@@ -37,6 +37,8 @@ import {
   fixtureSourceIdentityClaim,
   fixtureSourceIdentityReference,
   fixtureSourceOccurrenceReference,
+  fixtureT0,
+  fixtureT1,
   fixtureT2,
   fixtureTenantId,
   fixtureTimelineAllocation,
@@ -189,6 +191,69 @@ describe("Inbox V2 Message and StaffNote contracts", () => {
         )
       }).success
     ).toBe(false);
+  });
+
+  it("binds source Message timeline clocks to the exact SourceOccurrence", () => {
+    const base = fixtureSourceCreationCommit();
+    const timelineItem = base.timelineAllocation.items[0];
+    if (timelineItem === undefined) {
+      throw new Error("Source Message fixture requires one TimelineItem.");
+    }
+
+    const occurredMismatchItem = {
+      ...timelineItem,
+      occurredAt: fixtureT0
+    };
+    const occurredMismatch = inboxV2MessageCreationCommitSchema.safeParse({
+      ...base,
+      timelineAllocation: {
+        ...base.timelineAllocation,
+        items: [occurredMismatchItem],
+        conversationAfter: {
+          ...base.timelineAllocation.conversationAfter,
+          head: {
+            ...base.timelineAllocation.conversationAfter.head,
+            latestActivityAt: fixtureT0
+          }
+        }
+      },
+      initialRevision: {
+        ...base.initialRevision,
+        occurredAt: fixtureT0
+      }
+    });
+    expect(occurredMismatch.success).toBe(false);
+    if (!occurredMismatch.success) {
+      expect(occurredMismatch.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: ["timelineAllocation", "items", 0, "occurredAt"],
+            message:
+              "Source Message occurrence time must match its exact SourceOccurrence observation time."
+          })
+        ])
+      );
+    }
+
+    const receivedMismatch = inboxV2MessageCreationCommitSchema.safeParse({
+      ...base,
+      timelineAllocation: {
+        ...base.timelineAllocation,
+        items: [{ ...timelineItem, receivedAt: fixtureT1 }]
+      }
+    });
+    expect(receivedMismatch.success).toBe(false);
+    if (!receivedMismatch.success) {
+      expect(receivedMismatch.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: ["timelineAllocation", "items", 0, "receivedAt"],
+            message:
+              "Source Message receipt time must match its exact SourceOccurrence recording time."
+          })
+        ])
+      );
+    }
   });
 
   it("binds a source Employee claim to its full event-time snapshot", () => {

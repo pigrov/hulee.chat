@@ -344,6 +344,13 @@
       "when": 1784322065443,
       "tag": "0048_inbox_v2_source_processing_runtime",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1784366628935,
+      "tag": "0049_inbox_v2_monotonic_timeline",
+      "breakpoints": true
     }
   ]
 }

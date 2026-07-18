@@ -70,6 +70,13 @@ const expectedScopeMatrix = {
     "team",
     "conversation"
   ],
+  "core:conversation.timeline_append_system": [
+    "tenant",
+    "org_unit",
+    "team",
+    "queue",
+    "conversation"
+  ],
   "core:conversation.collaborators.manage": [
     "tenant",
     "org_unit",
@@ -552,7 +559,7 @@ const privacyGuardExpectations = [
 ] as const;
 
 describe("Inbox V2 permission/scope catalog", () => {
-  it("publishes one immutable versioned catalog with all 101 ADR permissions and 12 scope families", () => {
+  it("publishes one immutable versioned catalog with all 102 ADR permissions and 12 scope families", () => {
     expect(INBOX_V2_PERMISSION_SCOPE_CATALOG_SCHEMA_ID).toBe(
       "core:inbox-v2.permission-scope-catalog"
     );
@@ -564,7 +571,7 @@ describe("Inbox V2 permission/scope catalog", () => {
     });
     expect(inboxV2PermissionScopeCatalog.payload.registrations).toHaveLength(4);
 
-    expect(inboxV2PermissionCatalog).toHaveLength(101);
+    expect(inboxV2PermissionCatalog).toHaveLength(102);
     expect(inboxV2ScopeCatalog).toHaveLength(12);
     expect(inboxV2PermissionCatalog.map(({ id }) => id)).toEqual(
       Object.keys(expectedScopeMatrix)
@@ -573,7 +580,7 @@ describe("Inbox V2 permission/scope catalog", () => {
       Object.keys(validScopeByType)
     );
     expect(new Set(inboxV2PermissionCatalog.map(({ id }) => id)).size).toBe(
-      101
+      102
     );
     expect(Object.isFrozen(inboxV2PermissionScopeCatalog)).toBe(true);
     expect(Object.isFrozen(inboxV2PermissionScopeCatalog.payload)).toBe(true);
@@ -607,7 +614,7 @@ describe("Inbox V2 permission/scope catalog", () => {
         payload.entries.length
       ])
     ).toEqual([
-      ["inbox-v2-permission", 101],
+      ["inbox-v2-permission", 102],
       ["inbox-v2-permission-scope", 12],
       ["inbox-v2-permission-guard-profile", 21],
       ["inbox-v1-permission-mapping", 25]
@@ -979,6 +986,7 @@ describe("Inbox V2 permission/scope catalog", () => {
   it("reserves policy application and automatic identity resolution for trusted services", () => {
     for (const permissionId of [
       "core:conversation.access_binding.apply_policy",
+      "core:conversation.timeline_append_system",
       "core:identity.auto_resolve"
     ]) {
       expect(

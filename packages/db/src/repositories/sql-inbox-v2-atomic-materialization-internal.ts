@@ -7,7 +7,7 @@ const atomicSealReceipts = new WeakMap<
   object,
   Readonly<{
     token: object;
-    manifest: InboxV2AtomicMessageCreationSealManifest;
+    manifest: InboxV2AtomicMaterializationSealManifest;
   }>
 >();
 const atomicSealReceiptTokens = new WeakSet<object>();
@@ -44,6 +44,28 @@ export type InboxV2AtomicMessageCreationSealManifest = Readonly<{
   outboundDispatch: InboxV2AtomicOutboundDispatchSealManifest | null;
   sourceOccurrence: InboxV2AtomicSourceOccurrenceSealManifest | null;
 }>;
+
+export type InboxV2AtomicTimelineItemCreationSealManifest = Readonly<{
+  kind: "timeline_item_creation";
+  tenantId: string;
+  timelineItemId: string;
+  timelineItemRevision: string;
+  conversationId: string;
+  timelineSequence: string;
+  subjectKind: "system_event";
+  activityKind: "non_activity";
+  audience: "workforce_metadata";
+  stateSchemaId: string;
+  stateSchemaVersion: string;
+  stateHash: string;
+  payloadReference: InboxV2PayloadReference;
+  domainCommitReference: InboxV2PayloadReference;
+  event: InboxV2AtomicStreamEventManifest;
+}>;
+
+export type InboxV2AtomicMaterializationSealManifest =
+  | InboxV2AtomicMessageCreationSealManifest
+  | InboxV2AtomicTimelineItemCreationSealManifest;
 
 export type InboxV2AtomicStreamEventManifest = Readonly<{
   typeId: string;
@@ -130,7 +152,7 @@ export function revokeInboxV2AtomicSealExecutor(context: object): void {
  */
 export function issueInboxV2AtomicMaterializationSealReceipt(
   atomicMaterializationToken: object,
-  manifest: InboxV2AtomicMessageCreationSealManifest
+  manifest: InboxV2AtomicMaterializationSealManifest
 ): InboxV2AtomicMaterializationSealReceipt {
   assertObjectCapability(
     atomicMaterializationToken,
@@ -222,7 +244,7 @@ export function revokeInboxV2AtomicOutboundRouteProofs(
 export function consumeInboxV2AtomicMaterializationSealReceipt(
   receipt: InboxV2AtomicMaterializationSealReceipt,
   atomicMaterializationToken: object
-): InboxV2AtomicMessageCreationSealManifest {
+): InboxV2AtomicMaterializationSealManifest {
   assertObjectCapability(
     atomicMaterializationToken,
     "Inbox V2 atomic materialization token"
@@ -267,15 +289,16 @@ export function revokeInboxV2AtomicMaterializationSealReceipt(
 }
 
 function recursivelyFrozenManifest(
-  manifest: InboxV2AtomicMessageCreationSealManifest
-): InboxV2AtomicMessageCreationSealManifest {
+  manifest: InboxV2AtomicMaterializationSealManifest
+): InboxV2AtomicMaterializationSealManifest {
   if (
     typeof manifest !== "object" ||
     manifest === null ||
-    manifest.kind !== "message_creation"
+    (manifest.kind !== "message_creation" &&
+      manifest.kind !== "timeline_item_creation")
   ) {
     throw new TypeError(
-      "Inbox V2 atomic seal receipt requires a Message-creation manifest."
+      "Inbox V2 atomic seal receipt requires a supported canonical creation manifest."
     );
   }
   return recursivelyFrozenValue(manifest);

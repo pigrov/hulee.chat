@@ -1702,12 +1702,25 @@ participant set.
 Goal: provide one ordered, auditable timeline that supports messenger parity and
 future non-chat items without a universal JSON message.
 
-- [ ] `INB2-MSG-001` Implement monotonic timeline sequencing and item creation.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-SRC-007`, `INB2-DB-005`.
+- [x] `INB2-MSG-001` Implement monotonic timeline sequencing and item creation.
+  - State: `done`; Priority: `P0`; Started: `2026-07-18`; Completed:
+    `2026-07-18`; Depends on: `INB2-SRC-007`, `INB2-DB-005`.
   - Acceptance: concurrent inbound/outbound/system items receive unique ordered
     sequence values and preserve occurred/received/provider timestamps.
   - Verification: concurrency and retry tests produce no duplicate or regressed
-    sequence. Evidence: -
+    sequence. Evidence: the real authorised inbound/provider-native
+    outbound/system race rebuilds both stale writers after `revision.conflict`
+    and commits contiguous Timeline sequences and tenant-stream positions
+    `1..3` while preserving source/provider clocks. Focused tests passed `8/8`
+    files / `553/553` tests; the disposable PostgreSQL gate applied `50`
+    migrations with contract
+    `sha256:a1c86bee22a9be596667d952cdfddef294517d19b3d73f677c79ee1c38995274`
+    and passed `30/30` files / `299` tests (`6` opt-in scenarios skipped);
+    preserve/N-1/RBAC passed `3/3` files / `17/17` tests; `db:check`, N-1
+    reproducibility and the clean-worktree `pnpm check` passed, including
+    `354/354` default files / `3694/3694` tests; two independent final reviews
+    returned `READY`. Detailed evidence is in
+    `docs/product/inbox-v2-msg-001-monotonic-timeline.md`.
 
 - [ ] `INB2-MSG-002` Implement outbound send with explicit route and mutation ID.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-MSG-001`,

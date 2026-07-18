@@ -445,7 +445,17 @@ async function seedReadTargets(
           created_at, updated_at
         ) values (
           ${eventId}, ${tenantId}, 'inbox_v2.db006.read_target', 'v1', ${t0},
-          ${JSON.stringify({ sequence: target })}::jsonb, ${t1}, ${t1}
+          ${JSON.stringify({
+            schemaId: "core:inbox-v2.conversation-system-event-payload",
+            schemaVersion: "v1",
+            conversation: {
+              tenantId,
+              kind: "conversation",
+              id: conversationId
+            },
+            recordedAt: t1,
+            sequence: target
+          })}::jsonb, ${t1}, ${t1}
         )
       `);
       await transaction.execute(sql`

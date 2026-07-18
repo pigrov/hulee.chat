@@ -15,7 +15,8 @@ import {
   type HuleeDatabase
 } from "../client";
 import {
-  createSqlInboxV2ConversationRepository,
+  allocateInboxV2TimelineRangeInTransaction,
+  createInternalSqlInboxV2ConversationRepository as createSqlInboxV2ConversationRepository,
   type AllocateInboxV2TimelineRangeInput,
   type InboxV2TimelineRangeAllocation
 } from "./sql-inbox-v2-conversation-repository";
@@ -75,6 +76,10 @@ describePostgres("SQL Inbox V2 Conversation repository (PostgreSQL)", () => {
       `);
       await transaction.execute(sql`
         delete from inbox_v2_conversations
+        where tenant_id in (${tenantA}, ${tenantB})
+      `);
+      await transaction.execute(sql`
+        delete from event_store
         where tenant_id in (${tenantA}, ${tenantB})
       `);
     });
@@ -302,6 +307,277 @@ describePostgres("SQL Inbox V2 Conversation repository (PostgreSQL)", () => {
     expect(retry.record.aggregate.head.revision).toBe("3");
   });
 
+  it("serializes concurrent inbound, outbound and system plans without reordering their source clocks", async () => {
+    const repository = createSqlInboxV2ConversationRepository(db);
+    const conversationId = conversation("mixed-writers");
+    await repository.create(createInput(tenantA, conversationId, "1", t0));
+    const writers = [
+      {
+        kind: "inbound",
+        item: item("mixed-inbound", t3, true),
+        receivedAt: t3
+      },
+      {
+        kind: "outbound",
+        item: item("mixed-outbound", t1, true),
+        receivedAt: t2
+      },
+      {
+        kind: "system",
+        item: item("mixed-system", t2, false),
+        receivedAt: t3
+      }
+    ] as const;
+    const initialInput = (writer: (typeof writers)[number]) =>
+      allocationInput(tenantA, conversationId, "1", "2", t3, [writer.item]);
+    let releaseInbound = (): void => undefined;
+    let markInboundLocked = (): void => undefined;
+    const inboundLocked = new Promise<void>((resolve) => {
+      markInboundLocked = resolve;
+    });
+    const inboundRelease = new Promise<void>((resolve) => {
+      releaseInbound = resolve;
+    });
+    const inbound = writers[0];
+    const inboundAttempt = repository.withTimelineSequenceAllocation(
+      initialInput(inbound),
+      async (context) => {
+        await persistAllocatedCallItems(context, initialInput(inbound), {
+          [inbound.item.itemId]: inbound.receivedAt
+        });
+        markInboundLocked();
+        await inboundRelease;
+        return inbound.kind;
+      }
+    );
+    await inboundLocked;
+
+    let contendersSettled = false;
+    const contenderAttempts = Promise.all(
+      writers.slice(1).map((writer) =>
+        repository.withTimelineSequenceAllocation(
+          initialInput(writer),
+          async (context) => {
+            await persistAllocatedCallItems(context, initialInput(writer), {
+              [writer.item.itemId]: writer.receivedAt
+            });
+            return writer.kind;
+          }
+        )
+      )
+    ).finally(() => {
+      contendersSettled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(contendersSettled).toBe(false);
+    releaseInbound();
+
+    const first = await inboundAttempt;
+    const contenders = await contenderAttempts;
+    expect(first).toMatchObject({
+      kind: "allocated",
+      allocation: { firstSequence: "1", lastSequence: "1" },
+      result: "inbound"
+    });
+    expect(contenders.map(({ kind }) => kind)).toEqual([
+      "revision_conflict",
+      "revision_conflict"
+    ]);
+
+    for (const [index, writer] of writers.slice(1).entries()) {
+      const current = await repository.findById({
+        tenantId: tenantA,
+        conversationId
+      });
+      if (current === null) {
+        throw new Error("Mixed-writer Conversation disappeared.");
+      }
+      const retryInput = allocationInput(
+        tenantA,
+        conversationId,
+        current.aggregate.head.revision,
+        String(index + 3),
+        t3,
+        [writer.item]
+      );
+      await expect(
+        repository.withTimelineSequenceAllocation(
+          retryInput,
+          async (context) => {
+            await persistAllocatedCallItems(context, retryInput, {
+              [writer.item.itemId]: writer.receivedAt
+            });
+            return writer.kind;
+          }
+        )
+      ).resolves.toMatchObject({
+        kind: "allocated",
+        allocation: {
+          firstSequence: String(index + 2),
+          lastSequence: String(index + 2)
+        },
+        result: writer.kind
+      });
+    }
+
+    const rows = await db.execute<{
+      id: string;
+      timeline_sequence: string;
+      occurred_at: string;
+      received_at: string;
+    }>(sql`
+      select id, timeline_sequence::text as timeline_sequence,
+             to_char(occurred_at at time zone 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as occurred_at,
+             to_char(received_at at time zone 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as received_at
+        from inbox_v2_timeline_items
+       where tenant_id = ${tenantA}
+         and conversation_id = ${conversationId}
+       order by timeline_sequence
+    `);
+    expect(rows.rows).toEqual([
+      {
+        id: inbound.item.itemId,
+        timeline_sequence: "1",
+        occurred_at: t3,
+        received_at: t3
+      },
+      {
+        id: writers[1].item.itemId,
+        timeline_sequence: "2",
+        occurred_at: t1,
+        received_at: t2
+      },
+      {
+        id: writers[2].item.itemId,
+        timeline_sequence: "3",
+        occurred_at: t2,
+        received_at: t3
+      }
+    ]);
+    expect(
+      (await repository.findById({ tenantId: tenantA, conversationId }))
+        ?.aggregate.head
+    ).toMatchObject({ latestTimelineSequence: "3", revision: "4" });
+  });
+
+  it("locks a referenced system event until its Timeline binding commits", async () => {
+    const conversationId = conversation("system-event-binding-race");
+    const eventId = `event:db001-system-binding-${runId}`;
+    const itemId = inboxV2TimelineItemIdSchema.parse(
+      `timeline_item:system-binding-${runId}`
+    );
+    const payload = {
+      schemaId: "core:inbox-v2.conversation-system-event-payload",
+      schemaVersion: "v1",
+      conversation: {
+        tenantId: tenantA,
+        kind: "conversation",
+        id: conversationId
+      },
+      recordedAt: t2
+    };
+    const repository = createSqlInboxV2ConversationRepository(db);
+    await repository.create(createInput(tenantA, conversationId, "1", t0));
+    await db.transaction(async (transaction) => {
+      await transaction.execute(
+        sql`set local session_replication_role = replica`
+      );
+      await transaction.execute(sql`
+        insert into event_store (
+          id, tenant_id, type, version, occurred_at, payload,
+          created_at, updated_at
+        ) values (
+          ${eventId}, ${tenantA}, 'inbox_v2.db001.system_binding', 'v1',
+          ${t1}, ${JSON.stringify(payload)}::jsonb, ${t2}, ${t2}
+        )
+      `);
+      await transaction.execute(sql`
+        insert into inbox_v2_timeline_items (
+          tenant_id, id, conversation_id, timeline_sequence,
+          subject_kind, subject_id, visibility, activity_kind,
+          activity_reason_id, occurred_at, received_at, revision,
+          last_changed_stream_position, created_at, updated_at
+        ) values (
+          ${tenantA}, ${itemId}, ${conversationId}, 1,
+          'system_event', ${eventId}, 'workforce_metadata', 'non_activity',
+          'core:system_binding_test', ${t1}, ${t2}, 1, 2, ${t2}, ${t2}
+        )
+      `);
+    });
+
+    let markReferenceLocked = (): void => undefined;
+    let releaseReference = (): void => undefined;
+    const referenceLocked = new Promise<void>((resolve) => {
+      markReferenceLocked = resolve;
+    });
+    const referenceRelease = new Promise<void>((resolve) => {
+      releaseReference = resolve;
+    });
+    const referenceCommit = db.transaction(async (transaction) => {
+      await transaction.execute(sql`
+        insert into inbox_v2_timeline_subject_details (
+          tenant_id, timeline_item_id, subject_kind, system_event_id,
+          system_actor_id, record_revision, created_at
+        ) values (
+          ${tenantA}, ${itemId}, 'system_event', ${eventId},
+          'trusted_service:db001-binding-test', 1, ${t2}
+        )
+      `);
+      markReferenceLocked();
+      await referenceRelease;
+    });
+    await referenceLocked;
+
+    let updateSettled = false;
+    const updateOutcome = db
+      .execute(
+        sql`
+        update event_store
+           set payload = payload || '{"tampered":true}'::jsonb,
+               updated_at = ${t3}
+         where tenant_id = ${tenantA}
+           and id = ${eventId}
+        returning id
+      `
+      )
+      .then(
+        () => ({ kind: "updated" as const, error: null }),
+        (error: unknown) => ({ kind: "rejected" as const, error })
+      )
+      .finally(() => {
+        updateSettled = true;
+      });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    try {
+      expect(updateSettled).toBe(false);
+    } finally {
+      releaseReference();
+    }
+    await referenceCommit;
+    const update = await updateOutcome;
+    expect(update.kind).toBe("rejected");
+    if (update.kind !== "rejected") {
+      throw new Error("Referenced system event update unexpectedly committed.");
+    }
+    const updateCause =
+      update.error instanceof Error && "cause" in update.error
+        ? update.error.cause
+        : null;
+    expect(updateCause).toBeInstanceOf(Error);
+    expect((updateCause as Error).message).toContain(
+      "inbox_v2.referenced_system_event_immutable"
+    );
+    const stored = await db.execute<{ payload: unknown }>(sql`
+      select payload
+        from event_store
+       where tenant_id = ${tenantA}
+         and id = ${eventId}
+    `);
+    expect(stored.rows[0]?.payload).toEqual(payload);
+  });
+
   it("rolls a reserved range back with its callback and reuses it on retry", async () => {
     const repository = createSqlInboxV2ConversationRepository(db);
     const conversationId = conversation("rollback");
@@ -346,6 +622,37 @@ describePostgres("SQL Inbox V2 Conversation repository (PostgreSQL)", () => {
       lastSequence: "2"
     });
     expect(retry.result).toBe("1");
+  });
+
+  it("composes a range into a caller-owned PostgreSQL transaction", async () => {
+    const repository = createSqlInboxV2ConversationRepository(db);
+    const conversationId = conversation("transaction-local");
+    await repository.create(createInput(tenantA, conversationId, "1", t0));
+    const input = allocationInput(tenantA, conversationId, "1", "2", t1, [
+      item("transaction-local-1", t1, true)
+    ]);
+
+    const outcome = await db.transaction((transaction) =>
+      allocateInboxV2TimelineRangeInTransaction(
+        transaction as unknown as RawSqlExecutor,
+        input,
+        async (context) => {
+          await persistAllocatedCallItems(context, input);
+          return context.allocation.firstSequence;
+        }
+      )
+    );
+
+    expect(outcome).toMatchObject({
+      kind: "allocated",
+      allocation: { firstSequence: "1", lastSequence: "1" },
+      result: "1",
+      record: {
+        aggregate: {
+          head: { latestTimelineSequence: "1", revision: "2" }
+        }
+      }
+    });
   });
 
   it("keeps a waiting allocator blocked and exposes no gap after the holder rolls back", async () => {
@@ -616,7 +923,8 @@ async function persistAllocatedCallItems(
     allocation: InboxV2TimelineRangeAllocation;
     executor: RawSqlExecutor;
   },
-  input: AllocateInboxV2TimelineRangeInput
+  input: AllocateInboxV2TimelineRangeInput,
+  receivedAtByItemId: Readonly<Record<string, string>> = {}
 ): Promise<void> {
   for (const [index, assignment] of context.allocation.assignments.entries()) {
     const allocationItem = input.items[index];
@@ -636,7 +944,8 @@ async function persistAllocatedCallItems(
         'source_item_policy',
         ${allocationItem.activityEligible ? "eligible" : "non_activity"},
         ${allocationItem.activityEligible ? null : "core:db001_fixture"},
-        ${allocationItem.occurredAt}, ${input.changedAt}, 1,
+        ${allocationItem.occurredAt},
+        ${receivedAtByItemId[assignment.itemId] ?? input.changedAt}, 1,
         ${input.streamPosition}, ${input.changedAt}, ${input.changedAt}
       )
     `);

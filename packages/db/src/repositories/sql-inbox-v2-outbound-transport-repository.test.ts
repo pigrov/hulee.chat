@@ -1210,7 +1210,7 @@ async function expectRouteContextRejectedBeforeSql(
   await expect(result).rejects.toThrow(
     mode === "atomic"
       ? "Inbox V2 route resolution crossed its authorized message-send context."
-      : "Message and provider-dispatch mutations require withAuthorizedAtomicMaterialization."
+      : "Message, TimelineItem and provider-dispatch mutations require withAuthorizedAtomicMaterialization."
   );
   expect(seamQueries).toEqual(mode === "atomic" ? [] : undefined);
 }

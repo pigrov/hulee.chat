@@ -1750,6 +1750,88 @@ describePostgres("Inbox V2 clean install and guarded reset", () => {
       );
     }
 
+    await withClient(database.url, (client) =>
+      client.query(`
+        drop index
+          public.inbox_v2_timeline_subject_details_system_event_unique;
+        create unique index
+          inbox_v2_timeline_subject_details_system_event_unique
+          on public.inbox_v2_timeline_subject_details using btree
+            (tenant_id, system_event_id)
+          where system_event_id is null
+      `)
+    );
+    try {
+      await expectInstallFailure("inbox_v2.current_schema_definition_mismatch");
+    } finally {
+      await withClient(database.url, (client) =>
+        client.query(`
+          drop index
+            public.inbox_v2_timeline_subject_details_system_event_unique;
+          create unique index
+            inbox_v2_timeline_subject_details_system_event_unique
+            on public.inbox_v2_timeline_subject_details using btree
+              (tenant_id, system_event_id)
+            where system_event_id is not null
+        `)
+      );
+    }
+
+    for (const [relation, trigger] of [
+      [
+        "inbox_v2_timeline_subject_details",
+        "inbox_v2_system_event_timeline_binding_guard"
+      ],
+      ["event_store", "inbox_v2_referenced_system_event_immutable_guard"]
+    ]) {
+      const definition = await readTriggerDefinition(
+        database.url,
+        relation,
+        trigger
+      );
+      await withClient(database.url, (client) =>
+        client.query(`drop trigger ${trigger} on public.${relation}`)
+      );
+      try {
+        await expectInstallFailure("inbox_v2.current_schema_incomplete");
+      } finally {
+        await withClient(database.url, (client) => client.query(definition));
+      }
+    }
+
+    for (const routine of [
+      "inbox_v2_system_event_timeline_binding_guard",
+      "inbox_v2_referenced_system_event_immutable_guard"
+    ]) {
+      const definition = await readFunctionDefinition(
+        database.url,
+        `public.${routine}()`
+      );
+      await withClient(database.url, (client) =>
+        client.query(`
+          create or replace function public.${routine}()
+          returns trigger
+          language plpgsql
+          set search_path = pg_catalog, public, pg_temp
+          as $function$
+          begin
+            if tg_op = 'DELETE' then
+              return old;
+            end if;
+            return new;
+          end;
+          $function$
+        `)
+      );
+      try {
+        await expectInstallFailure(
+          "inbox_v2.current_schema_definition_mismatch"
+        );
+      } finally {
+        await withClient(database.url, (client) => client.query(definition));
+      }
+    }
+
     const timelineClockConstraintDefinition = await readConstraintDefinition(
       database.url,
       "inbox_v2_timeline_items",
@@ -2009,6 +2091,19 @@ async function readTriggerDefinition(databaseUrl, relation, trigger) {
     );
     if (result.rows.length !== 1) {
       throw new Error(`Missing trigger definition for ${relation}.${trigger}.`);
+    }
+    return result.rows[0].definition;
+  });
+}
+
+async function readFunctionDefinition(databaseUrl, signature) {
+  return withClient(databaseUrl, async (client) => {
+    const result = await client.query(
+      `select pg_get_functiondef(to_regprocedure($1)) as definition`,
+      [signature]
+    );
+    if (result.rows.length !== 1 || result.rows[0].definition === null) {
+      throw new Error(`Missing function definition for ${signature}.`);
     }
     return result.rows[0].definition;
   });

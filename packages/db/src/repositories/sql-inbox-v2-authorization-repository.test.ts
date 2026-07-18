@@ -42,8 +42,10 @@ import {
 } from "./sql-inbox-v2-authorization-repository";
 import {
   issueInboxV2AtomicMaterializationSealReceipt,
+  type InboxV2AtomicMaterializationSealManifest,
   type InboxV2AtomicMaterializationSealReceipt,
-  type InboxV2AtomicMessageCreationSealManifest
+  type InboxV2AtomicMessageCreationSealManifest,
+  type InboxV2AtomicTimelineItemCreationSealManifest
 } from "./sql-inbox-v2-atomic-materialization-internal";
 import {
   computeInboxV2TimelineMessageCommitDigest,
@@ -68,7 +70,7 @@ function atomicSealResult<TResult>(
     "atomicMaterializationToken"
   >,
   result: TResult,
-  manifest: InboxV2AtomicMessageCreationSealManifest = atomicMessageCreationSealManifest()
+  manifest: InboxV2AtomicMaterializationSealManifest = atomicMessageCreationSealManifest()
 ): InboxV2AuthorizedAtomicMaterializationSealResult<TResult> {
   return {
     result,
@@ -542,7 +544,7 @@ describe("SQL Inbox V2 authorization mutation repository", () => {
           return { result: null };
         })
       ).rejects.toThrow(
-        "Message and provider-dispatch mutations require withAuthorizedAtomicMaterialization"
+        "Message, TimelineItem and provider-dispatch mutations require withAuthorizedAtomicMaterialization"
       );
       expect(callbackCount).toBe(0);
       expect(executor.transactionCount).toBe(0);
@@ -979,6 +981,132 @@ describe("SQL Inbox V2 authorization mutation repository", () => {
         async (context) => atomicSealResult(context, null)
       )
     ).resolves.toMatchObject({ kind: "applied" });
+  });
+
+  it("accepts one exact non-activity system TimelineItem seal", async () => {
+    const input = atomicTimelineItemMutationInput();
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        new RoutingAuthorizationExecutor()
+      ).withAuthorizedAtomicMaterialization(
+        input,
+        async () => null,
+        async (context) =>
+          atomicSealResult(
+            context,
+            null,
+            atomicTimelineItemCreationSealManifest(input)
+          )
+      )
+    ).resolves.toMatchObject({ kind: "applied" });
+  });
+
+  it("rejects notification or workflow work attached to a non-activity system TimelineItem", async () => {
+    const base = atomicTimelineItemMutationInput();
+    const projection = base.records.outboxIntents[0]!;
+    const input = {
+      ...base,
+      records: {
+        ...base.records,
+        outboxIntents: [
+          projection,
+          {
+            ...projection,
+            id: "outbox-intent:system-timeline-notification",
+            ordinal: 2,
+            typeId: "core:notification.evaluate",
+            handlerId: "core:timeline-notification",
+            effectClass: "notification",
+            consumerDedupeKey: hashD,
+            intentHash: hashD
+          }
+        ]
+      }
+    } as unknown as WithPrivilegedAuthorizationMutationInput;
+    const executor = new RoutingAuthorizationExecutor();
+
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        executor
+      ).withAuthorizedAtomicMaterialization(
+        input,
+        async () => null,
+        async (context) =>
+          atomicSealResult(
+            context,
+            null,
+            atomicTimelineItemCreationSealManifest(base)
+          )
+      )
+    ).rejects.toThrow("atomic TimelineItem seal manifest does not match");
+    expectNoAtomicStreamClosure(executor);
+  });
+
+  it("rejects a separate change, event and side effect smuggled through a system TimelineItem command", async () => {
+    const base = atomicTimelineItemMutationInput();
+    const change = base.records.changes[0]!;
+    const event = base.records.events[0]!;
+    const projection = base.records.outboxIntents[0]!;
+    const companionEntity = {
+      tenantId,
+      entityTypeId: "core:conversation",
+      entityId: "conversation:system-timeline-companion"
+    } as const;
+    const companionChange = {
+      ...change,
+      id: "change:system-timeline-companion",
+      ordinal: 2,
+      entity: companionEntity,
+      timeline: null
+    };
+    const companionEvent = {
+      ...event,
+      id: "event:system-timeline-companion",
+      typeId: "core:conversation.changed" as const,
+      ordinal: "2",
+      changeIds: [companionChange.id],
+      subjects: [companionEntity]
+    };
+    const input = {
+      ...base,
+      records: {
+        ...base.records,
+        changes: [change, companionChange],
+        events: [event, companionEvent],
+        outboxIntents: [
+          projection,
+          {
+            ...projection,
+            id: "outbox-intent:system-timeline-companion",
+            ordinal: 2,
+            typeId: "core:notification.evaluate",
+            handlerId: "core:timeline-notification",
+            effectClass: "notification",
+            eventId: companionEvent.id,
+            changeIds: [companionChange.id],
+            consumerDedupeKey: hashD,
+            intentHash: hashD
+          }
+        ]
+      }
+    } as unknown as WithPrivilegedAuthorizationMutationInput;
+    const executor = new RoutingAuthorizationExecutor();
+
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        executor
+      ).withAuthorizedAtomicMaterialization(
+        input,
+        async () => null,
+        async (context) =>
+          atomicSealResult(
+            context,
+            null,
+            atomicTimelineItemCreationSealManifest(base)
+          )
+      )
+    ).rejects.toThrow("atomic TimelineItem seal manifest does not match");
+    expectNoAtomicStreamClosure(executor);
   });
 
   it.each([
@@ -3175,6 +3303,118 @@ function atomicMessageMutationInput(): WithPrivilegedAuthorizationMutationInput 
   return messageDomainMutationInput(
     internalMessageCreationCommitAt(occurredAt)
   );
+}
+
+function atomicTimelineItemMutationInput(): WithPrivilegedAuthorizationMutationInput {
+  const base = atomicMessageMutationInput();
+  const originalChange = base.records.changes[0]!;
+  const originalEvent = base.records.events[0]!;
+  const originalProjection = base.records.outboxIntents[0]!;
+  const timelineItemId = "timeline_item:atomic-system-event";
+  const entity = {
+    tenantId,
+    entityTypeId: "core:timeline-item",
+    entityId: timelineItemId
+  } as const;
+  const payloadReference = {
+    tenantId,
+    recordId: timelineItemId,
+    schemaId: "core:inbox-v2.timeline-item",
+    schemaVersion: "v1",
+    digest: hashC
+  };
+  const domainCommitReference = {
+    tenantId,
+    recordId: timelineItemId,
+    schemaId: "core:inbox-v2.system-event-timeline-creation-commit",
+    schemaVersion: "v1",
+    digest: hashD
+  };
+  const change = {
+    ...originalChange,
+    entity,
+    audience: "workforce_metadata" as const,
+    state: {
+      kind: "upsert" as const,
+      stateSchemaId: payloadReference.schemaId,
+      stateSchemaVersion: payloadReference.schemaVersion,
+      stateHash: payloadReference.digest,
+      payloadReference,
+      domainCommitReference
+    }
+  };
+  const event = {
+    ...originalEvent,
+    typeId: "core:timeline.changed" as const,
+    payloadSchemaId: domainCommitReference.schemaId,
+    payloadSchemaVersion: domainCommitReference.schemaVersion,
+    subjects: [entity],
+    payloadReference: domainCommitReference
+  };
+  return {
+    ...base,
+    command: {
+      ...base.command,
+      resultReference: payloadReference
+    },
+    records: {
+      ...base.records,
+      changes: [change],
+      events: [event],
+      outboxIntents: [
+        {
+          ...originalProjection,
+          eventId: event.id,
+          changeIds: [change.id]
+        }
+      ],
+      audit: {
+        ...base.records.audit,
+        evidenceReference: domainCommitReference
+      }
+    }
+  } as unknown as WithPrivilegedAuthorizationMutationInput;
+}
+
+function atomicTimelineItemCreationSealManifest(
+  input: WithPrivilegedAuthorizationMutationInput
+): InboxV2AtomicTimelineItemCreationSealManifest {
+  const change = input.records.changes[0];
+  const event = input.records.events[0];
+  if (
+    change === undefined ||
+    change.timeline === undefined ||
+    change.timeline === null ||
+    change.state.kind !== "upsert" ||
+    event === undefined ||
+    event.payloadReference === null
+  ) {
+    throw new Error("System TimelineItem seal fixture is incomplete.");
+  }
+  return {
+    kind: "timeline_item_creation",
+    tenantId: input.tenantId,
+    timelineItemId: String(change.entity.entityId),
+    timelineItemRevision: String(change.resultingRevision),
+    conversationId: String(change.timeline.conversation.id),
+    timelineSequence: String(change.timeline.timelineSequence),
+    subjectKind: "system_event",
+    activityKind: "non_activity",
+    audience: "workforce_metadata",
+    stateSchemaId: change.state.stateSchemaId,
+    stateSchemaVersion: change.state.stateSchemaVersion,
+    stateHash: change.state.stateHash,
+    payloadReference: change.state.payloadReference,
+    domainCommitReference: change.state.domainCommitReference,
+    event: {
+      typeId: event.typeId,
+      payloadSchemaId: event.payloadSchemaId,
+      payloadSchemaVersion: event.payloadSchemaVersion,
+      payloadReference: event.payloadReference,
+      occurredAt: event.occurredAt,
+      recordedAt: event.recordedAt
+    }
+  };
 }
 
 function atomicProviderIoMutationInput(): WithPrivilegedAuthorizationMutationInput {

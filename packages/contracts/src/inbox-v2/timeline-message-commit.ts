@@ -268,7 +268,7 @@ export const inboxV2MessageCreationCommitSchema = z
         "Initial revision preserves the exact author, app actor and source occurrence planes."
       );
     }
-    addOriginIssues(context, commit, timelineItem.id);
+    addOriginIssues(context, commit, timelineItem);
     addExternalThreadMappingIssues(context, commit);
     addOutboundBindingIssues(context, commit);
     addActivityAndCausationIssues(context, commit, timelineItem);
@@ -597,7 +597,7 @@ function addActivityAndCausationIssues(
 function addOriginIssues(
   context: z.RefinementCtx,
   commit: z.infer<typeof inboxV2MessageCreationCommitSchema>,
-  timelineItemId: string
+  timelineItem: z.infer<typeof inboxV2TimelineItemSchema>
 ): void {
   const { message } = commit;
   if (message.origin.kind === "source_originated") {
@@ -627,7 +627,7 @@ function addOriginIssues(
       occurrence.resolution.externalMessageReference.id !== reference.id ||
       occurrence.providerActor?.kind !== "source_external_identity" ||
       reference.message.id !== message.id ||
-      reference.timelineItem.id !== timelineItemId ||
+      reference.timelineItem.id !== timelineItem.id ||
       reference.createdAt !== commit.timelineAllocation.committedAt ||
       link.message.id !== message.id ||
       link.sourceOccurrence.id !== occurrence.id ||
@@ -650,6 +650,20 @@ function addOriginIssues(
         "Source Message creation requires one exact non-echo occurrence and immutable external reference."
       );
       return;
+    }
+    if (timelineItem.occurredAt !== occurrence.observedAt) {
+      addIssue(
+        context,
+        ["timelineAllocation", "items", 0, "occurredAt"],
+        "Source Message occurrence time must match its exact SourceOccurrence observation time."
+      );
+    }
+    if (timelineItem.receivedAt !== occurrence.recordedAt) {
+      addIssue(
+        context,
+        ["timelineAllocation", "items", 0, "receivedAt"],
+        "Source Message receipt time must match its exact SourceOccurrence recording time."
+      );
     }
     const participant = commit.authorParticipant;
     if (

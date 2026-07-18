@@ -92,16 +92,16 @@
   },
   "upgradeTarget": {
     "folder": "packages/db/drizzle",
-    "count": 49,
+    "count": 50,
     "first": {
       "hash": "8347f51723c429250051338c4e0c0ca7f849aac0f550c47d2f15df081a169a9d",
       "createdAt": "1782111649246"
     },
     "last": {
-      "hash": "69f70258e318544a4de045ebb62afde31aab583b837dc456c85a06dcaa7eaca9",
-      "createdAt": "1784322065443"
+      "hash": "30941f17fab441b4a17102a876d365e3a1bf8b1fef54928e917b0402257f3290",
+      "createdAt": "1784366628935"
     },
-    "digest": "sha256:f1eb6d3b49875524c7467ea8c6ba01bed70dfc9138bc7ccf6ff198ba2d22b69a"
+    "digest": "sha256:a1c86bee22a9be596667d952cdfddef294517d19b3d73f677c79ee1c38995274"
   },
   "inputs": {
     "entry": {

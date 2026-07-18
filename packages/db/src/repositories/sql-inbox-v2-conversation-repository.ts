@@ -143,14 +143,24 @@ export type InboxV2ConversationRepository = Readonly<{
   compareAndSet(
     input: CompareAndSetInboxV2ConversationInput
   ): Promise<CompareAndSetInboxV2ConversationResult>;
-  withTimelineSequenceAllocation<TResult>(
-    input: AllocateInboxV2TimelineRangeInput,
-    persist: (context: {
-      allocation: InboxV2TimelineRangeAllocation;
-      executor: RawSqlExecutor;
-    }) => Promise<TResult>
-  ): Promise<AllocateInboxV2TimelineRangeResult<TResult>>;
 }>;
+
+/**
+ * Package-internal bootstrap/test seam. Production timeline writers must use
+ * an authorized atomic prepare/seal repository so the allocated tenant stream
+ * position, canonical item, event and projection outbox close together.
+ */
+export type InboxV2ConversationTimelineAllocationRepository =
+  InboxV2ConversationRepository &
+    Readonly<{
+      withTimelineSequenceAllocation<TResult>(
+        input: AllocateInboxV2TimelineRangeInput,
+        persist: (context: {
+          allocation: InboxV2TimelineRangeAllocation;
+          executor: RawSqlExecutor;
+        }) => Promise<TResult>
+      ): Promise<AllocateInboxV2TimelineRangeResult<TResult>>;
+    }>;
 
 type InboxV2ConversationAggregateRow = {
   conversation_tenant_id: unknown;
@@ -189,6 +199,18 @@ export class InboxV2PersistenceInvariantError extends Error {
 export function createSqlInboxV2ConversationRepository(
   executor: InboxV2ConversationTransactionExecutor | HuleeDatabase
 ): InboxV2ConversationRepository {
+  const repository = createInternalSqlInboxV2ConversationRepository(executor);
+  return Object.freeze({
+    create: repository.create,
+    findById: repository.findById,
+    compareAndSet: repository.compareAndSet
+  });
+}
+
+/** @internal Not exported from the `@hulee/db` package boundary. */
+export function createInternalSqlInboxV2ConversationRepository(
+  executor: InboxV2ConversationTransactionExecutor | HuleeDatabase
+): InboxV2ConversationTimelineAllocationRepository {
   const transactionExecutor =
     executor as unknown as InboxV2ConversationTransactionExecutor;
 
@@ -326,80 +348,103 @@ export function createSqlInboxV2ConversationRepository(
     ): Promise<AllocateInboxV2TimelineRangeResult<TResult>> {
       const normalized = normalizeTimelineAllocationInput(input);
 
-      return transactionExecutor.transaction(async (transaction) => {
-        const current = await loadConversationRecord(transaction, {
-          tenantId: normalized.tenantId,
-          conversationId: normalized.conversationId,
-          lock: true
-        });
-
-        if (current === null) {
-          return { kind: "not_found" };
-        }
-
-        if (
-          current.aggregate.head.revision !== normalized.expectedHeadRevision
-        ) {
-          return { kind: "revision_conflict", record: current };
-        }
-
-        assertForwardMutationMetadata({
-          currentPosition: current.headLastChangedStreamPosition,
-          nextPosition: normalized.streamPosition,
-          currentUpdatedAt: current.aggregate.head.updatedAt,
-          nextUpdatedAt: normalized.changedAt
-        });
-
-        const allocation = allocateTimelineRange(
-          current.aggregate.head.latestTimelineSequence,
-          normalized.items
-        );
-        const lastEligibleItem = findLastEligibleItem(
-          normalized.items,
-          allocation.assignments
-        );
-
-        const updateResult = await transaction.execute<InsertedConversationRow>(
-          buildCompareAndSetInboxV2ConversationHeadSql({
-            ...normalized,
-            expectedLatestTimelineSequence:
-              current.aggregate.head.latestTimelineSequence,
-            latestTimelineSequence: allocation.lastSequence,
-            latestActivityItemId:
-              lastEligibleItem?.itemId ??
-              current.aggregate.head.latestActivityItemId,
-            latestActivityTimelineSequence:
-              lastEligibleItem?.timelineSequence ??
-              current.aggregate.head.latestActivityTimelineSequence,
-            latestActivityAt:
-              lastEligibleItem?.occurredAt ??
-              current.aggregate.head.latestActivityAt
-          })
-        );
-
-        if (updateResult.rows.length !== 1) {
-          throw invariantError(
-            "Locked ConversationHead CAS failed its defensive revision/sequence predicate."
-          );
-        }
-
-        const result = await persist({ allocation, executor: transaction });
-        const record = await loadConversationRecord(transaction, {
-          tenantId: normalized.tenantId,
-          conversationId: normalized.conversationId,
-          lock: false
-        });
-
-        if (record === null) {
-          throw invariantError(
-            "Conversation aggregate disappeared after timeline allocation."
-          );
-        }
-
-        return { kind: "allocated", allocation, record, result };
-      });
+      return transactionExecutor.transaction((transaction) =>
+        allocateInboxV2TimelineRangeInTransaction(
+          transaction,
+          normalized,
+          persist
+        )
+      );
     }
   };
+}
+
+/**
+ * Package-internal composition seam for a caller that already owns the SQL
+ * transaction. It deliberately never opens or commits a transaction: the
+ * caller must keep this allocation, `persist`, and every related canonical
+ * write in its existing transaction and must propagate failures so rollback
+ * returns the range to the Conversation head.
+ *
+ * This symbol is intentionally not re-exported from the `@hulee/db` package
+ * boundary. Production command paths must additionally preserve the canonical
+ * domain-lock-before-tenant-stream-head order from ADR 0012.
+ */
+export async function allocateInboxV2TimelineRangeInTransaction<TResult>(
+  executor: RawSqlExecutor,
+  input: AllocateInboxV2TimelineRangeInput,
+  persist: (context: {
+    allocation: InboxV2TimelineRangeAllocation;
+    executor: RawSqlExecutor;
+  }) => Promise<TResult>
+): Promise<AllocateInboxV2TimelineRangeResult<TResult>> {
+  const normalized = normalizeTimelineAllocationInput(input);
+  const current = await loadConversationRecord(executor, {
+    tenantId: normalized.tenantId,
+    conversationId: normalized.conversationId,
+    lock: true
+  });
+
+  if (current === null) {
+    return { kind: "not_found" };
+  }
+
+  if (current.aggregate.head.revision !== normalized.expectedHeadRevision) {
+    return { kind: "revision_conflict", record: current };
+  }
+
+  assertForwardMutationMetadata({
+    currentPosition: current.headLastChangedStreamPosition,
+    nextPosition: normalized.streamPosition,
+    currentUpdatedAt: current.aggregate.head.updatedAt,
+    nextUpdatedAt: normalized.changedAt
+  });
+
+  const allocation = allocateTimelineRange(
+    current.aggregate.head.latestTimelineSequence,
+    normalized.items
+  );
+  const lastEligibleItem = findLastEligibleItem(
+    normalized.items,
+    allocation.assignments
+  );
+
+  const updateResult = await executor.execute<InsertedConversationRow>(
+    buildCompareAndSetInboxV2ConversationHeadSql({
+      ...normalized,
+      expectedLatestTimelineSequence:
+        current.aggregate.head.latestTimelineSequence,
+      latestTimelineSequence: allocation.lastSequence,
+      latestActivityItemId:
+        lastEligibleItem?.itemId ?? current.aggregate.head.latestActivityItemId,
+      latestActivityTimelineSequence:
+        lastEligibleItem?.timelineSequence ??
+        current.aggregate.head.latestActivityTimelineSequence,
+      latestActivityAt:
+        lastEligibleItem?.occurredAt ?? current.aggregate.head.latestActivityAt
+    })
+  );
+
+  if (updateResult.rows.length !== 1) {
+    throw invariantError(
+      "Locked ConversationHead CAS failed its defensive revision/sequence predicate."
+    );
+  }
+
+  const result = await persist({ allocation, executor });
+  const record = await loadConversationRecord(executor, {
+    tenantId: normalized.tenantId,
+    conversationId: normalized.conversationId,
+    lock: false
+  });
+
+  if (record === null) {
+    throw invariantError(
+      "Conversation aggregate disappeared after timeline allocation."
+    );
+  }
+
+  return { kind: "allocated", allocation, record, result };
 }
 
 export function buildInsertInboxV2ConversationSql(

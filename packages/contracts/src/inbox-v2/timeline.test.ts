@@ -16,6 +16,7 @@ import {
   fixtureOtherTenantId,
   fixtureReference,
   fixtureT0,
+  fixtureT1,
   fixtureT2,
   fixtureTenantId,
   fixtureTimelineAllocation,
@@ -45,6 +46,35 @@ describe("Inbox V2 timeline contracts", () => {
         contentBlocks: [{ kind: "text", text: "duplicated" }]
       }).success
     ).toBe(false);
+  });
+
+  it("accepts an item received at the same instant that it occurred", () => {
+    expect(
+      inboxV2TimelineItemSchema.safeParse({
+        ...fixtureTimelineItem(),
+        receivedAt: fixtureT1
+      }).success
+    ).toBe(true);
+  });
+
+  it("rejects an item received before it occurred", () => {
+    const parsed = inboxV2TimelineItemSchema.safeParse({
+      ...fixtureTimelineItem(),
+      occurredAt: fixtureT2,
+      receivedAt: fixtureT1
+    });
+
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: ["receivedAt"],
+            message: "TimelineItem cannot be received before it occurred."
+          })
+        ])
+      );
+    }
   });
 
   it("keeps StaffNote and work metadata outside external visibility", () => {

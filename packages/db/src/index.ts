@@ -37,6 +37,17 @@ export type {
   SealInboxV2PreparedMessageCreationResult
 } from "./repositories/sql-inbox-v2-timeline-message-repository";
 export {
+  INBOX_V2_SYSTEM_EVENT_TIMELINE_COMMAND_TYPE_ID,
+  INBOX_V2_SYSTEM_EVENT_TIMELINE_PERMISSION_ID,
+  prepareInboxV2SystemEventTimelineCreation,
+  sealInboxV2PreparedSystemEventTimelineCreation
+} from "./repositories/sql-inbox-v2-timeline-system-event-repository";
+export type {
+  InboxV2PreparedSystemEventTimelineCreationCapability,
+  PrepareInboxV2SystemEventTimelineCreationResult,
+  SealInboxV2PreparedSystemEventTimelineCreationResult
+} from "./repositories/sql-inbox-v2-timeline-system-event-repository";
+export {
   assertTenantScopedRows,
   buildApplyInboxV2ParticipantMembershipMutationSql,
   buildAppendTenantEventsSql,
@@ -353,8 +364,6 @@ export type {
   AuthEmailTokenRepository,
   AuthEmailTokenTarget,
   AuthSessionPrincipal,
-  AllocateInboxV2TimelineRangeInput,
-  AllocateInboxV2TimelineRangeResult,
   ApplyInboxV2ParticipantMembershipMutationInput,
   ClaimPendingOutboxInput,
   CompareAndSetInboxV2ConversationInput,
@@ -437,9 +446,6 @@ export type {
   LockExactActiveInboxV2TenantPolicyAuthorityResult,
   ListInboxV2SourceIdentityClaimHistoryInput,
   RevokeInboxV2TenantPolicyVersionResult,
-  InboxV2TimelineAllocationItem,
-  InboxV2TimelineRangeAllocation,
-  InboxV2TimelineSequenceAssignment,
   StartInboxV2ParticipantMembershipEpisodeInput,
   StartInboxV2ParticipantMembershipEpisodeResult,
   StartInboxV2ProviderMembershipEpisodeInput,

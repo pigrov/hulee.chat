@@ -1320,7 +1320,10 @@ export const inboxV2TimelineSubjectDetails = pgTable(
     index("inbox_v2_timeline_subject_details_tenant_idx").on(
       table.tenantId,
       table.timelineItemId
-    )
+    ),
+    uniqueIndex("inbox_v2_timeline_subject_details_system_event_unique")
+      .on(table.tenantId, table.systemEventId)
+      .where(sql`${table.systemEventId} is not null`)
   ]
 );
 

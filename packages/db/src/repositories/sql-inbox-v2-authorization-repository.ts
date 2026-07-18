@@ -50,7 +50,9 @@ import {
   revokeInboxV2AtomicOutboundRouteProofs,
   revokeInboxV2AtomicSealExecutor,
   type InboxV2AtomicMaterializationSealReceipt,
-  type InboxV2AtomicMessageCreationSealManifest
+  type InboxV2AtomicMessageCreationSealManifest,
+  type InboxV2AtomicStreamEventManifest,
+  type InboxV2AtomicTimelineItemCreationSealManifest
 } from "./sql-inbox-v2-atomic-materialization-internal";
 import type {
   RawSqlExecutor,
@@ -93,7 +95,8 @@ const POST_HEAD_INSERT_TABLES = new Set([
   "inbox_v2_timeline_content_payloads",
   "inbox_v2_timeline_content_revisions",
   "inbox_v2_timeline_contents",
-  "inbox_v2_timeline_items"
+  "inbox_v2_timeline_items",
+  "inbox_v2_timeline_subject_details"
 ]);
 const POST_HEAD_FORBIDDEN_SQL_PATTERN =
   /(?:;|--|\/\*|\*\/|\b(?:select|with|merge|delete|truncate|alter|create|drop|grant|revoke|copy|call|lock|from|using|join|union|intersect|except)\b|\bfor\s+(?:update|no\s+key\s+update|share|key\s+share)\b|\bpg_[a-z0-9_]*\s*\()/iu;
@@ -882,7 +885,8 @@ function assertInboxV2OnePhaseMutationDoesNotBypassAtomicMessageSeam(
   const hasAtomicMessageChange = input.records.changes.some(
     ({ entity }) =>
       entity.entityTypeId === "core:message" ||
-      entity.entityTypeId === "core:outbound-dispatch"
+      entity.entityTypeId === "core:outbound-dispatch" ||
+      entity.entityTypeId === "core:timeline-item"
   );
   const hasProviderDispatchIntent = input.records.outboxIntents.some(
     (intent) =>
@@ -896,7 +900,7 @@ function assertInboxV2OnePhaseMutationDoesNotBypassAtomicMessageSeam(
     hasProviderDispatchIntent
   ) {
     throw new TypeError(
-      "Message and provider-dispatch mutations require withAuthorizedAtomicMaterialization."
+      "Message, TimelineItem and provider-dispatch mutations require withAuthorizedAtomicMaterialization."
     );
   }
 }
@@ -1082,7 +1086,14 @@ async function persistAuthorizedAtomicMaterialization<TPrepared, TResult>(
         sealed.receipt,
         atomicMaterializationToken
       );
-      assertInboxV2AtomicMessageCreationSealManifest(input, sealManifest);
+      if (sealManifest.kind === "message_creation") {
+        assertInboxV2AtomicMessageCreationSealManifest(input, sealManifest);
+      } else {
+        assertInboxV2AtomicTimelineItemCreationSealManifest(
+          input,
+          sealManifest
+        );
+      }
     } finally {
       authorizedAtomicMaterializationContexts.delete(sealContext);
       materializationPhase.closePostHeadWritePhase();
@@ -6684,10 +6695,84 @@ function assertInboxV2AtomicMessageCreationSealManifest(
   );
 }
 
+function assertInboxV2AtomicTimelineItemCreationSealManifest(
+  input: WithPrivilegedAuthorizationMutationInput,
+  manifest: InboxV2AtomicTimelineItemCreationSealManifest
+): void {
+  const timelineItemChanges = input.records.changes.filter(
+    (change) => change.entity.entityTypeId === "core:timeline-item"
+  );
+  const change = timelineItemChanges.find(
+    (candidate) =>
+      candidate.entity.tenantId === manifest.tenantId &&
+      String(candidate.entity.entityId) === String(manifest.timelineItemId)
+  );
+  const state = change?.state;
+  const timeline = change?.timeline;
+  const commandResultReference = input.command.resultReference;
+  const forbiddenProviderIntents = input.records.outboxIntents.filter(
+    (intent) =>
+      intent.effectClass === "provider_io" ||
+      intent.typeId === "core:provider.dispatch"
+  );
+  if (
+    input.tenantId !== manifest.tenantId ||
+    input.records.changes.length !== 1 ||
+    input.records.events.length !== 1 ||
+    input.records.outboxIntents.length !== 1 ||
+    timelineItemChanges.length !== 1 ||
+    change === undefined ||
+    String(change.resultingRevision) !== manifest.timelineItemRevision ||
+    change.audience !== manifest.audience ||
+    timeline === undefined ||
+    timeline === null ||
+    timeline.conversation.tenantId !== manifest.tenantId ||
+    String(timeline.conversation.id) !== String(manifest.conversationId) ||
+    String(timeline.timelineSequence) !== manifest.timelineSequence ||
+    manifest.subjectKind !== "system_event" ||
+    manifest.activityKind !== "non_activity" ||
+    state?.kind !== "upsert" ||
+    state.stateSchemaId !== manifest.stateSchemaId ||
+    state.stateSchemaVersion !== manifest.stateSchemaVersion ||
+    state.stateHash !== manifest.stateHash ||
+    !payloadReferencesMatch(
+      state.payloadReference,
+      manifest.payloadReference
+    ) ||
+    !payloadReferencesMatch(
+      state.domainCommitReference,
+      manifest.domainCommitReference
+    ) ||
+    commandResultReference === null ||
+    !payloadReferencesMatch(commandResultReference, state.payloadReference) ||
+    forbiddenProviderIntents.length !== 0
+  ) {
+    throw atomicTimelineItemSealManifestMismatch();
+  }
+
+  const event = assertInboxV2AtomicEntityEventAndProjectionClosure(
+    input,
+    change,
+    manifest.event,
+    atomicTimelineItemSealManifestMismatch
+  );
+  const forbiddenTimelineSideEffects = input.records.outboxIntents.filter(
+    (intent) =>
+      (String(intent.eventId) === String(event.id) ||
+        intent.changeIds.some((id) => String(id) === String(change.id))) &&
+      (intent.effectClass !== "projection" ||
+        intent.typeId !== "core:projection.update")
+  );
+  if (forbiddenTimelineSideEffects.length !== 0) {
+    throw atomicTimelineItemSealManifestMismatch();
+  }
+}
+
 function assertInboxV2AtomicEntityEventAndProjectionClosure(
   input: WithPrivilegedAuthorizationMutationInput,
   change: InboxV2AuthorizationStreamChangeInput,
-  manifest: InboxV2AtomicMessageCreationSealManifest["event"]
+  manifest: InboxV2AtomicStreamEventManifest,
+  mismatch: () => Error = atomicMessageSealManifestMismatch
 ): InboxV2AuthorizationDomainEventInput {
   const events = input.records.events.filter(
     (event) =>
@@ -6725,7 +6810,7 @@ function assertInboxV2AtomicEntityEventAndProjectionClosure(
         String(subject.entityId) === String(change.entity.entityId)
     )
   ) {
-    throw atomicMessageSealManifestMismatch();
+    throw mismatch();
   }
   const matchingProjections = input.records.outboxIntents.filter(
     (intent) =>
@@ -6737,7 +6822,7 @@ function assertInboxV2AtomicEntityEventAndProjectionClosure(
       )
   );
   if (matchingProjections.length !== 1) {
-    throw atomicMessageSealManifestMismatch();
+    throw mismatch();
   }
   return event;
 }
@@ -6830,6 +6915,12 @@ function payloadReferencesMatch(
 function atomicMessageSealManifestMismatch(): Error {
   return invariantError(
     "Inbox V2 atomic Message seal manifest does not match the exact stream change, event and projection closure."
+  );
+}
+
+function atomicTimelineItemSealManifestMismatch(): Error {
+  return invariantError(
+    "Inbox V2 atomic TimelineItem seal manifest does not match the exact stream change, event and projection closure."
   );
 }
 

@@ -361,6 +361,13 @@ export const inboxV2TimelineItemSchema = z
       );
     }
 
+    if (!isInboxV2TimestampOrderValid(item.occurredAt, item.receivedAt)) {
+      addIssue(
+        context,
+        ["receivedAt"],
+        "TimelineItem cannot be received before it occurred."
+      );
+    }
     if (!isInboxV2TimestampOrderValid(item.receivedAt, item.createdAt)) {
       addIssue(
         context,

@@ -49,6 +49,7 @@ export * from "./timeline";
 export * from "./timeline-command-intents";
 export * from "./timeline-message-commit";
 export * from "./timeline-source-object-commit";
+export * from "./timeline-system-event-commit";
 export * from "./work-item";
 export * from "./work-item-relations";
 export * from "./work-primitives";

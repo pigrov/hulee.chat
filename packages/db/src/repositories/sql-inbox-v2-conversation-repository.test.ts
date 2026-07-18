@@ -18,7 +18,9 @@ import {
   buildInsertInboxV2ConversationMembershipHeadSql,
   buildInsertInboxV2ConversationSql,
   buildLockInboxV2ConversationSql,
-  createSqlInboxV2ConversationRepository,
+  allocateInboxV2TimelineRangeInTransaction,
+  createInternalSqlInboxV2ConversationRepository as createSqlInboxV2ConversationRepository,
+  createSqlInboxV2ConversationRepository as createPublicSqlInboxV2ConversationRepository,
   type CreateInboxV2ConversationInput,
   type InboxV2ConversationTransactionExecutor,
   type RawSqlExecutor,
@@ -32,6 +34,19 @@ const createdAt = "2026-07-13T10:00:00.000Z";
 const changedAt = "2026-07-13T10:01:00.000Z";
 
 describe("SQL Inbox V2 conversation repository", () => {
+  it("keeps raw timeline allocation outside the public repository", () => {
+    const repository = createPublicSqlInboxV2ConversationRepository(
+      new StatefulConversationExecutor()
+    );
+
+    expect(Object.keys(repository).sort()).toEqual([
+      "compareAndSet",
+      "create",
+      "findById"
+    ]);
+    expect("withTimelineSequenceAllocation" in repository).toBe(false);
+  });
+
   it("builds tenant-scoped create, lookup and defensive CAS SQL", () => {
     const createInput = createConversationInput();
     const insertConversation = renderQuery(
@@ -325,6 +340,43 @@ describe("SQL Inbox V2 conversation repository", () => {
         headLastChangedStreamPosition: "2"
       }
     });
+    expect(callbackExecutor).not.toBe(executor);
+  });
+
+  it("composes the package-internal allocator inside exactly the caller-owned transaction", async () => {
+    const executor = new StatefulConversationExecutor();
+    const repository = createSqlInboxV2ConversationRepository(executor);
+    await repository.create(createConversationInput());
+    const transactionsBefore = executor.transactionCount;
+    let callbackExecutor: RawSqlExecutor | null = null;
+
+    const outcome = await executor.transaction((transaction) =>
+      allocateInboxV2TimelineRangeInTransaction(
+        transaction,
+        allocationInput([
+          allocationItem("timeline_item:transaction-local", true, changedAt)
+        ]),
+        async ({ allocation, executor: allocatorExecutor }) => {
+          callbackExecutor = allocatorExecutor;
+          return allocation.firstSequence;
+        }
+      )
+    );
+
+    expect(outcome).toMatchObject({
+      kind: "allocated",
+      allocation: { firstSequence: "1", lastSequence: "1" },
+      result: "1",
+      record: {
+        aggregate: {
+          head: {
+            latestTimelineSequence: "1",
+            revision: "2"
+          }
+        }
+      }
+    });
+    expect(executor.transactionCount).toBe(transactionsBefore + 1);
     expect(callbackExecutor).not.toBe(executor);
   });
 

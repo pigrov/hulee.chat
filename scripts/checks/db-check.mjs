@@ -220,6 +220,13 @@ const inboxV2OutboxTerminalPayloadTableName =
   "public.inbox_v2_outbox_terminal_payload_refs";
 const inboxV2SourceProcessingRuntimeFileName =
   "0048_inbox_v2_source_processing_runtime.sql";
+const inboxV2MonotonicTimelineFileName = "0049_inbox_v2_monotonic_timeline.sql";
+const inboxV2MonotonicTimelineMarker =
+  "-- INB2-MSG-001_MONOTONIC_TIMELINE_GUARDS_V1";
+const inboxV2MonotonicTimelineIndexName =
+  "inbox_v2_timeline_subject_details_system_event_unique";
+const inboxV2MonotonicTimelineTailSha256 =
+  "sha256:942378c4f479cd901d45c09e88c68ac18c0a569c96f112c8bc27c4bbe3946c5e";
 const inboxV2SourceProcessingRuntimeInvariantName =
   "INBOX_V2_SOURCE_PROCESSING_RUNTIME_INTEGRITY_SQL";
 const inboxV2SourceRawAdmissionInvariantName =
@@ -374,6 +381,11 @@ const inboxV2OutboxTerminalPayloadMigrations = migrationFiles.filter(
 );
 const inboxV2SourceProcessingRuntimeMigrations = migrationFiles.filter(
   ({ fileName }) => fileName === inboxV2SourceProcessingRuntimeFileName
+);
+const inboxV2MonotonicTimelineMigrations = migrationFiles.filter(
+  ({ fileName, sql }) =>
+    fileName === inboxV2MonotonicTimelineFileName &&
+    sql.includes(inboxV2MonotonicTimelineMarker)
 );
 const inboxV2SchemaFileNames = (await readdir(inboxV2SchemaDirectory))
   .filter((fileName) => fileName.endsWith(".ts"))
@@ -783,6 +795,12 @@ if (inboxV2SourceProcessingRuntimeMigrations.length !== 1) {
   );
   process.exit(1);
 }
+if (inboxV2MonotonicTimelineMigrations.length !== 1) {
+  console.error(
+    `Expected exactly one monotonic-timeline migration, found ${inboxV2MonotonicTimelineMigrations.length}.`
+  );
+  process.exit(1);
+}
 
 try {
   assertGlobalMigrationArtifactBijection({
@@ -807,6 +825,15 @@ try {
     targetIndex: 48,
     finalizedMigrationFileName:
       inboxV2SourceProcessingRuntimeMigrations[0].fileName,
+    migrationFileNames,
+    snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
+      fileName.endsWith("_snapshot.json")
+    )
+  });
+  assertMigrationJournalArtifactParity({
+    journal: drizzleJournal,
+    targetIndex: 49,
+    finalizedMigrationFileName: inboxV2MonotonicTimelineMigrations[0].fileName,
     migrationFileNames,
     snapshotFileNames: migrationMetadataFileNames.filter((fileName) =>
       fileName.endsWith("_snapshot.json")
@@ -988,6 +1015,7 @@ assertInboxV2SourceProcessingRuntimeMigration(
   inboxV2SourceRawAdmissionInvariantBlocks[0],
   inboxV2SourceProcessingRuntimeInvariantBlocks[0]
 );
+assertInboxV2MonotonicTimelineMigration(inboxV2MonotonicTimelineMigrations[0]);
 assertInboxV2SecurityDenialMigration(inboxV2SecurityDenialMigrations[0]);
 assertInboxV2RepositoryFoundationMigration(
   inboxV2RepositoryFoundationMigrations[0]
@@ -1028,6 +1056,9 @@ try {
   await assertInboxV2OutboxTerminalPayloadGeneratedSchemaParity();
   await assertInboxV2SourceProcessingRuntimeGeneratedSchemaParity(
     inboxV2SourceProcessingRuntimeMigrations[0]
+  );
+  await assertInboxV2MonotonicTimelineGeneratedSchemaParity(
+    inboxV2MonotonicTimelineMigrations[0]
   );
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
@@ -1623,6 +1654,31 @@ async function assertInboxV2SourceProcessingRuntimeGeneratedSchemaParity(
     baseIndex: 47,
     targetIndex: 48
   });
+  const historicalGenerated =
+    withoutInboxV2MonotonicTimelineSchemaDelta(generated);
+  const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
+  assertDrizzleSnapshotParity(
+    historicalGenerated.snapshot,
+    checkedInSnapshot,
+    snapshotPath
+  );
+
+  const checkedInStatements = splitMigrationStatements(migration.sql);
+  assertExactSqlSequence(
+    historicalGenerated.statements,
+    checkedInStatements.slice(0, -2),
+    "Inbox V2 SRC-008 ordered generated migration DDL"
+  );
+}
+
+async function assertInboxV2MonotonicTimelineGeneratedSchemaParity(migration) {
+  const snapshotPath = "packages/db/drizzle/meta/0049_snapshot.json";
+  const generated = await generateExpectedDrizzleMigration({
+    workspaceRoot: process.cwd(),
+    migrationDirectory,
+    baseIndex: 48,
+    targetIndex: 49
+  });
   const checkedInSnapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
   assertDrizzleSnapshotParity(
     generated.snapshot,
@@ -1633,9 +1689,46 @@ async function assertInboxV2SourceProcessingRuntimeGeneratedSchemaParity(
   const checkedInStatements = splitMigrationStatements(migration.sql);
   assertExactSqlSequence(
     generated.statements,
-    checkedInStatements.slice(0, -2),
-    "Inbox V2 SRC-008 ordered generated migration DDL"
+    checkedInStatements.slice(0, 1),
+    "Inbox V2 MSG-001 ordered generated migration DDL"
   );
+}
+
+function assertInboxV2MonotonicTimelineMigration(migration) {
+  if (migration.fileName !== inboxV2MonotonicTimelineFileName) {
+    throw new Error(
+      `${migration.fileName} must be the Inbox V2 monotonic-timeline migration at index 0049.`
+    );
+  }
+  const statements = splitMigrationStatements(migration.sql);
+  if (statements.length !== 7) {
+    throw new Error(
+      `${migration.fileName} must contain one generated index statement and six reviewed system-event integrity statements.`
+    );
+  }
+  const tailDigest = digestOrderedSqlStatements(statements.slice(1));
+  if (tailDigest !== inboxV2MonotonicTimelineTailSha256) {
+    throw new Error(
+      `${migration.fileName} system-event integrity tail differs from the reviewed MSG-001 sequence contract.`
+    );
+  }
+  for (const fragment of [
+    inboxV2MonotonicTimelineIndexName,
+    inboxV2MonotonicTimelineMarker,
+    "create or replace function public.inbox_v2_system_event_timeline_binding_guard()",
+    "create trigger inbox_v2_system_event_timeline_binding_guard",
+    "create or replace function public.inbox_v2_referenced_system_event_immutable_guard()",
+    "create trigger inbox_v2_referenced_system_event_immutable_guard",
+    "core:inbox-v2.conversation-system-event-payload",
+    "inbox_v2.system_event_timeline_binding_invalid",
+    "inbox_v2.referenced_system_event_immutable"
+  ]) {
+    if (!migration.sql.includes(fragment)) {
+      throw new Error(
+        `${migration.fileName} is missing monotonic-timeline integrity SQL: ${fragment}.`
+      );
+    }
+  }
 }
 
 function assertInboxV2OutboxTerminalPayloadMigration(
@@ -2333,8 +2426,35 @@ function withoutInboxV2OutboxTerminalPayloadSchemaDelta(generated) {
   return { snapshot, statements };
 }
 
-function withoutInboxV2SourceProcessingRuntimeSchemaDelta(generated) {
+function withoutInboxV2MonotonicTimelineSchemaDelta(generated) {
   const snapshot = structuredClone(generated.snapshot);
+  const subjectDetails =
+    snapshot.tables["public.inbox_v2_timeline_subject_details"];
+  if (!subjectDetails?.indexes?.[inboxV2MonotonicTimelineIndexName]) {
+    throw new Error(
+      "Generated schema is missing the MSG-001 system-event uniqueness index."
+    );
+  }
+  delete subjectDetails.indexes[inboxV2MonotonicTimelineIndexName];
+
+  const matchingStatements = generated.statements.filter((statement) =>
+    statement.includes(inboxV2MonotonicTimelineIndexName)
+  );
+  if (matchingStatements.length !== 1) {
+    throw new Error(
+      `Generated MSG-001 schema must contain the system-event uniqueness index exactly once; found ${matchingStatements.length}.`
+    );
+  }
+  const statements = generated.statements.filter(
+    (statement) => !statement.includes(inboxV2MonotonicTimelineIndexName)
+  );
+  return { snapshot, statements };
+}
+
+function withoutInboxV2SourceProcessingRuntimeSchemaDelta(generated) {
+  const withoutMonotonicTimeline =
+    withoutInboxV2MonotonicTimelineSchemaDelta(generated);
+  const snapshot = structuredClone(withoutMonotonicTimeline.snapshot);
   for (const tableName of inboxV2SourceProcessingRuntimeTableNames) {
     delete snapshot.tables[tableName];
   }
@@ -2406,7 +2526,7 @@ function withoutInboxV2SourceProcessingRuntimeSchemaDelta(generated) {
     "event_identity_guarantee_until",
     "inbox_v2_source_raw_quarantines_identity_secret_fk"
   ];
-  const statements = generated.statements
+  const statements = withoutMonotonicTimeline.statements
     .filter(
       (statement) => !schemaNames.some((name) => statement.includes(name))
     )

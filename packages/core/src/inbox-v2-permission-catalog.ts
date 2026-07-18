@@ -566,6 +566,11 @@ export const inboxV2PermissionCatalog = Object.freeze([
     TRUSTED_SERVICE
   ),
   permission(
+    "core:conversation.timeline_append_system",
+    scopes("tenant", "org_unit", "team", "queue", "conversation"),
+    TRUSTED_SERVICE
+  ),
+  permission(
     "core:conversation.collaborators.manage",
     scopes(
       "tenant",
