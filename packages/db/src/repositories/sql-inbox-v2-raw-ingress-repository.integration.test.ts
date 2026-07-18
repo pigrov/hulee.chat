@@ -1,7 +1,9 @@
 import {
   defineInboxV2RawIngressSanitizer,
   defineInboxV2RawIngressSanitizerProfile,
+  inboxV2EntityRevisionSchema,
   inboxV2NamespacedIdSchema,
+  inboxV2RawInboundEventIdSchema,
   inboxV2SourceAccountIdSchema,
   inboxV2SourceConnectionIdSchema,
   inboxV2TenantIdSchema,
@@ -19,7 +21,9 @@ import {
   type HuleeDatabase
 } from "../client";
 import {
+  createProductionSqlInboxV2RawIngressRepository,
   createSqlInboxV2RawIngressRepository,
+  handoffInboxV2RawAdmissionSkeletonInTransaction,
   type InboxV2RawIngressTransactionExecutor
 } from "./sql-inbox-v2-raw-ingress-repository";
 import type {
@@ -29,6 +33,11 @@ import type {
 
 const describePostgres =
   process.env.HULEE_DB_INTEGRATION === "1" ? describe : describe.skip;
+const describeRawAdmissionPostgres =
+  process.env.HULEE_DB_INTEGRATION === "1" &&
+  process.env.HULEE_DB_RAW_ADMISSION_INTEGRATION === "1"
+    ? describe
+    : describe.skip;
 const suffix = `src002-${process.pid}-${Date.now().toString(36)}`;
 const t0 = "2026-07-16T08:00:00.000Z";
 const t1 = "2026-07-16T08:00:01.000Z";
@@ -58,6 +67,7 @@ describePostgres("SQL Inbox V2 raw-ingress PostgreSQL invariants", () => {
     await seedScope(database, scope("collision"), { includeSecondEdge: true });
     await seedScope(database, scope("concurrent"));
     await seedScope(database, scope("lease"));
+    await seedScope(database, scope("fairness"), { includeSecondEdge: true });
     await seedScope(database, scope("rollback"));
     await seedScope(database, scope("isolation-a"));
     await seedScope(database, scope("isolation-b"));
@@ -165,6 +175,11 @@ describePostgres("SQL Inbox V2 raw-ingress PostgreSQL invariants", () => {
     const replay = await repository.record(laterRetryCandidate);
     expect(replay).toEqual({
       outcome: "already_recorded",
+      source: {
+        tenantId: ids.tenantId,
+        sourceConnectionId: ids.connectionId,
+        sourceAccountId: ids.accountId
+      },
       rawEventId: recorded.rawEventId,
       safeEnvelopeDigest: candidate.safeEnvelopeDigest
     });
@@ -369,11 +384,15 @@ describePostgres("SQL Inbox V2 raw-ingress PostgreSQL invariants", () => {
       "already_recorded",
       "recorded"
     ]);
-    const rawIds = results.map((result) =>
-      result.outcome === "quarantined"
-        ? result.existingRawEventId
-        : result.rawEventId
-    );
+    const rawIds = results.map((result) => {
+      if (
+        result.outcome !== "recorded" &&
+        result.outcome !== "already_recorded"
+      ) {
+        throw new Error("compatibility concurrency fixture invariant");
+      }
+      return result.rawEventId;
+    });
     expect(new Set(rawIds).size).toBe(1);
 
     const counts = await database.execute<{
@@ -474,6 +493,11 @@ describePostgres("SQL Inbox V2 raw-ingress PostgreSQL invariants", () => {
     expect(noSteal.outcome).toBe("empty");
     expect(await ingressRepository.record(candidate)).toEqual({
       outcome: "already_recorded",
+      source: {
+        tenantId: candidate.tenantId,
+        sourceConnectionId: candidate.sourceConnectionId,
+        sourceAccountId: candidate.sourceAccountId
+      },
       rawEventId: recorded.rawEventId,
       safeEnvelopeDigest: candidate.safeEnvelopeDigest
     });
@@ -623,7 +647,360 @@ describePostgres("SQL Inbox V2 raw-ingress PostgreSQL invariants", () => {
     });
     expect(result.outcome).toBe("empty");
   });
+
+  it("caps a hot account so another due account is represented in the batch", async () => {
+    const ids = scope("fairness");
+    const coldScope: CandidateScope = {
+      tenantId: ids.tenantId,
+      connectionId: ids.secondConnectionId,
+      accountId: ids.secondAccountId
+    };
+    const hotOne = await repositoryFor(database, "fairness-hot-1").record(
+      await acceptedCandidate(ids, {
+        identity: `${rawIdentitySentinel}-fairness-hot-1`,
+        payload: { message: "hot-1" }
+      })
+    );
+    const hotTwo = await repositoryFor(database, "fairness-hot-2").record(
+      await acceptedCandidate(ids, {
+        identity: `${rawIdentitySentinel}-fairness-hot-2`,
+        payload: { message: "hot-2" }
+      })
+    );
+    const cold = await repositoryFor(database, "fairness-cold").record(
+      await acceptedCandidate(coldScope, {
+        identity: `${rawIdentitySentinel}-fairness-cold`,
+        payload: { message: "cold" }
+      })
+    );
+    if (
+      hotOne.outcome !== "recorded" ||
+      hotTwo.outcome !== "recorded" ||
+      cold.outcome !== "recorded"
+    ) {
+      throw new Error("fairness fixture invariant");
+    }
+
+    const result = await createSqlInboxV2RawIngressRepository(database).claim({
+      tenantId: ids.tenantId,
+      workerId: inboxV2NamespacedIdSchema.parse(
+        "core:raw-ingress-worker-fairness"
+      ),
+      leaseDurationSeconds: 30,
+      batchSize: 2,
+      maxClaimsPerAccount: 1
+    });
+
+    expect(result.outcome).toBe("claimed");
+    if (result.outcome !== "claimed") throw new Error("fixture invariant");
+    const claimedIds = new Set(
+      result.claims.map((claim) => String(claim.work.rawEventId))
+    );
+    expect(claimedIds.has(String(cold.rawEventId))).toBe(true);
+    expect(
+      [hotOne.rawEventId, hotTwo.rawEventId].filter((id) =>
+        claimedIds.has(String(id))
+      )
+    ).toHaveLength(1);
+  });
 });
+
+describeRawAdmissionPostgres(
+  "SQL Inbox V2 production raw-admission PostgreSQL fences",
+  () => {
+    let database: HuleeDatabase;
+    let guaranteeUntil: string;
+    const concurrentIds = scope("prod-concurrent");
+    const rotationIds = scope("prod-rotation");
+    const isolationIds = scope("prod-isolation");
+    const unavailableIds = scope("prod-key-unavailable");
+    const retentionIds = scope("prod-retention");
+    const quarantineIds = scope("prod-quarantine-retention");
+
+    beforeAll(async () => {
+      if (!process.env.DATABASE_URL) {
+        throw new Error("DATABASE_URL is required for raw-admission PG tests.");
+      }
+      database = createHuleeDatabase({
+        connectionString: process.env.DATABASE_URL,
+        poolConfig: { max: 8 }
+      });
+      await assertRawAdmissionMigrationReady(database);
+      await seedScope(database, concurrentIds);
+      await seedScope(database, rotationIds);
+      await seedScope(database, isolationIds, { includeSecondEdge: true });
+      await seedScope(database, unavailableIds);
+      await seedScope(database, retentionIds);
+      await seedScope(database, quarantineIds);
+      guaranteeUntil = await futureDatabaseTimestamp(database, 3_600_000);
+      for (const ids of [
+        concurrentIds,
+        rotationIds,
+        isolationIds,
+        retentionIds,
+        quarantineIds
+      ]) {
+        await seedRawAdmissionKey(database, ids, "source-key:2026-08");
+      }
+    }, 30_000);
+
+    afterAll(async () => {
+      if (database) await closeHuleeDatabase(database);
+    }, 30_000);
+
+    it("serializes concurrent same-event admission to one raw aggregate", async () => {
+      const candidate = await acceptedCandidate(concurrentIds, {
+        identity: `${rawIdentitySentinel}-prod-concurrent-low-entropy`,
+        payload: { message: "prod-concurrent" }
+      });
+      const authority = productionAuthority(concurrentIds, guaranteeUntil, {
+        identity: "1",
+        safeEnvelope: "2"
+      });
+      const [left, right] = await Promise.all([
+        productionRepositoryFor(
+          database,
+          "prod-concurrent-a",
+          authority
+        ).record(candidate),
+        productionRepositoryFor(
+          database,
+          "prod-concurrent-b",
+          authority
+        ).record(candidate)
+      ]);
+      expect([left.outcome, right.outcome].sort()).toEqual([
+        "duplicate",
+        "recorded"
+      ]);
+      const counts = await rawAdmissionCounts(database, concurrentIds.tenantId);
+      expect(counts).toEqual({ anchorCount: 1, admissionCount: 1 });
+      const persisted = await database.execute<{ serialized: unknown }>(sql`
+        select concat_ws('|', envelope.event_identity_digest_sha256,
+          envelope.safe_envelope_digest_sha256,
+          admission.identity_hmac_sha256,
+          admission.safe_envelope_digest_sha256) as serialized
+          from public.inbox_v2_source_raw_envelopes envelope
+          join public.inbox_v2_source_raw_admissions admission
+            on admission.tenant_id = envelope.tenant_id
+           and admission.raw_event_id = envelope.raw_event_id
+         where envelope.tenant_id = ${concurrentIds.tenantId}
+      `);
+      expect(String(persisted.rows[0]?.serialized)).not.toContain(
+        rawIdentitySentinel
+      );
+      expect(String(persisted.rows[0]?.serialized)).not.toContain(
+        candidate.safeEnvelopeDigest
+      );
+    });
+
+    it("matches a verify-only generation and its old safe-envelope HMAC after rotation", async () => {
+      const candidate = await acceptedCandidate(rotationIds, {
+        identity: `${rawIdentitySentinel}-prod-rotation`,
+        payload: { message: "prod-rotation" }
+      });
+      const oldAuthority = productionAuthority(rotationIds, guaranteeUntil, {
+        identity: "3",
+        safeEnvelope: "4"
+      });
+      const first = await productionRepositoryFor(
+        database,
+        "prod-rotation-first",
+        oldAuthority
+      ).record(candidate);
+      expect(first.outcome).toBe("recorded");
+
+      await rotateRawAdmissionKey(
+        database,
+        rotationIds,
+        "source-key:2026-08",
+        "source-key:2026-09"
+      );
+      const rotatedAuthority = productionAuthority(
+        rotationIds,
+        guaranteeUntil,
+        { identity: "5", safeEnvelope: "6", generation: "source-key:2026-09" },
+        [{ identity: "3", safeEnvelope: "4", generation: "source-key:2026-08" }]
+      );
+      const duplicate = await productionRepositoryFor(
+        database,
+        "prod-rotation-retry",
+        rotatedAuthority
+      ).record(candidate);
+      expect(duplicate).toMatchObject({
+        outcome: "duplicate",
+        safeEnvelopeDigest: `hmac-sha256:${"4".repeat(64)}`,
+        matchedKeyGenerations: ["source-key:2026-08"]
+      });
+      expect(await rawAdmissionCounts(database, rotationIds.tenantId)).toEqual({
+        anchorCount: 1,
+        admissionCount: 1
+      });
+    });
+
+    it("isolates equal provider identities across account/source scope", async () => {
+      const firstScope = isolationIds;
+      const secondScope = {
+        tenantId: isolationIds.tenantId,
+        connectionId: isolationIds.secondConnectionId,
+        accountId: isolationIds.secondAccountId
+      };
+      const [first, second] = await Promise.all([
+        productionRepositoryFor(
+          database,
+          "prod-isolation-a",
+          productionAuthority(firstScope, guaranteeUntil, {
+            identity: "7",
+            safeEnvelope: "8"
+          })
+        ).record(
+          await acceptedCandidate(firstScope, {
+            identity: "same-low-entropy-id",
+            payload: { message: "isolation-a" }
+          })
+        ),
+        productionRepositoryFor(
+          database,
+          "prod-isolation-b",
+          productionAuthority(secondScope, guaranteeUntil, {
+            identity: "9",
+            safeEnvelope: "a"
+          })
+        ).record(
+          await acceptedCandidate(secondScope, {
+            identity: "same-low-entropy-id",
+            payload: { message: "isolation-b" }
+          })
+        )
+      ]);
+      expect(first.outcome).toBe("recorded");
+      expect(second.outcome).toBe("recorded");
+      expect(await rawAdmissionCounts(database, isolationIds.tenantId)).toEqual(
+        {
+          anchorCount: 2,
+          admissionCount: 2
+        }
+      );
+    });
+
+    it("fails closed with no raw rows when the authorized key is unavailable", async () => {
+      const candidate = await acceptedCandidate(unavailableIds, {
+        identity: `${rawIdentitySentinel}-missing-key`,
+        payload: { message: "missing-key" }
+      });
+      const result = await productionRepositoryFor(
+        database,
+        "prod-missing-key",
+        productionAuthority(unavailableIds, guaranteeUntil, {
+          identity: "b",
+          safeEnvelope: "c"
+        })
+      ).record(candidate);
+      expect(result).toEqual({ outcome: "key_unavailable" });
+      expect(
+        await rawAdmissionCounts(database, unavailableIds.tenantId)
+      ).toEqual({
+        anchorCount: 0,
+        admissionCount: 0
+      });
+    });
+
+    it("links handoff atomically and allows only post-guarantee retention delete", async () => {
+      const shortGuarantee = await futureDatabaseTimestamp(database, 2_000);
+      const candidate = await acceptedCandidate(retentionIds, {
+        identity: `${rawIdentitySentinel}-retention`,
+        payload: { message: "retention" }
+      });
+      const recorded = await productionRepositoryFor(
+        database,
+        "prod-retention",
+        productionAuthority(retentionIds, shortGuarantee, {
+          identity: "d",
+          safeEnvelope: "e"
+        })
+      ).record(candidate);
+      if (recorded.outcome !== "recorded") throw new Error("fixture invariant");
+      const terminalAt = await futureDatabaseTimestamp(database, 100);
+      const skeletonId = `source-skeleton:${suffix}-retention`;
+      const outcomeHmac = `hmac-sha256:${"f".repeat(64)}`;
+      await database.transaction(async (transaction) => {
+        const rawTransaction = transaction as unknown as RawSqlExecutor;
+        await insertRawTerminalSkeleton(rawTransaction, {
+          ids: retentionIds,
+          rawEventId: recorded.rawEventId,
+          skeletonId,
+          identityHmac: `hmac-sha256:${"d".repeat(64)}`,
+          outcomeHmac,
+          terminalAt,
+          guaranteeUntil: shortGuarantee
+        });
+        const handed = await handoffInboxV2RawAdmissionSkeletonInTransaction(
+          rawTransaction,
+          {
+            tenantId: retentionIds.tenantId,
+            rawEventId: recorded.rawEventId,
+            expectedAdmissionRevision: inboxV2EntityRevisionSchema.parse("1"),
+            handedOffAt: terminalAt,
+            terminalSkeletonId: skeletonId,
+            terminalOutcomeHmacSha256: outcomeHmac
+          }
+        );
+        expect(handed.outcome).toBe("handed_off");
+      });
+      await expect(
+        deleteRawAdmissionAsRetention(
+          database,
+          retentionIds.tenantId,
+          recorded.rawEventId
+        )
+      ).rejects.toThrow();
+      await delay(2_100);
+      await expect(
+        deleteRawAdmissionAsRetention(
+          database,
+          retentionIds.tenantId,
+          recorded.rawEventId
+        )
+      ).resolves.toBe(1);
+    }, 15_000);
+
+    it("retains poisoned production quarantine only through its finite key guarantee", async () => {
+      const shortGuarantee = await futureDatabaseTimestamp(database, 1_000);
+      const quarantined = await productionRepositoryFor(
+        database,
+        "prod-quarantine-retention",
+        productionAuthority(quarantineIds, shortGuarantee, {
+          identity: "1",
+          safeEnvelope: "2"
+        })
+      ).record(
+        await quarantinedCandidate(
+          quarantineIds,
+          `${rawIdentitySentinel}-poisoned-low-entropy`
+        )
+      );
+      expect(quarantined.outcome).toBe("quarantined");
+      if (quarantined.outcome !== "quarantined") {
+        throw new Error("fixture invariant");
+      }
+      await expect(
+        deleteRawQuarantineAsRetention(
+          database,
+          quarantineIds.tenantId,
+          quarantined.quarantineId
+        )
+      ).rejects.toThrow();
+      await delay(1_100);
+      await expect(
+        deleteRawQuarantineAsRetention(
+          database,
+          quarantineIds.tenantId,
+          quarantined.quarantineId
+        )
+      ).resolves.toBe(1);
+    }, 15_000);
+  }
+);
 
 type Scope = ReturnType<typeof scope>;
 type CandidateScope = Readonly<{
@@ -845,6 +1222,291 @@ function repositoryFor(
     quarantineIdSource: () => `core:${suffix}-${label}-quarantine`,
     idempotencyKeyDigestSource: options.idempotencyKeyDigestSource
   });
+}
+
+type ProductionAuthority = Parameters<
+  typeof createProductionSqlInboxV2RawIngressRepository
+>[1]["admissionAuthority"];
+
+function productionAuthority(
+  ids: CandidateScope,
+  guaranteeAt: string,
+  write: {
+    identity: string;
+    safeEnvelope: string;
+    generation?: string;
+  },
+  previous: readonly {
+    identity: string;
+    safeEnvelope: string;
+    generation: string;
+  }[] = []
+): ProductionAuthority {
+  const generation = write.generation ?? "source-key:2026-08";
+  const candidate = (proof: {
+    identity: string;
+    safeEnvelope: string;
+    generation: string;
+  }) => ({
+    generation: proof.generation,
+    hmacKeySecretRef: `${rawAdmissionSecretRef(ids.tenantId, proof.generation)}`,
+    identityHmacSha256: `hmac-sha256:${proof.identity.repeat(64)}`,
+    safeEnvelopeHmacSha256: `hmac-sha256:${proof.safeEnvelope.repeat(64)}`
+  });
+  const writeCandidate = candidate({ ...write, generation });
+  return {
+    authorizeRawAdmission: async (input) => ({
+      outcome: "authorized",
+      source: input.source,
+      identityKind: input.identityKind,
+      purposeId: input.purposeId,
+      writeCandidate,
+      candidates: [writeCandidate, ...previous.map(candidate)],
+      guaranteeUntil: guaranteeAt
+    })
+  };
+}
+
+function productionRepositoryFor(
+  executor: HuleeDatabase,
+  label: string,
+  admissionAuthority: ProductionAuthority
+) {
+  return createProductionSqlInboxV2RawIngressRepository(executor, {
+    admissionAuthority,
+    rawEventIdSource: () =>
+      inboxV2RawInboundEventIdSchema.parse(
+        `raw_inbound_event:${suffix}-${label}`
+      ),
+    quarantineIdSource: () => `core:${suffix}-${label}-quarantine`
+  });
+}
+
+function rawAdmissionSecretRef(tenantId: string, generation: string): string {
+  return `secret:${tenantId}/inbox-v2/${generation}`;
+}
+
+async function seedRawAdmissionKey(
+  executor: HuleeDatabase,
+  ids: Scope,
+  generation: string
+): Promise<void> {
+  const secretRef = rawAdmissionSecretRef(ids.tenantId, generation);
+  await executor.execute(sql`
+    insert into public.tenant_secrets (
+      tenant_id, secret_ref, purpose, encrypted_value, encryption_key_ref
+    ) values (
+      ${ids.tenantId}, ${secretRef}, 'inbox_v2.source_processing_hmac',
+      ${`sealed:${generation}`}, 'test-key:raw-admission'
+    ) on conflict (tenant_id, secret_ref) do nothing
+  `);
+  await executor.execute(sql`
+    insert into public.inbox_v2_source_processing_key_generations (
+      tenant_id, purpose_id, generation, secret_ref, state, activated_at,
+      use_until, guarantee_not_after, verify_until, retired_at, revision,
+      created_at, updated_at
+    ) values (
+      ${ids.tenantId}, 'core:source_replay_and_diagnostics', ${generation},
+      ${secretRef}, 'active', clock_timestamp() - interval '1 minute',
+      clock_timestamp() + interval '1 day',
+      clock_timestamp() + interval '2 days',
+      clock_timestamp() + interval '3 days', null, 1,
+      clock_timestamp() - interval '1 minute',
+      clock_timestamp() - interval '1 minute'
+    )
+  `);
+}
+
+async function rotateRawAdmissionKey(
+  executor: HuleeDatabase,
+  ids: Scope,
+  previousGeneration: string,
+  nextGeneration: string
+): Promise<void> {
+  await executor.execute(sql`
+    update public.inbox_v2_source_processing_key_generations
+       set state = 'verify_only', revision = revision + 1,
+           updated_at = clock_timestamp()
+     where tenant_id = ${ids.tenantId}
+       and purpose_id = 'core:source_replay_and_diagnostics'
+       and generation = ${previousGeneration}
+       and state = 'active'
+  `);
+  await seedRawAdmissionKey(executor, ids, nextGeneration);
+}
+
+async function futureDatabaseTimestamp(
+  executor: HuleeDatabase,
+  milliseconds: number
+): Promise<string> {
+  const result = await executor.execute<{ future_at: unknown }>(sql`
+    select clock_timestamp() +
+      (${milliseconds}::double precision * interval '1 millisecond')
+      as future_at
+  `);
+  const value = result.rows[0]?.future_at;
+  if (!(value instanceof Date) && typeof value !== "string") {
+    throw new Error("Database clock fixture failed.");
+  }
+  return new Date(value).toISOString();
+}
+
+async function rawAdmissionCounts(
+  executor: HuleeDatabase,
+  tenantId: string
+): Promise<{ anchorCount: number; admissionCount: number }> {
+  const result = await executor.execute<{
+    anchor_count: unknown;
+    admission_count: unknown;
+  }>(sql`
+    select (select count(*)::text from public.raw_inbound_events
+             where tenant_id = ${tenantId}) as anchor_count,
+           (select count(*)::text
+              from public.inbox_v2_source_raw_admissions
+             where tenant_id = ${tenantId}) as admission_count
+  `);
+  return {
+    anchorCount: Number(result.rows[0]?.anchor_count),
+    admissionCount: Number(result.rows[0]?.admission_count)
+  };
+}
+
+async function assertRawAdmissionMigrationReady(
+  executor: HuleeDatabase
+): Promise<void> {
+  const result = await executor.execute<{
+    admission_table: unknown;
+    admission_enum: unknown;
+    guard_trigger: unknown;
+    coherence_trigger: unknown;
+    terminal_inverse_trigger: unknown;
+  }>(sql`
+    select to_regclass('public.inbox_v2_source_raw_admissions')::text
+             as admission_table,
+           to_regtype('public.inbox_v2_source_raw_admission_state')::text
+             as admission_enum,
+           (select tgname from pg_catalog.pg_trigger
+             where tgrelid =
+               'public.inbox_v2_source_raw_admissions'::regclass
+               and tgname = 'inbox_v2_source_raw_admission_guard_trigger')
+             as guard_trigger,
+           (select tgname from pg_catalog.pg_trigger
+             where tgrelid =
+               'public.inbox_v2_source_raw_admissions'::regclass
+               and tgname =
+                 'inbox_v2_source_raw_admission_coherence_constraint')
+             as coherence_trigger,
+           (select tgname from pg_catalog.pg_trigger
+             where tgrelid =
+               'public.inbox_v2_source_raw_admissions'::regclass
+               and tgname =
+                 'inbox_v2_src_runtime_raw_admission_terminal_skeleton_constraint')
+             as terminal_inverse_trigger
+  `);
+  if (
+    result.rows[0]?.admission_table !== "inbox_v2_source_raw_admissions" ||
+    result.rows[0]?.admission_enum !== "inbox_v2_source_raw_admission_state" ||
+    result.rows[0]?.guard_trigger !==
+      "inbox_v2_source_raw_admission_guard_trigger" ||
+    result.rows[0]?.coherence_trigger !==
+      "inbox_v2_source_raw_admission_coherence_constraint" ||
+    result.rows[0]?.terminal_inverse_trigger !==
+      "inbox_v2_src_runtime_raw_admission_terminal_skeleton_constraint"
+  ) {
+    throw new Error("SRC-008 raw-admission migration tail is not installed.");
+  }
+}
+
+async function insertRawTerminalSkeleton(
+  executor: RawSqlExecutor,
+  input: {
+    ids: Scope;
+    rawEventId: string;
+    skeletonId: string;
+    identityHmac: string;
+    outcomeHmac: string;
+    terminalAt: string;
+    guaranteeUntil: string;
+  }
+): Promise<void> {
+  // This fixture owns no source-registry aggregate. Bypass only the unrelated
+  // route-head INSERT guard, then restore normal trigger execution before the
+  // admission handoff so its deferred exact-skeleton inverse still runs.
+  await executor.execute(sql`set local session_replication_role = 'replica'`);
+  await executor.execute(sql`
+    insert into public.inbox_v2_source_delivery_dedupe_skeletons (
+      tenant_id, id, source_connection_id, source_account_id,
+      source_account_scope_key, route_generation, phase, raw_event_id,
+      normalized_event_id, purpose_id, key_generation, key_verify_until,
+      identity_hmac_sha256, outcome_hmac_sha256, outcome,
+      diagnostic_code_id, evidence_captured_at, raw_payload_expires_at,
+      allowed_raw_headers_expires_at, normalized_payload_expires_at,
+      terminal_at, guarantee_until, replayability_state, replay_until,
+      replayability_reason_code_id, skeleton_expires_at, lifecycle_state,
+      expired_at, revision, created_at, updated_at
+    )
+    select ${input.ids.tenantId}, ${input.skeletonId},
+           ${input.ids.connectionId}, ${input.ids.accountId},
+           ${accountScopeKeyForTest(input.ids.accountId)}, 1, 'raw',
+           ${input.rawEventId}, null, 'core:source_replay_and_diagnostics',
+           'source-key:2026-08', key_row.verify_until,
+           ${input.identityHmac}, ${input.outcomeHmac}, 'processed', null,
+           ${t2}::timestamptz, ${input.guaranteeUntil}::timestamptz,
+           ${input.guaranteeUntil}::timestamptz, null,
+           ${input.terminalAt}::timestamptz,
+           ${input.guaranteeUntil}::timestamptz, 'not_replayable', null,
+           'core:source-terminal-fixture',
+           ${input.guaranteeUntil}::timestamptz + interval '1 hour',
+           'active', null, 1, ${input.terminalAt}::timestamptz,
+           ${input.terminalAt}::timestamptz
+      from public.inbox_v2_source_processing_key_generations key_row
+     where key_row.tenant_id = ${input.ids.tenantId}
+       and key_row.purpose_id = 'core:source_replay_and_diagnostics'
+       and key_row.generation = 'source-key:2026-08'
+  `);
+  await executor.execute(sql`set local session_replication_role = 'origin'`);
+}
+
+async function deleteRawAdmissionAsRetention(
+  executor: HuleeDatabase,
+  tenantId: string,
+  rawEventId: string
+): Promise<number> {
+  return executor.transaction(async (transaction) => {
+    await transaction.execute(
+      sql`set local role hulee_inbox_v2_retention_owner`
+    );
+    const deleted = await transaction.execute<{ raw_event_id: unknown }>(sql`
+      delete from public.inbox_v2_source_raw_admissions
+       where tenant_id = ${tenantId} and raw_event_id = ${rawEventId}
+      returning raw_event_id
+    `);
+    return deleted.rows.length;
+  });
+}
+
+async function deleteRawQuarantineAsRetention(
+  executor: HuleeDatabase,
+  tenantId: string,
+  quarantineId: string
+): Promise<number> {
+  return executor.transaction(async (transaction) => {
+    await transaction.execute(
+      sql`set local role hulee_inbox_v2_retention_owner`
+    );
+    const deleted = await transaction.execute<{ id: unknown }>(sql`
+      delete from public.inbox_v2_source_raw_quarantines
+       where tenant_id = ${tenantId} and id = ${quarantineId}
+      returning id
+    `);
+    return deleted.rows.length;
+  });
+}
+
+function accountScopeKeyForTest(accountId: string | null): string {
+  return accountId === null
+    ? "0:"
+    : `1:${new TextEncoder().encode(accountId).byteLength}:${accountId}`;
 }
 
 async function assertMigrationReady(executor: HuleeDatabase): Promise<void> {

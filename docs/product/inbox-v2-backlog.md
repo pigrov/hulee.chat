@@ -1619,8 +1619,9 @@ participant set.
     evidence is in
     `docs/product/inbox-v2-src-007-atomic-materialization.md`.
 
-- [ ] `INB2-SRC-008` Complete replay, DLQ, redacted diagnostics and backpressure.
-  - State: `planned`; Priority: `P1`; Depends on: `INB2-SRC-007`.
+- [x] `INB2-SRC-008` Complete replay, DLQ, redacted diagnostics and backpressure.
+  - State: `done`; Priority: `P1`; Started: `2026-07-17`; Finished:
+    `2026-07-18`; Owner: `Codex`; Depends on: `INB2-SRC-007`.
   - Acceptance: source/account isolation, durable-before-cursor acknowledgement,
     retryability, replay reason, rate-limit hints, classification/redaction before
     durable diagnostics and separate raw/normalized evidence deadlines work
@@ -1634,7 +1635,22 @@ participant set.
     payload expiry cannot be reversed from diagnostics/hash or block bounded
     cleanup. Key rotation/retirement and guarantee-window expiry fixtures keep
     old outcomes finite and diagnosable without silently extending replay or
-    falling back to clear/unkeyed weak identities. Evidence: -
+    falling back to clear/unkeyed weak identities. Evidence: completed and
+    independently re-audited on `2026-07-18` with a provider-neutral staged
+    processing runtime, account-fair bounded claims, fenced retry/DLQ/replay,
+    durable-before-cursor acknowledgement, classified finite evidence and a
+    tenant/purpose-keyed HMAC admission/outcome skeleton with pinned generation
+    and guarantee window. Migration `0048` adds `96` generated statements plus
+    `2` schema-owned invariant blocks. Fresh PostgreSQL applied `49` migrations
+    with contract
+    `sha256:f1eb6d3b49875524c7467ea8c6ba01bed70dfc9138bc7ccf6ff198ba2d22b69a`
+    and passed `30/30` files / `294/294` executed tests; preserve/N-1/RBAC
+    passed `3/3` / `17/17`, and the pinned N-1 bundle rebuilt successfully.
+    Production composition now requires one opaque all-stage process-local
+    composite; actual dual materialization and provider/legacy worker cutover
+    remain explicitly owned by `INB2-MIG-002` and `INB2-MIG-005`. Detailed
+    evidence is in
+    `docs/product/inbox-v2-src-008-replay-dlq-diagnostics-backpressure.md`.
 
 - [x] `INB2-SRC-009` Implement fenced outbox lease and outcome lifecycle.
   - State: `done`; Priority: `P0`; Started: `2026-07-17`; Finished:

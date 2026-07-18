@@ -18,6 +18,7 @@ export * from "./inbox-v2/repository-foundation";
 export * from "./inbox-v2/security-denial";
 export * from "./inbox-v2/source-account-identity";
 export * from "./inbox-v2/source-occurrence";
+export * from "./inbox-v2/source-processing-runtime";
 export * from "./inbox-v2/source-raw-ingress";
 export * from "./inbox-v2/source-normalization";
 export * from "./inbox-v2/source-identity-resolution";

@@ -20,7 +20,10 @@ import { describe, expect, it, vi } from "vitest";
 import * as rawIngressModule from "./sql-inbox-v2-raw-ingress-repository";
 import {
   buildClaimInboxV2RawIngressSql,
+  createProductionSqlInboxV2RawIngressRepository,
   createSqlInboxV2RawIngressRepository,
+  handoffInboxV2RawAdmissionSkeletonInTransaction,
+  loadPendingInboxV2RawDedupeAdmission,
   InboxV2RawIngressPersistenceInvariantError,
   type InboxV2RawIngressTransactionExecutor
 } from "./sql-inbox-v2-raw-ingress-repository";
@@ -39,6 +42,9 @@ const accountId = inboxV2SourceAccountIdSchema.parse(
 const rawEventId = inboxV2RawInboundEventIdSchema.parse(
   "raw_inbound_event:src002-unit"
 );
+const existingRawEventId = inboxV2RawInboundEventIdSchema.parse(
+  "raw_inbound_event:existing-src002"
+);
 const quarantineId = inboxV2NamespacedIdSchema.parse(
   "core:raw-ingress-quarantine-src002-unit"
 );
@@ -47,6 +53,7 @@ const workerId = inboxV2NamespacedIdSchema.parse(
 );
 const revision2 = inboxV2EntityRevisionSchema.parse("2");
 const revision3 = inboxV2EntityRevisionSchema.parse("3");
+const revision1 = inboxV2EntityRevisionSchema.parse("1");
 const tokenA = `src002-token-a-${"a".repeat(32)}`;
 const tokenB = `src002-token-b-${"b".repeat(32)}`;
 const tokenHashA = calculateInboxV2RawIngressLeaseTokenHash(tokenA);
@@ -56,6 +63,7 @@ const t0 = "2026-07-16T08:00:00.000Z";
 const t1 = "2026-07-16T08:00:01.000Z";
 const t2 = "2026-07-16T08:00:02.000Z";
 const t3 = "2026-07-16T08:01:02.000Z";
+const guarantee = "2026-07-17T08:00:00.000Z";
 const secretSentinel = "credential-sentinel-src002";
 const rawIdentitySentinel = "raw-provider-identity-src002";
 
@@ -135,7 +143,9 @@ describe("SQL Inbox V2 raw-ingress repository", () => {
 
   it("stores stable safe quarantine for sanitizer rejection without raw/evidence/work writes", async () => {
     const candidate = await quarantinedCandidate();
-    const executor = new ScriptedTransactionExecutor([[{ id: quarantineId }]]);
+    const executor = new ScriptedTransactionExecutor([
+      [quarantineReceiptRow()]
+    ]);
     const repository = createSqlInboxV2RawIngressRepository(executor, {
       quarantineIdSource: () => quarantineId,
       idempotencyKeyDigestSource: () => forcedDigest
@@ -167,7 +177,7 @@ describe("SQL Inbox V2 raw-ingress repository", () => {
     const executor = new ScriptedTransactionExecutor([
       [],
       [existing],
-      [{ id: quarantineId }]
+      [quarantineReceiptRow()]
     ]);
     const repository = createSqlInboxV2RawIngressRepository(executor, {
       rawEventIdSource: () => rawEventId,
@@ -179,6 +189,11 @@ describe("SQL Inbox V2 raw-ingress repository", () => {
 
     expect(result).toEqual({
       outcome: "quarantined",
+      source: {
+        tenantId,
+        sourceConnectionId: connectionId,
+        sourceAccountId: accountId
+      },
       quarantineId,
       existingRawEventId: "raw_inbound_event:existing-src002",
       safeEnvelopeDigest: candidate.safeEnvelopeDigest,
@@ -193,12 +208,285 @@ describe("SQL Inbox V2 raw-ingress repository", () => {
     executor.expectExhausted();
   });
 
+  it("records production raw ingress only through a live pinned HMAC admission", async () => {
+    const candidate = await acceptedCandidate();
+    const authority = {
+      authorizeRawAdmission: vi.fn(async () => productionAuthorization())
+    };
+    const executor = new ScriptedTransactionExecutor([
+      [],
+      [rawAdmissionKeyRow()],
+      [],
+      [{ id: rawEventId }],
+      [],
+      [],
+      [],
+      [pendingRow()],
+      [],
+      []
+    ]);
+    const repository = createProductionSqlInboxV2RawIngressRepository(
+      executor,
+      {
+        admissionAuthority: authority,
+        rawEventIdSource: () => rawEventId,
+        quarantineIdSource: () => quarantineId
+      }
+    );
+
+    await expect(repository.record(candidate)).resolves.toMatchObject({
+      outcome: "recorded",
+      rawEventId
+    });
+    expect(authority.authorizeRawAdmission).toHaveBeenCalledWith(
+      expect.objectContaining({
+        identityMaterial: rawIdentitySentinel,
+        purposeId: "core:source_replay_and_diagnostics"
+      })
+    );
+    const sqlParameters = JSON.stringify(
+      executor.renderedQueries.flatMap((query) => query.params)
+    );
+    expect(sqlParameters).not.toContain(rawIdentitySentinel);
+    expect(sqlParameters).not.toContain(candidate.safeEnvelopeDigest);
+    expect(sqlParameters).toContain(`hmac-sha256:${"b".repeat(64)}`);
+    expect(sqlParameters).toContain(`hmac-sha256:${"e".repeat(64)}`);
+    expect(
+      executor.renderedQueries.map((query) => normalizeSql(query.sql)).join(" ")
+    ).toContain("insert into public.inbox_v2_source_raw_admissions");
+    executor.expectExhausted();
+  });
+
+  it("pins production quarantine HMAC metadata without persisting clear identity or safe SHA", async () => {
+    const candidate = await quarantinedCandidate();
+    const executor = new ScriptedTransactionExecutor([
+      [],
+      [rawAdmissionKeyRow()],
+      [quarantineReceiptRow()]
+    ]);
+    const repository = createProductionSqlInboxV2RawIngressRepository(
+      executor,
+      {
+        admissionAuthority: {
+          authorizeRawAdmission: async () => productionAuthorization()
+        },
+        quarantineIdSource: () => quarantineId
+      }
+    );
+
+    await expect(repository.record(candidate)).resolves.toMatchObject({
+      outcome: "quarantined",
+      source: {
+        tenantId,
+        sourceConnectionId: connectionId,
+        sourceAccountId: accountId
+      },
+      quarantineId
+    });
+    const parameters = JSON.stringify(
+      executor.renderedQueries.flatMap((query) => query.params)
+    );
+    expect(parameters).not.toContain(rawIdentitySentinel);
+    expect(parameters).not.toContain(candidate.safeEnvelopeDigest);
+    expect(parameters).toContain("source-key:2026-08");
+    expect(parameters).toContain(
+      "secret:tenant:src002-unit/inbox-v2/source-key-2026-08"
+    );
+    expect(parameters).toContain(guarantee);
+  });
+
+  it("fails closed without opening a transaction when admission key is unavailable", async () => {
+    const candidate = await acceptedCandidate();
+    const executor = new ScriptedTransactionExecutor([]);
+    const repository = createProductionSqlInboxV2RawIngressRepository(
+      executor,
+      {
+        admissionAuthority: {
+          authorizeRawAdmission: async () => ({
+            outcome: "rejected",
+            reason: "key_unavailable"
+          })
+        }
+      }
+    );
+
+    await expect(repository.record(candidate)).resolves.toEqual({
+      outcome: "key_unavailable"
+    });
+    expect(executor.transactionConfigs).toEqual([]);
+  });
+
+  it("fails closed when the authority generation is absent from the locked DB key ring", async () => {
+    const candidate = await acceptedCandidate();
+    const executor = new ScriptedTransactionExecutor([[], []]);
+    const repository = createProductionSqlInboxV2RawIngressRepository(
+      executor,
+      {
+        admissionAuthority: {
+          authorizeRawAdmission: async () => productionAuthorization()
+        }
+      }
+    );
+
+    await expect(repository.record(candidate)).resolves.toEqual({
+      outcome: "key_unavailable"
+    });
+    expect(executor.renderedQueries).toHaveLength(2);
+    expect(normalizeSql(executor.renderedQueries[0]!.sql)).toContain(
+      "pg_advisory_xact_lock"
+    );
+    expect(normalizeSql(executor.renderedQueries[1]!.sql)).toContain(
+      "for share of key_row"
+    );
+  });
+
+  it("transports domain-separated raw-admission lock keys without PostgreSQL-forbidden NUL bytes", async () => {
+    const candidate = await acceptedCandidate();
+    const executor = new ScriptedTransactionExecutor([[], []]);
+    const repository = createProductionSqlInboxV2RawIngressRepository(
+      executor,
+      {
+        admissionAuthority: {
+          authorizeRawAdmission: async () =>
+            productionAuthorization({ includePrevious: true })
+        }
+      }
+    );
+
+    await expect(repository.record(candidate)).resolves.toEqual({
+      outcome: "key_unavailable"
+    });
+    const lockQuery = executor.renderedQueries[0]!;
+    const statement = normalizeSql(lockQuery.sql);
+    const parameters = JSON.stringify(lockQuery.params);
+    expect(statement).toContain("jsonb_build_array");
+    expect(statement).toContain('order by candidate.lock_key collate "c"');
+    expect(statement).not.toContain("jsonb_to_recordset");
+    expect(parameters).toContain("inbox-v2:raw-admission:v1");
+    expect(parameters).toContain("source-key:2026-08");
+    expect(parameters).toContain("source-key:2026-07");
+    expect(parameters).not.toContain("\\u0000");
+    executor.expectExhausted();
+  });
+
+  it("matches a verify-only previous generation during rotation without creating another raw row", async () => {
+    const candidate = await acceptedCandidate();
+    const authorization = productionAuthorization({ includePrevious: true });
+    const executor = new ScriptedTransactionExecutor([
+      [],
+      [
+        rawAdmissionKeyRow(),
+        rawAdmissionKeyRow({
+          generation: "source-key:2026-07",
+          secret_ref: "secret:tenant:src002-unit/inbox-v2/source-key-2026-07",
+          state: "verify_only",
+          is_write: false
+        })
+      ],
+      [
+        rawAdmissionRow(candidate, {
+          key_generation: "source-key:2026-07",
+          hmac_key_secret_ref:
+            "secret:tenant:src002-unit/inbox-v2/source-key-2026-07",
+          identity_hmac_sha256: `hmac-sha256:${"c".repeat(64)}`,
+          event_identity_digest_sha256: `hmac-sha256:${"c".repeat(64)}`,
+          safe_envelope_digest_sha256: `hmac-sha256:${"f".repeat(64)}`
+        })
+      ]
+    ]);
+    const repository = createProductionSqlInboxV2RawIngressRepository(
+      executor,
+      {
+        admissionAuthority: { authorizeRawAdmission: async () => authorization }
+      }
+    );
+
+    await expect(repository.record(candidate)).resolves.toEqual({
+      outcome: "duplicate",
+      source: {
+        tenantId,
+        sourceConnectionId: connectionId,
+        sourceAccountId: accountId
+      },
+      rawEventId: "raw_inbound_event:existing-src002",
+      safeEnvelopeDigest: `hmac-sha256:${"f".repeat(64)}`,
+      matchedKeyGenerations: ["source-key:2026-07"]
+    });
+    expect(
+      executor.renderedQueries.some((query) =>
+        normalizeSql(query.sql).includes(
+          "insert into public.raw_inbound_events"
+        )
+      )
+    ).toBe(false);
+    expect(JSON.stringify(executor.renderedQueries)).not.toContain(
+      rawIdentitySentinel
+    );
+    executor.expectExhausted();
+  });
+
+  it("loads a bounded pending snapshot and CAS-hands it off without clear identity", async () => {
+    const candidate = await acceptedCandidate();
+    const pendingAdmission = rawAdmissionRow(candidate, { db_now: t2 });
+    const loadExecutor = new ScriptedTransactionExecutor([[pendingAdmission]]);
+    const loaded = await loadPendingInboxV2RawDedupeAdmission(loadExecutor, {
+      tenantId,
+      rawEventId: existingRawEventId
+    });
+    expect(loaded).toMatchObject({
+      outcome: "pending",
+      snapshot: {
+        admissionRevision: "1",
+        keyGeneration: "source-key:2026-08"
+      }
+    });
+    expect(JSON.stringify(loaded)).not.toContain(rawIdentitySentinel);
+    expect(normalizeSql(loadExecutor.renderedQueries[0]!.sql)).toContain(
+      "limit 2"
+    );
+
+    const handoffExecutor = new ScriptedTransactionExecutor([
+      [pendingAdmission],
+      [
+        rawAdmissionRow(candidate, {
+          state: "skeleton_handed_off",
+          terminal_skeleton_id: "source-skeleton:src008-unit",
+          terminal_outcome_hmac_sha256: `hmac-sha256:${"9".repeat(64)}`,
+          skeleton_handed_off_at: t3,
+          revision: "2"
+        })
+      ]
+    ]);
+    const handedOff = await handoffInboxV2RawAdmissionSkeletonInTransaction(
+      handoffExecutor,
+      {
+        tenantId,
+        rawEventId: existingRawEventId,
+        expectedAdmissionRevision: revision1,
+        handedOffAt: t3,
+        terminalSkeletonId: "source-skeleton:src008-unit",
+        terminalOutcomeHmacSha256: `hmac-sha256:${"9".repeat(64)}`
+      }
+    );
+    expect(handedOff).toMatchObject({
+      outcome: "handed_off",
+      sealedSkeleton: { admissionRevision: "1" }
+    });
+    const update = normalizeSql(handoffExecutor.renderedQueries[1]!.sql);
+    expect(update).toContain("admission.revision =");
+    expect(update).toContain("admission.guarantee_until >");
+    expect(JSON.stringify(handoffExecutor.renderedQueries)).not.toContain(
+      rawIdentitySentinel
+    );
+  });
+
   it("claims pending and expired work with DB clock, SKIP LOCKED and raw-token ordinals", async () => {
     const input = inboxV2ClaimRawIngressInputSchema.parse({
       tenantId,
       workerId,
       leaseDurationSeconds: 60,
-      batchSize: 2
+      batchSize: 2,
+      maxClaimsPerAccount: 1
     });
     const rendered = renderQuery(
       buildClaimInboxV2RawIngressSql(input, [tokenHashA, tokenHashB])
@@ -206,6 +494,10 @@ describe("SQL Inbox V2 raw-ingress repository", () => {
     const statement = normalizeSql(rendered.sql);
     expect(statement).toContain("select clock_timestamp() as db_now");
     expect(statement).toContain("for update of work skip locked");
+    expect(statement).toContain(
+      "partition by envelope.source_connection_id, envelope.source_account_scope_key"
+    );
+    expect(statement).toContain("account_claim_ordinal <=");
     expect(statement).toContain("work.state = 'pending'");
     expect(statement).toContain("work.state = 'leased'");
     expect(statement).toContain("last_reclaimed_from_expires_at");
@@ -547,13 +839,109 @@ function existingEnvelopeRow(
   overrides: Record<string, unknown> = {}
 ): Record<string, unknown> {
   return {
+    tenant_id: tenantId,
     raw_event_id: "raw_inbound_event:existing-src002",
     source_connection_id: connectionId,
+    source_account_id: accountId,
     source_account_scope_key: `1:${accountId.length}:${accountId}`,
     transport_kind: "webhook",
     event_identity_kind: "provider_event_id",
     event_identity_digest_sha256: `sha256:${"a".repeat(64)}`,
     safe_envelope_digest_sha256: `sha256:${"b".repeat(64)}`,
+    sanitizer_id: "module:synthetic:sanitize-src002",
+    sanitizer_version: "v1",
+    sanitizer_declaration_revision: "1",
+    ...overrides
+  };
+}
+
+function quarantineReceiptRow(): Record<string, unknown> {
+  return {
+    id: quarantineId,
+    tenant_id: tenantId,
+    source_connection_id: connectionId,
+    source_account_id: accountId
+  };
+}
+
+function productionAuthorization(
+  options: Readonly<{ includePrevious?: boolean }> = {}
+) {
+  const active = {
+    generation: "source-key:2026-08",
+    hmacKeySecretRef: "secret:tenant:src002-unit/inbox-v2/source-key-2026-08",
+    identityHmacSha256: `hmac-sha256:${"b".repeat(64)}`,
+    safeEnvelopeHmacSha256: `hmac-sha256:${"e".repeat(64)}`
+  };
+  return {
+    outcome: "authorized" as const,
+    source: {
+      tenantId,
+      sourceConnectionId: connectionId,
+      sourceAccountId: accountId
+    },
+    identityKind: "provider_event_id" as const,
+    purposeId: "core:source_replay_and_diagnostics" as const,
+    writeCandidate: active,
+    candidates: options.includePrevious
+      ? [
+          active,
+          {
+            generation: "source-key:2026-07",
+            hmacKeySecretRef:
+              "secret:tenant:src002-unit/inbox-v2/source-key-2026-07",
+            identityHmacSha256: `hmac-sha256:${"c".repeat(64)}`,
+            safeEnvelopeHmacSha256: `hmac-sha256:${"f".repeat(64)}`
+          }
+        ]
+      : [active],
+    guaranteeUntil: guarantee
+  };
+}
+
+function rawAdmissionKeyRow(
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    generation: "source-key:2026-08",
+    secret_ref: "secret:tenant:src002-unit/inbox-v2/source-key-2026-08",
+    state: "active",
+    activated_at: t0,
+    use_until: "2026-07-18T08:00:00.000Z",
+    guarantee_not_after: "2026-07-19T08:00:00.000Z",
+    verify_until: "2026-08-01T08:00:00.000Z",
+    is_write: true,
+    db_now: t2,
+    ...overrides
+  };
+}
+
+function rawAdmissionRow(
+  candidate: InboxV2SanitizedRawIngressCandidate,
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    tenant_id: tenantId,
+    purpose_id: "core:source_replay_and_diagnostics",
+    key_generation: "source-key:2026-08",
+    hmac_key_secret_ref:
+      "secret:tenant:src002-unit/inbox-v2/source-key-2026-08",
+    identity_hmac_sha256: `hmac-sha256:${"b".repeat(64)}`,
+    identity_kind: "provider_event_id",
+    source_connection_id: connectionId,
+    source_account_id: accountId,
+    source_account_scope_key: `1:${accountId.length}:${accountId}`,
+    raw_event_id: "raw_inbound_event:existing-src002",
+    safe_envelope_digest_sha256: `hmac-sha256:${"e".repeat(64)}`,
+    guarantee_until: guarantee,
+    state: "skeleton_pending",
+    terminal_skeleton_id: null,
+    terminal_outcome_hmac_sha256: null,
+    skeleton_handed_off_at: null,
+    revision: "1",
+    transport_kind: "webhook",
+    event_identity_kind: "provider_event_id",
+    event_identity_digest_sha256: `hmac-sha256:${"b".repeat(64)}`,
     sanitizer_id: "module:synthetic:sanitize-src002",
     sanitizer_version: "v1",
     sanitizer_declaration_revision: "1",

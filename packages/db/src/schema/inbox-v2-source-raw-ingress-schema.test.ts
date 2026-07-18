@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   INBOX_V2_SOURCE_RAW_INGRESS_INTEGRITY_SQL,
+  INBOX_V2_SOURCE_RAW_ADMISSION_INTEGRITY_SQL,
+  inboxV2SourceRawAdmissions,
+  inboxV2SourceRawAdmissionState,
   inboxV2SourceRawEnvelopes,
   inboxV2SourceRawEvidence,
   inboxV2SourceRawEvidenceKind,
@@ -15,16 +18,18 @@ import { rawInboundEvents, sourceAccounts, sourceConnections } from "./tables";
 
 const rawIngressTables = [
   inboxV2SourceRawEnvelopes,
+  inboxV2SourceRawAdmissions,
   inboxV2SourceRawEvidence,
   inboxV2SourceRawQuarantines,
   inboxV2SourceRawWorkItems
 ] as const;
 
 describe("Inbox V2 source raw ingress schema", () => {
-  it("adds four tenant-scoped companions without replacing the raw anchor", () => {
+  it("adds five tenant-scoped companions without replacing the raw anchor", () => {
     expect(rawIngressTables.map((table) => getTableConfig(table).name)).toEqual(
       [
         "inbox_v2_source_raw_envelopes",
+        "inbox_v2_source_raw_admissions",
         "inbox_v2_source_raw_evidence",
         "inbox_v2_source_raw_quarantines",
         "inbox_v2_source_raw_work_items"
@@ -35,6 +40,71 @@ describe("Inbox V2 source raw ingress schema", () => {
       expect(primaryKeyColumns(table)[0]?.[0]).toBe("tenant_id");
     }
     expect(getTableConfig(rawInboundEvents).name).toBe("raw_inbound_events");
+  });
+
+  it("fences tenant/purpose keyed HMAC admission until skeleton handoff", () => {
+    expect(inboxV2SourceRawAdmissionState.enumValues).toEqual([
+      "skeleton_pending",
+      "skeleton_handed_off"
+    ]);
+    expect(primaryKeyColumns(inboxV2SourceRawAdmissions)).toEqual([
+      ["tenant_id", "purpose_id", "key_generation", "identity_hmac_sha256"]
+    ]);
+    expect(uniqueColumns(inboxV2SourceRawAdmissions)).toContainEqual([
+      "tenant_id",
+      "raw_event_id",
+      "key_generation"
+    ]);
+    expect(uniqueColumns(inboxV2SourceRawAdmissions)).toContainEqual([
+      "tenant_id",
+      "terminal_skeleton_id"
+    ]);
+    expect(columnNames(inboxV2SourceRawAdmissions)).toEqual(
+      expect.arrayContaining([
+        "terminal_skeleton_id",
+        "terminal_outcome_hmac_sha256"
+      ])
+    );
+    expectForeignKey(
+      inboxV2SourceRawAdmissions,
+      "inbox_v2_source_raw_admissions_envelope_fk",
+      inboxV2SourceRawEnvelopes,
+      ["tenant_id", "raw_event_id", "safe_envelope_digest_sha256"],
+      ["tenant_id", "raw_event_id", "safe_envelope_digest_sha256"]
+    );
+    const identity = checkSql(
+      inboxV2SourceRawAdmissions,
+      "inbox_v2_source_raw_admissions_identity_check"
+    );
+    expect(identity).toContain("core:source_replay_and_diagnostics");
+    expect(identity).toContain("^hmac-sha256:[0-9a-f]{64}$");
+    expect(identity).toContain("hmac_key_secret_ref");
+    const lifecycle = checkSql(
+      inboxV2SourceRawAdmissions,
+      "inbox_v2_source_raw_admissions_lifecycle_check"
+    );
+    expect(lifecycle).toContain("skeleton_pending");
+    expect(lifecycle).toContain("skeleton_handed_off");
+    expect(lifecycle).toContain("isfinite");
+  });
+
+  it("exports an additive SRC-008 raw-admission migration tail", () => {
+    const ddl = INBOX_V2_SOURCE_RAW_ADMISSION_INTEGRITY_SQL;
+    expect(ddl).toContain("INBOX_V2_SOURCE_RAW_ADMISSION_FINALIZED_V1");
+    expect(ddl).toContain(
+      "create or replace function public.inbox_v2_source_raw_reject_immutable"
+    );
+    expect(ddl).toContain(
+      "create trigger inbox_v2_source_raw_admission_guard_trigger"
+    );
+    expect(ddl).toContain(
+      "create constraint trigger inbox_v2_source_raw_admission_coherence_constraint"
+    );
+    expect(ddl).toContain("grant select, delete on table");
+    expect(ddl).toContain("public.inbox_v2_source_raw_quarantines");
+    expect(ddl).not.toContain(
+      "create trigger inbox_v2_source_raw_envelopes_immutable_trigger"
+    );
   });
 
   it("binds the immutable envelope to the exact anchor, connection and null-safe account scope", () => {
@@ -115,6 +185,7 @@ describe("Inbox V2 source raw ingress schema", () => {
     );
     expect(identity).toContain("^source:v2:raw:[0-9a-f]{64}$");
     expect(identity.match(/\^sha256:/gu)).toHaveLength(2);
+    expect(identity.match(/\^hmac-sha256:/gu)).toHaveLength(2);
     expect(identity).toContain("safe_envelope_schema_version");
 
     const lifecycle = checkSql(
@@ -191,6 +262,13 @@ describe("Inbox V2 source raw ingress schema", () => {
         "authorization"
       ])
     );
+    expect(columnNames(inboxV2SourceRawQuarantines)).toEqual(
+      expect.arrayContaining([
+        "event_identity_key_generation",
+        "event_identity_hmac_key_secret_ref",
+        "event_identity_guarantee_until"
+      ])
+    );
     expect(uniqueColumns(inboxV2SourceRawQuarantines)).toContainEqual([
       "tenant_id",
       "quarantine_fingerprint_sha256"
@@ -206,6 +284,12 @@ describe("Inbox V2 source raw ingress schema", () => {
     expect(shape).toContain("existing_raw_event_id");
     expect(shape).toContain("existing_safe_envelope_digest_sha256");
     expect(shape).toContain("<>");
+    const safeValues = checkSql(
+      inboxV2SourceRawQuarantines,
+      "inbox_v2_source_raw_quarantines_safe_values_check"
+    );
+    expect(safeValues).toContain("^hmac-sha256:[0-9a-f]{64}$");
+    expect(safeValues).toContain("event_identity_guarantee_until");
   });
 
   it("keeps the work lifecycle limited to pending and leased with fenced reclaim diagnostics", () => {
@@ -278,6 +362,7 @@ describe("Inbox V2 source raw ingress schema", () => {
     expect(ddl).toContain(
       "create trigger inbox_v2_source_raw_quarantines_immutable_trigger"
     );
+    expect(ddl).not.toContain("inbox_v2_source_raw_admission_guard");
     expect(ddl).not.toContain(
       "before update or delete on public.inbox_v2_source_raw_evidence"
     );
@@ -300,6 +385,7 @@ describe("Inbox V2 source raw ingress schema", () => {
     expect(aggregate).toContain("v_anchor.error_message is not null");
     expect(aggregate).toContain("v_anchor.processing_status <> 'ignored'");
     expect(aggregate).toContain("v_work_count <> 1");
+    expect(aggregate).not.toContain("v_admission_count");
     expect(aggregate).toContain("provider_payload_evidence_present");
     expect(aggregate).toContain("allowed_headers_evidence_present");
     expect(aggregate).toContain(
@@ -315,6 +401,54 @@ describe("Inbox V2 source raw ingress schema", () => {
     );
     expect(ddl).not.toContain(
       "after insert or delete on public.inbox_v2_source_raw_evidence"
+    );
+  });
+
+  it("installs additive HMAC admission, retention and handoff guards", () => {
+    const ddl = INBOX_V2_SOURCE_RAW_ADMISSION_INTEGRITY_SQL;
+    expect(ddl).toContain("INBOX_V2_SOURCE_RAW_ADMISSION_FINALIZED_V1");
+    expect(ddl.match(/create or replace function/gu)).toHaveLength(3);
+    expect(
+      ddl.match(/set search_path = pg_catalog, public, pg_temp/gu)
+    ).toHaveLength(3);
+    expect(ddl).toContain(
+      "create trigger inbox_v2_source_raw_admission_guard_trigger"
+    );
+    expect(ddl).toContain(
+      "Raw evidence cannot compact before skeleton handoff"
+    );
+
+    const immutableGuard = functionSql(
+      ddl,
+      "inbox_v2_source_raw_reject_immutable"
+    );
+    expect(immutableGuard).toContain(
+      "Raw quarantine is not retention eligible"
+    );
+    expect(immutableGuard).toContain("event_identity_guarantee_until");
+    expect(immutableGuard).toContain("hulee_inbox_v2_retention_owner");
+
+    const admissionGuard = functionSql(
+      ddl,
+      "inbox_v2_source_raw_admission_guard"
+    );
+    expect(admissionGuard).toContain("skeleton_pending");
+    expect(admissionGuard).toContain("skeleton_handed_off");
+    expect(admissionGuard).toContain("new.revision <> old.revision + 1");
+    expect(admissionGuard).toContain("hulee_inbox_v2_retention_owner");
+    expect(admissionGuard).toContain("clock_timestamp() < old.guarantee_until");
+
+    const aggregate = functionSql(ddl, "inbox_v2_source_raw_assert_aggregate");
+    expect(aggregate).toContain("v_admission_count <> 1");
+    expect(aggregate).toContain(
+      "event_identity_digest_sha256 like 'hmac-sha256:%'"
+    );
+    expect(ddl.match(/deferrable initially deferred/gu)).toHaveLength(1);
+    expect(ddl).toContain(
+      "grant select, delete on table\n  public.inbox_v2_source_raw_admissions\nto hulee_inbox_v2_retention_owner"
+    );
+    expect(ddl).toContain(
+      "revoke delete, truncate on table\n  public.inbox_v2_source_raw_admissions\nfrom hulee_inbox_v2_runtime"
     );
   });
 });

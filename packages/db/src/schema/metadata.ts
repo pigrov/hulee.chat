@@ -62,6 +62,24 @@ export const initialTables = [
   { name: "inbox_v2_source_raw_quarantines", scope: "tenant", requiresTenantId: true },
   // prettier-ignore
   { name: "inbox_v2_source_raw_work_items", scope: "tenant", requiresTenantId: true },
+  // SRC-008 processing runtime state is tenant-scoped and additive to the
+  // N-1 raw-ingress work contract.
+  // prettier-ignore
+  { name: "inbox_v2_source_processing_key_generations", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_delivery_dedupe_skeletons", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_processing_work_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_processing_attempts", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_processing_dead_letters", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_replay_requests", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_account_pressure_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_source_ingress_cursor_checkpoints", scope: "tenant", requiresTenantId: true },
   {
     name: "normalized_inbound_events",
     scope: "tenant",

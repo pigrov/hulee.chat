@@ -382,6 +382,32 @@ describe("Inbox V2 public contract boundary", () => {
     expect(
       publicContracts.inboxV2SourceOccurrenceMaterializationCommitSchema
     ).toBeDefined();
+    expect(publicContracts.inboxV2SourceProcessingOutcomeSchema).toBeDefined();
+    expect(publicContracts.inboxV2SourceReplayRequestSchema).toBeDefined();
+    expect(publicContracts.inboxV2SourceDedupeSkeletonSchema).toBeDefined();
+    expect(
+      publicContracts.inboxV2SourceProcessingRuntimeClaimSchema
+    ).toBeDefined();
+    expect(
+      publicContracts.inboxV2ApplySourceProcessingOutcomeInputSchema
+    ).toBeDefined();
+    expect(
+      publicContracts.inboxV2SourceCursorPersistenceInputSchema
+    ).toBeDefined();
+    expect(publicContracts.inboxV2SourceCursorLoadResultSchema).toBeDefined();
+    expect(publicContracts.inboxV2SourceCursorProtectionSchema).toBeDefined();
+    expect(
+      publicContracts.inboxV2SourceDedupeKeyRotationInputSchema
+    ).toBeDefined();
+    expect(
+      publicContracts.inboxV2SourceDedupeReplayabilityExpireInputSchema
+    ).toBeDefined();
+    expect(publicContracts.calculateInboxV2SourceReplayRequestHash).toBeTypeOf(
+      "function"
+    );
+    expect(
+      publicContracts.calculateInboxV2SourceProcessingLeaseTokenHash
+    ).toBeTypeOf("function");
     expect(publicContracts.inboxV2OutboundDispatchSchema).toBeDefined();
     expect(
       publicContracts.inboxV2OutboundDispatchAttemptCommitSchema

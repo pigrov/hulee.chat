@@ -4,6 +4,14 @@ import {
   type WorkerConfig
 } from "@hulee/config";
 import {
+  inboxV2TimestampSchema,
+  type InboxV2RawAdmissionPreflightPort,
+  type InboxV2RawAdmissionTerminalOutcomeSealingPort,
+  type InboxV2SourceProcessingCryptographicAuthorityPort,
+  type InboxV2SourceTerminalDedupeLifecycleResolverPort,
+  type InboxV2SourceReplayAuthorizationPort
+} from "@hulee/contracts";
+import {
   createLevelFilteredLogger,
   createJsonLogger,
   type Logger
@@ -20,11 +28,17 @@ import {
   createSqlInboxV2FencedOutboundTransportRuntimeRepository,
   createSqlInboxV2RepositoryOutbox,
   createSqlInboxV2SecurityDenialRetentionRepository,
+  createSqlInboxV2SourceProcessingRuntimeRepository,
   createDrizzlePersistenceExecutor,
   createExternalMessageRepository,
   createSqlOutboundDispatchRepository,
   createSqlSourceIntegrationRepository,
   createSqlTenantSecretRepository,
+  type InboxV2SourceDeadLetterLifecycleResolver as SqlInboxV2SourceDeadLetterLifecycleResolver,
+  type InboxV2SourceProcessingAttemptIdSource,
+  type InboxV2SourceProcessingLeaseTokenSource,
+  type InboxV2SourceProcessingRetentionPolicy,
+  type InboxV2SourceReplayEpisodeIdSource,
   type HuleeDatabase
 } from "@hulee/db";
 import { createExternalChannelCommandService } from "@hulee/core";
@@ -86,6 +100,16 @@ import {
   type InboxV2ProviderDispatchCoordinator,
   type InboxV2ProviderDispatchCoordinatorOptions
 } from "./inbox-v2-provider-dispatch-coordinator";
+import {
+  createInboxV2SourceProcessingRuntimeCoordinator,
+  type InboxV2SourceProcessingRuntimeClock,
+  type InboxV2SourceProcessingRuntimeCoordinator,
+  type InboxV2SourceProcessingRuntimeCoordinatorOptions
+} from "./source-processing-runtime-coordinator";
+import {
+  resolveInboxV2SourceProcessingProductionHandlers,
+  type InboxV2SourceProcessingProductionActivation
+} from "./source-processing-production-activation";
 
 export type WorkerBoundary = {
   processesOutbox: true;
@@ -145,6 +169,159 @@ export function createWorkerInboxV2ProviderDispatchCoordinator<
     transport:
       createSqlInboxV2FencedOutboundTransportRuntimeRepository(database)
   });
+}
+
+export type WorkerInboxV2SourceProcessingRuntimeCoordinatorOptions = Omit<
+  InboxV2SourceProcessingRuntimeCoordinatorOptions,
+  "repository" | "deadLetterLifecycleResolver" | "clock" | "handlers"
+> &
+  Readonly<{
+    database: HuleeDatabase;
+    activation: InboxV2SourceProcessingProductionActivation;
+    replayAuthorization: InboxV2SourceReplayAuthorizationPort;
+    cryptographicAuthority: InboxV2SourceProcessingCryptographicAuthorityPort;
+    retentionPolicy: InboxV2SourceProcessingRetentionPolicy;
+    deadLetterLifecycleResolver: SqlInboxV2SourceDeadLetterLifecycleResolver;
+    rawAdmissionPreflight: InboxV2RawAdmissionPreflightPort;
+    terminalOutcomeSealer: InboxV2RawAdmissionTerminalOutcomeSealingPort;
+    terminalLifecycleResolver: InboxV2SourceTerminalDedupeLifecycleResolverPort;
+    leaseTokenSource: InboxV2SourceProcessingLeaseTokenSource;
+    attemptIdSource: InboxV2SourceProcessingAttemptIdSource;
+    replayEpisodeIdSource: InboxV2SourceReplayEpisodeIdSource;
+  }>;
+
+/**
+ * Capability-complete production composition point for the SRC-008 inbound
+ * lifecycle. No compatibility repository or implicit identity source is used
+ * when a production capability is absent.
+ */
+export function createWorkerInboxV2SourceProcessingRuntimeCoordinator(
+  options: WorkerInboxV2SourceProcessingRuntimeCoordinatorOptions
+): InboxV2SourceProcessingRuntimeCoordinator {
+  assertWorkerInboxV2SourceProcessingRuntimeCapabilities(options);
+  const {
+    database,
+    replayAuthorization,
+    cryptographicAuthority,
+    retentionPolicy,
+    deadLetterLifecycleResolver,
+    rawAdmissionPreflight,
+    terminalOutcomeSealer,
+    terminalLifecycleResolver,
+    leaseTokenSource,
+    attemptIdSource,
+    replayEpisodeIdSource,
+    activation,
+    ...coordinatorOptions
+  } = options;
+  const repository = createSqlInboxV2SourceProcessingRuntimeRepository(
+    database,
+    {
+      replayAuthorization,
+      cryptographicAuthority,
+      retentionPolicy,
+      deadLetterLifecycleResolver,
+      terminalDedupe: {
+        mode: "required",
+        rawAdmissionPreflight,
+        terminalOutcomeSealer,
+        terminalLifecycleResolver
+      },
+      leaseTokenSource,
+      attemptIdSource,
+      replayEpisodeIdSource
+    }
+  );
+
+  return createInboxV2SourceProcessingRuntimeCoordinator({
+    ...coordinatorOptions,
+    handlers: resolveInboxV2SourceProcessingProductionHandlers(activation),
+    repository,
+    deadLetterLifecycleResolver: Object.freeze({
+      resolve: ({ outcome }) =>
+        deadLetterLifecycleResolver({
+          scope: outcome.attempt.scope,
+          deadLetterId: outcome.deadLetter.id,
+          deadLetteredAt: outcome.deadLetter.deadLetteredAt,
+          diagnostic: outcome.diagnostic
+        })
+    }),
+    clock: createWorkerInboxV2SourceProcessingDatabaseClock(database)
+  });
+}
+
+/**
+ * Production source-processing decisions use PostgreSQL time so lease fences
+ * cannot drift with the worker host clock.
+ */
+export function createWorkerInboxV2SourceProcessingDatabaseClock(
+  database: HuleeDatabase
+): InboxV2SourceProcessingRuntimeClock {
+  return Object.freeze({
+    async now() {
+      const result = await database.$client.query<{
+        db_now: Date | string | null;
+      }>("select clock_timestamp() as db_now");
+      const rawTimestamp = result.rows[0]?.db_now;
+      const epochMilliseconds =
+        rawTimestamp instanceof Date
+          ? rawTimestamp.getTime()
+          : typeof rawTimestamp === "string"
+            ? Date.parse(rawTimestamp)
+            : Number.NaN;
+      if (!Number.isFinite(epochMilliseconds)) {
+        throw new TypeError(
+          "PostgreSQL source-processing clock returned an invalid timestamp."
+        );
+      }
+      return inboxV2TimestampSchema.parse(
+        new Date(epochMilliseconds).toISOString()
+      );
+    }
+  });
+}
+
+function assertWorkerInboxV2SourceProcessingRuntimeCapabilities(
+  options: WorkerInboxV2SourceProcessingRuntimeCoordinatorOptions
+): void {
+  if (typeof options?.diagnosticClassifier?.classify !== "function") {
+    throw new TypeError(
+      "Source-processing production runtime requires key-safe diagnostics capability."
+    );
+  }
+  const database = options?.database as
+    | Readonly<{
+        execute?: unknown;
+        transaction?: unknown;
+        $client?: Readonly<{ query?: unknown }>;
+      }>
+    | undefined;
+  if (
+    typeof database?.execute !== "function" ||
+    typeof database.transaction !== "function" ||
+    typeof database.$client?.query !== "function" ||
+    typeof options.replayAuthorization?.authorizeReplay !== "function" ||
+    typeof options.cryptographicAuthority?.protectCursor !== "function" ||
+    typeof options.cryptographicAuthority?.resolveCursor !== "function" ||
+    typeof options.cryptographicAuthority?.verifyDedupeSkeleton !==
+      "function" ||
+    typeof options.cryptographicAuthority?.deriveDedupeIdentityCandidates !==
+      "function" ||
+    typeof options.deadLetterLifecycleResolver !== "function" ||
+    typeof options.rawAdmissionPreflight?.loadPendingDedupeAdmission !==
+      "function" ||
+    typeof options.terminalOutcomeSealer?.sealTerminalDedupeOutcome !==
+      "function" ||
+    typeof options.terminalLifecycleResolver?.resolveTerminalDedupeLifecycle !==
+      "function" ||
+    typeof options.leaseTokenSource !== "function" ||
+    typeof options.attemptIdSource !== "function" ||
+    typeof options.replayEpisodeIdSource !== "function"
+  ) {
+    throw new TypeError(
+      "Source-processing production runtime requires database, replay authorization, cryptographic, terminal dedupe, DLQ and lease identity capabilities."
+    );
+  }
 }
 
 export type WorkerOutboxHandlerOptions = {
@@ -683,6 +860,50 @@ export type {
   InboxV2SourceNormalizationProcessor,
   InboxV2SourceNormalizationProcessorOptions
 } from "./source-normalization-processor";
+export { createInboxV2SourceNormalizationRuntimeHandler } from "./source-normalization-runtime-handler";
+export { createInboxV2SourceIngressRecordAndAcknowledgeSeam } from "./source-ingress-record-and-acknowledge";
+export {
+  createInboxV2SourceNormalizationDurabilityCapability,
+  createInboxV2SourceProcessingCompositeDurabilityCapabilitySet,
+  createInboxV2SourceProcessingProductionActivation,
+  createInboxV2TrustedSourceProcessingCompositeTransaction,
+  inboxV2SourceProcessingCompositeStages,
+  resolveInboxV2SourceProcessingProductionHandlers
+} from "./source-processing-production-activation";
+export { createInboxV2SourceProcessingRuntimeCoordinator } from "./source-processing-runtime-coordinator";
+export type {
+  InboxV2SourceIngressCursorRequest,
+  InboxV2SourceIngressDurableAdmissionReceipt,
+  InboxV2SourceIngressDurableCursorAcknowledgeInput,
+  InboxV2SourceIngressDurableCursorAcknowledgerPort,
+  InboxV2SourceIngressRecordAndAcknowledgeResult,
+  InboxV2SourceIngressRecordAndAcknowledgeSeam
+} from "./source-ingress-record-and-acknowledge";
+export type {
+  InboxV2SourceProcessingCompositeDurableStage,
+  InboxV2SourceProcessingCompositeTransactionLocalPort,
+  InboxV2SourceProcessingDurableStage,
+  InboxV2SourceProcessingProductionActivation,
+  InboxV2TrustedSourceProcessingCompositeDurabilityCapabilitySet,
+  InboxV2TrustedSourceProcessingCompositeTransaction,
+  InboxV2TrustedSourceProcessingStageDurabilityCapability
+} from "./source-processing-production-activation";
+export type {
+  InboxV2SourceProcessingClaimRunResult,
+  InboxV2SourceProcessingDiagnosticClassifier,
+  InboxV2SourceProcessingHandlerResult,
+  InboxV2SourceProcessingRuntimeApplyResult,
+  InboxV2SourceProcessingRuntimeClaim,
+  InboxV2SourceProcessingRuntimeClaimResult,
+  InboxV2SourceProcessingRuntimeClock,
+  InboxV2SourceProcessingRuntimeCoordinator,
+  InboxV2SourceProcessingRuntimeCoordinatorOptions,
+  InboxV2SourceProcessingRuntimeRepositoryPort,
+  InboxV2SourceProcessingRuntimeRunResult,
+  InboxV2SourceProcessingStageHandler,
+  InboxV2SourceDeadLetterLifecycle,
+  InboxV2SourceDeadLetterLifecycleResolver
+} from "./source-processing-runtime-coordinator";
 export type {
   InboxV2SourceIdentityAssessmentPlan,
   InboxV2SourceIdentityAssessmentPlanner,

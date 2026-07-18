@@ -7,6 +7,7 @@ import {
   isInboxV2TimestampOrderValid
 } from "./entity-metadata";
 import {
+  inboxV2NormalizedInboundEventIdSchema,
   inboxV2RawInboundEventIdSchema,
   inboxV2SourceAccountIdSchema,
   inboxV2SourceConnectionIdSchema,
@@ -25,7 +26,9 @@ import {
 } from "./schema-version";
 import {
   inboxV2AdapterContractSnapshotSchema,
-  inboxV2OpaqueProviderSubjectSchema
+  inboxV2OpaqueProviderSubjectSchema,
+  inboxV2RoutingTokenSchema,
+  inboxV2SourceDiagnosticIdSchema
 } from "./source-routing-primitives";
 import { inboxV2Sha256DigestSchema } from "./sync-primitives";
 
@@ -42,6 +45,9 @@ export const INBOX_V2_RAW_INGRESS_ALLOWED_PURPOSE_IDS = [
   "core:security_and_fraud_prevention",
   "core:legal_claim_or_regulatory_duty"
 ] as const;
+export const INBOX_V2_RAW_ADMISSION_PURPOSE_ID =
+  "core:source_replay_and_diagnostics" as const;
+export const INBOX_V2_RAW_ADMISSION_MAX_LOOKUP_CANDIDATES = 8;
 
 const rawIngressTransportSchema = z.enum([
   "webhook",
@@ -446,6 +452,422 @@ export type InboxV2SanitizedRawIngressCandidate = Readonly<{
       }>;
   safeEnvelopeDigest: z.infer<typeof inboxV2Sha256DigestSchema>;
 }>;
+
+/**
+ * Tenant/purpose-keyed admission is the production authority for raw-event
+ * identity. `identityMaterial` is consumed transiently by the authority; only
+ * the returned HMAC candidates may cross the persistence boundary.
+ */
+export const inboxV2RawAdmissionSourceScopeSchema = z
+  .object({
+    tenantId: inboxV2TenantIdSchema,
+    sourceConnectionId: inboxV2SourceConnectionIdSchema,
+    sourceAccountId: inboxV2SourceAccountIdSchema.nullable()
+  })
+  .strict();
+
+export const inboxV2RawAdmissionKeyGenerationSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._~:-]*$/u);
+
+export const inboxV2RawAdmissionTenantSecretRefSchema = z
+  .string()
+  .min(8)
+  .max(512)
+  .regex(/^secret:[A-Za-z0-9][A-Za-z0-9._~:/-]*$/u);
+
+export const inboxV2RawAdmissionIdentityHmacSha256Schema = z
+  .string()
+  .regex(/^hmac-sha256:[0-9a-f]{64}$/u);
+export const inboxV2RawPersistedSafeEnvelopeDigestSchema = z.union([
+  inboxV2Sha256DigestSchema,
+  inboxV2RawAdmissionIdentityHmacSha256Schema
+]);
+
+export const inboxV2RawAdmissionIdentityCandidateSchema = z
+  .object({
+    generation: inboxV2RawAdmissionKeyGenerationSchema,
+    hmacKeySecretRef: inboxV2RawAdmissionTenantSecretRefSchema,
+    identityHmacSha256: inboxV2RawAdmissionIdentityHmacSha256Schema,
+    safeEnvelopeHmacSha256: inboxV2RawAdmissionIdentityHmacSha256Schema
+  })
+  .strict();
+
+export const inboxV2AuthorizeRawAdmissionInputSchema = z
+  .object({
+    source: inboxV2RawAdmissionSourceScopeSchema,
+    identityKind: rawIngressIdentityKindSchema,
+    purposeId: z.literal(INBOX_V2_RAW_ADMISSION_PURPOSE_ID),
+    /** Ephemeral clear identity; implementations must not retain or log it. */
+    identityMaterial: inboxV2OpaqueProviderSubjectSchema,
+    /** Ephemeral unkeyed sanitizer digest; only its tenant-keyed HMAC persists. */
+    safeEnvelopeMaterialDigest: inboxV2Sha256DigestSchema
+  })
+  .strict();
+
+export const inboxV2RawAdmissionAuthorizationDecisionSchema =
+  z.discriminatedUnion("outcome", [
+    z
+      .object({
+        outcome: z.literal("authorized"),
+        source: inboxV2RawAdmissionSourceScopeSchema,
+        identityKind: rawIngressIdentityKindSchema,
+        purposeId: z.literal(INBOX_V2_RAW_ADMISSION_PURPOSE_ID),
+        writeCandidate: inboxV2RawAdmissionIdentityCandidateSchema,
+        candidates: z
+          .array(inboxV2RawAdmissionIdentityCandidateSchema)
+          .min(1)
+          .max(INBOX_V2_RAW_ADMISSION_MAX_LOOKUP_CANDIDATES)
+          .readonly(),
+        guaranteeUntil: inboxV2TimestampSchema
+      })
+      .strict()
+      .superRefine((decision, context) => {
+        const generations = decision.candidates.map(
+          (candidate) => candidate.generation
+        );
+        const hmacs = decision.candidates.map(
+          (candidate) => candidate.identityHmacSha256
+        );
+        const envelopeHmacs = decision.candidates.map(
+          (candidate) => candidate.safeEnvelopeHmacSha256
+        );
+        if (
+          new Set(generations).size !== generations.length ||
+          new Set(hmacs).size !== hmacs.length ||
+          new Set(envelopeHmacs).size !== envelopeHmacs.length
+        ) {
+          context.addIssue({
+            code: "custom",
+            path: ["candidates"],
+            message:
+              "Raw admission candidates require unique generations and HMACs."
+          });
+        }
+        if (
+          !decision.candidates.some(
+            (candidate) =>
+              candidate.generation === decision.writeCandidate.generation &&
+              candidate.hmacKeySecretRef ===
+                decision.writeCandidate.hmacKeySecretRef &&
+              candidate.identityHmacSha256 ===
+                decision.writeCandidate.identityHmacSha256 &&
+              candidate.safeEnvelopeHmacSha256 ===
+                decision.writeCandidate.safeEnvelopeHmacSha256
+          )
+        ) {
+          context.addIssue({
+            code: "custom",
+            path: ["writeCandidate"],
+            message:
+              "Raw admission write candidate must be present in the lookup set."
+          });
+        }
+        for (const [index, candidate] of decision.candidates.entries()) {
+          if (
+            !candidate.hmacKeySecretRef.startsWith(
+              `secret:${decision.source.tenantId}/`
+            )
+          ) {
+            context.addIssue({
+              code: "custom",
+              path: ["candidates", index, "hmacKeySecretRef"],
+              message:
+                "Raw admission key reference must belong to the exact tenant."
+            });
+          }
+        }
+      }),
+    z
+      .object({
+        outcome: z.literal("rejected"),
+        reason: z.enum(["key_unavailable", "scope_mismatch"])
+      })
+      .strict()
+  ]);
+
+export type InboxV2AuthorizeRawAdmissionInput = z.infer<
+  typeof inboxV2AuthorizeRawAdmissionInputSchema
+>;
+export type InboxV2RawAdmissionAuthorizationDecision = z.infer<
+  typeof inboxV2RawAdmissionAuthorizationDecisionSchema
+>;
+export type InboxV2RawAdmissionIdentityCandidate = z.infer<
+  typeof inboxV2RawAdmissionIdentityCandidateSchema
+>;
+
+export interface InboxV2RawAdmissionAuthorityPort {
+  authorizeRawAdmission(
+    input: Readonly<InboxV2AuthorizeRawAdmissionInput>
+  ): Promise<InboxV2RawAdmissionAuthorizationDecision>;
+}
+
+export const inboxV2RawAdmissionSkeletonHandoffInputSchema = z
+  .object({
+    tenantId: inboxV2TenantIdSchema,
+    rawEventId: inboxV2RawInboundEventIdSchema,
+    expectedAdmissionRevision: inboxV2EntityRevisionSchema,
+    handedOffAt: inboxV2TimestampSchema,
+    terminalSkeletonId: inboxV2RoutingTokenSchema,
+    terminalOutcomeHmacSha256: inboxV2RawAdmissionIdentityHmacSha256Schema
+  })
+  .strict();
+
+export const inboxV2LoadPendingRawAdmissionInputSchema = z
+  .object({
+    tenantId: inboxV2TenantIdSchema,
+    rawEventId: inboxV2RawInboundEventIdSchema
+  })
+  .strict();
+
+export const inboxV2RawAdmissionSealedSkeletonInputSchema = z
+  .object({
+    source: inboxV2RawAdmissionSourceScopeSchema,
+    rawEventId: inboxV2RawInboundEventIdSchema,
+    identityKind: rawIngressIdentityKindSchema,
+    purposeId: z.literal(INBOX_V2_RAW_ADMISSION_PURPOSE_ID),
+    keyGeneration: inboxV2RawAdmissionKeyGenerationSchema,
+    hmacKeySecretRef: inboxV2RawAdmissionTenantSecretRefSchema,
+    identityHmacSha256: inboxV2RawAdmissionIdentityHmacSha256Schema,
+    safeEnvelopeDigest: inboxV2RawAdmissionIdentityHmacSha256Schema,
+    guaranteeUntil: inboxV2TimestampSchema,
+    admissionRevision: inboxV2EntityRevisionSchema
+  })
+  .strict()
+  .superRefine((sealed, context) => {
+    if (
+      sealed.source.tenantId !==
+      sealed.hmacKeySecretRef.slice("secret:".length).split("/", 1)[0]
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["hmacKeySecretRef"],
+        message: "Sealed raw skeleton key must belong to the exact tenant."
+      });
+    }
+  });
+
+export const inboxV2RawAdmissionSafeTerminalMaterialSchema = z
+  .object({
+    target: z.discriminatedUnion("phase", [
+      z
+        .object({
+          phase: z.literal("raw"),
+          rawEventId: inboxV2RawInboundEventIdSchema,
+          normalizedEventId: z.null()
+        })
+        .strict(),
+      z
+        .object({
+          phase: z.literal("normalized"),
+          rawEventId: inboxV2RawInboundEventIdSchema,
+          normalizedEventId: inboxV2NormalizedInboundEventIdSchema
+        })
+        .strict()
+    ]),
+    terminalOutcome: z
+      .object({
+        kind: z.enum(["processed", "ignored", "duplicate", "dead_lettered"]),
+        diagnosticCodeId: inboxV2SourceDiagnosticIdSchema.nullable()
+      })
+      .strict()
+      .superRefine((outcome, context) => {
+        const requiresDiagnostic =
+          outcome.kind === "ignored" || outcome.kind === "dead_lettered";
+        if (requiresDiagnostic !== (outcome.diagnosticCodeId !== null)) {
+          context.addIssue({
+            code: "custom",
+            path: ["diagnosticCodeId"],
+            message:
+              "Only ignored and dead-lettered raw outcomes retain a safe diagnostic code."
+          });
+        }
+      }),
+    terminalAt: inboxV2TimestampSchema
+  })
+  .strict();
+
+export const inboxV2SealRawAdmissionTerminalOutcomeInputSchema = z
+  .object({
+    admission: inboxV2RawAdmissionSealedSkeletonInputSchema,
+    material: inboxV2RawAdmissionSafeTerminalMaterialSchema
+  })
+  .strict()
+  .superRefine((input, context) => {
+    if (input.material.target.rawEventId !== input.admission.rawEventId) {
+      context.addIssue({
+        code: "custom",
+        path: ["material", "target", "rawEventId"],
+        message: "Terminal material must target the admitted raw event."
+      });
+    }
+    if (
+      Date.parse(input.material.terminalAt) >=
+      Date.parse(input.admission.guaranteeUntil)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["material", "terminalAt"],
+        message: "Terminal outcome must be sealed before the finite guarantee."
+      });
+    }
+  });
+
+export const inboxV2SealRawAdmissionTerminalOutcomeResultSchema =
+  z.discriminatedUnion("outcome", [
+    z
+      .object({
+        outcome: z.literal("sealed"),
+        source: inboxV2RawAdmissionSourceScopeSchema,
+        rawEventId: inboxV2RawInboundEventIdSchema,
+        purposeId: z.literal(INBOX_V2_RAW_ADMISSION_PURPOSE_ID),
+        admissionRevision: inboxV2EntityRevisionSchema,
+        keyGeneration: inboxV2RawAdmissionKeyGenerationSchema,
+        hmacKeySecretRef: inboxV2RawAdmissionTenantSecretRefSchema,
+        identityHmacSha256: inboxV2RawAdmissionIdentityHmacSha256Schema,
+        material: inboxV2RawAdmissionSafeTerminalMaterialSchema,
+        outcomeHmacSha256: inboxV2RawAdmissionIdentityHmacSha256Schema
+      })
+      .strict()
+      .superRefine((seal, context) => {
+        if (
+          !seal.hmacKeySecretRef.startsWith(`secret:${seal.source.tenantId}/`)
+        ) {
+          context.addIssue({
+            code: "custom",
+            path: ["hmacKeySecretRef"],
+            message: "Terminal outcome key must belong to the exact tenant."
+          });
+        }
+        if (seal.material.target.rawEventId !== seal.rawEventId) {
+          context.addIssue({
+            code: "custom",
+            path: ["material", "target", "rawEventId"],
+            message: "Terminal outcome seal must target its admitted raw event."
+          });
+        }
+      }),
+    z
+      .object({
+        outcome: z.literal("rejected"),
+        reason: z.enum([
+          "key_unavailable",
+          "scope_mismatch",
+          "key_mismatch",
+          "material_mismatch"
+        ])
+      })
+      .strict()
+  ]);
+
+export type InboxV2SealRawAdmissionTerminalOutcomeInput = z.infer<
+  typeof inboxV2SealRawAdmissionTerminalOutcomeInputSchema
+>;
+export type InboxV2SealRawAdmissionTerminalOutcomeResult = z.infer<
+  typeof inboxV2SealRawAdmissionTerminalOutcomeResultSchema
+>;
+
+export function isInboxV2RawAdmissionTerminalOutcomeSealForInput(
+  input: InboxV2SealRawAdmissionTerminalOutcomeInput,
+  result: InboxV2SealRawAdmissionTerminalOutcomeResult
+): result is Extract<
+  InboxV2SealRawAdmissionTerminalOutcomeResult,
+  Readonly<{ outcome: "sealed" }>
+> {
+  return (
+    result.outcome === "sealed" &&
+    JSON.stringify(result.source) === JSON.stringify(input.admission.source) &&
+    result.rawEventId === input.admission.rawEventId &&
+    result.purposeId === input.admission.purposeId &&
+    result.admissionRevision === input.admission.admissionRevision &&
+    result.keyGeneration === input.admission.keyGeneration &&
+    result.hmacKeySecretRef === input.admission.hmacKeySecretRef &&
+    result.identityHmacSha256 === input.admission.identityHmacSha256 &&
+    JSON.stringify(result.material) === JSON.stringify(input.material)
+  );
+}
+
+export interface InboxV2RawAdmissionTerminalOutcomeSealingPort {
+  sealTerminalDedupeOutcome(
+    input: Readonly<InboxV2SealRawAdmissionTerminalOutcomeInput>
+  ): Promise<InboxV2SealRawAdmissionTerminalOutcomeResult>;
+}
+
+export const inboxV2RawAdmissionSkeletonHandoffResultSchema =
+  z.discriminatedUnion("outcome", [
+    z
+      .object({
+        outcome: z.enum(["handed_off", "already_handed_off"]),
+        handedOffAt: inboxV2TimestampSchema,
+        terminalSkeletonId: inboxV2RoutingTokenSchema,
+        terminalOutcomeHmacSha256: inboxV2RawAdmissionIdentityHmacSha256Schema,
+        sealedSkeleton: inboxV2RawAdmissionSealedSkeletonInputSchema
+      })
+      .strict(),
+    z
+      .object({
+        outcome: z.enum([
+          "not_found",
+          "revision_conflict",
+          "guarantee_expired",
+          "integrity_failure"
+        ])
+      })
+      .strict()
+  ]);
+
+export const inboxV2LoadPendingRawAdmissionResultSchema = z.discriminatedUnion(
+  "outcome",
+  [
+    z
+      .object({
+        outcome: z.literal("pending"),
+        snapshot: inboxV2RawAdmissionSealedSkeletonInputSchema
+      })
+      .strict(),
+    z
+      .object({
+        outcome: z.enum([
+          "not_found",
+          "not_pending",
+          "guarantee_expired",
+          "integrity_failure"
+        ])
+      })
+      .strict()
+  ]
+);
+
+export type InboxV2RawAdmissionSkeletonHandoffInput = z.infer<
+  typeof inboxV2RawAdmissionSkeletonHandoffInputSchema
+>;
+export type InboxV2LoadPendingRawAdmissionInput = z.infer<
+  typeof inboxV2LoadPendingRawAdmissionInputSchema
+>;
+export type InboxV2LoadPendingRawAdmissionResult = z.infer<
+  typeof inboxV2LoadPendingRawAdmissionResultSchema
+>;
+export type InboxV2RawAdmissionSealedSkeletonInput = z.infer<
+  typeof inboxV2RawAdmissionSealedSkeletonInputSchema
+>;
+export type InboxV2RawAdmissionSkeletonHandoffResult = z.infer<
+  typeof inboxV2RawAdmissionSkeletonHandoffResultSchema
+>;
+
+/** Implement this inside the caller's terminal database transaction. */
+export interface InboxV2RawAdmissionSkeletonHandoffPort {
+  handoffRawAdmissionSkeleton(
+    input: Readonly<InboxV2RawAdmissionSkeletonHandoffInput>
+  ): Promise<InboxV2RawAdmissionSkeletonHandoffResult>;
+}
+
+export interface InboxV2RawAdmissionPreflightPort {
+  loadPendingDedupeAdmission(
+    input: Readonly<InboxV2LoadPendingRawAdmissionInput>
+  ): Promise<InboxV2LoadPendingRawAdmissionResult>;
+}
 
 export type InboxV2SanitizeRawIngressResult =
   | Readonly<{
@@ -1170,9 +1592,28 @@ export const inboxV2ClaimRawIngressInputSchema = z
     tenantId: inboxV2TenantIdSchema,
     workerId: inboxV2RawIngressWorkerIdSchema,
     leaseDurationSeconds: leaseDurationSecondsSchema,
-    batchSize: claimBatchSizeSchema
+    batchSize: claimBatchSizeSchema,
+    /**
+     * Optional account-partition cap used by the production scheduler. It is
+     * absent for the SRC-002 compatibility path, which preserves the original
+     * tenant-wide batch behaviour during an additive N-1 rollout.
+     */
+    maxClaimsPerAccount: claimBatchSizeSchema.optional()
   })
-  .strict();
+  .strict()
+  .superRefine((input, context) => {
+    if (
+      input.maxClaimsPerAccount !== undefined &&
+      input.maxClaimsPerAccount > input.batchSize
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["maxClaimsPerAccount"],
+        message:
+          "Per-account raw-ingress claim cap cannot exceed the tenant batch size."
+      });
+    }
+  });
 
 const expiredRawIngressLeaseEvidenceSchema = z
   .object({
@@ -1404,14 +1845,16 @@ export const inboxV2RecordRawIngressResultSchema = z.discriminatedUnion(
     z
       .object({
         outcome: z.literal("recorded"),
+        source: inboxV2RawAdmissionSourceScopeSchema,
         rawEventId: inboxV2RawInboundEventIdSchema,
-        safeEnvelopeDigest: inboxV2Sha256DigestSchema,
+        safeEnvelopeDigest: inboxV2RawPersistedSafeEnvelopeDigestSchema,
         work: inboxV2RawIngressWorkItemSchema
       })
       .strict()
       .superRefine((result, context) => {
         if (
           result.work.rawEventId !== result.rawEventId ||
+          result.work.tenantId !== result.source.tenantId ||
           result.work.state !== "pending"
         ) {
           context.addIssue({
@@ -1425,16 +1868,44 @@ export const inboxV2RecordRawIngressResultSchema = z.discriminatedUnion(
     z
       .object({
         outcome: z.literal("already_recorded"),
+        source: inboxV2RawAdmissionSourceScopeSchema,
         rawEventId: inboxV2RawInboundEventIdSchema,
-        safeEnvelopeDigest: inboxV2Sha256DigestSchema
+        safeEnvelopeDigest: inboxV2RawPersistedSafeEnvelopeDigestSchema
       })
       .strict(),
     z
       .object({
+        outcome: z.literal("duplicate"),
+        source: inboxV2RawAdmissionSourceScopeSchema,
+        rawEventId: inboxV2RawInboundEventIdSchema,
+        safeEnvelopeDigest: inboxV2RawPersistedSafeEnvelopeDigestSchema,
+        matchedKeyGenerations: z
+          .array(inboxV2RawAdmissionKeyGenerationSchema)
+          .min(1)
+          .max(INBOX_V2_RAW_ADMISSION_MAX_LOOKUP_CANDIDATES)
+          .readonly()
+      })
+      .strict()
+      .superRefine((result, context) => {
+        if (
+          new Set(result.matchedKeyGenerations).size !==
+          result.matchedKeyGenerations.length
+        ) {
+          context.addIssue({
+            code: "custom",
+            path: ["matchedKeyGenerations"],
+            message: "Matched raw-admission key generations must be unique."
+          });
+        }
+      }),
+    z.object({ outcome: z.literal("key_unavailable") }).strict(),
+    z
+      .object({
         outcome: z.literal("quarantined"),
+        source: inboxV2RawAdmissionSourceScopeSchema,
         quarantineId: inboxV2NamespacedIdSchema,
         existingRawEventId: inboxV2RawInboundEventIdSchema.nullable(),
-        safeEnvelopeDigest: inboxV2Sha256DigestSchema,
+        safeEnvelopeDigest: inboxV2RawPersistedSafeEnvelopeDigestSchema,
         reasonCode: inboxV2RawIngressQuarantineReasonSchema
       })
       .strict()

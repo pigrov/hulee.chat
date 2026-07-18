@@ -19,6 +19,7 @@ import {
   rawInboundEvents,
   sourceAccounts,
   sourceConnections,
+  tenantSecrets,
   tenants
 } from "../tables";
 
@@ -43,6 +44,11 @@ export const inboxV2SourceRawQuarantineReason = pgEnum(
 export const inboxV2SourceRawWorkState = pgEnum(
   "inbox_v2_source_raw_work_state",
   ["pending", "leased"]
+);
+
+export const inboxV2SourceRawAdmissionState = pgEnum(
+  "inbox_v2_source_raw_admission_state",
+  ["skeleton_pending", "skeleton_handed_off"]
 );
 
 type SanitizedEvidence = Readonly<Record<string, unknown>>;
@@ -171,10 +177,14 @@ export const inboxV2SourceRawEnvelopes = pgTable(
       sql`${table.idempotencyKey} ~ '^source:v2:raw:[0-9a-f]{64}$'
         and ${safeTokenSql(table.transportKind)}
         and ${safeTokenSql(table.eventIdentityKind)}
-        and ${sha256Sql(table.eventIdentityDigestSha256)}
         and ${catalogIdSql(table.safeEnvelopeSchemaId)}
         and ${versionTokenSql(table.safeEnvelopeSchemaVersion)}
-        and ${sha256Sql(table.safeEnvelopeDigestSha256)}`
+        and (
+          (${sha256Sql(table.eventIdentityDigestSha256)}
+            and ${sha256Sql(table.safeEnvelopeDigestSha256)})
+          or (${hmacSha256Sql(table.eventIdentityDigestSha256)}
+            and ${hmacSha256Sql(table.safeEnvelopeDigestSha256)})
+        )`
     ),
     check(
       "inbox_v2_source_raw_envelopes_sanitizer_check",
@@ -207,6 +217,156 @@ export const inboxV2SourceRawEnvelopes = pgTable(
       table.sourceAccountScopeKey,
       table.acceptedAt,
       table.rawEventId
+    )
+  ]
+);
+
+/**
+ * Production raw-admission authority. One tenant/purpose/key-generation HMAC
+ * is the race-safe fence for a raw occurrence. Clear provider identity never
+ * enters this table. The pending state prevents evidence compaction until the
+ * terminal processing skeleton has been durably handed off.
+ */
+export const inboxV2SourceRawAdmissions = pgTable(
+  "inbox_v2_source_raw_admissions",
+  {
+    tenantId: text("tenant_id").notNull(),
+    purposeId: text("purpose_id").notNull(),
+    keyGeneration: text("key_generation").notNull(),
+    hmacKeySecretRef: text("hmac_key_secret_ref").notNull(),
+    identityHmacSha256: text("identity_hmac_sha256").notNull(),
+    identityKind: text("identity_kind").notNull(),
+    sourceConnectionId: text("source_connection_id").notNull(),
+    sourceAccountId: text("source_account_id"),
+    sourceAccountScopeKey: text("source_account_scope_key").notNull(),
+    rawEventId: text("raw_event_id").notNull(),
+    safeEnvelopeDigestSha256: text("safe_envelope_digest_sha256").notNull(),
+    guaranteeUntil: timestamp("guarantee_until", {
+      withTimezone: true,
+      precision: 3
+    }).notNull(),
+    state: inboxV2SourceRawAdmissionState("state").notNull(),
+    terminalSkeletonId: text("terminal_skeleton_id"),
+    terminalOutcomeHmacSha256: text("terminal_outcome_hmac_sha256"),
+    skeletonHandedOffAt: timestamp("skeleton_handed_off_at", {
+      withTimezone: true,
+      precision: 3
+    }),
+    revision: bigint("revision", { mode: "bigint" }).notNull(),
+    createdAt: timestamp("created_at", {
+      withTimezone: true,
+      precision: 3
+    }).notNull(),
+    updatedAt: timestamp("updated_at", {
+      withTimezone: true,
+      precision: 3
+    }).notNull()
+  },
+  (table) => [
+    primaryKey({
+      name: "inbox_v2_source_raw_admissions_pk",
+      columns: [
+        table.tenantId,
+        table.purposeId,
+        table.keyGeneration,
+        table.identityHmacSha256
+      ]
+    }),
+    unique("inbox_v2_source_raw_admissions_raw_generation_unique").on(
+      table.tenantId,
+      table.rawEventId,
+      table.keyGeneration
+    ),
+    unique("inbox_v2_source_raw_admissions_terminal_skeleton_unique").on(
+      table.tenantId,
+      table.terminalSkeletonId
+    ),
+    foreignKey({
+      name: "inbox_v2_source_raw_admissions_tenant_fk",
+      columns: [table.tenantId],
+      foreignColumns: [tenants.id]
+    }),
+    foreignKey({
+      name: "inbox_v2_source_raw_admissions_secret_fk",
+      columns: [table.tenantId, table.hmacKeySecretRef],
+      foreignColumns: [tenantSecrets.tenantId, tenantSecrets.secretRef]
+    }),
+    foreignKey({
+      name: "inbox_v2_source_raw_admissions_connection_fk",
+      columns: [table.tenantId, table.sourceConnectionId],
+      foreignColumns: [sourceConnections.tenantId, sourceConnections.id]
+    }),
+    foreignKey({
+      name: "inbox_v2_source_raw_admissions_account_edge_fk",
+      columns: [
+        table.tenantId,
+        table.sourceAccountId,
+        table.sourceConnectionId
+      ],
+      foreignColumns: [
+        sourceAccounts.tenantId,
+        sourceAccounts.id,
+        sourceAccounts.sourceConnectionId
+      ]
+    }),
+    foreignKey({
+      name: "inbox_v2_source_raw_admissions_envelope_fk",
+      columns: [
+        table.tenantId,
+        table.rawEventId,
+        table.safeEnvelopeDigestSha256
+      ],
+      foreignColumns: [
+        inboxV2SourceRawEnvelopes.tenantId,
+        inboxV2SourceRawEnvelopes.rawEventId,
+        inboxV2SourceRawEnvelopes.safeEnvelopeDigestSha256
+      ]
+    }),
+    check(
+      "inbox_v2_source_raw_admissions_scope_check",
+      accountScopeSql(table.sourceAccountId, table.sourceAccountScopeKey)
+    ),
+    check(
+      "inbox_v2_source_raw_admissions_identity_check",
+      sql`${table.purposeId} = 'core:source_replay_and_diagnostics'
+        and ${keyGenerationSql(table.keyGeneration)}
+        and ${secretRefSql(table.hmacKeySecretRef)}
+        and ${table.hmacKeySecretRef} like
+          'secret:' || ${table.tenantId} || '/%'
+        and ${hmacSha256Sql(table.identityHmacSha256)}
+        and ${safeTokenSql(table.identityKind)}
+        and ${hmacSha256Sql(table.safeEnvelopeDigestSha256)}
+        and ${table.revision} >= 1`
+    ),
+    check(
+      "inbox_v2_source_raw_admissions_lifecycle_check",
+      sql`isfinite(${table.guaranteeUntil})
+        and isfinite(${table.createdAt})
+        and isfinite(${table.updatedAt})
+        and ${table.guaranteeUntil} > ${table.createdAt}
+        and ${table.updatedAt} >= ${table.createdAt}
+        and (
+          (${table.state} = 'skeleton_pending'
+            and ${table.terminalSkeletonId} is null
+            and ${table.terminalOutcomeHmacSha256} is null
+            and ${table.skeletonHandedOffAt} is null)
+          or (${table.state} = 'skeleton_handed_off'
+            and ${internalIdSql(table.terminalSkeletonId)}
+            and ${hmacSha256Sql(table.terminalOutcomeHmacSha256)}
+            and isfinite(${table.skeletonHandedOffAt})
+            and ${table.skeletonHandedOffAt} between
+              ${table.createdAt} and ${table.updatedAt})
+        )`
+    ),
+    index("inbox_v2_source_raw_admissions_raw_idx").on(
+      table.tenantId,
+      table.rawEventId,
+      table.state
+    ),
+    index("inbox_v2_source_raw_admissions_guarantee_idx").on(
+      table.tenantId,
+      table.guaranteeUntil,
+      table.keyGeneration
     )
   ]
 );
@@ -304,6 +464,12 @@ export const inboxV2SourceRawQuarantines = pgTable(
     transportKind: text("transport_kind").notNull(),
     eventIdentityKind: text("event_identity_kind"),
     eventIdentityDigestSha256: text("event_identity_digest_sha256"),
+    eventIdentityKeyGeneration: text("event_identity_key_generation"),
+    eventIdentityHmacKeySecretRef: text("event_identity_hmac_key_secret_ref"),
+    eventIdentityGuaranteeUntil: timestamp("event_identity_guarantee_until", {
+      withTimezone: true,
+      precision: 3
+    }),
     idempotencyKeyDigestSha256: text("idempotency_key_digest_sha256"),
     safeEnvelopeDigestSha256: text("safe_envelope_digest_sha256"),
     existingRawEventId: text("existing_raw_event_id"),
@@ -345,6 +511,11 @@ export const inboxV2SourceRawQuarantines = pgTable(
       name: "inbox_v2_source_raw_quarantines_connection_fk",
       columns: [table.tenantId, table.sourceConnectionId],
       foreignColumns: [sourceConnections.tenantId, sourceConnections.id]
+    }),
+    foreignKey({
+      name: "inbox_v2_source_raw_quarantines_identity_secret_fk",
+      columns: [table.tenantId, table.eventIdentityHmacKeySecretRef],
+      foreignColumns: [tenantSecrets.tenantId, tenantSecrets.secretRef]
     }),
     foreignKey({
       name: "inbox_v2_source_raw_quarantines_account_edge_fk",
@@ -418,20 +589,35 @@ export const inboxV2SourceRawQuarantines = pgTable(
         and ${safeTokenSql(table.transportKind)}
         and (${table.eventIdentityKind} is null
           or ${safeTokenSql(table.eventIdentityKind)})
-        and (${table.eventIdentityDigestSha256} is null
-          or ${sha256Sql(table.eventIdentityDigestSha256)})
+        and (
+          (${table.eventIdentityDigestSha256} is null
+            and ${table.eventIdentityKeyGeneration} is null
+            and ${table.eventIdentityHmacKeySecretRef} is null
+            and ${table.eventIdentityGuaranteeUntil} is null)
+          or (${sha256Sql(table.eventIdentityDigestSha256)}
+            and ${table.eventIdentityKeyGeneration} is null
+            and ${table.eventIdentityHmacKeySecretRef} is null
+            and ${table.eventIdentityGuaranteeUntil} is null)
+          or (${hmacSha256Sql(table.eventIdentityDigestSha256)}
+            and ${keyGenerationSql(table.eventIdentityKeyGeneration)}
+            and ${secretRefSql(table.eventIdentityHmacKeySecretRef)}
+            and ${table.eventIdentityHmacKeySecretRef} like
+              'secret:' || ${table.tenantId} || '/%'
+            and isfinite(${table.eventIdentityGuaranteeUntil})
+            and ${table.eventIdentityGuaranteeUntil} > ${table.recordedAt})
+        )
         and (${table.idempotencyKeyDigestSha256} is null
           or ${sha256Sql(table.idempotencyKeyDigestSha256)})
         and (${table.safeEnvelopeDigestSha256} is null
-          or ${sha256Sql(table.safeEnvelopeDigestSha256)})
+          or ${rawIdentityDigestSql(table.safeEnvelopeDigestSha256)})
         and (${table.existingSafeEnvelopeDigestSha256} is null
-          or ${sha256Sql(table.existingSafeEnvelopeDigestSha256)})
+          or ${rawIdentityDigestSql(table.existingSafeEnvelopeDigestSha256)})
         and (${table.existingTransportKind} is null
           or ${safeTokenSql(table.existingTransportKind)})
         and (${table.existingEventIdentityKind} is null
           or ${safeTokenSql(table.existingEventIdentityKind)})
         and (${table.existingEventIdentityDigestSha256} is null
-          or ${sha256Sql(table.existingEventIdentityDigestSha256)})
+          or ${rawIdentityDigestSql(table.existingEventIdentityDigestSha256)})
         and ${catalogIdSql(table.sanitizerId)}
         and ${versionTokenSql(table.sanitizerVersion)}
         and ${table.sanitizerDeclarationRevision} >= 1
@@ -916,6 +1102,253 @@ deferrable initially deferred
 for each row execute function public.inbox_v2_source_raw_assert_aggregate();
 `;
 
+/**
+ * Additive SRC-008 migration tail. Append this after generated raw-admission
+ * table/FK DDL; do not replay the full SRC-002 integrity block in migration
+ * 0048 because its historical CREATE TRIGGER statements already exist.
+ */
+export const INBOX_V2_SOURCE_RAW_ADMISSION_INTEGRITY_SQL = String.raw`
+-- INBOX_V2_SOURCE_RAW_ADMISSION_FINALIZED_V1
+create or replace function public.inbox_v2_source_raw_reject_immutable()
+returns trigger
+language plpgsql
+set search_path = pg_catalog, public, pg_temp
+as $function$
+begin
+  if tg_table_name = 'inbox_v2_source_raw_quarantines'
+     and tg_op = 'DELETE' then
+    if not pg_catalog.pg_has_role(
+         current_user, 'hulee_inbox_v2_retention_owner', 'member'
+       )
+       or old.event_identity_digest_sha256 not like 'hmac-sha256:%'
+       or old.event_identity_key_generation is null
+       or old.event_identity_hmac_key_secret_ref is null
+       or old.event_identity_guarantee_until is null
+       or clock_timestamp() < old.event_identity_guarantee_until then
+      raise exception 'Raw quarantine is not retention eligible'
+        using errcode = '23514';
+    end if;
+    return old;
+  end if;
+  if tg_table_name = 'inbox_v2_source_raw_evidence' and tg_op = 'DELETE' then
+    if exists (
+      select 1
+        from public.inbox_v2_source_raw_admissions admission
+       where admission.tenant_id = old.tenant_id
+         and admission.raw_event_id = old.raw_event_id
+         and admission.state = 'skeleton_pending'
+    ) then
+      raise exception 'Raw evidence cannot compact before skeleton handoff'
+        using errcode = '23514';
+    end if;
+    return old;
+  end if;
+  raise exception '% is immutable', tg_table_name using errcode = '23514';
+end
+$function$;
+
+create or replace function public.inbox_v2_source_raw_admission_guard()
+returns trigger
+language plpgsql
+set search_path = pg_catalog, public, pg_temp
+as $function$
+begin
+  if tg_op = 'DELETE' then
+    if not pg_catalog.pg_has_role(
+         current_user, 'hulee_inbox_v2_retention_owner', 'member'
+       )
+       or old.state <> 'skeleton_handed_off'
+       or clock_timestamp() < old.guarantee_until then
+      raise exception 'Raw admission is not retention eligible'
+        using errcode = '23514';
+    end if;
+    return old;
+  end if;
+
+  if tg_op = 'INSERT' then
+    if new.state <> 'skeleton_pending'
+       or new.terminal_skeleton_id is not null
+       or new.terminal_outcome_hmac_sha256 is not null
+       or new.skeleton_handed_off_at is not null
+       or new.revision <> 1
+       or new.updated_at <> new.created_at then
+      raise exception 'Raw admission must start skeleton_pending at revision one'
+        using errcode = '23514';
+    end if;
+    return new;
+  end if;
+
+  if new.tenant_id <> old.tenant_id
+     or new.purpose_id <> old.purpose_id
+     or new.key_generation <> old.key_generation
+     or new.hmac_key_secret_ref <> old.hmac_key_secret_ref
+     or new.identity_hmac_sha256 <> old.identity_hmac_sha256
+     or new.identity_kind <> old.identity_kind
+     or new.source_connection_id <> old.source_connection_id
+     or new.source_account_id is distinct from old.source_account_id
+     or new.source_account_scope_key <> old.source_account_scope_key
+     or new.raw_event_id <> old.raw_event_id
+     or new.safe_envelope_digest_sha256 <> old.safe_envelope_digest_sha256
+     or new.guarantee_until <> old.guarantee_until
+     or new.created_at <> old.created_at
+     or new.revision <> old.revision + 1
+     or new.updated_at < old.updated_at then
+    raise exception 'Raw admission mutation requires immutable identity and +1 CAS'
+      using errcode = '23514';
+  end if;
+
+  if old.state = 'skeleton_pending'
+     and new.state = 'skeleton_handed_off'
+     and new.terminal_skeleton_id is not null
+     and new.terminal_outcome_hmac_sha256 is not null
+     and new.skeleton_handed_off_at = new.updated_at
+     and new.skeleton_handed_off_at >= old.created_at then
+    return new;
+  end if;
+
+  raise exception 'Illegal raw admission state transition'
+    using errcode = '23514';
+end
+$function$;
+
+create trigger inbox_v2_source_raw_admission_guard_trigger
+before insert or update or delete on public.inbox_v2_source_raw_admissions
+for each row execute function public.inbox_v2_source_raw_admission_guard();
+
+create trigger inbox_v2_source_raw_admissions_truncate_guard
+before truncate on public.inbox_v2_source_raw_admissions
+for each statement execute function public.inbox_v2_source_raw_reject_immutable();
+
+create or replace function public.inbox_v2_source_raw_assert_aggregate()
+returns trigger
+language plpgsql
+set search_path = pg_catalog, public, pg_temp
+as $function$
+declare
+  v_tenant_id text;
+  v_raw_event_id text;
+  v_anchor public.raw_inbound_events%rowtype;
+  v_envelope public.inbox_v2_source_raw_envelopes%rowtype;
+  v_work_count bigint;
+  v_payload_count bigint;
+  v_header_count bigint;
+  v_admission_count bigint;
+begin
+  v_tenant_id := new.tenant_id;
+  if tg_table_name = 'raw_inbound_events' then
+    v_raw_event_id := new.id;
+  else
+    v_raw_event_id := new.raw_event_id;
+  end if;
+
+  select * into v_anchor
+    from public.raw_inbound_events r
+   where r.tenant_id = v_tenant_id and r.id = v_raw_event_id;
+  select * into v_envelope
+    from public.inbox_v2_source_raw_envelopes e
+   where e.tenant_id = v_tenant_id and e.raw_event_id = v_raw_event_id;
+
+  if v_envelope.raw_event_id is null then
+    if v_anchor.id is not null
+       and v_anchor.idempotency_key like 'source:v2:raw:%' then
+      raise exception 'V2 raw anchor requires an immutable envelope'
+        using errcode = '23514';
+    end if;
+    return null;
+  end if;
+
+  if v_anchor.id is null
+     or v_anchor.source_connection_id <> v_envelope.source_connection_id
+     or v_anchor.source_account_scope_key <>
+        v_envelope.source_account_scope_key
+     or v_anchor.idempotency_key <> v_envelope.idempotency_key
+     or v_anchor.received_at <> v_envelope.accepted_at
+     or v_anchor.external_event_id is not null
+     or v_anchor.event_signature is not null
+     or v_anchor.payload <> '{}'::jsonb
+     or v_anchor.headers <> '{}'::jsonb
+     or v_anchor.processing_status <> 'ignored'
+     or v_anchor.error_code is not null
+     or v_anchor.error_message is not null then
+    raise exception 'V2 raw compatibility anchor contains unsafe or incoherent data'
+      using errcode = '23514';
+  end if;
+
+  select count(*) into v_work_count
+    from public.inbox_v2_source_raw_work_items w
+   where w.tenant_id = v_tenant_id and w.raw_event_id = v_raw_event_id;
+  select count(*) filter (where e.evidence_kind = 'provider_payload'),
+         count(*) filter (where e.evidence_kind = 'allowed_headers')
+    into v_payload_count, v_header_count
+    from public.inbox_v2_source_raw_evidence e
+   where e.tenant_id = v_tenant_id and e.raw_event_id = v_raw_event_id;
+  select count(*) into v_admission_count
+    from public.inbox_v2_source_raw_admissions admission
+   where admission.tenant_id = v_tenant_id
+     and admission.raw_event_id = v_raw_event_id
+     and admission.safe_envelope_digest_sha256 =
+       v_envelope.safe_envelope_digest_sha256;
+
+  if v_work_count <> 1
+     or (
+       v_envelope.event_identity_digest_sha256 like 'hmac-sha256:%'
+       and v_admission_count <> 1
+     )
+     or (
+       v_envelope.event_identity_digest_sha256 like 'sha256:%'
+       and v_admission_count <> 0
+     )
+     or (
+       tg_table_name <> 'inbox_v2_source_raw_work_items'
+       and (
+         (v_envelope.provider_payload_evidence_present and v_payload_count <> 1)
+         or (not v_envelope.provider_payload_evidence_present and v_payload_count <> 0)
+         or (v_envelope.allowed_headers_evidence_present and v_header_count <> 1)
+         or (not v_envelope.allowed_headers_evidence_present and v_header_count <> 0)
+       )
+     ) then
+    raise exception 'V2 raw aggregate requires one work head and exact evidence flags'
+      using errcode = '23514';
+  end if;
+
+  return null;
+end
+$function$;
+
+create constraint trigger inbox_v2_source_raw_admission_coherence_constraint
+after insert or update on public.inbox_v2_source_raw_admissions
+deferrable initially deferred
+for each row execute function public.inbox_v2_source_raw_assert_aggregate();
+
+revoke all privileges on table
+  public.inbox_v2_source_raw_admissions
+from public;
+grant select, insert, update on table
+  public.inbox_v2_source_raw_admissions
+to hulee_inbox_v2_runtime;
+grant select, delete on table
+  public.inbox_v2_source_raw_admissions
+to hulee_inbox_v2_retention_owner;
+revoke delete, truncate on table
+  public.inbox_v2_source_raw_admissions
+from hulee_inbox_v2_runtime;
+revoke insert, update, truncate on table
+  public.inbox_v2_source_raw_admissions
+from hulee_inbox_v2_retention_owner;
+grant select, insert on table
+  public.inbox_v2_source_raw_quarantines
+to hulee_inbox_v2_runtime;
+grant select, delete on table
+  public.inbox_v2_source_raw_quarantines
+to hulee_inbox_v2_retention_owner;
+revoke delete, truncate on table
+  public.inbox_v2_source_raw_quarantines
+from hulee_inbox_v2_runtime;
+revoke insert, update, truncate on table
+  public.inbox_v2_source_raw_quarantines
+from hulee_inbox_v2_retention_owner;
+`;
+
 function accountScopeSql(
   accountId: SQLWrapper,
   accountScopeKey: SQLWrapper
@@ -928,6 +1361,29 @@ function accountScopeSql(
 
 function sha256Sql(value: SQLWrapper): SQL {
   return sql`${value} ~ '^sha256:[0-9a-f]{64}$'`;
+}
+
+function hmacSha256Sql(value: SQLWrapper): SQL {
+  return sql`${value} ~ '^hmac-sha256:[0-9a-f]{64}$'`;
+}
+
+function rawIdentityDigestSql(value: SQLWrapper): SQL {
+  return sql`(${sha256Sql(value)} or ${hmacSha256Sql(value)})`;
+}
+
+function keyGenerationSql(value: SQLWrapper): SQL {
+  return sql`char_length(${value}) between 1 and 128
+    and ${value} ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'`;
+}
+
+function secretRefSql(value: SQLWrapper): SQL {
+  return sql`char_length(${value}) between 8 and 512
+    and ${value} ~ '^secret:[A-Za-z0-9][A-Za-z0-9._~:/-]*$'`;
+}
+
+function internalIdSql(value: SQLWrapper): SQL {
+  return sql`char_length(${value}) between 8 and 256
+    and ${value} ~ '^[A-Za-z0-9][A-Za-z0-9._~:/-]*$'`;
 }
 
 function safeTokenSql(value: SQLWrapper): SQL {

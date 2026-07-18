@@ -5,7 +5,11 @@ import {
   calculateInboxV2RawIngressLeaseTokenHash,
   defineInboxV2RawIngressSanitizer,
   defineInboxV2RawIngressSanitizerProfile,
+  inboxV2ClaimRawIngressInputSchema,
   inboxV2ClaimRawIngressResultSchema,
+  inboxV2RawAdmissionAuthorizationDecisionSchema,
+  inboxV2SealRawAdmissionTerminalOutcomeInputSchema,
+  inboxV2SealRawAdmissionTerminalOutcomeResultSchema,
   inboxV2RawIngressClaimSchema,
   inboxV2RawIngressSanitizerProfileSchema,
   inboxV2RawIngressWorkItemSchema,
@@ -16,6 +20,7 @@ import {
   inboxV2RenewRawIngressLeaseResultSchema,
   isInboxV2RawIngressSanitizer,
   isInboxV2RawIngressSanitizerProfile,
+  isInboxV2RawAdmissionTerminalOutcomeSealForInput,
   isInboxV2SanitizedRawIngressCandidate,
   sanitizeInboxV2RawIngress,
   type InboxV2RawIngressInput,
@@ -28,6 +33,11 @@ const t1 = "2026-07-16T08:00:01.000Z";
 const t2 = "2026-07-16T08:00:02.000Z";
 const hash = `sha256:${"a".repeat(64)}`;
 const leaseToken = "raw-lease-token-000000000000000000000001";
+const resultSource = {
+  tenantId: "tenant:alpha",
+  sourceConnectionId: "source_connection:synthetic-1",
+  sourceAccountId: "source_account:synthetic-1"
+} as const;
 
 function profileInput() {
   return {
@@ -777,6 +787,7 @@ describe("Inbox V2 raw ingress lease and record schemas", () => {
     expect(
       inboxV2RecordRawIngressResultSchema.safeParse({
         outcome: "recorded",
+        source: resultSource,
         rawEventId: "raw_inbound_event:event-1",
         safeEnvelopeDigest: hash,
         work: pendingWork
@@ -785,6 +796,7 @@ describe("Inbox V2 raw ingress lease and record schemas", () => {
     expect(
       inboxV2RecordRawIngressResultSchema.safeParse({
         outcome: "already_recorded",
+        source: resultSource,
         rawEventId: "raw_inbound_event:event-1",
         safeEnvelopeDigest: hash
       }).success
@@ -792,6 +804,7 @@ describe("Inbox V2 raw ingress lease and record schemas", () => {
     expect(
       inboxV2RecordRawIngressResultSchema.safeParse({
         outcome: "quarantined",
+        source: resultSource,
         quarantineId: "core:raw-ingress-collision-1",
         existingRawEventId: "raw_inbound_event:event-1",
         safeEnvelopeDigest: hash,
@@ -801,6 +814,7 @@ describe("Inbox V2 raw ingress lease and record schemas", () => {
     expect(
       inboxV2RecordRawIngressResultSchema.safeParse({
         outcome: "quarantined",
+        source: resultSource,
         quarantineId: "core:unsafe-payload-1",
         existingRawEventId: "raw_inbound_event:event-1",
         safeEnvelopeDigest: hash,
@@ -810,6 +824,7 @@ describe("Inbox V2 raw ingress lease and record schemas", () => {
     expect(
       inboxV2RecordRawIngressResultSchema.safeParse({
         outcome: "recorded",
+        source: resultSource,
         rawEventId: "raw_inbound_event:other",
         safeEnvelopeDigest: hash,
         work: pendingWork
@@ -842,5 +857,214 @@ describe("Inbox V2 raw ingress lease and record schemas", () => {
         claims: [claim, claim]
       }).success
     ).toBe(false);
+  });
+
+  it("bounds an optional account-fair claim cap by the tenant batch", () => {
+    expect(
+      inboxV2ClaimRawIngressInputSchema.safeParse({
+        tenantId: "tenant:alpha",
+        workerId: "core:raw-ingress-worker",
+        leaseDurationSeconds: 30,
+        batchSize: 8,
+        maxClaimsPerAccount: 2
+      }).success
+    ).toBe(true);
+    expect(
+      inboxV2ClaimRawIngressInputSchema.safeParse({
+        tenantId: "tenant:alpha",
+        workerId: "core:raw-ingress-worker",
+        leaseDurationSeconds: 30,
+        batchSize: 2,
+        maxClaimsPerAccount: 3
+      }).success
+    ).toBe(false);
+  });
+
+  it("accepts a tenant-keyed active plus verify-only admission set", () => {
+    const active = {
+      generation: "source-key:2026-08",
+      hmacKeySecretRef: "secret:tenant:alpha/inbox-v2/source-key-2026-08",
+      identityHmacSha256: `hmac-sha256:${"b".repeat(64)}`,
+      safeEnvelopeHmacSha256: `hmac-sha256:${"e".repeat(64)}`
+    };
+    expect(
+      inboxV2RawAdmissionAuthorizationDecisionSchema.safeParse({
+        outcome: "authorized",
+        source: {
+          tenantId: "tenant:alpha",
+          sourceConnectionId: "source_connection:synthetic-1",
+          sourceAccountId: "source_account:synthetic-1"
+        },
+        identityKind: "provider_event_id",
+        purposeId: "core:source_replay_and_diagnostics",
+        writeCandidate: active,
+        candidates: [
+          active,
+          {
+            generation: "source-key:2026-07",
+            hmacKeySecretRef: "secret:tenant:alpha/inbox-v2/source-key-2026-07",
+            identityHmacSha256: `hmac-sha256:${"c".repeat(64)}`,
+            safeEnvelopeHmacSha256: `hmac-sha256:${"f".repeat(64)}`
+          }
+        ],
+        guaranteeUntil: t2
+      }).success
+    ).toBe(true);
+  });
+
+  it("rejects admission outputs that cannot be a tenant-scoped key capability", () => {
+    const candidate = {
+      generation: "source-key:2026-08",
+      hmacKeySecretRef: "secret:tenant:other/inbox-v2/source-key",
+      identityHmacSha256: `hmac-sha256:${"b".repeat(64)}`,
+      safeEnvelopeHmacSha256: `hmac-sha256:${"e".repeat(64)}`
+    };
+    expect(
+      inboxV2RawAdmissionAuthorizationDecisionSchema.safeParse({
+        outcome: "authorized",
+        source: {
+          tenantId: "tenant:alpha",
+          sourceConnectionId: "source_connection:synthetic-1",
+          sourceAccountId: "source_account:synthetic-1"
+        },
+        identityKind: "provider_event_id",
+        purposeId: "core:source_replay_and_diagnostics",
+        writeCandidate: candidate,
+        candidates: [candidate],
+        guaranteeUntil: t2
+      }).success
+    ).toBe(false);
+  });
+
+  it("exposes typed production duplicate and fail-closed outcomes", () => {
+    expect(
+      inboxV2RecordRawIngressResultSchema.safeParse({
+        outcome: "duplicate",
+        source: resultSource,
+        rawEventId: "raw_inbound_event:event-1",
+        safeEnvelopeDigest: hash,
+        matchedKeyGenerations: ["source-key:2026-07", "source-key:2026-08"]
+      }).success
+    ).toBe(true);
+    expect(
+      inboxV2RecordRawIngressResultSchema.safeParse({
+        outcome: "key_unavailable"
+      }).success
+    ).toBe(true);
+  });
+
+  it("seals only strict safe terminal material and never accepts clear identity", () => {
+    const admission = {
+      source: {
+        tenantId: "tenant:alpha",
+        sourceConnectionId: "source_connection:synthetic-1",
+        sourceAccountId: "source_account:synthetic-1"
+      },
+      rawEventId: "raw_inbound_event:event-1",
+      identityKind: "provider_event_id" as const,
+      purposeId: "core:source_replay_and_diagnostics" as const,
+      keyGeneration: "source-key:2026-08",
+      hmacKeySecretRef: "secret:tenant:alpha/inbox-v2/source-key-2026-08",
+      identityHmacSha256: `hmac-sha256:${"b".repeat(64)}`,
+      safeEnvelopeDigest: `hmac-sha256:${"e".repeat(64)}`,
+      guaranteeUntil: t2,
+      admissionRevision: "1"
+    };
+    const material = {
+      target: {
+        phase: "raw" as const,
+        rawEventId: "raw_inbound_event:event-1",
+        normalizedEventId: null
+      },
+      terminalOutcome: { kind: "processed" as const, diagnosticCodeId: null },
+      terminalAt: t1
+    };
+    const input = inboxV2SealRawAdmissionTerminalOutcomeInputSchema.parse({
+      admission,
+      material
+    });
+    expect(JSON.stringify(input)).not.toContain("low-entropy-provider-id");
+    expect(
+      inboxV2SealRawAdmissionTerminalOutcomeInputSchema.safeParse({
+        admission,
+        material,
+        identityMaterial: "low-entropy-provider-id"
+      }).success
+    ).toBe(false);
+
+    const sealed = inboxV2SealRawAdmissionTerminalOutcomeResultSchema.parse({
+      outcome: "sealed",
+      source: admission.source,
+      rawEventId: admission.rawEventId,
+      purposeId: admission.purposeId,
+      admissionRevision: admission.admissionRevision,
+      keyGeneration: admission.keyGeneration,
+      hmacKeySecretRef: admission.hmacKeySecretRef,
+      identityHmacSha256: admission.identityHmacSha256,
+      material,
+      outcomeHmacSha256: `hmac-sha256:${"d".repeat(64)}`
+    });
+    expect(
+      isInboxV2RawAdmissionTerminalOutcomeSealForInput(input, sealed)
+    ).toBe(true);
+  });
+
+  it("rejects terminal seals with scope, generation, or key drift", () => {
+    const input = inboxV2SealRawAdmissionTerminalOutcomeInputSchema.parse({
+      admission: {
+        source: {
+          tenantId: "tenant:alpha",
+          sourceConnectionId: "source_connection:synthetic-1",
+          sourceAccountId: null
+        },
+        rawEventId: "raw_inbound_event:event-1",
+        identityKind: "provider_event_id",
+        purposeId: "core:source_replay_and_diagnostics",
+        keyGeneration: "source-key:2026-08",
+        hmacKeySecretRef: "secret:tenant:alpha/inbox-v2/source-key-2026-08",
+        identityHmacSha256: `hmac-sha256:${"b".repeat(64)}`,
+        safeEnvelopeDigest: `hmac-sha256:${"e".repeat(64)}`,
+        guaranteeUntil: t2,
+        admissionRevision: "1"
+      },
+      material: {
+        target: {
+          phase: "raw",
+          rawEventId: "raw_inbound_event:event-1",
+          normalizedEventId: null
+        },
+        terminalOutcome: { kind: "processed", diagnosticCodeId: null },
+        terminalAt: t1
+      }
+    });
+    const base = {
+      outcome: "sealed" as const,
+      source: input.admission.source,
+      rawEventId: input.admission.rawEventId,
+      purposeId: input.admission.purposeId,
+      admissionRevision: input.admission.admissionRevision,
+      keyGeneration: input.admission.keyGeneration,
+      hmacKeySecretRef: input.admission.hmacKeySecretRef,
+      identityHmacSha256: input.admission.identityHmacSha256,
+      material: input.material,
+      outcomeHmacSha256: `hmac-sha256:${"d".repeat(64)}`
+    };
+    for (const drifted of [
+      {
+        ...base,
+        source: { ...base.source, sourceAccountId: "source_account:other" }
+      },
+      { ...base, keyGeneration: "source-key:2026-09" },
+      {
+        ...base,
+        hmacKeySecretRef: "secret:tenant:alpha/inbox-v2/source-key-2026-09"
+      }
+    ]) {
+      const result =
+        inboxV2SealRawAdmissionTerminalOutcomeResultSchema.parse(drifted);
+      expect(
+        isInboxV2RawAdmissionTerminalOutcomeSealForInput(input, result)
+      ).toBe(false);
+    }
   });
 });

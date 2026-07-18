@@ -25,6 +25,7 @@ export type {
 } from "./sql-inbox-v2-timeline-message-repository";
 export * from "./sql-inbox-v2-employee-conversation-state-repository";
 export * from "./sql-inbox-v2-work-item-repository";
+export * from "./sql-inbox-v2-source-processing-runtime-repository";
 export { createDrizzlePersistenceExecutor } from "./drizzle-persistence-executor";
 export {
   buildClaimPendingOutboxSql,
