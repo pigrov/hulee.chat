@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   INBOX_V2_TIMELINE_CONTENT_SCHEMA_ID,
+  calculateInboxV2ContentCopySourceDigest,
   calculateInboxV2MessageContentDigest,
+  inboxV2ContentCopyAttachmentMappingSchema,
   inboxV2MessageContentBlockSchema,
   inboxV2TimelineContentDraftSchema,
   inboxV2TimelineContentEnvelopeSchema,
@@ -664,6 +666,98 @@ describe("Inbox V2 message content contracts", () => {
         after
       }).success
     ).toBe(false);
+  });
+
+  it("proves an attachment content-copy by remapping only its owner anchor", () => {
+    const sourceAttachment = fixtureReference(
+      "message_attachment",
+      "message_attachment:copy-source-1"
+    );
+    const destinationAttachment = fixtureReference(
+      "message_attachment",
+      "message_attachment:copy-destination-1"
+    );
+    const sourceBlocks = inboxV2TimelineContentDraftSchema.parse({
+      blocks: [
+        {
+          blockKey: "body-1",
+          kind: "text",
+          role: "body",
+          text: "Forwarded contract",
+          language: "en"
+        },
+        {
+          blockKey: "file-1",
+          kind: "file",
+          attachment: {
+            ...attachment("ready"),
+            attachment: sourceAttachment
+          },
+          displayName: "contract.pdf"
+        }
+      ]
+    }).blocks;
+    const destinationBlocks = inboxV2TimelineContentDraftSchema.parse({
+      blocks: sourceBlocks.map((block) =>
+        block.kind === "file"
+          ? {
+              ...block,
+              attachment: {
+                ...block.attachment,
+                attachment: destinationAttachment
+              }
+            }
+          : block
+      )
+    }).blocks;
+    const mapping = inboxV2ContentCopyAttachmentMappingSchema.parse({
+      blockKey: "file-1",
+      sourceAttachment,
+      destinationAttachment
+    });
+    const sourceDigest = calculateInboxV2MessageContentDigest(sourceBlocks);
+
+    expect(
+      calculateInboxV2ContentCopySourceDigest(destinationBlocks, [mapping])
+    ).toBe(sourceDigest);
+    expect(
+      calculateInboxV2ContentCopySourceDigest(destinationBlocks, [])
+    ).toBeNull();
+    expect(
+      inboxV2ContentCopyAttachmentMappingSchema.safeParse({
+        ...mapping,
+        destinationAttachment: sourceAttachment
+      }).success
+    ).toBe(false);
+
+    const forgedFilePin = inboxV2TimelineContentDraftSchema.parse({
+      blocks: destinationBlocks.map((block) =>
+        block.kind === "file"
+          ? {
+              ...block,
+              attachment: {
+                ...block.attachment,
+                objectVersion: fixtureReference(
+                  "file_object_version",
+                  "file_object_version:forged-copy"
+                )
+              }
+            }
+          : block
+      )
+    }).blocks;
+    expect(
+      calculateInboxV2ContentCopySourceDigest(forgedFilePin, [mapping])
+    ).not.toBe(sourceDigest);
+
+    const forgedBody = inboxV2TimelineContentDraftSchema.parse({
+      blocks: destinationBlocks.map((block) =>
+        block.kind === "text" ? { ...block, text: "Forged body" } : block
+      )
+    }).blocks;
+    expect(
+      calculateInboxV2ContentCopySourceDigest(forgedBody, [mapping])
+    ).not.toBe(sourceDigest);
   });
 
   it("exports purgeable content through an exact versioned envelope", () => {

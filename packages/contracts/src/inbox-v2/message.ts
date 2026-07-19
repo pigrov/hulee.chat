@@ -80,6 +80,7 @@ export const inboxV2MessageOriginSchema = z.discriminatedUnion("kind", [
 
 const canonicalTargetSchema = z
   .object({
+    conversation: inboxV2ConversationReferenceSchema,
     message: inboxV2MessageReferenceSchema,
     timelineItem: inboxV2TimelineItemReferenceSchema,
     messageRevision: inboxV2EntityRevisionSchema
@@ -165,7 +166,7 @@ export const inboxV2MessageReferenceContextSchema = z
     z
       .object({
         kind: z.literal("forward_provider_native"),
-        sources: z.array(exactExternalTargetSchema).min(1).max(32),
+        sources: z.array(exactExternalTargetSchema).length(1),
         capability: providerNativeForwardCapabilitySchema
       })
       .strict(),
@@ -564,6 +565,10 @@ function addCanonicalTargetTenantIssues(
   target: z.infer<typeof canonicalTargetSchema>,
   path: PropertyKey[]
 ): void {
+  addTenantReferenceIssue(context, tenantId, target.conversation, [
+    ...path,
+    "conversation"
+  ]);
   addTenantReferenceIssue(context, tenantId, target.message, [
     ...path,
     "message"

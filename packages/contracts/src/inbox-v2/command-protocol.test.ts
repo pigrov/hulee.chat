@@ -1127,6 +1127,7 @@ describe("Inbox V2 command protocol", () => {
         target: {
           state: "resolved_external" as const,
           canonical: {
+            conversation,
             message,
             timelineItem: {
               tenantId,
@@ -1499,6 +1500,42 @@ describe("Inbox V2 command protocol", () => {
         authorizedTimelineCommand(intent, evidence)
       ).success
     ).toBe(true);
+
+    const secondExternalMessageReference = {
+      ...externalMessageReference,
+      id: "external_message_reference:native-source-2"
+    };
+    const secondSourceOccurrence = {
+      ...sourceOccurrence,
+      id: "source_occurrence:native-source-2"
+    };
+    expect(
+      inboxV2TimelineCommandIntentEnvelopeSchema.safeParse({
+        schemaId: "core:inbox-v2.timeline-command-intent",
+        schemaVersion: "v1",
+        payload: {
+          ...intent,
+          sourceReadProofs: [
+            ...intent.sourceReadProofs,
+            {
+              ...intent.sourceReadProofs[0],
+              externalMessageReference: secondExternalMessageReference,
+              sourceOccurrence: secondSourceOccurrence
+            }
+          ],
+          referenceContext: {
+            ...intent.referenceContext,
+            sources: [
+              ...intent.referenceContext.sources,
+              {
+                externalMessageReference: secondExternalMessageReference,
+                sourceOccurrence: secondSourceOccurrence
+              }
+            ]
+          }
+        }
+      }).success
+    ).toBe(false);
 
     const { sourceReadProofs: _sourceReadProofs, ...withoutSourceProof } =
       intent;

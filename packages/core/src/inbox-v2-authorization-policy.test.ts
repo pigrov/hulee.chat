@@ -5911,6 +5911,139 @@ describe("Inbox V2 authorization policy", () => {
     ).toBe("denied");
   });
 
+  it("authorizes provider-reference reply only through exact portable route evidence", () => {
+    const decide = (
+      operation: ProviderReferenceReplyOperation,
+      guardOverrides: Partial<ExternalRouteGuardEvidence> = {}
+    ) =>
+      evaluateInboxV2AuthorizationPlan(
+        makeInput(
+          externalOperationRequirements(
+            "core:message.reply_external",
+            operation,
+            [],
+            conversationResource,
+            guardOverrides
+          ),
+          externalOperationGrants("core:message.reply_external")
+        )
+      );
+    const alternateBindingGuard: Partial<ExternalRouteGuardEvidence> = {
+      bindingResource: secondSourceThreadBindingResource,
+      capabilityManifestBindingResource: secondSourceThreadBindingResource
+    };
+
+    expect(decide(providerReferenceReplyOperation()).outcome).toBe("allowed");
+    expect(
+      decide(
+        providerReferenceReplyOperation({ portability: "external_thread" }),
+        alternateBindingGuard
+      ).outcome
+    ).toBe("allowed");
+    expect(
+      decide(providerReferenceReplyOperation(), alternateBindingGuard).outcome
+    ).toBe("denied");
+    expect(
+      decide(
+        providerReferenceReplyOperation({
+          bindingSourceAccountResource: otherSourceAccountResource,
+          resourceRevisionChecks: keyedRevisionChecks([
+            conversationResource,
+            timelineItemResource,
+            sourceOccurrenceResource,
+            externalMessageReferenceResource,
+            sourceThreadBindingResource,
+            otherSourceAccountResource,
+            externalThreadResource
+          ])
+        })
+      ).outcome
+    ).toBe("denied");
+
+    expect(
+      decide(
+        providerReferenceReplyOperation({ portability: "external_thread" }),
+        {
+          ...alternateBindingGuard,
+          externalThreadResource: secondExternalThreadResource,
+          bindingExternalThreadResource: secondExternalThreadResource
+        }
+      ).outcome
+    ).toBe("denied");
+
+    const providerGlobalProof = providerGlobalReplyProof(
+      secondSourceThreadBindingResource
+    );
+    const providerGlobal = providerReferenceReplyOperation({
+      portability: "provider_global",
+      providerGlobalProof
+    });
+    const providerGlobalDecision = decide(
+      providerGlobal,
+      alternateBindingGuard
+    );
+    expect(providerGlobalDecision.outcome).toBe("allowed");
+    if (providerGlobalDecision.outcome === "allowed") {
+      expect(providerGlobalDecision.notAfter).toBe("2026-07-12T10:20:00.000Z");
+    }
+
+    expect(
+      decide(
+        providerReferenceReplyOperation({
+          resourceRevisionChecks:
+            providerReferenceReplyOperation().resourceRevisionChecks.map(
+              (check, index) =>
+                index === 0 ? { ...check, actual: "2" } : check
+            )
+        })
+      ).outcome
+    ).toBe("denied");
+    expect(
+      decide(
+        providerReferenceReplyOperation({
+          revisionChecks: [
+            { kind: "binding", expected: "1", actual: "1" },
+            { kind: "route", expected: "1", actual: "2" },
+            { kind: "state", expected: "1", actual: "1" }
+          ]
+        })
+      ).outcome
+    ).toBe("denied");
+    expect(
+      decide(
+        providerReferenceReplyOperation({
+          portability: "provider_global",
+          providerGlobalProof: {
+            ...providerGlobalProof,
+            revisionChecks: [
+              { kind: "binding", expected: "1", actual: "2" },
+              { kind: "manifest", expected: "1", actual: "1" }
+            ]
+          }
+        }),
+        alternateBindingGuard
+      ).outcome
+    ).toBe("denied");
+    expect(
+      decide(
+        providerReferenceReplyOperation({
+          portability: "provider_global",
+          providerGlobalProof: {
+            ...providerGlobalProof,
+            notAfter: NOW
+          }
+        }),
+        alternateBindingGuard
+      ).outcome
+    ).toBe("denied");
+
+    expect(
+      decide(providerReferenceReplyOperation(), {
+        routeFallbackRequested: true
+      }).outcome
+    ).toBe("denied");
+  });
+
   it("binds every external route permission to operation-specific evidence", () => {
     const copyForward: Extract<
       ExternalRouteOperationEvidence,
@@ -8168,7 +8301,7 @@ function makeMultiSendDestinationAuthorityRequirement(
 
 function newResponseReplyOperation(): Extract<
   ExternalRouteOperationEvidence,
-  { kind: "reply" }
+  { kind: "reply"; mode: "new_response" }
 > {
   return {
     kind: "reply",
@@ -8185,6 +8318,89 @@ function newResponseReplyOperation(): Extract<
     referenceBindingResource: null,
     revisionChecks: [],
     resourceRevisionChecks: []
+  };
+}
+
+type ProviderReferenceReplyOperation = Extract<
+  ExternalRouteOperationEvidence,
+  { kind: "reply"; mode: "provider_reference" }
+>;
+
+function providerReferenceReplyOperation(
+  overrides: Partial<ProviderReferenceReplyOperation> = {}
+): ProviderReferenceReplyOperation {
+  return {
+    kind: "reply",
+    mode: "provider_reference",
+    sourceReadRequirementId: "conversation-read",
+    sourceReadResource: conversationResource,
+    sourceTimelineItemResource: timelineItemResource,
+    sourceOccurrenceResource,
+    occurrenceTimelineItemResource: timelineItemResource,
+    occurrenceReferenceResource: externalMessageReferenceResource,
+    occurrenceBindingResource: sourceThreadBindingResource,
+    sourceReferenceResource: externalMessageReferenceResource,
+    referenceTimelineItemResource: timelineItemResource,
+    referenceBindingResource: sourceThreadBindingResource,
+    sourceBindingResource: sourceThreadBindingResource,
+    bindingConversationResource: conversationResource,
+    bindingExternalThreadResource: externalThreadResource,
+    bindingSourceAccountResource: sourceAccountResource,
+    sourceExternalThreadResource: externalThreadResource,
+    portability: "binding_only",
+    providerGlobalProof: null,
+    revisionChecks: currentRouteRevisionChecks(),
+    resourceRevisionChecks: keyedRevisionChecks([
+      conversationResource,
+      timelineItemResource,
+      sourceOccurrenceResource,
+      externalMessageReferenceResource,
+      sourceThreadBindingResource,
+      sourceAccountResource,
+      externalThreadResource
+    ]),
+    ...overrides
+  };
+}
+
+function providerGlobalReplyProof(
+  destinationBindingResource: InboxV2EntityKey,
+  destinationSourceAccountResource: InboxV2EntityKey = sourceAccountResource
+): NonNullable<ProviderReferenceReplyOperation["providerGlobalProof"]> {
+  const proofResource = resource(
+    "core:reference-portability-proof",
+    `reference_portability_proof:reply:${String(destinationBindingResource.entityId)}`
+  );
+  const providerContractResource = resource(
+    "core:adapter-contract-snapshot",
+    "adapter_contract_snapshot:reply-provider-1"
+  );
+  return {
+    resource: proofResource,
+    sourceReferenceResource: externalMessageReferenceResource,
+    sourceOccurrenceResource,
+    originBindingResource: sourceThreadBindingResource,
+    originSourceAccountResource: sourceAccountResource,
+    destinationBindingResource,
+    destinationSourceAccountResource,
+    providerContractResource,
+    originSourceAccountProviderContractResource: providerContractResource,
+    destinationSourceAccountProviderContractResource: providerContractResource,
+    revisionChecks: [
+      { kind: "binding", expected: "1", actual: "1" },
+      { kind: "manifest", expected: "1", actual: "1" }
+    ],
+    resourceRevisionChecks: keyedRevisionChecks([
+      proofResource,
+      externalMessageReferenceResource,
+      sourceOccurrenceResource,
+      sourceThreadBindingResource,
+      sourceAccountResource,
+      destinationBindingResource,
+      destinationSourceAccountResource,
+      providerContractResource
+    ]),
+    notAfter: "2026-07-12T10:20:00.000Z"
   };
 }
 
@@ -8339,7 +8555,8 @@ function externalOperationRequirements(
   permissionId: ExternalRoutePermissionId,
   operation: ExternalRouteOperationEvidence,
   extraRequirements: readonly InboxV2AuthorizationRequirement[] = [],
-  targetResource = conversationResource
+  targetResource = conversationResource,
+  guardOverrides: Partial<ExternalRouteGuardEvidence> = {}
 ): readonly InboxV2AuthorizationRequirement[] {
   const [, ...baseCompanions] = externalReplyRequirements();
   const primary = makeRequirement({
@@ -8368,7 +8585,10 @@ function externalOperationRequirements(
           ]
         : [])
     ],
-    guard: makeExternalRouteGuard(operation, { targetResource })
+    guard: makeExternalRouteGuard(operation, {
+      targetResource,
+      ...guardOverrides
+    })
   });
   const destinationAuthorities =
     operation.kind === "multi_send"

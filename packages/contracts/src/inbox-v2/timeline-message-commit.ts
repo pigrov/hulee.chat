@@ -875,6 +875,7 @@ function addReferenceTargetSnapshotIssues(
   const reference = commit.message.referenceContext;
   addUnresolvedReferenceTargetIssues(context, commit);
   const canonicalTargets: Array<{
+    conversation: { id: string };
     message: { id: string };
     timelineItem: { id: string };
     messageRevision: string;
@@ -932,6 +933,7 @@ function addReferenceTargetSnapshotIssues(
       snapshot.message.timelineItem.id !== snapshot.timelineItem.id ||
       snapshot.timelineItem.conversation.id !==
         snapshot.message.conversation.id ||
+      snapshot.message.conversation.id !== target.conversation.id ||
       snapshot.message.revision !== target.messageRevision ||
       snapshot.timelineItem.revision !== target.messageRevision ||
       snapshot.timelineItem.subject.kind !== "message" ||
@@ -944,7 +946,7 @@ function addReferenceTargetSnapshotIssues(
       addIssue(
         context,
         ["canonicalReferenceTargets", index],
-        "Resolved canonical target must prove the exact Message revision and reply Conversation."
+        "Resolved canonical target must prove the exact Message revision and source Conversation."
       );
     }
     canonicalIds.add(key);
@@ -1232,27 +1234,54 @@ function addOutboundReferenceProofIssues(
         target.externalMessageReference.id &&
       candidate.sourceOccurrence.id === target.sourceOccurrence.id
   );
+  const routeReference = route.referenceContext;
+  const resolution =
+    routeReference.kind === "external_message"
+      ? routeReference.resolutionDecision
+      : null;
+  const bindingOnlyDestinationMismatch =
+    routeReference.kind === "external_message" &&
+    routeReference.portability.kind === "binding_only" &&
+    snapshot !== undefined &&
+    (snapshot.sourceOccurrence.bindingContext.sourceAccount.id !==
+      route.sourceAccount.id ||
+      snapshot.sourceOccurrence.bindingContext.sourceThreadBinding.id !==
+        route.sourceThreadBinding.id ||
+      snapshot.sourceOccurrence.bindingContext.bindingGeneration !==
+        route.bindingFence.bindingGeneration);
   if (
     snapshot === undefined ||
+    routeReference.kind !== "external_message" ||
+    resolution === null ||
     snapshot.externalMessageReference.externalThread.id !==
       route.externalThread.id ||
     snapshot.sourceOccurrence.bindingContext.externalThread.id !==
       route.externalThread.id ||
     snapshot.sourceOccurrence.bindingContext.sourceAccount.id !==
-      route.sourceAccount.id ||
+      routeReference.originSourceAccount.id ||
     snapshot.sourceOccurrence.bindingContext.sourceThreadBinding.id !==
-      route.sourceThreadBinding.id ||
+      routeReference.originBinding.id ||
     snapshot.sourceOccurrence.bindingContext.bindingGeneration !==
-      route.bindingFence.bindingGeneration ||
+      resolution.occurrenceBindingGeneration ||
+    snapshot.sourceOccurrence.revision !== resolution.occurrenceRevision ||
+    !sameValue(
+      snapshot.sourceOccurrence.descriptor,
+      resolution.occurrenceDescriptor
+    ) ||
+    !sameValue(
+      snapshot.sourceOccurrence.referencePortability,
+      routeReference.portability
+    ) ||
     !sameValue(
       snapshot.sourceOccurrence.messageIdentityDeclaration.adapterContract,
       route.adapterContract
-    )
+    ) ||
+    bindingOnlyDestinationMismatch
   ) {
     addIssue(
       context,
       ["externalReferenceTargets"],
-      "Outbound reply/native-forward target must belong to the route's exact thread, account, binding generation and adapter contract."
+      "Outbound reply/native-forward target must prove its exact occurrence origin and portability; binding-only references must also retain the origin route."
     );
   }
 }
@@ -1370,12 +1399,12 @@ function expectedRouteAuthorityFor(
     case "forward_content_copy":
       return {
         operationId: "core:message.forward_content_copy",
-        permissionId: "core:message.forward_content_copy_external"
+        permissionId: "core:message.forward_external"
       };
     case "forward_provider_native":
       return {
         operationId: "core:message.forward_provider_native",
-        permissionId: "core:message.forward_provider_native_external"
+        permissionId: "core:message.forward_external"
       };
     case "forward_provider_observed":
       return {

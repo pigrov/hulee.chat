@@ -185,6 +185,32 @@ describe("Inbox V2 timeline and Message schema", () => {
     );
   });
 
+  it("pins canonical reply and copy targets to immutable Message revisions", () => {
+    expect(
+      uniqueColumns(
+        inboxV2MessageRevisions,
+        "inbox_v2_message_revisions_target_unique"
+      )
+    ).toEqual([
+      "tenant_id",
+      "message_id",
+      "timeline_item_id",
+      "message_revision"
+    ]);
+    expectForeignKey(
+      inboxV2MessageReferenceCanonicalTargets,
+      "inbox_v2_message_reference_canonical_targets_target_fk",
+      inboxV2MessageRevisions,
+      [
+        "tenant_id",
+        "target_message_id",
+        "target_timeline_item_id",
+        "target_message_revision"
+      ],
+      ["tenant_id", "message_id", "timeline_item_id", "message_revision"]
+    );
+  });
+
   it("indexes only retention-eligible content by tenant, class and anchor", () => {
     const tableIndex = getTableConfig(inboxV2TimelineContents).indexes.find(
       (candidate) =>
@@ -796,7 +822,20 @@ describe("Inbox V2 timeline and Message schema", () => {
       "'core:message.reaction.' || new.operation::text || '_external'"
     );
     expect(invariantSql).toContain(
-      "when 'forward_provider_native' then\n               'core:message.forward_provider_native_external'"
+      "when 'forward_provider_native' then\n               'core:message.forward_external'"
+    );
+    expect(invariantSql).toContain(
+      "and external_count = 1\n      and canonical_count = 0"
+    );
+    expect(invariantSql).toContain(
+      "'{resolutionDecision,occurrenceRevision}')::bigint"
+    );
+    expect(invariantSql).toContain("'{portability,kind}' <> 'binding_only'");
+    expect(invariantSql).toContain(
+      "'{resolutionDecision,availabilityObservation,observedByTrustedServiceId}' =\n               occurrence_row.adapter_loaded_by_trusted_service_id"
+    );
+    expect(invariantSql).toContain(
+      "route_row.selection_intent_kind <> 'explicit_occurrence'"
     );
     expect(invariantSql).toContain(
       "expected_capability_id is null\n         or capability_row.capability_id = expected_capability_id"
@@ -838,6 +877,23 @@ describe("Inbox V2 timeline and Message schema", () => {
     );
     expect(invariantSql).toContain(
       "reference_row.message_id = canonical_row.target_message_id"
+    );
+    expect(invariantSql).toContain(
+      "inbox_v2.message_content_copy_source_drift"
+    );
+    expect(invariantSql).toContain(
+      "source_message.revision = source_revision.message_revision"
+    );
+    expect(invariantSql).toContain("to_jsonb(source_payload) - array[");
+    expect(invariantSql).toContain(
+      "'content_id', 'content_revision', 'attachment_id', 'created_at'"
+    );
+    expect(invariantSql).toContain("to_jsonb(source_value) - array[");
+    expect(invariantSql).toContain(
+      "destination_payload.attachment_id =\n              source_payload.attachment_id"
+    );
+    expect(invariantSql).toContain(
+      "for share of source_message, source_content"
     );
     expect(invariantSql).toContain(
       "inbox_v2.message_creation_dispatch_mismatch"

@@ -74,7 +74,7 @@ const authorizedRouteFixture = createOutboundTransportContractFixture({
 });
 const wrongOperationRouteFixture = createOutboundTransportContractFixture({
   suffix: "wrong-operation-route",
-  operationId: "core:reply",
+  operationId: "core:message.forward_content_copy",
   requiredPermissionId: "core:message.reply_external"
 });
 const wrongPermissionRouteFixture = createOutboundTransportContractFixture({
@@ -371,7 +371,7 @@ describe("SQL Inbox V2 outbound transport repository", () => {
     });
 
     await expect(probeAuthorizedReroute(reroute)).rejects.toThrow(
-      /authorized message-send context/iu
+      /authorized message-action context/iu
     );
     expect(reroute.executor.routeStatementKinds()).toEqual([]);
   });
@@ -504,7 +504,7 @@ describe("SQL Inbox V2 outbound transport repository", () => {
     });
 
     await expect(probeAuthorizedReroute(reroute)).rejects.toThrow(
-      /authorized message-send context/iu
+      /authorized message-action context/iu
     );
     expect(reroute.executor.routeStatementKinds()).toEqual([]);
   });
@@ -2172,7 +2172,7 @@ async function expectRouteContextRejectedBeforeSql(
 
   await expect(result).rejects.toThrow(
     mode === "atomic"
-      ? "Inbox V2 route resolution crossed its authorized message-send context."
+      ? "Inbox V2 route resolution crossed its authorized message-action context."
       : "Message, TimelineItem and provider-dispatch mutations require withAuthorizedAtomicMaterialization."
   );
   expect(seamQueries).toEqual(mode === "atomic" ? [] : undefined);

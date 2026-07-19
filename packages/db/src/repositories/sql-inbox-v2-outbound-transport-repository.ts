@@ -1066,6 +1066,11 @@ function assertInboxV2RouteResolutionAuthorizedContext(
   const expectedCommandTypeId = explicitReroute
     ? "core:source.dispatch.reroute"
     : "core:message.send";
+  const actionAuthorityPairIsAllowed =
+    isInboxV2OutboundMessageActionAuthorityPair({
+      operationId: commit.input.operationId,
+      permissionId: commit.input.routePolicy.requiredConversationPermissionId
+    });
   const primaryAuthorizationDecisionMatches = explicitReroute
     ? context.authorizationDecisionRefs.some(
         (decision) =>
@@ -1125,9 +1130,7 @@ function assertInboxV2RouteResolutionAuthorizedContext(
     !principalMatches ||
     context.authorizationEpoch !== commit.input.authorizationEpoch ||
     context.occurredAt !== commit.input.requestedAt ||
-    commit.input.operationId !== "core:message.send" ||
-    commit.input.routePolicy.requiredConversationPermissionId !==
-      "core:message.reply_external" ||
+    !actionAuthorityPairIsAllowed ||
     matchingConversationDecisions.length !== 1 ||
     !primaryAuthorizationDecisionMatches ||
     !selectedSourceAccountDecisionCountMatches ||
@@ -1135,8 +1138,24 @@ function assertInboxV2RouteResolutionAuthorizedContext(
     !selectedSourceAccountAuthorizationMatches
   ) {
     throw invariantError(
-      "Inbox V2 route resolution crossed its authorized message-send context."
+      "Inbox V2 route resolution crossed its authorized message-action context."
     );
+  }
+}
+
+function isInboxV2OutboundMessageActionAuthorityPair(input: {
+  operationId: string;
+  permissionId: string;
+}): boolean {
+  switch (input.operationId) {
+    case "core:message.send":
+    case "core:message.reply":
+      return input.permissionId === "core:message.reply_external";
+    case "core:message.forward_content_copy":
+    case "core:message.forward_provider_native":
+      return input.permissionId === "core:message.forward_external";
+    default:
+      return false;
   }
 }
 

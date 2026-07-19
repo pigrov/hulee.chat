@@ -381,6 +381,11 @@ export {
   calculateInboxV2OutboundSendIntentDigest,
   createInboxV2OutboundSendCommandService
 } from "./inbox-v2-outbound-send-command";
+export {
+  calculateInboxV2OutboundReferenceIntentDigest,
+  calculateInboxV2OutboundReferenceRouteIdempotencyToken,
+  createInboxV2OutboundReferenceCommandService
+} from "./inbox-v2-outbound-reference-command";
 export { createInternalAccessDecisionService } from "./internal-access-decision-service";
 export { createInternalEgressStatusService } from "./internal-egress-status-service";
 export {
@@ -433,6 +438,18 @@ export type {
   InboxV2OutboundSendRouteIntent,
   InboxV2PreparedOutboundSendCommand
 } from "./inbox-v2-outbound-send-command";
+export type {
+  InboxV2OutboundReferenceCommand,
+  InboxV2OutboundReferenceCommandPreparer,
+  InboxV2OutboundReferenceCommandResult,
+  InboxV2OutboundReferenceCommandService,
+  InboxV2OutboundReferenceCommandServiceOptions,
+  InboxV2OutboundReferenceIdempotencyScope,
+  InboxV2OutboundReferenceRequestScope,
+  InboxV2OutboundReferenceRouteIntent,
+  InboxV2OutboundReferenceSource,
+  InboxV2PreparedOutboundReferenceCommand
+} from "./inbox-v2-outbound-reference-command";
 export type {
   InternalAccessDecisionContext,
   InternalAccessDecisionService,

@@ -13,6 +13,9 @@ const migrationPath = resolve(
 const providerClosureMigrationPath = resolve(
   "packages/db/drizzle/0046_inbox_v2_atomic_provider_io_closure.sql"
 );
+const timelineFoundationMigrationPath = resolve(
+  "packages/db/drizzle/0031_inbox_v2_timeline_message_foundation.sql"
+);
 const legacyPermission = "core:message.send_external";
 const canonicalPermission = "core:message.reply_external";
 const rerouteCommandType = "core:source.dispatch.reroute";
@@ -74,6 +77,10 @@ describePostgres(
         providerClosureMigrationPath,
         "utf8"
       );
+      const timelineFoundationMigrationSql = await readFile(
+        timelineFoundationMigrationPath,
+        "utf8"
+      );
       const reviewedSuccessorMd5 = new Map(
         guardedFunctions.map((guardedFunction) => [
           guardedFunction.name,
@@ -88,13 +95,13 @@ describePostgres(
 
       try {
         const currentInstalled = await readGuardedFunctions(client);
-        expectCurrentMsg003Override(currentInstalled, reviewedSuccessorMd5);
+        expectCurrentReviewedOverrides(currentInstalled, reviewedSuccessorMd5);
         const staleMigrationError = await captureDatabaseError(
           client.query(migrationSql)
         );
         expect(staleMigrationError).toMatchObject({
           code: "55000",
-          message: "inbox_v2.msg002_domain_mutation_unreviewed_shape"
+          message: "inbox_v2.msg002_core_coherence_unreviewed_shape"
         });
         expect(functionSources(await readGuardedFunctions(client))).toEqual(
           functionSources(currentInstalled)
@@ -102,6 +109,18 @@ describePostgres(
 
         await client.query("begin");
         try {
+          await client.query(
+            extractFunctionDefinition(
+              timelineFoundationMigrationSql,
+              "public.inbox_v2_tm_core_coherence"
+            )
+          );
+          await client.query(
+            extractFunctionDefinition(
+              timelineFoundationMigrationSql,
+              "public.inbox_v2_tm_outbound_route_action_valid"
+            )
+          );
           await client.query(
             extractFunctionDefinition(
               providerClosureMigrationSql,
@@ -297,14 +316,36 @@ function expectReviewedSuccessorShapes(
   }
 }
 
-function expectCurrentMsg003Override(
+function expectCurrentReviewedOverrides(
   installed: ReadonlyMap<string, InstalledFunction>,
   reviewedSuccessorMd5: ReadonlyMap<string, string>
 ): void {
   for (const guardedFunction of guardedFunctions) {
     const installedFunction = requiredFunction(installed, guardedFunction.name);
     const reviewedMd5 = reviewedSuccessorMd5.get(guardedFunction.name);
-    if (guardedFunction.name === "inbox_v2_auth_domain_mutation_coherence") {
+    if (guardedFunction.name === "inbox_v2_tm_core_coherence") {
+      expect(md5(installedFunction.source)).not.toBe(reviewedMd5);
+      for (const fragment of [
+        "inbox_v2_tm_assert_reference_context",
+        "inbox_v2.message_creation_dispatch_mismatch",
+        "inbox_v2.message_dispatch_coherence"
+      ]) {
+        expect(installedFunction.source).toContain(fragment);
+      }
+    } else if (
+      guardedFunction.name === "inbox_v2_tm_outbound_route_action_valid"
+    ) {
+      expect(md5(installedFunction.source)).not.toBe(reviewedMd5);
+      for (const fragment of [
+        "expected_reference_owner_message_id",
+        "reference_portability_kind",
+        "binding_only"
+      ]) {
+        expect(installedFunction.source).toContain(fragment);
+      }
+    } else if (
+      guardedFunction.name === "inbox_v2_auth_domain_mutation_coherence"
+    ) {
       expect(md5(installedFunction.source)).not.toBe(reviewedMd5);
       for (const fragment of [
         "core:attachment.materialization.complete",

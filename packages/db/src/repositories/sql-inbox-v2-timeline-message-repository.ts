@@ -2556,7 +2556,8 @@ export function assertInboxV2MessageCreationAuthority(
       case "hulee_external":
         return {
           commandTypeId: "core:message.send",
-          permissionId: "core:message.reply_external"
+          permissionId: inboxV2ExternalMessageConversationPermissionId(commit),
+          operationId: inboxV2ExternalMessageOperationId(commit)
         } as const;
       case "internal":
         return {
@@ -2572,6 +2573,17 @@ export function assertInboxV2MessageCreationAuthority(
   if (context.commandTypeId !== requiredAuthority.commandTypeId) {
     throw invariantError(
       "Inbox V2 Message origin does not match the authorized command type."
+    );
+  }
+  if (
+    commit.message.origin.kind === "hulee_external" &&
+    (commit.outboundRoute === null ||
+      commit.outboundRoute.operationId !== requiredAuthority.operationId ||
+      commit.outboundRoute.requiredConversationPermissionId !==
+        requiredAuthority.permissionId)
+  ) {
+    throw invariantError(
+      "Inbox V2 external Message action does not match its exact OutboundRoute operation and Conversation permission."
     );
   }
 
@@ -2624,6 +2636,46 @@ export function assertInboxV2MessageCreationAuthority(
     );
   }
   assertInboxV2MessageAppActorMatchesContext(context, commit);
+}
+
+function inboxV2ExternalMessageConversationPermissionId(
+  commit: InboxV2MessageCreationCommit
+): "core:message.reply_external" | "core:message.forward_external" {
+  switch (commit.message.referenceContext.kind) {
+    case "none":
+    case "reply":
+      return "core:message.reply_external";
+    case "forward_content_copy":
+    case "forward_provider_native":
+      return "core:message.forward_external";
+    case "forward_provider_observed":
+      throw invariantError(
+        "Provider-observed forward provenance cannot authorize a Hulee external Message."
+      );
+  }
+}
+
+function inboxV2ExternalMessageOperationId(
+  commit: InboxV2MessageCreationCommit
+):
+  | "core:message.send"
+  | "core:message.reply"
+  | "core:message.forward_content_copy"
+  | "core:message.forward_provider_native" {
+  switch (commit.message.referenceContext.kind) {
+    case "none":
+      return "core:message.send";
+    case "reply":
+      return "core:message.reply";
+    case "forward_content_copy":
+      return "core:message.forward_content_copy";
+    case "forward_provider_native":
+      return "core:message.forward_provider_native";
+    case "forward_provider_observed":
+      throw invariantError(
+        "Provider-observed forward provenance cannot authorize a Hulee external Message."
+      );
+  }
 }
 
 function assertInboxV2ExternalRerouteMessageCreationAuthority(
@@ -5099,6 +5151,11 @@ async function loadMessageReferenceContext(
     throw invariantError("Message reference context is missing.");
   }
   const canonical = canonicalResult.rows.map((row) => ({
+    conversation: {
+      tenantId: input.tenantId,
+      kind: "conversation" as const,
+      id: row.target_conversation_id
+    },
     message: {
       tenantId: input.tenantId,
       kind: "message" as const,
@@ -6992,11 +7049,14 @@ export function buildListInboxV2MessageReferenceCanonicalTargetsSql(input: {
   messageId: InboxV2MessageId;
 }): SQL {
   return sql`
-    select *
-      from inbox_v2_message_reference_canonical_targets
-     where tenant_id = ${input.tenantId}
-       and message_id = ${input.messageId}
-     order by ordinal asc
+    select target_row.*, target_message.conversation_id as target_conversation_id
+      from inbox_v2_message_reference_canonical_targets target_row
+      inner join inbox_v2_messages target_message
+        on target_message.tenant_id = target_row.tenant_id
+       and target_message.id = target_row.target_message_id
+     where target_row.tenant_id = ${input.tenantId}
+       and target_row.message_id = ${input.messageId}
+     order by target_row.ordinal asc
   `;
 }
 

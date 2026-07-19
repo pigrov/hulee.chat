@@ -130,6 +130,29 @@ function routeDescriptor(suffix: string) {
   } as const;
 }
 
+function occurrenceDescriptor(adapterMismatch = false) {
+  return {
+    adapterContract: adapterMismatch
+      ? { ...adapterContract, declarationRevision: "99" as const }
+      : adapterContract,
+    descriptorSchemaId: "module:synthetic-source:message-occurrence",
+    descriptorVersion: "v1",
+    capabilityRevision: "4",
+    providerReferences: [
+      {
+        kindId: "module:synthetic-source:provider-message-id",
+        subject: "provider-message-1"
+      },
+      {
+        kindId: "module:synthetic-source:quoted-context-token",
+        subject: "opaque-quoted-context-token"
+      }
+    ],
+    descriptorDigestSha256:
+      "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  } as const;
+}
+
 function authorizationTarget(
   suffix: string,
   referenceTarget: Record<string, unknown> = { kind: "none" }
@@ -226,6 +249,7 @@ function routeError(
     | "route.not_found"
     | "route.ambiguous"
     | "route.inactive"
+    | "route.reference_unavailable"
     | "route.reference_nonportable"
     | "route.reply_window_expired"
     | "route.runtime_unavailable"
@@ -307,6 +331,15 @@ function resolutionInput(input?: {
 
 function externalReferenceContext(input?: {
   portability?: "binding_only" | "external_thread" | "provider_global";
+  availability?:
+    | "available"
+    | "provider_deleted"
+    | "provider_unavailable"
+    | "unknown";
+  availabilityObservedAt?: string;
+  availabilityDescriptorDigestSha256?: string;
+  availabilityObserverMismatch?: boolean;
+  descriptorAdapterMismatch?: boolean;
   referenceWindow?:
     | { state: "not_applicable" }
     | { state: "valid"; notAfter: string }
@@ -331,6 +364,7 @@ function externalReferenceContext(input?: {
         ? ("authoritative" as const)
         : ("safe_default" as const)
   };
+  const descriptor = occurrenceDescriptor(input?.descriptorAdapterMismatch);
   return {
     kind: "external_message" as const,
     externalThread,
@@ -349,7 +383,28 @@ function externalReferenceContext(input?: {
       originSourceAccount,
       occurrenceRevision: "3",
       occurrenceBindingGeneration: "1",
+      occurrenceDescriptor: descriptor,
       portability,
+      availabilityObservation: {
+        observationKind: "external_message_reference_availability" as const,
+        tenantId,
+        externalThread,
+        externalMessageReference,
+        sourceOccurrence,
+        occurrenceRevision: "3",
+        occurrenceDescriptorDigestSha256:
+          input?.availabilityDescriptorDigestSha256 ??
+          descriptor.descriptorDigestSha256,
+        adapterContract,
+        state: input?.availability ?? ("available" as const),
+        diagnostic: null,
+        observationToken: "observation:reference-availability-0001",
+        observedByTrustedServiceId: input?.availabilityObserverMismatch
+          ? "core:forged-reference-observer"
+          : adapterContract.loadedByTrustedServiceId,
+        observedAt: input?.availabilityObservedAt ?? loadedAt,
+        notAfter
+      },
       referenceWindow: input?.referenceWindow ?? {
         state: "valid" as const,
         notAfter
@@ -547,6 +602,109 @@ describe("Inbox V2 outbound route contracts", () => {
     });
   });
 
+  it.each(["provider_deleted", "provider_unavailable", "unknown"] as const)(
+    "fails a %s explicit reference without using preferred or policy fallback",
+    (availability) => {
+      const context = externalReferenceContext({ availability });
+      const origin = candidateForReference("a", context);
+      const input = resolutionInput({
+        intent: {
+          kind: "explicit_occurrence",
+          occurrence: context.sourceOccurrence
+        },
+        referenceContext: context,
+        routePolicy: policy({
+          preferred: binding("b"),
+          fallback: [binding("a")]
+        }),
+        candidates: snapshot({
+          count: 2,
+          explicit: origin,
+          preferred: candidateForReference("b", context),
+          sole: null,
+          fallback: {
+            candidate: candidateForReference("a", context),
+            policyOrdinal: 0
+          }
+        })
+      });
+
+      expect(
+        inboxV2OutboundRouteResolutionInputSchema.safeParse(input).success
+      ).toBe(true);
+      expect(resolveInboxV2OutboundRoute(input)).toEqual({
+        kind: "failed",
+        error: routeError("route.reference_unavailable")
+      });
+    }
+  );
+
+  it("does not use policy fallback for an automatic provider reference", () => {
+    const context = externalReferenceContext({
+      portability: "external_thread"
+    });
+    const input = resolutionInput({
+      referenceContext: context,
+      routePolicy: policy({ fallback: [binding("a")] }),
+      candidates: snapshot({
+        count: 2,
+        explicit: null,
+        preferred: null,
+        sole: null,
+        fallback: {
+          candidate: candidateForReference("a", context),
+          policyOrdinal: 0
+        }
+      })
+    });
+
+    expect(resolveInboxV2OutboundRoute(input)).toEqual({
+      kind: "failed",
+      error: routeError("route.ambiguous")
+    });
+  });
+
+  it("keeps group destination separate from the opaque quoted reference token", () => {
+    const context = externalReferenceContext({
+      portability: "external_thread"
+    });
+    const crossBinding = candidateForReference("b", context);
+    const input = resolutionInput({
+      referenceContext: context,
+      routePolicy: policy({ preferred: binding("b") }),
+      candidates: snapshot({
+        count: 2,
+        preferred: crossBinding,
+        sole: null
+      })
+    });
+
+    const commit = materializeInboxV2OutboundRouteResolutionCommit(input, {
+      routeId: "outbound_route:group-reply",
+      selectedAt: createdAt
+    });
+    expect(commit.route).toMatchObject({
+      sourceThreadBinding: binding("b"),
+      routeDescriptor: {
+        destinationKindId: "module:synthetic-source:group-peer",
+        destinationSubject: "Group-b"
+      },
+      referenceContext: {
+        originBinding: binding("a"),
+        resolutionDecision: {
+          occurrenceDescriptor: {
+            providerReferences: expect.arrayContaining([
+              {
+                kindId: "module:synthetic-source:quoted-context-token",
+                subject: "opaque-quoted-context-token"
+              }
+            ])
+          }
+        }
+      }
+    });
+  });
+
   it("requires two exact server-loaded authorization decisions", () => {
     const valid = candidate("a");
     expect(
@@ -655,6 +813,82 @@ describe("Inbox V2 outbound route contracts", () => {
             occurrence: forged.sourceOccurrence
           },
           referenceContext: forged,
+          candidates: snapshot({ count: 1, explicit: origin, sole: origin })
+        })
+      ).success
+    ).toBe(false);
+
+    const forgedDescriptor = externalReferenceContext({
+      availabilityDescriptorDigestSha256:
+        "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    });
+    const forgedDescriptorOrigin = candidateForReference("a", forgedDescriptor);
+    expect(
+      inboxV2OutboundRouteResolutionInputSchema.safeParse(
+        resolutionInput({
+          intent: {
+            kind: "explicit_occurrence",
+            occurrence: forgedDescriptor.sourceOccurrence
+          },
+          referenceContext: forgedDescriptor,
+          candidates: snapshot({
+            count: 1,
+            explicit: forgedDescriptorOrigin,
+            sole: forgedDescriptorOrigin
+          })
+        })
+      ).success
+    ).toBe(false);
+  });
+
+  it("requires coherent adapter and availability observation timestamps", () => {
+    for (const context of [
+      externalReferenceContext({ descriptorAdapterMismatch: true }),
+      externalReferenceContext({ availabilityObservedAt: createdAt }),
+      externalReferenceContext({ availabilityObserverMismatch: true })
+    ]) {
+      const origin = candidateForReference("a", context);
+      expect(
+        inboxV2OutboundRouteResolutionInputSchema.safeParse(
+          resolutionInput({
+            intent: {
+              kind: "explicit_occurrence",
+              occurrence: context.sourceOccurrence
+            },
+            referenceContext: context,
+            candidates: snapshot({
+              count: 1,
+              explicit: origin,
+              sole: origin
+            })
+          })
+        ).success
+      ).toBe(false);
+    }
+  });
+
+  it("rejects authoritative provider-global proof that crosses ExternalThread", () => {
+    const context = externalReferenceContext({
+      portability: "provider_global"
+    });
+    const otherThread = reference(
+      "external_thread",
+      "external_thread:thread-other"
+    );
+    context.externalThread = otherThread;
+    context.resolutionDecision.externalThread = otherThread;
+    context.resolutionDecision.availabilityObservation.externalThread =
+      otherThread;
+    const origin = candidateForReference("a", context);
+
+    expect(
+      inboxV2OutboundRouteResolutionInputSchema.safeParse(
+        resolutionInput({
+          intent: {
+            kind: "explicit_occurrence",
+            occurrence: context.sourceOccurrence
+          },
+          referenceContext: context,
           candidates: snapshot({ count: 1, explicit: origin, sole: origin })
         })
       ).success

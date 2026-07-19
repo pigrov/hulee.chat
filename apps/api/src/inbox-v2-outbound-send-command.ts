@@ -28,7 +28,6 @@ import {
   type InboxV2AuthorizationDecisionReference,
   type InboxV2AuthorizedCommand,
   type InboxV2MessageCreationCommit,
-  type InboxV2MessageContentBlock,
   type InboxV2OutboundDispatchRerouteCommit,
   type InboxV2OutboundDispatchContentPlan,
   type InboxV2OutboundRouteResolutionCommit,
@@ -43,18 +42,18 @@ import {
   type InboxV2SecurityDenialSink
 } from "@hulee/core";
 import {
-  fenceInboxV2OutboundReplyAuthorityInTransaction,
-  InboxV2RouteResolutionRollbackError,
-  persistInboxV2ExplicitRerouteResolutionInTransaction,
-  persistInboxV2OutboundDispatchContentPlanInTransaction,
-  persistInboxV2RouteResolutionInTransaction,
-  prepareInboxV2MessageCreation,
-  sealInboxV2PreparedMessageCreation,
   type InboxV2AuthorizedAtomicMaterializationCoordinator,
   type InboxV2AuthorizedCommandMutationResult,
   type InboxV2PrivilegedAuthorizationMutationReplayStatus,
   type WithInboxV2AuthorizedCommandMutationInput
 } from "@hulee/db";
+
+import {
+  inboxV2OutboundDispatchContentPlanMatches,
+  materializeInboxV2OutboundMessage,
+  type InboxV2OutboundMessageMaterializationFingerprintAuthority,
+  type InboxV2OutboundMessageMaterializationPersistence
+} from "./inbox-v2-outbound-message-materialization";
 
 export type InboxV2OutboundSendRouteIntent =
   | Readonly<{ kind: "automatic" }>
@@ -166,18 +165,8 @@ export type InboxV2OutboundSendCommandPreparer = Readonly<{
  * the fingerprint expiry), and reject generations that were not authorized at
  * `planCreatedAt` or are no longer verifiable at `at`.
  */
-export type InboxV2OutboundDispatchContentFingerprintAuthority = Readonly<{
-  verify(input: {
-    fingerprint: InboxV2OutboundDispatchContentPlan["contentFingerprint"];
-    tenantId: string;
-    timelineContent: InboxV2OutboundDispatchContentPlan["timelineContent"];
-    contentRevision: string;
-    /** Purgeable current Message/TimelineContent digest; never persisted in the plan. */
-    contentDigestSha256: string;
-    planCreatedAt: string;
-    at: string;
-  }): Promise<boolean>;
-}>;
+export type InboxV2OutboundDispatchContentFingerprintAuthority =
+  InboxV2OutboundMessageMaterializationFingerprintAuthority;
 
 type AtomicSendResult = Readonly<{
   messageId: string;
@@ -226,14 +215,7 @@ export type InboxV2OutboundSendCommandResult =
       conflict: AtomicSendFailure;
     }>;
 
-type OutboundSendPersistence = Readonly<{
-  fenceReplyAuthority: typeof fenceInboxV2OutboundReplyAuthorityInTransaction;
-  persistRoute: typeof persistInboxV2RouteResolutionInTransaction;
-  persistReroute: typeof persistInboxV2ExplicitRerouteResolutionInTransaction;
-  prepareMessage: typeof prepareInboxV2MessageCreation;
-  persistContentPlan: typeof persistInboxV2OutboundDispatchContentPlanInTransaction;
-  sealMessage: typeof sealInboxV2PreparedMessageCreation;
-}>;
+type OutboundSendPersistence = InboxV2OutboundMessageMaterializationPersistence;
 
 export type InboxV2OutboundSendCommandServiceOptions = Readonly<{
   requestScope: InboxV2OutboundSendRequestScope;
@@ -256,15 +238,6 @@ export type InboxV2OutboundSendCommandService = Readonly<{
   ): Promise<InboxV2OutboundSendCommandResult>;
 }>;
 
-const productionPersistence: OutboundSendPersistence = Object.freeze({
-  fenceReplyAuthority: fenceInboxV2OutboundReplyAuthorityInTransaction,
-  persistRoute: persistInboxV2RouteResolutionInTransaction,
-  persistReroute: persistInboxV2ExplicitRerouteResolutionInTransaction,
-  prepareMessage: prepareInboxV2MessageCreation,
-  persistContentPlan: persistInboxV2OutboundDispatchContentPlanInTransaction,
-  sealMessage: sealInboxV2PreparedMessageCreation
-});
-
 /**
  * Executes normal outbound send without provider I/O. One immutable route,
  * Message, queued dispatch and provider outbox intent are sealed by the same
@@ -274,7 +247,6 @@ export function createInboxV2OutboundSendCommandService(
   options: InboxV2OutboundSendCommandServiceOptions
 ): InboxV2OutboundSendCommandService {
   const requestScope = normalizeRequestScope(options.requestScope);
-  const persistence = options.persistence ?? productionPersistence;
   const authorizationGate =
     options.authorizationGate ?? executeInboxV2AuthorizationGate;
 
@@ -338,167 +310,67 @@ export function createInboxV2OutboundSendCommandService(
       }
 
       const closed = assertSelectedSendClosure(command, requestScope, prepared);
-      if (
-        !(await verifySelectedDispatchContentFingerprint(
-          closed.dispatchContentPlan,
-          closed.messageCreation,
-          options.contentFingerprintAuthority,
-          options.currentTime()
-        ))
-      ) {
-        return {
-          outcome: "materialization_rejected",
-          reason: "dispatch_content_fingerprint_rejected"
-        };
-      }
-      try {
-        const gated = await authorizationGate({
+      const materialized = await materializeInboxV2OutboundMessage(
+        {
+          tenantId: command.tenantId,
+          conversationId: command.conversationId,
+          requiredConversationPermissionId: "core:message.reply_external",
+          replyAuthority: closed.replyAuthority,
           authorizationPlan: prepared.authorizationPlan,
           denialContext: prepared.denialContext,
+          authorizedMutation: prepared.authorizedMutation,
+          routeResolution: closed.routeResolution,
+          messageCreation: closed.messageCreation,
+          dispatchContentPlan: closed.dispatchContentPlan,
+          rerouteCommit: closed.rerouteCommit
+        },
+        {
           denialSink: options.denialSink,
-          executeAllowed: () =>
-            options.coordinator.withAuthorizedAtomicMaterialization(
-              prepared.authorizedMutation,
-              async (context) => {
-                const replyAuthority = await persistence.fenceReplyAuthority(
-                  context,
-                  {
-                    tenantId: command.tenantId,
-                    conversationId: command.conversationId,
-                    replyAuthority: closed.replyAuthority
-                  }
-                );
-                if (replyAuthority.kind !== "committed") {
-                  throw new OutboundSendMaterializationRejected(
-                    replyAuthority.reason
-                  );
-                }
-                const route =
-                  closed.rerouteCommit === null
-                    ? await persistence.persistRoute(
-                        context,
-                        closed.routeResolution
-                      )
-                    : await persistence.persistReroute(context, {
-                        routeResolution: closed.routeResolution,
-                        rerouteCommit: closed.rerouteCommit
-                      });
-                if (route.kind !== "committed") {
-                  throw new OutboundSendMaterializationRejected(route.kind);
-                }
-                const message = await persistence.prepareMessage(context, {
-                  commit: closed.messageCreation
-                });
-                if (message.kind !== "ready") {
-                  throw new OutboundSendMaterializationRejected(message.kind);
-                }
-                const contentPlan = await persistence.persistContentPlan(
-                  context,
-                  closed.dispatchContentPlan
-                );
-                if (contentPlan.kind !== "persisted") {
-                  throw new OutboundSendMaterializationRejected(
-                    "code" in contentPlan
-                      ? contentPlan.code
-                      : "dispatch_plan_already_persisted"
-                  );
-                }
-                return message.capability;
-              },
-              async (context, capability) => {
-                const sealed = await persistence.sealMessage(context, {
-                  capability
-                });
-                return {
-                  result: {
-                    messageId: sealed.message.id,
-                    outboundRouteId: closed.route.id,
-                    outboundDispatchId: closed.dispatch.id
-                  },
-                  receipt: sealed.receipt
-                };
-              }
-            )
-        });
-
-        if (gated.outcome === "denied") {
-          return {
-            outcome: "denied",
-            errorCode: gated.publicDecision.errorCode
-          };
+          coordinator: options.coordinator,
+          contentFingerprintAuthority: options.contentFingerprintAuthority,
+          currentTime: options.currentTime,
+          persistence: options.persistence,
+          authorizationGate
         }
-        if (gated.value.kind === "applied") {
-          return {
-            outcome: "queued",
-            ...gated.value.result,
-            commit: gated.value.status
-          };
-        }
-        if (gated.value.kind === "already_applied") {
-          const messageId = replayedMessageId(
-            gated.value.status,
-            command.tenantId
-          );
-          return {
-            outcome: "already_queued",
-            messageId,
-            commit: gated.value.status
-          };
-        }
-        if (gated.value.kind === "idempotency_conflict") {
-          return { outcome: "idempotency_conflict" };
-        }
+      );
+      if (materialized.kind === "applied") {
         return {
-          outcome: "authorization_conflict",
-          conflict: gated.value
+          outcome: "queued",
+          ...materialized.mutation.result,
+          commit: materialized.mutation.status
         };
-      } catch (error) {
-        if (error instanceof InboxV2RouteResolutionRollbackError) {
-          return {
-            outcome: "materialization_rejected",
-            reason: error.result.kind
-          };
-        }
-        if (error instanceof OutboundSendMaterializationRejected) {
-          return {
-            outcome: "materialization_rejected",
-            reason: error.reason
-          };
-        }
-        throw error;
       }
+      if (materialized.kind === "already_applied") {
+        return {
+          outcome: "already_queued",
+          messageId: replayedMessageId(
+            materialized.mutation.status,
+            command.tenantId
+          ),
+          commit: materialized.mutation.status
+        };
+      }
+      if (materialized.kind === "idempotency_conflict") {
+        return { outcome: "idempotency_conflict" };
+      }
+      if (materialized.kind === "denied") {
+        return {
+          outcome: "denied",
+          errorCode: materialized.errorCode
+        };
+      }
+      if (materialized.kind === "materialization_rejected") {
+        return {
+          outcome: "materialization_rejected",
+          reason: materialized.reason
+        };
+      }
+      return {
+        outcome: "authorization_conflict",
+        conflict: materialized.conflict
+      };
     }
   });
-}
-
-async function verifySelectedDispatchContentFingerprint(
-  plan: InboxV2OutboundDispatchContentPlan,
-  messageCreation: InboxV2MessageCreationCommit,
-  authority: InboxV2OutboundDispatchContentFingerprintAuthority,
-  currentTime: string
-): Promise<boolean> {
-  const content = messageCreation.content;
-  const currentTimeMillis = Date.parse(currentTime);
-  if (
-    content.state.kind !== "available" ||
-    !Number.isFinite(currentTimeMillis) ||
-    Date.parse(plan.contentFingerprint.validUntil) <= currentTimeMillis
-  ) {
-    return false;
-  }
-  try {
-    return await authority.verify({
-      fingerprint: plan.contentFingerprint,
-      tenantId: messageCreation.tenantId,
-      timelineContent: messageCreation.message.content.content,
-      contentRevision: content.revision,
-      contentDigestSha256: content.state.contentDigestSha256,
-      planCreatedAt: plan.createdAt,
-      at: currentTime
-    });
-  } catch {
-    return false;
-  }
 }
 
 export function calculateInboxV2OutboundSendIntentDigest(
@@ -538,13 +410,6 @@ export function calculateInboxV2OutboundRouteIdempotencyToken(
       clientMutationId: command.clientMutationId
     })
   );
-}
-
-class OutboundSendMaterializationRejected extends Error {
-  constructor(readonly reason: string) {
-    super(`Outbound send materialization rejected: ${reason}`);
-    this.name = "OutboundSendMaterializationRejected";
-  }
 }
 
 function assertRejectedRouteClosure(
@@ -625,7 +490,7 @@ function assertSelectedSendClosure(
     !routeInputMatchesCommand(command, requestScope, routeResolution) ||
     !sameValue(routeResult, routeResolution.result) ||
     !sameValue(route, messageCreation.outboundRoute) ||
-    !dispatchContentPlanMatches(
+    !inboxV2OutboundDispatchContentPlanMatches(
       dispatchContentPlan,
       messageCreation,
       route,
@@ -708,97 +573,6 @@ function assertSelectedSendClosure(
     rerouteCommit,
     replyAuthority: intent.replyAuthority
   };
-}
-
-function dispatchContentPlanMatches(
-  plan: InboxV2OutboundDispatchContentPlan,
-  messageCreation: InboxV2MessageCreationCommit,
-  route: NonNullable<InboxV2MessageCreationCommit["outboundRoute"]>,
-  dispatch: NonNullable<InboxV2MessageCreationCommit["outboundDispatch"]>
-): boolean {
-  const content = messageCreation.content;
-  const binding = messageCreation.outboundBindingSnapshot;
-  if (content.state.kind !== "available" || binding === null) return false;
-  const artifactCapabilitiesMatch = plan.artifacts.every((artifact) =>
-    binding.capabilities.entries.some(
-      (capability) =>
-        capability.capabilityId === artifact.capabilityId &&
-        capability.operationId === artifact.operationId &&
-        capability.contentKindId === route.contentKindId &&
-        capability.state === "supported" &&
-        (capability.validUntil === null ||
-          Date.parse(capability.validUntil) > Date.parse(plan.createdAt)) &&
-        capability.requiredProviderRoleIds.every((roleId) =>
-          binding.providerAccess.roleIds.includes(roleId)
-        )
-    )
-  );
-  if (
-    plan.tenantId !== messageCreation.tenantId ||
-    String(plan.dispatch.id) !== String(dispatch.id) ||
-    String(plan.message.id) !== String(messageCreation.message.id) ||
-    plan.messageRevision !== messageCreation.message.revision ||
-    String(plan.conversation.id) !==
-      String(messageCreation.message.conversation.id) ||
-    String(plan.timelineItem.id) !==
-      String(messageCreation.message.timelineItem.id) ||
-    String(plan.route.id) !== String(route.id) ||
-    String(plan.timelineContent.id) !== String(content.id) ||
-    plan.contentRevision !== content.revision ||
-    String(plan.binding.id) !== String(route.sourceThreadBinding.id) ||
-    plan.bindingRevision !== binding.revision ||
-    plan.capabilityRevision !== route.bindingFence.capabilityRevision ||
-    binding.capabilities.revision !== plan.capabilityRevision ||
-    !sameValue(plan.adapterContract, route.adapterContract) ||
-    plan.createdAt !== dispatch.createdAt ||
-    plan.blocks.length !== content.state.blocks.length ||
-    !artifactCapabilitiesMatch ||
-    plan.artifacts.some(
-      (artifact) => artifact.operationId !== route.operationId
-    )
-  ) {
-    return false;
-  }
-
-  return content.state.blocks.every((block, index) => {
-    const planned = plan.blocks[index];
-    return (
-      planned !== undefined &&
-      planned.blockKey === block.blockKey &&
-      planned.blockKind === block.kind &&
-      sameValue(planned.exactFileObjectPin, exactFileObjectPinForBlock(block))
-    );
-  });
-}
-
-function exactFileObjectPinForBlock(block: InboxV2MessageContentBlock) {
-  if (
-    block.kind === "image" ||
-    block.kind === "audio" ||
-    block.kind === "video" ||
-    block.kind === "file" ||
-    block.kind === "sticker"
-  ) {
-    return block.attachment.state === "ready"
-      ? {
-          file: block.attachment.file,
-          fileRevision: block.attachment.fileRevision,
-          fileVersion: block.attachment.fileVersion,
-          objectVersion: block.attachment.objectVersion
-        }
-      : null;
-  }
-  if (block.kind === "extension") {
-    return block.payloadPin.state === "exact"
-      ? {
-          file: block.payloadFile,
-          fileRevision: block.payloadPin.fileRevision,
-          fileVersion: block.payloadPin.fileVersion,
-          objectVersion: block.payloadPin.objectVersion
-        }
-      : null;
-  }
-  return null;
 }
 
 function rerouteCommitMatchesSelectedSend(

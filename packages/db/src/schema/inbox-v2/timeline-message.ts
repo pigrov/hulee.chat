@@ -1985,6 +1985,12 @@ export const inboxV2MessageRevisions = pgTable(
       table.messageId,
       table.messageRevision
     ),
+    unique("inbox_v2_message_revisions_target_unique").on(
+      table.tenantId,
+      table.messageId,
+      table.timelineItemId,
+      table.messageRevision
+    ),
     unique("inbox_v2_message_revisions_attribution_unique").on(
       table.tenantId,
       table.actionAttributionId
@@ -2180,10 +2186,10 @@ export const inboxV2MessageReferenceCanonicalTargets = pgTable(
         table.targetMessageRevision
       ],
       foreignColumns: [
-        inboxV2Messages.tenantId,
-        inboxV2Messages.id,
-        inboxV2Messages.timelineItemId,
-        inboxV2Messages.revision
+        inboxV2MessageRevisions.tenantId,
+        inboxV2MessageRevisions.messageId,
+        inboxV2MessageRevisions.timelineItemId,
+        inboxV2MessageRevisions.messageRevision
       ]
     }),
     unique("inbox_v2_message_reference_canonical_targets_unique").on(
@@ -5768,11 +5774,6 @@ begin
        and occurrence_row.id = expected_source_occurrence_id
        and occurrence_row.conversation_id = route_row.conversation_id
        and occurrence_row.external_thread_id = route_row.external_thread_id
-       and occurrence_row.source_thread_binding_id =
-         route_row.source_thread_binding_id
-       and occurrence_row.source_connection_id = route_row.source_connection_id
-       and occurrence_row.source_account_id = route_row.source_account_id
-       and occurrence_row.binding_generation = route_row.binding_generation
        and occurrence_row.adapter_contract_id = route_row.adapter_contract_id
        and occurrence_row.adapter_contract_version =
          route_row.adapter_contract_version
@@ -5784,6 +5785,14 @@ begin
        and occurrence_row.adapter_loaded_at = route_row.adapter_loaded_at
        and occurrence_row.resolution_state = 'resolved'
        and occurrence_row.resolved_external_message_reference_id =
+         expected_external_message_reference_id
+      left join public.inbox_v2_source_occurrence_resolution_transitions
+        resolution_row
+        on resolution_row.tenant_id = occurrence_row.tenant_id
+       and resolution_row.source_occurrence_id = occurrence_row.id
+       and resolution_row.resulting_revision = occurrence_row.revision
+       and resolution_row.to_state = 'resolved'
+       and resolution_row.resolved_external_message_reference_id =
          expected_external_message_reference_id
       left join public.inbox_v2_external_message_references reference_row
         on reference_row.tenant_id = route_row.tenant_id
@@ -5872,6 +5881,7 @@ begin
            and expected_source_occurrence_id is not null
            and occurrence_row.id is not null
            and reference_row.id is not null
+           and resolution_row.id is not null
            and (
              expected_reference_owner_message_id is null
              or reference_row.message_id =
@@ -5884,6 +5894,142 @@ begin
                expected_external_message_reference_id
            and route_row.reference_context_snapshot #>>
              '{sourceOccurrence,id}' = expected_source_occurrence_id
+           and route_row.reference_context_snapshot #>>
+             '{externalThread,id}' = route_row.external_thread_id
+           and route_row.reference_context_snapshot #>>
+             '{originBinding,id}' = occurrence_row.source_thread_binding_id
+           and route_row.reference_context_snapshot #>>
+             '{originSourceAccount,id}' = occurrence_row.source_account_id
+           and route_row.reference_context_snapshot #>
+             '{resolutionDecision,externalThread}' =
+               route_row.reference_context_snapshot #> '{externalThread}'
+           and route_row.reference_context_snapshot #>
+             '{resolutionDecision,externalMessageReference}' =
+               route_row.reference_context_snapshot #>
+                 '{externalMessageReference}'
+           and route_row.reference_context_snapshot #>
+             '{resolutionDecision,sourceOccurrence}' =
+               route_row.reference_context_snapshot #> '{sourceOccurrence}'
+           and route_row.reference_context_snapshot #>
+             '{resolutionDecision,originBinding}' =
+               route_row.reference_context_snapshot #> '{originBinding}'
+           and route_row.reference_context_snapshot #>
+             '{resolutionDecision,originSourceAccount}' =
+               route_row.reference_context_snapshot #> '{originSourceAccount}'
+           and route_row.reference_context_snapshot #>
+             '{resolutionDecision,portability}' =
+               route_row.reference_context_snapshot #> '{portability}'
+           and occurrence_row.revision =
+             (route_row.reference_context_snapshot #>>
+               '{resolutionDecision,occurrenceRevision}')::bigint
+           and occurrence_row.binding_generation =
+             (route_row.reference_context_snapshot #>>
+               '{resolutionDecision,occurrenceBindingGeneration}')::bigint
+           and route_row.reference_context_snapshot #>>
+             '{resolutionDecision,occurrenceDescriptor,descriptorSchemaId}' =
+               occurrence_row.descriptor_schema_id
+           and route_row.reference_context_snapshot #>>
+             '{resolutionDecision,occurrenceDescriptor,descriptorVersion}' =
+               occurrence_row.descriptor_version
+           and route_row.reference_context_snapshot #>>
+             '{resolutionDecision,occurrenceDescriptor,capabilityRevision}' =
+               occurrence_row.capability_revision::text
+           and route_row.reference_context_snapshot #>>
+             '{resolutionDecision,occurrenceDescriptor,descriptorDigestSha256}' =
+               occurrence_row.descriptor_digest_sha256
+           and jsonb_array_length(route_row.reference_context_snapshot #>
+             '{resolutionDecision,occurrenceDescriptor,providerReferences}') =
+               occurrence_row.provider_reference_count
+           and not exists (
+             select 1
+               from jsonb_array_elements(route_row.reference_context_snapshot #>
+                 '{resolutionDecision,occurrenceDescriptor,providerReferences}')
+                 with ordinality as supplied_reference(value, ordinal)
+               left join public.inbox_v2_source_occurrence_provider_references
+                 stored_reference
+                 on stored_reference.tenant_id = occurrence_row.tenant_id
+                and stored_reference.source_occurrence_id = occurrence_row.id
+                and stored_reference.ordinal = supplied_reference.ordinal - 1
+              where stored_reference.ordinal is null
+                 or supplied_reference.value is distinct from jsonb_build_object(
+                   'kindId', stored_reference.kind_id,
+                   'subject', stored_reference.subject
+                 )
+           )
+           and route_row.reference_context_snapshot #>>
+             '{portability,kind}' =
+               occurrence_row.reference_portability_kind::text
+           and route_row.reference_context_snapshot #>>
+             '{portability,decisionStrength}' =
+               occurrence_row.reference_portability_decision_strength::text
+           and route_row.reference_context_snapshot #>
+             '{portability,adapterContract}' =
+               route_row.adapter_contract_snapshot
+           and route_row.reference_context_snapshot #>>
+             '{resolutionDecision,loadedByTrustedServiceId}' =
+               resolution_row.resolver_trusted_service_id
+           and route_row.reference_context_snapshot #>>
+             '{resolutionDecision,availabilityObservation,state}' = 'available'
+           and route_row.reference_context_snapshot #>>
+             '{resolutionDecision,availabilityObservation,tenantId}' =
+               route_row.tenant_id
+           and route_row.reference_context_snapshot #>
+             '{resolutionDecision,availabilityObservation,externalThread}' =
+               route_row.reference_context_snapshot #> '{externalThread}'
+           and route_row.reference_context_snapshot #>
+             '{resolutionDecision,availabilityObservation,externalMessageReference}' =
+               route_row.reference_context_snapshot #>
+                 '{externalMessageReference}'
+           and route_row.reference_context_snapshot #>
+             '{resolutionDecision,availabilityObservation,sourceOccurrence}' =
+               route_row.reference_context_snapshot #> '{sourceOccurrence}'
+           and route_row.reference_context_snapshot #>>
+             '{resolutionDecision,availabilityObservation,occurrenceRevision}' =
+               occurrence_row.revision::text
+           and route_row.reference_context_snapshot #>>
+             '{resolutionDecision,availabilityObservation,occurrenceDescriptorDigestSha256}' =
+               occurrence_row.descriptor_digest_sha256
+           and route_row.reference_context_snapshot #>
+             '{resolutionDecision,availabilityObservation,adapterContract}' =
+               route_row.adapter_contract_snapshot
+           and route_row.reference_context_snapshot #>>
+             '{resolutionDecision,availabilityObservation,observedByTrustedServiceId}' =
+               occurrence_row.adapter_loaded_by_trusted_service_id
+           and route_row.reference_context_snapshot #>
+             '{resolutionDecision,availabilityObservation,diagnostic}' =
+               'null'::jsonb
+           and (route_row.reference_context_snapshot #>>
+             '{resolutionDecision,availabilityObservation,observedAt}')::timestamptz
+               <= expected_authority_at
+           and (route_row.reference_context_snapshot #>>
+             '{resolutionDecision,availabilityObservation,notAfter}')::timestamptz
+               >= expected_authority_at
+           and (
+             route_row.reference_context_snapshot #>>
+               '{portability,kind}' <> 'binding_only'
+             or (
+               occurrence_row.source_thread_binding_id =
+                 route_row.source_thread_binding_id
+               and occurrence_row.source_account_id =
+                 route_row.source_account_id
+               and occurrence_row.binding_generation =
+                 route_row.binding_generation
+             )
+           )
+           and (
+             route_row.selection_intent_kind <> 'explicit_occurrence'
+             or (
+               route_row.selection_reason = 'explicit_occurrence'
+               and route_row.selection_intent_snapshot #>>
+                 '{occurrence,id}' = occurrence_row.id
+               and occurrence_row.source_thread_binding_id =
+                 route_row.source_thread_binding_id
+               and occurrence_row.source_account_id =
+                 route_row.source_account_id
+               and occurrence_row.binding_generation =
+                 route_row.binding_generation
+             )
+           )
          )
        )
        and (
@@ -8894,14 +9040,17 @@ declare
   message_kind public.inbox_v2_message_reference_kind;
   context_kind public.inbox_v2_message_reference_context_kind;
   provenance public.inbox_v2_provider_forward_provenance;
+  message_origin public.inbox_v2_message_origin_kind;
   message_conversation_id text;
   canonical_count integer;
   external_count integer;
   unresolved_count integer;
 begin
   select message_row.reference_kind, context_row.kind,
-         context_row.provenance_completeness, message_row.conversation_id
-    into message_kind, context_kind, provenance, message_conversation_id
+         context_row.provenance_completeness, message_row.origin_kind,
+         message_row.conversation_id
+    into message_kind, context_kind, provenance, message_origin,
+         message_conversation_id
     from public.inbox_v2_messages message_row
     left join public.inbox_v2_message_reference_contexts context_row
       on context_row.tenant_id = message_row.tenant_id
@@ -8939,7 +9088,7 @@ begin
       and external_count = 0 and unresolved_count = 0)
     or (message_kind = 'forward_provider_native'
       and context_kind = 'forward_provider_native'
-      and external_count between 1 and 32
+      and external_count = 1
       and canonical_count = 0 and unresolved_count = 0)
     or (message_kind = 'forward_provider_observed'
       and context_kind = 'forward_provider_observed'
@@ -9002,6 +9151,140 @@ begin
   ) then
     raise exception using errcode = '23514',
       message = 'inbox_v2.message_reply_target_identity_mismatch';
+  end if;
+
+  if message_kind = 'forward_content_copy'
+     and message_origin = 'hulee_external' then
+    perform 1
+      from public.inbox_v2_message_reference_canonical_targets canonical_row
+      join public.inbox_v2_message_revisions source_revision
+        on source_revision.tenant_id = canonical_row.tenant_id
+       and source_revision.message_id = canonical_row.target_message_id
+       and source_revision.timeline_item_id =
+         canonical_row.target_timeline_item_id
+       and source_revision.message_revision =
+         canonical_row.target_message_revision
+      join public.inbox_v2_messages source_message
+        on source_message.tenant_id = source_revision.tenant_id
+       and source_message.id = source_revision.message_id
+       and source_message.timeline_item_id = source_revision.timeline_item_id
+       and source_message.revision = source_revision.message_revision
+       and source_message.lifecycle = 'active'
+       and source_message.content_id = source_revision.after_content_id
+       and source_message.content_revision =
+         source_revision.after_content_revision
+       and source_message.content_state = source_revision.after_content_state
+      join public.inbox_v2_timeline_contents source_content
+        on source_content.tenant_id = source_message.tenant_id
+       and source_content.id = source_message.content_id
+       and source_content.owner_kind = 'message'
+       and source_content.owner_id = source_message.id
+       and source_content.revision = source_message.content_revision
+       and source_content.state = 'available'
+      join public.inbox_v2_messages destination_message
+        on destination_message.tenant_id = canonical_row.tenant_id
+       and destination_message.id = canonical_row.message_id
+       and destination_message.origin_kind = 'hulee_external'
+      join public.inbox_v2_timeline_contents destination_content
+        on destination_content.tenant_id = destination_message.tenant_id
+       and destination_content.id = destination_message.content_id
+       and destination_content.owner_kind = 'message'
+       and destination_content.owner_id = destination_message.id
+       and destination_content.revision = destination_message.content_revision
+       and destination_content.state = 'available'
+     where canonical_row.tenant_id = tenant_key
+       and canonical_row.message_id = message_key
+       and canonical_count = 1
+       and source_revision.after_content_state = 'available'
+       and source_content.content_digest_sha256 is not null
+       and destination_content.content_digest_sha256 is not null
+       -- Content-copy preserves every ordered semantic field and immutable
+       -- file/object pin. MessageAttachment ids are deliberately excluded:
+       -- they are owner-scoped anchors and the destination must receive a new
+       -- one. Keeping the comparison relational lets PostgreSQL validate the
+       -- copy independently from the application-level normalized digest.
+       and (
+         select coalesce(
+           jsonb_agg(
+             to_jsonb(source_payload) - array[
+               'content_id', 'content_revision', 'attachment_id', 'created_at'
+             ]::text[]
+             order by source_payload.ordinal
+           ),
+           '[]'::jsonb
+         )
+           from public.inbox_v2_timeline_content_payloads source_payload
+          where source_payload.tenant_id = source_content.tenant_id
+            and source_payload.content_id = source_content.id
+            and source_payload.content_revision = source_content.revision
+       ) = (
+         select coalesce(
+           jsonb_agg(
+             to_jsonb(destination_payload) - array[
+               'content_id', 'content_revision', 'attachment_id', 'created_at'
+             ]::text[]
+             order by destination_payload.ordinal
+           ),
+           '[]'::jsonb
+         )
+           from public.inbox_v2_timeline_content_payloads destination_payload
+          where destination_payload.tenant_id = destination_content.tenant_id
+            and destination_payload.content_id = destination_content.id
+            and destination_payload.content_revision =
+              destination_content.revision
+       )
+       and (
+         select coalesce(
+           jsonb_agg(
+             to_jsonb(source_value) - array[
+               'content_id', 'content_revision'
+             ]::text[]
+             order by source_value.block_ordinal, source_value.value_ordinal
+           ),
+           '[]'::jsonb
+         )
+           from public.inbox_v2_timeline_content_contact_values source_value
+          where source_value.tenant_id = source_content.tenant_id
+            and source_value.content_id = source_content.id
+            and source_value.content_revision = source_content.revision
+       ) = (
+         select coalesce(
+           jsonb_agg(
+             to_jsonb(destination_value) - array[
+               'content_id', 'content_revision'
+             ]::text[]
+             order by destination_value.block_ordinal,
+                      destination_value.value_ordinal
+           ),
+           '[]'::jsonb
+         )
+           from public.inbox_v2_timeline_content_contact_values destination_value
+          where destination_value.tenant_id = destination_content.tenant_id
+            and destination_value.content_id = destination_content.id
+            and destination_value.content_revision =
+              destination_content.revision
+       )
+       and not exists (
+         select 1
+           from public.inbox_v2_timeline_content_payloads source_payload
+           join public.inbox_v2_timeline_content_payloads destination_payload
+             on destination_payload.tenant_id = source_payload.tenant_id
+            and destination_payload.content_id = destination_content.id
+            and destination_payload.content_revision =
+              destination_content.revision
+            and destination_payload.attachment_id =
+              source_payload.attachment_id
+          where source_payload.tenant_id = source_content.tenant_id
+            and source_payload.content_id = source_content.id
+            and source_payload.content_revision = source_content.revision
+            and source_payload.attachment_id is not null
+       )
+     for share of source_message, source_content;
+
+    if not found then
+      raise exception using errcode = '23514',
+        message = 'inbox_v2.message_content_copy_source_drift';
+    end if;
   end if;
 
   if exists (
@@ -9438,9 +9721,9 @@ begin
              when 'none' then 'core:message.reply_external'
              when 'reply' then 'core:message.reply_external'
              when 'forward_content_copy' then
-               'core:message.forward_content_copy_external'
+               'core:message.forward_external'
              when 'forward_provider_native' then
-               'core:message.forward_provider_native_external'
+               'core:message.forward_external'
            end,
            case when context_row.kind in ('reply', 'forward_provider_native')
              then external_target.external_message_reference_id

@@ -1781,14 +1781,26 @@ future non-chat items without a universal JSON message.
     Detailed evidence is in
     `docs/product/inbox-v2-msg-003-typed-content-and-attachments.md`.
 
-- [ ] `INB2-MSG-004` Implement reply and forward semantics.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-MSG-002`.
+- [x] `INB2-MSG-004` Implement reply and forward semantics.
+  - State: `done`; Priority: `P0`; Started: `2026-07-19`; Completed:
+    `2026-07-19`; Owner: `Codex`; Depends on: `INB2-MSG-002`.
   - Acceptance: reply preserves exact occurrence/binding/reference portability;
     explicit occurrence cannot fall back, and content copy/send-as-new and
     provider-native forward are distinct capabilities.
   - Verification: group-destination-not-sender, quoted route token, original
     deleted/unavailable, cross-route and unsupported forward fixtures return
-    defined outcomes without falsifying reply semantics. Evidence: -
+    defined outcomes without falsifying reply semantics. Evidence: reply binds
+    the exact immutable occurrence/reference/route and portability proof;
+    content-copy preserves canonical source provenance while remapping attachment
+    anchors under independent SQL equivalence checks; provider-native forward is
+    a separate fail-closed capability. Focused suites passed `11/11` files /
+    `710/710`; real PostgreSQL passed `33/33` files / `342` tests (`6` skipped),
+    preserve/N-1/RBAC passed `3/3` / `17/17`, and default Vitest passed `375`
+    files / `4,125` tests (`43` files / `396` tests skipped). Typecheck,
+    `db:check`, reproducible N-1 bundle, task-scoped lint/format and auxiliary
+    repository checks passed; independent final review returned `READY`.
+    Detailed evidence is in
+    `docs/product/inbox-v2-msg-004-reply-and-forward.md`.
 
 - [ ] `INB2-MSG-005` Implement edit/delete revisions and tombstones.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-MSG-002`,
@@ -3240,3 +3252,4 @@ the task state, checkbox and evidence above.
 | 2026-07-18 | `INB2-EPIC-3-GATE` | Source 82/1127; PG 30/294; preserve 3/17; clean full 352/3679 + all gates  | task commit  | Codex + independent final review  |
 | 2026-07-18 | `INB2-MSG-002`     | Scoped 16/373; PG 32/322; preserve 3/17; full 356/3808 + all gates         | task commit  | Codex + independent final reviews |
 | 2026-07-19 | `INB2-MSG-003`     | Typed media/storage; PG 33/341; preserve 3/17; full 374/4077 + all gates   | task commit  | Codex + independent audits        |
+| 2026-07-19 | `INB2-MSG-004`     | Reply/forward; PG 33/342; preserve 3/17; full 375/4125 + all gates         | task commit  | Codex + independent final review  |

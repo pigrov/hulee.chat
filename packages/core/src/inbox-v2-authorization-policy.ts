@@ -815,20 +815,64 @@ type InboxV2NotificationTargetReadGuard = Readonly<{
   targetReadRequirementId: string;
 }>;
 
+type InboxV2ExternalReferencePortability =
+  | "binding_only"
+  | "external_thread"
+  | "provider_global";
+
+type InboxV2ProviderGlobalReferenceProof = Readonly<{
+  resource: InboxV2EntityKey;
+  sourceReferenceResource: InboxV2EntityKey;
+  sourceOccurrenceResource: InboxV2EntityKey;
+  originBindingResource: InboxV2EntityKey;
+  originSourceAccountResource: InboxV2EntityKey;
+  destinationBindingResource: InboxV2EntityKey;
+  destinationSourceAccountResource: InboxV2EntityKey;
+  providerContractResource: InboxV2EntityKey;
+  originSourceAccountProviderContractResource: InboxV2EntityKey;
+  destinationSourceAccountProviderContractResource: InboxV2EntityKey;
+  revisionChecks: readonly InboxV2PolicyRevisionCheck[];
+  resourceRevisionChecks: readonly InboxV2KeyedRevisionCheck[];
+  notAfter: InboxV2PolicyTimestamp;
+}>;
+
 type InboxV2ExternalRouteOperationEvidence =
   | Readonly<{
       kind: "reply";
-      mode: "new_response" | "provider_reference";
-      sourceReadRequirementId: string | null;
-      sourceReadResource: InboxV2EntityKey | null;
-      sourceTimelineItemResource: InboxV2EntityKey | null;
-      sourceOccurrenceResource: InboxV2EntityKey | null;
-      occurrenceTimelineItemResource: InboxV2EntityKey | null;
-      occurrenceReferenceResource: InboxV2EntityKey | null;
-      occurrenceBindingResource: InboxV2EntityKey | null;
-      sourceReferenceResource: InboxV2EntityKey | null;
-      referenceTimelineItemResource: InboxV2EntityKey | null;
-      referenceBindingResource: InboxV2EntityKey | null;
+      mode: "new_response";
+      sourceReadRequirementId: null;
+      sourceReadResource: null;
+      sourceTimelineItemResource: null;
+      sourceOccurrenceResource: null;
+      occurrenceTimelineItemResource: null;
+      occurrenceReferenceResource: null;
+      occurrenceBindingResource: null;
+      sourceReferenceResource: null;
+      referenceTimelineItemResource: null;
+      referenceBindingResource: null;
+      revisionChecks: readonly InboxV2PolicyRevisionCheck[];
+      resourceRevisionChecks: readonly InboxV2KeyedRevisionCheck[];
+    }>
+  | Readonly<{
+      kind: "reply";
+      mode: "provider_reference";
+      sourceReadRequirementId: string;
+      sourceReadResource: InboxV2EntityKey;
+      sourceTimelineItemResource: InboxV2EntityKey;
+      sourceOccurrenceResource: InboxV2EntityKey;
+      occurrenceTimelineItemResource: InboxV2EntityKey;
+      occurrenceReferenceResource: InboxV2EntityKey;
+      occurrenceBindingResource: InboxV2EntityKey;
+      sourceReferenceResource: InboxV2EntityKey;
+      referenceTimelineItemResource: InboxV2EntityKey;
+      referenceBindingResource: InboxV2EntityKey;
+      sourceBindingResource: InboxV2EntityKey;
+      bindingConversationResource: InboxV2EntityKey;
+      bindingExternalThreadResource: InboxV2EntityKey;
+      bindingSourceAccountResource: InboxV2EntityKey;
+      sourceExternalThreadResource: InboxV2EntityKey;
+      portability: InboxV2ExternalReferencePortability;
+      providerGlobalProof: InboxV2ProviderGlobalReferenceProof | null;
       revisionChecks: readonly InboxV2PolicyRevisionCheck[];
       resourceRevisionChecks: readonly InboxV2KeyedRevisionCheck[];
     }>
@@ -862,21 +906,7 @@ type InboxV2ExternalRouteOperationEvidence =
         | "binding_only"
         | "external_thread"
         | "provider_global";
-      providerGlobalProof: Readonly<{
-        resource: InboxV2EntityKey;
-        sourceReferenceResource: InboxV2EntityKey;
-        sourceOccurrenceResource: InboxV2EntityKey;
-        originBindingResource: InboxV2EntityKey;
-        originSourceAccountResource: InboxV2EntityKey;
-        destinationBindingResource: InboxV2EntityKey;
-        destinationSourceAccountResource: InboxV2EntityKey;
-        providerContractResource: InboxV2EntityKey;
-        originSourceAccountProviderContractResource: InboxV2EntityKey;
-        destinationSourceAccountProviderContractResource: InboxV2EntityKey;
-        revisionChecks: readonly InboxV2PolicyRevisionCheck[];
-        resourceRevisionChecks: readonly InboxV2KeyedRevisionCheck[];
-        notAfter: InboxV2PolicyTimestamp;
-      }> | null;
+      providerGlobalProof: InboxV2ProviderGlobalReferenceProof | null;
       occurrenceRevisionChecks: readonly InboxV2PolicyRevisionCheck[];
       nativeResourceRevisionChecks: readonly InboxV2KeyedRevisionCheck[];
     }>
@@ -12133,7 +12163,9 @@ function evaluateExternalRouteGuard(
     guard.capabilityNotAfter,
     policy.notAfter,
     ...(structural === null ? [] : [structural.notAfter]),
-    ...(guard.operation.kind === "forward" &&
+    ...((guard.operation.kind === "forward" ||
+      (guard.operation.kind === "reply" &&
+        guard.operation.mode === "provider_reference")) &&
     guard.operation.providerGlobalProof !== null
       ? [guard.operation.providerGlobalProof.notAfter]
       : []),
@@ -12167,63 +12199,132 @@ function externalRouteOperationEvidenceIsValid(
         operation.resourceRevisionChecks.length === 0
       );
     }
-    return (
+    if (
       operation.sourceReadRequirementId !== null &&
-      operation.sourceReadResource?.entityTypeId === "core:conversation" &&
-      sameNullableEntityKey(
-        operation.sourceReadResource,
-        guard.conversationResource
-      ) &&
-      operation.sourceTimelineItemResource?.entityTypeId ===
+      operation.sourceReadResource.entityTypeId === "core:conversation" &&
+      sameEntityKey(operation.sourceReadResource, guard.conversationResource) &&
+      operation.sourceTimelineItemResource.entityTypeId ===
         "core:timeline-item" &&
-      operation.sourceOccurrenceResource?.entityTypeId ===
+      operation.sourceOccurrenceResource.entityTypeId ===
         "core:source-occurrence" &&
-      operation.sourceReferenceResource?.entityTypeId ===
+      operation.sourceReferenceResource.entityTypeId ===
         "core:external-message-reference" &&
-      sameNullableEntityKey(
+      operation.sourceBindingResource.entityTypeId ===
+        "core:source-thread-binding" &&
+      operation.bindingSourceAccountResource.entityTypeId ===
+        "core:source-account" &&
+      operation.sourceExternalThreadResource.entityTypeId ===
+        "core:external-thread" &&
+      sameEntityKey(
         operation.occurrenceTimelineItemResource,
         operation.sourceTimelineItemResource
       ) &&
-      sameNullableEntityKey(
+      sameEntityKey(
         operation.occurrenceReferenceResource,
         operation.sourceReferenceResource
       ) &&
-      sameNullableEntityKey(
+      sameEntityKey(
         operation.occurrenceBindingResource,
-        guard.bindingResource
+        operation.sourceBindingResource
       ) &&
-      sameNullableEntityKey(
+      sameEntityKey(
         operation.referenceTimelineItemResource,
         operation.sourceTimelineItemResource
       ) &&
-      sameNullableEntityKey(
+      sameEntityKey(
         operation.referenceBindingResource,
-        guard.bindingResource
+        operation.sourceBindingResource
+      ) &&
+      sameEntityKey(
+        operation.bindingConversationResource,
+        operation.sourceReadResource
+      ) &&
+      sameEntityKey(
+        operation.bindingExternalThreadResource,
+        operation.sourceExternalThreadResource
+      ) &&
+      sameEntityKey(
+        operation.sourceExternalThreadResource,
+        guard.externalThreadResource
       ) &&
       [
         operation.sourceReadResource,
         operation.sourceTimelineItemResource,
         operation.sourceOccurrenceResource,
-        operation.sourceReferenceResource
+        operation.sourceReferenceResource,
+        operation.sourceBindingResource,
+        operation.bindingConversationResource,
+        operation.bindingExternalThreadResource,
+        operation.bindingSourceAccountResource,
+        operation.sourceExternalThreadResource
       ].every(
-        (resource) => resource?.tenantId === guard.targetResource.tenantId
+        (resource) => resource.tenantId === guard.targetResource.tenantId
       ) &&
       routeRevisionSetIsCurrent(operation.revisionChecks) &&
       exactKeyedRevisionSetIsCurrent(
         operation.resourceRevisionChecks,
-        uniqueEntityResources(
-          [
-            operation.sourceReadResource,
-            operation.sourceTimelineItemResource,
-            operation.sourceOccurrenceResource,
-            operation.sourceReferenceResource,
-            guard.bindingResource
-          ].filter(
-            (resource): resource is InboxV2EntityKey => resource !== null
-          )
-        )
+        uniqueEntityResources([
+          operation.sourceReadResource,
+          operation.sourceTimelineItemResource,
+          operation.sourceOccurrenceResource,
+          operation.sourceReferenceResource,
+          operation.sourceBindingResource,
+          operation.bindingSourceAccountResource,
+          operation.sourceExternalThreadResource
+        ])
       )
-    );
+    ) {
+      if (operation.portability === "binding_only") {
+        return (
+          operation.providerGlobalProof === null &&
+          sameEntityKey(
+            operation.sourceBindingResource,
+            guard.bindingResource
+          ) &&
+          sameEntityKey(
+            operation.bindingConversationResource,
+            guard.bindingConversationResource
+          ) &&
+          sameEntityKey(
+            operation.bindingExternalThreadResource,
+            guard.bindingExternalThreadResource
+          ) &&
+          sameEntityKey(
+            operation.bindingSourceAccountResource,
+            guard.bindingSourceAccountResource
+          )
+        );
+      }
+      if (operation.portability === "external_thread") {
+        return (
+          operation.providerGlobalProof === null &&
+          sameEntityKey(
+            operation.bindingConversationResource,
+            guard.bindingConversationResource
+          ) &&
+          sameEntityKey(
+            operation.sourceExternalThreadResource,
+            guard.externalThreadResource
+          ) &&
+          sameEntityKey(
+            operation.bindingExternalThreadResource,
+            guard.bindingExternalThreadResource
+          )
+        );
+      }
+      return providerGlobalReferenceProofIsValid({
+        proof: operation.providerGlobalProof,
+        sourceReferenceResource: operation.sourceReferenceResource,
+        sourceOccurrenceResource: operation.sourceOccurrenceResource,
+        originBindingResource: operation.sourceBindingResource,
+        originSourceAccountResource: operation.bindingSourceAccountResource,
+        destinationBindingResource: guard.bindingResource,
+        destinationSourceAccountResource: guard.bindingSourceAccountResource,
+        tenantId: guard.targetResource.tenantId,
+        evaluatedAt
+      });
+    }
+    return false;
   }
   if (operation.kind === "forward") {
     if (
@@ -12395,62 +12496,17 @@ function externalRouteOperationEvidenceIsValid(
         )
       );
     }
-    const proof = operation.providerGlobalProof;
-    return (
-      proof?.resource.entityTypeId === "core:reference-portability-proof" &&
-      proof.resource.tenantId === guard.targetResource.tenantId &&
-      sameEntityKey(
-        proof.sourceReferenceResource,
-        operation.sourceReferenceResource
-      ) &&
-      sameEntityKey(
-        proof.sourceOccurrenceResource,
-        operation.sourceOccurrenceResource
-      ) &&
-      sameEntityKey(
-        proof.originBindingResource,
-        operation.sourceBindingResource
-      ) &&
-      sameEntityKey(
-        proof.originSourceAccountResource,
-        operation.bindingSourceAccountResource
-      ) &&
-      sameEntityKey(proof.destinationBindingResource, guard.bindingResource) &&
-      sameEntityKey(
-        proof.destinationSourceAccountResource,
-        guard.bindingSourceAccountResource
-      ) &&
-      proof.providerContractResource.entityTypeId ===
-        "core:adapter-contract-snapshot" &&
-      proof.providerContractResource.tenantId ===
-        guard.targetResource.tenantId &&
-      sameEntityKey(
-        proof.originSourceAccountProviderContractResource,
-        proof.providerContractResource
-      ) &&
-      sameEntityKey(
-        proof.destinationSourceAccountProviderContractResource,
-        proof.providerContractResource
-      ) &&
-      proof.revisionChecks.length > 0 &&
-      proof.revisionChecks.every((check) => check.expected === check.actual) &&
-      proof.revisionChecks.some((check) => check.kind === "binding") &&
-      proof.revisionChecks.some((check) => check.kind === "manifest") &&
-      exactKeyedRevisionSetIsCurrent(
-        proof.resourceRevisionChecks,
-        uniqueEntityResources([
-          proof.resource,
-          proof.sourceReferenceResource,
-          proof.sourceOccurrenceResource,
-          proof.originBindingResource,
-          proof.originSourceAccountResource,
-          proof.destinationBindingResource,
-          proof.destinationSourceAccountResource,
-          proof.providerContractResource
-        ])
-      ) &&
-      isStrictlyAfter(proof.notAfter, evaluatedAt)
-    );
+    return providerGlobalReferenceProofIsValid({
+      proof: operation.providerGlobalProof,
+      sourceReferenceResource: operation.sourceReferenceResource,
+      sourceOccurrenceResource: operation.sourceOccurrenceResource,
+      originBindingResource: operation.sourceBindingResource,
+      originSourceAccountResource: operation.bindingSourceAccountResource,
+      destinationBindingResource: guard.bindingResource,
+      destinationSourceAccountResource: guard.bindingSourceAccountResource,
+      tenantId: guard.targetResource.tenantId,
+      evaluatedAt
+    });
   }
   if (operation.kind === "multi_send") {
     const operationRequirementIds = operation.destinations.map(
@@ -12614,6 +12670,77 @@ function externalRouteOperationEvidenceIsValid(
     operation.capabilityRevisionChecks.some(
       (check) => check.kind === "manifest"
     )
+  );
+}
+
+function providerGlobalReferenceProofIsValid(
+  input: Readonly<{
+    proof: InboxV2ProviderGlobalReferenceProof | null;
+    sourceReferenceResource: InboxV2EntityKey;
+    sourceOccurrenceResource: InboxV2EntityKey;
+    originBindingResource: InboxV2EntityKey;
+    originSourceAccountResource: InboxV2EntityKey;
+    destinationBindingResource: InboxV2EntityKey;
+    destinationSourceAccountResource: InboxV2EntityKey;
+    tenantId: InboxV2TenantId;
+    evaluatedAt: InboxV2PolicyTimestamp;
+  }>
+): boolean {
+  const proof = input.proof;
+  return (
+    proof !== null &&
+    proof.resource.entityTypeId === "core:reference-portability-proof" &&
+    proof.resource.tenantId === input.tenantId &&
+    sameEntityKey(
+      proof.sourceReferenceResource,
+      input.sourceReferenceResource
+    ) &&
+    sameEntityKey(
+      proof.sourceOccurrenceResource,
+      input.sourceOccurrenceResource
+    ) &&
+    sameEntityKey(proof.originBindingResource, input.originBindingResource) &&
+    sameEntityKey(
+      proof.originSourceAccountResource,
+      input.originSourceAccountResource
+    ) &&
+    sameEntityKey(
+      proof.destinationBindingResource,
+      input.destinationBindingResource
+    ) &&
+    sameEntityKey(
+      proof.destinationSourceAccountResource,
+      input.destinationSourceAccountResource
+    ) &&
+    proof.providerContractResource.entityTypeId ===
+      "core:adapter-contract-snapshot" &&
+    proof.providerContractResource.tenantId === input.tenantId &&
+    sameEntityKey(
+      proof.originSourceAccountProviderContractResource,
+      proof.providerContractResource
+    ) &&
+    sameEntityKey(
+      proof.destinationSourceAccountProviderContractResource,
+      proof.providerContractResource
+    ) &&
+    proof.revisionChecks.length > 0 &&
+    proof.revisionChecks.every((check) => check.expected === check.actual) &&
+    proof.revisionChecks.some((check) => check.kind === "binding") &&
+    proof.revisionChecks.some((check) => check.kind === "manifest") &&
+    exactKeyedRevisionSetIsCurrent(
+      proof.resourceRevisionChecks,
+      uniqueEntityResources([
+        proof.resource,
+        proof.sourceReferenceResource,
+        proof.sourceOccurrenceResource,
+        proof.originBindingResource,
+        proof.originSourceAccountResource,
+        proof.destinationBindingResource,
+        proof.destinationSourceAccountResource,
+        proof.providerContractResource
+      ])
+    ) &&
+    isStrictlyAfter(proof.notAfter, input.evaluatedAt)
   );
 }
 
@@ -13191,13 +13318,6 @@ function sameEntityKey(
     left.entityTypeId === right.entityTypeId &&
     left.entityId === right.entityId
   );
-}
-
-function sameNullableEntityKey(
-  left: InboxV2EntityKey | null,
-  right: InboxV2EntityKey | null
-): boolean {
-  return left !== null && right !== null && sameEntityKey(left, right);
 }
 
 function entityKeyString(resource: InboxV2EntityKey): string {

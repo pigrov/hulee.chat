@@ -22,7 +22,10 @@ import {
   inboxV2ThreadRoutePolicyIdSchema,
   inboxV2ThreadRoutePolicyReferenceSchema
 } from "./ids";
-import { inboxV2ExternalReferencePortabilitySchema } from "./external-message-reference";
+import {
+  inboxV2ExternalReferencePortabilitySchema,
+  inboxV2SourceOccurrenceDescriptorSchema
+} from "./external-message-reference";
 import { inboxV2AuthorizationEpochSchema } from "./authorization-epoch";
 import {
   inboxV2AdapterContractSnapshotSchema,
@@ -65,6 +68,7 @@ const routeErrorCodes = [
   "route.binding_changed",
   "route.policy_changed",
   "route.capability_missing",
+  "route.reference_unavailable",
   "route.reference_nonportable",
   "route.reply_window_expired",
   "route.audience_mismatch",
@@ -81,6 +85,7 @@ const routeRetryabilityByCode = {
   "route.binding_changed": "retryable_resolution",
   "route.policy_changed": "retryable_resolution",
   "route.capability_missing": "terminal",
+  "route.reference_unavailable": "terminal",
   "route.reference_nonportable": "terminal",
   "route.reply_window_expired": "terminal",
   "route.audience_mismatch": "terminal",
@@ -327,6 +332,90 @@ export const inboxV2OutboundRouteIntentSchema = z.discriminatedUnion("kind", [
     })
 ]);
 
+export const inboxV2OutboundReferenceAvailabilityStateSchema = z.enum([
+  "available",
+  "provider_deleted",
+  "provider_unavailable",
+  "unknown"
+]);
+
+/**
+ * A bounded trusted observation for the exact provider reference used by a
+ * reply or provider-native forward. It deliberately binds the canonical
+ * reference, occurrence revision and descriptor digest, so a caller cannot
+ * reuse an availability bit for another provider message.
+ */
+export const inboxV2OutboundReferenceAvailabilityObservationSchema = z
+  .object({
+    observationKind: z.literal("external_message_reference_availability"),
+    tenantId: inboxV2TenantIdSchema,
+    externalThread: inboxV2ExternalThreadReferenceSchema,
+    externalMessageReference: inboxV2ExternalMessageReferenceRefSchema,
+    sourceOccurrence: inboxV2SourceOccurrenceReferenceSchema,
+    occurrenceRevision: inboxV2EntityRevisionSchema,
+    occurrenceDescriptorDigestSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+    adapterContract: inboxV2AdapterContractSnapshotSchema,
+    state: inboxV2OutboundReferenceAvailabilityStateSchema,
+    diagnostic: inboxV2SafeSourceDiagnosticSchema.nullable(),
+    observationToken: inboxV2RoutingTokenSchema,
+    observedByTrustedServiceId: inboxV2RoutingTrustedServiceIdSchema,
+    observedAt: inboxV2TimestampSchema,
+    notAfter: inboxV2TimestampSchema
+  })
+  .strict()
+  .superRefine((observation, context) => {
+    for (const [field, reference] of [
+      ["externalThread", observation.externalThread],
+      ["externalMessageReference", observation.externalMessageReference],
+      ["sourceOccurrence", observation.sourceOccurrence]
+    ] as const) {
+      addTenantReferenceIssue(context, observation.tenantId, reference, [
+        field
+      ]);
+    }
+    if (
+      !isInboxV2TimestampOrderValid(
+        observation.adapterContract.loadedAt,
+        observation.observedAt
+      )
+    ) {
+      addIssue(
+        context,
+        ["observedAt"],
+        "Reference availability cannot predate its pinned adapter contract."
+      );
+    }
+    if (
+      !isInboxV2TimestampOrderValid(
+        observation.observedAt,
+        observation.notAfter
+      )
+    ) {
+      addIssue(
+        context,
+        ["notAfter"],
+        "Reference-availability evidence cannot expire before it is observed."
+      );
+    }
+    if (
+      observation.observedByTrustedServiceId !==
+      observation.adapterContract.loadedByTrustedServiceId
+    ) {
+      addIssue(
+        context,
+        ["observedByTrustedServiceId"],
+        "Reference availability must be observed by the trusted service pinned by the adapter contract."
+      );
+    }
+    if (observation.state === "available" && observation.diagnostic !== null) {
+      addIssue(
+        context,
+        ["diagnostic"],
+        "An available provider reference cannot retain a failure diagnostic."
+      );
+    }
+  });
+
 /** Trusted, bounded proof that the exact occurrence owns this reference. */
 export const inboxV2OutboundReferenceResolutionDecisionSchema = z
   .object({
@@ -339,7 +428,10 @@ export const inboxV2OutboundReferenceResolutionDecisionSchema = z
     originSourceAccount: inboxV2SourceAccountReferenceSchema,
     occurrenceRevision: inboxV2EntityRevisionSchema,
     occurrenceBindingGeneration: inboxV2EntityRevisionSchema,
+    occurrenceDescriptor: inboxV2SourceOccurrenceDescriptorSchema,
     portability: inboxV2ExternalReferencePortabilitySchema,
+    availabilityObservation:
+      inboxV2OutboundReferenceAvailabilityObservationSchema,
     referenceWindow: z.discriminatedUnion("state", [
       z.object({ state: z.literal("not_applicable") }).strict(),
       z
@@ -379,6 +471,19 @@ export const inboxV2OutboundReferenceResolutionDecisionSchema = z
         "Reference-resolution authority cannot expire before it is decided."
       );
     }
+    if (
+      !sameAdapterContractSnapshot(
+        decision.occurrenceDescriptor.adapterContract,
+        decision.portability.adapterContract
+      )
+    ) {
+      addIssue(
+        context,
+        ["occurrenceDescriptor", "adapterContract"],
+        "Occurrence descriptor and portability must use one pinned adapter contract."
+      );
+    }
+    addReferenceAvailabilityDecisionIssues(context, decision);
   });
 
 export const inboxV2OutboundRouteReferenceContextSchema = z.discriminatedUnion(
@@ -838,7 +943,7 @@ export function resolveInboxV2OutboundRoute(
   }
 
   const fallback = request.candidates.fallbackCandidate;
-  if (fallback !== null) {
+  if (fallback !== null && request.referenceContext.kind === "none") {
     return {
       kind: "selected",
       candidate: fallback.candidate,
@@ -1096,6 +1201,15 @@ export type InboxV2ThreadRoutePolicy = z.infer<
 >;
 export type InboxV2OutboundRouteIntent = z.infer<
   typeof inboxV2OutboundRouteIntentSchema
+>;
+export type InboxV2OutboundReferenceAvailabilityState = z.infer<
+  typeof inboxV2OutboundReferenceAvailabilityStateSchema
+>;
+export type InboxV2OutboundReferenceAvailabilityObservation = z.infer<
+  typeof inboxV2OutboundReferenceAvailabilityObservationSchema
+>;
+export type InboxV2OutboundReferenceResolutionDecision = z.infer<
+  typeof inboxV2OutboundReferenceResolutionDecisionSchema
 >;
 export type InboxV2OutboundRouteReferenceContext = z.infer<
   typeof inboxV2OutboundRouteReferenceContextSchema
@@ -1507,6 +1621,7 @@ function addResolutionPolicySlotIssues(
 ): void {
   const { preferredCandidate, soleEligibleCandidate, fallbackCandidate } =
     input.candidates;
+  const appliesToSelection = input.intent.kind === "automatic";
   if (preferredCandidate !== null) {
     if (
       input.routePolicy.preferredBinding === null ||
@@ -1521,15 +1636,17 @@ function addResolutionPolicySlotIssues(
         "Preferred candidate must be the exact current policy preference."
       );
     }
-    addSelectableReferenceCompatibilityIssue(
-      context,
-      preferredCandidate,
-      input.referenceContext,
-      input.requestedAt,
-      ["candidates", "preferredCandidate"]
-    );
+    if (appliesToSelection) {
+      addSelectableReferenceCompatibilityIssue(
+        context,
+        preferredCandidate,
+        input.referenceContext,
+        input.requestedAt,
+        ["candidates", "preferredCandidate"]
+      );
+    }
   }
-  if (soleEligibleCandidate !== null) {
+  if (soleEligibleCandidate !== null && appliesToSelection) {
     addSelectableReferenceCompatibilityIssue(
       context,
       soleEligibleCandidate,
@@ -1561,13 +1678,15 @@ function addResolutionPolicySlotIssues(
         );
       }
     }
-    addSelectableReferenceCompatibilityIssue(
-      context,
-      fallbackCandidate.candidate,
-      input.referenceContext,
-      input.requestedAt,
-      ["candidates", "fallbackCandidate", "candidate"]
-    );
+    if (appliesToSelection) {
+      addSelectableReferenceCompatibilityIssue(
+        context,
+        fallbackCandidate.candidate,
+        input.referenceContext,
+        input.requestedAt,
+        ["candidates", "fallbackCandidate", "candidate"]
+      );
+    }
   }
 }
 
@@ -1619,6 +1738,12 @@ function referenceCompatibilityError(
     !sameReference(candidate.externalThread, referenceContext.externalThread)
   ) {
     return routeError("route.audience_mismatch");
+  }
+  if (
+    referenceContext.resolutionDecision.availabilityObservation.state !==
+    "available"
+  ) {
+    return routeError("route.reference_unavailable");
   }
   if (
     referenceContext.resolutionDecision.referenceWindow.state === "expired" ||
@@ -1823,6 +1948,16 @@ function addReferenceResolutionDecisionIssues(
       "Exact reference-resolution authority must be current at route selection."
     );
   }
+  if (
+    Date.parse(decision.availabilityObservation.observedAt) > Date.parse(at) ||
+    Date.parse(decision.availabilityObservation.notAfter) < Date.parse(at)
+  ) {
+    addIssue(
+      context,
+      [...path, "availabilityObservation", "notAfter"],
+      "Trusted reference availability must be current at route selection."
+    );
+  }
 }
 
 function referenceAuthorizationTargetOf(
@@ -1891,6 +2026,21 @@ function addStoredRouteAuthorizationIssues(
     );
     const window = route.referenceContext.resolutionDecision.referenceWindow;
     if (
+      route.referenceContext.resolutionDecision.availabilityObservation
+        .state !== "available"
+    ) {
+      addIssue(
+        context,
+        [
+          "referenceContext",
+          "resolutionDecision",
+          "availabilityObservation",
+          "state"
+        ],
+        "A stored route may reference only an available exact provider occurrence."
+      );
+    }
+    if (
       window.state === "expired" ||
       (window.state === "valid" &&
         Date.parse(window.notAfter) < Date.parse(route.createdAt))
@@ -1901,6 +2051,49 @@ function addStoredRouteAuthorizationIssues(
         "Stored route requires a reference window valid at route creation."
       );
     }
+  }
+}
+
+function addReferenceAvailabilityDecisionIssues(
+  context: z.RefinementCtx,
+  decision: z.infer<typeof inboxV2OutboundReferenceResolutionDecisionSchema>
+): void {
+  const observation = decision.availabilityObservation;
+  const descriptor = decision.occurrenceDescriptor;
+  if (
+    observation.tenantId !== decision.tenantId ||
+    !sameReference(observation.externalThread, decision.externalThread) ||
+    !sameReference(
+      observation.externalMessageReference,
+      decision.externalMessageReference
+    ) ||
+    !sameReference(observation.sourceOccurrence, decision.sourceOccurrence) ||
+    String(observation.occurrenceRevision) !==
+      String(decision.occurrenceRevision) ||
+    observation.occurrenceDescriptorDigestSha256 !==
+      descriptor.descriptorDigestSha256 ||
+    !sameAdapterContractSnapshot(
+      observation.adapterContract,
+      descriptor.adapterContract
+    )
+  ) {
+    addIssue(
+      context,
+      ["availabilityObservation"],
+      "Trusted availability must bind the decision's exact reference, occurrence revision and immutable descriptor."
+    );
+  }
+  if (
+    Date.parse(descriptor.adapterContract.loadedAt) >
+      Date.parse(decision.decidedAt) ||
+    Date.parse(observation.observedAt) > Date.parse(decision.decidedAt) ||
+    Date.parse(observation.notAfter) < Date.parse(decision.notAfter)
+  ) {
+    addIssue(
+      context,
+      ["availabilityObservation", "notAfter"],
+      "Reference decision must use prior evidence and cannot outlive its trusted availability observation."
+    );
   }
 }
 

@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,10 +10,84 @@ import {
   classifyInboxV2PendingDdl,
   inspectInboxV2ExpandDdlRisk
 } from "./inbox-v2-expand-ddl-risk.mjs";
+import { splitMigrationStatements } from "../checks/db-check-lib.mjs";
 
 describe("Inbox V2 preserve expand DDL risk", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it("requires a reviewed online bridge for the exact MSG-004 revision and reference constraints", async () => {
+    const migrationSql = await readFile(
+      resolve("packages/db/drizzle/0054_inbox_v2_reply_and_forward.sql"),
+      "utf8"
+    );
+    const migrations = [migration(splitMigrationStatements(migrationSql))];
+    const relations = [
+      relation("inbox_v2_message_revisions", 16 * 1024 * 1024, true),
+      relation(
+        "inbox_v2_message_reference_canonical_targets",
+        16 * 1024 * 1024,
+        true
+      ),
+      relation("inbox_v2_outbound_routes", 16 * 1024 * 1024, true)
+    ];
+    const report = await inspectInboxV2ExpandDdlRisk(
+      evidenceClient({ databaseName: "hulee_production", relations }),
+      { migrations, appliedCount: 0 }
+    );
+
+    expect(report).toMatchObject({
+      pendingMigrationCount: 1,
+      requiresOnlineBridge: true,
+      reviewedOnlineBridgeRequested: false,
+      reviewedOnlineBridgeAuthorized: false
+    });
+    expect(
+      report.violations.map(({ relationName, riskKind, violationReason }) => ({
+        relationName,
+        riskKind,
+        violationReason
+      }))
+    ).toEqual(
+      expect.arrayContaining([
+        {
+          relationName: "inbox_v2_message_revisions",
+          riskKind: "blocking_index",
+          violationReason: "blocking_index_requires_bridge"
+        },
+        {
+          relationName: "inbox_v2_message_reference_canonical_targets",
+          riskKind: "destructive_contract_change",
+          violationReason: "destructive_expand_requires_bridge"
+        },
+        {
+          relationName: "inbox_v2_message_reference_canonical_targets",
+          riskKind: "validated_constraint",
+          violationReason: "validated_constraint_requires_bridge"
+        },
+        {
+          relationName: "inbox_v2_outbound_routes",
+          riskKind: "destructive_contract_change",
+          violationReason: "destructive_expand_requires_bridge"
+        },
+        {
+          relationName: "inbox_v2_outbound_routes",
+          riskKind: "validated_constraint",
+          violationReason: "validated_constraint_requires_bridge"
+        }
+      ])
+    );
+
+    const reviewed = await inspectInboxV2ExpandDdlRisk(
+      evidenceClient({ databaseName: "hulee_production", relations }),
+      { migrations, appliedCount: 0, allowReviewedOnlineBridge: true }
+    );
+    expect(reviewed).toMatchObject({
+      requiresOnlineBridge: true,
+      reviewedOnlineBridgeRequested: true,
+      reviewedOnlineBridgeAuthorized: true
+    });
   });
 
   it("classifies only operations against relations that existed before expand", () => {

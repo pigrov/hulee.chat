@@ -379,6 +379,13 @@
       "when": 1784455967546,
       "tag": "0053_inbox_v2_typed_content_and_attachments",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1784474844088,
+      "tag": "0054_inbox_v2_reply_and_forward",
+      "breakpoints": true
     }
   ]
 }

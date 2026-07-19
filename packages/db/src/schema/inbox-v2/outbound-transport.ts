@@ -2536,6 +2536,37 @@ begin
           and occurrence_row.binding_generation =
              (new.reference_context_snapshot #>>
                '{resolutionDecision,occurrenceBindingGeneration}')::bigint
+          and new.reference_context_snapshot #>>
+             '{resolutionDecision,occurrenceDescriptor,descriptorSchemaId}' =
+             occurrence_row.descriptor_schema_id
+          and new.reference_context_snapshot #>>
+             '{resolutionDecision,occurrenceDescriptor,descriptorVersion}' =
+             occurrence_row.descriptor_version
+          and new.reference_context_snapshot #>>
+             '{resolutionDecision,occurrenceDescriptor,capabilityRevision}' =
+             occurrence_row.capability_revision::text
+          and new.reference_context_snapshot #>>
+             '{resolutionDecision,occurrenceDescriptor,descriptorDigestSha256}' =
+             occurrence_row.descriptor_digest_sha256
+          and jsonb_array_length(new.reference_context_snapshot #>
+             '{resolutionDecision,occurrenceDescriptor,providerReferences}') =
+             occurrence_row.provider_reference_count
+          and not exists (
+            select 1
+              from jsonb_array_elements(new.reference_context_snapshot #>
+                '{resolutionDecision,occurrenceDescriptor,providerReferences}')
+                with ordinality as supplied_reference(value, ordinal)
+              left join public.inbox_v2_source_occurrence_provider_references
+                stored_reference
+                on stored_reference.tenant_id = occurrence_row.tenant_id
+               and stored_reference.source_occurrence_id = occurrence_row.id
+               and stored_reference.ordinal = supplied_reference.ordinal - 1
+             where stored_reference.ordinal is null
+                or supplied_reference.value is distinct from jsonb_build_object(
+                  'kindId', stored_reference.kind_id,
+                  'subject', stored_reference.subject
+                )
+          )
           and new.reference_context_snapshot #> '{portability}' =
              new.reference_context_snapshot #>
                '{resolutionDecision,portability}'
@@ -2563,6 +2594,41 @@ begin
           and occurrence_row.adapter_loaded_by_trusted_service_id =
              new.adapter_loaded_by_trusted_service_id
           and occurrence_row.adapter_loaded_at = new.adapter_loaded_at
+          and new.reference_context_snapshot #>>
+             '{resolutionDecision,availabilityObservation,state}' = 'available'
+          and new.reference_context_snapshot #>>
+             '{resolutionDecision,availabilityObservation,tenantId}' =
+             new.tenant_id
+          and new.reference_context_snapshot #>
+             '{resolutionDecision,availabilityObservation,externalThread}' =
+             new.reference_context_snapshot #> '{externalThread}'
+          and new.reference_context_snapshot #>
+             '{resolutionDecision,availabilityObservation,externalMessageReference}' =
+             new.reference_context_snapshot #> '{externalMessageReference}'
+          and new.reference_context_snapshot #>
+             '{resolutionDecision,availabilityObservation,sourceOccurrence}' =
+             new.reference_context_snapshot #> '{sourceOccurrence}'
+          and new.reference_context_snapshot #>>
+             '{resolutionDecision,availabilityObservation,occurrenceRevision}' =
+             occurrence_row.revision::text
+          and new.reference_context_snapshot #>>
+             '{resolutionDecision,availabilityObservation,occurrenceDescriptorDigestSha256}' =
+             occurrence_row.descriptor_digest_sha256
+          and new.reference_context_snapshot #>
+             '{resolutionDecision,availabilityObservation,adapterContract}' =
+             new.adapter_contract_snapshot
+          and new.reference_context_snapshot #>>
+             '{resolutionDecision,availabilityObservation,observedByTrustedServiceId}' =
+             occurrence_row.adapter_loaded_by_trusted_service_id
+          and new.reference_context_snapshot #>
+             '{resolutionDecision,availabilityObservation,diagnostic}' =
+             'null'::jsonb
+          and (new.reference_context_snapshot #>>
+             '{resolutionDecision,availabilityObservation,observedAt}')::timestamptz
+             <= new.selected_at
+          and (new.reference_context_snapshot #>>
+             '{resolutionDecision,availabilityObservation,notAfter}')::timestamptz
+             >= new.selected_at
           and (
             new.reference_context_snapshot #>> '{portability,kind}' <>
               'binding_only'
@@ -2571,6 +2637,11 @@ begin
                 new.source_thread_binding_id
               and occurrence_row.source_account_id = new.source_account_id
             )
+          )
+          and (
+            new.selection_intent_kind <> 'explicit_occurrence'
+            or new.selection_intent_snapshot #>> '{occurrence,id}' =
+              occurrence_row.id
           )
           and new.reference_context_snapshot #>>
              '{resolutionDecision,externalThread,id}' =
@@ -4390,6 +4461,8 @@ function routeReferenceContextSql(table: Record<string, SQLWrapper>) {
     '{originSourceAccount,id}'`;
   const portability = sql`${snapshot} #> '{portability}'`;
   const resolution = sql`${snapshot} #> '{resolutionDecision}'`;
+  const descriptor = sql`${resolution} #> '{occurrenceDescriptor}'`;
+  const availability = sql`${resolution} #> '{availabilityObservation}'`;
 
   return sql`((
       ${snapshot} = '{"kind":"none"}'::jsonb
@@ -4453,7 +4526,45 @@ function routeReferenceContextSql(table: Record<string, SQLWrapper>) {
       and ${canonicalPositiveBigintTextSql(
         sql`${resolution} #>> '{occurrenceBindingGeneration}'`
       )}
+      and ${descriptor} #> '{adapterContract}' =
+        ${table.adapterContractSnapshot}
+      and ${catalogIdSql(sql`${descriptor} #>> '{descriptorSchemaId}'`)}
+      and ${versionTokenSql(sql`${descriptor} #>> '{descriptorVersion}'`)}
+      and ${canonicalPositiveBigintTextSql(
+        sql`${descriptor} #>> '{capabilityRevision}'`
+      )}
+      and jsonb_typeof(${descriptor} #> '{providerReferences}') = 'array'
+      and jsonb_array_length(${descriptor} #> '{providerReferences}')
+        between 1 and 32
+      and ${sha256DigestSql(sql`${descriptor} #>> '{descriptorDigestSha256}'`)}
       and ${resolution} #> '{portability}' = ${portability}
+      and ${availability} #>> '{observationKind}' =
+        'external_message_reference_availability'
+      and ${availability} #>> '{tenantId}' = ${table.tenantId}
+      and ${availability} #> '{externalThread}' =
+        ${snapshot} #> '{externalThread}'
+      and ${availability} #> '{externalMessageReference}' =
+        ${snapshot} #> '{externalMessageReference}'
+      and ${availability} #> '{sourceOccurrence}' =
+        ${snapshot} #> '{sourceOccurrence}'
+      and ${availability} #>> '{occurrenceRevision}' =
+        ${resolution} #>> '{occurrenceRevision}'
+      and ${availability} #>> '{occurrenceDescriptorDigestSha256}' =
+        ${descriptor} #>> '{descriptorDigestSha256}'
+      and ${availability} #> '{adapterContract}' =
+        ${table.adapterContractSnapshot}
+      and ${availability} #>> '{state}' = 'available'
+      and ${availability} #> '{diagnostic}' = 'null'::jsonb
+      and ${routingTokenSql(sql`${availability} #>> '{observationToken}'`)}
+      and ${catalogIdSql(
+        sql`${availability} #>> '{observedByTrustedServiceId}'`
+      )}
+      and isfinite((${availability} #>> '{observedAt}')::timestamptz)
+      and isfinite((${availability} #>> '{notAfter}')::timestamptz)
+      and (${availability} #>> '{observedAt}')::timestamptz <=
+        ${table.selectedAt}
+      and (${availability} #>> '{notAfter}')::timestamptz >=
+        ${table.selectedAt}
       and (
         ${resolution} #> '{referenceWindow}' =
           '{"state":"not_applicable"}'::jsonb
@@ -4472,6 +4583,12 @@ function routeReferenceContextSql(table: Record<string, SQLWrapper>) {
       and ${catalogIdSql(sql`${resolution} #>> '{loadedByTrustedServiceId}'`)}
       and isfinite((${resolution} #>> '{decidedAt}')::timestamptz)
       and isfinite((${resolution} #>> '{notAfter}')::timestamptz)
+      and (${descriptor} #>> '{adapterContract,loadedAt}')::timestamptz <=
+        (${availability} #>> '{observedAt}')::timestamptz
+      and (${availability} #>> '{observedAt}')::timestamptz <=
+        (${resolution} #>> '{decidedAt}')::timestamptz
+      and (${availability} #>> '{notAfter}')::timestamptz >=
+        (${resolution} #>> '{notAfter}')::timestamptz
       and (${resolution} #>> '{decidedAt}')::timestamptz <= ${table.selectedAt}
       and (${resolution} #>> '{notAfter}')::timestamptz >= ${table.selectedAt}
     )) is true`;

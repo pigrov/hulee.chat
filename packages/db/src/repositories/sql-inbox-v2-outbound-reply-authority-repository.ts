@@ -24,7 +24,10 @@ const inboxV2OutboundReplyAuthorityFenceInputSchema = z
   .object({
     tenantId: inboxV2TenantIdSchema,
     conversationId: inboxV2ConversationIdSchema,
-    replyAuthority: inboxV2ExternalReplyAuthoritySchema
+    replyAuthority: inboxV2ExternalReplyAuthoritySchema,
+    requiredConversationPermissionId: z
+      .enum(["core:message.reply_external", "core:message.forward_external"])
+      .default("core:message.reply_external")
   })
   .strict();
 
@@ -185,7 +188,7 @@ export async function fenceInboxV2OutboundReplyAuthorityInTransaction(
       tenantId: normalized.tenantId,
       entityTypeId: "core:conversation",
       entityId: normalized.conversationId,
-      permissionId: "core:message.reply_external",
+      permissionId: normalized.requiredConversationPermissionId,
       resourceAccessRevision: conversationFence.expectedResourceAccessRevision
     })
   ) {

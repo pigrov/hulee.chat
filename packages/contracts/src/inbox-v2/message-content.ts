@@ -15,6 +15,7 @@ import {
 import {
   inboxV2EventReferenceSchema,
   inboxV2FileReferenceSchema,
+  inboxV2MessageAttachmentReferenceSchema,
   inboxV2SourceOccurrenceReferenceSchema,
   inboxV2TenantIdSchema,
   inboxV2TimelineContentIdSchema,
@@ -222,6 +223,121 @@ export function verifyInboxV2MessageContentDigest(
   digest: string
 ): boolean {
   return calculateInboxV2MessageContentDigest(blocks) === digest;
+}
+
+/**
+ * A content-copy creates new MessageAttachment anchors owned by the destination
+ * Message. The mapping is the only admissible difference between the exact
+ * source and destination blocks; every file/object pin and presentation field
+ * remains covered by the source canonical content digest.
+ */
+export const inboxV2ContentCopyAttachmentMappingSchema = z
+  .object({
+    blockKey: inboxV2ContentBlockKeySchema,
+    sourceAttachment: inboxV2MessageAttachmentReferenceSchema,
+    destinationAttachment: inboxV2MessageAttachmentReferenceSchema
+  })
+  .strict()
+  .superRefine((mapping, context) => {
+    if (
+      mapping.sourceAttachment.tenantId !==
+      mapping.destinationAttachment.tenantId
+    ) {
+      addIssue(
+        context,
+        ["destinationAttachment", "tenantId"],
+        "A copied attachment cannot cross the tenant boundary."
+      );
+    }
+    if (mapping.sourceAttachment.id === mapping.destinationAttachment.id) {
+      addIssue(
+        context,
+        ["destinationAttachment", "id"],
+        "A copied attachment requires a new destination-owned anchor."
+      );
+    }
+  });
+
+export type InboxV2ContentCopyAttachmentMapping = z.infer<
+  typeof inboxV2ContentCopyAttachmentMappingSchema
+>;
+
+/**
+ * Rebuilds the exact source blocks from a destination content-copy draft.
+ * Only owner-scoped MessageAttachment references may be remapped. Returning
+ * null means the mapping is incomplete, ambiguous or attempts to reuse an
+ * existing source anchor.
+ */
+export function reconstructInboxV2ContentCopySourceBlocks(
+  destinationBlocks: readonly InboxV2MessageContentBlock[],
+  attachmentMappings: readonly InboxV2ContentCopyAttachmentMapping[]
+): readonly InboxV2MessageContentBlock[] | null {
+  const attachmentBlocks = destinationBlocks.filter(
+    (
+      block
+    ): block is Extract<InboxV2MessageContentBlock, { attachment: unknown }> =>
+      "attachment" in block
+  );
+  if (attachmentBlocks.length !== attachmentMappings.length) return null;
+
+  const mappingsByBlockKey = new Map(
+    attachmentMappings.map((mapping) => [mapping.blockKey, mapping] as const)
+  );
+  const sourceAttachmentIds = new Set(
+    attachmentMappings.map((mapping) => mapping.sourceAttachment.id)
+  );
+  const destinationAttachmentIds = new Set(
+    attachmentMappings.map((mapping) => mapping.destinationAttachment.id)
+  );
+  if (
+    mappingsByBlockKey.size !== attachmentMappings.length ||
+    sourceAttachmentIds.size !== attachmentMappings.length ||
+    destinationAttachmentIds.size !== attachmentMappings.length ||
+    [...sourceAttachmentIds].some((id) => destinationAttachmentIds.has(id))
+  ) {
+    return null;
+  }
+
+  const sourceBlocks: InboxV2MessageContentBlock[] = [];
+  for (const block of destinationBlocks) {
+    if (!("attachment" in block)) {
+      sourceBlocks.push(block);
+      continue;
+    }
+    const mapping = mappingsByBlockKey.get(block.blockKey);
+    if (
+      mapping === undefined ||
+      mapping.sourceAttachment.tenantId !==
+        mapping.destinationAttachment.tenantId ||
+      mapping.destinationAttachment.tenantId !==
+        block.attachment.attachment.tenantId ||
+      mapping.destinationAttachment.id !== block.attachment.attachment.id
+    ) {
+      return null;
+    }
+    sourceBlocks.push({
+      ...block,
+      attachment: {
+        ...block.attachment,
+        attachment: mapping.sourceAttachment
+      }
+    });
+  }
+  return sourceBlocks;
+}
+
+/** Exact source digest implied by a destination draft and its anchor remap. */
+export function calculateInboxV2ContentCopySourceDigest(
+  destinationBlocks: readonly InboxV2MessageContentBlock[],
+  attachmentMappings: readonly InboxV2ContentCopyAttachmentMapping[]
+): InboxV2ContentDigestSha256 | null {
+  const sourceBlocks = reconstructInboxV2ContentCopySourceBlocks(
+    destinationBlocks,
+    attachmentMappings
+  );
+  return sourceBlocks === null
+    ? null
+    : calculateInboxV2MessageContentDigest(sourceBlocks);
 }
 
 export const inboxV2TimelineContentStateKindSchema = z.enum([

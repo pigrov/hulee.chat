@@ -298,12 +298,15 @@ describe("Inbox V2 outbound transport schema", () => {
     expect(runtimeObservation).not.toContain("select count");
     expect(runtimeObservation).toContain("observedAt");
     expect(runtimeObservation).toContain("diagnostic");
-    expect(
-      checkSql(
-        inboxV2OutboundRoutes,
-        "inbox_v2_outbound_routes_reference_context_check"
-      )
-    ).toContain("is true");
+    const referenceContext = checkSql(
+      inboxV2OutboundRoutes,
+      "inbox_v2_outbound_routes_reference_context_check"
+    );
+    expect(referenceContext).toContain("is true");
+    expect(referenceContext).toContain("occurrenceDescriptor");
+    expect(referenceContext).toContain("availabilityObservation");
+    expect(referenceContext).toContain("observedByTrustedServiceId");
+    expect(referenceContext).toContain("available");
     expect(
       checkSql(
         inboxV2OutboundRoutes,
@@ -524,6 +527,19 @@ describe("Inbox V2 outbound transport schema", () => {
     expect(routeGuard).toContain(
       "occurrence_row.adapter_loaded_at = new.adapter_loaded_at"
     );
+    expect(routeGuard).toContain(
+      "'{resolutionDecision,occurrenceDescriptor,descriptorDigestSha256}'"
+    );
+    expect(routeGuard).toContain(
+      "'{resolutionDecision,availabilityObservation,occurrenceRevision}'"
+    );
+    expect(routeGuard).toContain(
+      "'{resolutionDecision,availabilityObservation,observedByTrustedServiceId}' =\n             occurrence_row.adapter_loaded_by_trusted_service_id"
+    );
+    expect(routeGuard).toContain(
+      "new.selection_intent_kind <> 'explicit_occurrence'"
+    );
+    expect(routeGuard).toContain("resolution_row.resolver_trusted_service_id");
     const attemptGuard = functionSql(
       invariantSql,
       "inbox_v2_outbound_attempt_guard_insert"

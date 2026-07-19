@@ -896,7 +896,26 @@ export function fixtureExternalTargetRoute(
     originSourceAccount: fixtureSourceAccountReference,
     occurrenceRevision: occurrence.revision,
     occurrenceBindingGeneration: occurrence.bindingContext.bindingGeneration,
+    occurrenceDescriptor: occurrence.descriptor,
     portability,
+    availabilityObservation: {
+      observationKind: "external_message_reference_availability" as const,
+      tenantId: fixtureTenantId,
+      externalThread: fixtureExternalThreadReference,
+      externalMessageReference,
+      sourceOccurrence,
+      occurrenceRevision: occurrence.revision,
+      occurrenceDescriptorDigestSha256:
+        occurrence.descriptor.descriptorDigestSha256,
+      adapterContract: occurrence.descriptor.adapterContract,
+      state: "available" as const,
+      diagnostic: null,
+      observationToken: "observation:reference-target-1",
+      observedByTrustedServiceId:
+        occurrence.descriptor.adapterContract.loadedByTrustedServiceId,
+      observedAt: fixtureT1,
+      notAfter: fixtureT4
+    },
     referenceWindow: { state: "not_applicable" as const },
     decisionToken: "decision:reference-target-1",
     decisionRevision: "1",

@@ -18,6 +18,7 @@ import {
 import { inboxV2TimelineCommandIntentSchema } from "./timeline-command-intents";
 import { inboxV2MessageCreationCommitSchema } from "./timeline-message-commit";
 import {
+  fixtureAdapterContract,
   fixtureContent,
   fixtureEmployeeActor,
   fixtureEmployeeReference,
@@ -502,9 +503,32 @@ describe("Inbox V2 Message and StaffNote contracts", () => {
 
   it("keeps content-copy and provider-native forward as different semantics", () => {
     const canonical = {
+      conversation: fixtureHuleeCreationCommit().message.conversation,
       message: fixtureMessageReference,
       timelineItem: fixtureTimelineItemReference,
       messageRevision: "1"
+    };
+    const nativeCapability = {
+      capabilityId: "core:provider-native-forward",
+      capabilityRevision: "1",
+      adapterContract:
+        fixtureSourceCreationCommit().sourceOccurrence.descriptor
+          .adapterContract,
+      decision: "supported" as const
+    };
+    const nativeSource = {
+      externalMessageReference: fixtureExternalMessageReference,
+      sourceOccurrence: fixtureSourceOccurrenceReference
+    };
+    const secondNativeSource = {
+      externalMessageReference: fixtureReference(
+        "external_message_reference",
+        "external_message_reference:message-2"
+      ),
+      sourceOccurrence: fixtureReference(
+        "source_occurrence",
+        "source_occurrence:occurrence-2"
+      )
     };
     expect(
       inboxV2MessageReferenceContextSchema.safeParse({
@@ -515,20 +539,8 @@ describe("Inbox V2 Message and StaffNote contracts", () => {
     expect(
       inboxV2MessageReferenceContextSchema.safeParse({
         kind: "forward_provider_native",
-        sources: [
-          {
-            externalMessageReference: fixtureExternalMessageReference,
-            sourceOccurrence: fixtureSourceOccurrenceReference
-          }
-        ],
-        capability: {
-          capabilityId: "core:provider-native-forward",
-          capabilityRevision: "1",
-          adapterContract:
-            fixtureSourceCreationCommit().sourceOccurrence.descriptor
-              .adapterContract,
-          decision: "supported"
-        }
+        sources: [nativeSource],
+        capability: nativeCapability
       }).success
     ).toBe(true);
     expect(
@@ -544,6 +556,204 @@ describe("Inbox V2 Message and StaffNote contracts", () => {
         copied: true
       }).success
     ).toBe(false);
+    expect(
+      inboxV2MessageReferenceContextSchema.safeParse({
+        kind: "forward_provider_native",
+        sources: [nativeSource, secondNativeSource],
+        capability: nativeCapability
+      }).success
+    ).toBe(false);
+    expect(
+      inboxV2MessageReferenceContextSchema.safeParse({
+        kind: "forward_provider_observed",
+        originOccurrence: fixtureSourceOccurrenceReference,
+        provenanceCompleteness: "exact",
+        sourceReferences: [nativeSource, secondNativeSource]
+      }).success
+    ).toBe(true);
+  });
+
+  it("requires exact external-work source proof for external content-copy", () => {
+    const base = fixtureHuleeCreationCommit();
+    if (base.content.state.kind !== "available") {
+      throw new Error("Expected available content fixture.");
+    }
+    const source = {
+      conversation: base.message.conversation,
+      message: fixtureMessageReference,
+      timelineItem: fixtureTimelineItemReference,
+      messageRevision: "1"
+    };
+    const sourceProof = {
+      conversation: source.conversation,
+      message: source.message,
+      expectedMessageRevision: source.messageRevision,
+      timelineItem: source.timelineItem,
+      expectedTimelineItemRevision: source.messageRevision,
+      timelineContent: base.message.content.content,
+      expectedTimelineContentRevision: base.message.content.contentRevision,
+      sourceContentDigestSha256: base.content.state.contentDigestSha256,
+      visibilityBoundary: "external_work" as const
+    };
+    const intent = {
+      kind: "forward_content_copy" as const,
+      tenantId: base.tenantId,
+      conversation: base.message.conversation,
+      authorParticipant: base.message.authorParticipant,
+      appActor: base.message.appActor,
+      automationCausation: base.message.automationCausation,
+      occurredAt: base.message.createdAt,
+      content: { blocks: base.content.state.blocks },
+      referenceContext: {
+        kind: "forward_content_copy" as const,
+        sources: [source]
+      },
+      destination: {
+        kind: "external" as const,
+        outboundRoute: fixtureRouteReference
+      }
+    };
+
+    expect(inboxV2TimelineCommandIntentSchema.safeParse(intent).success).toBe(
+      false
+    );
+    expect(
+      inboxV2TimelineCommandIntentSchema.safeParse({
+        ...intent,
+        sourceReadProofs: [
+          { ...sourceProof, visibilityBoundary: "internal" as const }
+        ]
+      }).success
+    ).toBe(false);
+    expect(
+      inboxV2TimelineCommandIntentSchema.safeParse({
+        ...intent,
+        sourceReadProofs: [sourceProof]
+      }).success
+    ).toBe(true);
+    expect(
+      inboxV2TimelineCommandIntentSchema.safeParse({
+        ...intent,
+        content: {
+          blocks: [
+            {
+              ...base.content.state.blocks[0],
+              text: "forged identity-copy content"
+            }
+          ]
+        },
+        sourceReadProofs: [sourceProof]
+      }).success
+    ).toBe(false);
+  });
+
+  it("allows external content-copy to allocate a new attachment anchor only", () => {
+    const base = fixtureHuleeCreationCommit();
+    const sourceAttachment = fixtureReference(
+      "message_attachment",
+      "message_attachment:copy-source-1"
+    );
+    const destinationAttachment = fixtureReference(
+      "message_attachment",
+      "message_attachment:copy-destination-1"
+    );
+    const sourceBlocks = [
+      {
+        blockKey: "file-1",
+        kind: "file" as const,
+        attachment: {
+          state: "ready" as const,
+          attachment: sourceAttachment,
+          file: fixtureReference("file", "file:copy-1"),
+          fileRevision: "4",
+          fileVersion: fixtureReference(
+            "file_version",
+            "file_version:copy-1-r4"
+          ),
+          objectVersion: fixtureReference(
+            "file_object_version",
+            "file_object_version:copy-1-r4-v1"
+          )
+        },
+        displayName: "copy.pdf"
+      }
+    ];
+    const destinationBlocks = [
+      {
+        ...sourceBlocks[0],
+        attachment: {
+          ...sourceBlocks[0]!.attachment,
+          attachment: destinationAttachment
+        }
+      }
+    ];
+    const source = {
+      conversation: base.message.conversation,
+      message: fixtureMessageReference,
+      timelineItem: fixtureTimelineItemReference,
+      messageRevision: "1"
+    };
+    const sourceProof = {
+      conversation: source.conversation,
+      message: source.message,
+      expectedMessageRevision: source.messageRevision,
+      timelineItem: source.timelineItem,
+      expectedTimelineItemRevision: source.messageRevision,
+      timelineContent: base.message.content.content,
+      expectedTimelineContentRevision: base.message.content.contentRevision,
+      sourceContentDigestSha256:
+        calculateInboxV2MessageContentDigest(sourceBlocks),
+      attachmentCopies: [
+        {
+          blockKey: "file-1",
+          sourceAttachment,
+          destinationAttachment
+        }
+      ],
+      visibilityBoundary: "external_work" as const
+    };
+    const intent = {
+      kind: "forward_content_copy" as const,
+      tenantId: base.tenantId,
+      conversation: base.message.conversation,
+      authorParticipant: base.message.authorParticipant,
+      appActor: base.message.appActor,
+      automationCausation: base.message.automationCausation,
+      occurredAt: base.message.createdAt,
+      content: { blocks: destinationBlocks },
+      referenceContext: {
+        kind: "forward_content_copy" as const,
+        sources: [source]
+      },
+      sourceReadProofs: [sourceProof],
+      destination: {
+        kind: "external" as const,
+        outboundRoute: fixtureRouteReference
+      }
+    };
+
+    expect(inboxV2TimelineCommandIntentSchema.safeParse(intent).success).toBe(
+      true
+    );
+    expect(
+      inboxV2TimelineCommandIntentSchema.safeParse({
+        ...intent,
+        sourceReadProofs: [{ ...sourceProof, attachmentCopies: [] }]
+      }).success
+    ).toBe(false);
+    expect(
+      inboxV2TimelineCommandIntentSchema.safeParse({
+        ...intent,
+        content: {
+          blocks: [
+            {
+              ...destinationBlocks[0],
+              displayName: "forged-name.pdf"
+            }
+          ]
+        }
+      }).success
+    ).toBe(false);
   });
 
   it("pins one provider-native forward source to the exact route capability", () => {
@@ -555,11 +765,19 @@ describe("Inbox V2 Message and StaffNote contracts", () => {
       ...fixtureOccurrence({
         occurrenceId: "source_occurrence:forward-target-1"
       }),
+      referencePortability: {
+        kind: "external_thread" as const,
+        adapterContract: fixtureAdapterContract,
+        decisionStrength: "authoritative" as const
+      },
       resolution: {
         state: "resolved" as const,
         externalMessageReference: targetExternalReference
       }
     };
+    const targetOccurrenceFixture = targetOccurrence as unknown as ReturnType<
+      typeof fixtureOccurrence
+    >;
     const target = {
       externalMessageReference: targetExternalReference,
       sourceOccurrence: fixtureReference(
@@ -568,21 +786,24 @@ describe("Inbox V2 Message and StaffNote contracts", () => {
       )
     };
     const externalSnapshot = {
-      externalMessageReference: fixtureExternalReference(targetOccurrence, {
-        id: targetExternalReference.id,
-        message: fixtureReference("message", "message:forward-target-1"),
-        timelineItem: fixtureReference(
-          "timeline_item",
-          "timeline_item:forward-target-1"
-        )
-      }),
+      externalMessageReference: fixtureExternalReference(
+        targetOccurrenceFixture,
+        {
+          id: targetExternalReference.id,
+          message: fixtureReference("message", "message:forward-target-1"),
+          timelineItem: fixtureReference(
+            "timeline_item",
+            "timeline_item:forward-target-1"
+          )
+        }
+      ),
       sourceOccurrence: targetOccurrence
     };
     const route = fixtureExternalTargetRoute(
       "core:message.forward_provider_native",
-      "core:message.forward_provider_native_external",
+      "core:message.forward_external",
       {
-        occurrence: targetOccurrence,
+        occurrence: targetOccurrenceFixture,
         externalMessageReference: targetExternalReference
       }
     );
@@ -610,6 +831,100 @@ describe("Inbox V2 Message and StaffNote contracts", () => {
 
     const parsed = inboxV2MessageCreationCommitSchema.safeParse(commit);
     expect(parsed.success ? [] : parsed.error.issues).toEqual([]);
+
+    const destinationBinding = fixtureReference(
+      "source_thread_binding",
+      "source_thread_binding:forward-destination-2"
+    );
+    const destinationAccount = fixtureReference(
+      "source_account",
+      "source_account:forward-destination-2"
+    );
+    const destinationConnection = fixtureReference(
+      "source_connection",
+      "source_connection:forward-destination-2"
+    );
+    const destinationAuthorizationTarget = {
+      ...route.conversationAuthorization.target,
+      sourceThreadBinding: destinationBinding,
+      sourceAccount: destinationAccount,
+      sourceConnection: destinationConnection
+    };
+    const portableRoute = {
+      ...route,
+      sourceThreadBinding: destinationBinding,
+      sourceAccount: destinationAccount,
+      sourceConnection: destinationConnection,
+      conversationAuthorization: {
+        ...route.conversationAuthorization,
+        target: destinationAuthorizationTarget
+      },
+      sourceAccountAuthorization: {
+        ...route.sourceAccountAuthorization,
+        target: destinationAuthorizationTarget
+      },
+      selection: {
+        ...route.selection,
+        intent: {
+          kind: "explicit_binding" as const,
+          binding: destinationBinding
+        },
+        reason: "explicit_binding" as const
+      }
+    };
+    const portableCommit = {
+      ...commit,
+      outboundRoute: portableRoute,
+      outboundBindingSnapshot: fixtureOutboundBindingSnapshot(
+        portableRoute,
+        "core:provider-native-forward"
+      )
+    };
+    const portableParsed =
+      inboxV2MessageCreationCommitSchema.safeParse(portableCommit);
+    expect(portableParsed.success ? [] : portableParsed.error.issues).toEqual(
+      []
+    );
+
+    const bindingOnlyPortability = {
+      kind: "binding_only" as const,
+      adapterContract: targetOccurrence.descriptor.adapterContract,
+      decisionStrength: "safe_default" as const
+    };
+    if (portableRoute.referenceContext.kind !== "external_message") {
+      throw new Error("Portable forward fixture requires an exact reference.");
+    }
+    const bindingOnlyRoute = {
+      ...portableRoute,
+      referenceContext: {
+        ...portableRoute.referenceContext,
+        portability: bindingOnlyPortability,
+        resolutionDecision: {
+          ...portableRoute.referenceContext.resolutionDecision,
+          portability: bindingOnlyPortability
+        }
+      }
+    };
+    expect(
+      inboxV2MessageCreationCommitSchema.safeParse({
+        ...portableCommit,
+        externalReferenceTargets: [
+          {
+            ...externalSnapshot,
+            sourceOccurrence: {
+              ...targetOccurrence,
+              referencePortability: bindingOnlyPortability
+            }
+          }
+        ],
+        outboundRoute: bindingOnlyRoute,
+        outboundBindingSnapshot: fixtureOutboundBindingSnapshot(
+          bindingOnlyRoute,
+          "core:provider-native-forward"
+        )
+      }).success
+    ).toBe(false);
+
     const observedBase = fixtureSourceCreationCommit();
     if (observedBase.message.origin.kind !== "source_originated") {
       throw new Error("Observed forward fixture requires source origin.");
@@ -887,6 +1202,7 @@ describe("Inbox V2 Message and StaffNote contracts", () => {
         target: {
           state: "resolved_internal" as const,
           canonical: {
+            conversation: targetMessageSnapshot.conversation,
             message: targetMessage,
             timelineItem: targetTimelineItem,
             messageRevision: "1"
@@ -1075,6 +1391,7 @@ describe("Inbox V2 Message and StaffNote contracts", () => {
           target: {
             state: "resolved_external" as const,
             canonical: {
+              conversation: targetMessageSnapshot.conversation,
               message: targetMessage,
               timelineItem: targetTimelineItem,
               messageRevision: "1"
@@ -1327,6 +1644,7 @@ describe("Inbox V2 Message and StaffNote contracts", () => {
       target: {
         state: "resolved_external" as const,
         canonical: {
+          conversation: authored.conversation,
           message: fixtureMessageReference,
           timelineItem: fixtureTimelineItemReference,
           messageRevision: "1"

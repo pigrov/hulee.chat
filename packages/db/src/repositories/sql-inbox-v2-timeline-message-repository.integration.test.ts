@@ -3598,6 +3598,516 @@ describePostgres(
       ).resolves.toBeNull();
     });
 
+    it("pins reply history and fails closed for native-forward route authority drift", async () => {
+      const repository = createSqlInboxV2TimelineMessageRepository(db);
+
+      // The canonical target must keep pointing at the immutable Message
+      // revision that was selected, rather than silently following the head.
+      const target = creationCommit("reply-history-pin-target");
+      await seedCreationAnchors(db, target);
+      await expect(
+        historicalTimelineFixtureRepository(db).createMessage({
+          commit: target,
+          streamPosition: position("680")
+        })
+      ).resolves.toMatchObject({ kind: "created" });
+      const targetEdit = editMutation(
+        target,
+        "reply-history-pin-target-edit",
+        "The target head moved after the reply was composed."
+      );
+      await expect(
+        repository.mutateMessage({
+          commit: targetEdit,
+          streamPosition: position("681")
+        })
+      ).resolves.toMatchObject({ kind: "applied", message: { revision: "2" } });
+
+      const pinnedReply = replyCreationCommit(target, "reply-history-pin");
+      await expect(
+        historicalTimelineFixtureRepository(db).createMessage({
+          commit: pinnedReply,
+          streamPosition: position("682")
+        })
+      ).resolves.toMatchObject({ kind: "created" });
+      const pinnedTarget = await db.execute<{
+        target_revision: string;
+        current_revision: string;
+      }>(sql`
+        select canonical.target_message_revision::text as target_revision,
+               target.revision::text as current_revision
+          from inbox_v2_message_reference_canonical_targets canonical
+          join inbox_v2_messages target
+            on target.tenant_id = canonical.tenant_id
+           and target.id = canonical.target_message_id
+         where canonical.tenant_id = ${tenantId}
+           and canonical.message_id = ${pinnedReply.message.id}
+      `);
+      expect(pinnedTarget.rows).toEqual([
+        { target_revision: "1", current_revision: "2" }
+      ]);
+
+      const suffix = "native-forward-authority";
+      const source = sourceOutboundCreationCommit(suffix);
+      const context = await seedExternalCreationAnchors(db, source, suffix, {
+        includeContentCopyCapability: true,
+        includeNativeForwardCapability: true
+      });
+      const operator = await seedProviderResultOperator(db, source, suffix);
+      await expect(
+        createSourceMessage(
+          historicalTimelineFixtureRepository(db),
+          source,
+          "690"
+        )
+      ).resolves.toMatchObject({ kind: "created" });
+
+      const forwardAnchor = rebaseMessageCreationCommit(
+        source,
+        source.timelineAllocation.conversationAfter
+      );
+      const nativeRoute = await seedProviderResultOutboundRoute({
+        db,
+        creation: forwardAnchor,
+        context,
+        operator,
+        operationId: "core:message.forward_provider_native",
+        permissionId: "core:message.forward_external",
+        suffix
+      });
+      const sourceOccurrence = requireSourceOccurrence(source);
+      const externalMessageReference = source.externalMessageReference;
+      const nativeRouteReference = nativeRoute.referenceContext;
+      const nativeCapability =
+        context.bindingProjection.binding.capabilities.entries.find(
+          (entry) =>
+            entry.capabilityId === "module:synthetic:native-forward" &&
+            entry.operationId === "core:message.forward_provider_native"
+        );
+      if (
+        externalMessageReference === null ||
+        nativeRouteReference.kind !== "external_message" ||
+        nativeCapability === undefined
+      ) {
+        throw new Error(
+          "Native forward requires one exact target and supported capability."
+        );
+      }
+      const nativeForward = huleeExternalCreationCommit({
+        binding: context.bindingProjection.binding,
+        creation: forwardAnchor,
+        operator,
+        route: nativeRoute,
+        suffix: `${suffix}-dispatch`,
+        referenceContext: {
+          kind: "forward_provider_native",
+          sources: [
+            {
+              externalMessageReference:
+                nativeRouteReference.externalMessageReference,
+              sourceOccurrence: nativeRouteReference.sourceOccurrence
+            }
+          ],
+          capability: {
+            capabilityId: nativeCapability.capabilityId,
+            capabilityRevision: nativeRoute.bindingFence.capabilityRevision,
+            adapterContract: nativeRoute.adapterContract,
+            decision: "supported"
+          }
+        }
+      });
+      await expect(
+        withAtomicMessageCreationGuardsDisabled(db, () =>
+          createSqlInboxV2TimelineMessageRepository(db).createMessage({
+            commit: nativeForward,
+            streamPosition: position("691")
+          })
+        )
+      ).resolves.toMatchObject({ kind: "created" });
+
+      const validNativeForward = () =>
+        outboundRouteActionValid(db, {
+          route: nativeRoute,
+          message: nativeForward,
+          externalMessageReferenceId: externalMessageReference.id,
+          sourceOccurrenceId: sourceOccurrence.id,
+          requireExplicitOccurrence: true
+        });
+      await expect(validNativeForward()).resolves.toBe(true);
+      await expect(
+        outboundRouteActionValid(db, {
+          route: nativeRoute,
+          message: nativeForward,
+          externalMessageReferenceId: externalMessageReference.id,
+          sourceOccurrenceId: sourceOccurrence.id,
+          permissionId: "core:message.reply_external",
+          requireExplicitOccurrence: true
+        })
+      ).resolves.toBe(false);
+      await expect(
+        outboundRouteActionValid(db, {
+          route: nativeRoute,
+          message: nativeForward,
+          externalMessageReferenceId: externalMessageReference.id,
+          sourceOccurrenceId: `source_occurrence:missing-${runId}`,
+          requireExplicitOccurrence: true
+        })
+      ).resolves.toBe(false);
+
+      // The action guard is deliberately evaluated against persisted route
+      // evidence: unavailable and observer-drifted snapshots never degrade to
+      // a best-effort provider call.
+      const unavailableSnapshotError = await capturePostgresError(
+        updateOutboundRouteReferenceContext(db, nativeRoute.id, (context) => ({
+          ...context,
+          resolutionDecision: {
+            ...context.resolutionDecision,
+            availabilityObservation: {
+              ...context.resolutionDecision.availabilityObservation,
+              state: "provider_unavailable",
+              diagnostic: null
+            }
+          }
+        }))
+      );
+      expect(postgresSqlState(unavailableSnapshotError)).toBe("23514");
+      expect(postgresErrorText(unavailableSnapshotError)).toContain(
+        "inbox_v2.outbound_transport_immutable"
+      );
+      await expect(validNativeForward()).resolves.toBe(true);
+      const observerDriftError = await capturePostgresError(
+        updateOutboundRouteReferenceContext(db, nativeRoute.id, (context) => ({
+          ...context,
+          resolutionDecision: {
+            ...context.resolutionDecision,
+            availabilityObservation: {
+              ...context.resolutionDecision.availabilityObservation,
+              // A route snapshot is immutable, so online-bridge observer
+              // drift is rejected before it can reach provider dispatch.
+              observedByTrustedServiceId: "core:observer-drift" as never
+            }
+          }
+        }))
+      );
+      expect(postgresSqlState(observerDriftError)).toBe("23514");
+      expect(postgresErrorText(observerDriftError)).toContain(
+        "inbox_v2.outbound_transport_immutable"
+      );
+
+      // External content-copy is send-as-new, but the copied body is still
+      // pinned to one exact canonical source. PostgreSQL checks the live
+      // source Message/TimelineContent under a shared lock so the source
+      // cannot drift between command authorization and commit.
+      const sourceTimelineItem = source.timelineAllocation.items[0];
+      if (sourceTimelineItem === undefined) {
+        throw new Error("Content-copy requires one canonical source item.");
+      }
+      const contentCopyReferenceContext = {
+        kind: "forward_content_copy" as const,
+        sources: [
+          {
+            conversation: source.message.conversation,
+            message: source.initialRevision.message,
+            timelineItem: source.initialRevision.timelineItem,
+            messageRevision: source.message.revision
+          }
+        ]
+      };
+      const contentCopyAnchor = rebaseMessageCreationCommit(
+        nativeForward,
+        nativeForward.timelineAllocation.conversationAfter
+      );
+      const contentCopyRoute = await seedMessageSendOutboundRoute({
+        db,
+        creation: contentCopyAnchor,
+        context,
+        operator,
+        operationId: "core:message.forward_content_copy",
+        permissionId: "core:message.forward_external",
+        suffix: `${suffix}-copy-route`
+      });
+      const contentCopy = huleeExternalCreationCommit({
+        binding: context.bindingProjection.binding,
+        creation: contentCopyAnchor,
+        copySource: source,
+        operator,
+        route: contentCopyRoute,
+        suffix: `${suffix}-copy-dispatch`,
+        referenceContext: contentCopyReferenceContext
+      });
+      await expect(
+        withAtomicMessageCreationGuardsDisabled(db, () =>
+          createSqlInboxV2TimelineMessageRepository(db).createMessage({
+            commit: contentCopy,
+            streamPosition: position("692")
+          })
+        )
+      ).resolves.toMatchObject({ kind: "created" });
+
+      const forgedCopyAnchor = rebaseMessageCreationCommit(
+        contentCopy,
+        contentCopy.timelineAllocation.conversationAfter
+      );
+      const forgedCopyRoute = await seedMessageSendOutboundRoute({
+        db,
+        creation: forgedCopyAnchor,
+        context,
+        operator,
+        operationId: "core:message.forward_content_copy",
+        permissionId: "core:message.forward_external",
+        routePolicy: contentCopyRoute.routePolicy,
+        suffix: `${suffix}-forged-copy-route`
+      });
+      const forgedCopy = huleeExternalCreationCommit({
+        binding: context.bindingProjection.binding,
+        creation: forgedCopyAnchor,
+        copyContentMode: "different",
+        copySource: source,
+        operator,
+        route: forgedCopyRoute,
+        suffix: `${suffix}-forged-copy-dispatch`,
+        referenceContext: contentCopyReferenceContext
+      });
+      const forgedCopyError = await withAtomicMessageCreationGuardsDisabled(
+        db,
+        () =>
+          capturePostgresError(
+            createSqlInboxV2TimelineMessageRepository(db).createMessage({
+              commit: forgedCopy,
+              streamPosition: position("693")
+            })
+          )
+      );
+      expect(postgresSqlState(forgedCopyError)).toBe("23514");
+      expect(postgresErrorText(forgedCopyError)).toContain(
+        "inbox_v2.message_content_copy_source_drift"
+      );
+      await expect(
+        repository.findMessage({ tenantId, messageId: forgedCopy.message.id })
+      ).resolves.toBeNull();
+
+      const staleSource = creationCommit(`${suffix}-copy-drift-source`);
+      await seedCreationAnchors(db, staleSource);
+      await expect(
+        historicalTimelineFixtureRepository(db).createMessage({
+          commit: staleSource,
+          streamPosition: position("694")
+        })
+      ).resolves.toMatchObject({ kind: "created" });
+      const staleSourceEdit = editMutation(
+        staleSource,
+        `${suffix}-copy-drift-source-edit`,
+        "The copied source changed after authorization."
+      );
+      await expect(
+        repository.mutateMessage({
+          commit: staleSourceEdit,
+          streamPosition: position("695")
+        })
+      ).resolves.toMatchObject({ kind: "applied" });
+      const staleSourceTimelineItem = staleSource.timelineAllocation.items[0];
+      if (staleSourceTimelineItem === undefined) {
+        throw new Error("Stale content-copy requires one source item.");
+      }
+      const staleReferenceContext = {
+        kind: "forward_content_copy" as const,
+        sources: [
+          {
+            conversation: staleSource.message.conversation,
+            message: staleSource.initialRevision.message,
+            timelineItem: staleSource.initialRevision.timelineItem,
+            messageRevision: staleSource.message.revision
+          }
+        ]
+      };
+      const staleCopyRoute = await seedMessageSendOutboundRoute({
+        db,
+        creation: forgedCopyAnchor,
+        context,
+        operator,
+        operationId: "core:message.forward_content_copy",
+        permissionId: "core:message.forward_external",
+        routePolicy: contentCopyRoute.routePolicy,
+        suffix: `${suffix}-stale-copy-route`
+      });
+      const staleCopy = huleeExternalCreationCommit({
+        binding: context.bindingProjection.binding,
+        creation: forgedCopyAnchor,
+        copySource: staleSource,
+        operator,
+        route: staleCopyRoute,
+        suffix: `${suffix}-stale-copy-dispatch`,
+        referenceContext: staleReferenceContext
+      });
+      const staleCopyError = await withAtomicMessageCreationGuardsDisabled(
+        db,
+        () =>
+          capturePostgresError(
+            createSqlInboxV2TimelineMessageRepository(db).createMessage({
+              commit: staleCopy,
+              streamPosition: position("696")
+            })
+          )
+      );
+      expect(postgresSqlState(staleCopyError)).toBe("23514");
+      expect(postgresErrorText(staleCopyError)).toContain(
+        "inbox_v2.message_content_copy_source_drift"
+      );
+      await expect(
+        repository.findMessage({ tenantId, messageId: staleCopy.message.id })
+      ).resolves.toBeNull();
+
+      const attachmentPin = readyFilePin(`${suffix}-copy-attachment`);
+      const attachmentSource = creationCommitWithReadyAttachment(
+        creationCommit(`${suffix}-copy-attachment-source`),
+        attachmentPin,
+        `${suffix}-copy-attachment-source`
+      );
+      await seedReadyFileGraph(db, {
+        pin: attachmentPin,
+        processingPurposeId:
+          attachmentSource.timelineAllocation.conversationAfter.purposeId,
+        timestamp: attachmentSource.content.createdAt
+      });
+      await seedCreationAnchors(db, attachmentSource);
+      await expect(
+        historicalTimelineFixtureRepository(db).createMessage({
+          commit: attachmentSource,
+          streamPosition: position("697")
+        })
+      ).resolves.toMatchObject({ kind: "created" });
+      const attachmentSourceItem = attachmentSource.timelineAllocation.items[0];
+      if (attachmentSourceItem === undefined) {
+        throw new Error("Attachment content-copy requires one source item.");
+      }
+      const attachmentReferenceContext = {
+        kind: "forward_content_copy" as const,
+        sources: [
+          {
+            conversation: attachmentSource.message.conversation,
+            message: attachmentSource.initialRevision.message,
+            timelineItem: attachmentSource.initialRevision.timelineItem,
+            messageRevision: attachmentSource.message.revision
+          }
+        ]
+      };
+      const attachmentCopyRoute = await seedMessageSendOutboundRoute({
+        db,
+        creation: forgedCopyAnchor,
+        contentKindId: "core:multipart",
+        context,
+        operator,
+        operationId: "core:message.forward_content_copy",
+        permissionId: "core:message.forward_external",
+        routePolicy: contentCopyRoute.routePolicy,
+        suffix: `${suffix}-attachment-copy-route`
+      });
+      const attachmentCopy = huleeExternalCreationCommit({
+        binding: context.bindingProjection.binding,
+        copyAttachmentMode: "remap",
+        copySource: attachmentSource,
+        creation: forgedCopyAnchor,
+        operator,
+        referenceContext: attachmentReferenceContext,
+        route: attachmentCopyRoute,
+        suffix: `${suffix}-attachment-copy-dispatch`
+      });
+      await expect(
+        withAtomicMessageCreationGuardsDisabled(db, () =>
+          createSqlInboxV2TimelineMessageRepository(db).createMessage({
+            commit: attachmentCopy,
+            streamPosition: position("698")
+          })
+        )
+      ).resolves.toMatchObject({ kind: "created" });
+      const sourceAttachment = requireReadyAttachment(attachmentSource);
+      const copiedAttachment = requireReadyAttachment(attachmentCopy);
+      if (
+        sourceAttachment.attachment.state !== "ready" ||
+        copiedAttachment.attachment.state !== "ready"
+      ) {
+        throw new Error("Content-copy attachment pins must be ready.");
+      }
+      expect(copiedAttachment.attachment.attachment.id).not.toBe(
+        sourceAttachment.attachment.attachment.id
+      );
+      expect(copiedAttachment.attachment.fileVersion.id).toBe(
+        sourceAttachment.attachment.fileVersion.id
+      );
+      expect(copiedAttachment.attachment.objectVersion.id).toBe(
+        sourceAttachment.attachment.objectVersion.id
+      );
+
+      const tamperedAttachmentAnchor = rebaseMessageCreationCommit(
+        attachmentCopy,
+        attachmentCopy.timelineAllocation.conversationAfter
+      );
+      const tamperedAttachmentRoute = await seedMessageSendOutboundRoute({
+        db,
+        creation: tamperedAttachmentAnchor,
+        contentKindId: "core:multipart",
+        context,
+        operator,
+        operationId: "core:message.forward_content_copy",
+        permissionId: "core:message.forward_external",
+        routePolicy: contentCopyRoute.routePolicy,
+        suffix: `${suffix}-tampered-attachment-copy-route`
+      });
+      const tamperedAttachmentCopy = huleeExternalCreationCommit({
+        binding: context.bindingProjection.binding,
+        copyAttachmentMode: "remap_tampered_display",
+        copySource: attachmentSource,
+        creation: tamperedAttachmentAnchor,
+        operator,
+        referenceContext: attachmentReferenceContext,
+        route: tamperedAttachmentRoute,
+        suffix: `${suffix}-tampered-attachment-copy-dispatch`
+      });
+      const tamperedAttachmentError =
+        await withAtomicMessageCreationGuardsDisabled(db, () =>
+          capturePostgresError(
+            createSqlInboxV2TimelineMessageRepository(db).createMessage({
+              commit: tamperedAttachmentCopy,
+              streamPosition: position("699")
+            })
+          )
+        );
+      expect(postgresSqlState(tamperedAttachmentError)).toBe("23514");
+      expect(postgresErrorText(tamperedAttachmentError)).toContain(
+        "inbox_v2.message_content_copy_source_drift"
+      );
+      await expect(
+        repository.findMessage({
+          tenantId,
+          messageId: tamperedAttachmentCopy.message.id
+        })
+      ).resolves.toBeNull();
+
+      // A native forward has exactly one external source. Adding a canonical
+      // target bypasses no application validation: the deferred PostgreSQL
+      // closure rejects the cardinality mismatch and rolls it back.
+      const cardinalityError = await captureLegacyMessageCreationError(
+        db,
+        async (transaction) => {
+          await transaction.execute(sql`
+            insert into inbox_v2_message_reference_canonical_targets (
+              tenant_id, message_id, ordinal, target_message_id,
+              target_timeline_item_id, target_message_revision, created_at
+            ) values (
+              ${tenantId}, ${nativeForward.message.id}, 0,
+              ${target.message.id}, ${target.timelineAllocation.items[0]!.id},
+              1, ${nativeForward.timelineAllocation.committedAt}
+            )
+          `);
+          await transaction.execute(sql`set constraints all immediate`);
+        }
+      );
+      expect(postgresSqlState(cardinalityError)).toBe("23514");
+      expect(postgresErrorText(cardinalityError)).toContain(
+        "inbox_v2.message_reference_context_shape"
+      );
+    });
+
     it("replays, fences and recovers reactions plus provider lifecycle state", async () => {
       const repository = createSqlInboxV2TimelineMessageRepository(db);
       const foreignTenantId = inboxV2TenantIdSchema.parse(
@@ -5788,6 +6298,163 @@ function creationCommit(suffix: string): InboxV2MessageCreationCommit {
   );
 }
 
+function readyFilePin(suffix: string) {
+  return {
+    file: {
+      tenantId,
+      kind: "file" as const,
+      id: `file:db005-${suffix}-${runId}`
+    },
+    fileRevision: "1" as const,
+    fileVersion: {
+      tenantId,
+      kind: "file_version" as const,
+      id: `file_version:db005-${suffix}-v1-${runId}`
+    },
+    objectVersion: {
+      tenantId,
+      kind: "file_object_version" as const,
+      id: `file_object_version:db005-${suffix}-v1-${runId}`
+    }
+  };
+}
+
+function creationCommitWithReadyAttachment(
+  base: InboxV2MessageCreationCommit,
+  pin: ReturnType<typeof readyFilePin>,
+  suffix: string
+): InboxV2MessageCreationCommit {
+  if (base.content.state.kind !== "available") {
+    throw new Error("Ready attachment fixture requires available content.");
+  }
+  const blocks = [
+    ...base.content.state.blocks,
+    {
+      blockKey: "image-copy-1",
+      kind: "image" as const,
+      attachment: {
+        state: "ready" as const,
+        attachment: {
+          tenantId,
+          kind: "message_attachment" as const,
+          id: `message_attachment:db005-${suffix}-${runId}`
+        },
+        file: pin.file,
+        fileRevision: pin.fileRevision,
+        fileVersion: pin.fileVersion,
+        objectVersion: pin.objectVersion
+      },
+      displayName: "copy-source-photo.jpg"
+    }
+  ];
+  const content = inboxV2TimelineContentSchema.parse({
+    ...base.content,
+    state: {
+      kind: "available",
+      blocks,
+      contentDigestSha256: calculateInboxV2MessageContentDigest(blocks)
+    }
+  });
+  const message = {
+    ...base.message,
+    content: inboxV2TimelineContentHeadOf(content)
+  };
+  return inboxV2MessageCreationCommitSchema.parse({
+    ...base,
+    content,
+    message,
+    initialRevision: {
+      ...base.initialRevision,
+      change: { kind: "created", content: message.content }
+    }
+  });
+}
+
+function requireReadyAttachment(creation: InboxV2MessageCreationCommit) {
+  if (creation.content.state.kind !== "available") {
+    throw new Error("Ready attachment content is unavailable.");
+  }
+  for (const block of creation.content.state.blocks) {
+    if ("attachment" in block && block.attachment.state === "ready") {
+      return block;
+    }
+  }
+  throw new Error("Expected one ready attachment block.");
+}
+
+async function seedReadyFileGraph(
+  db: HuleeDatabase,
+  input: {
+    pin: ReturnType<typeof readyFilePin>;
+    processingPurposeId: string;
+    timestamp: string;
+  }
+) {
+  const { pin } = input;
+  await db.transaction(async (transaction) => {
+    await transaction.execute(
+      sql`set local session_replication_role = replica`
+    );
+    try {
+      await transaction.execute(sql`
+        insert into inbox_v2_file_object_versions (
+          tenant_id, id, storage_root_id, storage_object_key,
+          storage_version_identity, versioning_mode, checksum_sha256,
+          size_bytes, declared_media_type, detected_media_type,
+          encryption_key_ref, data_class_id, retention_anchor_at, created_at
+        ) values (
+          ${tenantId}, ${pin.objectVersion.id}, 'core:tenant-object-storage',
+          ${`attachment-copy/${pin.file.id}/v1`}, 'v1', 'immutable_key',
+          ${"a".repeat(64)}, 42, 'image/jpeg', 'image/jpeg', null,
+          'core:message-content', ${input.timestamp}, ${input.timestamp}
+        )
+      `);
+      await transaction.execute(sql`
+        insert into inbox_v2_file_objects (
+          tenant_id, id, data_class_id, processing_purpose_id,
+          retention_anchor_at, state, current_file_version_id,
+          current_object_version_id, revision, created_at, updated_at
+        ) values (
+          ${tenantId}, ${pin.file.id}, 'core:message-content',
+          ${input.processingPurposeId}, ${input.timestamp}, 'ready',
+          ${pin.fileVersion.id}, ${pin.objectVersion.id}, 1,
+          ${input.timestamp}, ${input.timestamp}
+        )
+      `);
+      await transaction.execute(sql`
+        insert into inbox_v2_file_versions (
+          tenant_id, id, file_id, version_number, object_version_id, created_at
+        ) values (
+          ${tenantId}, ${pin.fileVersion.id}, ${pin.file.id}, 1,
+          ${pin.objectVersion.id}, ${input.timestamp}
+        )
+      `);
+      await transaction.execute(sql`
+        insert into inbox_v2_file_object_version_heads (
+          tenant_id, object_version_id, state, latest_operation_evidence_id,
+          revision, state_changed_at, created_at
+        ) values (
+          ${tenantId}, ${pin.objectVersion.id}, 'ready', null, 1,
+          ${input.timestamp}, ${input.timestamp}
+        )
+      `);
+      await transaction.execute(sql`
+        insert into inbox_v2_file_parent_set_heads (
+          tenant_id, file_id, revision, completeness,
+          completeness_revision, live_parent_count, updated_at
+        ) values (
+          ${tenantId}, ${pin.file.id}, 1, 'complete', 1, 0,
+          ${input.timestamp}
+        )
+      `);
+    } finally {
+      await transaction.execute(
+        sql`set local session_replication_role = origin`
+      );
+    }
+  });
+}
+
 function staffNoteCreationCommit(
   anchors: InboxV2MessageCreationCommit,
   suffix: string
@@ -6003,6 +6670,7 @@ function replyCreationCommit(
     target: {
       state: "resolved_internal" as const,
       canonical: {
+        conversation: target.message.conversation,
         message: {
           tenantId,
           kind: "message" as const,
@@ -6389,7 +7057,11 @@ function huleeExternalCreationCommit(input: {
     ReturnType<typeof seedExternalCreationAnchors>
   >["bindingProjection"]["binding"];
   creation: InboxV2MessageCreationCommit;
+  copyAttachmentMode?: "remap" | "remap_tampered_display";
+  copyContentMode?: "identity" | "different";
+  copySource?: InboxV2MessageCreationCommit;
   operator: ReturnType<typeof fixtureParticipant>;
+  referenceContext?: InboxV2MessageCreationCommit["message"]["referenceContext"];
   route: ReturnType<typeof inboxV2OutboundRouteSchema.parse>;
   suffix: string;
 }) {
@@ -6431,9 +7103,76 @@ function huleeExternalCreationCommit(input: {
     employee: input.operator.subject.employee,
     authorizationEpoch: input.route.authorizationEpoch
   };
+  const referenceContext =
+    input.referenceContext ?? raw.message.referenceContext;
+  const copySourceTimelineItem = input.copySource?.timelineAllocation.items[0];
+  const copySourceContent = input.copySource?.content;
+  if (
+    referenceContext.kind === "forward_content_copy" &&
+    (input.copySource === undefined ||
+      copySourceTimelineItem === undefined ||
+      copySourceContent?.state.kind !== "available")
+  ) {
+    throw new Error(
+      "Content-copy creation fixture requires one available canonical source."
+    );
+  }
+  const copiedBlocks =
+    referenceContext.kind === "forward_content_copy" &&
+    copySourceContent?.state.kind === "available"
+      ? input.copyContentMode === "different"
+        ? [
+            {
+              blockKey: "body-1",
+              kind: "text" as const,
+              role: "body" as const,
+              text: "Forged content-copy body",
+              language: "en"
+            }
+          ]
+        : copySourceContent.state.blocks.map((block) => {
+            if (
+              !("attachment" in block) ||
+              input.copyAttachmentMode === undefined
+            ) {
+              return block;
+            }
+            return {
+              ...block,
+              ...(input.copyAttachmentMode === "remap_tampered_display" &&
+              (block.kind === "image" ||
+                block.kind === "file" ||
+                block.kind === "sticker")
+                ? { displayName: "tampered-forward-name.bin" }
+                : {}),
+              attachment: {
+                ...block.attachment,
+                attachment: {
+                  ...block.attachment.attachment,
+                  id: `message_attachment:db005-${input.suffix}-${block.blockKey}-${runId}`
+                }
+              }
+            };
+          })
+      : null;
+  const content: InboxV2TimelineContent =
+    copiedBlocks === null
+      ? inboxV2TimelineContentSchema.parse(raw.content)
+      : inboxV2TimelineContentSchema.parse({
+          ...raw.content,
+          state: {
+            kind: "available",
+            blocks: copiedBlocks,
+            contentDigestSha256:
+              calculateInboxV2MessageContentDigest(copiedBlocks)
+          }
+        });
   const timelineItem = {
     ...rawTimelineItem,
     conversation: input.creation.message.conversation,
+    timelineSequence: String(
+      BigInt(conversation.head.latestTimelineSequence) + 1n
+    ),
     subject: {
       kind: "message" as const,
       message: messageReference,
@@ -6449,7 +7188,9 @@ function huleeExternalCreationCommit(input: {
       kind: "hulee_external" as const,
       outboundRoute: routeReference
     },
-    appActor
+    appActor,
+    content: inboxV2TimelineContentHeadOf(content),
+    referenceContext
   };
   const conversationAfter = {
     ...conversation,
@@ -6463,6 +7204,28 @@ function huleeExternalCreationCommit(input: {
       updatedAt: raw.timelineAllocation.committedAt
     }
   };
+  const externalReferenceTargets =
+    referenceContext.kind === "forward_provider_native" &&
+    input.creation.externalMessageReference !== null &&
+    input.creation.sourceOccurrence !== null
+      ? [
+          {
+            externalMessageReference: input.creation.externalMessageReference,
+            sourceOccurrence: input.creation.sourceOccurrence
+          }
+        ]
+      : raw.externalReferenceTargets;
+  const canonicalReferenceTargets =
+    referenceContext.kind === "forward_content_copy" &&
+    input.copySource !== undefined &&
+    copySourceTimelineItem !== undefined
+      ? [
+          {
+            message: input.copySource.message,
+            timelineItem: copySourceTimelineItem
+          }
+        ]
+      : raw.canonicalReferenceTargets;
   return inboxV2MessageCreationCommitSchema.parse({
     ...raw,
     timelineAllocation: {
@@ -6473,6 +7236,7 @@ function huleeExternalCreationCommit(input: {
       committedAt: raw.timelineAllocation.committedAt
     },
     authorParticipant: input.operator,
+    content,
     message,
     initialRevision: {
       ...raw.initialRevision,
@@ -6482,9 +7246,15 @@ function huleeExternalCreationCommit(input: {
         ...raw.initialRevision.actionAttribution,
         actionParticipant: authorParticipant,
         appActor
+      },
+      change: {
+        kind: "created",
+        content: message.content
       }
     },
     externalThreadMapping: input.creation.externalThreadMapping,
+    canonicalReferenceTargets,
+    externalReferenceTargets,
     outboundRoute: input.route,
     outboundBindingSnapshot: input.binding,
     outboundDispatch: {
@@ -8721,7 +9491,9 @@ async function seedExternalCreationAnchors(
   creation: InboxV2MessageCreationCommit,
   suffix: string,
   options: {
+    includeContentCopyCapability?: boolean;
     includeMessageSendCapability?: boolean;
+    includeNativeForwardCapability?: boolean;
     includeReactionSetCapability?: boolean;
   } = {}
 ) {
@@ -8785,7 +9557,10 @@ async function seedExternalCreationAnchors(
     sourceConnection,
     sourceAccountIdentity: identity,
     bindingEvidence,
+    includeContentCopyCapability: options.includeContentCopyCapability ?? false,
     includeMessageSendCapability: options.includeMessageSendCapability ?? false,
+    includeNativeForwardCapability:
+      options.includeNativeForwardCapability ?? false,
     includeReactionSetCapability: options.includeReactionSetCapability ?? false
   });
   const bindingResult =
@@ -10645,6 +11420,12 @@ async function seedProviderResultOutboundRoute(input: {
   creation: InboxV2MessageCreationCommit;
   context: Awaited<ReturnType<typeof seedExternalCreationAnchors>>;
   operator: ReturnType<typeof fixtureParticipant>;
+  operationId?:
+    | "core:message.reaction.set"
+    | "core:message.forward_provider_native";
+  permissionId?:
+    | "core:message.reaction.set_external"
+    | "core:message.forward_external";
   suffix: string;
 }) {
   const sourceOccurrence = requireSourceOccurrence(input.creation);
@@ -10663,8 +11444,8 @@ async function seedProviderResultOutboundRoute(input: {
   const operatorEmployee = input.operator.subject.employee;
   const rawRoute = namespaceFixture(
     fixtureExternalTargetRoute(
-      "core:message.reaction.set",
-      "core:message.reaction.set_external"
+      input.operationId ?? "core:message.reaction.set",
+      input.permissionId ?? "core:message.reaction.set_external"
     ),
     input.suffix
   );
@@ -10859,23 +11640,42 @@ async function seedProviderResultOutboundRoute(input: {
 async function seedMessageSendOutboundRoute(input: {
   db: HuleeDatabase;
   creation: InboxV2MessageCreationCommit;
+  contentKindId?: "core:text" | "core:multipart";
   context: Awaited<ReturnType<typeof seedExternalCreationAnchors>>;
   operator: ReturnType<typeof fixtureParticipant>;
   routePolicy?: ReturnType<
     typeof inboxV2OutboundRouteSchema.parse
   >["routePolicy"];
+  operationId?: "core:message.send" | "core:message.forward_content_copy";
+  permissionId?:
+    | "core:message.reply_external"
+    | "core:message.forward_external";
   suffix: string;
 }) {
   const binding = input.context.bindingProjection.binding;
-  const rawRoute = namespaceFixture(
+  const rawRouteFixture = namespaceFixture(
     fixtureHuleeCreationCommit().outboundRoute,
     input.suffix
   );
-  if (rawRoute === null || input.operator.subject.kind !== "employee") {
+  if (rawRouteFixture === null || input.operator.subject.kind !== "employee") {
     throw new Error(
       "Message-send route requires a route fixture and Employee principal."
     );
   }
+  const operationId = input.operationId ?? "core:message.send";
+  const contentKindId = input.contentKindId ?? "core:text";
+  const permissionId = input.permissionId ?? "core:message.reply_external";
+  const rawRoute = {
+    ...rawRouteFixture,
+    contentKindId,
+    operationId,
+    requiredConversationPermissionId: permissionId,
+    conversationAuthorization: {
+      ...rawRouteFixture.conversationAuthorization,
+      requiredPermissionId: permissionId,
+      matchedPermissionIds: [permissionId]
+    }
+  };
   const bindingFence = {
     accountGeneration:
       binding.accountIdentitySnapshot.status === "verified"
@@ -10921,6 +11721,8 @@ async function seedMessageSendOutboundRoute(input: {
     sourceAccount: binding.sourceAccount,
     sourceConnection: binding.sourceConnection,
     routePolicy: input.routePolicy ?? rawRoute.routePolicy,
+    operationId,
+    requiredConversationPermissionId: permissionId,
     bindingFence,
     adapterContract: binding.capabilities.adapterContract,
     routeDescriptor: binding.routeDescriptor,
@@ -10928,7 +11730,9 @@ async function seedMessageSendOutboundRoute(input: {
       ...rawRoute.conversationAuthorization,
       tenantId,
       principal,
-      target: authorizationTarget
+      target: authorizationTarget,
+      requiredPermissionId: permissionId,
+      matchedPermissionIds: [permissionId]
     },
     sourceAccountAuthorization: {
       ...rawRoute.sourceAccountAuthorization,
@@ -11637,6 +12441,8 @@ function sourceThreadBindingCreationCommit(input: {
     InboxV2MessageCreationCommit["sourceOccurrence"]
   >["bindingContext"];
   includeMessageSendCapability?: boolean;
+  includeContentCopyCapability?: boolean;
+  includeNativeForwardCapability?: boolean;
   includeReactionSetCapability?: boolean;
 }) {
   const occurrence = requireSourceOccurrence(input.creation);
@@ -11754,6 +12560,47 @@ function sourceThreadBindingCreationCommit(input: {
                 capabilityId: "core:message-text-send",
                 operationId: "core:message.send",
                 contentKindId: "core:text",
+                state: "supported" as const,
+                referencePortability: "external_thread" as const,
+                requiredProviderRoleIds: [],
+                validUntil: null,
+                diagnostic: null,
+                evidence: [input.bindingEvidence]
+              }
+            ]
+          : []),
+        ...(input.includeContentCopyCapability
+          ? [
+              {
+                capabilityId: "module:synthetic:content-copy",
+                operationId: "core:message.forward_content_copy",
+                contentKindId: "core:text",
+                state: "supported" as const,
+                referencePortability: "external_thread" as const,
+                requiredProviderRoleIds: [],
+                validUntil: null,
+                diagnostic: null,
+                evidence: [input.bindingEvidence]
+              },
+              {
+                capabilityId: "module:synthetic:content-copy-multipart",
+                operationId: "core:message.forward_content_copy",
+                contentKindId: "core:multipart",
+                state: "supported" as const,
+                referencePortability: "external_thread" as const,
+                requiredProviderRoleIds: [],
+                validUntil: null,
+                diagnostic: null,
+                evidence: [input.bindingEvidence]
+              }
+            ]
+          : []),
+        ...(input.includeNativeForwardCapability
+          ? [
+              {
+                capabilityId: "module:synthetic:native-forward",
+                operationId: "core:message.forward_provider_native",
+                contentKindId: null,
                 state: "supported" as const,
                 referencePortability: "external_thread" as const,
                 requiredProviderRoleIds: [],
@@ -12698,6 +13545,84 @@ async function createSourceMessage(
   );
 }
 
+type ExternalMessageRouteReferenceContext = Extract<
+  ReturnType<typeof inboxV2OutboundRouteSchema.parse>["referenceContext"],
+  { kind: "external_message" }
+>;
+
+async function outboundRouteActionValid(
+  db: HuleeDatabase,
+  input: {
+    route: ReturnType<typeof inboxV2OutboundRouteSchema.parse>;
+    message: InboxV2MessageCreationCommit;
+    externalMessageReferenceId: string;
+    sourceOccurrenceId: string;
+    permissionId?:
+      | "core:message.forward_external"
+      | "core:message.reply_external";
+    requireExplicitOccurrence: boolean;
+  }
+): Promise<boolean> {
+  const result = await db.execute<{ valid: boolean }>(sql`
+    select public.inbox_v2_tm_outbound_route_action_valid(
+      ${tenantId}, ${input.route.id}, ${input.message.message.id}, null,
+      ${input.message.message.conversation.id},
+      ${input.message.timelineAllocation.committedAt},
+      ${input.message.initialRevision.createdAt},
+      'core:message.forward_provider_native',
+      ${input.permissionId ?? "core:message.forward_external"},
+      ${input.externalMessageReferenceId}, ${input.sourceOccurrenceId},
+      ${input.route.sourceAccount.id},
+      ${input.route.sourceThreadBinding.id},
+      ${input.route.bindingFence.bindingGeneration},
+      ${input.route.adapterContract.contractId},
+      ${input.route.adapterContract.contractVersion},
+      ${input.route.adapterContract.declarationRevision},
+      ${input.route.adapterContract.surfaceId},
+      ${input.route.adapterContract.loadedByTrustedServiceId},
+      ${input.route.adapterContract.loadedAt},
+      'module:synthetic:native-forward',
+      ${input.route.bindingFence.capabilityRevision},
+      ${derivedInboxV2Id(
+        "action_attribution",
+        input.message.initialRevision.id
+      )},
+      ${input.requireExplicitOccurrence}
+    ) as valid
+  `);
+  return result.rows[0]?.valid ?? false;
+}
+
+async function updateOutboundRouteReferenceContext(
+  db: HuleeDatabase,
+  routeId: string,
+  mutate: (
+    context: ExternalMessageRouteReferenceContext
+  ) => ExternalMessageRouteReferenceContext
+): Promise<void> {
+  await db.transaction(async (transaction) => {
+    const stored = await transaction.execute<{
+      context: ExternalMessageRouteReferenceContext;
+    }>(sql`
+      select reference_context_snapshot as context
+        from inbox_v2_outbound_routes
+       where tenant_id = ${tenantId}
+         and id = ${routeId}
+       for update
+    `);
+    const current = stored.rows[0]?.context;
+    if (current === undefined || current.kind !== "external_message") {
+      throw new Error("Expected one persisted external-message route context.");
+    }
+    await transaction.execute(sql`
+      update inbox_v2_outbound_routes
+         set reference_context_snapshot = ${JSON.stringify(mutate(current))}::jsonb
+       where tenant_id = ${tenantId}
+         and id = ${routeId}
+    `);
+  });
+}
+
 function historicalTimelineFixtureRepository(db: HuleeDatabase) {
   return createSqlInboxV2TimelineMessageRepository({
     execute: db.execute.bind(db),
@@ -12741,6 +13666,19 @@ async function captureLegacyMessageCreationError(
   db: HuleeDatabase,
   work: Parameters<InboxV2TimelineMessageTransactionExecutor["transaction"]>[0]
 ) {
+  return withAtomicMessageCreationGuardsDisabled(db, () =>
+    capturePostgresError(
+      db.transaction((transaction) =>
+        work(transaction as unknown as RawSqlExecutor)
+      )
+    )
+  );
+}
+
+async function withAtomicMessageCreationGuardsDisabled<TResult>(
+  db: HuleeDatabase,
+  work: () => Promise<TResult>
+): Promise<TResult> {
   await db.transaction(async (transaction) => {
     await transaction.execute(sql`
       alter table public.inbox_v2_messages
@@ -12752,11 +13690,7 @@ async function captureLegacyMessageCreationError(
     `);
   });
   try {
-    return await capturePostgresError(
-      db.transaction((transaction) =>
-        work(transaction as unknown as RawSqlExecutor)
-      )
-    );
+    return await work();
   } finally {
     await db.transaction(async (transaction) => {
       await transaction.execute(sql`

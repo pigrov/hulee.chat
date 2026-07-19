@@ -21,6 +21,8 @@ import {
   inboxV2SourceThreadBindingReferenceSchema,
   inboxV2StaffNoteReferenceSchema,
   inboxV2TenantIdSchema,
+  inboxV2TimelineContentReferenceSchema,
+  inboxV2TimelineItemReferenceSchema,
   inboxV2WorkItemCollaboratorEpisodeReferenceSchema,
   inboxV2WorkItemPrimaryAssignmentReferenceSchema,
   inboxV2WorkItemReferenceSchema
@@ -30,7 +32,10 @@ import {
   type InboxV2MessageReferenceContext
 } from "./message";
 import {
+  calculateInboxV2ContentCopySourceDigest,
+  inboxV2ContentCopyAttachmentMappingSchema,
   inboxV2ContentBlockKeySchema,
+  inboxV2ContentDigestSha256Schema,
   inboxV2TimelineContentDraftSchema
 } from "./message-content";
 import { inboxV2ReactionValueSchema } from "./message-reaction";
@@ -520,11 +525,20 @@ const providerDeleteSchema = z
     );
   });
 
-const forwardSourceReadProofSchema = z
+export const inboxV2ContentCopySourceReadProofSchema = z
   .object({
     conversation: inboxV2ConversationReferenceSchema,
     message: inboxV2MessageReferenceSchema,
     expectedMessageRevision: inboxV2EntityRevisionSchema,
+    timelineItem: inboxV2TimelineItemReferenceSchema,
+    expectedTimelineItemRevision: inboxV2EntityRevisionSchema,
+    timelineContent: inboxV2TimelineContentReferenceSchema,
+    expectedTimelineContentRevision: inboxV2EntityRevisionSchema,
+    sourceContentDigestSha256: inboxV2ContentDigestSha256Schema,
+    attachmentCopies: z
+      .array(inboxV2ContentCopyAttachmentMappingSchema)
+      .max(64)
+      .optional(),
     visibilityBoundary: z.enum(["external_work", "internal"])
   })
   .strict();
@@ -538,7 +552,7 @@ const forwardContentCopySchema = z
     replyAuthority: inboxV2ExternalReplyAuthoritySchema.optional(),
     referenceContext: inboxV2MessageReferenceContextSchema,
     sourceReadProofs: z
-      .array(forwardSourceReadProofSchema)
+      .array(inboxV2ContentCopySourceReadProofSchema)
       .min(1)
       .max(32)
       .optional(),
@@ -565,11 +579,11 @@ const forwardContentCopySchema = z
     } else if (intent.sourceReadProofs !== undefined) {
       const sourceKeys = intent.referenceContext.sources.map(
         (source) =>
-          `${source.message.tenantId}\u0000${source.message.id}\u0000${source.messageRevision}`
+          `${source.conversation.tenantId}\u0000${source.conversation.id}\u0000${source.message.tenantId}\u0000${source.message.id}\u0000${source.messageRevision}\u0000${source.timelineItem.tenantId}\u0000${source.timelineItem.id}\u0000${source.messageRevision}`
       );
       const proofKeys = intent.sourceReadProofs.map(
         (proof) =>
-          `${proof.message.tenantId}\u0000${proof.message.id}\u0000${proof.expectedMessageRevision}`
+          `${proof.conversation.tenantId}\u0000${proof.conversation.id}\u0000${proof.message.tenantId}\u0000${proof.message.id}\u0000${proof.expectedMessageRevision}\u0000${proof.timelineItem.tenantId}\u0000${proof.timelineItem.id}\u0000${proof.expectedTimelineItemRevision}`
       );
       if (
         new Set(sourceKeys).size !== sourceKeys.length ||
@@ -583,8 +597,55 @@ const forwardContentCopySchema = z
           "Every canonical forward source requires one exact server-stamped source Conversation visibility proof."
         );
       }
+      if (
+        intent.sourceReadProofs.some(
+          (proof) =>
+            proof.conversation.tenantId !== intent.tenantId ||
+            proof.message.tenantId !== intent.tenantId ||
+            proof.timelineContent.tenantId !== intent.tenantId ||
+            proof.timelineItem.tenantId !== intent.tenantId
+        )
+      ) {
+        addIssue(
+          context,
+          ["sourceReadProofs"],
+          "Content-copy source proofs cannot cross the command tenant."
+        );
+      }
     }
     if (intent.destination.kind === "external") {
+      if (
+        intent.sourceReadProofs === undefined ||
+        intent.referenceContext.kind !== "forward_content_copy" ||
+        intent.referenceContext.sources.length !== 1 ||
+        intent.sourceReadProofs.length !== 1 ||
+        intent.sourceReadProofs.some(
+          (proof) => proof.visibilityBoundary !== "external_work"
+        )
+      ) {
+        addIssue(
+          context,
+          ["sourceReadProofs"],
+          "External content-copy requires one exact external-work source visibility proof per canonical source."
+        );
+      }
+      if (
+        intent.sourceReadProofs !== undefined &&
+        intent.sourceReadProofs.some(
+          (proof) =>
+            proof.sourceContentDigestSha256 !==
+            calculateInboxV2ContentCopySourceDigest(
+              intent.content.blocks,
+              proof.attachmentCopies ?? []
+            )
+        )
+      ) {
+        addIssue(
+          context,
+          ["content"],
+          "External content-copy may replace only owner-scoped MessageAttachment anchors; every other source block field must match the server-stamped TimelineContent digest."
+        );
+      }
       addRouteAuthorizationProofIssues(
         context,
         intent.conversation,
@@ -624,8 +685,7 @@ const forwardProviderNativeSchema = z
     replyAuthority: inboxV2ExternalReplyAuthoritySchema.optional(),
     sourceReadProofs: z
       .array(inboxV2ProviderNativeForwardSourceReadProofSchema)
-      .min(1)
-      .max(32)
+      .length(1)
       .optional(),
     referenceContext: inboxV2MessageReferenceContextSchema
   })
