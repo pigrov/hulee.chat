@@ -10,6 +10,9 @@ const describePostgres =
 const migrationPath = resolve(
   "packages/db/drizzle/0050_inbox_v2_outbound_send_authority.sql"
 );
+const providerClosureMigrationPath = resolve(
+  "packages/db/drizzle/0046_inbox_v2_atomic_provider_io_closure.sql"
+);
 const legacyPermission = "core:message.send_external";
 const canonicalPermission = "core:message.reply_external";
 const rerouteCommandType = "core:source.dispatch.reroute";
@@ -67,6 +70,10 @@ describePostgres(
       }
 
       const migrationSql = await readFile(migrationPath, "utf8");
+      const providerClosureMigrationSql = await readFile(
+        providerClosureMigrationPath,
+        "utf8"
+      );
       const reviewedSuccessorMd5 = new Map(
         guardedFunctions.map((guardedFunction) => [
           guardedFunction.name,
@@ -80,52 +87,89 @@ describePostgres(
       await client.connect();
 
       try {
-        const installed = await readGuardedFunctions(client);
-        expectReviewedSuccessorShapes(installed, reviewedSuccessorMd5);
-
-        await client.query(migrationSql);
-        const afterFirstRerun = await readGuardedFunctions(client);
-        expect(functionSources(afterFirstRerun)).toEqual(
-          functionSources(installed)
+        const currentInstalled = await readGuardedFunctions(client);
+        expectCurrentMsg003Override(currentInstalled, reviewedSuccessorMd5);
+        const staleMigrationError = await captureDatabaseError(
+          client.query(migrationSql)
+        );
+        expect(staleMigrationError).toMatchObject({
+          code: "55000",
+          message: "inbox_v2.msg002_domain_mutation_unreviewed_shape"
+        });
+        expect(functionSources(await readGuardedFunctions(client))).toEqual(
+          functionSources(currentInstalled)
         );
 
-        for (const guardedFunction of guardedFunctions) {
-          await client.query("begin");
-          try {
-            const baseline = requiredFunction(installed, guardedFunction.name);
-            await client.query(
-              addBodyDriftComment(
-                baseline.definition,
-                guardedFunction.guardSlug
-              )
-            );
+        await client.query("begin");
+        try {
+          await client.query(
+            extractFunctionDefinition(
+              providerClosureMigrationSql,
+              "public.inbox_v2_auth_domain_mutation_coherence"
+            )
+          );
+          await client.query(migrationSql);
+          const installed = await readGuardedFunctions(client);
+          expectReviewedSuccessorShapes(installed, reviewedSuccessorMd5);
 
-            const tampered = await readGuardedFunction(client, guardedFunction);
-            expect(md5(tampered.source)).not.toBe(
-              reviewedSuccessorMd5.get(guardedFunction.name)
-            );
+          await client.query(migrationSql);
+          const afterFirstRerun = await readGuardedFunctions(client);
+          expect(functionSources(afterFirstRerun)).toEqual(
+            functionSources(installed)
+          );
 
-            const migrationError = await captureDatabaseError(
-              client.query(migrationSql)
+          for (const guardedFunction of guardedFunctions) {
+            await client.query("savepoint msg002_guard_drift");
+            try {
+              const baseline = requiredFunction(
+                installed,
+                guardedFunction.name
+              );
+              await client.query(
+                addBodyDriftComment(
+                  baseline.definition,
+                  guardedFunction.guardSlug
+                )
+              );
+
+              const tampered = await readGuardedFunction(
+                client,
+                guardedFunction
+              );
+              expect(md5(tampered.source)).not.toBe(
+                reviewedSuccessorMd5.get(guardedFunction.name)
+              );
+
+              const migrationError = await captureDatabaseError(
+                client.query(migrationSql)
+              );
+              expect(migrationError).toMatchObject({
+                code: "55000",
+                message: `inbox_v2.msg002_${guardedFunction.guardSlug}_unreviewed_shape`
+              });
+            } finally {
+              await client.query("rollback to savepoint msg002_guard_drift");
+              await client.query("release savepoint msg002_guard_drift");
+            }
+
+            const restored = await readGuardedFunctions(client);
+            expect(functionSources(restored)).toEqual(
+              functionSources(installed)
             );
-            expect(migrationError).toMatchObject({
-              code: "55000",
-              message: `inbox_v2.msg002_${guardedFunction.guardSlug}_unreviewed_shape`
-            });
-          } finally {
-            await client.query("rollback");
           }
 
-          const restored = await readGuardedFunctions(client);
-          expect(functionSources(restored)).toEqual(functionSources(installed));
+          await client.query(migrationSql);
+          const afterFinalRerun = await readGuardedFunctions(client);
+          expect(functionSources(afterFinalRerun)).toEqual(
+            functionSources(installed)
+          );
+          expectReviewedSuccessorShapes(afterFinalRerun, reviewedSuccessorMd5);
+        } finally {
+          await client.query("rollback");
         }
-
-        await client.query(migrationSql);
-        const afterFinalRerun = await readGuardedFunctions(client);
-        expect(functionSources(afterFinalRerun)).toEqual(
-          functionSources(installed)
+        expect(functionSources(await readGuardedFunctions(client))).toEqual(
+          functionSources(currentInstalled)
         );
-        expectReviewedSuccessorShapes(afterFinalRerun, reviewedSuccessorMd5);
       } finally {
         await client.end();
       }
@@ -253,6 +297,28 @@ function expectReviewedSuccessorShapes(
   }
 }
 
+function expectCurrentMsg003Override(
+  installed: ReadonlyMap<string, InstalledFunction>,
+  reviewedSuccessorMd5: ReadonlyMap<string, string>
+): void {
+  for (const guardedFunction of guardedFunctions) {
+    const installedFunction = requiredFunction(installed, guardedFunction.name);
+    const reviewedMd5 = reviewedSuccessorMd5.get(guardedFunction.name);
+    if (guardedFunction.name === "inbox_v2_auth_domain_mutation_coherence") {
+      expect(md5(installedFunction.source)).not.toBe(reviewedMd5);
+      for (const fragment of [
+        "core:attachment.materialization.complete",
+        "inbox_v2_auth_attachment_message_change_valid",
+        "inbox_v2.domain_mutation_attachment_cardinality_invalid"
+      ]) {
+        expect(installedFunction.source).toContain(fragment);
+      }
+    } else {
+      expect(md5(installedFunction.source)).toBe(reviewedMd5);
+    }
+  }
+}
+
 function functionSources(
   installed: ReadonlyMap<string, InstalledFunction>
 ): Readonly<Record<string, string>> {
@@ -292,6 +358,23 @@ function extractMigrationConstant(sql: string, name: string): string {
     throw new Error(`Missing ${name} in the MSG-002 migration.`);
   }
   return match[1];
+}
+
+function extractFunctionDefinition(sql: string, functionName: string): string {
+  const normalized = sql.replaceAll("\r\n", "\n");
+  const start = normalized.indexOf(
+    `create or replace function ${functionName}`
+  );
+  const delimiter = "$function$";
+  const bodyStart = normalized.indexOf(`as ${delimiter}`, start);
+  const bodyEnd = normalized.indexOf(
+    `${delimiter};`,
+    bodyStart + `as ${delimiter}`.length
+  );
+  if (start < 0 || bodyStart < 0 || bodyEnd < 0) {
+    throw new Error(`Cannot extract ${functionName} from migration 0046.`);
+  }
+  return normalized.slice(start, bodyEnd + `${delimiter};`.length);
 }
 
 function countOccurrences(value: string, fragment: string): number {

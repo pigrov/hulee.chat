@@ -2,6 +2,7 @@ import { getTableConfig, PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
 import {
+  INBOX_V2_MESSAGE_ATTACHMENT_ANCHOR_INVARIANTS_SQL,
   INBOX_V2_TIMELINE_MESSAGE_INVARIANTS_SQL,
   inboxV2ActionAttributions,
   inboxV2MessageAttachmentAnchors,
@@ -73,6 +74,115 @@ describe("Inbox V2 timeline and Message schema", () => {
         );
       }
     }
+  });
+
+  it("binds new attachment anchors to one immutable Message content block while preserving N-1 rows", () => {
+    const anchorColumns = getTableConfig(
+      inboxV2MessageAttachmentAnchors
+    ).columns;
+    for (const columnName of [
+      "owner_message_id",
+      "owner_timeline_item_id",
+      "owner_timeline_content_id",
+      "owner_block_key",
+      "materialization_state"
+    ]) {
+      const column = anchorColumns.find(
+        (candidate) => candidate.name === columnName
+      );
+      expect(column).toBeDefined();
+      expect(column?.notNull).toBe(false);
+      expect(column?.hasDefault).toBe(false);
+    }
+    expect(
+      uniqueColumns(
+        inboxV2MessageAttachmentAnchors,
+        "inbox_v2_message_attachment_anchors_owner_block_unique"
+      )
+    ).toEqual(["tenant_id", "owner_timeline_content_id", "owner_block_key"]);
+    expect(
+      uniqueColumns(
+        inboxV2MessageAttachmentAnchors,
+        "inbox_v2_message_attachment_anchors_owner_identity_unique"
+      )
+    ).toEqual(["tenant_id", "owner_timeline_content_id", "id"]);
+    expect(
+      getTableConfig(inboxV2TimelineContentPayloads).indexes.some(
+        (index) =>
+          index.config.name ===
+          "inbox_v2_timeline_content_payloads_attachment_unique"
+      )
+    ).toBe(true);
+    expect(INBOX_V2_MESSAGE_ATTACHMENT_ANCHOR_INVARIANTS_SQL).toContain(
+      "deferrable initially deferred not valid"
+    );
+    expect(INBOX_V2_MESSAGE_ATTACHMENT_ANCHOR_INVARIANTS_SQL).toContain(
+      "inbox_v2.message_attachment_anchor_owner_required"
+    );
+    expect(INBOX_V2_MESSAGE_ATTACHMENT_ANCHOR_INVARIANTS_SQL).toContain(
+      "anchor_row.materialization_state = payload_row.attachment_state"
+    );
+    expect(INBOX_V2_MESSAGE_ATTACHMENT_ANCHOR_INVARIANTS_SQL).toContain(
+      "content_row.state = 'available'"
+    );
+    expect(INBOX_V2_MESSAGE_ATTACHMENT_ANCHOR_INVARIANTS_SQL).toMatch(
+      /if pg_catalog\.pg_trigger_depth\(\) > 1[\s\S]*?and not exists \([\s\S]*?from public\.tenants tenant_row/u
+    );
+    expect(INBOX_V2_MESSAGE_ATTACHMENT_ANCHOR_INVARIANTS_SQL).toContain(
+      "message_attachment_anchor_immutable"
+    );
+  });
+
+  it("accepts legacy or canonical automation causes without shadow event duplication", () => {
+    const attributionConfig = getTableConfig(inboxV2ActionAttributions);
+    expect(
+      attributionConfig.foreignKeys.map((foreignKey) => foreignKey.getName())
+    ).not.toContain("inbox_v2_action_attributions_cause_event_fk");
+    expect(
+      indexColumns(
+        inboxV2ActionAttributions,
+        "inbox_v2_action_attributions_cause_event_idx"
+      )
+    ).toEqual(["tenant_id", "automation_cause_event_id"]);
+    const causeEventIndex = attributionConfig.indexes.find(
+      (candidate) =>
+        candidate.config.name === "inbox_v2_action_attributions_cause_event_idx"
+    );
+    if (!causeEventIndex?.config.where) {
+      throw new Error("Missing partial cause-event index predicate.");
+    }
+    expect(
+      new PgDialect().sqlToQuery(causeEventIndex.config.where).sql
+    ).toContain('"automation_cause_event_id" is not null');
+
+    const invariantSql =
+      INBOX_V2_MESSAGE_ATTACHMENT_ANCHOR_INVARIANTS_SQL.toLowerCase();
+    expect(invariantSql).toContain(
+      "inbox_v2_msg003_action_attribution_cause_event_coherence"
+    );
+    expect(invariantSql).toContain("from public.event_store event_row");
+    expect(invariantSql).toContain(
+      "from public.inbox_v2_domain_events event_row"
+    );
+    expect(invariantSql).toContain(
+      "inbox_v2.action_attribution_cause_event_missing"
+    );
+    expect(invariantSql.match(/for key share/gu)).toHaveLength(2);
+    expect(invariantSql).toContain(
+      "deferrable initially deferred for each row"
+    );
+    expect(invariantSql).toContain(
+      "after insert or update on public.inbox_v2_action_attributions"
+    );
+    expect(invariantSql).toContain(
+      "before update or delete on public.event_store"
+    );
+    expect(invariantSql).toContain(
+      "inbox_v2.action_attribution_legacy_cause_event_referenced"
+    );
+    expect(invariantSql).not.toContain(
+      "before update or delete on public.inbox_v2_domain_events"
+    );
   });
 
   it("indexes only retention-eligible content by tenant, class and anchor", () => {

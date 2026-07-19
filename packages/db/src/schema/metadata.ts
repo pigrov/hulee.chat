@@ -353,6 +353,40 @@ export const initialTables = [
   { name: "inbox_v2_action_attributions", scope: "tenant", requiresTenantId: true },
   // prettier-ignore
   { name: "inbox_v2_message_attachment_anchors", scope: "tenant", requiresTenantId: true },
+  // MSG-003 file/object authority is additive to legacy files and attachment
+  // anchors. Physical versions never inherit parent-link cascade semantics.
+  // prettier-ignore
+  { name: "inbox_v2_file_objects", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_file_object_versions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_file_object_version_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_file_versions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_file_attachment_materialization_jobs", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_file_object_operation_evidence", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_file_attachment_materialization_attempts", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_file_attachment_materialization_evidence", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_file_storage_orphans", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_file_parent_set_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_file_parent_links", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_file_parent_link_heads", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_file_derivative_edges", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_file_outbound_dispatch_plans", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_file_outbound_artifact_plans", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_file_outbound_artifact_blocks", scope: "tenant", requiresTenantId: true },
   // prettier-ignore
   { name: "inbox_v2_timeline_contents", scope: "tenant", requiresTenantId: true },
   // prettier-ignore

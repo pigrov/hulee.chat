@@ -6,7 +6,10 @@ import {
   inboxV2MessageReferenceContextSchema,
   inboxV2MessageSchema
 } from "./message";
-import { inboxV2TimelineContentHeadOf } from "./message-content";
+import {
+  calculateInboxV2MessageContentDigest,
+  inboxV2TimelineContentHeadOf
+} from "./message-content";
 import {
   inboxV2StaffNoteCreationCommitSchema,
   inboxV2StaffNoteReadIntentSchema,
@@ -1208,19 +1211,20 @@ describe("Inbox V2 Message and StaffNote contracts", () => {
       }).success
     ).toBe(false);
 
+    const sourceBlocks = [
+      {
+        blockKey: "unsupported-1",
+        kind: "unsupported_source_content" as const,
+        sourceOccurrence: fixtureSourceOccurrenceReference,
+        providerContentKindId: "module:synthetic:unknown",
+        safeFallbackReasonId: "core:unsupported"
+      }
+    ];
     const sourceContent = fixtureContent({
       state: {
         kind: "available",
-        blocks: [
-          {
-            blockKey: "unsupported-1",
-            kind: "unsupported_source_content",
-            sourceOccurrence: fixtureSourceOccurrenceReference,
-            providerContentKindId: "module:synthetic:unknown",
-            safeFallbackReasonId: "core:unsupported"
-          }
-        ],
-        contentDigestSha256: "f".repeat(64)
+        blocks: sourceBlocks,
+        contentDigestSha256: calculateInboxV2MessageContentDigest(sourceBlocks)
       }
     });
     expect(

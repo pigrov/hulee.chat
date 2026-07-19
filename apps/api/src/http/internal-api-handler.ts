@@ -58,6 +58,7 @@ import {
   internalApiTimestampHeader,
   isPermission,
   verifyInternalApiSignature,
+  type InboxV2FileObjectPin,
   type Permission
 } from "@hulee/core";
 import type { Logger } from "@hulee/observability";
@@ -66,7 +67,11 @@ import type {
   InternalInboxCommandService,
   InternalInboxQueryService
 } from "../internal-inbox-service";
-import type { InternalFileService } from "../internal-file-service";
+import type {
+  InternalFileService,
+  InternalInboxV2FileDownloadService
+} from "../internal-file-service";
+import { InboxV2FileDownloadTicketError } from "../inbox-v2-file-download-ticket";
 import type { InternalAccessDecisionService } from "../internal-access-decision-service";
 import type { InternalEgressStatusService } from "../internal-egress-status-service";
 import type { InternalIntegrationService } from "../internal-integrations-service";
@@ -96,6 +101,7 @@ export type InternalApiHandlerOptions = {
   inboxQueries: InternalInboxQueryService;
   inboxCommands: InternalInboxCommandService;
   files: InternalFileService;
+  fileDownloads?: InternalInboxV2FileDownloadService;
   integrations: InternalIntegrationService;
   tenantSettings: InternalTenantSettingsService;
   orgStructure: InternalOrgStructureService;
@@ -131,6 +137,13 @@ type RouteMatch =
   | {
       route: "file_content";
       fileId: string;
+    }
+  | {
+      route: "inbox_v2_file_download";
+      ticket: string;
+    }
+  | {
+      route: "inbox_v2_file_download_issue";
     }
   | {
       route: "tenant_brand_view";
@@ -319,6 +332,7 @@ export function createInternalApiHandler(
           inboxQueries: options.inboxQueries,
           inboxCommands: options.inboxCommands,
           files: options.files,
+          fileDownloads: options.fileDownloads,
           integrations: options.integrations,
           tenantSettings: options.tenantSettings,
           orgStructure: options.orgStructure,
@@ -457,6 +471,7 @@ async function handleAuthenticatedRoute(input: {
   inboxQueries: InternalInboxQueryService;
   inboxCommands: InternalInboxCommandService;
   files: InternalFileService;
+  fileDownloads?: InternalInboxV2FileDownloadService;
   integrations: InternalIntegrationService;
   tenantSettings: InternalTenantSettingsService;
   orgStructure: InternalOrgStructureService;
@@ -516,6 +531,44 @@ async function handleAuthenticatedRoute(input: {
         "cache-control": "private, max-age=60",
         "x-content-type-options": "nosniff"
       });
+    }
+
+    case "inbox_v2_file_download": {
+      if (input.fileDownloads === undefined) {
+        throw new CoreError(
+          "validation.failed",
+          "Inbox V2 file downloads are not configured."
+        );
+      }
+      const file = await input.fileDownloads.redeemFileDownload(input.session, {
+        ticket: input.route.ticket
+      });
+
+      return binaryResponse(200, file.body, {
+        "content-type": file.mediaType,
+        "content-length": String(file.sizeBytes),
+        "content-disposition": contentDispositionHeader(
+          file.fileName,
+          "attachment"
+        ),
+        "cache-control": "private, no-store",
+        "x-content-type-options": "nosniff"
+      });
+    }
+
+    case "inbox_v2_file_download_issue": {
+      if (input.fileDownloads === undefined) {
+        throw new CoreError(
+          "validation.failed",
+          "Inbox V2 file downloads are not configured."
+        );
+      }
+      const request = parseInboxV2FileDownloadIssueRequest(input.request.body);
+      const issued = await input.fileDownloads.issueFileDownload(
+        input.session,
+        request
+      );
+      return jsonResponse(201, issued);
     }
 
     case "tenant_brand_view": {
@@ -928,6 +981,8 @@ function internalRouteAuthorizationPolicy(
     case "inbox_reply":
     case "inbox_routing_update":
     case "file_content":
+    case "inbox_v2_file_download":
+    case "inbox_v2_file_download_issue":
       return {
         kind: "service_effective_access"
       };
@@ -1002,6 +1057,23 @@ function matchRoute(request: ApiHttpRequest): RouteMatch | undefined {
       queueId: nonEmptyQueryValue(url.searchParams.get("queueId")),
       assignedToMe: url.searchParams.get("assigned") === "me"
     };
+  }
+
+  if (
+    request.method === "GET" &&
+    path === "/internal/inbox-v2/files/download"
+  ) {
+    const ticket = nonEmptyQueryValue(url.searchParams.get("ticket"));
+    return ticket === undefined
+      ? undefined
+      : { route: "inbox_v2_file_download", ticket };
+  }
+
+  if (
+    request.method === "POST" &&
+    path === "/internal/inbox-v2/files/download-tickets"
+  ) {
+    return { route: "inbox_v2_file_download_issue" };
   }
 
   if (request.method === "GET" && path === "/internal/v1/tenant/brand") {
@@ -1417,6 +1489,66 @@ function nonEmptyQueryValue(value: string | null): string | undefined {
     : trimmedValue;
 }
 
+function parseInboxV2FileDownloadIssueRequest(body: unknown): Readonly<{
+  pin: InboxV2FileObjectPin;
+  parentLinkId: string;
+}> {
+  if (!isStrictRecord(body, ["pin", "parentLinkId"])) {
+    throw new CoreError("validation.failed");
+  }
+  const pin = body.pin;
+  if (
+    !isStrictRecord(pin, [
+      "tenantId",
+      "fileId",
+      "fileRevision",
+      "fileVersionId",
+      "objectVersionId"
+    ])
+  ) {
+    throw new CoreError("validation.failed");
+  }
+
+  const request = {
+    pin: {
+      tenantId: boundedOpaqueValue(pin.tenantId),
+      fileId: boundedOpaqueValue(pin.fileId),
+      fileRevision: boundedOpaqueValue(pin.fileRevision),
+      fileVersionId: boundedOpaqueValue(pin.fileVersionId),
+      objectVersionId: boundedOpaqueValue(pin.objectVersionId)
+    },
+    parentLinkId: boundedOpaqueValue(body.parentLinkId)
+  };
+  return request;
+}
+
+function isStrictRecord(
+  value: unknown,
+  expectedKeys: readonly string[]
+): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const keys = Object.keys(value);
+  return (
+    keys.length === expectedKeys.length &&
+    expectedKeys.every((key) => Object.hasOwn(value, key))
+  );
+}
+
+function boundedOpaqueValue(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > 2_048 ||
+    !/\S/u.test(value) ||
+    /\p{Cc}/u.test(value)
+  ) {
+    throw new CoreError("validation.failed");
+  }
+  return value;
+}
+
 function headerValue(
   headers: Record<string, string | undefined> | undefined,
   name: string
@@ -1453,6 +1585,12 @@ function parsePermissionsHeader(
 }
 
 function platformErrorCodeFromUnknown(error: unknown): PlatformErrorCode {
+  if (error instanceof InboxV2FileDownloadTicketError) {
+    // Do not expose whether a ticket was malformed, expired, revoked or bound
+    // to another principal.
+    return "permission.denied";
+  }
+
   if (
     error instanceof Error &&
     "code" in error &&
@@ -1492,7 +1630,7 @@ function jsonResponse(status: number, body: unknown): ApiHttpResponse {
 
 function binaryResponse(
   status: number,
-  body: Uint8Array,
+  body: Uint8Array | AsyncIterable<Uint8Array>,
   headers: Record<string, string>
 ): ApiHttpResponse {
   return {
@@ -1502,14 +1640,17 @@ function binaryResponse(
   };
 }
 
-function contentDispositionHeader(fileName: string): string {
+function contentDispositionHeader(
+  fileName: string,
+  disposition: "inline" | "attachment" = "inline"
+): string {
   const fallback = fileName
     .replace(/[\\"]/g, "_")
     .replace(/[^\x20-\x7E]/g, "_")
     .trim();
   const safeFallback = fallback.length > 0 ? fallback : "download";
 
-  return `inline; filename="${safeFallback}"; filename*=UTF-8''${encodeURIComponent(
+  return `${disposition}; filename="${safeFallback}"; filename*=UTF-8''${encodeURIComponent(
     fileName
   )}`;
 }

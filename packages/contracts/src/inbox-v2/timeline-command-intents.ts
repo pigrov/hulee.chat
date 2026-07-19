@@ -10,10 +10,12 @@ import {
   inboxV2ConversationWorkItemSlotReferenceSchema,
   inboxV2ExternalMessageReferenceRefSchema,
   inboxV2FileReferenceSchema,
+  inboxV2FileVersionReferenceSchema,
   inboxV2MessageAttachmentReferenceSchema,
   inboxV2MessageReactionReferenceSchema,
   inboxV2MessageReferenceSchema,
   inboxV2OutboundRouteReferenceSchema,
+  inboxV2ObjectVersionReferenceSchema,
   inboxV2SourceAccountReferenceSchema,
   inboxV2SourceOccurrenceReferenceSchema,
   inboxV2SourceThreadBindingReferenceSchema,
@@ -105,6 +107,8 @@ const fileReadProofBase = {
   blockKey: inboxV2ContentBlockKeySchema,
   file: inboxV2FileReferenceSchema,
   expectedFileRevision: inboxV2EntityRevisionSchema,
+  fileVersion: inboxV2FileVersionReferenceSchema,
+  objectVersion: inboxV2ObjectVersionReferenceSchema,
   parentConversation: inboxV2ConversationReferenceSchema,
   visibilityBoundary: z.enum(["external_work", "internal", "staff_note"]),
   sourceParent: inboxV2TimelineFileSourceParentSchema
@@ -931,6 +935,9 @@ function addContentFileReadProofIssues(
     blockKey: z.infer<typeof inboxV2ContentBlockKeySchema>;
     purpose: "attachment" | "extension_payload";
     file: z.infer<typeof inboxV2FileReferenceSchema>;
+    fileRevision: z.infer<typeof inboxV2EntityRevisionSchema>;
+    fileVersion: z.infer<typeof inboxV2FileVersionReferenceSchema>;
+    objectVersion: z.infer<typeof inboxV2ObjectVersionReferenceSchema>;
     attachment: z.infer<typeof inboxV2MessageAttachmentReferenceSchema> | null;
   }[] = [];
   for (const block of draft.blocks) {
@@ -939,26 +946,32 @@ function addContentFileReadProofIssues(
         blockKey: block.blockKey,
         purpose: "attachment",
         file: block.attachment.file,
+        fileRevision: block.attachment.fileRevision,
+        fileVersion: block.attachment.fileVersion,
+        objectVersion: block.attachment.objectVersion,
         attachment: block.attachment.attachment
       });
       continue;
     }
-    if (block.kind === "extension") {
+    if (block.kind === "extension" && block.payloadPin.state === "exact") {
       uses.push({
         blockKey: block.blockKey,
         purpose: "extension_payload",
         file: block.payloadFile,
+        fileRevision: block.payloadPin.fileRevision,
+        fileVersion: block.payloadPin.fileVersion,
+        objectVersion: block.payloadPin.objectVersion,
         attachment: null
       });
     }
   }
   const useKeys = uses.map(
     (use) =>
-      `${use.blockKey}\u0000${use.purpose}\u0000${use.file.tenantId}\u0000${use.file.id}\u0000${use.attachment?.id ?? "-"}`
+      `${use.blockKey}\u0000${use.purpose}\u0000${use.file.tenantId}\u0000${use.file.id}\u0000${use.fileRevision}\u0000${use.fileVersion.id}\u0000${use.objectVersion.id}\u0000${use.attachment?.id ?? "-"}`
   );
   const proofKeys = proofs.map(
     (proof) =>
-      `${proof.blockKey}\u0000${proof.purpose}\u0000${proof.file.tenantId}\u0000${proof.file.id}\u0000${proof.purpose === "attachment" ? proof.attachment.id : "-"}`
+      `${proof.blockKey}\u0000${proof.purpose}\u0000${proof.file.tenantId}\u0000${proof.file.id}\u0000${proof.expectedFileRevision}\u0000${proof.fileVersion.id}\u0000${proof.objectVersion.id}\u0000${proof.purpose === "attachment" ? proof.attachment.id : "-"}`
   );
   if (
     new Set(useKeys).size !== useKeys.length ||
@@ -995,6 +1008,21 @@ function addOutboundDraftIssues(
       context,
       ["content", "blocks"],
       "Unsupported source fallback is inbound evidence, never an outbound draft."
+    );
+  }
+  if (
+    draft.blocks.some(
+      (block) =>
+        ("attachment" in block &&
+          block.attachment.state === "legacy_unpinned") ||
+        (block.kind === "extension" &&
+          block.payloadPin.state === "legacy_unpinned")
+    )
+  ) {
+    addIssue(
+      context,
+      ["content", "blocks"],
+      "Legacy unpinned file state is N-1 read compatibility and cannot enter a new outbound command."
     );
   }
   if (

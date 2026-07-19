@@ -273,7 +273,7 @@ describePostgres("Inbox V2 representative V1 preserve upgrade", () => {
         expectedMigrationContract(checkedInMigrationsDirectory).length -
         (v1LastMigrationIndex + 1),
       maximumRelationBytes: 8 * 1024 * 1024,
-      violationCount: 1693,
+      violationCount: 1794,
       requiresOnlineBridge: true,
       overrideRequested: true,
       overrideAuthorized: true

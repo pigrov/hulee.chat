@@ -2,7 +2,7 @@
 
 Status: `active`  
 Canonical task tracker: this file  
-Last updated: `2026-07-18`
+Last updated: `2026-07-19`
 
 ## Purpose
 
@@ -1750,8 +1750,9 @@ future non-chat items without a universal JSON message.
     returned `READY`. Detailed evidence is in
     `docs/product/inbox-v2-msg-002-outbound-send.md`.
 
-- [ ] `INB2-MSG-003` Implement typed content blocks and attachment materialization.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-MSG-001`.
+- [x] `INB2-MSG-003` Implement typed content blocks and attachment materialization.
+  - State: `done`; Priority: `P0`; Started: `2026-07-19`; Completed:
+    `2026-07-19`; Owner: `Codex`; Depends on: `INB2-MSG-001`.
   - Acceptance: text, image, audio/voice, video/video-note, file, sticker,
     location and contact content use provider-neutral classified purgeable
     blocks and tenant storage; object registry tracks checksum/version/state/
@@ -1763,7 +1764,22 @@ future non-chat items without a universal JSON message.
     media creates a visible fallback; delete/quarantine/head/list-version adapter
     contracts and orphan reconciliation cover DB/object failure order. Purging
     one attachment parent removes only that link and keeps the shared object while
-    another live parent, purpose or hold still requires it. Evidence: -
+    another live parent, purpose or hold still requires it. Evidence: provider-
+    neutral typed content, classified File/Object/parent/version/derivative
+    records, tenant-scoped capability-gated storage, reservation/materialization
+    workers, exact terminal command/event attribution and fail-closed file access
+    passed the focused contract, API, worker, storage, repository and schema
+    suites. A clean database installed `54/54` migrations with contract
+    `sha256:01d877f5f43035503d7b1542101e04e244cb0d213297614797f8bb6bae2dab6b`;
+    the full PG gate passed `33/33` files / `341` tests (`6` opt-in scenarios
+    skipped). Preserve/N-1/RBAC passed `3/3` files / `17/17`; default Vitest
+    passed `374` files / `4077` tests (`43` files / `395` tests skipped).
+    Typecheck, `db:check`, reproducible N-1 bundle, task-scoped lint/formatting
+    and auxiliary gates passed. Production upload staging, download composition,
+    object purge and old-writer drain remain explicitly owned by `INB2-API-003`,
+    `INB2-API-002`, `INB2-OPS-010`/`INB2-OPS-011` and `INB2-MIG-002`.
+    Detailed evidence is in
+    `docs/product/inbox-v2-msg-003-typed-content-and-attachments.md`.
 
 - [ ] `INB2-MSG-004` Implement reply and forward semantics.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-MSG-002`.
@@ -1984,20 +2000,24 @@ and revision model.
     page/filter. Evidence: -
 
 - [ ] `INB2-API-002` Add conversation snapshot and timeline endpoints.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-PRJ-003`.
+  - State: `planned`; Priority: `P0`; Depends on: `INB2-PRJ-003`,
+    `INB2-MSG-003`.
   - Acceptance: one repeatable snapshot includes normalized participants, links,
     work/head revisions, component checkpoints/generation, authoritative scope
     manifest and `resumeAfter`; timeline uses sequence before/after/around
     keysets and defaults to the latest page. External content, private internal
     content, staff notes, files and every linked Client/contact are filtered by
-    separate server-loaded authorization decisions.
+    separate server-loaded authorization decisions. File download ticket
+    redemption uses production SQL for current parent/item/RBAC authority and a
+    tenant storage resolver; a verified disk/object spool plus an explicit
+    concurrency budget precede response headers and large-file enablement.
   - Verification: concurrent snapshot/connect and long timeline/deep-link tests
     avoid fixed-page scans, dangling head references and stale resurrection.
     Evidence: -
 
 - [ ] `INB2-API-003` Add idempotent Inbox V2 mutation endpoints.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-API-002`,
-    `INB2-RBAC-007`.
+    `INB2-RBAC-007`, `INB2-MSG-003`.
   - Acceptance: external reply, internal send, staff note, membership,
     edit/delete/reaction, read/mute, claim/assign/transfer/close, identity claim
     and per-Client CRM/link commands use one authoritative resource resolver,
@@ -2006,7 +2026,11 @@ and revision model.
     result and stable errors; an HTTP result never skips the applied cursor.
     Denial observation uses a separately constructed bounded DB pool/executor,
     never the primary request/data pool, and retains the RBAC-007 timeout and
-    circuit behavior under sink saturation or failure.
+    circuit behavior under sink saturation or failure. Authenticated
+    `upload_staging` start/finalize/cancel is idempotent, rechecks current parent,
+    content and authorization revisions, and atomically hands the exact staged
+    object version to the trusted materialization command; the capability stays
+    disabled until that production composition is present.
   - Verification: response-loss retries return the same canonical result,
     simultaneous same-ID requests create one sequence/commit/outbox result,
     same-ID/different-request conflicts, claim-and-reply atomicity, permission
@@ -2678,7 +2702,7 @@ SaaS, isolated SaaS and on-prem data planes.
 - [ ] `INB2-OPS-010` Implement bounded retention and replay-purge orchestration.
   - State: `planned`; Priority: `P1`; Depends on: `INB2-OPS-006`,
     `INB2-SRC-008`, `INB2-MSG-005`, `INB2-RT-002`, `INB2-DMX-005`,
-    `INB2-PRJ-003`.
+    `INB2-PRJ-003`, `INB2-MSG-003`.
   - Acceptance: tenant/data-class workers freeze policy/high-water, use fenced
     leases and expected revisions, make content unavailable transactionally,
     dispatch registered purge handlers and verify absence; raw/normalized,
@@ -2694,6 +2718,10 @@ SaaS, isolated SaaS and on-prem data planes.
     atomically advances its tenant/generation retained minimum, never a provider/
     server timestamp. Tenant/class batching remains bounded under millions of
     eligible rows and hot hold scopes without cross-tenant scans or long locks.
+    Attachment orchestration unlinks each eligible parent independently and
+    schedules object work only after the conjunctive live-parent, purpose and
+    hold policy permits it; physical object/derivative removal belongs to
+    `INB2-OPS-011`.
     Production runners persist or lease partitioned checkpoints, add bounded
     jitter between replicas, retry retryable SQLSTATEs with batch downshift and
     expose lag/saturation/repeated-failure metrics; lifecycle executors are typed
@@ -2810,7 +2838,9 @@ SaaS, isolated SaaS and on-prem data planes.
   - Acceptance: runbooks cover lag, stuck lease, DLQ/replay, broken account,
     projection rebuild, notification failure, policy/hold, privacy request,
     partial export/delete, object/provider residual, backup erasure replay,
-    backfill and rollback with thresholds.
+    backfill and rollback with thresholds. They also alert before attachment
+    namespace verification deadlines and prohibit key removal until the exact
+    `INB2-MIG-002` admission-pause/drain receipt has been verified.
   - Verification: another operator can execute representative recovery steps. Evidence: -
 
 - [ ] `INB2-EPIC-13-GATE` Verify Epic 13 exit gate.
@@ -2861,11 +2891,17 @@ the full ADR 0014 preserve path are active.
     the historical `0029`/`0036` boundaries (concurrent indexes, staged
     constraints, bounded backfills and explicit generated-column rewrite or
     maintenance disposition) and proves exact target schema/journal equivalence
-    before enabling materialization. Existing v1 contracts then remain stable
-    while current inbound flows materialize V2 through one canonical command; a
-    minimum audited materialization phase/kill switch exists here, provider I/O
-    has one owner, and outbound prefers explicit V2 binding while measuring
-    legacy fallback.
+    before enabling materialization. The bridge also proves an old-shape
+    attachment-anchor write and in-flight attachment transfer against the
+    expanded schema, or durably drains every supported N-1 attachment writer
+    before V2 attachment ownership is enabled. Existing v1 contracts then
+    remain stable while current inbound flows materialize V2 through one
+    canonical command; a minimum audited materialization phase/kill switch
+    exists here, provider I/O has one owner, and outbound prefers explicit V2
+    binding while measuring legacy fallback. Attachment namespace key removal
+    additionally requires a durable all-replica materialization-admission pause,
+    a serialized zero-work/zero-job drain receipt pinned to the exact tenant and
+    key generation, and fail-closed resume from the next admitted generation.
   - Verification: the normal install preflight accepts the reviewed bridge
     result without a test bypass; representative populated V1, current Public
     API/Telegram Bot/inbox tests still pass and V2 rows/events are correct.
@@ -3203,3 +3239,4 @@ the task state, checkbox and evidence above.
 | 2026-07-17 | `INB2-SRC-009`     | Fenced provider I/O; focused 8/115; PG 29/274; preserve 3/17 + all gates   | task commit  | Codex + three independent reviews |
 | 2026-07-18 | `INB2-EPIC-3-GATE` | Source 82/1127; PG 30/294; preserve 3/17; clean full 352/3679 + all gates  | task commit  | Codex + independent final review  |
 | 2026-07-18 | `INB2-MSG-002`     | Scoped 16/373; PG 32/322; preserve 3/17; full 356/3808 + all gates         | task commit  | Codex + independent final reviews |
+| 2026-07-19 | `INB2-MSG-003`     | Typed media/storage; PG 33/341; preserve 3/17; full 374/4077 + all gates   | task commit  | Codex + independent audits        |

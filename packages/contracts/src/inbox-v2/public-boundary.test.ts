@@ -473,6 +473,25 @@ describe("Inbox V2 public contract boundary", () => {
       "function"
     );
     expect(publicContracts.inboxV2TimelineContentIdSchema).toBeDefined();
+    expect(publicContracts.inboxV2FileVersionIdSchema).toBeDefined();
+    expect(publicContracts.inboxV2ObjectVersionIdSchema).toBeDefined();
+    expect(publicContracts.inboxV2FileParentLinkIdSchema).toBeDefined();
+    expect(publicContracts.inboxV2FileLineageEdgeIdSchema).toBeDefined();
+    expect(
+      publicContracts.inboxV2AttachmentMaterializationClaimIdSchema
+    ).toBeDefined();
+    expect(
+      publicContracts.inboxV2AttachmentMaterializationAttemptIdSchema
+    ).toBeDefined();
+    expect(
+      publicContracts.inboxV2AttachmentMaterializationEvidenceIdSchema
+    ).toBeDefined();
+    expect(
+      publicContracts.inboxV2ObjectOperationEvidenceIdSchema
+    ).toBeDefined();
+    expect(
+      publicContracts.inboxV2OutboundDispatchContentPlanIdSchema
+    ).toBeDefined();
     expect(publicContracts.inboxV2StaffNoteIdSchema).toBeDefined();
     expect(publicContracts.inboxV2StaffNoteRevisionIdSchema).toBeDefined();
     expect(publicContracts.inboxV2SourceObjectIdSchema).toBeDefined();
@@ -510,6 +529,35 @@ describe("Inbox V2 public contract boundary", () => {
       false
     );
     expect(publicContracts.inboxV2TimelineContentSchema).toBeDefined();
+    expect(publicContracts.inboxV2FileVersionSchema).toBeDefined();
+    expect(publicContracts.inboxV2ObjectVersionSchema).toBeDefined();
+    expect(publicContracts.inboxV2ObjectVersionHeadSchema).toBeDefined();
+    expect(publicContracts.inboxV2FileLineageEdgeSchema).toBeDefined();
+    expect(publicContracts.inboxV2FileParentLinkSchema).toBeDefined();
+    expect(publicContracts.inboxV2FileParentLinkHeadSchema).toBeDefined();
+    expect(publicContracts.inboxV2FileParentSetHeadSchema).toBeDefined();
+    expect(
+      publicContracts.inboxV2AttachmentMaterializationClaimSchema
+    ).toBeDefined();
+    expect(
+      publicContracts.inboxV2AttachmentMaterializationAttemptSchema
+    ).toBeDefined();
+    expect(
+      publicContracts.inboxV2AttachmentMaterializationEvidenceSchema
+    ).toBeDefined();
+    expect(publicContracts.inboxV2ObjectOperationEvidenceSchema).toBeDefined();
+    expect(
+      publicContracts.inboxV2OutboundDispatchContentPlanSchema
+    ).toBeDefined();
+    expect(publicContracts.calculateInboxV2MessageContentDigest).toBeTypeOf(
+      "function"
+    );
+    expect(publicContracts.verifyInboxV2MessageContentDigest).toBeTypeOf(
+      "function"
+    );
+    expect(
+      publicContracts.calculateInboxV2OutboundDispatchContentPlanDigest
+    ).toBeTypeOf("function");
     expect(publicContracts.inboxV2TimelineContentEnvelopeSchema).toBeDefined();
     expect(
       publicContracts.inboxV2TimelineContentTransitionCommitSchema

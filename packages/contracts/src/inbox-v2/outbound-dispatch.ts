@@ -84,6 +84,26 @@ export const INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION =
   INBOX_V2_INITIAL_SCHEMA_VERSION;
 export const INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_VERSION =
   INBOX_V2_INITIAL_SCHEMA_VERSION;
+export const INBOX_V2_PROVIDER_ARTIFACT_OUTCOMES_MIXED_DIAGNOSTIC_CODE_ID =
+  "core:provider-artifact-outcomes-mixed" as const;
+export const INBOX_V2_RECONCILE_BEFORE_RETRY_HINT_ID =
+  "core:reconcile-before-retry" as const;
+
+/**
+ * A mixed provider-artifact result is never a direct retry signal: at least
+ * one artifact may already exist remotely. Preserve each artifact diagnostic
+ * separately and fence the aggregate attempt with this reconciliation marker.
+ */
+export function createInboxV2MixedProviderArtifactOutcomeDiagnostic(
+  correlationToken: string
+) {
+  return inboxV2SafeSourceDiagnosticSchema.parse({
+    codeId: INBOX_V2_PROVIDER_ARTIFACT_OUTCOMES_MIXED_DIAGNOSTIC_CODE_ID,
+    retryable: false,
+    correlationToken,
+    safeOperatorHintId: INBOX_V2_RECONCILE_BEFORE_RETRY_HINT_ID
+  });
+}
 
 export const inboxV2OutboundActorSchema = z.discriminatedUnion("kind", [
   z
@@ -411,14 +431,18 @@ export const inboxV2OutboundDispatchAttemptSchema = z
       );
     }
     if (attempt.outcome.kind === "outcome_unknown") {
-      const requiredAction = attempt.retrySafety.automaticRetryAllowed
-        ? "automated_reconciliation_required"
-        : "operator_duplicate_risk_decision_required";
+      const mixedArtifactOutcome =
+        attempt.outcome.diagnostic.codeId ===
+        "core:provider-artifact-outcomes-mixed";
+      const requiredAction =
+        mixedArtifactOutcome || !attempt.retrySafety.automaticRetryAllowed
+          ? "operator_duplicate_risk_decision_required"
+          : "automated_reconciliation_required";
       if (attempt.outcome.requiredAction !== requiredAction) {
         addIssue(
           context,
           ["outcome", "requiredAction"],
-          "Unknown outcome action is fixed by retry safety pinned before provider I/O."
+          "Unknown outcome action is fixed by retry safety, except mixed artifact outcomes always require an operator duplicate-risk decision."
         );
       }
     }
@@ -987,6 +1011,48 @@ export const inboxV2OutboundDispatchArtifactSchema = z
       );
     }
   });
+
+const inboxV2OutboundDispatchArtifactIdentitySchema = z
+  .object({
+    tenantId: inboxV2TenantIdSchema,
+    dispatch: inboxV2OutboundDispatchReferenceSchema,
+    route: inboxV2OutboundRouteReferenceSchema,
+    attempt: inboxV2OutboundDispatchAttemptReferenceSchema,
+    ordinal: z.number().int().min(1).max(100)
+  })
+  .strict()
+  .superRefine((identity, context) => {
+    for (const [field, reference] of [
+      ["dispatch", identity.dispatch],
+      ["route", identity.route],
+      ["attempt", identity.attempt]
+    ] as const) {
+      addTenantReferenceIssue(context, identity.tenantId, reference, [field]);
+    }
+  });
+
+export type InboxV2OutboundDispatchArtifactIdentity = z.input<
+  typeof inboxV2OutboundDispatchArtifactIdentitySchema
+>;
+
+/**
+ * Stable identity for one provider-side artifact produced by one exact attempt.
+ * Retries use another Attempt and therefore cannot collide with, or overwrite,
+ * the immutable artifact evidence of an earlier provider call.
+ */
+export function deriveInboxV2OutboundDispatchArtifactId(
+  input: InboxV2OutboundDispatchArtifactIdentity
+) {
+  const identity = inboxV2OutboundDispatchArtifactIdentitySchema.parse(input);
+  const digest = calculateInboxV2CanonicalSha256({
+    domain: "core:inbox-v2.outbound-dispatch-artifact-identity",
+    hashVersion: INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
+    identity
+  });
+  return inboxV2OutboundDispatchArtifactIdSchema.parse(
+    `outbound_dispatch_artifact:${digest.slice("sha256:".length)}`
+  );
+}
 
 /** Append-only late association; the accepted artifact itself never mutates. */
 export const inboxV2OutboundDispatchArtifactReferenceLinkSchema = z

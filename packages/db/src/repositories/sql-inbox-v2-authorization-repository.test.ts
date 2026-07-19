@@ -44,6 +44,7 @@ import {
 } from "./sql-inbox-v2-authorization-repository";
 import {
   issueInboxV2AtomicMaterializationSealReceipt,
+  requireInboxV2AtomicSealExecutor,
   type InboxV2AtomicMaterializationSealManifest,
   type InboxV2AtomicMaterializationSealReceipt,
   type InboxV2AtomicMessageCreationSealManifest,
@@ -94,6 +95,237 @@ function expectNoAtomicStreamClosure(
   expect(executor.timeline).not.toContain("insert_domain_events");
   expect(executor.timeline).not.toContain("insert_outbox_intents");
   expect(executor.timeline).not.toContain("advance_stream_head");
+}
+
+function preparedFileParentPostHeadStatements(): readonly SQL[] {
+  return [
+    sql`
+      insert into inbox_v2_file_parent_links (
+        tenant_id, id, file_id, file_version_id, object_version_id,
+        parent_identity_digest_sha256, parent_kind, parent_purpose,
+        visibility_boundary, parent_conversation_visibility,
+        parent_entity_id, parent_entity_revision, conversation_id,
+        timeline_item_id, content_id, content_revision, block_key,
+        data_class_id, processing_purpose_id, retention_anchor_at,
+        created_at, revision
+      ) values (
+        ${tenantId}, ${"file_parent_link:link-1"}, ${"file:file-1"},
+        ${"file_version:version-1"}, ${"file_object_version:object-1"},
+        ${"a".repeat(64)}, ${"message"}, 'attachment',
+        ${"external_work"}, ${null}, ${"message:message-1"},
+        ${"1"}::bigint, ${"conversation:conversation-1"},
+        ${"timeline_item:item-1"}, ${"timeline_content:content-1"},
+        ${"1"}::bigint, ${"attachment-1"}, ${"core:communication"},
+        ${"core:chat"}, ${occurredAt}::timestamptz,
+        ${occurredAt}::timestamptz, 1
+      )
+      returning id
+    `,
+    sql`
+      insert into inbox_v2_file_parent_link_heads (
+        tenant_id, link_id, file_id, state, detached_by_event_id,
+        revision, updated_at
+      ) values (
+        ${tenantId}, ${"file_parent_link:link-1"}, ${"file:file-1"},
+        'live', null, 1, ${occurredAt}::timestamptz
+      )
+      returning link_id as id
+    `,
+    sql`
+      update inbox_v2_file_parent_set_heads
+         set revision = ${"2"}::bigint,
+             completeness_revision = ${"2"}::bigint,
+             live_parent_count = ${2}::integer,
+             updated_at = ${occurredAt}::timestamptz
+       where tenant_id = ${tenantId}
+         and file_id = ${"file:file-1"}
+         and revision = ${"1"}::bigint
+         and completeness = 'complete'
+         and completeness_revision = revision
+         and live_parent_count = ${1}::integer
+      returning file_id as id
+    `
+  ];
+}
+
+function preparedFileTerminalPostHeadStatements(): readonly SQL[] {
+  const objectVersionId = "file_object_version:object-1";
+  const fileVersionId = "file_version:version-1";
+  const fileId = "file:file-1";
+  const jobId = "attachment_materialization_job:job-1";
+  const attachmentId = "message_attachment:attachment-1";
+  return [
+    sql`
+      insert into inbox_v2_file_object_versions (
+        tenant_id, id, storage_root_id, storage_object_key,
+        storage_version_identity, versioning_mode, checksum_sha256,
+        size_bytes, declared_media_type, detected_media_type,
+        encryption_key_ref, data_class_id, retention_anchor_at, created_at
+      ) values (
+        ${tenantId}, ${objectVersionId}, ${"core:tenant-files"}, ${"objects/key"},
+        ${"version-1"}, 'native_version', ${"a".repeat(64)}, ${12}::bigint,
+        ${"image/png"}, ${"image/png"}, null, ${"core:communication"},
+        ${occurredAt}::timestamptz, ${occurredAt}::timestamptz
+      )
+      returning id
+    `,
+    sql`
+      insert into inbox_v2_file_object_operation_evidence (
+        tenant_id, id, object_version_id, materialization_job_id,
+        operation_kind, storage_root_id, attempt_token, outcome,
+        safe_reason_id, observed_version_count, affected_bytes,
+        deletion_evidence_digest_sha256, expected_object_head_revision,
+        live_parent_count, active_purpose_count, active_hold_count,
+        deletion_authority_evaluated_at,
+        deletion_authority_decision_sha256, requested_at, completed_at,
+        revision
+      ) values (
+        ${tenantId}, ${"object_operation_evidence:evidence-1"},
+        ${objectVersionId}, ${jobId}, 'put', ${"core:tenant-files"},
+        ${"object-put:attempt-1"}, 'succeeded', null, null, ${12}::bigint,
+        null, null, null, null, null, null, null,
+        ${occurredAt}::timestamptz, ${occurredAt}::timestamptz, 1
+      )
+      returning id
+    `,
+    sql`
+      insert into inbox_v2_file_object_version_heads (
+        tenant_id, object_version_id, state, latest_operation_evidence_id,
+        revision, state_changed_at, created_at
+      ) values (
+        ${tenantId}, ${objectVersionId}, 'ready',
+        ${"object_operation_evidence:evidence-1"}, 1,
+        ${occurredAt}::timestamptz, ${occurredAt}::timestamptz
+      )
+      returning object_version_id as id
+    `,
+    sql`
+      insert into inbox_v2_file_versions (
+        tenant_id, id, file_id, version_number, object_version_id, created_at
+      ) values (
+        ${tenantId}, ${fileVersionId}, ${fileId}, 1, ${objectVersionId},
+        ${occurredAt}::timestamptz
+      )
+      returning id
+    `,
+    sql`
+      update inbox_v2_file_objects
+         set state = 'ready',
+             current_file_version_id = ${fileVersionId},
+             current_object_version_id = ${objectVersionId},
+             revision = revision + 1,
+             updated_at = ${occurredAt}::timestamptz
+       where tenant_id = ${tenantId}
+         and id = ${fileId}
+         and state = 'pending'
+         and revision = ${"1"}::bigint
+         and current_file_version_id is null
+         and current_object_version_id is null
+      returning id
+    `,
+    sql`
+      update inbox_v2_message_attachment_anchors
+         set materialization_state = ${"ready"},
+             revision = ${"2"}::bigint
+       where tenant_id = ${tenantId}
+         and id = ${attachmentId}
+         and owner_message_id = ${"message:message-1"}
+         and owner_timeline_item_id = ${"timeline_item:item-1"}
+         and owner_timeline_content_id = ${"timeline_content:content-1"}
+         and owner_block_key = ${"attachment-1"}
+         and materialization_state = 'pending'
+         and revision = ${"1"}::bigint
+         and created_at <= ${occurredAt}::timestamptz
+      returning id
+    `,
+    sql`
+      insert into inbox_v2_file_parent_set_heads (
+        tenant_id, file_id, revision, completeness,
+        completeness_revision, live_parent_count, updated_at
+      ) values (
+        ${tenantId}, ${fileId}, 1, 'complete', 1, 1,
+        ${occurredAt}::timestamptz
+      )
+      returning file_id as id
+    `,
+    ...preparedFileParentPostHeadStatements().slice(0, 2),
+    sql`
+      insert into inbox_v2_file_attachment_materialization_evidence (
+        tenant_id, id, job_id, attempt_id, attachment_id, file_id,
+        expected_file_revision, lease_generation,
+        expected_attachment_revision, resulting_attachment_revision,
+        timeline_content_id, expected_content_revision,
+        resulting_content_revision, content_mutation_fence_sha256,
+        outcome, result_file_version_id, result_object_version_id,
+        resulting_file_revision, object_operation_evidence_id,
+        safe_reason_id, retryable, completed_at, evidence_hash_sha256,
+        revision
+      ) values (
+        ${tenantId}, ${"attachment_materialization_evidence:evidence-1"},
+        ${jobId}, ${"attachment_materialization_attempt:attempt-1"},
+        ${attachmentId}, ${fileId}, ${"1"}::bigint, ${"1"}::bigint,
+        ${"1"}::bigint, ${"2"}::bigint,
+        ${"timeline_content:content-1"}, ${"1"}::bigint, ${"2"}::bigint,
+        ${"b".repeat(64)}, ${"ready"}, ${fileVersionId}, ${objectVersionId},
+        ${"2"}::bigint, ${"object_operation_evidence:evidence-1"}, ${null},
+        ${null}, ${occurredAt}::timestamptz, ${"c".repeat(64)}, 1
+      )
+      returning id
+    `,
+    sql`
+      update inbox_v2_file_attachment_materialization_jobs
+         set state = ${"ready"},
+             lease_token_hash = null,
+             lease_owner_id = null,
+             lease_claimed_at = null,
+             lease_expires_at = null,
+             result_file_version_id = ${fileVersionId},
+             result_object_version_id = ${objectVersionId},
+             result_file_revision = ${"2"}::bigint,
+             result_content_revision = ${"2"}::bigint,
+             terminal_reason_id = ${null},
+             revision = revision + 1,
+             updated_at = ${occurredAt}::timestamptz
+       where tenant_id = ${tenantId}
+         and id = ${jobId}
+         and state in ('claimed', 'transferring', 'verifying')
+         and revision = ${"1"}::bigint
+         and lease_token_hash = ${"d".repeat(64)}
+         and lease_expires_at > clock_timestamp()
+      returning id
+    `,
+    sql`
+      update inbox_v2_file_storage_orphans
+         set state = 'adopted',
+             claim_token_hash = null,
+             claim_expires_at = null,
+             adopted_object_version_id = ${objectVersionId},
+             terminal_evidence_digest_sha256 = ${"e".repeat(64)},
+             safe_reason_id = null,
+             revision = revision + 1,
+             updated_at = ${occurredAt}::timestamptz
+       where tenant_id = ${tenantId}
+         and id = ${"file_storage_orphan:orphan-1"}
+         and revision = ${"1"}::bigint
+         and state = 'open'
+         and materialization_job_id = ${jobId}
+         and storage_root_id = ${"core:tenant-files"}
+         and storage_object_key = ${"objects/key"}
+         and storage_version_identity = ${"version-1"}
+         and checksum_sha256 = ${"a".repeat(64)}
+         and size_bytes = ${12}::bigint
+         and detected_media_type = ${"image/png"}
+         and claim_token_hash is null
+         and claim_expires_at is null
+         and adopted_object_version_id is null
+         and terminal_evidence_digest_sha256 is null
+         and safe_reason_id is null
+         and quarantine_reason_code is null
+         and quarantine_evidence_digest_sha256 is null
+         and quarantine_physical_kind is null
+      returning id
+    `
+  ];
 }
 
 describe("SQL Inbox V2 authorization mutation repository", () => {
@@ -527,6 +759,41 @@ describe("SQL Inbox V2 authorization mutation repository", () => {
     expect(relationWriteInsert).toBeDefined();
     expect(jsonRecordsetRowCount(revisionEffectInsert!)).toBe(0);
     expect(jsonRecordsetRowCount(relationWriteInsert!)).toBe(0);
+  });
+
+  it("conjunctively fences structural and collaborator revisions without advancing either aggregate", async () => {
+    const base = domainMutationInput();
+    const input = {
+      ...base,
+      revisions: {
+        ...base.revisions,
+        resources: [
+          {
+            resourceKind: "conversation" as const,
+            resourceId: "conversation:conversation-1",
+            resourceHeadId: "authorization-resource:conversation-1",
+            expectedResourceAccessRevision: "4",
+            expectedStructuralRelationRevision: "1",
+            advanceStructuralRelation: "none" as const,
+            expectedCollaboratorSetRevision: "3",
+            advanceCollaboratorSet: "none" as const,
+            advance: "none" as const
+          }
+        ]
+      }
+    } as WithPrivilegedAuthorizationMutationInput;
+    const executor = new RoutingAuthorizationExecutor();
+
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        executor
+      ).withAuthorizedCommandMutation(input, async (context) => {
+        expect(context.revisionEffects).toEqual([]);
+        return { result: null };
+      })
+    ).resolves.toMatchObject({ kind: "applied", revisionEffects: [] });
+    expect(executor.timeline).toContain("lock_resource_heads");
+    expect(executor.timeline).not.toContain("advance_resource_heads");
   });
 
   it.each(["message_change", "provider_intent"] as const)(
@@ -1604,6 +1871,226 @@ describe("SQL Inbox V2 authorization mutation repository", () => {
     expect(
       executor.queries.some((query) =>
         renderQuery(query).sql.includes("select id from inbox_v2_conversations")
+      )
+    ).toBe(false);
+  });
+
+  it("allows only the exact prepared File-parent append and CAS shapes after the stream head", async () => {
+    const executor = new RoutingAuthorizationExecutor();
+    let sealExecutor: RawSqlExecutor | null = null;
+
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        executor
+      ).withAuthorizedAtomicMaterialization(
+        atomicMessageMutationInput(),
+        async (context) => {
+          sealExecutor = requireInboxV2AtomicSealExecutor(context);
+          return null;
+        },
+        async (context) => {
+          if (sealExecutor === null) throw new Error("missing seal executor");
+          for (const statement of preparedFileParentPostHeadStatements()) {
+            await sealExecutor.execute(statement);
+          }
+          return atomicSealResult(context, null);
+        }
+      )
+    ).resolves.toMatchObject({ kind: "applied" });
+
+    const postHeadStatements = executor.queries
+      .map((query) => normalizeSql(renderQuery(query).sql))
+      .filter((statement) => statement.includes("file_parent_"));
+    expect(postHeadStatements).toHaveLength(3);
+    expect(
+      postHeadStatements.every((statement) => !statement.includes("select"))
+    ).toBe(true);
+  });
+
+  it("allows the exact single-row File terminal sequence after the stream head", async () => {
+    const executor = new RoutingAuthorizationExecutor();
+    let sealExecutor: RawSqlExecutor | null = null;
+
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        executor
+      ).withAuthorizedAtomicMaterialization(
+        atomicMessageMutationInput(),
+        async (context) => {
+          sealExecutor = requireInboxV2AtomicSealExecutor(context);
+          return null;
+        },
+        async (context) => {
+          if (sealExecutor === null) throw new Error("missing seal executor");
+          for (const statement of preparedFileTerminalPostHeadStatements()) {
+            await sealExecutor.execute(statement);
+          }
+          return atomicSealResult(context, null);
+        }
+      )
+    ).resolves.toMatchObject({ kind: "applied" });
+
+    const postHeadStatements = executor.queries
+      .map((query) => normalizeSql(renderQuery(query).sql))
+      .filter(
+        (statement) =>
+          statement.startsWith("insert into inbox_v2_file_") ||
+          statement.startsWith("update inbox_v2_file_") ||
+          statement.startsWith("update inbox_v2_message_attachment_anchors")
+      );
+    expect(postHeadStatements).toHaveLength(12);
+    expect(postHeadStatements.at(-2)).toContain(
+      "lease_expires_at > clock_timestamp()"
+    );
+  });
+
+  it("rejects File terminal bulk insert, reordered columns and a stale lease CAS", async () => {
+    const executor = new RoutingAuthorizationExecutor();
+    let sealExecutor: RawSqlExecutor | null = null;
+
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        executor
+      ).withAuthorizedAtomicMaterialization(
+        atomicMessageMutationInput(),
+        async (context) => {
+          sealExecutor = requireInboxV2AtomicSealExecutor(context);
+          return null;
+        },
+        async (context) => {
+          if (sealExecutor === null) throw new Error("missing seal executor");
+          await expect(
+            sealExecutor.execute(sql`
+              insert into inbox_v2_file_versions (
+                tenant_id, id, file_id, version_number,
+                object_version_id, created_at
+              ) values (
+                ${tenantId}, ${"file_version:one"}, ${"file:file-1"}, 1,
+                ${"file_object_version:one"}, ${occurredAt}::timestamptz
+              ), (
+                ${tenantId}, ${"file_version:two"}, ${"file:file-1"}, 2,
+                ${"file_object_version:two"}, ${occurredAt}::timestamptz
+              )
+              returning id
+            `)
+          ).rejects.toThrow("post-stream-head materialization");
+          await expect(
+            sealExecutor.execute(sql`
+              insert into inbox_v2_file_versions (
+                tenant_id, file_id, id, version_number,
+                object_version_id, created_at
+              ) values (
+                ${tenantId}, ${"file:file-1"}, ${"file_version:one"}, 1,
+                ${"file_object_version:one"}, ${occurredAt}::timestamptz
+              )
+              returning id
+            `)
+          ).rejects.toThrow("post-stream-head materialization");
+          await expect(
+            sealExecutor.execute(sql`
+              update inbox_v2_file_attachment_materialization_jobs
+                 set state = ${"ready"}, lease_token_hash = null,
+                     lease_owner_id = null, lease_claimed_at = null,
+                     lease_expires_at = null,
+                     result_file_version_id = ${"file_version:one"},
+                     result_object_version_id = ${"file_object_version:one"},
+                     result_file_revision = ${"2"}::bigint,
+                     result_content_revision = ${"2"}::bigint,
+                     terminal_reason_id = ${null}, revision = revision + 1,
+                     updated_at = ${occurredAt}::timestamptz
+               where tenant_id = ${tenantId}
+                 and id = ${"attachment_materialization_job:job-1"}
+                 and state in ('claimed', 'transferring', 'verifying')
+                 and revision = ${"1"}::bigint
+                 and lease_token_hash = ${"d".repeat(64)}
+                 and lease_expires_at >= clock_timestamp()
+              returning id
+            `)
+          ).rejects.toThrow("post-stream-head materialization");
+          return atomicSealResult(context, null);
+        }
+      )
+    ).resolves.toMatchObject({ kind: "applied" });
+
+    expect(
+      executor.queries.some((query) =>
+        normalizeSql(renderQuery(query).sql).includes("file_version:one")
+      )
+    ).toBe(false);
+  });
+
+  it("rejects File-parent reads, incomplete inserts and weak CAS predicates after the stream head", async () => {
+    const executor = new RoutingAuthorizationExecutor();
+    let sealExecutor: RawSqlExecutor | null = null;
+
+    await expect(
+      createSqlInboxV2AuthorizedCommandCoordinator(
+        executor
+      ).withAuthorizedAtomicMaterialization(
+        atomicMessageMutationInput(),
+        async (context) => {
+          sealExecutor = requireInboxV2AtomicSealExecutor(context);
+          return null;
+        },
+        async (context) => {
+          if (sealExecutor === null) throw new Error("missing seal executor");
+          await expect(
+            sealExecutor.execute(
+              sql`select id from inbox_v2_file_parent_links for update`
+            )
+          ).rejects.toThrow("post-stream-head materialization");
+          await expect(
+            sealExecutor.execute(sql`
+              insert into inbox_v2_file_parent_links (tenant_id, id)
+              values (${tenantId}, ${"file_parent_link:forged"})
+              returning id
+            `)
+          ).rejects.toThrow("post-stream-head materialization");
+          await expect(
+            sealExecutor.execute(sql`
+              insert into inbox_v2_file_parent_links (
+                tenant_id, id, file_id, file_version_id, object_version_id,
+                parent_identity_digest_sha256, parent_kind, parent_purpose,
+                visibility_boundary, parent_conversation_visibility,
+                parent_entity_id, parent_entity_revision, conversation_id,
+                timeline_item_id, content_id, content_revision, block_key,
+                data_class_id, processing_purpose_id, retention_anchor_at,
+                created_at, revision
+              ) values (
+                ${tenantId}, ${"file_parent_link:forged-purpose"},
+                ${"file:file-1"}, ${"file_version:version-1"},
+                ${"file_object_version:object-1"}, ${"a".repeat(64)},
+                ${"message"}, ${"attachment"}, ${"external_work"}, ${null},
+                ${"message:message-1"}, ${"1"}::bigint,
+                ${"conversation:conversation-1"}, ${"timeline_item:item-1"},
+                ${"timeline_content:content-1"}, ${"1"}::bigint,
+                ${"attachment-1"}, ${"core:communication"}, ${"core:chat"},
+                ${occurredAt}::timestamptz, ${occurredAt}::timestamptz, 1
+              )
+              returning id
+            `)
+          ).rejects.toThrow("post-stream-head materialization");
+          await expect(
+            sealExecutor.execute(sql`
+              update inbox_v2_file_parent_set_heads
+                 set revision = ${"2"}::bigint,
+                     completeness_revision = ${"2"}::bigint,
+                     live_parent_count = ${2}::integer,
+                     updated_at = ${occurredAt}::timestamptz
+               where tenant_id = ${tenantId}
+                 and file_id = ${"file:file-1"}
+                 and revision = ${"1"}::bigint
+              returning file_id as id
+            `)
+          ).rejects.toThrow("post-stream-head materialization");
+          return atomicSealResult(context, null);
+        }
+      )
+    ).resolves.toMatchObject({ kind: "applied" });
+
+    expect(
+      executor.queries.some((query) =>
+        normalizeSql(renderQuery(query).sql).includes("file_parent_")
       )
     ).toBe(false);
   });

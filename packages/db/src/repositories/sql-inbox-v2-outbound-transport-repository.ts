@@ -1,5 +1,7 @@
 import {
   calculateInboxV2OutboxLeaseTokenHash,
+  createInboxV2MixedProviderArtifactOutcomeDiagnostic,
+  deriveInboxV2OutboundDispatchArtifactId,
   deriveInboxV2RouteFailureOutboxFinalization,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
@@ -31,6 +33,7 @@ import {
   type InboxV2ExternalMessageReference,
   type InboxV2ExternalMessageReferenceId,
   type InboxV2OutboundDispatch,
+  type InboxV2OutboundDispatchContentPlan,
   type InboxV2OutboundDispatchArtifact,
   type InboxV2OutboundDispatchArtifactAssociationCommit,
   type InboxV2OutboundDispatchAttempt,
@@ -65,6 +68,7 @@ import {
   type InboxV2AuthorizedCommandMutationContext
 } from "./sql-inbox-v2-authorization-repository";
 import { InboxV2PersistenceInvariantError } from "./sql-inbox-v2-conversation-repository";
+import { loadInboxV2OutboundDispatchContentPlan } from "./sql-inbox-v2-file-object-repository";
 import {
   buildFinalizeInboxV2OutboxSql,
   buildInsertInboxV2OutboxOutcomeSql
@@ -148,6 +152,13 @@ class ArtifactAssociationRollbackError extends Error {
   }
 }
 
+class ProviderResultArtifactRollbackError extends Error {
+  constructor(readonly result: ApplyInboxV2ProviderResultFencedResult) {
+    super(`Rollback provider result artifacts: ${result.kind}`);
+    this.name = "ProviderResultArtifactRollbackError";
+  }
+}
+
 export type CreateInboxV2OutboundDispatchResult =
   | Readonly<{
       kind: "committed" | "already_exists";
@@ -175,7 +186,8 @@ export type ApplyInboxV2DispatchAttemptResult =
         | "attempt_id_conflict"
         | "attempt_number_conflict"
         | "claim_token_conflict"
-        | "attempt_state_conflict";
+        | "attempt_state_conflict"
+        | "artifact_retry_unsafe";
     }>;
 
 export type ApplyInboxV2ReconciliationResult =
@@ -186,7 +198,8 @@ export type ApplyInboxV2ReconciliationResult =
         | "dispatch_state_conflict"
         | "unknown_attempt_not_found"
         | "decision_conflict"
-        | "attempt_already_reconciled";
+        | "attempt_already_reconciled"
+        | "artifact_retry_unsafe";
     }>;
 
 export type InboxV2ProviderIoOutboxLeaseFence = Readonly<
@@ -216,7 +229,16 @@ export type InboxV2ProviderIoOutboxFenceFailure =
 
 export type ApplyInboxV2FencedDispatchAttemptResult =
   | ApplyInboxV2DispatchAttemptResult
-  | InboxV2ProviderIoOutboxFenceFailure;
+  | InboxV2ProviderIoOutboxFenceFailure
+  | Readonly<{
+      kind:
+        | "outbox_dispatch_content_plan_not_found"
+        | "outbox_dispatch_content_plan_conflict";
+    }>;
+
+export type ApplyInboxV2ProviderResultFencedResult =
+  | ApplyInboxV2FencedDispatchAttemptResult
+  | Readonly<{ kind: "dispatch_artifact_set_conflict" }>;
 
 export type ApplyInboxV2FencedReconciliationResult =
   | ApplyInboxV2ReconciliationResult
@@ -227,9 +249,14 @@ export type LoadInboxV2ClaimedProviderIoResult =
       kind: "loaded";
       intent: InboxV2OutboxIntent;
       dispatch: InboxV2OutboundDispatch;
+      contentPlan: InboxV2OutboundDispatchContentPlan;
     }>
   | InboxV2ProviderIoOutboxFenceFailure
-  | Readonly<{ kind: "outbox_dispatch_not_found" }>;
+  | Readonly<{
+      kind:
+        | "outbox_dispatch_not_found"
+        | "outbox_dispatch_content_plan_not_found";
+    }>;
 
 export type AppendInboxV2DispatchArtifactResult =
   | Readonly<{ kind: "committed" | "already_exists" }>
@@ -316,6 +343,21 @@ export type InboxV2OutboundTransportRepository = Readonly<{
       commit: InboxV2OutboundDispatchAttemptCommit;
     }>
   ): Promise<ApplyInboxV2FencedDispatchAttemptResult>;
+  /**
+   * Atomically appends the complete planned artifact outcome set and closes
+   * the exact provider attempt under the same live outbox lease fence.
+   */
+  applyProviderResultFenced(
+    input: Readonly<{
+      outboxLease: InboxV2ProviderIoOutboxLeaseFence;
+      contentPlanDigestSha256: InboxV2OutboundDispatchContentPlan["planDigestSha256"];
+      commit: Extract<
+        InboxV2OutboundDispatchAttemptCommit,
+        { kind: "complete_attempt" }
+      >;
+      artifacts: readonly InboxV2OutboundDispatchArtifact[];
+    }>
+  ): Promise<ApplyInboxV2ProviderResultFencedResult>;
   applyRouteFailure(
     commit: InboxV2OutboundDispatchRouteFailureCommit
   ): Promise<ApplyInboxV2DispatchAttemptResult>;
@@ -336,9 +378,6 @@ export type InboxV2OutboundTransportRepository = Readonly<{
       commit: InboxV2OutboundDispatchReconciliationCommit;
     }>
   ): Promise<ApplyInboxV2FencedReconciliationResult>;
-  appendArtifact(
-    artifact: InboxV2OutboundDispatchArtifact
-  ): Promise<AppendInboxV2DispatchArtifactResult>;
   associateArtifact(
     commit: InboxV2OutboundDispatchArtifactAssociationCommit
   ): Promise<AssociateInboxV2DispatchArtifactResult>;
@@ -356,6 +395,7 @@ export type InboxV2FencedOutboundTransportRuntimeRepository = Readonly<
     | "findDispatch"
     | "loadClaimedProviderIo"
     | "applyAttemptFenced"
+    | "applyProviderResultFenced"
     | "applyRouteFailureFenced"
     | "reconcileFenced"
   >
@@ -375,6 +415,7 @@ type BindingRouteFenceRow = BindingAnchorRow & {
   remote_access_revision: unknown;
   administrative_revision: unknown;
   capability_revision: unknown;
+  provider_access_revision: unknown;
   route_descriptor_revision: unknown;
   remote_access_state: unknown;
   administrative_state: unknown;
@@ -521,10 +562,21 @@ export function createSqlInboxV2OutboundTransportRepository(
           );
           const row = result.rows[0];
           if (row === undefined) return { kind: "outbox_dispatch_not_found" };
+          const contentPlan = await loadInboxV2OutboundDispatchContentPlan(
+            transaction,
+            {
+              tenantId: outboxLease.context.tenantId,
+              dispatchId: fenced.dispatchId
+            }
+          );
+          if (contentPlan === null) {
+            return { kind: "outbox_dispatch_content_plan_not_found" };
+          }
           return {
             kind: "loaded",
             intent: fenced.intent,
-            dispatch: mapDispatchReadRow(row, outboxLease.context.tenantId)
+            dispatch: mapDispatchReadRow(row, outboxLease.context.tenantId),
+            contentPlan
           };
         }
       );
@@ -624,11 +676,99 @@ export function createSqlInboxV2OutboundTransportRepository(
           if (!providerAttemptTimeFenceMatches(commit, fenced)) {
             return { kind: "outbox_attempt_lease_conflict" } as const;
           }
-          return commit.kind === "open_attempt"
-            ? openAttemptInTransaction(transaction, commit)
-            : completeAttemptInTransaction(transaction, commit);
+          if (commit.kind === "open_attempt") {
+            const contentPlan = await loadInboxV2OutboundDispatchContentPlan(
+              transaction,
+              {
+                tenantId: commit.tenantId,
+                dispatchId: commit.dispatchBefore.id
+              }
+            );
+            if (contentPlan === null) {
+              return {
+                kind: "outbox_dispatch_content_plan_not_found"
+              } as const;
+            }
+            if (!contentPlanMatchesOpenAttempt(contentPlan, commit)) {
+              return {
+                kind: "outbox_dispatch_content_plan_conflict"
+              } as const;
+            }
+            return openAttemptInTransaction(transaction, commit, {
+              contentPlan,
+              databaseNow: fenced.databaseNow
+            });
+          }
+          return completeAttemptInTransaction(transaction, commit);
         }
       );
+    },
+
+    async applyProviderResultFenced(input) {
+      const commit = inboxV2OutboundDispatchAttemptCommitSchema.parse(
+        input.commit
+      );
+      if (commit.kind !== "complete_attempt") {
+        throw invariantError(
+          "Provider artifact persistence requires a complete-attempt commit."
+        );
+      }
+      const artifacts = input.artifacts.map((artifact) =>
+        inboxV2OutboundDispatchArtifactSchema.parse(artifact)
+      );
+      const outboxLease = parseProviderIoOutboxLeaseFence(input.outboxLease);
+      assertProviderIoFenceTenant(outboxLease, commit.tenantId);
+      try {
+        return await runTransportTransaction(
+          transactionExecutor,
+          async (transaction) => {
+            const fenced = await lockAndValidateProviderIoOutboxLease(
+              transaction,
+              outboxLease,
+              commit.dispatchBefore.id
+            );
+            if (fenced.kind !== "fenced") return fenced;
+            if (!providerAttemptTimeFenceMatches(commit, fenced)) {
+              return { kind: "outbox_attempt_lease_conflict" } as const;
+            }
+            const contentPlan = await loadInboxV2OutboundDispatchContentPlan(
+              transaction,
+              {
+                tenantId: commit.tenantId,
+                dispatchId: commit.dispatchBefore.id
+              }
+            );
+            if (contentPlan === null) {
+              return {
+                kind: "outbox_dispatch_content_plan_not_found"
+              } as const;
+            }
+            if (
+              contentPlan.planDigestSha256 !== input.contentPlanDigestSha256 ||
+              !contentPlanMatchesCompletedAttempt(contentPlan, commit) ||
+              !providerArtifactSetMatchesCompletion(
+                artifacts,
+                contentPlan,
+                commit
+              )
+            ) {
+              return {
+                kind: "outbox_dispatch_content_plan_conflict"
+              } as const;
+            }
+            return persistProviderResultArtifactsAndCompletion(
+              transaction,
+              commit,
+              artifacts
+            );
+          }
+        );
+      } catch (error) {
+        if (error instanceof ProviderResultArtifactRollbackError) {
+          return error.result;
+        }
+        throw error;
+      }
     },
 
     async applyRouteFailure(input) {
@@ -699,13 +839,6 @@ export function createSqlInboxV2OutboundTransportRepository(
       );
     },
 
-    async appendArtifact(input) {
-      const artifact = inboxV2OutboundDispatchArtifactSchema.parse(input);
-      return runTransportTransaction(transactionExecutor, (transaction) =>
-        appendArtifactInTransaction(transaction, artifact)
-      );
-    },
-
     async associateArtifact(input) {
       const commit =
         inboxV2OutboundDispatchArtifactAssociationCommitSchema.parse(input);
@@ -751,6 +884,7 @@ export function createSqlInboxV2FencedOutboundTransportRuntimeRepository(
     findDispatch: repository.findDispatch,
     loadClaimedProviderIo: repository.loadClaimedProviderIo,
     applyAttemptFenced: repository.applyAttemptFenced,
+    applyProviderResultFenced: repository.applyProviderResultFenced,
     applyRouteFailureFenced: repository.applyRouteFailureFenced,
     reconcileFenced: repository.reconcileFenced
   });
@@ -1665,7 +1799,8 @@ async function lockBindingFence(
            head.revision as binding_revision, head.account_generation,
            head.binding_generation, head.remote_access_revision,
            head.administrative_revision, head.capability_revision,
-           head.route_descriptor_revision, head.remote_access_state,
+           head.provider_access_revision, head.route_descriptor_revision,
+           head.remote_access_state,
            head.administrative_state, head.runtime_health_state,
            head.runtime_health_revision, head.updated_at
       from inbox_v2_source_thread_binding_heads head
@@ -2661,6 +2796,136 @@ function providerAttemptTimeFenceMatches(
   return commit.completionSource !== "lease_expired";
 }
 
+function contentPlanMatchesOpenAttempt(
+  plan: InboxV2OutboundDispatchContentPlan,
+  commit: OpenAttemptCommit
+): boolean {
+  return (
+    plan.tenantId === commit.tenantId &&
+    String(plan.dispatch.id) === String(commit.dispatchBefore.id) &&
+    String(plan.message.id) === String(commit.dispatchBefore.message.id) &&
+    String(plan.route.id) === String(commit.routeSnapshot.id) &&
+    String(plan.binding.id) ===
+      String(commit.routeSnapshot.sourceThreadBinding.id) &&
+    String(plan.bindingRevision) ===
+      String(commit.bindingHeadSnapshot.bindingRevision) &&
+    String(plan.capabilityRevision) ===
+      String(commit.routeSnapshot.bindingFence.capabilityRevision) &&
+    sameJson(plan.adapterContract, commit.routeSnapshot.adapterContract) &&
+    Date.parse(plan.createdAt) <= Date.parse(commit.attempt.openedAt)
+  );
+}
+
+function contentPlanMatchesCompletedAttempt(
+  plan: InboxV2OutboundDispatchContentPlan,
+  commit: CompleteAttemptCommit
+): boolean {
+  return (
+    plan.tenantId === commit.tenantId &&
+    String(plan.dispatch.id) === String(commit.dispatchBefore.id) &&
+    String(plan.message.id) === String(commit.dispatchBefore.message.id) &&
+    String(plan.route.id) === String(commit.dispatchBefore.route.id) &&
+    String(commit.attemptBefore.dispatch.id) ===
+      String(commit.dispatchBefore.id) &&
+    String(commit.attemptBefore.route.id) ===
+      String(commit.dispatchBefore.route.id)
+  );
+}
+
+function providerArtifactSetMatchesCompletion(
+  artifacts: readonly InboxV2OutboundDispatchArtifact[],
+  plan: InboxV2OutboundDispatchContentPlan,
+  commit: CompleteAttemptCommit
+): boolean {
+  if (
+    artifacts.length !== plan.artifacts.length ||
+    artifacts.length === 0 ||
+    commit.attemptAfter.outcome.kind === "pending"
+  ) {
+    return false;
+  }
+  const completedAt = commit.attemptAfter.outcome.completedAt;
+  const ordered = [...artifacts].sort(
+    (left, right) => left.ordinal - right.ordinal
+  );
+  if (
+    ordered.some((artifact, index) => {
+      const planned = plan.artifacts[index];
+      if (planned === undefined || artifact.ordinal !== planned.ordinal) {
+        return true;
+      }
+      const expectedId = deriveInboxV2OutboundDispatchArtifactId({
+        tenantId: commit.tenantId,
+        dispatch: commit.attemptBefore.dispatch,
+        route: commit.attemptBefore.route,
+        attempt: {
+          tenantId: commit.tenantId,
+          kind: "outbound_dispatch_attempt",
+          id: commit.attemptBefore.id
+        },
+        ordinal: artifact.ordinal
+      });
+      return (
+        artifact.id !== expectedId ||
+        artifact.tenantId !== commit.tenantId ||
+        String(artifact.dispatch.id) !== String(commit.dispatchBefore.id) ||
+        String(artifact.route.id) !== String(commit.dispatchBefore.route.id) ||
+        String(artifact.attempt.id) !== String(commit.attemptBefore.id) ||
+        artifact.createdAt !== completedAt ||
+        artifact.revision !== "1"
+      );
+    })
+  ) {
+    return false;
+  }
+
+  const outcome = commit.attemptAfter.outcome;
+  if (commit.completionSource === "lease_expired") {
+    return (
+      outcome.kind === "outcome_unknown" &&
+      ordered.every((artifact) => artifact.state === "outcome_unknown") &&
+      sameJson(outcome.diagnostic, ordered[0]?.diagnostic)
+    );
+  }
+  if (commit.completionSource !== "provider_result") return false;
+
+  if (ordered.every((artifact) => artifact.state === "accepted")) {
+    return outcome.kind === "accepted";
+  }
+  if (ordered.every((artifact) => artifact.state === "failed")) {
+    const terminal = ordered.find(
+      (artifact) => artifact.diagnostic?.retryable === false
+    );
+    const representative = terminal ?? ordered[0];
+    const expectedKind =
+      terminal === undefined ? "retryable_failure" : "terminal_failure";
+    return (
+      outcome.kind === expectedKind &&
+      sameJson(outcome.diagnostic, representative?.diagnostic)
+    );
+  }
+  const states = new Set(ordered.map((artifact) => artifact.state));
+  const representative = ordered.find(
+    (artifact) => artifact.state === "outcome_unknown"
+  );
+  const expectedDiagnostic =
+    states.size > 1
+      ? createInboxV2MixedProviderArtifactOutcomeDiagnostic(
+          commit.attemptBefore.claimToken
+        )
+      : representative?.diagnostic;
+  return (
+    outcome.kind === "outcome_unknown" &&
+    expectedDiagnostic !== undefined &&
+    sameJson(outcome.diagnostic, expectedDiagnostic) &&
+    outcome.requiredAction ===
+      (states.size > 1 ||
+      !commit.attemptBefore.retrySafety.automaticRetryAllowed
+        ? "operator_duplicate_risk_decision_required"
+        : "automated_reconciliation_required")
+  );
+}
+
 function providerRouteFailureTimeFenceMatches(
   commit: InboxV2OutboundDispatchRouteFailureCommit,
   fence: ValidatedProviderIoOutboxLease
@@ -2705,9 +2970,44 @@ function parseDatabaseJson(value: unknown): unknown {
   }
 }
 
+type ArtifactRetrySafetyRow = {
+  retry_safe: unknown;
+};
+
+export function buildCheckInboxV2ArtifactRetrySafetySql(input: {
+  tenantId: InboxV2TenantId;
+  dispatchId: InboxV2OutboundDispatchId;
+  attemptId: InboxV2OutboundDispatchAttempt["id"];
+}): SQL {
+  return sql`
+    select not exists (
+      select 1
+        from inbox_v2_outbound_dispatch_artifacts artifact
+       where artifact.tenant_id = ${input.tenantId}
+         and artifact.dispatch_id = ${input.dispatchId}
+         and artifact.attempt_id = ${input.attemptId}
+         and artifact.state = 'accepted'
+    ) as retry_safe
+  `;
+}
+
+async function retryIsSafeForAttempt(
+  transaction: RawSqlExecutor,
+  input: Parameters<typeof buildCheckInboxV2ArtifactRetrySafetySql>[0]
+): Promise<boolean> {
+  const result = await transaction.execute<ArtifactRetrySafetyRow>(
+    buildCheckInboxV2ArtifactRetrySafetySql(input)
+  );
+  return result.rows[0]?.retry_safe === true;
+}
+
 async function openAttemptInTransaction(
   transaction: RawSqlExecutor,
-  commit: OpenAttemptCommit
+  commit: OpenAttemptCommit,
+  providerOpen?: Readonly<{
+    contentPlan: InboxV2OutboundDispatchContentPlan;
+    databaseNow: string;
+  }>
 ): Promise<ApplyInboxV2DispatchAttemptResult> {
   const dispatchRow = await lockDispatch(transaction, commit.dispatchBefore);
   if (dispatchRow === null) return { kind: "dispatch_not_found" };
@@ -2740,7 +3040,9 @@ async function openAttemptInTransaction(
     !bindingAnchorMatchesRoute(fence, commit.routeSnapshot) ||
     !bindingFenceMatchesRoute(fence, commit.routeSnapshot) ||
     String(commit.bindingHeadSnapshot.bindingRevision) !==
-      String(fence.binding_revision)
+      String(fence.binding_revision) ||
+    String(commit.bindingHeadSnapshot.providerAccessRevision) !==
+      String(fence.provider_access_revision)
   ) {
     return { kind: "binding_fence_conflict" };
   }
@@ -2751,6 +3053,30 @@ async function openAttemptInTransaction(
       fence.runtime_health_state !== "degraded")
   ) {
     return { kind: "binding_fence_conflict" };
+  }
+  if (
+    providerOpen !== undefined &&
+    !(await providerOpenCapabilitiesRemainAuthorized(transaction, {
+      contentPlan: providerOpen.contentPlan,
+      route: commit.routeSnapshot,
+      attempt: commit.attempt,
+      databaseNow: providerOpen.databaseNow,
+      bindingRevision: String(fence.binding_revision),
+      capabilityRevision: String(fence.capability_revision),
+      providerAccessRevision: String(fence.provider_access_revision)
+    }))
+  ) {
+    return { kind: "binding_fence_conflict" };
+  }
+  if (
+    commit.priorAttempt !== null &&
+    !(await retryIsSafeForAttempt(transaction, {
+      tenantId: commit.tenantId,
+      dispatchId: commit.dispatchBefore.id,
+      attemptId: commit.priorAttempt.id
+    }))
+  ) {
+    return { kind: "artifact_retry_unsafe" };
   }
 
   const attemptInsert = await transaction.execute<IdRow>(
@@ -2778,6 +3104,197 @@ async function openAttemptInTransaction(
     );
   }
   return { kind: "committed" };
+}
+
+type ProviderOpenCapabilityAuthorityRow = {
+  artifact_ordinal: unknown;
+};
+
+export function buildValidateInboxV2ProviderOpenContentPlanSql(input: {
+  contentPlan: InboxV2OutboundDispatchContentPlan;
+  route: InboxV2OutboundRoute;
+  attempt: InboxV2OutboundDispatchAttempt;
+  databaseNow: string;
+  bindingRevision: string;
+  capabilityRevision: string;
+  providerAccessRevision: string;
+}): SQL {
+  const plannedRows = input.contentPlan.artifacts.map(
+    (artifact) =>
+      sql`(${artifact.ordinal}, ${artifact.capabilityId}, ${artifact.operationId})`
+  );
+  const pinnedRows = input.contentPlan.blocks.flatMap((block) => {
+    const pin = block.exactFileObjectPin;
+    return pin === null
+      ? []
+      : [
+          sql`(${block.blockKey}, ${pin.file.id}, ${BigInt(pin.fileRevision)}::bigint, ${pin.fileVersion.id}, ${pin.objectVersion.id})`
+        ];
+  });
+  const plannedFilePins =
+    pinnedRows.length === 0
+      ? sql`select null::text, null::text, null::bigint, null::text,
+                   null::text
+              where false`
+      : sql`values ${sql.join(pinnedRows, sql`, `)}`;
+  return sql`
+    with planned(artifact_ordinal, capability_id, operation_id) as (
+      values ${sql.join(plannedRows, sql`, `)}
+    ),
+    planned_file_pins(
+      block_key, file_id, file_revision, file_version_id, object_version_id
+    ) as (
+      ${plannedFilePins}
+    ),
+    current_content_fence(content_plan_id) as materialized (
+      select plan_row.id
+        from inbox_v2_file_outbound_dispatch_plans plan_row
+        join inbox_v2_messages message_row
+          on message_row.tenant_id = plan_row.tenant_id
+         and message_row.id = plan_row.message_id
+         and message_row.revision = plan_row.message_revision
+         and message_row.conversation_id = plan_row.conversation_id
+         and message_row.timeline_item_id = plan_row.timeline_item_id
+         and message_row.content_id = plan_row.content_id
+         and message_row.content_revision = plan_row.content_revision
+         and message_row.content_state = 'available'
+        join inbox_v2_timeline_contents content_row
+          on content_row.tenant_id = message_row.tenant_id
+         and content_row.id = message_row.content_id
+         and content_row.revision = message_row.content_revision
+         and content_row.state = 'available'
+       where plan_row.tenant_id = ${input.contentPlan.tenantId}
+         and plan_row.id = ${input.contentPlan.id}
+         and plan_row.dispatch_id = ${input.attempt.dispatch.id}
+         and plan_row.message_id = ${input.contentPlan.message.id}
+         and plan_row.message_revision =
+           ${BigInt(input.contentPlan.messageRevision)}
+         and plan_row.route_id = ${input.attempt.route.id}
+         and plan_row.content_id = ${input.contentPlan.timelineContent.id}
+         and plan_row.content_revision =
+           ${BigInt(input.contentPlan.contentRevision)}
+         and plan_row.content_fingerprint_purpose_id =
+           ${input.contentPlan.contentFingerprint.purposeId}
+         and plan_row.content_fingerprint_key_generation =
+           ${input.contentPlan.contentFingerprint.keyGeneration}
+         and plan_row.content_fingerprint_valid_until =
+           ${toDate(input.contentPlan.contentFingerprint.validUntil)}
+         and plan_row.content_fingerprint_hmac_sha256 =
+           ${input.contentPlan.contentFingerprint.hmacSha256}
+         and plan_row.content_fingerprint_valid_until >
+           ${toDate(input.attempt.openedAt)}
+         and plan_row.content_fingerprint_valid_until >
+           ${toDate(input.databaseNow)}
+         and plan_row.plan_digest_sha256 = ${input.contentPlan.planDigestSha256}
+         and plan_row.revision = ${BigInt(input.contentPlan.revision)}
+         and plan_row.created_at = ${toDate(input.contentPlan.createdAt)}
+       for share of message_row, content_row
+    ),
+    valid_file_pins(block_key) as materialized (
+      select pin.block_key
+        from planned_file_pins pin
+        join inbox_v2_file_objects file_row
+          on file_row.tenant_id = ${input.contentPlan.tenantId}
+         and file_row.id = pin.file_id
+         and file_row.revision = pin.file_revision
+         and file_row.state = 'ready'
+         and file_row.current_file_version_id = pin.file_version_id
+         and file_row.current_object_version_id = pin.object_version_id
+        join inbox_v2_file_versions file_version_row
+          on file_version_row.tenant_id = file_row.tenant_id
+         and file_version_row.id = pin.file_version_id
+         and file_version_row.file_id = pin.file_id
+         and file_version_row.object_version_id = pin.object_version_id
+        join inbox_v2_file_object_versions object_version_row
+          on object_version_row.tenant_id = file_version_row.tenant_id
+         and object_version_row.id = pin.object_version_id
+        join inbox_v2_file_object_version_heads object_head_row
+          on object_head_row.tenant_id = object_version_row.tenant_id
+         and object_head_row.object_version_id = object_version_row.id
+         and object_head_row.state = 'ready'
+       order by pin.file_id, pin.file_version_id, pin.object_version_id
+       for share of file_row, file_version_row, object_version_row,
+         object_head_row
+    )
+    select planned.artifact_ordinal
+      from planned
+      join inbox_v2_source_thread_binding_capability_entries capability
+        on capability.tenant_id = ${input.contentPlan.tenantId}
+       and capability.binding_id = ${input.contentPlan.binding.id}
+       and capability.capability_revision =
+         ${BigInt(input.capabilityRevision)}
+       and capability.capability_id = planned.capability_id
+       and capability.operation_id = planned.operation_id
+       and capability.content_kind_id is not distinct from
+         ${input.route.contentKindId}
+     where capability.state = 'supported'
+       and (
+         capability.valid_until is null
+         or (
+           capability.valid_until > ${toDate(input.attempt.openedAt)}
+           and capability.valid_until > ${toDate(input.databaseNow)}
+         )
+       )
+       and not exists (
+         select 1
+           from inbox_v2_source_thread_binding_capability_required_roles
+             required_role
+          where required_role.tenant_id = capability.tenant_id
+            and required_role.binding_id = capability.binding_id
+            and required_role.capability_revision =
+              capability.capability_revision
+            and required_role.capability_ordinal = capability.ordinal
+            and not exists (
+              select 1
+                from inbox_v2_source_thread_binding_provider_roles provider_role
+               where provider_role.tenant_id = required_role.tenant_id
+                 and provider_role.binding_id = required_role.binding_id
+                 and provider_role.provider_access_revision =
+                   ${BigInt(input.providerAccessRevision)}
+                 and provider_role.provider_role_id =
+                   required_role.provider_role_id
+            )
+       )
+       and (
+         select count(*) from valid_file_pins
+       ) = (
+         select count(*) from planned_file_pins
+       )
+       and exists (select 1 from current_content_fence)
+     order by planned.artifact_ordinal
+     for share of capability
+  `;
+}
+
+async function providerOpenCapabilitiesRemainAuthorized(
+  transaction: RawSqlExecutor,
+  input: Parameters<typeof buildValidateInboxV2ProviderOpenContentPlanSql>[0]
+): Promise<boolean> {
+  const fingerprintValidUntil = Date.parse(
+    input.contentPlan.contentFingerprint.validUntil
+  );
+  if (
+    String(input.contentPlan.bindingRevision) !==
+      String(input.bindingRevision) ||
+    String(input.contentPlan.capabilityRevision) !==
+      String(input.capabilityRevision) ||
+    !Number.isFinite(fingerprintValidUntil) ||
+    fingerprintValidUntil <= Date.parse(input.attempt.openedAt) ||
+    fingerprintValidUntil <= Date.parse(input.databaseNow)
+  ) {
+    return false;
+  }
+  const result = await transaction.execute<ProviderOpenCapabilityAuthorityRow>(
+    buildValidateInboxV2ProviderOpenContentPlanSql(input)
+  );
+  return (
+    result.rows.length === input.contentPlan.artifacts.length &&
+    result.rows.every(
+      (row, index) =>
+        Number(row.artifact_ordinal) ===
+        input.contentPlan.artifacts[index]?.ordinal
+    )
+  );
 }
 
 function existingDispatchIsCancellationOf(
@@ -3414,6 +3931,16 @@ async function reconcileInTransaction(
   if (!existingAttemptMatches(attemptRow, commit.decision.unknownAttempt)) {
     return { kind: "unknown_attempt_not_found" };
   }
+  if (
+    commit.decision.result.state === "retryable_failure" &&
+    !(await retryIsSafeForAttempt(transaction, {
+      tenantId: commit.tenantId,
+      dispatchId: commit.dispatchBefore.id,
+      attemptId: commit.decision.unknownAttempt.id
+    }))
+  ) {
+    return { kind: "artifact_retry_unsafe" };
+  }
 
   const permissions = reconciliationPermissions(commit.decision);
   const permissionDigest = digestOrdinalIds(permissions);
@@ -3678,6 +4205,61 @@ function existingReconciliationMatches(
     sameTimestamp(row.decided_at, decision.decidedAt) &&
     BigInt(String(row.revision)) === BigInt(decision.revision)
   );
+}
+
+async function persistProviderResultArtifactsAndCompletion(
+  transaction: RawSqlExecutor,
+  commit: CompleteAttemptCommit,
+  artifacts: readonly InboxV2OutboundDispatchArtifact[]
+): Promise<ApplyInboxV2ProviderResultFencedResult> {
+  const existing = await transaction.execute<ArtifactRow>(sql`
+    select id, dispatch_id, route_id, attempt_id, message_id, ordinal,
+           state, diagnostic_code_id, diagnostic_retryable,
+           diagnostic_correlation_token, diagnostic_safe_operator_hint_id,
+           created_at, revision
+      from inbox_v2_outbound_dispatch_artifacts
+     where tenant_id = ${commit.tenantId}
+       and dispatch_id = ${commit.dispatchBefore.id}
+       and attempt_id = ${commit.attemptBefore.id}
+     order by ordinal
+     for update
+  `);
+  const ordered = [...artifacts].sort(
+    (left, right) => left.ordinal - right.ordinal
+  );
+  const hasExactExistingSet =
+    existing.rows.length === ordered.length &&
+    existing.rows.every((row, index) => {
+      const artifact = ordered[index];
+      return artifact !== undefined && artifactRowMatches(row, artifact);
+    });
+  if (existing.rows.length > 0 && !hasExactExistingSet) {
+    return { kind: "dispatch_artifact_set_conflict" };
+  }
+
+  const completion = await completeAttemptInTransaction(transaction, commit);
+  if (
+    completion.kind !== "committed" &&
+    completion.kind !== "already_applied"
+  ) {
+    return completion;
+  }
+  if (completion.kind === "already_applied") {
+    return hasExactExistingSet
+      ? completion
+      : { kind: "dispatch_artifact_set_conflict" };
+  }
+  if (hasExactExistingSet) return completion;
+
+  for (const artifact of ordered) {
+    const result = await appendArtifactInTransaction(transaction, artifact);
+    if (result.kind !== "committed" && result.kind !== "already_exists") {
+      throw new ProviderResultArtifactRollbackError({
+        kind: "dispatch_artifact_set_conflict"
+      });
+    }
+  }
+  return completion;
 }
 
 async function appendArtifactInTransaction(

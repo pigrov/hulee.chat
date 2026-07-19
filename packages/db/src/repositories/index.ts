@@ -11,6 +11,9 @@ export * from "./sql-inbox-v2-privacy-export-lifecycle-repository";
 export * from "./sql-inbox-v2-destructive-checkpoint-guard-repository";
 export * from "./sql-inbox-v2-deletion-run-state-repository";
 export * from "./sql-inbox-v2-erasure-restore-ledger-repository";
+export { INBOX_V2_ATTACHMENT_MATERIALIZATION_COMPLETION_RESULT_CODE } from "./sql-inbox-v2-attachment-materialization-command-service";
+export { persistInboxV2OutboundDispatchContentPlanInTransaction } from "./sql-inbox-v2-file-object-repository";
+export type { PersistInboxV2OutboundDispatchContentPlanResult } from "./sql-inbox-v2-file-object-repository";
 export {
   InboxV2TimelineMessagePersistenceInvariantError,
   prepareInboxV2MessageCreation,

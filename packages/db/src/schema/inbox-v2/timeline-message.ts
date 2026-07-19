@@ -26,6 +26,7 @@ import {
   sourceAccounts,
   tenants
 } from "../tables";
+import { inboxV2FileObjectVersions, inboxV2FileVersions } from "./file-object";
 import {
   inboxV2SourceExternalIdentities,
   inboxV2SourceIdentityClaims
@@ -424,11 +425,6 @@ export const inboxV2ActionAttributions = pgTable(
         inboxV2SourceOccurrences.id
       ]
     }),
-    foreignKey({
-      name: "inbox_v2_action_attributions_cause_event_fk",
-      columns: [table.tenantId, table.automationCauseEventId],
-      foreignColumns: [eventStore.tenantId, eventStore.id]
-    }),
     unique("inbox_v2_action_attributions_target_unique").on(
       table.tenantId,
       table.id,
@@ -489,7 +485,10 @@ export const inboxV2ActionAttributions = pgTable(
       table.conversationId,
       table.createdAt,
       table.id
-    )
+    ),
+    index("inbox_v2_action_attributions_cause_event_idx")
+      .on(table.tenantId, table.automationCauseEventId)
+      .where(sql`${table.automationCauseEventId} is not null`)
   ]
 );
 
@@ -499,6 +498,13 @@ export const inboxV2MessageAttachmentAnchors = pgTable(
   {
     tenantId: text("tenant_id").notNull(),
     id: text("id").notNull(),
+    ownerMessageId: text("owner_message_id"),
+    ownerTimelineItemId: text("owner_timeline_item_id"),
+    ownerTimelineContentId: text("owner_timeline_content_id"),
+    ownerBlockKey: text("owner_block_key"),
+    materializationState: inboxV2AttachmentMaterializationState(
+      "materialization_state"
+    ),
     revision: bigint("revision", { mode: "bigint" }).notNull(),
     createdAt: timestamp("created_at", {
       withTimezone: true,
@@ -519,6 +525,22 @@ export const inboxV2MessageAttachmentAnchors = pgTable(
       "inbox_v2_message_attachment_anchors_revision_check",
       sql`${inboxV2IdSql(table.id, "message_attachment")}
         and ${table.revision} >= 1`
+    ),
+    unique("inbox_v2_message_attachment_anchors_owner_block_unique").on(
+      table.tenantId,
+      table.ownerTimelineContentId,
+      table.ownerBlockKey
+    ),
+    unique("inbox_v2_message_attachment_anchors_owner_identity_unique").on(
+      table.tenantId,
+      table.ownerTimelineContentId,
+      table.id
+    ),
+    unique("inbox_v2_message_attachment_anchors_exact_owner_unique").on(
+      table.tenantId,
+      table.id,
+      table.ownerTimelineContentId,
+      table.ownerBlockKey
     ),
     check(
       "inbox_v2_message_attachment_anchors_time_check",
@@ -757,6 +779,12 @@ export const inboxV2TimelineContentPayloads = pgTable(
     attachmentId: text("attachment_id"),
     attachmentState: inboxV2AttachmentMaterializationState("attachment_state"),
     attachmentFileId: text("attachment_file_id"),
+    attachmentV2FileId: text("attachment_v2_file_id"),
+    attachmentFileRevision: bigint("attachment_file_revision", {
+      mode: "bigint"
+    }),
+    attachmentFileVersionId: text("attachment_file_version_id"),
+    attachmentObjectVersionId: text("attachment_object_version_id"),
     attachmentFailureReasonId: text("attachment_failure_reason_id"),
     displayName: text("display_name"),
     mediaSemantic: text("media_semantic"),
@@ -780,6 +808,14 @@ export const inboxV2TimelineContentPayloads = pgTable(
     extensionPayloadSchemaId: text("extension_payload_schema_id"),
     extensionPayloadSchemaVersion: text("extension_payload_schema_version"),
     extensionPayloadFileId: text("extension_payload_file_id"),
+    extensionPayloadV2FileId: text("extension_payload_v2_file_id"),
+    extensionPayloadFileRevision: bigint("extension_payload_file_revision", {
+      mode: "bigint"
+    }),
+    extensionPayloadFileVersionId: text("extension_payload_file_version_id"),
+    extensionPayloadObjectVersionId: text(
+      "extension_payload_object_version_id"
+    ),
     extensionPayloadDigestSha256: text("extension_payload_digest_sha256"),
     extensionRendererId: text("extension_renderer_id"),
     createdAt: timestamp("created_at", {
@@ -820,9 +856,55 @@ export const inboxV2TimelineContentPayloads = pgTable(
       foreignColumns: [files.tenantId, files.id]
     }),
     foreignKey({
+      name: "inbox_v2_timeline_content_payloads_file_version_fk",
+      columns: [
+        table.tenantId,
+        table.attachmentFileVersionId,
+        table.attachmentV2FileId,
+        table.attachmentObjectVersionId
+      ],
+      foreignColumns: [
+        inboxV2FileVersions.tenantId,
+        inboxV2FileVersions.id,
+        inboxV2FileVersions.fileId,
+        inboxV2FileVersions.objectVersionId
+      ]
+    }),
+    foreignKey({
+      name: "inbox_v2_timeline_content_payloads_object_version_fk",
+      columns: [table.tenantId, table.attachmentObjectVersionId],
+      foreignColumns: [
+        inboxV2FileObjectVersions.tenantId,
+        inboxV2FileObjectVersions.id
+      ]
+    }),
+    foreignKey({
       name: "inbox_v2_timeline_content_payloads_extension_file_fk",
       columns: [table.tenantId, table.extensionPayloadFileId],
       foreignColumns: [files.tenantId, files.id]
+    }),
+    foreignKey({
+      name: "inbox_v2_timeline_payloads_extension_file_version_fk",
+      columns: [
+        table.tenantId,
+        table.extensionPayloadFileVersionId,
+        table.extensionPayloadV2FileId,
+        table.extensionPayloadObjectVersionId
+      ],
+      foreignColumns: [
+        inboxV2FileVersions.tenantId,
+        inboxV2FileVersions.id,
+        inboxV2FileVersions.fileId,
+        inboxV2FileVersions.objectVersionId
+      ]
+    }),
+    foreignKey({
+      name: "inbox_v2_timeline_payloads_extension_object_version_fk",
+      columns: [table.tenantId, table.extensionPayloadObjectVersionId],
+      foreignColumns: [
+        inboxV2FileObjectVersions.tenantId,
+        inboxV2FileObjectVersions.id
+      ]
     }),
     foreignKey({
       name: "inbox_v2_timeline_content_payloads_occurrence_fk",
@@ -838,6 +920,14 @@ export const inboxV2TimelineContentPayloads = pgTable(
       table.contentRevision,
       table.blockKey
     ),
+    uniqueIndex("inbox_v2_timeline_content_payloads_attachment_unique")
+      .on(
+        table.tenantId,
+        table.contentId,
+        table.contentRevision,
+        table.attachmentId
+      )
+      .where(sql`${table.attachmentId} is not null`),
     check(
       "inbox_v2_timeline_content_payloads_ordinal_check",
       sql`${table.ordinal} between 0 and 63`
@@ -856,24 +946,156 @@ export const inboxV2TimelineContentPayloads = pgTable(
           ${table.kind} = 'text'
           and ${table.textRole} in ('body', 'caption')
           and ${table.textValue} is not null
+          and num_nonnulls(
+            ${table.attachmentId}, ${table.attachmentState},
+            ${table.attachmentFileId}, ${table.attachmentV2FileId},
+            ${table.attachmentFileRevision},
+            ${table.attachmentFileVersionId},
+            ${table.attachmentObjectVersionId},
+            ${table.attachmentFailureReasonId}, ${table.displayName},
+            ${table.mediaSemantic}, ${table.latitude}, ${table.longitude},
+            ${table.accuracyMeters}, ${table.locationMode}, ${table.liveUntil},
+            ${table.headingDegrees}, ${table.locationLabel},
+            ${table.locationAddress}, ${table.contactDisplayName},
+            ${table.contactOrganization},
+            ${table.unsupportedSourceOccurrenceId},
+            ${table.providerContentKindId}, ${table.safeFallbackReasonId},
+            ${table.extensionBlockKindId},
+            ${table.extensionPayloadSchemaId},
+            ${table.extensionPayloadSchemaVersion},
+            ${table.extensionPayloadFileId},
+            ${table.extensionPayloadV2FileId},
+            ${table.extensionPayloadFileRevision},
+            ${table.extensionPayloadFileVersionId},
+            ${table.extensionPayloadObjectVersionId},
+            ${table.extensionPayloadDigestSha256},
+            ${table.extensionRendererId}
+          ) = 0
         ) or (
           ${table.kind} in ('image', 'audio', 'video', 'file', 'sticker')
           and ${table.attachmentId} is not null
           and ${table.attachmentState} is not null
-          and (${table.attachmentState} <> 'ready' or ${table.attachmentFileId} is not null)
-          and (${table.attachmentState} not in ('failed', 'quarantined')
-            or ${table.attachmentFailureReasonId} is not null)
-          and (${table.kind} <> 'audio' or ${table.mediaSemantic} in ('audio', 'voice'))
-          and (${table.kind} <> 'video' or ${table.mediaSemantic} in ('video', 'video_note'))
+          and num_nonnulls(
+            ${table.textRole}, ${table.textValue}, ${table.language},
+            ${table.latitude}, ${table.longitude}, ${table.accuracyMeters},
+            ${table.locationMode}, ${table.liveUntil},
+            ${table.headingDegrees}, ${table.locationLabel},
+            ${table.locationAddress}, ${table.contactDisplayName},
+            ${table.contactOrganization},
+            ${table.unsupportedSourceOccurrenceId},
+            ${table.providerContentKindId}, ${table.safeFallbackReasonId},
+            ${table.extensionBlockKindId},
+            ${table.extensionPayloadSchemaId},
+            ${table.extensionPayloadSchemaVersion},
+            ${table.extensionPayloadFileId},
+            ${table.extensionPayloadV2FileId},
+            ${table.extensionPayloadFileRevision},
+            ${table.extensionPayloadFileVersionId},
+            ${table.extensionPayloadObjectVersionId},
+            ${table.extensionPayloadDigestSha256},
+            ${table.extensionRendererId}
+          ) = 0
+          and (
+            (${table.attachmentState} = 'pending'
+              and num_nonnulls(
+                ${table.attachmentFileId}, ${table.attachmentV2FileId},
+                ${table.attachmentFileRevision},
+                ${table.attachmentFileVersionId},
+                ${table.attachmentObjectVersionId},
+                ${table.attachmentFailureReasonId}
+              ) = 0)
+            or (${table.attachmentState} = 'ready'
+              and ${table.attachmentFailureReasonId} is null
+              and (
+                (${table.attachmentFileId} is not null
+                  and num_nonnulls(
+                    ${table.attachmentV2FileId},
+                    ${table.attachmentFileRevision},
+                    ${table.attachmentFileVersionId},
+                    ${table.attachmentObjectVersionId}
+                  ) = 0)
+                or (${table.attachmentFileId} is null
+                  and num_nonnulls(
+                    ${table.attachmentV2FileId},
+                    ${table.attachmentFileRevision},
+                    ${table.attachmentFileVersionId},
+                    ${table.attachmentObjectVersionId}
+                  ) = 4)
+              ))
+            or (${table.attachmentState} in ('failed', 'quarantined')
+              and ${table.attachmentFailureReasonId} is not null
+              and num_nonnulls(
+                ${table.attachmentFileId}, ${table.attachmentV2FileId},
+                ${table.attachmentFileRevision},
+                ${table.attachmentFileVersionId},
+                ${table.attachmentObjectVersionId}
+              ) = 0)
+          )
+          and ((${table.kind} = 'audio'
+              and ${table.mediaSemantic} in ('audio', 'voice')
+              and ${table.displayName} is null)
+            or (${table.kind} = 'video'
+              and ${table.mediaSemantic} in ('video', 'video_note')
+              and ${table.displayName} is null)
+            or (${table.kind} in ('image', 'file', 'sticker')
+              and ${table.mediaSemantic} is null))
         ) or (
           ${table.kind} = 'location'
           and ${table.latitude} between -90 and 90
           and ${table.longitude} between -180 and 180
           and ${table.locationMode} in ('static', 'live')
           and ((${table.locationMode} = 'live') = (${table.liveUntil} is not null))
+          and num_nonnulls(
+            ${table.textRole}, ${table.textValue}, ${table.language},
+            ${table.attachmentId}, ${table.attachmentState},
+            ${table.attachmentFileId}, ${table.attachmentV2FileId},
+            ${table.attachmentFileRevision},
+            ${table.attachmentFileVersionId},
+            ${table.attachmentObjectVersionId},
+            ${table.attachmentFailureReasonId}, ${table.displayName},
+            ${table.mediaSemantic}, ${table.contactDisplayName},
+            ${table.contactOrganization},
+            ${table.unsupportedSourceOccurrenceId},
+            ${table.providerContentKindId}, ${table.safeFallbackReasonId},
+            ${table.extensionBlockKindId},
+            ${table.extensionPayloadSchemaId},
+            ${table.extensionPayloadSchemaVersion},
+            ${table.extensionPayloadFileId},
+            ${table.extensionPayloadV2FileId},
+            ${table.extensionPayloadFileRevision},
+            ${table.extensionPayloadFileVersionId},
+            ${table.extensionPayloadObjectVersionId},
+            ${table.extensionPayloadDigestSha256},
+            ${table.extensionRendererId}
+          ) = 0
         ) or (
           ${table.kind} = 'contact'
           and ${table.contactDisplayName} is not null
+          and num_nonnulls(
+            ${table.textRole}, ${table.textValue}, ${table.language},
+            ${table.attachmentId}, ${table.attachmentState},
+            ${table.attachmentFileId}, ${table.attachmentV2FileId},
+            ${table.attachmentFileRevision},
+            ${table.attachmentFileVersionId},
+            ${table.attachmentObjectVersionId},
+            ${table.attachmentFailureReasonId}, ${table.displayName},
+            ${table.mediaSemantic}, ${table.latitude}, ${table.longitude},
+            ${table.accuracyMeters}, ${table.locationMode}, ${table.liveUntil},
+            ${table.headingDegrees}, ${table.locationLabel},
+            ${table.locationAddress},
+            ${table.unsupportedSourceOccurrenceId},
+            ${table.providerContentKindId}, ${table.safeFallbackReasonId},
+            ${table.extensionBlockKindId},
+            ${table.extensionPayloadSchemaId},
+            ${table.extensionPayloadSchemaVersion},
+            ${table.extensionPayloadFileId},
+            ${table.extensionPayloadV2FileId},
+            ${table.extensionPayloadFileRevision},
+            ${table.extensionPayloadFileVersionId},
+            ${table.extensionPayloadObjectVersionId},
+            ${table.extensionPayloadDigestSha256},
+            ${table.extensionRendererId}
+          ) = 0
         ) or (
           ${table.kind} = 'unsupported_source_content'
           and num_nonnulls(
@@ -881,25 +1103,124 @@ export const inboxV2TimelineContentPayloads = pgTable(
             ${table.providerContentKindId},
             ${table.safeFallbackReasonId}
           ) = 3
+          and num_nonnulls(
+            ${table.textRole}, ${table.textValue}, ${table.language},
+            ${table.attachmentId}, ${table.attachmentState},
+            ${table.attachmentFileId}, ${table.attachmentV2FileId},
+            ${table.attachmentFileRevision},
+            ${table.attachmentFileVersionId},
+            ${table.attachmentObjectVersionId},
+            ${table.attachmentFailureReasonId}, ${table.displayName},
+            ${table.mediaSemantic}, ${table.latitude}, ${table.longitude},
+            ${table.accuracyMeters}, ${table.locationMode}, ${table.liveUntil},
+            ${table.headingDegrees}, ${table.locationLabel},
+            ${table.locationAddress}, ${table.contactDisplayName},
+            ${table.contactOrganization},
+            ${table.extensionBlockKindId},
+            ${table.extensionPayloadSchemaId},
+            ${table.extensionPayloadSchemaVersion},
+            ${table.extensionPayloadFileId},
+            ${table.extensionPayloadV2FileId},
+            ${table.extensionPayloadFileRevision},
+            ${table.extensionPayloadFileVersionId},
+            ${table.extensionPayloadObjectVersionId},
+            ${table.extensionPayloadDigestSha256},
+            ${table.extensionRendererId}
+          ) = 0
         ) or (
           ${table.kind} = 'extension'
           and num_nonnulls(
             ${table.extensionBlockKindId}, ${table.extensionPayloadSchemaId},
             ${table.extensionPayloadSchemaVersion},
-            ${table.extensionPayloadFileId},
+            coalesce(${table.extensionPayloadFileId}, ${table.extensionPayloadV2FileId}),
             ${table.extensionPayloadDigestSha256},
             ${table.extensionRendererId}
           ) = 6
           and ${table.extensionPayloadDigestSha256} ~ '^[a-f0-9]{64}$'
+          and (( ${table.extensionPayloadFileId} is not null
+                and num_nonnulls(
+                  ${table.extensionPayloadV2FileId},
+                  ${table.extensionPayloadFileRevision},
+                  ${table.extensionPayloadFileVersionId},
+                  ${table.extensionPayloadObjectVersionId}
+                ) = 0)
+            or (${table.extensionPayloadFileId} is null
+              and num_nonnulls(
+                ${table.extensionPayloadV2FileId},
+                ${table.extensionPayloadFileRevision},
+                ${table.extensionPayloadFileVersionId},
+                ${table.extensionPayloadObjectVersionId}
+              ) = 4))
+          and num_nonnulls(
+            ${table.textRole}, ${table.textValue}, ${table.language},
+            ${table.attachmentId}, ${table.attachmentState},
+            ${table.attachmentFileId}, ${table.attachmentV2FileId},
+            ${table.attachmentFileRevision},
+            ${table.attachmentFileVersionId},
+            ${table.attachmentObjectVersionId},
+            ${table.attachmentFailureReasonId}, ${table.displayName},
+            ${table.mediaSemantic}, ${table.latitude}, ${table.longitude},
+            ${table.accuracyMeters}, ${table.locationMode}, ${table.liveUntil},
+            ${table.headingDegrees}, ${table.locationLabel},
+            ${table.locationAddress}, ${table.contactDisplayName},
+            ${table.contactOrganization},
+            ${table.unsupportedSourceOccurrenceId},
+            ${table.providerContentKindId}, ${table.safeFallbackReasonId}
+          ) = 0
         )`
     ),
     check(
       "inbox_v2_timeline_content_payloads_created_check",
       sql`isfinite(${table.createdAt})`
     ),
+    check(
+      "inbox_v2_timeline_content_payloads_version_pins_check",
+      sql`num_nonnulls(
+          ${table.attachmentV2FileId},
+          ${table.attachmentFileRevision},
+          ${table.attachmentFileVersionId},
+          ${table.attachmentObjectVersionId}
+        ) in (0, 4)
+        and ((${table.attachmentV2FileId} is null
+            and ${table.attachmentFileRevision} is null
+            and ${table.attachmentFileVersionId} is null
+            and ${table.attachmentObjectVersionId} is null)
+          or (${table.attachmentState} = 'ready'
+            and ${table.attachmentFileId} is null
+            and ${table.attachmentV2FileId} is not null
+            and ${table.attachmentFileRevision} >= 1
+            and ${table.attachmentFileVersionId} is not null
+            and ${table.attachmentObjectVersionId} is not null))
+        and num_nonnulls(
+          ${table.extensionPayloadV2FileId},
+          ${table.extensionPayloadFileRevision},
+          ${table.extensionPayloadFileVersionId},
+          ${table.extensionPayloadObjectVersionId}
+        ) in (0, 4)
+        and ((${table.extensionPayloadV2FileId} is null
+            and ${table.extensionPayloadFileRevision} is null
+            and ${table.extensionPayloadFileVersionId} is null
+            and ${table.extensionPayloadObjectVersionId} is null)
+          or (${table.kind} = 'extension'
+            and ${table.extensionPayloadFileId} is null
+            and ${table.extensionPayloadV2FileId} is not null
+            and ${table.extensionPayloadFileRevision} >= 1
+            and ${table.extensionPayloadFileVersionId} is not null
+            and ${table.extensionPayloadObjectVersionId} is not null))`
+    ),
     index("inbox_v2_timeline_content_payloads_attachment_idx").on(
       table.tenantId,
       table.attachmentId,
+      table.contentId
+    ),
+    index("inbox_v2_timeline_content_payloads_file_version_idx").on(
+      table.tenantId,
+      table.attachmentFileVersionId,
+      table.contentId
+    ),
+    index("inbox_v2_timeline_payloads_extension_version_idx").on(
+      table.tenantId,
+      table.extensionPayloadFileVersionId,
       table.contentId
     )
   ]
@@ -9751,4 +10072,265 @@ create constraint trigger inbox_v2_tm_receipt_payload_coherence
 after insert on public.inbox_v2_provider_receipt_opaque_payloads
 deferrable initially deferred for each row
 execute function public.inbox_v2_tm_aux_coherence();
+`;
+
+/**
+ * Additive MSG-003 tail for the pre-existing attachment anchor relation.
+ * Columns stay nullable for N-1 preservation; the new-write guard and deferred
+ * coherence require every new anchor to carry one exact immutable owner/state.
+ */
+export const INBOX_V2_MESSAGE_ATTACHMENT_ANCHOR_INVARIANTS_SQL = String.raw`
+create or replace function public.inbox_v2_msg003_action_attribution_cause_event_coherence()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, public, pg_temp
+as $function$
+begin
+  if new.automation_cause_event_id is null then
+    return null;
+  end if;
+
+  perform 1
+    from public.inbox_v2_domain_events event_row
+   where event_row.tenant_id = new.tenant_id
+     and event_row.id = new.automation_cause_event_id
+   for key share;
+  if found then
+    return null;
+  end if;
+
+  perform 1
+    from public.event_store event_row
+   where event_row.tenant_id = new.tenant_id
+     and event_row.id = new.automation_cause_event_id
+   for key share;
+  if found then
+    return null;
+  end if;
+
+  raise exception using errcode = '23503',
+    message = 'inbox_v2.action_attribution_cause_event_missing';
+end;
+$function$;
+
+create constraint trigger inbox_v2_msg003_action_attribution_cause_event_coherence
+after insert or update on public.inbox_v2_action_attributions
+deferrable initially deferred for each row
+execute function public.inbox_v2_msg003_action_attribution_cause_event_coherence();
+
+create or replace function public.inbox_v2_msg003_legacy_cause_event_guard()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, public, pg_temp
+as $function$
+begin
+  if tg_op = 'DELETE'
+     and pg_catalog.pg_trigger_depth() > 1
+     and not exists (
+       select 1 from public.tenants tenant_row
+        where tenant_row.id = old.tenant_id
+     ) then
+    return old;
+  end if;
+
+  if exists (
+    select 1
+      from public.inbox_v2_action_attributions attribution_row
+     where attribution_row.tenant_id = old.tenant_id
+       and attribution_row.automation_cause_event_id = old.id
+  ) then
+    raise exception using errcode = '23503',
+      message = 'inbox_v2.action_attribution_legacy_cause_event_referenced';
+  end if;
+  if tg_op = 'DELETE' then
+    return old;
+  end if;
+  return new;
+end;
+$function$;
+
+create trigger inbox_v2_msg003_legacy_cause_event_guard
+before update or delete on public.event_store
+for each row execute function public.inbox_v2_msg003_legacy_cause_event_guard();
+
+alter table public.inbox_v2_message_attachment_anchors
+  add constraint inbox_v2_message_attachment_anchors_owner_message_fk
+  foreign key (tenant_id, owner_message_id)
+  references public.inbox_v2_messages (tenant_id, id)
+  deferrable initially deferred not valid;
+alter table public.inbox_v2_message_attachment_anchors
+  add constraint inbox_v2_message_attachment_anchors_owner_timeline_fk
+  foreign key (tenant_id, owner_timeline_item_id)
+  references public.inbox_v2_timeline_items (tenant_id, id)
+  deferrable initially deferred not valid;
+alter table public.inbox_v2_message_attachment_anchors
+  add constraint inbox_v2_message_attachment_anchors_owner_content_fk
+  foreign key (tenant_id, owner_timeline_content_id)
+  references public.inbox_v2_timeline_contents (tenant_id, id)
+  deferrable initially deferred not valid;
+
+create or replace function public.inbox_v2_msg003_attachment_anchor_guard()
+returns trigger
+language plpgsql
+set search_path = pg_catalog, public, pg_temp
+as $function$
+begin
+  if tg_op = 'INSERT' then
+    if num_nonnulls(
+      new.owner_message_id, new.owner_timeline_item_id,
+      new.owner_timeline_content_id, new.owner_block_key,
+      new.materialization_state
+    ) <> 5 or new.revision <> 1 then
+      raise exception using errcode = '23514',
+        message = 'inbox_v2.message_attachment_anchor_owner_required';
+    end if;
+    return new;
+  end if;
+
+  if tg_op = 'DELETE' then
+    -- Only the nested RI delete caused by removing the owning tenant may
+    -- bypass immutability. An unrelated application trigger can also raise
+    -- trigger depth and therefore must not be sufficient on its own.
+    if pg_catalog.pg_trigger_depth() > 1
+       and not exists (
+         select 1 from public.tenants tenant_row
+          where tenant_row.id = old.tenant_id
+       ) then
+      return old;
+    end if;
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.message_attachment_anchor_immutable';
+  end if;
+
+  if new.tenant_id is distinct from old.tenant_id
+     or new.id is distinct from old.id
+     or new.owner_message_id is distinct from old.owner_message_id
+     or new.owner_timeline_item_id is distinct from old.owner_timeline_item_id
+     or new.owner_timeline_content_id is distinct from
+       old.owner_timeline_content_id
+     or new.owner_block_key is distinct from old.owner_block_key
+     or new.created_at is distinct from old.created_at
+     or old.materialization_state <> 'pending'
+     or new.materialization_state not in ('ready', 'failed', 'quarantined')
+     or new.revision <> old.revision + 1 then
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.message_attachment_anchor_transition_invalid';
+  end if;
+  return new;
+end;
+$function$;
+
+create or replace function public.inbox_v2_msg003_attachment_anchor_coherence()
+returns trigger
+language plpgsql
+set search_path = pg_catalog, public, pg_temp
+as $function$
+declare
+  changed_row jsonb;
+  tenant_key text;
+  content_key text;
+begin
+  changed_row := case when tg_op = 'DELETE' then to_jsonb(old) else to_jsonb(new) end;
+  tenant_key := changed_row->>'tenant_id';
+  content_key := case
+    when tg_table_name = 'inbox_v2_message_attachment_anchors'
+      then changed_row->>'owner_timeline_content_id'
+    else coalesce(changed_row->>'id', changed_row->>'content_id')
+  end;
+
+  if content_key is null
+     or not exists (select 1 from public.tenants where id = tenant_key) then
+    return null;
+  end if;
+
+  if exists (
+    select 1
+      from public.inbox_v2_message_attachment_anchors anchor_row
+      left join public.inbox_v2_timeline_contents content_row
+        on content_row.tenant_id = anchor_row.tenant_id
+       and content_row.id = anchor_row.owner_timeline_content_id
+      left join public.inbox_v2_messages message_row
+        on message_row.tenant_id = anchor_row.tenant_id
+       and message_row.id = anchor_row.owner_message_id
+     where anchor_row.tenant_id = tenant_key
+       and anchor_row.owner_timeline_content_id = content_key
+       and (
+         content_row.id is null
+         or content_row.owner_kind <> 'message'
+         or content_row.owner_id <> anchor_row.owner_message_id
+         or message_row.id is null
+         or message_row.timeline_item_id <>
+           anchor_row.owner_timeline_item_id
+         or message_row.content_id <>
+           anchor_row.owner_timeline_content_id
+         or (content_row.state = 'available' and not exists (
+           select 1
+             from public.inbox_v2_timeline_content_payloads payload_row
+            where payload_row.tenant_id = anchor_row.tenant_id
+              and payload_row.content_id =
+                anchor_row.owner_timeline_content_id
+              and payload_row.content_revision = content_row.revision
+              and payload_row.block_key = anchor_row.owner_block_key
+              and payload_row.attachment_id = anchor_row.id
+              and payload_row.attachment_state =
+                anchor_row.materialization_state
+         ))
+       )
+  ) then
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.message_attachment_anchor_owner_mismatch';
+  end if;
+
+  if exists (
+    select 1
+      from public.inbox_v2_timeline_contents content_row
+      join public.inbox_v2_timeline_content_payloads payload_row
+        on payload_row.tenant_id = content_row.tenant_id
+       and payload_row.content_id = content_row.id
+       and payload_row.content_revision = content_row.revision
+      left join public.inbox_v2_messages message_row
+        on message_row.tenant_id = content_row.tenant_id
+       and message_row.id = content_row.owner_id
+       and message_row.content_id = content_row.id
+      left join public.inbox_v2_message_attachment_anchors anchor_row
+        on anchor_row.tenant_id = payload_row.tenant_id
+       and anchor_row.id = payload_row.attachment_id
+       and anchor_row.owner_message_id = message_row.id
+       and anchor_row.owner_timeline_item_id = message_row.timeline_item_id
+       and anchor_row.owner_timeline_content_id = payload_row.content_id
+       and anchor_row.owner_block_key = payload_row.block_key
+       and anchor_row.materialization_state = payload_row.attachment_state
+     where content_row.tenant_id = tenant_key
+       and content_row.id = content_key
+       and content_row.state = 'available'
+       and payload_row.attachment_id is not null
+       and (content_row.owner_kind <> 'message' or anchor_row.id is null)
+  ) then
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.message_attachment_payload_anchor_mismatch';
+  end if;
+  return null;
+end;
+$function$;
+
+create trigger inbox_v2_msg003_attachment_anchor_guard_trigger
+before insert or update or delete
+on public.inbox_v2_message_attachment_anchors
+for each row execute function public.inbox_v2_msg003_attachment_anchor_guard();
+
+create constraint trigger inbox_v2_msg003_attachment_anchor_coherence
+after insert or update or delete
+on public.inbox_v2_message_attachment_anchors
+deferrable initially deferred for each row
+execute function public.inbox_v2_msg003_attachment_anchor_coherence();
+create constraint trigger inbox_v2_msg003_attachment_payload_coherence
+after insert or update or delete on public.inbox_v2_timeline_content_payloads
+deferrable initially deferred for each row
+execute function public.inbox_v2_msg003_attachment_anchor_coherence();
+create constraint trigger inbox_v2_msg003_attachment_content_coherence
+after insert or update or delete on public.inbox_v2_timeline_contents
+deferrable initially deferred for each row
+execute function public.inbox_v2_msg003_attachment_anchor_coherence();
 `;

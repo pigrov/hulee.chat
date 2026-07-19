@@ -61,6 +61,7 @@ export const INBOX_V2_CORE_DOMAIN_EVENT_TYPE_IDS = [
   "core:source-connection.changed",
   "core:source-binding.changed",
   "core:authorization.changed",
+  "core:attachment-materialization.changed",
   "core:content.invalidated"
 ] as const;
 

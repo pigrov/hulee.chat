@@ -725,6 +725,7 @@ export {
 } from "./security-denial-retention-sweeper";
 export { createInboxV2SourceNormalizationProcessor } from "./source-normalization-processor";
 export { createInboxV2ProviderDispatchCoordinator } from "./inbox-v2-provider-dispatch-coordinator";
+export { createWorkerInboxV2AttachmentMaterializationSweeper } from "./inbox-v2-attachment-materialization-sweeper";
 export {
   createInboxV2SourceIdentityResolutionProcessor,
   createInboxV2TrustedSourceIdentityMaterializer,
@@ -854,6 +855,14 @@ export type {
   InboxV2ProviderDispatchTimer,
   InboxV2ProviderDispatchTransportPort
 } from "./inbox-v2-provider-dispatch-coordinator";
+export type {
+  InboxV2AttachmentMaterializationProductionServices,
+  InboxV2TrustedAttachmentMaterializationProviderSourceLoader,
+  InboxV2TrustedAttachmentMaterializationStorageResolver,
+  WorkerInboxV2AttachmentMaterializationSweeper,
+  WorkerInboxV2AttachmentMaterializationSweeperOptions,
+  WorkerInboxV2AttachmentMaterializationSweepResult
+} from "./inbox-v2-attachment-materialization-sweeper";
 export type {
   InboxV2SourceNormalizationClaim,
   InboxV2SourceNormalizationProcessResult,

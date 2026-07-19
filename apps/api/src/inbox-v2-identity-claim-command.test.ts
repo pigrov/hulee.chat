@@ -1613,6 +1613,12 @@ function inMemoryCoordinator(): InboxV2AuthorizedCommandCoordinator & {
         authorizationDecisionRefs:
           input.records.audit.authorizationDecisionRefs,
         authorizationResourceRevisionFences: input.revisions.resources,
+        authorizationTenantRbacRevision:
+          input.revisions.expectedTenantRbacRevision,
+        authorizationSharedAccessRevision:
+          input.revisions.expectedSharedAccessRevision,
+        authorizationAuditGrantSourceIds: input.records.audit.grantSourceIds,
+        authorizationAuditPolicyVersion: input.records.audit.policyVersion,
         authorizedAt: input.command.authorizedAt,
         occurredAt: input.occurredAt,
         mutationId: input.records.mutationId,

@@ -1,9 +1,11 @@
 import {
+  calculateInboxV2CanonicalSha256,
+  inboxV2InternalEntityReferenceSchema,
   inboxV2OutboundDispatchRerouteCommitSchema,
   type InboxV2OutboundDispatchRerouteCommit,
+  type InboxV2InternalEntityReference,
   type InboxV2PayloadReference
 } from "@hulee/contracts";
-
 import type { RawSqlExecutor } from "./sql-outbox-repository";
 
 const atomicSealExecutors = new WeakMap<object, RawSqlExecutor>();
@@ -22,6 +24,10 @@ const atomicOutboundRouteProofs = new WeakMap<
 const atomicOutboundRerouteProofs = new WeakMap<
   object,
   readonly InboxV2OutboundDispatchRerouteCommit[]
+>();
+const atomicAttachmentMaterializationProofs = new WeakMap<
+  object,
+  readonly InboxV2AtomicAttachmentMaterializationProof[]
 >();
 
 declare const inboxV2AtomicMaterializationSealReceiptBrand: unique symbol;
@@ -54,6 +60,88 @@ export type InboxV2AtomicMessageCreationSealManifest = Readonly<{
   sourceOccurrence: InboxV2AtomicSourceOccurrenceSealManifest | null;
 }>;
 
+/**
+ * Canonical closure for one provider-neutral Message mutation. Attachment
+ * materialization is intentionally a distinct manifest from Message creation:
+ * it advances an existing Message/Timeline/Content head and is bound to the
+ * immutable domain event that caused the background job.
+ */
+export type InboxV2AtomicMessageMutationSealManifest = Readonly<{
+  kind: "message_mutation";
+  tenantId: string;
+  messageId: string;
+  messageRevision: string;
+  conversationId: string;
+  timelineSequence: string;
+  timelineItemId: string;
+  timelineItemRevision: string;
+  contentId: string;
+  contentRevision: string;
+  audience: "internal_participants" | "conversation_external";
+  stateSchemaId: string;
+  stateSchemaVersion: string;
+  stateHash: string;
+  payloadReference: InboxV2PayloadReference;
+  domainCommitReference: InboxV2PayloadReference;
+  auditTarget: InboxV2InternalEntityReference;
+  auditFacetReference: InboxV2InternalEntityReference;
+  trustedServiceId: string;
+  causeEventId: string;
+  correlationId: string;
+  causedAt: string;
+  materialization: InboxV2AtomicAttachmentMaterializationProof;
+  event: InboxV2AtomicStreamEventManifest;
+}>;
+
+export function deriveInboxV2AttachmentMaterializationAuditReference(input: {
+  tenantId: string;
+  entityTypeId: "core:message" | "core:conversation";
+  referenceDomain: "message" | "conversation";
+  entityId: string;
+}): InboxV2InternalEntityReference {
+  const digest = calculateInboxV2CanonicalSha256({
+    domain: "core:inbox-v2.attachment-materialization-audit-reference@v1",
+    tenantId: input.tenantId,
+    referenceDomain: input.referenceDomain,
+    entityId: input.entityId
+  });
+  return inboxV2InternalEntityReferenceSchema.parse({
+    tenantId: input.tenantId,
+    entityTypeId: input.entityTypeId,
+    entityId: `internal-ref:${digest.slice("sha256:".length)}`
+  });
+}
+
+export type InboxV2AtomicAttachmentMaterializationProof = Readonly<{
+  tenantId: string;
+  jobId: string;
+  attemptId: string;
+  evidenceId: string;
+  outcome: "ready" | "failed";
+  completedByTrustedServiceId: string;
+  causeEventId: string;
+  causeMutationId: string;
+  causeStreamCommitId: string;
+  causeStreamPosition: string;
+  correlationId: string;
+  causedAt: string;
+  fileId: string;
+  resultingFileRevision: string;
+  fileVersionId: string | null;
+  objectVersionId: string | null;
+  conversationId: string;
+  timelineItemId: string;
+  contentId: string;
+  resultingContentRevision: string;
+  contentBlockKey: string;
+  attachmentId: string;
+  resultingAttachmentRevision: string;
+  parentKind: "message";
+  parentEntityId: string;
+  parentEntityRevision: string;
+  safeReasonId: string | null;
+}>;
+
 export type InboxV2AtomicTimelineItemCreationSealManifest = Readonly<{
   kind: "timeline_item_creation";
   tenantId: string;
@@ -74,6 +162,7 @@ export type InboxV2AtomicTimelineItemCreationSealManifest = Readonly<{
 
 export type InboxV2AtomicMaterializationSealManifest =
   | InboxV2AtomicMessageCreationSealManifest
+  | InboxV2AtomicMessageMutationSealManifest
   | InboxV2AtomicTimelineItemCreationSealManifest;
 
 export type InboxV2AtomicStreamEventManifest = Readonly<{
@@ -344,6 +433,61 @@ export function revokeInboxV2AtomicOutboundRerouteProofs(
 }
 
 /**
+ * Registers the exact File/Object terminal closure written by the file
+ * repository. The proof is transaction-token-bound and can only be consumed
+ * once by the canonical Message seal, so two independently prepared
+ * capabilities cannot be cross-wired by orchestration code.
+ */
+export function registerInboxV2AtomicAttachmentMaterializationProof(
+  atomicMaterializationToken: object,
+  proof: InboxV2AtomicAttachmentMaterializationProof
+): void {
+  assertObjectCapability(
+    atomicMaterializationToken,
+    "Inbox V2 atomic materialization token"
+  );
+  const frozenProof = recursivelyFrozenValue(proof);
+  atomicAttachmentMaterializationProofs.set(
+    atomicMaterializationToken,
+    Object.freeze([
+      ...(atomicAttachmentMaterializationProofs.get(
+        atomicMaterializationToken
+      ) ?? []),
+      frozenProof
+    ])
+  );
+}
+
+export function consumeInboxV2AtomicAttachmentMaterializationProof(
+  atomicMaterializationToken: object
+): InboxV2AtomicAttachmentMaterializationProof {
+  assertObjectCapability(
+    atomicMaterializationToken,
+    "Inbox V2 atomic materialization token"
+  );
+  const proofs =
+    atomicAttachmentMaterializationProofs.get(atomicMaterializationToken) ?? [];
+  atomicAttachmentMaterializationProofs.delete(atomicMaterializationToken);
+  const proof = proofs[0];
+  if (proofs.length !== 1 || proof === undefined) {
+    throw new TypeError(
+      "Inbox V2 Message attachment seal requires exactly one live File/Object materialization proof."
+    );
+  }
+  return proof;
+}
+
+export function revokeInboxV2AtomicAttachmentMaterializationProofs(
+  atomicMaterializationToken: object
+): void {
+  assertObjectCapability(
+    atomicMaterializationToken,
+    "Inbox V2 atomic materialization token"
+  );
+  atomicAttachmentMaterializationProofs.delete(atomicMaterializationToken);
+}
+
+/**
  * Consumes an exact-token receipt once. Deleting the WeakMap entry before the
  * coordinator publishes its stream closure makes replay fail closed even when
  * a caller retains the otherwise-empty frozen object.
@@ -402,10 +546,11 @@ function recursivelyFrozenManifest(
     typeof manifest !== "object" ||
     manifest === null ||
     (manifest.kind !== "message_creation" &&
+      manifest.kind !== "message_mutation" &&
       manifest.kind !== "timeline_item_creation")
   ) {
     throw new TypeError(
-      "Inbox V2 atomic seal receipt requires a supported canonical creation manifest."
+      "Inbox V2 atomic seal receipt requires a supported canonical materialization manifest."
     );
   }
   return recursivelyFrozenValue(manifest);

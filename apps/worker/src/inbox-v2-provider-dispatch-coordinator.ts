@@ -1,11 +1,15 @@
 import {
   calculateInboxV2CanonicalSha256,
+  createInboxV2MixedProviderArtifactOutcomeDiagnostic,
+  deriveInboxV2OutboundDispatchArtifactId,
   deriveInboxV2RouteFailureOutboxFinalization,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
   inboxV2OutboxClaimSchema,
   inboxV2OutboxIntentSchema,
   inboxV2NamespacedIdSchema,
+  inboxV2OutboundDispatchContentPlanSchema,
+  inboxV2OutboundDispatchArtifactSchema,
   inboxV2OutboundDispatchAttemptCommitSchema,
   inboxV2OutboundDispatchRouteFailureCommitSchema,
   inboxV2OutboundDispatchReconciliationCommitSchema,
@@ -19,6 +23,8 @@ import {
   type InboxV2OutboxIntent,
   type InboxV2OutboxWorkRepositoryPort,
   type InboxV2OutboundDispatch,
+  type InboxV2OutboundDispatchArtifact,
+  type InboxV2OutboundDispatchContentPlan,
   type InboxV2OutboundDispatchAttemptCommit,
   type InboxV2OutboundDispatchRouteFailureCommit,
   type InboxV2OutboundDispatchReconciliationCommit,
@@ -64,6 +70,7 @@ export type InboxV2ProviderDispatchLoadedState = Readonly<{
   kind: "loaded";
   intent: InboxV2OutboxIntent;
   dispatch: InboxV2OutboundDispatch;
+  contentPlan: InboxV2OutboundDispatchContentPlan;
 }>;
 
 export type InboxV2ProviderDispatchLoadRejected = Readonly<{
@@ -75,7 +82,8 @@ export type InboxV2ProviderDispatchLoadRejected = Readonly<{
     | "outbox_lease_revision_conflict"
     | "outbox_intent_conflict"
     | "outbox_attempt_lease_conflict"
-    | "outbox_dispatch_not_found";
+    | "outbox_dispatch_not_found"
+    | "outbox_dispatch_content_plan_not_found";
 }>;
 
 export type InboxV2ProviderDispatchLoadResult =
@@ -102,9 +110,13 @@ export type InboxV2ProviderDispatchFencedMutationResult =
         | "attempt_number_conflict"
         | "claim_token_conflict"
         | "attempt_state_conflict"
+        | "artifact_retry_unsafe"
         | "unknown_attempt_not_found"
         | "decision_conflict"
-        | "attempt_already_reconciled";
+        | "attempt_already_reconciled"
+        | "outbox_dispatch_content_plan_not_found"
+        | "outbox_dispatch_content_plan_conflict"
+        | "dispatch_artifact_set_conflict";
     }>;
 
 type FencedMutationRejectionKind = Exclude<
@@ -126,6 +138,12 @@ export type InboxV2ProviderDispatchTransportPort = Readonly<{
     outboxLease: InboxV2ProviderDispatchLeaseFence;
     commit: InboxV2OutboundDispatchAttemptCommit;
   }): Promise<InboxV2ProviderDispatchFencedMutationResult>;
+  applyProviderResultFenced(input: {
+    outboxLease: InboxV2ProviderDispatchLeaseFence;
+    contentPlanDigestSha256: InboxV2OutboundDispatchContentPlan["planDigestSha256"];
+    commit: CompleteAttemptCommit;
+    artifacts: readonly InboxV2OutboundDispatchArtifact[];
+  }): Promise<InboxV2ProviderDispatchFencedMutationResult>;
   applyRouteFailureFenced(input: {
     outboxLease: InboxV2ProviderDispatchLeaseFence;
     commit: InboxV2OutboundDispatchRouteFailureCommit;
@@ -136,29 +154,38 @@ export type InboxV2ProviderDispatchTransportPort = Readonly<{
   }): Promise<InboxV2ProviderDispatchFencedMutationResult>;
 }>;
 
-export type InboxV2ProviderDispatchAdapterResult =
+export type InboxV2ProviderDispatchArtifactAdapterResult =
   | Readonly<{
+      artifactOrdinal: number;
       outcome: "accepted";
+      /**
+       * Optional attempt receipt only. Provider-native message identity is
+       * canonicalized later as an ExternalMessageReference and linked to this
+       * deterministic artifact through the append-only association flow.
+       */
       providerAcknowledgementToken: string | null;
     }>
   | Readonly<{
-      outcome: "retryable_failure";
-      retryAt: string;
+      artifactOrdinal: number;
+      outcome: "failed";
+      retryAt: string | null;
       diagnostic: InboxV2SafeSourceDiagnostic;
     }>
   | Readonly<{
-      outcome: "terminal_failure";
-      diagnostic: InboxV2SafeSourceDiagnostic;
-    }>
-  | Readonly<{
+      artifactOrdinal: number;
       outcome: "outcome_unknown";
       diagnostic: InboxV2SafeSourceDiagnostic;
     }>;
+
+export type InboxV2ProviderDispatchAdapterResult = Readonly<{
+  artifacts: readonly InboxV2ProviderDispatchArtifactAdapterResult[];
+}>;
 
 export type InboxV2ProviderDispatchAdapterPort<TRequest = unknown> = Readonly<{
   dispatch(input: {
     intent: InboxV2OutboxIntent;
     dispatch: InboxV2OutboundDispatch;
+    contentPlan: InboxV2OutboundDispatchContentPlan;
     route: InboxV2OutboundRoute;
     attempt: OpenAttemptCommit["attempt"];
     request: TRequest;
@@ -429,6 +456,11 @@ export function createInboxV2ProviderDispatchCoordinator<TRequest = unknown>(
       }
 
       const openCommit = parseOpenCommit(plan.commit, loaded.dispatch);
+      assertContentPlanRouteSnapshot(
+        loaded.contentPlan,
+        openCommit.routeSnapshot,
+        openCommit.bindingHeadSnapshot.bindingRevision
+      );
       assertRetrySafety(openCommit);
       const opened = await options.transport.applyAttemptFenced({
         outboxLease: fence,
@@ -462,6 +494,7 @@ export function createInboxV2ProviderDispatchCoordinator<TRequest = unknown>(
         adapter: options.adapter,
         request: plan.request,
         intent: loaded.intent,
+        contentPlan: loaded.contentPlan,
         openCommit,
         deadlineMs: options.providerDeadlineMs,
         signal: processOptions.signal,
@@ -469,15 +502,18 @@ export function createInboxV2ProviderDispatchCoordinator<TRequest = unknown>(
         timer
       });
       const completedAt = inboxV2TimestampSchema.parse(clock.now());
-      const completion = buildCompletionCommit(
+      const providerCompletion = buildProviderCompletion(
         openCommit,
         providerRun,
         completedAt,
-        options.completedByTrustedServiceId
+        options.completedByTrustedServiceId,
+        loaded.contentPlan
       );
-      const completed = await options.transport.applyAttemptFenced({
+      const completed = await options.transport.applyProviderResultFenced({
         outboxLease: fence,
-        commit: completion
+        contentPlanDigestSha256: loaded.contentPlan.planDigestSha256,
+        commit: providerCompletion.commit,
+        artifacts: providerCompletion.artifacts
       });
       return finishMutation(
         options.outbox,
@@ -485,7 +521,7 @@ export function createInboxV2ProviderDispatchCoordinator<TRequest = unknown>(
         completed,
         "complete",
         "provider_result",
-        completion
+        providerCompletion.commit
       );
     }
   });
@@ -510,6 +546,14 @@ function validateLoadedLinkage(
 ): InboxV2ProviderDispatchLoadedState {
   const intent = inboxV2OutboxIntentSchema.parse(input.intent);
   const dispatch = inboxV2OutboundDispatchSchema.parse(input.dispatch);
+  let contentPlan: InboxV2OutboundDispatchContentPlan;
+  try {
+    contentPlan = inboxV2OutboundDispatchContentPlanSchema.parse(
+      input.contentPlan
+    );
+  } catch {
+    throw coordinatorError("provider_dispatch.invalid_intent_linkage");
+  }
   const reference = intent.payloadReference;
   if (
     intent.tenantId !== claim.work.tenantId ||
@@ -523,11 +567,44 @@ function validateLoadedLinkage(
     reference.schemaId !== INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID ||
     reference.schemaVersion !== INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION ||
     String(reference.recordId) !== String(dispatch.id) ||
-    dispatch.tenantId !== intent.tenantId
+    dispatch.tenantId !== intent.tenantId ||
+    contentPlan.tenantId !== dispatch.tenantId ||
+    !sameReference(contentPlan.dispatch, dispatch) ||
+    !sameReference(contentPlan.message, dispatch.message) ||
+    !sameReference(contentPlan.route, dispatch.route)
   ) {
     throw coordinatorError("provider_dispatch.invalid_intent_linkage");
   }
-  return { ...input, intent, dispatch };
+  return { ...input, intent, dispatch, contentPlan };
+}
+
+function assertContentPlanRouteSnapshot(
+  contentPlan: InboxV2OutboundDispatchContentPlan,
+  route: InboxV2OutboundRoute,
+  bindingRevision: string
+): void {
+  if (
+    contentPlan.tenantId !== route.tenantId ||
+    !sameReference(contentPlan.route, route) ||
+    !sameReference(contentPlan.conversation, route.conversation) ||
+    !sameReference(contentPlan.binding, route.sourceThreadBinding) ||
+    String(contentPlan.bindingRevision) !== String(bindingRevision) ||
+    String(contentPlan.capabilityRevision) !==
+      String(route.bindingFence.capabilityRevision) ||
+    calculateInboxV2CanonicalSha256(contentPlan.adapterContract) !==
+      calculateInboxV2CanonicalSha256(route.adapterContract)
+  ) {
+    throw coordinatorError("provider_dispatch.invalid_plan");
+  }
+}
+
+function sameReference(
+  left: Readonly<{ tenantId: string; id: string }>,
+  right: Readonly<{ tenantId: string; id: string }>
+): boolean {
+  return (
+    left.tenantId === right.tenantId && String(left.id) === String(right.id)
+  );
 }
 
 function parseOpenCommit(
@@ -667,6 +744,7 @@ async function runProviderCall<TRequest>(input: {
   adapter: InboxV2ProviderDispatchAdapterPort<TRequest>;
   request: TRequest;
   intent: InboxV2OutboxIntent;
+  contentPlan: InboxV2OutboundDispatchContentPlan;
   openCommit: OpenAttemptCommit;
   deadlineMs: number;
   signal: AbortSignal | undefined;
@@ -715,6 +793,7 @@ async function runProviderCall<TRequest>(input: {
       input.adapter.dispatch({
         intent: input.intent,
         dispatch: input.openCommit.dispatchBefore,
+        contentPlan: input.contentPlan,
         route: input.openCommit.routeSnapshot,
         attempt: input.openCommit.attempt,
         request: input.request,
@@ -723,7 +802,10 @@ async function runProviderCall<TRequest>(input: {
       aborted
     ]);
     try {
-      return { kind: "provider_result", result: parseAdapterResult(result) };
+      return {
+        kind: "provider_result",
+        result: parseAdapterResult(result, input.contentPlan)
+      };
     } catch {
       return { kind: "uncertain", reason: "invalid_result" };
     }
@@ -739,48 +821,131 @@ async function runProviderCall<TRequest>(input: {
 }
 
 function parseAdapterResult(
-  result: InboxV2ProviderDispatchAdapterResult
+  result: InboxV2ProviderDispatchAdapterResult,
+  contentPlan: InboxV2OutboundDispatchContentPlan
 ): InboxV2ProviderDispatchAdapterResult {
-  if (result.outcome === "accepted") {
+  if (
+    !isStrictRecord(result, ["artifacts"]) ||
+    !Array.isArray(result.artifacts)
+  ) {
+    throw new TypeError("artifact result envelope required");
+  }
+  const plannedOrdinals = contentPlan.artifacts.map(
+    (artifact) => artifact.ordinal
+  );
+  if (result.artifacts.length !== plannedOrdinals.length) {
+    throw new TypeError("complete artifact coverage required");
+  }
+  const parsed = result.artifacts.map(parseAdapterArtifactResult);
+  const ordinals = parsed.map((artifact) => artifact.artifactOrdinal);
+  if (
+    new Set(ordinals).size !== ordinals.length ||
+    plannedOrdinals.some((ordinal) => !ordinals.includes(ordinal))
+  ) {
+    throw new TypeError("exact unique artifact ordinals required");
+  }
+  return {
+    artifacts: [...parsed].sort(
+      (left, right) => left.artifactOrdinal - right.artifactOrdinal
+    )
+  };
+}
+
+function parseAdapterArtifactResult(
+  input: InboxV2ProviderDispatchArtifactAdapterResult
+): InboxV2ProviderDispatchArtifactAdapterResult {
+  const artifactOrdinal = Number(input.artifactOrdinal);
+  if (!Number.isInteger(artifactOrdinal) || artifactOrdinal < 1) {
+    throw new TypeError("positive artifact ordinal required");
+  }
+  if (input.outcome === "accepted") {
+    if (
+      !isStrictRecord(input, [
+        "artifactOrdinal",
+        "outcome",
+        "providerAcknowledgementToken"
+      ])
+    ) {
+      throw new TypeError("invalid accepted artifact result");
+    }
     return {
+      artifactOrdinal,
       outcome: "accepted",
       providerAcknowledgementToken:
-        result.providerAcknowledgementToken === null
+        input.providerAcknowledgementToken === null
           ? null
-          : inboxV2RoutingTokenSchema.parse(result.providerAcknowledgementToken)
+          : inboxV2RoutingTokenSchema.parse(input.providerAcknowledgementToken)
     };
   }
-  const diagnostic = inboxV2SafeSourceDiagnosticSchema.parse(result.diagnostic);
-  if (result.outcome === "retryable_failure") {
-    if (!diagnostic.retryable)
-      throw new TypeError("retryable diagnostic required");
+  const diagnostic = inboxV2SafeSourceDiagnosticSchema.parse(input.diagnostic);
+  if (input.outcome === "failed") {
+    if (
+      !isStrictRecord(input, [
+        "artifactOrdinal",
+        "outcome",
+        "retryAt",
+        "diagnostic"
+      ])
+    ) {
+      throw new TypeError("invalid failed artifact result");
+    }
+    const retryAt =
+      input.retryAt === null
+        ? null
+        : inboxV2TimestampSchema.parse(input.retryAt);
+    if (diagnostic.retryable !== (retryAt !== null)) {
+      throw new TypeError("failed artifact retry boundary mismatch");
+    }
     return {
-      outcome: "retryable_failure",
-      retryAt: inboxV2TimestampSchema.parse(result.retryAt),
+      artifactOrdinal,
+      outcome: "failed",
+      retryAt,
       diagnostic
     };
   }
-  if (result.outcome === "terminal_failure") {
-    if (diagnostic.retryable)
-      throw new TypeError("terminal diagnostic required");
-    return { outcome: "terminal_failure", diagnostic };
+  if (!isStrictRecord(input, ["artifactOrdinal", "outcome", "diagnostic"])) {
+    throw new TypeError("invalid uncertain artifact result");
   }
-  return { outcome: "outcome_unknown", diagnostic };
+  return { artifactOrdinal, outcome: "outcome_unknown", diagnostic };
 }
 
-function buildCompletionCommit(
+function isStrictRecord(
+  value: unknown,
+  expectedKeys: readonly string[]
+): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const keys = Object.keys(value).sort();
+  const expected = [...expectedKeys].sort();
+  return (
+    keys.length === expected.length &&
+    keys.every((key, index) => key === expected[index])
+  );
+}
+
+function buildProviderCompletion(
   open: OpenAttemptCommit,
   run: ProviderRun,
   completedAt: string,
-  completedByTrustedServiceId: CompleteAttemptCommit["completedByTrustedServiceId"]
-): CompleteAttemptCommit {
+  completedByTrustedServiceId: CompleteAttemptCommit["completedByTrustedServiceId"],
+  contentPlan: InboxV2OutboundDispatchContentPlan
+): Readonly<{
+  commit: CompleteAttemptCommit;
+  artifacts: readonly InboxV2OutboundDispatchArtifact[];
+}> {
   const leaseExpired =
     Date.parse(completedAt) >= Date.parse(open.attempt.leaseExpiresAt);
-  const outcome = leaseExpired
-    ? unknownOutcome(open, completedAt, "lease_expired")
-    : run.kind === "uncertain"
-      ? unknownOutcome(open, completedAt, run.reason)
-      : providerOutcome(run.result, completedAt, open);
+  const effectiveRun: ProviderRun = leaseExpired
+    ? { kind: "uncertain", reason: "lease_expired" }
+    : run;
+  const artifactResults = providerArtifactResults(
+    effectiveRun,
+    contentPlan,
+    open,
+    completedAt
+  );
+  const outcome = aggregateProviderOutcome(artifactResults, completedAt, open);
   const completionSource = leaseExpired ? "lease_expired" : "provider_result";
   const attemptAfter = {
     ...open.attempt,
@@ -808,40 +973,131 @@ function buildCompletionCommit(
   if (parsed.kind !== "complete_attempt") {
     throw coordinatorError("provider_dispatch.invalid_plan");
   }
-  return parsed;
+  const artifacts = artifactResults.map((result) =>
+    inboxV2OutboundDispatchArtifactSchema.parse({
+      tenantId: open.tenantId,
+      id: deriveInboxV2OutboundDispatchArtifactId({
+        tenantId: open.tenantId,
+        dispatch: open.attempt.dispatch,
+        route: open.attempt.route,
+        attempt: {
+          tenantId: open.tenantId,
+          kind: "outbound_dispatch_attempt",
+          id: open.attempt.id
+        },
+        ordinal: result.artifactOrdinal
+      }),
+      dispatch: open.attempt.dispatch,
+      route: open.attempt.route,
+      attempt: {
+        tenantId: open.tenantId,
+        kind: "outbound_dispatch_attempt",
+        id: open.attempt.id
+      },
+      ordinal: result.artifactOrdinal,
+      state:
+        result.outcome === "accepted"
+          ? "accepted"
+          : result.outcome === "failed"
+            ? "failed"
+            : "outcome_unknown",
+      diagnostic: result.outcome === "accepted" ? null : result.diagnostic,
+      createdAt: completedAt,
+      revision: "1"
+    })
+  );
+  return { commit: parsed, artifacts };
 }
 
-function providerOutcome(
-  result: InboxV2ProviderDispatchAdapterResult,
+function providerArtifactResults(
+  run: ProviderRun,
+  contentPlan: InboxV2OutboundDispatchContentPlan,
+  open: OpenAttemptCommit,
+  completedAt: string
+): readonly InboxV2ProviderDispatchArtifactAdapterResult[] {
+  if (run.kind === "provider_result") return run.result.artifacts;
+  const outcome = unknownOutcome(open, completedAt, run.reason);
+  return contentPlan.artifacts.map((artifact) => ({
+    artifactOrdinal: artifact.ordinal,
+    outcome: "outcome_unknown" as const,
+    diagnostic: outcome.diagnostic
+  }));
+}
+
+function aggregateProviderOutcome(
+  results: readonly InboxV2ProviderDispatchArtifactAdapterResult[],
   completedAt: string,
   open: OpenAttemptCommit
 ) {
-  if (result.outcome === "accepted") {
+  const allAccepted = results.every((result) => result.outcome === "accepted");
+  if (allAccepted) {
+    const acknowledgementTokens = new Set(
+      results.flatMap((result) =>
+        result.outcome === "accepted" &&
+        result.providerAcknowledgementToken !== null
+          ? [result.providerAcknowledgementToken]
+          : []
+      )
+    );
     return {
       kind: "accepted" as const,
       completedAt,
-      providerAcknowledgementToken: result.providerAcknowledgementToken
+      providerAcknowledgementToken:
+        acknowledgementTokens.size === 1 ? [...acknowledgementTokens][0]! : null
     };
   }
-  if (result.outcome === "retryable_failure") {
+  const allFailed = results.every((result) => result.outcome === "failed");
+  if (allFailed) {
+    const failed = results.filter(
+      (
+        result
+      ): result is Extract<
+        InboxV2ProviderDispatchArtifactAdapterResult,
+        { outcome: "failed" }
+      > => result.outcome === "failed"
+    );
+    const terminal = failed.find((result) => !result.diagnostic.retryable);
+    if (terminal !== undefined) {
+      return {
+        kind: "terminal_failure" as const,
+        completedAt,
+        diagnostic: terminal.diagnostic
+      };
+    }
+    const retryAt = failed
+      .map((result) => result.retryAt)
+      .filter((value): value is string => value !== null)
+      .sort((left, right) => Date.parse(right) - Date.parse(left))[0];
+    if (retryAt === undefined) {
+      throw coordinatorError("provider_dispatch.invalid_plan");
+    }
     return {
       kind: "retryable_failure" as const,
       completedAt,
-      retryAt: result.retryAt,
-      diagnostic: result.diagnostic
+      retryAt,
+      diagnostic: failed[0]!.diagnostic
     };
   }
-  if (result.outcome === "terminal_failure") {
+  if (new Set(results.map((result) => result.outcome)).size > 1) {
     return {
-      kind: "terminal_failure" as const,
+      kind: "outcome_unknown" as const,
       completedAt,
-      diagnostic: result.diagnostic
+      diagnostic: createInboxV2MixedProviderArtifactOutcomeDiagnostic(
+        open.attempt.claimToken
+      ),
+      requiredAction: "operator_duplicate_risk_decision_required"
     };
+  }
+  const representative =
+    results.find((result) => result.outcome === "outcome_unknown") ??
+    results.find((result) => result.outcome === "failed");
+  if (representative === undefined) {
+    throw coordinatorError("provider_dispatch.invalid_plan");
   }
   return {
     kind: "outcome_unknown" as const,
     completedAt,
-    diagnostic: result.diagnostic,
+    diagnostic: representative.diagnostic,
     requiredAction: requiredUnknownAction(open)
   };
 }

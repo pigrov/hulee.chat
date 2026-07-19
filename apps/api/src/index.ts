@@ -30,7 +30,11 @@ import {
   createDeploymentEgressRuntime,
   type EgressRuntime
 } from "@hulee/modules";
-import { createS3ObjectStorage, type ObjectStorage } from "@hulee/storage";
+import {
+  createS3ObjectStorage,
+  type ObjectStorage,
+  type TenantScopedVersionAwareObjectStorageResolver
+} from "@hulee/storage";
 
 import {
   createPublicApiHandler,
@@ -49,7 +53,11 @@ import {
 } from "./internal-inbox-service";
 import { createInternalAccessDecisionService } from "./internal-access-decision-service";
 import { createInternalEgressStatusService } from "./internal-egress-status-service";
-import { createInternalFileService } from "./internal-file-service";
+import {
+  createInternalFileService,
+  createInternalInboxV2FileDownloadService
+} from "./internal-file-service";
+import type { InboxV2FileDownloadTicketService } from "./inbox-v2-file-download-ticket";
 import {
   createTenantSecretResolver,
   createInternalIntegrationService
@@ -132,6 +140,9 @@ export type InternalApiDataPlaneHandlerOptions = {
   egressProfile?: ApiConfig["egressProfile"];
   objectStorageConfig?: ApiConfig["objectStorage"];
   objectStorage?: ObjectStorage;
+  inboxV2FileDownloadTicketService?: InboxV2FileDownloadTicketService;
+  inboxV2FileDownloadStorageResolver?: TenantScopedVersionAwareObjectStorageResolver;
+  inboxV2FileDownloadMaximumBytes?: number;
   publicWebhookBaseUrl?: string;
   telegramApiBaseUrl?: string;
   logger?: Logger;
@@ -161,6 +172,16 @@ export function createInternalApiDataPlaneHandler(
     (options.objectStorageConfig
       ? createS3ObjectStorage(options.objectStorageConfig)
       : undefined);
+  const inboxV2FileDownloads =
+    options.inboxV2FileDownloadTicketService === undefined
+      ? undefined
+      : createInternalInboxV2FileDownloadService({
+          tickets: options.inboxV2FileDownloadTicketService,
+          objectStorageResolver: requireInboxV2DownloadStorageResolver(
+            options.inboxV2FileDownloadStorageResolver
+          ),
+          maximumDownloadBytes: options.inboxV2FileDownloadMaximumBytes
+        });
 
   return createInternalApiHandler({
     sessionResolver: createSignedInternalSessionResolver({
@@ -180,6 +201,7 @@ export function createInternalApiDataPlaneHandler(
       authorization: inboxAuthorization,
       objectStorage
     }),
+    fileDownloads: inboxV2FileDownloads,
     integrations: createInternalIntegrationService({
       connectorRepository: createSqlChannelConnectorRepository(
         options.database
@@ -302,6 +324,9 @@ export type ApiDataPlaneHandlerOptions = PublicApiDataPlaneHandlerOptions &
     | "egressProfile"
     | "objectStorageConfig"
     | "objectStorage"
+    | "inboxV2FileDownloadTicketService"
+    | "inboxV2FileDownloadStorageResolver"
+    | "inboxV2FileDownloadMaximumBytes"
     | "publicWebhookBaseUrl"
     | "telegramApiBaseUrl"
   >;
@@ -330,6 +355,17 @@ export function createApiDataPlaneHandler(
   };
 }
 
+function requireInboxV2DownloadStorageResolver(
+  resolver: TenantScopedVersionAwareObjectStorageResolver | undefined
+): TenantScopedVersionAwareObjectStorageResolver {
+  if (resolver === undefined) {
+    throw new Error(
+      "Inbox V2 file download tickets require a tenant-scoped storage resolver."
+    );
+  }
+  return resolver;
+}
+
 export { createApiNodeServer } from "./http/node-server";
 export { createInternalApiHandler } from "./http/internal-api-handler";
 export { createPublicApiHandler } from "./http/public-api-handler";
@@ -347,7 +383,14 @@ export {
 } from "./inbox-v2-outbound-send-command";
 export { createInternalAccessDecisionService } from "./internal-access-decision-service";
 export { createInternalEgressStatusService } from "./internal-egress-status-service";
-export { createInternalFileService } from "./internal-file-service";
+export {
+  createInternalFileService,
+  createInternalInboxV2FileDownloadService
+} from "./internal-file-service";
+export {
+  createInboxV2FileDownloadTicketService,
+  InboxV2FileDownloadTicketError
+} from "./inbox-v2-file-download-ticket";
 export {
   createInternalInboxAuthorizationService,
   createInternalInboxCommandService,
@@ -403,8 +446,20 @@ export type {
 export type {
   InternalFileContent,
   InternalFileService,
-  InternalFileServiceOptions
+  InternalFileServiceOptions,
+  InternalInboxV2FileDownloadContent,
+  InternalInboxV2FileDownloadService,
+  InternalInboxV2FileDownloadServiceOptions
 } from "./internal-file-service";
+export type {
+  InboxV2FileDownloadAccessRecord,
+  InboxV2FileDownloadAccessRepository,
+  InboxV2FileDownloadPrincipal,
+  InboxV2FileDownloadPrincipalIdentity,
+  InboxV2FileDownloadTicketErrorCode,
+  InboxV2FileDownloadTicketService,
+  InboxV2FileDownloadTicketServiceOptions
+} from "./inbox-v2-file-download-ticket";
 export type {
   InternalInboxAuthorizationService,
   InternalInboxAuthorizationServiceOptions,

@@ -8030,6 +8030,233 @@ before update or delete
 on public.inbox_v2_atomic_source_resolution_materializations
 for each row execute function public.inbox_v2_auth_reject_immutable();
 
+create or replace function public.inbox_v2_auth_attachment_message_change_valid(
+  expected_tenant_id text,
+  expected_stream_commit_id text,
+  expected_mutation_id text,
+  expected_change_id text,
+  expected_stream_position bigint,
+  expected_committed_at timestamptz,
+  expected_trusted_service_id text,
+  expected_correlation_id text,
+  expected_command_result_reference jsonb,
+  expected_audit_evidence_reference jsonb,
+  expected_audit_revision_delta_hash text
+)
+returns boolean
+language sql
+stable
+set search_path = pg_catalog, public, pg_temp
+as $function$
+  select exists (
+    select 1
+      from public.inbox_v2_tenant_stream_changes message_change
+      join public.inbox_v2_messages message_row
+        on message_row.tenant_id = message_change.tenant_id
+       and message_row.id = message_change.entity_id
+      join public.inbox_v2_timeline_items timeline_row
+        on timeline_row.tenant_id = message_row.tenant_id
+       and timeline_row.id = message_row.timeline_item_id
+      join public.inbox_v2_timeline_contents content_row
+        on content_row.tenant_id = message_row.tenant_id
+       and content_row.id = message_row.content_id
+      join public.inbox_v2_timeline_content_revisions content_revision_row
+        on content_revision_row.tenant_id = content_row.tenant_id
+       and content_revision_row.content_id = content_row.id
+       and content_revision_row.revision = content_row.revision
+      join public.inbox_v2_message_revisions revision_row
+        on revision_row.tenant_id = message_change.tenant_id
+       and revision_row.id =
+         message_change.domain_commit_reference->>'recordId'
+      join public.inbox_v2_action_attributions attribution_row
+        on attribution_row.tenant_id = revision_row.tenant_id
+       and attribution_row.id = revision_row.action_attribution_id
+     where message_change.tenant_id = expected_tenant_id
+       and message_change.stream_commit_id = expected_stream_commit_id
+       and message_change.mutation_id = expected_mutation_id
+       and message_change.id = expected_change_id
+       and message_change.stream_position = expected_stream_position
+       and message_change.entity_type_id = 'core:message'
+       and message_change.resulting_revision >= 2
+       and message_change.state_kind = 'upsert'
+       and message_change.state_schema_id = 'core:inbox-v2.message'
+       and message_change.state_schema_version = 'v1'
+       and message_change.payload_reference->>'tenantId' =
+         message_change.tenant_id
+       and message_change.payload_reference->>'recordId' =
+         message_change.entity_id
+       and message_change.payload_reference->>'schemaId' =
+         'core:inbox-v2.message'
+       and message_change.payload_reference->>'schemaVersion' = 'v1'
+       and message_change.payload_reference =
+         expected_command_result_reference
+       and message_change.state_hash =
+         message_change.payload_reference->>'digest'
+       and message_change.domain_commit_reference->>'tenantId' =
+         message_change.tenant_id
+       and message_change.domain_commit_reference->>'schemaId' =
+         'core:inbox-v2.message-revision'
+       and message_change.domain_commit_reference->>'schemaVersion' = 'v1'
+       and message_change.domain_commit_reference =
+         expected_audit_evidence_reference
+       and expected_audit_revision_delta_hash <>
+         'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+       and message_change.audience in (
+         'conversation_external', 'internal_participants'
+       )
+       and message_row.revision = message_change.resulting_revision
+       and message_row.last_changed_stream_position = expected_stream_position
+       and message_row.created_at <= expected_committed_at
+       and message_row.updated_at = expected_committed_at
+       and timeline_row.subject_kind = 'message'
+       and timeline_row.subject_id = message_row.id
+       and timeline_row.conversation_id = message_row.conversation_id
+       and timeline_row.revision = message_row.revision
+       and timeline_row.visibility::text = message_change.audience::text
+       and timeline_row.last_changed_stream_position = expected_stream_position
+       and timeline_row.created_at <= expected_committed_at
+       and timeline_row.updated_at = expected_committed_at
+       and content_row.owner_kind = 'message'
+       and content_row.owner_id = message_row.id
+       and content_row.revision = message_row.content_revision
+       and content_row.state = message_row.content_state
+       and content_row.state = 'available'
+       and content_row.last_changed_stream_position = expected_stream_position
+       and content_row.created_at <= expected_committed_at
+       and content_row.updated_at = expected_committed_at
+       and content_revision_row.expected_previous_revision =
+         content_revision_row.revision - 1
+       and content_revision_row.transition_kind = 'attachment_materialization'
+       and content_revision_row.state = 'available'
+       and content_revision_row.event_id is not null
+       and content_revision_row.recorded_stream_position =
+         expected_stream_position
+       and content_revision_row.occurred_at = expected_committed_at
+       and content_revision_row.recorded_at = expected_committed_at
+       and message_change.timeline = jsonb_build_object(
+         'conversation', jsonb_build_object(
+           'tenantId', message_row.tenant_id,
+           'id', message_row.conversation_id,
+           'kind', 'conversation'
+         ),
+         'timelineSequence', timeline_row.timeline_sequence::text
+       )
+       and revision_row.message_id = message_row.id
+       and revision_row.timeline_item_id = message_row.timeline_item_id
+       and revision_row.message_revision = message_row.revision
+       and revision_row.change_kind = 'attachment_materialized'
+       and revision_row.expected_previous_revision =
+         revision_row.message_revision - 1
+       and revision_row.before_content_id = content_row.id
+       and revision_row.before_content_revision = content_row.revision - 1
+       and revision_row.before_content_state = 'available'
+       and revision_row.after_content_id = content_row.id
+       and revision_row.after_content_revision = content_row.revision
+       and revision_row.after_content_state = 'available'
+       and revision_row.provider_operation_id is null
+       and revision_row.reason_id is null
+       and revision_row.recorded_stream_position = expected_stream_position
+       and revision_row.occurred_at = expected_committed_at
+       and revision_row.recorded_at = expected_committed_at
+       and attribution_row.conversation_id = message_row.conversation_id
+       and attribution_row.action_participant_id is null
+       and attribution_row.app_actor_kind = 'trusted_service'
+       and attribution_row.app_trusted_service_id =
+         expected_trusted_service_id
+       and attribution_row.source_occurrence_id is null
+       and attribution_row.automation_kind = 'system_event'
+       and attribution_row.automation_cause_event_id is not null
+       and attribution_row.automation_correlation_id = expected_correlation_id
+       and attribution_row.automation_caused_at <= expected_committed_at
+       and attribution_row.created_at = expected_committed_at
+       and (
+         select count(*)
+           from public.inbox_v2_domain_events message_event
+          where message_event.tenant_id = message_change.tenant_id
+            and message_event.stream_commit_id =
+              message_change.stream_commit_id
+            and message_event.mutation_id = message_change.mutation_id
+            and message_event.type_id = 'core:message.changed'
+            and message_event.payload_schema_id =
+              'core:inbox-v2.message-revision'
+            and message_event.payload_schema_version = 'v1'
+            and message_event.payload_reference =
+              message_change.domain_commit_reference
+            and content_revision_row.event_id = message_event.id
+            and message_event.change_ids =
+              jsonb_build_array(message_change.id)
+            and message_event.subjects @> jsonb_build_array(
+              jsonb_build_object(
+                'tenantId', message_change.tenant_id,
+                'entityTypeId', 'core:message',
+                'entityId', message_change.entity_id
+              )
+            )
+            and message_event.correlation_id = expected_correlation_id
+            and message_event.occurred_at = expected_committed_at
+            and message_event.recorded_at = expected_committed_at
+       ) = 1
+       and (
+         select count(*)
+           from public.inbox_v2_outbox_intents projection_intent
+           join public.inbox_v2_domain_events projection_event
+             on projection_event.tenant_id = projection_intent.tenant_id
+            and projection_event.id = projection_intent.event_id
+          where projection_intent.tenant_id = message_change.tenant_id
+            and projection_intent.stream_commit_id =
+              message_change.stream_commit_id
+            and projection_intent.mutation_id = message_change.mutation_id
+            and projection_intent.effect_class = 'projection'
+            and projection_intent.type_id = 'core:projection.update'
+            and projection_intent.change_ids =
+              jsonb_build_array(message_change.id)
+            and projection_event.stream_commit_id =
+              message_change.stream_commit_id
+            and projection_event.mutation_id = message_change.mutation_id
+            and projection_event.type_id = 'core:message.changed'
+       ) = 1
+       and (
+         select count(*)
+           from public.inbox_v2_file_attachment_materialization_evidence
+             evidence_row
+           join public.inbox_v2_file_attachment_materialization_jobs job_row
+             on job_row.tenant_id = evidence_row.tenant_id
+            and job_row.id = evidence_row.job_id
+          where evidence_row.tenant_id = message_change.tenant_id
+            and evidence_row.timeline_content_id = content_row.id
+            and evidence_row.resulting_content_revision = content_row.revision
+            and evidence_row.expected_content_revision =
+              content_row.revision - 1
+            and evidence_row.outcome in ('ready', 'failed')
+            and job_row.parent_message_id = message_row.id
+            and job_row.timeline_item_id = timeline_row.id
+            and job_row.timeline_content_id = content_row.id
+            and job_row.result_content_revision = content_row.revision
+            and job_row.cause_event_id =
+              attribution_row.automation_cause_event_id
+            and job_row.correlation_id = expected_correlation_id
+            and job_row.caused_at = attribution_row.automation_caused_at
+            and job_row.authorization_actor_kind = 'trusted_service'
+            and job_row.authorization_actor_id =
+              expected_trusted_service_id
+            and job_row.updated_at = evidence_row.completed_at
+            and (
+              (evidence_row.outcome = 'ready' and job_row.state = 'ready')
+              or (evidence_row.outcome = 'failed' and job_row.state = 'failed')
+            )
+       ) = 1
+       and not exists (
+         select 1
+           from public.inbox_v2_atomic_source_resolution_materializations
+             source_materialization
+          where source_materialization.tenant_id = message_change.tenant_id
+            and source_materialization.stream_commit_id =
+              message_change.stream_commit_id
+            and source_materialization.mutation_id = message_change.mutation_id
+       )
+  );
+$function$;
+
 create or replace function public.inbox_v2_auth_domain_mutation_coherence()
 returns trigger
 language plpgsql
@@ -8662,6 +8889,8 @@ begin
      and message_change.stream_commit_id = new.stream_commit_id
      and message_change.mutation_id = new.mutation_id
      and message_change.entity_type_id = 'core:message'
+     and v_command.command_type_id <>
+       'core:attachment.materialization.complete'
      and (
        message_change.resulting_revision <> 1
        or message_change.state_kind <> 'upsert'
@@ -8827,6 +9056,28 @@ begin
             and source_materialization.stream_commit_id =
               message_change.stream_commit_id
        ))
+     );
+
+  select v_invalid_count + count(*)::integer into v_invalid_count
+    from public.inbox_v2_tenant_stream_changes message_change
+   where message_change.tenant_id = new.tenant_id
+     and message_change.stream_commit_id = new.stream_commit_id
+     and message_change.mutation_id = new.mutation_id
+     and message_change.entity_type_id = 'core:message'
+     and v_command.command_type_id =
+       'core:attachment.materialization.complete'
+     and not public.inbox_v2_auth_attachment_message_change_valid(
+       message_change.tenant_id,
+       message_change.stream_commit_id,
+       message_change.mutation_id,
+       message_change.id,
+       message_change.stream_position,
+       new.committed_at,
+       v_command.actor_trusted_service_id,
+       v_stream.correlation_id,
+       v_command.result_reference,
+       v_audit.evidence_reference,
+       v_audit.revision_delta_hash
      );
 
   select v_invalid_count + count(*)::integer into v_invalid_count
@@ -9082,6 +9333,58 @@ begin
     end if;
   end if;
 
+  if v_command.command_type_id =
+     'core:attachment.materialization.complete' then
+    select count(*)::integer into v_message_change_count
+      from public.inbox_v2_tenant_stream_changes message_change
+     where message_change.tenant_id = new.tenant_id
+       and message_change.stream_commit_id = new.stream_commit_id
+       and message_change.mutation_id = new.mutation_id
+       and message_change.stream_position = v_stream.position
+       and message_change.entity_type_id = 'core:message';
+    select count(*)::integer into v_message_row_count
+      from public.inbox_v2_tenant_stream_changes message_change
+      join public.inbox_v2_messages message_row
+        on message_row.tenant_id = message_change.tenant_id
+       and message_row.id = message_change.entity_id
+     where message_change.tenant_id = new.tenant_id
+       and message_change.stream_commit_id = new.stream_commit_id
+       and message_change.mutation_id = new.mutation_id
+       and message_change.stream_position = v_stream.position
+       and message_change.entity_type_id = 'core:message'
+       and message_row.revision = message_change.resulting_revision
+       and message_row.revision >= 2
+       and message_row.last_changed_stream_position = v_stream.position
+       and message_row.updated_at = new.committed_at;
+    select count(*)::integer into v_source_change_count
+      from public.inbox_v2_tenant_stream_changes occurrence_change
+     where occurrence_change.tenant_id = new.tenant_id
+       and occurrence_change.stream_commit_id = new.stream_commit_id
+       and occurrence_change.mutation_id = new.mutation_id
+       and occurrence_change.stream_position = v_stream.position
+       and occurrence_change.entity_type_id = 'core:source-occurrence';
+    select count(*)::integer into v_source_materialization_count
+      from public.inbox_v2_atomic_source_resolution_materializations
+        source_materialization
+     where source_materialization.tenant_id = new.tenant_id
+       and source_materialization.stream_commit_id = new.stream_commit_id
+       and source_materialization.mutation_id = new.mutation_id
+       and source_materialization.stream_position = v_stream.position;
+
+    if v_message_change_count <> 1
+       or v_message_row_count <> 1
+       or v_source_change_count <> 0
+       or v_source_materialization_count <> 0
+       or v_change_count <> 1
+       or v_event_count <> 1
+       or v_outbox_count <> 1
+       or v_projection_count <> 1 then
+      raise exception using errcode = '23514',
+        message =
+          'inbox_v2.domain_mutation_attachment_cardinality_invalid';
+    end if;
+  end if;
+
   if v_invalid_count <> 0 then
     raise exception using errcode = '23514',
       message = 'inbox_v2.domain_mutation_stream_child_mismatch';
@@ -9139,7 +9442,11 @@ begin
   if row(v_facet_count, v_facet_digest)
        is distinct from
      row(v_audit.facet_count, v_audit.facets_digest_sha256)
-     or v_audit.revision_delta_hash <> v_empty_digest then
+     or (
+       v_command.command_type_id <>
+         'core:attachment.materialization.complete'
+       and v_audit.revision_delta_hash <> v_empty_digest
+     ) then
     raise exception using errcode = '23514',
       message = 'inbox_v2.domain_mutation_audit_manifest_incomplete';
   end if;

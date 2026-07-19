@@ -1,7 +1,19 @@
 import { inboxV2SourceProcessingStageSchema } from "@hulee/contracts";
+import {
+  createSqlInboxV2SourceAttachmentReservationAuthorizationPreparer,
+  createSqlInboxV2SourceAttachmentMaterializationRepository,
+  createSqlInboxV2SourceAttachmentReservationCommandPort
+} from "@hulee/db/internal/attachment-materialization";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  createInboxV2SourceAttachmentMaterializationHandler,
+  createInboxV2SourceAttachmentReservationNamespaceAuthority,
+  createInboxV2SourceAttachmentReservationPlanner,
+  createInboxV2TenantAttachmentStorageAddressResolver
+} from "./source-attachment-materialization-handler";
+import {
+  createInboxV2SourceAttachmentMaterializationDurabilityCapability,
   createInboxV2SourceNormalizationDurabilityCapability,
   createInboxV2SourceProcessingCompositeDurabilityCapabilitySet,
   createInboxV2SourceProcessingProductionActivation,
@@ -16,7 +28,7 @@ import {
 import type { InboxV2SourceProcessingRuntimeClaim } from "./source-processing-runtime-coordinator";
 
 describe("Inbox V2 source-processing production activation", () => {
-  it("activates the exact full stage set from one process-local composite", async () => {
+  it("activates the exact full stage set from trusted durable capabilities", async () => {
     const normalizationProcess = vi.fn(async () => ({
       outcome: "completed" as const,
       completion: { outcome: "normalized" as const }
@@ -53,7 +65,9 @@ describe("Inbox V2 source-processing production activation", () => {
       handlers.get("normalization")!.process(runtimeClaim("normalization"))
     ).resolves.toEqual({ kind: "processed" });
     expect(normalizationProcess).toHaveBeenCalledOnce();
-    expect(processTransactionLocally).toHaveBeenCalledTimes(5);
+    expect(processTransactionLocally).toHaveBeenCalledTimes(
+      inboxV2SourceProcessingCompositeStages().length
+    );
 
     expect(
       await Promise.resolve(
@@ -63,7 +77,9 @@ describe("Inbox V2 source-processing production activation", () => {
       kind: "failed",
       diagnostic: { codeId: "core:source-raw-ingress-runtime-claim-invalid" }
     });
-    expect(processTransactionLocally).toHaveBeenCalledTimes(5);
+    expect(processTransactionLocally).toHaveBeenCalledTimes(
+      inboxV2SourceProcessingCompositeStages().length
+    );
   });
 
   it("rejects structural, partial and mixed composite capability sets", () => {
@@ -85,6 +101,7 @@ describe("Inbox V2 source-processing production activation", () => {
       expect(() =>
         createInboxV2SourceProcessingProductionActivation({
           normalizationCapability: normalization,
+          materializationCapability: createMaterializationCapability(),
           compositeCapabilitySet:
             forged as InboxV2TrustedSourceProcessingCompositeDurabilityCapabilitySet
         })
@@ -106,11 +123,13 @@ describe("Inbox V2 source-processing production activation", () => {
 
     createInboxV2SourceProcessingProductionActivation({
       normalizationCapability: createNormalizationCapability(),
+      materializationCapability: createMaterializationCapability(),
       compositeCapabilitySet
     });
     expect(() =>
       createInboxV2SourceProcessingProductionActivation({
         normalizationCapability: createNormalizationCapability(),
+        materializationCapability: createMaterializationCapability(),
         compositeCapabilitySet
       })
     ).toThrow(/already consumed/u);
@@ -132,6 +151,7 @@ describe("Inbox V2 source-processing production activation", () => {
     port.processTransactionLocally = replacement as never;
     const activation = createInboxV2SourceProcessingProductionActivation({
       normalizationCapability: createNormalizationCapability(),
+      materializationCapability: createMaterializationCapability(),
       compositeCapabilitySet:
         createInboxV2SourceProcessingCompositeDurabilityCapabilitySet(
           transaction
@@ -181,8 +201,7 @@ describe("Inbox V2 source-processing production activation", () => {
       "identity_resolution",
       "conversation_resolution",
       "routing",
-      "message_reconciliation",
-      "materialization"
+      "message_reconciliation"
     ]);
   });
 });
@@ -205,8 +224,60 @@ function createActivation(input?: {
   });
   return createInboxV2SourceProcessingProductionActivation({
     normalizationCapability,
+    materializationCapability: createMaterializationCapability(),
     compositeCapabilitySet
   });
+}
+
+function createMaterializationCapability() {
+  const database = {
+    execute: vi.fn(),
+    transaction: vi.fn(async (work: (transaction: unknown) => unknown) =>
+      work(database)
+    )
+  };
+  const repository = createSqlInboxV2SourceAttachmentMaterializationRepository(
+    database as never
+  );
+  const reservationCommands =
+    createSqlInboxV2SourceAttachmentReservationCommandPort(
+      database as never,
+      createSqlInboxV2SourceAttachmentReservationAuthorizationPreparer(
+        database as never,
+        { trustedServiceId: "core:source-runtime" }
+      )
+    );
+  const namespaceAuthority =
+    createInboxV2SourceAttachmentReservationNamespaceAuthority({
+      activeGeneration: "attachment-namespace-v1",
+      keys: [
+        {
+          generation: "attachment-namespace-v1",
+          key: new Uint8Array(32).fill(7),
+          activatedAt: "2026-01-01T00:00:00.000Z",
+          verifyUntil: null
+        }
+      ],
+      now: () => Date.parse("2026-07-19T00:00:00.000Z")
+    });
+  const storageAddressResolver =
+    createInboxV2TenantAttachmentStorageAddressResolver({
+      resolve: (tenantId) => ({
+        tenantId,
+        storageRootId: "core:tenant-object-storage",
+        keyPrefix: `tenants/${tenantId}/files/`
+      })
+    });
+  return createInboxV2SourceAttachmentMaterializationDurabilityCapability(
+    createInboxV2SourceAttachmentMaterializationHandler({
+      repository,
+      reservationCommands,
+      reservationPlanner: createInboxV2SourceAttachmentReservationPlanner({
+        namespaceAuthority,
+        storageAddressResolver
+      })
+    })
+  );
 }
 
 function createNormalizationCapability() {

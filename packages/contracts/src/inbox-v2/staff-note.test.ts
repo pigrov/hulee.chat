@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { inboxV2TimelineContentHeadOf } from "./message-content";
+import {
+  calculateInboxV2MessageContentDigest,
+  inboxV2TimelineContentHeadOf
+} from "./message-content";
 import {
   inboxV2StaffNoteCreationCommitSchema,
   inboxV2StaffNoteMutationCommitSchema,
@@ -92,25 +95,35 @@ function availableAttachmentContent(state: "pending" | "ready") {
     "message_attachment",
     "message_attachment:image-1"
   );
+  const blocks = [
+    {
+      blockKey: "image-1",
+      kind: "image" as const,
+      attachment:
+        state === "pending"
+          ? { state, attachment }
+          : {
+              state,
+              attachment,
+              file: fixtureReference("file", "file:image-1"),
+              fileRevision: "1",
+              fileVersion: fixtureReference(
+                "file_version",
+                "file_version:image-1-v1"
+              ),
+              objectVersion: fixtureReference(
+                "file_object_version",
+                "file_object_version:image-1-v1"
+              )
+            },
+      displayName: "photo.jpg"
+    }
+  ];
   return fixtureContent({
     state: {
       kind: "available" as const,
-      blocks: [
-        {
-          blockKey: "image-1",
-          kind: "image" as const,
-          attachment:
-            state === "pending"
-              ? { state, attachment }
-              : {
-                  state,
-                  attachment,
-                  file: fixtureReference("file", "file:image-1")
-                },
-          displayName: "photo.jpg"
-        }
-      ],
-      contentDigestSha256: (state === "pending" ? "a" : "b").repeat(64)
+      blocks,
+      contentDigestSha256: calculateInboxV2MessageContentDigest(blocks)
     },
     revision: state === "pending" ? "1" : "2",
     updatedAt: state === "pending" ? fixtureT2 : fixtureT3
@@ -126,19 +139,20 @@ function mutation(
 ) {
   const creation = staffNoteCreation();
   let beforeContent = creation.content;
+  const editedBlocks = [
+    {
+      blockKey: "body-1",
+      kind: "text" as const,
+      role: "body" as const,
+      text: "Edited note",
+      language: "en"
+    }
+  ];
   let afterContent = fixtureContent({
     state: {
       kind: "available" as const,
-      blocks: [
-        {
-          blockKey: "body-1",
-          kind: "text" as const,
-          role: "body" as const,
-          text: "Edited note",
-          language: "en"
-        }
-      ],
-      contentDigestSha256: "c".repeat(64)
+      blocks: editedBlocks,
+      contentDigestSha256: calculateInboxV2MessageContentDigest(editedBlocks)
     },
     revision: "2",
     updatedAt: fixtureT3
@@ -269,6 +283,40 @@ function mutation(
 }
 
 describe("Inbox V2 StaffNote lifecycle contracts", () => {
+  it("fails closed before persisting a StaffNote pending attachment", () => {
+    const base = staffNoteCreation();
+    const withContent = (content: ReturnType<typeof fixtureContent>) => ({
+      ...base,
+      content,
+      staffNote: {
+        ...base.staffNote,
+        content: inboxV2TimelineContentHeadOf(content as never)
+      },
+      initialRevision: {
+        ...base.initialRevision,
+        change: {
+          kind: "created" as const,
+          content: inboxV2TimelineContentHeadOf(content as never)
+        }
+      }
+    });
+    const pending = availableAttachmentContent("pending");
+    expect(
+      inboxV2StaffNoteCreationCommitSchema.safeParse(withContent(pending))
+        .success
+    ).toBe(false);
+
+    const readyFixture = availableAttachmentContent("ready");
+    const ready = fixtureContent({
+      state: readyFixture.state,
+      revision: "1",
+      updatedAt: fixtureT2
+    });
+    expect(
+      inboxV2StaffNoteCreationCommitSchema.safeParse(withContent(ready)).success
+    ).toBe(true);
+  });
+
   it("creates exactly one eligible staff-only Timeline item with bounded author proof", () => {
     const commit = staffNoteCreation();
     expect(inboxV2StaffNoteCreationCommitSchema.safeParse(commit).success).toBe(
@@ -442,22 +490,23 @@ describe("Inbox V2 StaffNote lifecycle contracts", () => {
         }
       }).success
     ).toBe(false);
+    const sourceBlocks = [
+      {
+        blockKey: "unsupported-1",
+        kind: "unsupported_source_content" as const,
+        sourceOccurrence: fixtureReference(
+          "source_occurrence",
+          "source_occurrence:forbidden-1"
+        ),
+        providerContentKindId: "module:synthetic:unknown",
+        safeFallbackReasonId: "core:unsupported"
+      }
+    ];
     const sourceContent = fixtureContent({
       state: {
         kind: "available",
-        blocks: [
-          {
-            blockKey: "unsupported-1",
-            kind: "unsupported_source_content",
-            sourceOccurrence: fixtureReference(
-              "source_occurrence",
-              "source_occurrence:forbidden-1"
-            ),
-            providerContentKindId: "module:synthetic:unknown",
-            safeFallbackReasonId: "core:unsupported"
-          }
-        ],
-        contentDigestSha256: "f".repeat(64)
+        blocks: sourceBlocks,
+        contentDigestSha256: calculateInboxV2MessageContentDigest(sourceBlocks)
       },
       revision: "2",
       updatedAt: fixtureT3
@@ -516,6 +565,28 @@ describe("Inbox V2 StaffNote lifecycle contracts", () => {
         providerOperation: {
           kind: "forbidden-provider-transport"
         }
+      }).success
+    ).toBe(false);
+
+    const pendingFixture = availableAttachmentContent("pending");
+    const pendingContent = fixtureContent({
+      state: pendingFixture.state,
+      revision: "2",
+      updatedAt: fixtureT3
+    });
+    const pendingHead = inboxV2TimelineContentHeadOf(pendingContent as never);
+    expect(
+      inboxV2StaffNoteMutationCommitSchema.safeParse({
+        ...commit,
+        contentTransition: {
+          ...commit.contentTransition,
+          after: pendingContent
+        },
+        revision: {
+          ...commit.revision,
+          change: { ...commit.revision.change, afterContent: pendingHead }
+        },
+        afterStaffNote: { ...commit.afterStaffNote, content: pendingHead }
       }).success
     ).toBe(false);
   });

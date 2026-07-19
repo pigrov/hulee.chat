@@ -25,6 +25,8 @@ const { Client, Pool } = pg;
 const LIFECYCLE_LOCK_KEY = "hulee:inbox-v2:database-lifecycle:v1";
 const MSG002_OUTBOUND_SEND_AUTHORITY_MARKER =
   "INB2-MSG-002_NORMAL_SEND_REPLY_AUTHORITY_V1";
+const MSG003_TYPED_CONTENT_AUTHORIZATION_MARKER =
+  "INBOX_V2_FILE_OBJECT_MIGRATION_FINALIZED_V1";
 const MIGRATION_DDL_BUDGET_EVIDENCE_SCHEMA_ID =
   "core:inbox-v2.migration-ddl-budget-evidence@v1";
 const MAX_MIGRATION_LOCK_TIMEOUT_MS = 60_000;
@@ -3417,7 +3419,10 @@ function expectedFunctionContract(bundle, signature) {
     )
   ].map((match) => `${match[1]}=${match[2]}`);
   let body = normalizeFunctionBody(bodyMatch[2]);
-  if (migrationBundleContains(bundle, MSG002_OUTBOUND_SEND_AUTHORITY_MARKER)) {
+  if (
+    migrationBundleContains(bundle, MSG002_OUTBOUND_SEND_AUTHORITY_MARKER) &&
+    !statement.includes(MSG003_TYPED_CONTENT_AUTHORIZATION_MARKER)
+  ) {
     body = applyInboxV2Msg002ExpectedFunctionOverlay(signature, body, bundle);
   }
   return Object.freeze({

@@ -1,5 +1,10 @@
 import { inboxV2SourceBackpressurePolicySchema } from "@hulee/contracts";
 import type { HuleeDatabase } from "@hulee/db";
+import {
+  createSqlInboxV2SourceAttachmentReservationAuthorizationPreparer,
+  createSqlInboxV2SourceAttachmentMaterializationRepository,
+  createSqlInboxV2SourceAttachmentReservationCommandPort
+} from "@hulee/db/internal/attachment-materialization";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import {
@@ -12,6 +17,13 @@ import {
   type WorkerInboxV2SourceProcessingRuntimeCoordinatorOptions
 } from "./index";
 import type { InboxV2SourceProcessingProductionActivation } from "./source-processing-production-activation";
+import {
+  createInboxV2SourceAttachmentMaterializationHandler,
+  createInboxV2SourceAttachmentReservationNamespaceAuthority,
+  createInboxV2SourceAttachmentReservationPlanner,
+  createInboxV2TenantAttachmentStorageAddressResolver
+} from "./source-attachment-materialization-handler";
+import { createInboxV2SourceAttachmentMaterializationDurabilityCapability } from "./source-processing-production-activation";
 
 const policy = inboxV2SourceBackpressurePolicySchema.parse({
   maxClaimBatch: 4,
@@ -100,6 +112,7 @@ describe("worker Inbox V2 source-processing runtime factory", () => {
       );
     const activation = createInboxV2SourceProcessingProductionActivation({
       normalizationCapability,
+      materializationCapability: createMaterializationCapability(),
       compositeCapabilitySet
     });
 
@@ -195,6 +208,54 @@ describe("worker Inbox V2 source-processing runtime factory", () => {
     ).toThrow(/key-safe diagnostics/u);
   });
 });
+
+function createMaterializationCapability() {
+  const database = {
+    execute: vi.fn(),
+    transaction: vi.fn(async (work: (transaction: unknown) => unknown) =>
+      work(database)
+    )
+  };
+  const namespaceAuthority =
+    createInboxV2SourceAttachmentReservationNamespaceAuthority({
+      activeGeneration: "attachment-namespace-v1",
+      keys: [
+        {
+          generation: "attachment-namespace-v1",
+          key: new Uint8Array(32).fill(7),
+          activatedAt: "2026-01-01T00:00:00.000Z",
+          verifyUntil: null
+        }
+      ],
+      now: () => Date.parse("2026-07-19T00:00:00.000Z")
+    });
+  return createInboxV2SourceAttachmentMaterializationDurabilityCapability(
+    createInboxV2SourceAttachmentMaterializationHandler({
+      repository: createSqlInboxV2SourceAttachmentMaterializationRepository(
+        database as never
+      ),
+      reservationCommands:
+        createSqlInboxV2SourceAttachmentReservationCommandPort(
+          database as never,
+          createSqlInboxV2SourceAttachmentReservationAuthorizationPreparer(
+            database as never,
+            { trustedServiceId: "core:source-runtime" }
+          )
+        ),
+      reservationPlanner: createInboxV2SourceAttachmentReservationPlanner({
+        namespaceAuthority,
+        storageAddressResolver:
+          createInboxV2TenantAttachmentStorageAddressResolver({
+            resolve: (tenantId) => ({
+              tenantId,
+              storageRootId: "core:tenant-object-storage",
+              keyPrefix: `tenants/${tenantId}/files/`
+            })
+          })
+      })
+    })
+  );
+}
 
 function options(): WorkerInboxV2SourceProcessingRuntimeCoordinatorOptions {
   return {

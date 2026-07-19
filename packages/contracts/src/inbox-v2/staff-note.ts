@@ -401,6 +401,18 @@ export const inboxV2StaffNoteCreationCommitSchema = z
         "StaffNote content cannot carry provider/source occurrence evidence."
       );
     }
+    if (
+      content.state.kind === "available" &&
+      content.state.blocks.some(
+        (block) => "attachment" in block && block.attachment.state === "pending"
+      )
+    ) {
+      addIssue(
+        context,
+        ["content", "state", "blocks"],
+        "StaffNote creation cannot persist pending attachments until the dedicated StaffNote materialization command is available."
+      );
+    }
   });
 
 export const inboxV2StaffNoteMutationCommitSchema = z
@@ -727,6 +739,18 @@ function addStaffNoteMutationHeadIssues(
       context,
       ["contentTransition", "after", "state", "blocks"],
       "StaffNote mutation cannot introduce provider/source occurrence content."
+    );
+  }
+  if (
+    contentTransition.after.state.kind === "available" &&
+    contentTransition.after.state.blocks.some(
+      (block) => "attachment" in block && block.attachment.state === "pending"
+    )
+  ) {
+    addIssue(
+      context,
+      ["contentTransition", "after", "state", "blocks"],
+      "StaffNote mutation cannot persist a pending attachment until the dedicated StaffNote materialization command is available."
     );
   }
 }

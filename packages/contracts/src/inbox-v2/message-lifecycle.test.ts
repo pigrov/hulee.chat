@@ -7,7 +7,10 @@ import {
   inboxV2MessageProviderLifecycleTransitionCommitSchema
 } from "./message-provider-lifecycle";
 import { inboxV2ProviderSemanticOrderingCommitSchema } from "./provider-semantic-proof";
-import { inboxV2TimelineContentHeadOf } from "./message-content";
+import {
+  calculateInboxV2MessageContentDigest,
+  inboxV2TimelineContentHeadOf
+} from "./message-content";
 import {
   fixtureAdapterContract,
   fixtureBindingReference,
@@ -38,19 +41,20 @@ import {
 } from "./timeline-message-fixtures.type-fixture";
 
 function editedContent() {
+  const blocks = [
+    {
+      blockKey: "body-1",
+      kind: "text" as const,
+      role: "body" as const,
+      text: "Edited",
+      language: "en"
+    }
+  ];
   return fixtureContent({
     state: {
       kind: "available",
-      blocks: [
-        {
-          blockKey: "body-1",
-          kind: "text",
-          role: "body",
-          text: "Edited",
-          language: "en"
-        }
-      ],
-      contentDigestSha256: "e".repeat(64)
+      blocks,
+      contentDigestSha256: calculateInboxV2MessageContentDigest(blocks)
     },
     revision: "2",
     updatedAt: fixtureT3
@@ -560,36 +564,47 @@ describe("Inbox V2 Message lifecycle contracts", () => {
       "message_attachment",
       "message_attachment:image-1"
     );
+    const beforeBlocks = [
+      {
+        blockKey: "image-1",
+        kind: "image" as const,
+        attachment: { state: "pending" as const, attachment },
+        displayName: "photo.png"
+      }
+    ];
+    const afterBlocks = [
+      {
+        blockKey: "image-1",
+        kind: "image" as const,
+        attachment: {
+          state: "ready" as const,
+          attachment,
+          file: fixtureReference("file", "file:image-1"),
+          fileRevision: "1",
+          fileVersion: fixtureReference(
+            "file_version",
+            "file_version:image-1-v1"
+          ),
+          objectVersion: fixtureReference(
+            "file_object_version",
+            "file_object_version:image-1-v1"
+          )
+        },
+        displayName: "photo.png"
+      }
+    ];
     const beforeContent = fixtureContent({
       state: {
         kind: "available",
-        blocks: [
-          {
-            blockKey: "image-1",
-            kind: "image",
-            attachment: { state: "pending", attachment },
-            displayName: "photo.png"
-          }
-        ],
-        contentDigestSha256: "a".repeat(64)
+        blocks: beforeBlocks,
+        contentDigestSha256: calculateInboxV2MessageContentDigest(beforeBlocks)
       }
     });
     const afterContent = fixtureContent({
       state: {
         kind: "available",
-        blocks: [
-          {
-            blockKey: "image-1",
-            kind: "image",
-            attachment: {
-              state: "ready",
-              attachment,
-              file: fixtureReference("file", "file:image-1")
-            },
-            displayName: "photo.png"
-          }
-        ],
-        contentDigestSha256: "b".repeat(64)
+        blocks: afterBlocks,
+        contentDigestSha256: calculateInboxV2MessageContentDigest(afterBlocks)
       },
       revision: "2",
       updatedAt: fixtureT3

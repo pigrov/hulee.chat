@@ -7,6 +7,7 @@ export * from "./inbox-v2/data-governance-privacy";
 export * from "./inbox-v2/database-reset-receipt";
 export * from "./inbox-v2/employee-conversation-state";
 export * from "./inbox-v2/external-thread";
+export * from "./inbox-v2/file-object";
 export * from "./inbox-v2/identity-foundation";
 export * from "./inbox-v2/outbound-transport";
 export * from "./inbox-v2/outbox-terminal-payload";

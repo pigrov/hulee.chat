@@ -2,7 +2,10 @@ import { type SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 import {
+  calculateInboxV2OutboundDispatchContentPlanDigest,
   calculateInboxV2OutboxLeaseTokenHash,
+  createInboxV2MixedProviderArtifactOutcomeDiagnostic,
+  deriveInboxV2OutboundDispatchArtifactId,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
   inboxV2AuthorizationDecisionReferenceSchema,
@@ -10,6 +13,9 @@ import {
   inboxV2OutboxIntentSchema,
   inboxV2OutboxLeaseTokenSchema,
   inboxV2OutboxWorkerIdSchema,
+  inboxV2OutboundDispatchContentPlanSchema,
+  inboxV2OutboundDispatchArtifactSchema,
+  inboxV2OutboundDispatchAttemptSchema,
   inboxV2OutboundDispatchAttemptCommitSchema,
   inboxV2OutboundDispatchRerouteCommitSchema,
   inboxV2OutboundDispatchRouteFailureCommitSchema,
@@ -24,6 +30,7 @@ import {
   buildCompareAndSwapInboxV2OutboundDispatchAttemptSql,
   buildCompareAndSwapInboxV2OutboundDispatchSql,
   buildCompareAndSwapInboxV2SourceOccurrenceResolutionSql,
+  buildCheckInboxV2ArtifactRetrySafetySql,
   buildFindInboxV2ExternalMessageReferenceSql,
   buildFindInboxV2OutboundDispatchSql,
   buildInsertInboxV2ExternalMessageReferenceSql,
@@ -37,6 +44,7 @@ import {
   buildInsertInboxV2SourceOccurrenceResolutionTransitionSql,
   buildInsertInboxV2ThreadRoutePolicyVersionSql,
   buildListInboxV2MessageDispatchesSql,
+  buildValidateInboxV2ProviderOpenContentPlanSql,
   computeInboxV2ExternalMessageKeyDigest,
   createSqlInboxV2OutboundTransportRepository,
   persistInboxV2ExplicitRerouteResolutionInTransaction,
@@ -74,6 +82,46 @@ const wrongPermissionRouteFixture = createOutboundTransportContractFixture({
   operationId: "core:message.send",
   requiredPermissionId: "core:message.read"
 });
+
+function safeRetryOpenAttempt() {
+  const attemptReference = {
+    tenantId: fixture.tenantId,
+    kind: "outbound_dispatch_attempt" as const,
+    id: "outbound_dispatch_attempt:db-transport-retry"
+  };
+  const attempt = inboxV2OutboundDispatchAttemptSchema.parse({
+    ...fixture.pendingAttempt,
+    id: attemptReference.id,
+    attemptNumber: 2,
+    claimToken: "claim:db-transport-retry",
+    leaseExpiresAt: "2026-07-14T08:20:00.000Z",
+    openedAt: OUTBOUND_TEST_TIMES.retryAt,
+    retrySafety: fixture.pendingAttempt.retrySafety
+  });
+  const dispatchAfter = inboxV2OutboundDispatchSchema.parse({
+    ...fixture.reconciledDispatch,
+    state: "attempting",
+    attemptCount: 2,
+    activeAttempt: attemptReference,
+    lastAttempt: attemptReference,
+    retryAuthorization: null,
+    revision: "5",
+    updatedAt: OUTBOUND_TEST_TIMES.retryAt
+  });
+  const commit = inboxV2OutboundDispatchAttemptCommitSchema.parse({
+    kind: "open_attempt",
+    tenantId: fixture.tenantId,
+    routeSnapshot: fixture.route,
+    bindingHeadSnapshot: fixture.bindingHeadSnapshot,
+    dispatchBefore: fixture.reconciledDispatch,
+    priorAttempt: fixture.unknownAttempt,
+    retryAuthorizationDecision: fixture.reconciliationDecision,
+    attempt,
+    dispatchAfter
+  });
+  if (commit.kind !== "open_attempt") throw new Error("Expected open attempt");
+  return commit;
+}
 
 describe("SQL Inbox V2 outbound transport repository", () => {
   it("matches the PostgreSQL external-message digest for opaque backslashes", () => {
@@ -719,6 +767,60 @@ describe("SQL Inbox V2 outbound transport repository", () => {
     );
   });
 
+  it("allows a retry open only when the prior attempt has no accepted artifact", async () => {
+    const commit = safeRetryOpenAttempt();
+    const safetyQuery = renderQuery(
+      buildCheckInboxV2ArtifactRetrySafetySql({
+        tenantId: commit.tenantId,
+        dispatchId: commit.dispatchBefore.id,
+        attemptId: commit.priorAttempt!.id
+      })
+    );
+    expect(normalizeSql(safetyQuery.sql)).toContain(
+      "artifact.state = 'accepted'"
+    );
+
+    const executor = new QueueOutboundExecutor([
+      [dispatchRow(fixture.reconciledDispatch)],
+      [{ id: fixture.route.id }],
+      [bindingFenceRow(fixture)],
+      [{ retry_safe: true }],
+      [{ id: commit.attempt.id }],
+      [{ id: commit.dispatchBefore.id }]
+    ]);
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(executor).applyAttempt(commit)
+    ).resolves.toEqual({ kind: "committed" });
+    expect(executor.statementKinds()).toEqual([
+      "lock_dispatch",
+      "lock_route",
+      "lock_binding_fence",
+      "check_artifact_retry_safety",
+      "insert_attempt",
+      "cas_dispatch"
+    ]);
+  });
+
+  it("rejects retry open before provider I/O when the prior attempt has an accepted artifact", async () => {
+    const commit = safeRetryOpenAttempt();
+    const executor = new QueueOutboundExecutor([
+      [dispatchRow(fixture.reconciledDispatch)],
+      [{ id: fixture.route.id }],
+      [bindingFenceRow(fixture)],
+      [{ retry_safe: false }]
+    ]);
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(executor).applyAttempt(commit)
+    ).resolves.toEqual({ kind: "artifact_retry_unsafe" });
+    expect(executor.statementKinds()).toEqual([
+      "lock_dispatch",
+      "lock_route",
+      "lock_binding_fence",
+      "check_artifact_retry_safety"
+    ]);
+    expect(executor.statementKinds()).not.toContain("insert_attempt");
+  });
+
   it("rejects a forged same-id route snapshot before opening a provider attempt", async () => {
     const commit = fixture.openAttemptCommit;
     if (commit.kind !== "open_attempt") throw new Error("open attempt fixture");
@@ -776,7 +878,8 @@ describe("SQL Inbox V2 outbound transport repository", () => {
   it("loads the exact provider intent and dispatch only under its live outbox lease", async () => {
     const executor = new QueueOutboundExecutor([
       [providerIoOutboxLeaseRow()],
-      [dispatchRow(fixture.queuedDispatch)]
+      [dispatchRow(fixture.queuedDispatch)],
+      [providerIoContentPlanRow()]
     ]);
 
     await expect(
@@ -786,23 +889,46 @@ describe("SQL Inbox V2 outbound transport repository", () => {
     ).resolves.toEqual({
       kind: "loaded",
       intent: providerIoIntent,
-      dispatch: fixture.queuedDispatch
+      dispatch: fixture.queuedDispatch,
+      contentPlan: providerIoContentPlan
     });
     expect(executor.statementKinds()).toEqual([
       "lock_provider_io_outbox",
-      "lock_dispatch"
+      "lock_dispatch",
+      "load_dispatch_content_plan"
     ]);
     const leaseLock = executor.queries[0]!;
     expect(normalizeSql(leaseLock.sql)).toContain("for update of work");
     expect(leaseLock.params).not.toContain(providerIoLeaseToken);
   });
 
-  it("re-fences the outbox lease before opening an attempt", async () => {
+  it("fails closed when a claimed dispatch has no immutable content plan", async () => {
     const executor = new QueueOutboundExecutor([
       [providerIoOutboxLeaseRow()],
       [dispatchRow(fixture.queuedDispatch)],
+      []
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(
+        executor
+      ).loadClaimedProviderIo({ outboxLease: providerIoOutboxLeaseFence })
+    ).resolves.toEqual({ kind: "outbox_dispatch_content_plan_not_found" });
+    expect(executor.statementKinds()).toEqual([
+      "lock_provider_io_outbox",
+      "lock_dispatch",
+      "load_dispatch_content_plan"
+    ]);
+  });
+
+  it("re-fences the outbox lease before opening an attempt", async () => {
+    const executor = new QueueOutboundExecutor([
+      [providerIoOutboxLeaseRow()],
+      [providerIoContentPlanRow()],
+      [dispatchRow(fixture.queuedDispatch)],
       [{ id: fixture.route.id }],
       [bindingFenceRow(fixture)],
+      [{ artifact_ordinal: 1 }],
       [{ id: fixture.pendingAttempt.id }],
       [{ id: fixture.queuedDispatch.id }]
     ]);
@@ -815,11 +941,419 @@ describe("SQL Inbox V2 outbound transport repository", () => {
     ).resolves.toEqual({ kind: "committed" });
     expect(executor.statementKinds()).toEqual([
       "lock_provider_io_outbox",
+      "load_dispatch_content_plan",
       "lock_dispatch",
       "lock_route",
       "lock_binding_fence",
+      "validate_provider_capabilities",
       "insert_attempt",
       "cas_dispatch"
+    ]);
+  });
+
+  it("opens when the current binding revision differs from the independent binding generation", async () => {
+    const bindingRevision = "17";
+    const contentPlan =
+      providerIoContentPlanWithBindingRevision(bindingRevision);
+    const commit = inboxV2OutboundDispatchAttemptCommitSchema.parse({
+      ...fixture.openAttemptCommit,
+      bindingHeadSnapshot: {
+        ...fixture.bindingHeadSnapshot,
+        bindingRevision
+      }
+    });
+    if (commit.kind !== "open_attempt")
+      throw new Error("Expected open attempt");
+    const executor = new QueueOutboundExecutor([
+      [providerIoOutboxLeaseRow()],
+      [providerIoContentPlanRow(contentPlan)],
+      [dispatchRow(fixture.queuedDispatch)],
+      [{ id: fixture.route.id }],
+      [bindingFenceRow(fixture, commit.bindingHeadSnapshot)],
+      [{ artifact_ordinal: 1 }],
+      [{ id: fixture.pendingAttempt.id }],
+      [{ id: fixture.queuedDispatch.id }]
+    ]);
+
+    expect(bindingRevision).not.toBe(
+      commit.routeSnapshot.bindingFence.bindingGeneration
+    );
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(executor).applyAttemptFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        commit
+      })
+    ).resolves.toEqual({ kind: "committed" });
+    expect(executor.statementKinds()).toContain(
+      "validate_provider_capabilities"
+    );
+    expect(executor.statementKinds()).toContain("insert_attempt");
+  });
+
+  it("rejects a content plan binding revision mismatch before locking transport state", async () => {
+    const contentPlan = providerIoContentPlanWithBindingRevision("17");
+    const executor = new QueueOutboundExecutor([
+      [providerIoOutboxLeaseRow()],
+      [providerIoContentPlanRow(contentPlan)]
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(executor).applyAttemptFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        commit: fixture.openAttemptCommit
+      })
+    ).resolves.toEqual({ kind: "outbox_dispatch_content_plan_conflict" });
+    expect(executor.statementKinds()).toEqual([
+      "lock_provider_io_outbox",
+      "load_dispatch_content_plan"
+    ]);
+  });
+
+  it("checks every planned artifact against current capability, expiry and provider roles before open", async () => {
+    const query = renderQuery(
+      buildValidateInboxV2ProviderOpenContentPlanSql({
+        contentPlan: providerIoContentPlan,
+        route: fixture.route,
+        attempt: fixture.pendingAttempt,
+        databaseNow: "2026-07-14T08:02:30.000Z",
+        bindingRevision: fixture.bindingHeadSnapshot.bindingRevision,
+        capabilityRevision: fixture.route.bindingFence.capabilityRevision,
+        providerAccessRevision:
+          fixture.bindingHeadSnapshot.providerAccessRevision
+      })
+    );
+    const statement = normalizeSql(query.sql);
+    expect(statement).toContain("capability.state = 'supported'");
+    expect(statement).toContain(
+      "capability.content_kind_id is not distinct from"
+    );
+    expect(statement).toContain("capability.valid_until >");
+    expect(statement).toContain(
+      "inbox_v2_source_thread_binding_capability_required_roles"
+    );
+    expect(statement).toContain("provider_role.provider_access_revision =");
+    expect(statement).toContain(
+      "current_content_fence(content_plan_id) as materialized"
+    );
+    expect(statement).toContain("join inbox_v2_messages message_row");
+    expect(statement).toContain(
+      "message_row.revision = plan_row.message_revision"
+    );
+    expect(statement).toContain("message_row.content_state = 'available'");
+    expect(statement).toContain("join inbox_v2_timeline_contents content_row");
+    expect(statement).toContain(
+      "content_row.revision = message_row.content_revision"
+    );
+    expect(statement).toContain("content_row.state = 'available'");
+    expect(statement).toContain("plan_row.content_fingerprint_purpose_id =");
+    expect(statement).toContain(
+      "plan_row.content_fingerprint_key_generation ="
+    );
+    expect(statement).toContain("plan_row.content_fingerprint_valid_until >");
+    expect(statement).toContain("plan_row.content_fingerprint_hmac_sha256 =");
+    expect(statement).toContain("for share of message_row, content_row");
+    expect(statement).toContain("planned_file_pins");
+    expect(statement).toContain("valid_file_pins(block_key) as materialized");
+    expect(statement).toContain("join inbox_v2_file_objects file_row");
+    expect(statement).toContain("file_row.revision = pin.file_revision");
+    expect(statement).toContain("file_row.state = 'ready'");
+    expect(statement).toContain(
+      "file_row.current_file_version_id = pin.file_version_id"
+    );
+    expect(statement).toContain(
+      "file_row.current_object_version_id = pin.object_version_id"
+    );
+    expect(statement).toContain("join inbox_v2_file_versions file_version_row");
+    expect(statement).toContain(
+      "join inbox_v2_file_object_versions object_version_row"
+    );
+    expect(statement).toContain(
+      "join inbox_v2_file_object_version_heads object_head_row"
+    );
+    expect(statement).toContain("object_head_row.state = 'ready'");
+    expect(statement).toContain(
+      "order by pin.file_id, pin.file_version_id, pin.object_version_id"
+    );
+    expect(statement).toContain(
+      "for share of file_row, file_version_row, object_version_row, object_head_row"
+    );
+    expect(statement).toContain("for share of capability");
+    expect(statement.indexOf("current_content_fence")).toBeLessThan(
+      statement.indexOf("valid_file_pins")
+    );
+    expect(statement).not.toContain(
+      "capability.materialized_by_binding_revision ="
+    );
+    expect(query.params).toEqual(
+      expect.arrayContaining([
+        providerIoContentPlan.artifacts[0]?.capabilityId,
+        providerIoContentPlan.artifacts[0]?.operationId,
+        fixture.route.contentKindId,
+        BigInt(fixture.bindingHeadSnapshot.providerAccessRevision)
+      ])
+    );
+  });
+
+  it("pins every file-bearing block to its exact logical and physical current heads", () => {
+    const pinnedPlan = providerIoContentPlanWithPinnedFile();
+    const query = renderQuery(
+      buildValidateInboxV2ProviderOpenContentPlanSql({
+        contentPlan: pinnedPlan,
+        route: fixture.route,
+        attempt: fixture.pendingAttempt,
+        databaseNow: "2026-07-14T08:02:30.000Z",
+        bindingRevision: fixture.bindingHeadSnapshot.bindingRevision,
+        capabilityRevision: fixture.route.bindingFence.capabilityRevision,
+        providerAccessRevision:
+          fixture.bindingHeadSnapshot.providerAccessRevision
+      })
+    );
+    const pin = pinnedPlan.blocks[0]!.exactFileObjectPin!;
+    expect(query.params).toEqual(
+      expect.arrayContaining([
+        pin.file.id,
+        BigInt(pin.fileRevision),
+        pin.fileVersion.id,
+        pin.objectVersion.id
+      ])
+    );
+  });
+
+  it("fails closed before attempt creation when any pinned file head is no longer exact and ready", async () => {
+    const pinnedPlan = providerIoContentPlanWithPinnedFile();
+    const executor = new QueueOutboundExecutor([
+      [providerIoOutboxLeaseRow()],
+      [providerIoContentPlanRow(pinnedPlan)],
+      [dispatchRow(fixture.queuedDispatch)],
+      [{ id: fixture.route.id }],
+      [bindingFenceRow(fixture)],
+      []
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(executor).applyAttemptFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        commit: fixture.openAttemptCommit
+      })
+    ).resolves.toEqual({ kind: "binding_fence_conflict" });
+    expect(executor.statementKinds()).not.toContain("insert_attempt");
+    expect(executor.statementKinds()).not.toContain("cas_dispatch");
+  });
+
+  it("fails closed before provider I/O when a current capability is revoked, expired or lacks a required role", async () => {
+    const executor = new QueueOutboundExecutor([
+      [providerIoOutboxLeaseRow()],
+      [providerIoContentPlanRow()],
+      [dispatchRow(fixture.queuedDispatch)],
+      [{ id: fixture.route.id }],
+      [bindingFenceRow(fixture)],
+      []
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(executor).applyAttemptFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        commit: fixture.openAttemptCommit
+      })
+    ).resolves.toEqual({ kind: "binding_fence_conflict" });
+    expect(executor.statementKinds()).toEqual([
+      "lock_provider_io_outbox",
+      "load_dispatch_content_plan",
+      "lock_dispatch",
+      "lock_route",
+      "lock_binding_fence",
+      "validate_provider_capabilities"
+    ]);
+    expect(executor.statementKinds()).not.toContain("insert_attempt");
+  });
+
+  it.each([
+    ["provider access", { provider_access_revision: "2" }],
+    ["capability", { capability_revision: "2" }]
+  ] as const)(
+    "fails closed when the current %s revision drifts after planning",
+    async (_axis, drift) => {
+      const executor = new QueueOutboundExecutor([
+        [providerIoOutboxLeaseRow()],
+        [providerIoContentPlanRow()],
+        [dispatchRow(fixture.queuedDispatch)],
+        [{ id: fixture.route.id }],
+        [{ ...bindingFenceRow(fixture), ...drift }]
+      ]);
+      await expect(
+        createSqlInboxV2OutboundTransportRepository(
+          executor
+        ).applyAttemptFenced({
+          outboxLease: providerIoOutboxLeaseFence,
+          commit: fixture.openAttemptCommit
+        })
+      ).resolves.toEqual({ kind: "binding_fence_conflict" });
+      expect(executor.statementKinds()).not.toContain("insert_attempt");
+      expect(executor.statementKinds()).not.toContain(
+        "validate_provider_capabilities"
+      );
+    }
+  );
+
+  it("atomically persists the exact provider artifact set with attempt completion", async () => {
+    const commit = acceptedProviderResultCommit();
+    const artifact = acceptedProviderResultArtifact();
+    const executor = new QueueOutboundExecutor([
+      [
+        providerIoOutboxLeaseRow({
+          databaseNow: OUTBOUND_TEST_TIMES.acceptedAt
+        })
+      ],
+      [providerIoContentPlanRow()],
+      [],
+      [dispatchRow(fixture.attemptingDispatch)],
+      [attemptRow(fixture.pendingAttempt)],
+      [{ id: fixture.pendingAttempt.id }],
+      [{ id: fixture.attemptingDispatch.id }],
+      [{ id: artifact.id }]
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(
+        executor
+      ).applyProviderResultFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        contentPlanDigestSha256: providerIoContentPlan.planDigestSha256,
+        commit,
+        artifacts: [artifact]
+      })
+    ).resolves.toEqual({ kind: "committed" });
+    expect(executor.statementKinds()).toEqual([
+      "lock_provider_io_outbox",
+      "load_dispatch_content_plan",
+      "lock_artifact_set",
+      "lock_dispatch",
+      "lock_attempt",
+      "cas_attempt",
+      "cas_dispatch",
+      "insert_artifact"
+    ]);
+  });
+
+  it("accepts only the reconciliation-only aggregate diagnostic for mixed artifact outcomes", async () => {
+    const mixed = mixedProviderResultFixture();
+    const executor = new QueueOutboundExecutor([
+      [
+        providerIoOutboxLeaseRow({
+          databaseNow: OUTBOUND_TEST_TIMES.acceptedAt
+        })
+      ],
+      providerIoContentPlanRows(mixed.contentPlan),
+      [],
+      [dispatchRow(fixture.attemptingDispatch)],
+      [attemptRow(fixture.pendingAttempt)],
+      [{ id: fixture.pendingAttempt.id }],
+      [{ id: fixture.attemptingDispatch.id }],
+      [{ id: mixed.artifacts[0]!.id }],
+      [{ id: mixed.artifacts[1]!.id }]
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(
+        executor
+      ).applyProviderResultFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        contentPlanDigestSha256: mixed.contentPlan.planDigestSha256,
+        commit: mixed.commit,
+        artifacts: mixed.artifacts
+      })
+    ).resolves.toEqual({ kind: "committed" });
+
+    const retryableArtifactDiagnostic = mixed.artifacts[1]!.diagnostic!;
+    const unsafeAggregate = inboxV2OutboundDispatchAttemptCommitSchema.parse({
+      ...mixed.commit,
+      attemptAfter: {
+        ...mixed.commit.attemptAfter,
+        outcome: {
+          ...mixed.commit.attemptAfter.outcome,
+          diagnostic: retryableArtifactDiagnostic,
+          requiredAction: "automated_reconciliation_required"
+        }
+      }
+    });
+    if (unsafeAggregate.kind !== "complete_attempt") {
+      throw new Error("Expected complete attempt");
+    }
+    const rejectedExecutor = new QueueOutboundExecutor([
+      [
+        providerIoOutboxLeaseRow({
+          databaseNow: OUTBOUND_TEST_TIMES.acceptedAt
+        })
+      ],
+      providerIoContentPlanRows(mixed.contentPlan)
+    ]);
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(
+        rejectedExecutor
+      ).applyProviderResultFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        contentPlanDigestSha256: mixed.contentPlan.planDigestSha256,
+        commit: unsafeAggregate,
+        artifacts: mixed.artifacts
+      })
+    ).resolves.toEqual({ kind: "outbox_dispatch_content_plan_conflict" });
+    expect(rejectedExecutor.statementKinds()).toEqual([
+      "lock_provider_io_outbox",
+      "load_dispatch_content_plan"
+    ]);
+  });
+
+  it("replays an exact completed provider artifact set without another insert", async () => {
+    const commit = acceptedProviderResultCommit();
+    const artifact = acceptedProviderResultArtifact();
+    const contentPlan = providerIoContentPlanWithPinnedFile();
+    const executor = new QueueOutboundExecutor([
+      [
+        providerIoOutboxLeaseRow({
+          databaseNow: OUTBOUND_TEST_TIMES.acceptedAt
+        })
+      ],
+      [providerIoContentPlanRow(contentPlan)],
+      [artifactRow(artifact)],
+      [dispatchRow(fixture.acceptedDispatch)],
+      [attemptRow(fixture.acceptedAttempt)]
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(
+        executor
+      ).applyProviderResultFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        contentPlanDigestSha256: contentPlan.planDigestSha256,
+        commit,
+        artifacts: [artifact]
+      })
+    ).resolves.toEqual({ kind: "already_applied" });
+    expect(executor.statementKinds()).not.toContain("insert_artifact");
+  });
+
+  it("rejects incomplete provider artifact coverage before attempt mutation", async () => {
+    const executor = new QueueOutboundExecutor([
+      [
+        providerIoOutboxLeaseRow({
+          databaseNow: OUTBOUND_TEST_TIMES.acceptedAt
+        })
+      ],
+      [providerIoContentPlanRow()]
+    ]);
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(
+        executor
+      ).applyProviderResultFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        contentPlanDigestSha256: providerIoContentPlan.planDigestSha256,
+        commit: acceptedProviderResultCommit(),
+        artifacts: []
+      })
+    ).resolves.toEqual({ kind: "outbox_dispatch_content_plan_conflict" });
+    expect(executor.statementKinds()).toEqual([
+      "lock_provider_io_outbox",
+      "load_dispatch_content_plan"
     ]);
   });
 
@@ -1152,6 +1686,7 @@ describe("SQL Inbox V2 outbound transport repository", () => {
     const executor = new QueueOutboundExecutor([
       [dispatchRow(fixture.unknownDispatch)],
       [attemptRow(fixture.unknownAttempt)],
+      [{ retry_safe: true }],
       [{ id: fixture.reconciliationDecision.id }],
       [{ id: fixture.unknownDispatch.id }]
     ]);
@@ -1162,6 +1697,7 @@ describe("SQL Inbox V2 outbound transport repository", () => {
     expect(executor.statementKinds()).toEqual([
       "lock_dispatch",
       "lock_attempt",
+      "check_artifact_retry_safety",
       "insert_reconciliation",
       "cas_dispatch"
     ]);
@@ -1172,6 +1708,26 @@ describe("SQL Inbox V2 outbound transport repository", () => {
         )
       )
     ).toBe(false);
+  });
+
+  it("rejects retryable reconciliation when the exact unknown attempt already has an accepted artifact", async () => {
+    const executor = new QueueOutboundExecutor([
+      [dispatchRow(fixture.unknownDispatch)],
+      [attemptRow(fixture.unknownAttempt)],
+      [{ retry_safe: false }]
+    ]);
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(executor).reconcile(
+        fixture.reconciliationCommit
+      )
+    ).resolves.toEqual({ kind: "artifact_retry_unsafe" });
+    expect(executor.statementKinds()).toEqual([
+      "lock_dispatch",
+      "lock_attempt",
+      "check_artifact_retry_safety"
+    ]);
+    expect(executor.statementKinds()).not.toContain("insert_reconciliation");
+    expect(executor.statementKinds()).not.toContain("cas_dispatch");
   });
 
   it("rejects a reconciliation timestamp ahead of the fenced DB clock", async () => {
@@ -1204,18 +1760,6 @@ describe("SQL Inbox V2 outbound transport repository", () => {
       expect(normalizeSql(query.sql)).toContain("on conflict do nothing");
       expect(normalizeSql(query.sql)).not.toContain(" do update");
     }
-
-    const executor = new QueueOutboundExecutor([
-      [{ id: fixture.artifacts[0]?.id }],
-      [{ id: fixture.artifacts[1]?.id }]
-    ]);
-    const repository = createSqlInboxV2OutboundTransportRepository(executor);
-    await expect(
-      repository.appendArtifact(fixture.artifacts[0])
-    ).resolves.toEqual({ kind: "committed" });
-    await expect(
-      repository.appendArtifact(fixture.artifacts[1])
-    ).resolves.toEqual({ kind: "committed" });
 
     for (const commit of [
       fixture.echoAssociation,
@@ -2276,6 +2820,16 @@ function classifyStatement(sql: string): string {
     return "lock_reroute_attempts";
   if (statement.includes("from public.inbox_v2_outbox_work_items"))
     return "lock_provider_io_outbox";
+  if (
+    statement.includes("current_content_fence(content_plan_id)") ||
+    statement.includes("valid_file_pins(block_key)") ||
+    statement.includes(
+      "join inbox_v2_source_thread_binding_capability_entries capability"
+    )
+  )
+    return "validate_provider_capabilities";
+  if (statement.includes("from inbox_v2_file_outbound_dispatch_plans"))
+    return "load_dispatch_content_plan";
   if (statement.includes("pg_advisory_xact_lock"))
     return "lock_policy_advisory";
   if (
@@ -2343,6 +2897,17 @@ function classifyStatement(sql: string): string {
     return "insert_reconciliation";
   if (statement.startsWith("insert into inbox_v2_outbound_dispatch_artifacts"))
     return "insert_artifact";
+  if (
+    statement.includes("from inbox_v2_outbound_dispatch_artifacts") &&
+    statement.includes("as retry_safe")
+  )
+    return "check_artifact_retry_safety";
+  if (
+    statement.includes("from inbox_v2_outbound_dispatch_artifacts") &&
+    statement.includes("order by ordinal") &&
+    statement.includes("for update")
+  )
+    return "lock_artifact_set";
   if (statement.startsWith("insert into public.inbox_v2_outbox_outcomes"))
     return "insert_outbox_outcome";
   if (statement.startsWith("update public.inbox_v2_outbox_work_items"))
@@ -2353,6 +2918,348 @@ function classifyStatement(sql: string): string {
 const providerIoLeaseToken = inboxV2OutboxLeaseTokenSchema.parse(
   `lease-token:provider-io-unit-${"t".repeat(40)}`
 );
+const providerIoContentPlan = (() => {
+  const base = {
+    tenantId: fixture.tenantId,
+    id: "outbound_dispatch_content_plan:provider-io-unit",
+    dispatch: fixture.references.dispatch,
+    message: fixture.queuedDispatch.message,
+    messageRevision: "1",
+    conversation: fixture.references.conversation,
+    timelineItem: fixture.references.timelineItem,
+    route: fixture.queuedDispatch.route,
+    timelineContent: {
+      tenantId: fixture.tenantId,
+      kind: "timeline_content" as const,
+      id: "timeline_content:provider-io-unit"
+    },
+    contentRevision: "1",
+    contentFingerprint: {
+      purposeId: "core:outbound_dispatch_content_plan" as const,
+      keyGeneration: "outbound-content-key:g1",
+      validUntil: "2026-08-18T09:00:00.000Z",
+      hmacSha256: `hmac-sha256:${"a".repeat(64)}`
+    },
+    binding: fixture.route.sourceThreadBinding,
+    bindingRevision: fixture.bindingHeadSnapshot.bindingRevision,
+    capabilityRevision: fixture.route.bindingFence.capabilityRevision,
+    adapterContract: fixture.route.adapterContract,
+    blocks: [
+      {
+        blockKey: "body-1",
+        blockKind: "text" as const,
+        exactFileObjectPin: null,
+        artifactOrdinal: 1
+      }
+    ],
+    artifacts: [
+      {
+        ordinal: 1,
+        grouping: "single" as const,
+        capabilityId: "core:message-text-send" as const,
+        operationId: fixture.route.operationId,
+        blockKeys: ["body-1"]
+      }
+    ],
+    createdAt: fixture.queuedDispatch.createdAt,
+    revision: "1" as const
+  };
+  return inboxV2OutboundDispatchContentPlanSchema.parse({
+    ...base,
+    planDigestSha256: calculateInboxV2OutboundDispatchContentPlanDigest(base)
+  });
+})();
+
+function acceptedProviderResultCommit() {
+  const commit = inboxV2OutboundDispatchAttemptCommitSchema.parse({
+    ...fixture.completeUnknownCommit,
+    attemptAfter: fixture.acceptedAttempt,
+    completionSource: "provider_result",
+    dispatchAfter: fixture.acceptedDispatch
+  });
+  if (commit.kind !== "complete_attempt") {
+    throw new Error("Expected a complete provider-result fixture.");
+  }
+  return commit;
+}
+
+function acceptedProviderResultArtifact() {
+  const attempt = fixture.acceptedAttempt;
+  return inboxV2OutboundDispatchArtifactSchema.parse({
+    tenantId: fixture.tenantId,
+    id: deriveInboxV2OutboundDispatchArtifactId({
+      tenantId: fixture.tenantId,
+      dispatch: attempt.dispatch,
+      route: attempt.route,
+      attempt: {
+        tenantId: fixture.tenantId,
+        kind: "outbound_dispatch_attempt",
+        id: attempt.id
+      },
+      ordinal: 1
+    }),
+    dispatch: attempt.dispatch,
+    route: attempt.route,
+    attempt: {
+      tenantId: fixture.tenantId,
+      kind: "outbound_dispatch_attempt",
+      id: attempt.id
+    },
+    ordinal: 1,
+    state: "accepted",
+    diagnostic: null,
+    createdAt: OUTBOUND_TEST_TIMES.acceptedAt,
+    revision: "1"
+  });
+}
+
+function mixedProviderResultFixture() {
+  const { planDigestSha256: _digest, ...base } = providerIoContentPlan;
+  const changed = {
+    ...base,
+    id: "outbound_dispatch_content_plan:provider-io-unit-mixed",
+    blocks: [
+      {
+        blockKey: "body-1",
+        blockKind: "text" as const,
+        exactFileObjectPin: null,
+        artifactOrdinal: 1
+      },
+      {
+        blockKey: "location-1",
+        blockKind: "location" as const,
+        exactFileObjectPin: null,
+        artifactOrdinal: 2
+      }
+    ],
+    artifacts: [
+      {
+        ordinal: 1,
+        grouping: "split" as const,
+        capabilityId: "core:message-text-send" as const,
+        operationId: fixture.route.operationId,
+        blockKeys: ["body-1"]
+      },
+      {
+        ordinal: 2,
+        grouping: "split" as const,
+        capabilityId: "core:message-location-send" as const,
+        operationId: fixture.route.operationId,
+        blockKeys: ["location-1"]
+      }
+    ]
+  };
+  const contentPlan = inboxV2OutboundDispatchContentPlanSchema.parse({
+    ...changed,
+    planDigestSha256: calculateInboxV2OutboundDispatchContentPlanDigest(changed)
+  });
+  const mixedDiagnostic = createInboxV2MixedProviderArtifactOutcomeDiagnostic(
+    fixture.pendingAttempt.claimToken
+  );
+  const retryableDiagnostic = {
+    codeId: "core:provider-artifact-temporary-failure",
+    retryable: true,
+    correlationToken: "provider:artifact-two-failure",
+    safeOperatorHintId: null
+  } as const;
+  const commit = inboxV2OutboundDispatchAttemptCommitSchema.parse({
+    ...fixture.completeUnknownCommit,
+    attemptAfter: {
+      ...fixture.pendingAttempt,
+      outcome: {
+        kind: "outcome_unknown",
+        completedAt: OUTBOUND_TEST_TIMES.acceptedAt,
+        diagnostic: mixedDiagnostic,
+        requiredAction: "operator_duplicate_risk_decision_required"
+      },
+      completionSource: "provider_result",
+      revision: "2"
+    },
+    completionSource: "provider_result",
+    dispatchAfter: {
+      ...fixture.attemptingDispatch,
+      state: "outcome_unknown",
+      activeAttempt: null,
+      revision: "3",
+      updatedAt: OUTBOUND_TEST_TIMES.acceptedAt
+    }
+  });
+  if (commit.kind !== "complete_attempt")
+    throw new Error("Expected completion");
+  const artifacts = [
+    inboxV2OutboundDispatchArtifactSchema.parse({
+      tenantId: fixture.tenantId,
+      id: deriveInboxV2OutboundDispatchArtifactId({
+        tenantId: fixture.tenantId,
+        dispatch: fixture.pendingAttempt.dispatch,
+        route: fixture.pendingAttempt.route,
+        attempt: {
+          tenantId: fixture.tenantId,
+          kind: "outbound_dispatch_attempt",
+          id: fixture.pendingAttempt.id
+        },
+        ordinal: 1
+      }),
+      dispatch: fixture.pendingAttempt.dispatch,
+      route: fixture.pendingAttempt.route,
+      attempt: {
+        tenantId: fixture.tenantId,
+        kind: "outbound_dispatch_attempt",
+        id: fixture.pendingAttempt.id
+      },
+      ordinal: 1,
+      state: "accepted",
+      diagnostic: null,
+      createdAt: OUTBOUND_TEST_TIMES.acceptedAt,
+      revision: "1"
+    }),
+    inboxV2OutboundDispatchArtifactSchema.parse({
+      tenantId: fixture.tenantId,
+      id: deriveInboxV2OutboundDispatchArtifactId({
+        tenantId: fixture.tenantId,
+        dispatch: fixture.pendingAttempt.dispatch,
+        route: fixture.pendingAttempt.route,
+        attempt: {
+          tenantId: fixture.tenantId,
+          kind: "outbound_dispatch_attempt",
+          id: fixture.pendingAttempt.id
+        },
+        ordinal: 2
+      }),
+      dispatch: fixture.pendingAttempt.dispatch,
+      route: fixture.pendingAttempt.route,
+      attempt: {
+        tenantId: fixture.tenantId,
+        kind: "outbound_dispatch_attempt",
+        id: fixture.pendingAttempt.id
+      },
+      ordinal: 2,
+      state: "failed",
+      diagnostic: retryableDiagnostic,
+      createdAt: OUTBOUND_TEST_TIMES.acceptedAt,
+      revision: "1"
+    })
+  ] as const;
+  return { contentPlan, commit, artifacts };
+}
+
+function providerIoContentPlanWithBindingRevision(bindingRevision: string) {
+  const { planDigestSha256: _digest, ...base } = providerIoContentPlan;
+  const changed = { ...base, bindingRevision };
+  return inboxV2OutboundDispatchContentPlanSchema.parse({
+    ...changed,
+    planDigestSha256: calculateInboxV2OutboundDispatchContentPlanDigest(changed)
+  });
+}
+
+function providerIoContentPlanWithPinnedFile() {
+  const { planDigestSha256: _digest, ...base } = providerIoContentPlan;
+  const changed = {
+    ...base,
+    blocks: [
+      {
+        ...base.blocks[0]!,
+        blockKind: "image" as const,
+        exactFileObjectPin: {
+          file: {
+            tenantId: fixture.tenantId,
+            kind: "file" as const,
+            id: "file:provider-open-unit"
+          },
+          fileRevision: "2",
+          fileVersion: {
+            tenantId: fixture.tenantId,
+            kind: "file_version" as const,
+            id: "file_version:provider-open-unit-v1"
+          },
+          objectVersion: {
+            tenantId: fixture.tenantId,
+            kind: "file_object_version" as const,
+            id: "file_object_version:provider-open-unit-v1"
+          }
+        }
+      }
+    ]
+  };
+  return inboxV2OutboundDispatchContentPlanSchema.parse({
+    ...changed,
+    planDigestSha256: calculateInboxV2OutboundDispatchContentPlanDigest(changed)
+  });
+}
+
+function providerIoContentPlanRow(
+  plan: typeof providerIoContentPlan = providerIoContentPlan
+) {
+  const block = plan.blocks[0]!;
+  const pin = block.exactFileObjectPin;
+  return {
+    plan_id: plan.id,
+    dispatch_id: plan.dispatch.id,
+    message_id: plan.message.id,
+    message_revision: plan.messageRevision,
+    conversation_id: plan.conversation.id,
+    timeline_item_id: plan.timelineItem.id,
+    route_id: plan.route.id,
+    content_id: plan.timelineContent.id,
+    content_revision: plan.contentRevision,
+    content_fingerprint_purpose_id: plan.contentFingerprint.purposeId,
+    content_fingerprint_key_generation: plan.contentFingerprint.keyGeneration,
+    content_fingerprint_valid_until: plan.contentFingerprint.validUntil,
+    content_fingerprint_hmac_sha256: plan.contentFingerprint.hmacSha256,
+    binding_id: plan.binding.id,
+    binding_revision: plan.bindingRevision,
+    capability_revision: plan.capabilityRevision,
+    adapter_contract_id: plan.adapterContract.contractId,
+    adapter_contract_version: plan.adapterContract.contractVersion,
+    adapter_contract_declaration_revision:
+      plan.adapterContract.declarationRevision,
+    adapter_surface_id: plan.adapterContract.surfaceId,
+    adapter_loaded_by_trusted_service_id:
+      plan.adapterContract.loadedByTrustedServiceId,
+    adapter_loaded_at: plan.adapterContract.loadedAt,
+    plan_digest_sha256: plan.planDigestSha256,
+    plan_created_at: plan.createdAt,
+    artifact_id: "outbound_dispatch_artifact_plan:provider-io-unit",
+    artifact_ordinal: 1,
+    grouping: "single",
+    capability_id: "core:message-text-send",
+    operation_id: plan.artifacts[0]!.operationId,
+    artifact_block_ordinal: 1,
+    content_block_ordinal: 0,
+    block_key: block.blockKey,
+    block_kind: block.blockKind,
+    file_id: pin?.file.id ?? null,
+    file_revision: pin?.fileRevision ?? null,
+    file_version_id: pin?.fileVersion.id ?? null,
+    object_version_id: pin?.objectVersion.id ?? null
+  };
+}
+
+function providerIoContentPlanRows(
+  plan: ReturnType<typeof mixedProviderResultFixture>["contentPlan"]
+) {
+  const base = providerIoContentPlanRow(plan);
+  return plan.artifacts.flatMap((artifact) =>
+    artifact.blockKeys.map((blockKey, artifactBlockIndex) => {
+      const contentBlockIndex = plan.blocks.findIndex(
+        (block) => block.blockKey === blockKey
+      );
+      const block = plan.blocks[contentBlockIndex]!;
+      return {
+        ...base,
+        artifact_id: `outbound_dispatch_artifact_plan:provider-io-unit-${artifact.ordinal}`,
+        artifact_ordinal: artifact.ordinal,
+        grouping: artifact.grouping,
+        capability_id: artifact.capabilityId,
+        operation_id: artifact.operationId,
+        artifact_block_ordinal: artifactBlockIndex + 1,
+        content_block_ordinal: contentBlockIndex,
+        block_key: block.blockKey,
+        block_kind: block.blockKind
+      };
+    })
+  );
+}
 const providerIoWorkerId = inboxV2OutboxWorkerIdSchema.parse(
   "core:provider-dispatch-worker"
 );
@@ -2450,6 +3357,7 @@ function bindingFenceRow(
     remote_access_revision: head.remoteAccess.revision,
     administrative_revision: head.administrative.revision,
     capability_revision: head.fence.capabilityRevision,
+    provider_access_revision: input.bindingHeadSnapshot.providerAccessRevision,
     route_descriptor_revision: head.fence.routeDescriptorRevision,
     remote_access_state: head.remoteAccess.state,
     administrative_state: head.administrative.state,
@@ -2604,6 +3512,27 @@ function attemptRow(attempt: typeof fixture.pendingAttempt) {
     unknown_required_action:
       outcome.kind === "outcome_unknown" ? outcome.requiredAction : null,
     revision: attempt.revision
+  };
+}
+
+function artifactRow(
+  artifact: ReturnType<typeof acceptedProviderResultArtifact>
+) {
+  return {
+    id: artifact.id,
+    dispatch_id: artifact.dispatch.id,
+    route_id: artifact.route.id,
+    attempt_id: artifact.attempt.id,
+    message_id: fixture.references.message.id,
+    ordinal: artifact.ordinal,
+    state: artifact.state,
+    diagnostic_code_id: artifact.diagnostic?.codeId ?? null,
+    diagnostic_retryable: artifact.diagnostic?.retryable ?? null,
+    diagnostic_correlation_token: artifact.diagnostic?.correlationToken ?? null,
+    diagnostic_safe_operator_hint_id:
+      artifact.diagnostic?.safeOperatorHintId ?? null,
+    created_at: artifact.createdAt,
+    revision: artifact.revision
   };
 }
 

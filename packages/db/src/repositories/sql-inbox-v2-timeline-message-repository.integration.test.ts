@@ -11,6 +11,7 @@ import {
   INBOX_V2_TIMELINE_ITEM_SCHEMA_ID,
   INBOX_V2_TIMELINE_SCHEMA_VERSION,
   INBOX_V2_CORE_CONVERSATION_CLIENT_ROLE_IDS,
+  calculateInboxV2MessageContentDigest,
   inboxV2BigintCounterSchema,
   inboxV2CatalogIdSchema,
   inboxV2ClientIdSchema,
@@ -59,7 +60,10 @@ import {
   type InboxV2ClientId,
   type InboxV2ConversationId,
   type InboxV2EmployeeId,
+  type InboxV2Message,
   type InboxV2MessageCreationCommit,
+  type InboxV2TimelineContent,
+  type InboxV2TimelineItem,
   type InboxV2SystemEventTimelineCreationCommit
 } from "@hulee/contracts";
 import { sql, type SQL } from "drizzle-orm";
@@ -103,11 +107,18 @@ import {
   createHuleeDatabase,
   type HuleeDatabase
 } from "../client";
+import { createSqlInboxV2AttachmentMaterializationTerminalCommandService } from "../internal/attachment-materialization";
 import { createSqlEmployeeDirectoryRepository } from "./sql-employee-directory-repository";
 import { createSqlInboxV2ClientMergeRepository } from "./sql-inbox-v2-client-merge-repository";
 import { createSqlInboxV2ConversationClientLinkRepository } from "./sql-inbox-v2-conversation-client-link-repository";
 import { createSqlInboxV2ConversationRepository } from "./sql-inbox-v2-conversation-repository";
 import { createSqlInboxV2ExternalThreadRepository } from "./sql-inbox-v2-external-thread-repository";
+import {
+  INBOX_V2_ATTACHMENT_MATERIALIZATION_RESERVATION_COMMAND_TYPE_ID,
+  calculateInboxV2AttachmentContentMutationFenceSha256,
+  createSqlInboxV2FileObjectRepository,
+  type ReserveInboxV2AttachmentMaterializationInput
+} from "./sql-inbox-v2-file-object-repository";
 import {
   computeInboxV2LeafHashDigest,
   computeInboxV2TenantStreamManifestDigest,
@@ -124,6 +135,10 @@ import {
   deriveInboxV2SourceOccurrenceResolutionTransitionId
 } from "./sql-inbox-v2-outbound-transport-repository";
 import { createSqlInboxV2SourceExternalIdentityRepository } from "./sql-inbox-v2-source-external-identity-repository";
+import {
+  createSqlInboxV2SourceAttachmentReservationAuthorizationPreparer,
+  createSqlInboxV2SourceAttachmentReservationCommandPort
+} from "./sql-inbox-v2-source-attachment-reservation-command";
 import { createSqlInboxV2SourceOccurrenceRepository } from "./sql-inbox-v2-source-occurrence-repository";
 import { createSqlInboxV2SourceThreadBindingRepository } from "./sql-inbox-v2-source-thread-binding-repository";
 import { createSqlInboxV2ParticipantMembershipRepository } from "./sql-inbox-v2-participant-membership-repository";
@@ -188,7 +203,7 @@ const clientMergeResolverId = inboxV2ClientMergeTrustedServiceIdSchema.parse(
 describe("SQL Inbox V2 timeline/message PostgreSQL fixtures", () => {
   it("builds contract-valid lifecycle and cross-ledger race commits", () => {
     const creation = creationCommit("contract-lifecycle");
-    const edit = editMutation(creation, "contract-edit", "Edited", "e");
+    const edit = editMutation(creation, "contract-edit", "Edited");
     expect(privacyMutation(edit, "contract-privacy")).toMatchObject({
       revision: { change: { kind: "privacy_erasure_tombstone" } }
     });
@@ -203,7 +218,7 @@ describe("SQL Inbox V2 timeline/message PostgreSQL fixtures", () => {
     });
     expect(
       retentionMutation(
-        editMutation(reply, "contract-retention-edit", "Retained", "9"),
+        editMutation(reply, "contract-retention-edit", "Retained"),
         "contract-retention"
       )
     ).toMatchObject({
@@ -553,6 +568,929 @@ describePostgres(
       ]);
       acceptedAtomicSource = { creation, authorized, context };
     });
+
+    const runAttachmentTerminalAcceptance = async () => {
+      const suffix = "atomic-attachment-terminal";
+      const creation = sourceCreationCommitWithPendingAttachment(suffix);
+      await seedExternalCreationAnchors(db, creation, suffix);
+      const operator = await seedProviderResultOperator(db, creation, suffix);
+      const requestedStreamEpoch = `stream-epoch:${suffix}-${runId}`;
+      await db.transaction(async (transaction) => {
+        // The pre-existing Conversation fixture owns historical position 1.
+        // Seed that checkpoint as imported history without weakening the
+        // production initial-state guard exercised by normal writers.
+        await transaction.execute(
+          sql`set local session_replication_role = replica`
+        );
+        await transaction.execute(sql`
+          insert into inbox_v2_tenant_stream_heads (
+            tenant_id, stream_epoch, last_position, min_retained_position,
+            revision, created_at, updated_at
+          ) values (
+            ${tenantId}, ${requestedStreamEpoch}, 1, 0, 1,
+            ${creation.timelineAllocation.conversationBefore.createdAt},
+            ${creation.timelineAllocation.conversationBefore.createdAt}
+          )
+          on conflict (tenant_id) do nothing
+        `);
+        await transaction.execute(
+          sql`set local session_replication_role = origin`
+        );
+      });
+      const streamBeforeSource = await db.execute<{
+        stream_epoch: string;
+      }>(sql`
+        select stream_epoch
+          from inbox_v2_tenant_stream_heads
+         where tenant_id = ${tenantId}
+      `);
+      const streamEpoch = streamBeforeSource.rows[0]?.stream_epoch;
+      if (streamEpoch === undefined) {
+        throw new Error(
+          "Attachment terminal fixture requires a tenant stream."
+        );
+      }
+      const sourceAuthorized = authorizedSourceMaterializationFixture({
+        creation,
+        operator,
+        streamEpoch,
+        suffix
+      });
+      const authorizationCoordinator =
+        createSqlInboxV2AuthorizedCommandCoordinator(db);
+      const sourceApplied =
+        await authorizationCoordinator.withAuthorizedAtomicMaterialization(
+          sourceAuthorized.input,
+          async (context) => {
+            const prepared = await prepareInboxV2MessageCreation(context, {
+              commit: creation
+            });
+            if (prepared.kind !== "ready") {
+              throw new Error(
+                `Attachment source Message preparation failed: ${prepared.kind}`
+              );
+            }
+            return prepared.capability;
+          },
+          async (context, capability) => {
+            const sealed = await sealInboxV2PreparedMessageCreation(context, {
+              capability
+            });
+            return {
+              result: { messageId: sealed.message.id },
+              receipt: sealed.receipt
+            };
+          }
+        );
+      if (sourceApplied.kind !== "applied") {
+        throw new Error(
+          `Attachment source Message was not applied: ${sourceApplied.kind}`
+        );
+      }
+      const sourceStreamPosition = sourceApplied.status.streamPosition;
+      const accessExpiryReservationStreamPosition = String(
+        BigInt(sourceStreamPosition) + 1n
+      );
+      const accessExpiryRefreshStreamPosition = String(
+        BigInt(sourceStreamPosition) + 2n
+      );
+      const firstReservationStreamPosition = String(
+        BigInt(sourceStreamPosition) + 3n
+      );
+      const secondReservationStreamPosition = String(
+        BigInt(sourceStreamPosition) + 4n
+      );
+      const claimedTombstoneReservationStreamPosition = String(
+        BigInt(sourceStreamPosition) + 5n
+      );
+      const staleReservationStreamPosition = String(
+        BigInt(sourceStreamPosition) + 6n
+      );
+      const firstTerminalStreamPosition = String(
+        BigInt(sourceStreamPosition) + 7n
+      );
+      const secondTerminalStreamPosition = String(
+        BigInt(sourceStreamPosition) + 8n
+      );
+      const privacyStreamPosition = String(BigInt(sourceStreamPosition) + 9n);
+      const attachments = requirePendingAttachments(creation);
+      const attachment = attachments[0]!;
+      const secondAttachment = attachments[1]!;
+      const claimedTombstoneAttachment = attachments[2]!;
+      const staleAttachment = attachments[3]!;
+      const accessExpiryAttachment = attachments[4]!;
+      const occurrence = requireSourceOccurrence(creation);
+      const accessExpiryReservationInput = attachmentReservationInput({
+        creation,
+        attachment: accessExpiryAttachment,
+        sourceAuthorized,
+        causeStreamPosition: sourceStreamPosition,
+        suffix: `${suffix}-0-access-expiry`
+      });
+      const accessExpiryReservationAuthorized =
+        authorizedAttachmentReservationFixture({
+          creation,
+          reservation: accessExpiryReservationInput,
+          resourceHeadId: sourceAuthorized.resourceHeadId,
+          streamEpoch,
+          suffix: `${suffix}-0-access-expiry`,
+          authorizationLifetimeMs: 5_000
+        });
+      const reservationInput = attachmentReservationInput({
+        creation,
+        attachment,
+        sourceAuthorized,
+        causeStreamPosition: sourceStreamPosition,
+        suffix: `${suffix}-a-first`
+      });
+      const secondReservationInput = attachmentReservationInput({
+        creation,
+        attachment: secondAttachment,
+        sourceAuthorized,
+        causeStreamPosition: sourceStreamPosition,
+        suffix: `${suffix}-b-second`
+      });
+      const claimedTombstoneReservationInput = attachmentReservationInput({
+        creation,
+        attachment: claimedTombstoneAttachment,
+        sourceAuthorized,
+        causeStreamPosition: sourceStreamPosition,
+        suffix: `${suffix}-c-claimed-tombstone`
+      });
+      const staleReservationInput = attachmentReservationInput({
+        creation,
+        attachment: staleAttachment,
+        sourceAuthorized,
+        causeStreamPosition: sourceStreamPosition,
+        suffix: `${suffix}-z-stale`
+      });
+      const fileRepository = createSqlInboxV2FileObjectRepository(db);
+
+      const accessExpiryReserved =
+        await authorizationCoordinator.withAuthorizedCommandMutation(
+          accessExpiryReservationAuthorized.input,
+          async (context) => ({
+            result: await fileRepository.reserveMaterialization(
+              context,
+              accessExpiryReservationInput
+            )
+          })
+        );
+      expect(accessExpiryReserved).toMatchObject({
+        kind: "applied",
+        result: {
+          kind: "reserved",
+          jobId: accessExpiryReservationInput.jobId
+        },
+        status: { streamPosition: accessExpiryReservationStreamPosition }
+      });
+      const accessExpiryClaims = await fileRepository.claimMaterializationJobs({
+        tenantId,
+        workerId: "core:attachment-materialization-worker",
+        batchSize: 1,
+        leaseDurationSeconds: 300
+      });
+      expect(accessExpiryClaims).toHaveLength(1);
+      const accessExpiryClaim = accessExpiryClaims[0]!;
+      expect(accessExpiryClaim).toMatchObject({
+        jobId: accessExpiryReservationInput.jobId,
+        leaseGeneration: "1",
+        expectedJobRevision: "2"
+      });
+      const accessExpiryDeadline = await db.execute<{
+        authorization_not_after: string;
+      }>(sql`
+        select to_char(
+                 authorization_not_after at time zone 'UTC',
+                 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+               ) as authorization_not_after
+          from inbox_v2_auth_command_records
+         where tenant_id = ${tenantId}
+           and id = ${accessExpiryReservationAuthorized.commandId}
+      `);
+      const authorizationNotAfter =
+        accessExpiryDeadline.rows[0]?.authorization_not_after;
+      if (authorizationNotAfter === undefined) {
+        throw new Error("Access-expiry fixture requires its command deadline.");
+      }
+      const expirationWaitMs = Math.max(
+        0,
+        Date.parse(authorizationNotAfter) - Date.now() + 25
+      );
+      if (expirationWaitMs > 6_000) {
+        throw new Error(
+          "Access-expiry fixture deadline exceeded its test bound."
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, expirationWaitMs));
+      await expect(
+        fileRepository.authorizeMaterializationIo(accessExpiryClaim)
+      ).resolves.toBe("authorization_refresh_required");
+      const refreshCandidates =
+        await fileRepository.listPendingMaterializationAuthorizationRefreshCandidates(
+          { tenantId, limit: 10 }
+        );
+      expect(refreshCandidates).toEqual([
+        {
+          tenantId,
+          jobId: accessExpiryReservationInput.jobId,
+          expectedJobRevision: "3"
+        }
+      ]);
+      const refreshAuthorization =
+        createSqlInboxV2SourceAttachmentReservationAuthorizationPreparer(db, {
+          trustedServiceId: "core:source-runtime"
+        });
+      const refreshCommands =
+        createSqlInboxV2SourceAttachmentReservationCommandPort(
+          db,
+          refreshAuthorization
+        );
+      await expect(
+        refreshCommands.refreshPendingAuthorization(refreshCandidates[0]!)
+      ).resolves.toEqual({
+        kind: "refreshed",
+        resultingJobRevision: "4"
+      });
+      const streamAfterRefresh = await db.execute<{
+        last_position: string;
+      }>(sql`
+        select last_position::text as last_position
+          from inbox_v2_tenant_stream_heads
+         where tenant_id = ${tenantId}
+      `);
+      expect(streamAfterRefresh.rows).toEqual([
+        { last_position: accessExpiryRefreshStreamPosition }
+      ]);
+      const refreshedAccessClaims =
+        await fileRepository.claimMaterializationJobs({
+          tenantId,
+          workerId: "core:attachment-materialization-worker",
+          batchSize: 1,
+          leaseDurationSeconds: 300
+        });
+      expect(refreshedAccessClaims).toHaveLength(1);
+      const refreshedAccessClaim = refreshedAccessClaims[0]!;
+      expect(refreshedAccessClaim).toMatchObject({
+        jobId: accessExpiryReservationInput.jobId,
+        leaseGeneration: "2",
+        expectedJobRevision: "5",
+        reservationAuthority: {
+          commandTypeId: "core:attachment.materialization.reauthorize"
+        }
+      });
+      await expect(
+        fileRepository.authorizeMaterializationIo(refreshedAccessClaim)
+      ).resolves.toBe("authorized");
+
+      // Prepare later commands after the intentionally delayed authorization
+      // refresh so tenant-stream timestamps remain monotonic.
+      const reservationAuthorized = authorizedAttachmentReservationFixture({
+        creation,
+        reservation: reservationInput,
+        resourceHeadId: sourceAuthorized.resourceHeadId,
+        streamEpoch,
+        suffix: `${suffix}-a-first`
+      });
+      const secondReservationAuthorized =
+        authorizedAttachmentReservationFixture({
+          creation,
+          reservation: secondReservationInput,
+          resourceHeadId: sourceAuthorized.resourceHeadId,
+          streamEpoch,
+          suffix: `${suffix}-b-second`
+        });
+      const claimedTombstoneReservationAuthorized =
+        authorizedAttachmentReservationFixture({
+          creation,
+          reservation: claimedTombstoneReservationInput,
+          resourceHeadId: sourceAuthorized.resourceHeadId,
+          streamEpoch,
+          suffix: `${suffix}-c-claimed-tombstone`
+        });
+      const staleReservationAuthorized = authorizedAttachmentReservationFixture(
+        {
+          creation,
+          reservation: staleReservationInput,
+          resourceHeadId: sourceAuthorized.resourceHeadId,
+          streamEpoch,
+          suffix: `${suffix}-z-stale`
+        }
+      );
+
+      const reserved =
+        await authorizationCoordinator.withAuthorizedCommandMutation(
+          reservationAuthorized.input,
+          async (context) => ({
+            result: await fileRepository.reserveMaterialization(
+              context,
+              reservationInput
+            )
+          })
+        );
+      expect(reserved).toMatchObject({
+        kind: "applied",
+        result: {
+          kind: "reserved",
+          jobId: reservationInput.jobId,
+          fileId: reservationInput.file.id
+        },
+        status: { streamPosition: firstReservationStreamPosition }
+      });
+      const secondReserved =
+        await authorizationCoordinator.withAuthorizedCommandMutation(
+          secondReservationAuthorized.input,
+          async (context) => ({
+            result: await fileRepository.reserveMaterialization(
+              context,
+              secondReservationInput
+            )
+          })
+        );
+      expect(secondReserved).toMatchObject({
+        kind: "applied",
+        result: {
+          kind: "reserved",
+          jobId: secondReservationInput.jobId,
+          fileId: secondReservationInput.file.id
+        },
+        status: { streamPosition: secondReservationStreamPosition }
+      });
+      const claimedTombstoneReserved =
+        await authorizationCoordinator.withAuthorizedCommandMutation(
+          claimedTombstoneReservationAuthorized.input,
+          async (context) => ({
+            result: await fileRepository.reserveMaterialization(
+              context,
+              claimedTombstoneReservationInput
+            )
+          })
+        );
+      expect(claimedTombstoneReserved).toMatchObject({
+        kind: "applied",
+        result: {
+          kind: "reserved",
+          jobId: claimedTombstoneReservationInput.jobId
+        },
+        status: { streamPosition: claimedTombstoneReservationStreamPosition }
+      });
+      const staleReserved =
+        await authorizationCoordinator.withAuthorizedCommandMutation(
+          staleReservationAuthorized.input,
+          async (context) => ({
+            result: await fileRepository.reserveMaterialization(
+              context,
+              staleReservationInput
+            )
+          })
+        );
+      expect(staleReserved).toMatchObject({
+        kind: "applied",
+        result: { kind: "reserved", jobId: staleReservationInput.jobId },
+        status: { streamPosition: staleReservationStreamPosition }
+      });
+
+      const timelineRepository = createSqlInboxV2TimelineMessageRepository(db);
+      const claims = await fileRepository.claimMaterializationJobs({
+        tenantId,
+        workerId: "core:attachment-materialization-worker",
+        batchSize: 1,
+        leaseDurationSeconds: 300
+      });
+      expect(claims).toHaveLength(1);
+      const claim = claims[0]!;
+      expect(claim).toMatchObject({
+        jobId: reservationInput.jobId,
+        attachmentId: attachment.attachmentId,
+        sourceOccurrenceId: occurrence.id,
+        reservationAuthority: {
+          commandId: reservationAuthorized.commandId,
+          commandTypeId:
+            INBOX_V2_ATTACHMENT_MATERIALIZATION_RESERVATION_COMMAND_TYPE_ID,
+          resourceHeadId: sourceAuthorized.resourceHeadId,
+          resourceAccessRevision: "1",
+          structuralRelationRevision: "1",
+          collaboratorSetRevision: "1"
+        }
+      });
+      await expect(
+        fileRepository.countNonterminalMaterializationsForReservationNamespace({
+          tenantId,
+          reservationNamespaceGeneration: "attachment-namespace-v1"
+        })
+      ).resolves.toBe("5");
+      await expect(
+        fileRepository.authorizeMaterializationIo(claim)
+      ).resolves.toBe("authorized");
+
+      const terminalService =
+        createSqlInboxV2AttachmentMaterializationTerminalCommandService(db);
+      const storage = {
+        storageKey: reservationInput.reservation.storageKey,
+        storageVersionId: `storage-version:${suffix}-${runId}`,
+        checksumSha256: atomicSourceSha256(`${suffix}:ready-bytes`),
+        sizeBytes: 73,
+        mediaType: "image/jpeg",
+        putOutcome: "created" as const
+      };
+      const applied = await terminalService.ready({ claim, storage });
+      expect(applied).toMatchObject({
+        kind: "applied",
+        result: {
+          messageId: creation.message.id,
+          messageRevision: "2",
+          contentId: creation.content.id,
+          contentRevision: "2",
+          materialization: {
+            kind: "applied",
+            outcome: "ready",
+            jobId: reservationInput.jobId,
+            attachmentId: attachment.attachmentId,
+            attachmentRevision: "2",
+            fileId: reservationInput.file.id,
+            fileVersionId: reservationInput.reservation.fileVersionId,
+            objectVersionId: reservationInput.reservation.objectVersionId
+          }
+        },
+        status: { streamPosition: firstTerminalStreamPosition }
+      });
+
+      expect(
+        await loadAtomicAttachmentTerminalState(db, {
+          creation,
+          reservation: reservationInput,
+          storageVersionId: storage.storageVersionId,
+          terminalStreamPosition: firstTerminalStreamPosition
+        })
+      ).toEqual({
+        message_revision: "2",
+        content_revision: "2",
+        attachment_state: "ready",
+        attachment_file_id: reservationInput.file.id,
+        attachment_file_version_id: reservationInput.reservation.fileVersionId,
+        attachment_object_version_id:
+          reservationInput.reservation.objectVersionId,
+        anchor_state: "ready",
+        anchor_revision: "2",
+        file_state: "ready",
+        file_revision: "2",
+        object_version_count: "1",
+        file_version_count: "1",
+        parent_link_count: "1",
+        job_state: "ready",
+        job_revision: "3",
+        job_result_file_version_id: reservationInput.reservation.fileVersionId,
+        job_result_object_version_id:
+          reservationInput.reservation.objectVersionId,
+        job_result_content_revision: "2",
+        storage_version_identity: storage.storageVersionId,
+        stream_position: firstTerminalStreamPosition,
+        terminal_event_count: "1",
+        terminal_audit_count: "1"
+      });
+
+      const causeClosure = await db.execute<{
+        canonical_event_count: string;
+        legacy_shadow_count: string;
+        attribution_count: string;
+      }>(sql`
+        select (
+                 select count(*)::text
+                   from inbox_v2_domain_events event_row
+                  where event_row.tenant_id = ${tenantId}
+                    and event_row.id = ${claim.causeEventId}
+               ) as canonical_event_count,
+               (
+                 select count(*)::text
+                   from event_store event_row
+                  where event_row.tenant_id = ${tenantId}
+                    and event_row.id = ${claim.causeEventId}
+               ) as legacy_shadow_count,
+               (
+                 select count(*)::text
+                   from inbox_v2_action_attributions attribution_row
+                  where attribution_row.tenant_id = ${tenantId}
+                    and attribution_row.automation_cause_event_id =
+                        ${claim.causeEventId}
+               ) as attribution_count
+      `);
+      expect(causeClosure.rows).toEqual([
+        {
+          canonical_event_count: "1",
+          legacy_shadow_count: "0",
+          attribution_count: "1"
+        }
+      ]);
+
+      const authorizationClosure = await db.execute<{
+        valid: boolean;
+        rejects_forged_result: boolean;
+        rejects_forged_correlation: boolean;
+        rejects_empty_revision_delta: boolean;
+      }>(sql`
+        select public.inbox_v2_auth_attachment_message_change_valid(
+                 change_row.tenant_id,
+                 change_row.stream_commit_id,
+                 change_row.mutation_id,
+                 change_row.id,
+                 change_row.stream_position,
+                 stream_row.committed_at,
+                 command_row.actor_trusted_service_id,
+                 stream_row.correlation_id,
+                 command_row.result_reference,
+                 audit_row.evidence_reference,
+                 audit_row.revision_delta_hash
+               ) as valid,
+               not public.inbox_v2_auth_attachment_message_change_valid(
+                 change_row.tenant_id,
+                 change_row.stream_commit_id,
+                 change_row.mutation_id,
+                 change_row.id,
+                 change_row.stream_position,
+                 stream_row.committed_at,
+                 command_row.actor_trusted_service_id,
+                 stream_row.correlation_id,
+                 '{}'::jsonb,
+                 audit_row.evidence_reference,
+                 audit_row.revision_delta_hash
+               ) as rejects_forged_result,
+               not public.inbox_v2_auth_attachment_message_change_valid(
+                 change_row.tenant_id,
+                 change_row.stream_commit_id,
+                 change_row.mutation_id,
+                 change_row.id,
+                 change_row.stream_position,
+                 stream_row.committed_at,
+                 command_row.actor_trusted_service_id,
+                 'correlation:forged-msg003',
+                 command_row.result_reference,
+                 audit_row.evidence_reference,
+                 audit_row.revision_delta_hash
+               ) as rejects_forged_correlation,
+               not public.inbox_v2_auth_attachment_message_change_valid(
+                 change_row.tenant_id,
+                 change_row.stream_commit_id,
+                 change_row.mutation_id,
+                 change_row.id,
+                 change_row.stream_position,
+                 stream_row.committed_at,
+                 command_row.actor_trusted_service_id,
+                 stream_row.correlation_id,
+                 command_row.result_reference,
+                 audit_row.evidence_reference,
+                 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+               ) as rejects_empty_revision_delta
+          from inbox_v2_auth_command_records command_row
+          join inbox_v2_tenant_stream_commits stream_row
+            on stream_row.tenant_id = command_row.tenant_id
+           and stream_row.mutation_id = command_row.mutation_id
+          join inbox_v2_tenant_stream_changes change_row
+            on change_row.tenant_id = stream_row.tenant_id
+           and change_row.stream_commit_id = stream_row.id
+           and change_row.mutation_id = stream_row.mutation_id
+          join inbox_v2_auth_audit_events audit_row
+            on audit_row.tenant_id = command_row.tenant_id
+           and audit_row.mutation_id = command_row.mutation_id
+         where command_row.tenant_id = ${tenantId}
+           and command_row.command_type_id =
+               'core:attachment.materialization.complete'
+           and change_row.entity_id = ${creation.message.id}
+      `);
+      expect(authorizationClosure.rows).toEqual([
+        {
+          valid: true,
+          rejects_forged_result: true,
+          rejects_forged_correlation: true,
+          rejects_empty_revision_delta: true
+        }
+      ]);
+
+      const orphanAttributionId = `action_attribution:${suffix}-orphan-cause-${runId}`;
+      const orphanCauseEventId = `event:${suffix}-orphan-cause-${runId}`;
+      const causeGuardAt = new Date().toISOString();
+      const orphanCauseError = await capturePostgresError(
+        db.execute(sql`
+          insert into inbox_v2_action_attributions (
+            tenant_id, id, conversation_id, app_actor_kind,
+            app_trusted_service_id, automation_kind,
+            automation_cause_event_id, automation_correlation_id,
+            automation_caused_at, created_at
+          ) values (
+            ${tenantId}, ${orphanAttributionId},
+            ${creation.message.conversation.id}, 'trusted_service',
+            'core:attachment-materialization-worker', 'system_event',
+            ${orphanCauseEventId},
+            ${`correlation:${suffix}-orphan-cause-${runId}`},
+            ${causeGuardAt}, ${causeGuardAt}
+          )
+        `)
+      );
+      expect(postgresSqlState(orphanCauseError)).toBe("23503");
+      expect(postgresErrorText(orphanCauseError)).toContain(
+        "inbox_v2.action_attribution_cause_event_missing"
+      );
+
+      const legacyAttributionId = `action_attribution:${suffix}-legacy-cause-${runId}`;
+      const legacyCauseEventId = `event:${suffix}-legacy-cause-${runId}`;
+      await db.transaction(async (transaction) => {
+        await transaction.execute(sql`
+          insert into inbox_v2_action_attributions (
+            tenant_id, id, conversation_id, app_actor_kind,
+            app_trusted_service_id, automation_kind,
+            automation_cause_event_id, automation_correlation_id,
+            automation_caused_at, created_at
+          ) values (
+            ${tenantId}, ${legacyAttributionId},
+            ${creation.message.conversation.id}, 'trusted_service',
+            'core:attachment-materialization-worker', 'system_event',
+            ${legacyCauseEventId},
+            ${`correlation:${suffix}-legacy-cause-${runId}`},
+            ${causeGuardAt}, ${causeGuardAt}
+          )
+        `);
+        await transaction.execute(sql`
+          insert into event_store (
+            id, tenant_id, type, version, occurred_at, idempotency_key,
+            payload, created_at, updated_at
+          ) values (
+            ${legacyCauseEventId}, ${tenantId},
+            'inbox_v2.legacy_attachment_cause', 'v1', ${causeGuardAt},
+            ${`db005-${suffix}-legacy-cause-${runId}`},
+            ${JSON.stringify({ kind: "legacy_attachment_cause" })}::jsonb,
+            ${causeGuardAt}, ${causeGuardAt}
+          )
+        `);
+        await transaction.execute(sql`set constraints all immediate`);
+      });
+      const legacyDeleteError = await capturePostgresError(
+        db.execute(sql`
+          delete from event_store
+           where tenant_id = ${tenantId}
+             and id = ${legacyCauseEventId}
+        `)
+      );
+      expect(postgresSqlState(legacyDeleteError)).toBe("23503");
+      expect(postgresErrorText(legacyDeleteError)).toContain(
+        "inbox_v2.action_attribution_legacy_cause_event_referenced"
+      );
+
+      const secondClaims = await fileRepository.claimMaterializationJobs({
+        tenantId,
+        workerId: "core:attachment-materialization-worker",
+        batchSize: 1,
+        leaseDurationSeconds: 300
+      });
+      expect(secondClaims).toHaveLength(1);
+      const secondClaim = secondClaims[0]!;
+      expect(secondClaim).toMatchObject({
+        jobId: secondReservationInput.jobId,
+        attachmentId: secondAttachment.attachmentId,
+        sourceOccurrenceId: occurrence.id,
+        reservationAuthority: {
+          commandId: secondReservationAuthorized.commandId
+        }
+      });
+      await expect(
+        fileRepository.authorizeMaterializationIo(secondClaim)
+      ).resolves.toBe("authorized");
+      const secondStorage = {
+        storageKey: secondReservationInput.reservation.storageKey,
+        storageVersionId: `storage-version:${suffix}-second-${runId}`,
+        checksumSha256: atomicSourceSha256(`${suffix}:second-ready-bytes`),
+        sizeBytes: 41,
+        mediaType: "image/jpeg",
+        putOutcome: "created" as const
+      };
+      await expect(
+        terminalService.ready({ claim: secondClaim, storage: secondStorage })
+      ).resolves.toMatchObject({
+        kind: "applied",
+        result: {
+          messageId: creation.message.id,
+          messageRevision: "3",
+          contentId: creation.content.id,
+          contentRevision: "3",
+          materialization: {
+            outcome: "ready",
+            jobId: secondReservationInput.jobId,
+            attachmentId: secondAttachment.attachmentId
+          }
+        },
+        status: { streamPosition: secondTerminalStreamPosition }
+      });
+
+      await expect(
+        terminalService.ready({
+          claim,
+          storage: { ...storage, putOutcome: "already_exists" }
+        })
+      ).resolves.toMatchObject({
+        kind: "already_applied",
+        status: { streamPosition: firstTerminalStreamPosition }
+      });
+      const streamAfterReplay = await db.execute<{ last_position: string }>(sql`
+        select last_position::text as last_position
+          from inbox_v2_tenant_stream_heads
+         where tenant_id = ${tenantId}
+      `);
+      expect(streamAfterReplay.rows).toEqual([
+        { last_position: secondTerminalStreamPosition }
+      ]);
+
+      const claimedBeforePrivacy =
+        await fileRepository.claimMaterializationJobs({
+          tenantId,
+          workerId: "core:attachment-materialization-worker",
+          batchSize: 1,
+          leaseDurationSeconds: 300
+        });
+      expect(claimedBeforePrivacy).toHaveLength(1);
+      const privacyClaim = claimedBeforePrivacy[0]!;
+      expect(privacyClaim).toMatchObject({
+        jobId: claimedTombstoneReservationInput.jobId,
+        attachmentId: claimedTombstoneAttachment.attachmentId,
+        leaseGeneration: "1"
+      });
+      const [currentMessage, currentContent, currentTimeline] =
+        await Promise.all([
+          timelineRepository.findMessage({
+            tenantId,
+            messageId: creation.message.id
+          }),
+          timelineRepository.findTimelineContent({
+            tenantId,
+            contentId: creation.content.id
+          }),
+          timelineRepository.listTimeline({
+            tenantId,
+            conversationId: creation.message.conversation.id,
+            anchor: {
+              kind: "around",
+              timelineItemId: creation.timelineAllocation.items[0]!.id
+            },
+            limit: 10
+          })
+        ]);
+      const currentTimelineItem = currentTimeline.items.find(
+        (item) => item.id === creation.timelineAllocation.items[0]!.id
+      );
+      if (
+        currentMessage === null ||
+        currentContent === null ||
+        currentTimelineItem === undefined
+      ) {
+        throw new Error(
+          "Claimed attachment privacy acceptance requires the current aggregate."
+        );
+      }
+      const privacyOccurredAt = new Date(Date.now() + 1_000).toISOString();
+      const privacy = currentAttachmentPrivacyMutation({
+        beforeMessage: currentMessage,
+        beforeTimelineItem: currentTimelineItem,
+        beforeContent: currentContent,
+        suffix: `${suffix}-claimed-tombstone`,
+        occurredAt: privacyOccurredAt
+      });
+      const privacyEvent = privacy.contentTransition?.transition.event;
+      if (privacyEvent === undefined) {
+        throw new Error(
+          "Claimed attachment privacy fixture requires an event."
+        );
+      }
+      await db.execute(sql`
+        insert into event_store (
+          id, tenant_id, type, version, occurred_at, idempotency_key,
+          payload, created_at, updated_at
+        ) values (
+          ${privacyEvent.id}, ${tenantId}, 'inbox_v2.content.privacy_erased',
+          'v1', ${privacyOccurredAt},
+          ${`db005-${suffix}-claimed-tombstone-${runId}`},
+          ${JSON.stringify({
+            actionKind: "privacy_erasure",
+            entityKind: "timeline_content",
+            entityId: creation.content.id,
+            reasonId: "core:privacy_request"
+          })}::jsonb,
+          ${privacyOccurredAt}, ${privacyOccurredAt}
+        )
+      `);
+      await expect(
+        timelineRepository.mutateMessage({
+          commit: privacy,
+          streamPosition: inboxV2BigintCounterSchema.parse(
+            privacyStreamPosition
+          )
+        })
+      ).resolves.toMatchObject({
+        kind: "applied",
+        envelope: { entityRevision: "4" }
+      });
+      await expect(
+        fileRepository.authorizeMaterializationIo(privacyClaim)
+      ).resolves.toBe("cancelled");
+      await expect(
+        fileRepository.authorizeMaterializationIo(refreshedAccessClaim)
+      ).resolves.toBe("cancelled");
+      await expect(
+        fileRepository.claimMaterializationJobs({
+          tenantId,
+          workerId: "core:attachment-materialization-worker",
+          batchSize: 10,
+          leaseDurationSeconds: 300
+        })
+      ).resolves.toEqual([]);
+      const staleFenceState = await db.execute<{
+        job_state: string;
+        terminal_reason_id: string | null;
+        attempt_count: string;
+      }>(sql`
+        select job.state::text as job_state,
+               job.terminal_reason_id,
+               (
+                 select count(*)::text
+                   from inbox_v2_file_attachment_materialization_attempts
+                        attempt
+                  where attempt.tenant_id = job.tenant_id
+                    and attempt.job_id = job.id
+               ) as attempt_count
+          from inbox_v2_file_attachment_materialization_jobs job
+         where job.tenant_id = ${tenantId}
+           and job.id = ${staleReservationInput.jobId}
+      `);
+      expect(staleFenceState.rows).toEqual([
+        {
+          job_state: "cancelled",
+          terminal_reason_id:
+            "core:attachment-materialization-current-fence-lost",
+          attempt_count: "0"
+        }
+      ]);
+      const cancelledBeforeIo = await db.execute<{
+        job_state: string;
+        terminal_reason_id: string | null;
+        attempt_count: string;
+        object_version_count: string;
+        file_version_count: string;
+        operation_evidence_count: string;
+        materialization_evidence_count: string;
+      }>(sql`
+        select job.state::text as job_state,
+               job.terminal_reason_id,
+               (
+                 select count(*)::text
+                   from inbox_v2_file_attachment_materialization_attempts
+                        attempt
+                  where attempt.tenant_id = job.tenant_id
+                    and attempt.job_id = job.id
+               ) as attempt_count,
+               (
+                 select count(*)::text
+                   from inbox_v2_file_object_versions object_version
+                  where object_version.tenant_id = job.tenant_id
+                    and object_version.id = job.reserved_object_version_id
+               ) as object_version_count,
+               (
+                 select count(*)::text
+                   from inbox_v2_file_versions file_version
+                  where file_version.tenant_id = job.tenant_id
+                    and file_version.id = job.reserved_file_version_id
+               ) as file_version_count,
+               (
+                 select count(*)::text
+                   from inbox_v2_file_object_operation_evidence operation
+                  where operation.tenant_id = job.tenant_id
+                    and operation.materialization_job_id = job.id
+               ) as operation_evidence_count,
+               (
+                 select count(*)::text
+                   from inbox_v2_file_attachment_materialization_evidence
+                        evidence
+                  where evidence.tenant_id = job.tenant_id
+                    and evidence.job_id = job.id
+               ) as materialization_evidence_count
+          from inbox_v2_file_attachment_materialization_jobs job
+         where job.tenant_id = ${tenantId}
+           and job.id = ${claimedTombstoneReservationInput.jobId}
+      `);
+      expect(cancelledBeforeIo.rows).toEqual([
+        {
+          job_state: "cancelled",
+          terminal_reason_id:
+            "core:attachment-materialization-current-fence-lost",
+          attempt_count: "1",
+          object_version_count: "0",
+          file_version_count: "0",
+          operation_evidence_count: "0",
+          materialization_evidence_count: "0"
+        }
+      ]);
+      await expect(
+        fileRepository.countNonterminalMaterializationsForReservationNamespace({
+          tenantId,
+          reservationNamespaceGeneration: "attachment-namespace-v1"
+        })
+      ).resolves.toBe("0");
+    };
 
     it("atomically seals, rolls back, replays and deduplicates a Conversation-bound system TimelineItem", async () => {
       const accepted = requireAcceptedAtomicSource(acceptedAtomicSource);
@@ -1379,7 +2317,7 @@ describePostgres(
         kind: "created",
         envelope: { streamPosition: "10", entityRevision: "1" }
       });
-      const edit = editMutation(creation, "privacy-edit", "Private", "b");
+      const edit = editMutation(creation, "privacy-edit", "Private");
       await expect(
         repository.mutateMessage({
           commit: edit,
@@ -1559,12 +2497,7 @@ describePostgres(
           streamPosition: position("20")
         })
       ).resolves.toMatchObject({ kind: "created" });
-      const edit = editMutation(
-        creation,
-        `${suffix}-edit`,
-        "Gap baseline",
-        "7"
-      );
+      const edit = editMutation(creation, `${suffix}-edit`, "Gap baseline");
       await expect(
         repository.mutateMessage({
           commit: edit,
@@ -1701,7 +2634,7 @@ describePostgres(
         envelope: { streamPosition: "101", entityRevision: "1" }
       });
 
-      const edit = editMutation(creation, "edit", "Edited", "e");
+      const edit = editMutation(creation, "edit", "Edited");
       const edited = await repository.mutateMessage({
         commit: edit,
         streamPosition: position("102")
@@ -1734,8 +2667,7 @@ describePostgres(
       const staleCollision = editMutation(
         creation,
         "edit",
-        "Competing stale edit",
-        "f"
+        "Competing stale edit"
       );
       const stale = await repository.mutateMessage({
         commit: staleCollision,
@@ -4841,6 +5773,12 @@ describePostgres(
         sourceOccurrence: { id: systemOccurrence.id }
       });
     });
+
+    it(
+      "reserves, claims and atomically completes a pending attachment through the production terminal service",
+      runAttachmentTerminalAcceptance,
+      30_000
+    );
   }
 );
 
@@ -4860,21 +5798,22 @@ function staffNoteCreationCommit(
     throw new Error("StaffNote fixture requires one employee-authored item.");
   }
   const staffNoteId = `staff_note:db005-${suffix}-${runId}`;
+  const blocks = [
+    {
+      blockKey: "body-1",
+      kind: "text" as const,
+      role: "body" as const,
+      text: "Staff-only note",
+      language: "en"
+    }
+  ];
   const content = inboxV2TimelineContentSchema.parse({
     ...anchors.content,
     id: `timeline_content:db005-${suffix}-${runId}`,
     state: {
       kind: "available",
-      blocks: [
-        {
-          blockKey: "body-1",
-          kind: "text",
-          role: "body",
-          text: "Staff-only note",
-          language: "en"
-        }
-      ],
-      contentDigestSha256: "4".repeat(64)
+      blocks,
+      contentDigestSha256: calculateInboxV2MessageContentDigest(blocks)
     }
   });
   const staffNoteReference = fixtureReference(
@@ -4942,20 +5881,21 @@ function staffNoteEditMutation(
   if (beforeTimelineItem === undefined) {
     throw new Error("StaffNote edit fixture requires one TimelineItem.");
   }
+  const blocks = [
+    {
+      blockKey: "body-1",
+      kind: "text" as const,
+      role: "body" as const,
+      text: "Edited staff-only note",
+      language: "en"
+    }
+  ];
   const afterContent = inboxV2TimelineContentSchema.parse({
     ...creation.content,
     state: {
       kind: "available",
-      blocks: [
-        {
-          blockKey: "body-1",
-          kind: "text",
-          role: "body",
-          text: "Edited staff-only note",
-          language: "en"
-        }
-      ],
-      contentDigestSha256: "5".repeat(64)
+      blocks,
+      contentDigestSha256: calculateInboxV2MessageContentDigest(blocks)
     },
     revision: "2",
     updatedAt: t3
@@ -7005,20 +7945,21 @@ function providerObservedEditMutation(
   }
   const operation = lifecycleCreation.operation;
   const beforeContent = creation.content;
+  const blocks = [
+    {
+      blockKey: "body-1",
+      kind: "text" as const,
+      role: "body" as const,
+      text: "Provider-system edited",
+      language: "en"
+    }
+  ];
   const afterContent = inboxV2TimelineContentSchema.parse({
     ...beforeContent,
     state: {
       kind: "available",
-      blocks: [
-        {
-          blockKey: "body-1",
-          kind: "text",
-          role: "body",
-          text: "Provider-system edited",
-          language: "en"
-        }
-      ],
-      contentDigestSha256: "6".repeat(64)
+      blocks,
+      contentDigestSha256: calculateInboxV2MessageContentDigest(blocks)
     },
     revision: "2",
     updatedAt: t4
@@ -7196,8 +8137,7 @@ function providerDeleteTombstoneMutation(
 function editMutation(
   creation: InboxV2MessageCreationCommit,
   revisionSuffix: string,
-  text: string,
-  digestCharacter: string
+  text: string
 ) {
   const beforeContent = creation.content;
   const beforeMessage = creation.message;
@@ -7205,33 +8145,34 @@ function editMutation(
   if (beforeTimelineItem === undefined) {
     throw new Error("Expected one creation TimelineItem.");
   }
+  const blocks = [
+    {
+      blockKey: "body-1",
+      kind: "text" as const,
+      role: "body" as const,
+      text,
+      language: "en"
+    },
+    {
+      blockKey: "contact-1",
+      kind: "contact" as const,
+      displayName: "DB005 classified contact",
+      organization: null,
+      values: [
+        {
+          kind: "phone" as const,
+          value: "+79990000000",
+          label: "mobile"
+        }
+      ]
+    }
+  ];
   const afterContent = inboxV2TimelineContentSchema.parse({
     ...beforeContent,
     state: {
       kind: "available" as const,
-      blocks: [
-        {
-          blockKey: "body-1",
-          kind: "text" as const,
-          role: "body" as const,
-          text,
-          language: "en"
-        },
-        {
-          blockKey: "contact-1",
-          kind: "contact" as const,
-          displayName: "DB005 classified contact",
-          organization: null,
-          values: [
-            {
-              kind: "phone" as const,
-              value: "+79990000000",
-              label: "mobile"
-            }
-          ]
-        }
-      ],
-      contentDigestSha256: digestCharacter.repeat(64)
+      blocks,
+      contentDigestSha256: calculateInboxV2MessageContentDigest(blocks)
     },
     revision: "2",
     updatedAt: t3
@@ -8498,6 +9439,680 @@ async function loadAtomicSystemTimelineState(
   return result.rows[0]!;
 }
 
+function sourceCreationCommitWithPendingAttachment(
+  suffix: string
+): InboxV2MessageCreationCommit {
+  const base = inboxV2MessageCreationCommitSchema.parse(
+    namespaceFixture(fixtureSourceCreationCommit(), suffix)
+  );
+  if (base.content.state.kind !== "available") {
+    throw new Error("Source attachment fixture requires available content.");
+  }
+  const attachmentId = `message_attachment:db005-${suffix}-first-${runId}`;
+  const secondAttachmentId = `message_attachment:db005-${suffix}-second-${runId}`;
+  const claimedTombstoneAttachmentId = `message_attachment:db005-${suffix}-claimed-tombstone-${runId}`;
+  const staleAttachmentId = `message_attachment:db005-${suffix}-stale-${runId}`;
+  const accessExpiryAttachmentId = `message_attachment:db005-${suffix}-access-expiry-${runId}`;
+  const blocks = [
+    ...base.content.state.blocks,
+    {
+      blockKey: "image-1",
+      kind: "image" as const,
+      attachment: {
+        state: "pending" as const,
+        attachment: {
+          tenantId,
+          kind: "message_attachment" as const,
+          id: attachmentId
+        }
+      },
+      displayName: "pending-photo.jpg"
+    },
+    {
+      blockKey: "image-2",
+      kind: "image" as const,
+      attachment: {
+        state: "pending" as const,
+        attachment: {
+          tenantId,
+          kind: "message_attachment" as const,
+          id: secondAttachmentId
+        }
+      },
+      displayName: "pending-second-photo.jpg"
+    },
+    {
+      blockKey: "image-3",
+      kind: "image" as const,
+      attachment: {
+        state: "pending" as const,
+        attachment: {
+          tenantId,
+          kind: "message_attachment" as const,
+          id: claimedTombstoneAttachmentId
+        }
+      },
+      displayName: "pending-claimed-tombstone-photo.jpg"
+    },
+    {
+      blockKey: "image-4",
+      kind: "image" as const,
+      attachment: {
+        state: "pending" as const,
+        attachment: {
+          tenantId,
+          kind: "message_attachment" as const,
+          id: staleAttachmentId
+        }
+      },
+      displayName: "pending-stale-photo.jpg"
+    },
+    {
+      blockKey: "image-5",
+      kind: "image" as const,
+      attachment: {
+        state: "pending" as const,
+        attachment: {
+          tenantId,
+          kind: "message_attachment" as const,
+          id: accessExpiryAttachmentId
+        }
+      },
+      displayName: "pending-access-expiry-photo.jpg"
+    }
+  ];
+  const content = inboxV2TimelineContentSchema.parse({
+    ...base.content,
+    state: {
+      kind: "available",
+      blocks,
+      contentDigestSha256: calculateInboxV2MessageContentDigest(blocks)
+    }
+  });
+  const message = {
+    ...base.message,
+    content: inboxV2TimelineContentHeadOf(content)
+  };
+  return inboxV2MessageCreationCommitSchema.parse({
+    ...base,
+    content,
+    message,
+    initialRevision: {
+      ...base.initialRevision,
+      change: { kind: "created", content: message.content }
+    }
+  });
+}
+
+function currentAttachmentPrivacyMutation(input: {
+  beforeMessage: InboxV2Message;
+  beforeTimelineItem: InboxV2TimelineItem;
+  beforeContent: InboxV2TimelineContent;
+  suffix: string;
+  occurredAt: string;
+}) {
+  if (
+    input.beforeTimelineItem.subject.kind !== "message" ||
+    input.beforeMessage.content.content.id !== input.beforeContent.id ||
+    input.beforeMessage.content.contentRevision !== input.beforeContent.revision
+  ) {
+    throw new Error(
+      "Attachment privacy fixture requires one current Message aggregate."
+    );
+  }
+  const resultingMessageRevision = (
+    BigInt(input.beforeMessage.revision) + 1n
+  ).toString();
+  const resultingContentRevision = (
+    BigInt(input.beforeContent.revision) + 1n
+  ).toString();
+  const resultingTimelineItemRevision = (
+    BigInt(input.beforeTimelineItem.revision) + 1n
+  ).toString();
+  const event = fixtureReference(
+    "event",
+    `event:db005-${input.suffix}-${runId}`,
+    tenantId
+  );
+  const afterContent = inboxV2TimelineContentSchema.parse({
+    ...input.beforeContent,
+    state: {
+      kind: "privacy_erased" as const,
+      tombstoneEvent: event,
+      reasonId: "core:privacy_request",
+      erasedAt: input.occurredAt
+    },
+    revision: resultingContentRevision,
+    updatedAt: input.occurredAt
+  });
+  const afterMessage = {
+    ...input.beforeMessage,
+    content: inboxV2TimelineContentHeadOf(afterContent),
+    revision: resultingMessageRevision,
+    updatedAt: input.occurredAt
+  };
+  const afterTimelineItem = {
+    ...input.beforeTimelineItem,
+    subject: {
+      kind: "message" as const,
+      message: fixtureReference("message", input.beforeMessage.id, tenantId),
+      messageRevision: resultingMessageRevision
+    },
+    revision: resultingTimelineItemRevision,
+    updatedAt: input.occurredAt
+  };
+  return inboxV2MessageMutationCommitSchema.parse({
+    tenantId,
+    beforeMessage: input.beforeMessage,
+    beforeTimelineItem: input.beforeTimelineItem,
+    contentTransition: {
+      tenantId,
+      before: input.beforeContent,
+      transition: {
+        kind: "privacy_erasure",
+        expectedRevision: input.beforeContent.revision,
+        resultingRevision: resultingContentRevision,
+        event,
+        occurredAt: input.occurredAt
+      },
+      after: afterContent
+    },
+    providerOperation: null,
+    providerOperationCreationCommit: null,
+    actionParticipantSnapshot: null,
+    revision: {
+      tenantId,
+      id: `message_revision:db005-${input.suffix}-${runId}`,
+      message: fixtureReference("message", input.beforeMessage.id, tenantId),
+      timelineItem: fixtureReference(
+        "timeline_item",
+        input.beforeTimelineItem.id,
+        tenantId
+      ),
+      expectedPreviousRevision: input.beforeMessage.revision,
+      messageRevision: resultingMessageRevision,
+      change: {
+        kind: "privacy_erasure_tombstone",
+        beforeContent: input.beforeMessage.content,
+        afterContent: afterMessage.content
+      },
+      actionAttribution: {
+        actionParticipant: null,
+        appActor: {
+          kind: "trusted_service",
+          trustedServiceId: "core:privacy-worker"
+        },
+        sourceOccurrence: null,
+        automationCausation: {
+          kind: "system_event",
+          causeEvent: event,
+          correlationId: `correlation:db005-${input.suffix}-${runId}`,
+          causedAt: input.occurredAt
+        }
+      },
+      occurredAt: input.occurredAt,
+      recordedAt: input.occurredAt,
+      recordRevision: "1",
+      createdAt: input.occurredAt
+    },
+    afterMessage,
+    afterTimelineItem
+  });
+}
+
+function requirePendingAttachments(creation: InboxV2MessageCreationCommit) {
+  if (creation.content.state.kind !== "available") {
+    throw new Error("Pending attachment fixture content is unavailable.");
+  }
+  const blocks = creation.content.state.blocks.filter(
+    (candidate) =>
+      "attachment" in candidate && candidate.attachment.state === "pending"
+  );
+  if (blocks.length === 0) {
+    throw new Error("Pending attachment fixture is missing its media block.");
+  }
+  return blocks.map((block) => {
+    if (!("attachment" in block)) {
+      throw new Error("Pending attachment fixture block is malformed.");
+    }
+    return {
+      attachmentId: block.attachment.attachment.id,
+      blockKey: block.blockKey,
+      attachmentRevision: "1" as const
+    };
+  });
+}
+
+function attachmentReservationInput(input: {
+  creation: InboxV2MessageCreationCommit;
+  attachment: ReturnType<typeof requirePendingAttachments>[number];
+  sourceAuthorized: ReturnType<typeof authorizedSourceMaterializationFixture>;
+  causeStreamPosition: string;
+  suffix: string;
+}): ReserveInboxV2AttachmentMaterializationInput {
+  const timelineItem = input.creation.timelineAllocation.items[0];
+  const occurrence = requireSourceOccurrence(input.creation);
+  if (timelineItem === undefined) {
+    throw new Error("Attachment reservation requires one TimelineItem.");
+  }
+  const jobId = `attachment_materialization_job:db005-${input.suffix}-${runId}`;
+  const fileId = `file:db005-${input.suffix}-${runId}`;
+  return {
+    tenantId,
+    jobId,
+    attachmentId: input.attachment.attachmentId,
+    file: {
+      id: fileId,
+      expectedRevision: "1",
+      dataClassId: "core:message-content",
+      processingPurposeId: "core:message-attachment",
+      retentionAnchorAt: input.creation.content.createdAt
+    },
+    content: {
+      conversationId: input.creation.message.conversation.id,
+      timelineItemId: timelineItem.id,
+      parentMessageId: input.creation.message.id,
+      expectedParentRevision: "1",
+      visibilityBoundary: "external_work",
+      id: input.creation.content.id,
+      expectedRevision: "1",
+      blockKey: input.attachment.blockKey,
+      mutationFenceSha256: calculateInboxV2AttachmentContentMutationFenceSha256(
+        {
+          tenantId,
+          attachmentId: input.attachment.attachmentId,
+          expectedAttachmentRevision: input.attachment.attachmentRevision,
+          timelineContentId: input.creation.content.id,
+          expectedContentRevision: "1",
+          contentBlockKey: input.attachment.blockKey
+        }
+      )
+    },
+    sourceOccurrenceId: occurrence.id,
+    sourceLocator: {
+      kind: "provider",
+      reference: `src_ref_${createHash("sha256")
+        .update(`${input.suffix}:${runId}:source-locator`, "utf8")
+        .digest("base64url")}`
+    },
+    reservationNamespaceGeneration: "attachment-namespace-v1",
+    causeEventId: input.sourceAuthorized.eventId,
+    causeMutationId: input.sourceAuthorized.input.records.mutationId,
+    causeStreamCommitId: input.sourceAuthorized.streamCommitId,
+    causeStreamPosition: input.causeStreamPosition,
+    correlationId: input.sourceAuthorized.input.records.correlationId,
+    causedAt: input.creation.initialRevision.occurredAt,
+    idempotencyToken: `attachment-reservation:${input.suffix}:${runId}`,
+    expectedAttachmentRevision: input.attachment.attachmentRevision,
+    reservation: {
+      fileVersionId: `file_version:db005-${input.suffix}-${runId}`,
+      objectVersionId: `file_object_version:db005-${input.suffix}-${runId}`,
+      storageRootId: "core:tenant-object-storage",
+      storageKey: `${tenantId}/attachments/${fileId}/v1`
+    }
+  };
+}
+
+function authorizedAttachmentReservationFixture(input: {
+  creation: InboxV2MessageCreationCommit;
+  reservation: ReserveInboxV2AttachmentMaterializationInput;
+  resourceHeadId: string;
+  streamEpoch: string;
+  suffix: string;
+  authorizationLifetimeMs?: number;
+}) {
+  const token = `${input.suffix}-${runId}`;
+  const trustedServiceId = "core:attachment-materialization-worker";
+  const authorizedAt = new Date().toISOString();
+  const notAfter = new Date(
+    Date.parse(authorizedAt) +
+      (input.authorizationLifetimeMs ?? 60 * 60 * 1_000)
+  ).toISOString();
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
+  const commandId = `command:attachment-reservation-${token}`;
+  const clientMutationId = `mutation:attachment-reservation-${token}`;
+  const mutationId = `authorization-mutation:attachment-reservation-${token}`;
+  const streamCommitId = `commit:attachment-reservation-${token}`;
+  const authorizationEpoch = `authorization:attachment-reservation-${token}`;
+  const correlationId = `correlation:attachment-reservation-${token}`;
+  const fileDecisionId = `authorization-decision:attachment-reservation-file-${token}`;
+  const readDecisionId = `authorization-decision:attachment-reservation-read-${token}`;
+  const entity = {
+    tenantId,
+    entityTypeId: "core:attachment-materialization-job",
+    entityId: input.reservation.jobId
+  };
+  const resultReference = {
+    tenantId,
+    recordId: input.reservation.jobId,
+    schemaId: "core:inbox-v2.attachment-materialization-reservation",
+    schemaVersion: "v1",
+    digest: atomicSourceSha256(`${token}:reservation`)
+  };
+  const decision = (id: string, permissionId: string) => ({
+    tenantId,
+    id,
+    authorizationEpoch,
+    principal: { kind: "trusted_service" as const, trustedServiceId },
+    permissionId,
+    resourceScopeId: "core:conversation",
+    resource: {
+      tenantId,
+      entityTypeId: "core:conversation",
+      entityId: input.creation.message.conversation.id
+    },
+    resourceAccessRevision: "1",
+    decisionRevision: "1",
+    decisionHash: atomicSourceSha256(`${token}:${permissionId}`),
+    outcome: "allowed" as const,
+    decidedAt: authorizedAt,
+    notAfter
+  });
+  const decisions = [
+    decision(fileDecisionId, "core:file.upload"),
+    decision(readDecisionId, "core:conversation.read")
+  ];
+  const internalReference = (purpose: string) =>
+    `internal-ref:${createHash("sha256")
+      .update(`${token}:${purpose}`, "utf8")
+      .digest("hex")
+      .slice(0, 32)}`;
+  const changeId = `change:attachment-reservation-${token}`;
+  const eventId = `event:attachment-reservation-${token}`;
+  const outboxIntentId = `outbox-intent:attachment-reservation-${token}`;
+  const grantSourceIds = [
+    internalReference("grant-a"),
+    internalReference("grant-b")
+  ].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+  const recordsWithoutCommitHash = {
+    mutationId,
+    relationKind: null,
+    streamCommitId,
+    expectedStreamEpoch: input.streamEpoch,
+    audienceImpact: { kind: "none" as const },
+    correlationId,
+    changes: [
+      {
+        id: changeId,
+        ordinal: 1,
+        entity,
+        resultingRevision: "1",
+        timeline: null,
+        audience: "staff_only" as const,
+        state: {
+          kind: "upsert" as const,
+          stateSchemaId: resultReference.schemaId,
+          stateSchemaVersion: resultReference.schemaVersion,
+          stateHash: resultReference.digest,
+          payloadReference: resultReference,
+          domainCommitReference: resultReference
+        }
+      }
+    ],
+    events: [
+      {
+        id: eventId,
+        typeId: "core:attachment-materialization.changed",
+        payloadSchemaId: resultReference.schemaId,
+        payloadSchemaVersion: resultReference.schemaVersion,
+        ordinal: "1",
+        changeIds: [changeId],
+        subjects: [entity],
+        payloadReference: resultReference,
+        correlationId,
+        commandIds: [commandId],
+        clientMutationIds: [clientMutationId],
+        authorizationDecisionRefs: decisions,
+        accessEffect: { kind: "none" as const },
+        occurredAt: authorizedAt,
+        recordedAt: authorizedAt,
+        eventHash: atomicSourceSha256(`${token}:event`)
+      }
+    ],
+    outboxIntents: [
+      {
+        id: outboxIntentId,
+        ordinal: 1,
+        typeId: "core:projection.update",
+        handlerId: "core:file-projection",
+        effectClass: "projection" as const,
+        eventId,
+        changeIds: [changeId],
+        payloadReference: null,
+        consumerDedupeKey: atomicSourceSha256(`${token}:projection-dedupe`),
+        correlationId,
+        availableAt: authorizedAt,
+        intentHash: atomicSourceSha256(`${token}:projection-intent`)
+      }
+    ],
+    audit: {
+      id: `authorization-audit:attachment-reservation-${token}`,
+      actionId: INBOX_V2_ATTACHMENT_MATERIALIZATION_RESERVATION_COMMAND_TYPE_ID,
+      target: {
+        tenantId,
+        entityTypeId: "core:attachment-materialization-job",
+        entityId: internalReference("audit-target")
+      },
+      reasonCodeId: "core:attachment-materialization-reserved",
+      matchedPermissionIds: ["core:conversation.read", "core:file.upload"],
+      grantSourceIds,
+      authorizationScopeIds: ["core:conversation"],
+      overrideReasonCodeId: null,
+      policyVersion: "v1",
+      evidenceReference: resultReference,
+      authorizationDecisionRefs: decisions,
+      correlationId,
+      outcome: "succeeded" as const,
+      revisionDeltaHash: computeInboxV2LeafHashDigest([]),
+      previousAuditHash: null,
+      auditHash: atomicSourceSha256(`${token}:audit`),
+      occurredAt: authorizedAt,
+      recordedAt: authorizedAt,
+      expiresAt,
+      facets: [
+        {
+          ordinal: 1,
+          dimension: "resource" as const,
+          reference: {
+            tenantId,
+            entityTypeId: "core:conversation",
+            entityId: internalReference("conversation-facet")
+          },
+          relation: "affected" as const,
+          facetHash: atomicSourceSha256(`${token}:facet`)
+        }
+      ]
+    }
+  };
+  const authorizedInput = {
+    tenantId,
+    command: {
+      id: commandId,
+      requestId: `request:attachment-reservation-${token}`,
+      clientMutationId,
+      commandTypeId:
+        INBOX_V2_ATTACHMENT_MATERIALIZATION_RESERVATION_COMMAND_TYPE_ID,
+      requestHash: atomicSourceSha256(`${token}:request`),
+      actor: { kind: "trusted_service" as const, trustedServiceId },
+      authorizationDecisionId: fileDecisionId,
+      authorizationEpoch,
+      authorizedAt,
+      publicResultCode: "core:attachment.materialization.reserved",
+      resultReference,
+      sensitiveResultReference: null
+    },
+    revisions: {
+      expectedTenantRbacRevision: "1",
+      expectedSharedAccessRevision: "1",
+      advanceTenantRbac: false,
+      advanceSharedAccess: false,
+      employees: [],
+      resources: [
+        {
+          resourceKind: "conversation" as const,
+          resourceId: input.creation.message.conversation.id,
+          resourceHeadId: input.resourceHeadId,
+          expectedResourceAccessRevision: "1",
+          expectedStructuralRelationRevision: "1",
+          advanceStructuralRelation: "none" as const,
+          expectedCollaboratorSetRevision: "1",
+          advanceCollaboratorSet: "none" as const,
+          advance: "none" as const
+        }
+      ]
+    },
+    records: {
+      ...recordsWithoutCommitHash,
+      commitHash: computeInboxV2TenantStreamManifestDigest(
+        recordsWithoutCommitHash as never
+      )
+    },
+    occurredAt: authorizedAt
+  } as unknown as WithInboxV2AuthorizedCommandMutationInput;
+  return {
+    commandId,
+    streamCommitId,
+    input: authorizedInput
+  };
+}
+
+async function loadAtomicAttachmentTerminalState(
+  db: HuleeDatabase,
+  input: {
+    creation: InboxV2MessageCreationCommit;
+    reservation: ReserveInboxV2AttachmentMaterializationInput;
+    storageVersionId: string;
+    terminalStreamPosition: string;
+  }
+) {
+  const result = await db.execute<Record<string, string | null>>(sql`
+    select
+      (select revision::text from inbox_v2_messages
+        where tenant_id = ${tenantId} and id = ${input.creation.message.id})
+        as message_revision,
+      (select revision::text from inbox_v2_timeline_contents
+        where tenant_id = ${tenantId} and id = ${input.creation.content.id})
+        as content_revision,
+      (select attachment_state::text
+         from inbox_v2_timeline_content_payloads
+        where tenant_id = ${tenantId}
+          and content_id = ${input.creation.content.id}
+          and content_revision = (
+            select result_content_revision
+              from inbox_v2_file_attachment_materialization_jobs
+             where tenant_id = ${tenantId}
+               and id = ${input.reservation.jobId}
+          )
+          and block_key = ${input.reservation.content.blockKey})
+        as attachment_state,
+      (select attachment_v2_file_id
+         from inbox_v2_timeline_content_payloads
+        where tenant_id = ${tenantId}
+          and content_id = ${input.creation.content.id}
+          and content_revision = (
+            select result_content_revision
+              from inbox_v2_file_attachment_materialization_jobs
+             where tenant_id = ${tenantId}
+               and id = ${input.reservation.jobId}
+          )
+          and block_key = ${input.reservation.content.blockKey})
+        as attachment_file_id,
+      (select attachment_file_version_id
+         from inbox_v2_timeline_content_payloads
+        where tenant_id = ${tenantId}
+          and content_id = ${input.creation.content.id}
+          and content_revision = (
+            select result_content_revision
+              from inbox_v2_file_attachment_materialization_jobs
+             where tenant_id = ${tenantId}
+               and id = ${input.reservation.jobId}
+          )
+          and block_key = ${input.reservation.content.blockKey})
+        as attachment_file_version_id,
+      (select attachment_object_version_id
+         from inbox_v2_timeline_content_payloads
+        where tenant_id = ${tenantId}
+          and content_id = ${input.creation.content.id}
+          and content_revision = (
+            select result_content_revision
+              from inbox_v2_file_attachment_materialization_jobs
+             where tenant_id = ${tenantId}
+               and id = ${input.reservation.jobId}
+          )
+          and block_key = ${input.reservation.content.blockKey})
+        as attachment_object_version_id,
+      (select materialization_state::text
+         from inbox_v2_message_attachment_anchors
+        where tenant_id = ${tenantId}
+          and id = ${input.reservation.attachmentId}) as anchor_state,
+      (select revision::text from inbox_v2_message_attachment_anchors
+        where tenant_id = ${tenantId}
+          and id = ${input.reservation.attachmentId}) as anchor_revision,
+      (select state::text from inbox_v2_file_objects
+        where tenant_id = ${tenantId} and id = ${input.reservation.file.id})
+        as file_state,
+      (select revision::text from inbox_v2_file_objects
+        where tenant_id = ${tenantId} and id = ${input.reservation.file.id})
+        as file_revision,
+      (select count(*)::text from inbox_v2_file_object_versions
+        where tenant_id = ${tenantId}
+          and id = ${input.reservation.reservation.objectVersionId})
+        as object_version_count,
+      (select count(*)::text from inbox_v2_file_versions
+        where tenant_id = ${tenantId}
+          and id = ${input.reservation.reservation.fileVersionId})
+        as file_version_count,
+      (select count(*)::text from inbox_v2_file_parent_links
+        where tenant_id = ${tenantId}
+          and file_id = ${input.reservation.file.id}) as parent_link_count,
+      (select state::text from inbox_v2_file_attachment_materialization_jobs
+        where tenant_id = ${tenantId} and id = ${input.reservation.jobId})
+        as job_state,
+      (select revision::text
+         from inbox_v2_file_attachment_materialization_jobs
+        where tenant_id = ${tenantId} and id = ${input.reservation.jobId})
+        as job_revision,
+      (select result_file_version_id
+         from inbox_v2_file_attachment_materialization_jobs
+        where tenant_id = ${tenantId} and id = ${input.reservation.jobId})
+        as job_result_file_version_id,
+      (select result_object_version_id
+         from inbox_v2_file_attachment_materialization_jobs
+        where tenant_id = ${tenantId} and id = ${input.reservation.jobId})
+        as job_result_object_version_id,
+      (select result_content_revision::text
+         from inbox_v2_file_attachment_materialization_jobs
+        where tenant_id = ${tenantId} and id = ${input.reservation.jobId})
+        as job_result_content_revision,
+      (select storage_version_identity
+         from inbox_v2_file_object_versions
+        where tenant_id = ${tenantId}
+          and id = ${input.reservation.reservation.objectVersionId})
+        as storage_version_identity,
+      (select last_position::text from inbox_v2_tenant_stream_heads
+        where tenant_id = ${tenantId}) as stream_position,
+      (select count(*)::text from inbox_v2_domain_events
+        where tenant_id = ${tenantId}
+          and stream_position = ${input.terminalStreamPosition}::bigint
+          and type_id = 'core:message.changed') as terminal_event_count,
+      (select count(*)::text
+         from inbox_v2_auth_audit_events audit
+         join inbox_v2_auth_mutation_commits mutation
+           on mutation.tenant_id = audit.tenant_id
+          and mutation.audit_event_id = audit.id
+          and mutation.mutation_id = audit.mutation_id
+         join inbox_v2_tenant_stream_commits stream
+           on stream.tenant_id = mutation.tenant_id
+          and stream.id = mutation.stream_commit_id
+          and stream.mutation_id = mutation.mutation_id
+        where audit.tenant_id = ${tenantId}
+          and audit.action_id = 'core:attachment.materialization.complete'
+          and stream.position = ${input.terminalStreamPosition}::bigint)
+        as terminal_audit_count
+  `);
+  return result.rows[0]!;
+}
+
 function authorizedSourceMaterializationFixture(input: {
   creation: InboxV2MessageCreationCommit;
   operator: ReturnType<typeof fixtureParticipant>;
@@ -9212,6 +10827,7 @@ async function seedProviderResultOutboundRoute(input: {
     remote_access_revision: unknown;
     administrative_revision: unknown;
     capability_revision: unknown;
+    provider_access_revision: unknown;
     route_descriptor_revision: unknown;
     remote_access_state: unknown;
     administrative_state: unknown;
@@ -9221,6 +10837,7 @@ async function seedProviderResultOutboundRoute(input: {
            source_account_id, revision as binding_revision,
            account_generation, binding_generation, remote_access_revision,
            administrative_revision, capability_revision,
+           provider_access_revision,
            route_descriptor_revision, remote_access_state,
            administrative_state, runtime_health_state
       from inbox_v2_source_thread_binding_heads
@@ -9360,6 +10977,7 @@ async function seedMessageSendOutboundRoute(input: {
     remote_access_revision: unknown;
     administrative_revision: unknown;
     capability_revision: unknown;
+    provider_access_revision: unknown;
     route_descriptor_revision: unknown;
     remote_access_state: unknown;
     administrative_state: unknown;
@@ -9369,6 +10987,7 @@ async function seedMessageSendOutboundRoute(input: {
            source_account_id, revision as binding_revision,
            account_generation, binding_generation, remote_access_revision,
            administrative_revision, capability_revision,
+           provider_access_revision,
            route_descriptor_revision, remote_access_state,
            administrative_state, runtime_health_state
       from inbox_v2_source_thread_binding_heads

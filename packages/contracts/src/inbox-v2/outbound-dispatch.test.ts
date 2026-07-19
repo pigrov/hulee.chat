@@ -14,6 +14,7 @@ import {
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
   INBOX_V2_OUTBOUND_MULTI_SEND_OPERATION_SCHEMA_ID,
+  deriveInboxV2OutboundDispatchArtifactId,
   deriveInboxV2RouteFailureOutboxFinalization,
   inboxV2OutboundDispatchArtifactAssociationCommitEnvelopeSchema,
   inboxV2OutboundDispatchArtifactAssociationCommitSchema,
@@ -1022,6 +1023,38 @@ describe("Inbox V2 crash-safe outbound dispatch", () => {
     ).toBe(false);
   });
 
+  it("forces mixed provider artifact outcomes through an operator duplicate-risk decision", () => {
+    const pending = pendingAttempt();
+    const mixedUnknown = {
+      ...pending,
+      outcome: {
+        kind: "outcome_unknown" as const,
+        completedAt: providerCompletedAt,
+        diagnostic: {
+          codeId: "core:provider-artifact-outcomes-mixed",
+          retryable: false,
+          correlationToken: pending.claimToken,
+          safeOperatorHintId: "core:reconcile-before-retry"
+        },
+        requiredAction: "operator_duplicate_risk_decision_required" as const
+      },
+      completionSource: "provider_result" as const,
+      revision: "2"
+    };
+    expect(
+      inboxV2OutboundDispatchAttemptSchema.safeParse(mixedUnknown).success
+    ).toBe(true);
+    expect(
+      inboxV2OutboundDispatchAttemptSchema.safeParse({
+        ...mixedUnknown,
+        outcome: {
+          ...mixedUnknown.outcome,
+          requiredAction: "automated_reconciliation_required"
+        }
+      }).success
+    ).toBe(false);
+  });
+
   it("prevents post-hoc retry-safety substitution and mutable unknown state", () => {
     const unsafePending = pendingAttempt({ retrySafety: unsafeRetrySafety() });
     const unknown = unknownAttempt(unsafePending);
@@ -1551,6 +1584,33 @@ describe("Inbox V2 crash-safe outbound dispatch", () => {
         association
       ).success
     ).toBe(true);
+  });
+
+  it("derives stable artifact identities from the exact attempt chain and ordinal", () => {
+    const attempt = pendingAttempt();
+    const identity = {
+      tenantId,
+      dispatch: dispatchReference,
+      route: routeReference,
+      attempt: {
+        tenantId,
+        kind: "outbound_dispatch_attempt" as const,
+        id: attempt.id
+      },
+      ordinal: 1
+    };
+    const first = deriveInboxV2OutboundDispatchArtifactId(identity);
+    expect(first).toMatch(/^outbound_dispatch_artifact:[a-f0-9]{64}$/u);
+    expect(deriveInboxV2OutboundDispatchArtifactId(identity)).toBe(first);
+    expect(
+      deriveInboxV2OutboundDispatchArtifactId({ ...identity, ordinal: 2 })
+    ).not.toBe(first);
+    expect(() =>
+      deriveInboxV2OutboundDispatchArtifactId({
+        ...identity,
+        dispatch: { ...dispatchReference, tenantId: otherTenantId }
+      })
+    ).toThrow();
   });
 
   it("accepts provider response or echo arrival order on the exact attempt", () => {

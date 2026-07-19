@@ -12,8 +12,10 @@ const migrationPath = new URL(
   import.meta.url
 );
 const migration = readFileSync(migrationPath, "utf8").replaceAll("\r\n", "\n");
-const historicalSchemaSql = restorePreMsg002AtomicProviderIoSql(
-  INBOX_V2_AUTH_DOMAIN_PROVIDER_IO_CLOSURE_SQL.trim()
+const historicalSchemaSql = restorePreMsg003AttachmentAuthorizationSql(
+  restorePreMsg002AtomicProviderIoSql(
+    INBOX_V2_AUTH_DOMAIN_PROVIDER_IO_CLOSURE_SQL.trim()
+  )
 );
 
 describe("Inbox V2 atomic provider-I/O closure migration", () => {
@@ -62,6 +64,21 @@ describe("Inbox V2 atomic provider-I/O closure migration", () => {
     expect(migration).not.toContain(
       "create or replace function public.inbox_v2_auth_mutation_coherence()"
     );
+  });
+
+  it("keeps the MSG-003 attachment authorization replacement out of the historical migration", () => {
+    for (const fragment of [
+      "create or replace function public.inbox_v2_auth_attachment_message_change_valid(",
+      "message_change.resulting_revision >= 2",
+      "content_revision_row.transition_kind = 'attachment_materialization'",
+      "revision_row.change_kind = 'attachment_materialized'",
+      "attribution_row.automation_cause_event_id is not null",
+      "'core:attachment.materialization.complete'",
+      "inbox_v2.domain_mutation_attachment_cardinality_invalid"
+    ]) {
+      expect(INBOX_V2_AUTH_DOMAIN_PROVIDER_IO_CLOSURE_SQL).toContain(fragment);
+      expect(migration).not.toContain(fragment);
+    }
   });
 
   it("accepts domain provider work only with the contract-equivalent dispatch closure", () => {
@@ -343,6 +360,117 @@ function restorePreMsg002AtomicProviderIoSql(current: string): string {
     }
     return value.replace(successor, predecessor);
   }, withoutRerouteCancellation);
+}
+
+function restorePreMsg003AttachmentAuthorizationSql(current: string): string {
+  const helper = extractFunctionDefinition(
+    current,
+    "public.inbox_v2_auth_attachment_message_change_valid"
+  );
+  const currentDomain = extractFunctionDefinition(
+    current,
+    "public.inbox_v2_auth_domain_mutation_coherence"
+  );
+  let historicalDomain = replaceExactlyOnce(
+    currentDomain,
+    `     and message_change.entity_type_id = 'core:message'\n` +
+      `     and v_command.command_type_id <>\n` +
+      `       'core:attachment.materialization.complete'\n` +
+      `     and (`,
+    `     and message_change.entity_type_id = 'core:message'\n` + `     and (`,
+    "MSG-003 message creation command exclusion"
+  );
+  historicalDomain = removeExactBoundedSpan(
+    historicalDomain,
+    `\n  select v_invalid_count + count(*)::integer into v_invalid_count\n` +
+      `    from public.inbox_v2_tenant_stream_changes message_change\n` +
+      `   where message_change.tenant_id = new.tenant_id\n` +
+      `     and message_change.stream_commit_id = new.stream_commit_id\n` +
+      `     and message_change.mutation_id = new.mutation_id\n` +
+      `     and message_change.entity_type_id = 'core:message'\n` +
+      `     and v_command.command_type_id =\n` +
+      `       'core:attachment.materialization.complete'`,
+    `\n  select v_invalid_count + count(*)::integer into v_invalid_count\n` +
+      `    from public.inbox_v2_tenant_stream_changes occurrence_change`,
+    "MSG-003 terminal message validation"
+  );
+  historicalDomain = removeExactBoundedSpan(
+    historicalDomain,
+    `\n  if v_command.command_type_id =\n` +
+      `     'core:attachment.materialization.complete' then`,
+    `\n  if v_invalid_count <> 0 then`,
+    "MSG-003 terminal message cardinality"
+  );
+  historicalDomain = replaceExactlyOnce(
+    historicalDomain,
+    `     or (\n` +
+      `       v_command.command_type_id <>\n` +
+      `         'core:attachment.materialization.complete'\n` +
+      `       and v_audit.revision_delta_hash <> v_empty_digest\n` +
+      `     ) then`,
+    `     or v_audit.revision_delta_hash <> v_empty_digest then`,
+    "MSG-003 terminal audit revision delta"
+  );
+  return replaceExactlyOnce(
+    replaceExactlyOnce(
+      current,
+      `${helper}\n\n`,
+      "",
+      "MSG-003 attachment validation helper"
+    ),
+    currentDomain,
+    historicalDomain,
+    "MSG-003 domain mutation coherence"
+  );
+}
+
+function removeExactBoundedSpan(
+  input: string,
+  start: string,
+  end: string,
+  label: string
+): string {
+  const startOccurrences = input.split(start).length - 1;
+  const endOccurrences = input.split(end).length - 1;
+  if (startOccurrences !== 1 || endOccurrences !== 1) {
+    throw new Error(
+      `${label} matched start/end ${startOccurrences}/${endOccurrences} times.`
+    );
+  }
+  const startIndex = input.indexOf(start);
+  const endIndex = input.indexOf(end, startIndex + start.length);
+  if (endIndex < 0) throw new Error(`${label} end precedes its start.`);
+  return `${input.slice(0, startIndex)}${end}${input.slice(endIndex + end.length)}`;
+}
+
+function extractFunctionDefinition(sql: string, functionName: string): string {
+  const normalized = sql.replaceAll("\r\n", "\n");
+  const start = normalized.indexOf(
+    `create or replace function ${functionName}`
+  );
+  const delimiter = "$function$";
+  const bodyStart = normalized.indexOf(`as ${delimiter}`, start);
+  const bodyEnd = normalized.indexOf(
+    `${delimiter};`,
+    bodyStart + `as ${delimiter}`.length
+  );
+  if (start < 0 || bodyStart < 0 || bodyEnd < 0) {
+    throw new Error(`Cannot extract ${functionName}.`);
+  }
+  return normalized.slice(start, bodyEnd + `${delimiter};`.length).trim();
+}
+
+function replaceExactlyOnce(
+  input: string,
+  fragment: string,
+  replacement: string,
+  label: string
+): string {
+  const occurrences = input.split(fragment).length - 1;
+  if (occurrences !== 1) {
+    throw new Error(`${label} matched ${occurrences} times.`);
+  }
+  return input.replace(fragment, replacement);
 }
 
 function restoreMsg002RerouteCancellationSql(current: string): string {

@@ -382,6 +382,12 @@ describe("Inbox V2 tenant stream", () => {
     expect(
       inboxV2DomainEventSchema.safeParse({
         ...event(),
+        typeId: "core:attachment-materialization.changed"
+      }).success
+    ).toBe(true);
+    expect(
+      inboxV2DomainEventSchema.safeParse({
+        ...event(),
         typeId: "core:telegram.message-received"
       }).success
     ).toBe(false);

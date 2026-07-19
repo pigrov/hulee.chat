@@ -21,6 +21,7 @@ import {
 } from "@hulee/core";
 import { describe, expect, it, vi } from "vitest";
 
+import { InboxV2FileDownloadTicketError } from "../inbox-v2-file-download-ticket";
 import {
   createInternalApiHandler,
   createLocalDevInternalSessionResolver,
@@ -68,6 +69,7 @@ const inboxView: InternalInboxViewResponse = {
 function createHandler(input?: {
   session?: InternalApiSession | null;
   view?: InternalInboxViewResponse;
+  fileDownloadsConfigured?: boolean;
 }) {
   const loadInboxView = vi.fn(async () => input?.view ?? inboxView);
   const sendReply = vi.fn(async () => ({
@@ -86,6 +88,18 @@ function createHandler(input?: {
     mediaType: "image/jpeg",
     sizeBytes: 3,
     body: new Uint8Array([1, 2, 3])
+  }));
+  const redeemFileDownload = vi.fn(async () => ({
+    fileName: "exact-photo.jpg",
+    mediaType: "image/jpeg",
+    sizeBytes: 3,
+    body: new Uint8Array([4, 5, 6])
+  }));
+  const issueFileDownload = vi.fn(async () => ({
+    ticket: "opaque-signed-ticket",
+    downloadUrl:
+      "/internal/inbox-v2/files/download?ticket=opaque-signed-ticket",
+    expiresAt: "2026-07-19T00:01:00.000Z"
   }));
   const inspectAccessDecision = vi.fn(
     async (
@@ -607,6 +621,9 @@ function createHandler(input?: {
     inboxQueries: { loadInboxView },
     inboxCommands: { sendReply, updateConversationRouting },
     files: { loadFileContent },
+    ...(input?.fileDownloadsConfigured === false
+      ? {}
+      : { fileDownloads: { issueFileDownload, redeemFileDownload } }),
     integrations: {
       listChannelCatalog,
       listChannelConnectors,
@@ -664,6 +681,8 @@ function createHandler(input?: {
     sendReply,
     updateConversationRouting,
     loadFileContent,
+    issueFileDownload,
+    redeemFileDownload,
     listChannelCatalog,
     listChannelConnectors,
     listSourceConnections,
@@ -863,6 +882,179 @@ describe("internal API handler", () => {
         code: "permission.denied"
       }
     });
+  });
+
+  it("redeems an opaque Inbox V2 ticket as the authenticated session and returns a no-store stream", async () => {
+    const scopedSession: InternalApiSession = {
+      ...session,
+      permissions: []
+    };
+    const { handler, redeemFileDownload } = createHandler({
+      session: scopedSession
+    });
+    const response = await handler.handle({
+      method: "GET",
+      path: "/internal/inbox-v2/files/download?ticket=opaque-ticket&tenantId=tenant-2&principalId=employee-2&authorizationEpoch=forged"
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers).toEqual({
+      "content-type": "image/jpeg",
+      "content-length": "3",
+      "content-disposition":
+        "attachment; filename=\"exact-photo.jpg\"; filename*=UTF-8''exact-photo.jpg",
+      "cache-control": "private, no-store",
+      "x-content-type-options": "nosniff"
+    });
+    expect(response.body).toEqual(new Uint8Array([4, 5, 6]));
+    expect(redeemFileDownload).toHaveBeenCalledWith(scopedSession, {
+      ticket: "opaque-ticket"
+    });
+  });
+
+  it.each([
+    ["text/html", "payload.html"],
+    ["image/svg+xml", "payload.svg"]
+  ])(
+    "forces untrusted %s content to download as an attachment",
+    async (mediaType, fileName) => {
+      const { handler, redeemFileDownload } = createHandler();
+      redeemFileDownload.mockResolvedValueOnce({
+        fileName,
+        mediaType,
+        sizeBytes: 3,
+        body: new Uint8Array([1, 2, 3])
+      });
+
+      const response = await handler.handle({
+        method: "GET",
+        path: "/internal/inbox-v2/files/download?ticket=opaque-ticket"
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.headers).toMatchObject({
+        "content-type": mediaType,
+        "content-disposition": `attachment; filename="${fileName}"; filename*=UTF-8''${fileName}`,
+        "x-content-type-options": "nosniff"
+      });
+    }
+  );
+
+  it("issues an Inbox V2 download ticket from session identity without caller authority fields", async () => {
+    const { handler, issueFileDownload } = createHandler();
+    const request = {
+      pin: {
+        tenantId,
+        fileId: "file-1",
+        fileRevision: "3",
+        fileVersionId: "file-version-1",
+        objectVersionId: "object-version-1"
+      },
+      parentLinkId: "parent-link-1"
+    };
+
+    const response = await handler.handle({
+      method: "POST",
+      path: "/internal/inbox-v2/files/download-tickets",
+      body: request
+    });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual({
+      ticket: "opaque-signed-ticket",
+      downloadUrl:
+        "/internal/inbox-v2/files/download?ticket=opaque-signed-ticket",
+      expiresAt: "2026-07-19T00:01:00.000Z"
+    });
+    expect(issueFileDownload).toHaveBeenCalledWith(session, request);
+  });
+
+  it("rejects caller-supplied principal or authorization epoch during ticket issuance", async () => {
+    const { handler, issueFileDownload } = createHandler();
+    const response = await handler.handle({
+      method: "POST",
+      path: "/internal/inbox-v2/files/download-tickets",
+      body: {
+        pin: {
+          tenantId,
+          fileId: "file-1",
+          fileRevision: "3",
+          fileVersionId: "file-version-1",
+          objectVersionId: "object-version-1"
+        },
+        parentLinkId: "parent-link-1",
+        principalId: "employee-2",
+        authorizationEpoch: "forged"
+      }
+    });
+
+    expect(response.status).toBe(400);
+    expect(issueFileDownload).not.toHaveBeenCalled();
+  });
+
+  it("does not redeem Inbox V2 downloads without a session or a non-empty ticket", async () => {
+    const unauthenticated = createHandler({ session: null });
+    const unauthenticatedResponse = await unauthenticated.handler.handle({
+      method: "GET",
+      path: "/internal/inbox-v2/files/download?ticket=opaque-ticket"
+    });
+    const missingTicket = createHandler();
+    const missingTicketResponse = await missingTicket.handler.handle({
+      method: "GET",
+      path: "/internal/inbox-v2/files/download?ticket=%20%20"
+    });
+
+    expect(unauthenticatedResponse.status).toBe(401);
+    expect(missingTicketResponse.status).toBe(404);
+    expect(unauthenticated.redeemFileDownload).not.toHaveBeenCalled();
+    expect(missingTicket.redeemFileDownload).not.toHaveBeenCalled();
+  });
+
+  it("does not disclose why an Inbox V2 download ticket was rejected", async () => {
+    const { handler, redeemFileDownload } = createHandler();
+    redeemFileDownload.mockRejectedValueOnce(
+      new InboxV2FileDownloadTicketError("ticket_principal_mismatch")
+    );
+
+    const response = await handler.handle({
+      method: "GET",
+      path: "/internal/inbox-v2/files/download?ticket=opaque-ticket"
+    });
+
+    expect(response.status).toBe(403);
+    expect(response.body).toMatchObject({
+      error: { code: "permission.denied" }
+    });
+  });
+
+  it("fails closed when runtime composition has no download authority service", async () => {
+    const { handler, issueFileDownload, redeemFileDownload } = createHandler({
+      fileDownloadsConfigured: false
+    });
+
+    const issueResponse = await handler.handle({
+      method: "POST",
+      path: "/internal/inbox-v2/files/download-tickets",
+      body: {
+        pin: {
+          tenantId,
+          fileId: "file-1",
+          fileRevision: "3",
+          fileVersionId: "file-version-1",
+          objectVersionId: "object-version-1"
+        },
+        parentLinkId: "parent-link-1"
+      }
+    });
+    const redeemResponse = await handler.handle({
+      method: "GET",
+      path: "/internal/inbox-v2/files/download?ticket=opaque-ticket"
+    });
+
+    expect(issueResponse.status).toBe(400);
+    expect(redeemResponse.status).toBe(400);
+    expect(issueFileDownload).not.toHaveBeenCalled();
+    expect(redeemFileDownload).not.toHaveBeenCalled();
   });
 
   it("loads and updates tenant brand through tenant.manage permission", async () => {

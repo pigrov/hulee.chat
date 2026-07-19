@@ -1,4 +1,6 @@
 import {
+  calculateInboxV2MessageContentDigest,
+  calculateInboxV2OutboundDispatchContentPlanDigest,
   deriveInboxV2RouteFailureOutboxFinalization,
   INBOX_V2_MESSAGE_SCHEMA_ID,
   INBOX_V2_MESSAGE_SCHEMA_VERSION,
@@ -11,6 +13,7 @@ import {
   inboxV2MessageCreationCommitSchema,
   inboxV2NamespacedIdSchema,
   inboxV2OutboundDispatchArtifactAssociationCommitSchema,
+  inboxV2OutboundDispatchContentPlanSchema,
   inboxV2OutboundDispatchAttemptCommitSchema,
   inboxV2OutboundDispatchAttemptSchema,
   inboxV2OutboundDispatchReconciliationCommitSchema,
@@ -51,9 +54,12 @@ import {
   createSqlInboxV2AuthorizedCommandCoordinator,
   type WithInboxV2AuthorizedCommandMutationInput
 } from "./sql-inbox-v2-authorization-repository";
+import { persistInboxV2OutboundDispatchContentPlanInTransaction } from "./sql-inbox-v2-file-object-repository";
 import {
   buildCompareAndSwapInboxV2OutboundDispatchSql,
+  buildInsertInboxV2OutboundDispatchArtifactSql,
   buildInsertInboxV2OutboundDispatchAttemptSql,
+  buildInsertInboxV2OutboundDispatchReconciliationDecisionSql,
   buildInsertInboxV2OutboundDispatchSql,
   buildInsertInboxV2OutboundRouteSql,
   createSqlInboxV2OutboundTransportRepository,
@@ -166,6 +172,23 @@ describePostgres(
         });
       }
       await closeHuleeDatabase(db);
+    });
+
+    it("keeps content-plan binding revision independent from binding generation", () => {
+      const fixture = fixtureFor("binding-revision-axis");
+      const bindingRevision = inboxV2EntityRevisionSchema.parse("7");
+      const plan = outboundDispatchContentPlanFor({
+        ...fixture,
+        bindingHeadSnapshot: {
+          ...fixture.bindingHeadSnapshot,
+          bindingRevision
+        }
+      });
+
+      expect(plan.bindingRevision).toBe(bindingRevision);
+      expect(plan.bindingRevision).not.toBe(
+        fixture.route.bindingFence.bindingGeneration
+      );
     });
 
     it("commits route, Message, queued dispatch and provider intent atomically before provider I/O", async () => {
@@ -884,6 +907,8 @@ describePostgres(
                 fixture.route.bindingFence.administrativeRevision,
               capability_revision:
                 fixture.route.bindingFence.capabilityRevision,
+              provider_access_revision:
+                fixture.bindingHeadSnapshot.providerAccessRevision,
               route_descriptor_revision:
                 fixture.route.bindingFence.routeDescriptorRevision,
               remote_access_state: "active",
@@ -1257,8 +1282,13 @@ describePostgres(
           async dispatch() {
             adapterCallCount += 1;
             return {
-              outcome: "accepted" as const,
-              providerAcknowledgementToken: `provider:unexpected-${runId}`
+              artifacts: [
+                {
+                  artifactOrdinal: 1,
+                  outcome: "accepted" as const,
+                  providerAcknowledgementToken: `provider:unexpected-${runId}`
+                }
+              ]
             };
           }
         },
@@ -1713,6 +1743,204 @@ describePostgres(
       });
     });
 
+    it("requires operator review for a mixed provider-artifact outcome while preserving other valid unknown outcomes", async () => {
+      const fixture = fixtureFor("mixed-artifact-outcome-guard");
+      tenantIds.push(fixture.tenantId);
+      await seedOutboundAnchors(db, fixture);
+      const repository = createSqlInboxV2OutboundTransportRepository(db);
+      await expect(
+        persistAtomicOutboundProducer(db, fixture)
+      ).resolves.toMatchObject({ kind: "applied" });
+      await expect(
+        repository.applyAttempt(fixture.openAttemptCommit)
+      ).resolves.toEqual({ kind: "committed" });
+
+      const updateMixedAttempt = (
+        requiredAction:
+          | "automated_reconciliation_required"
+          | "operator_duplicate_risk_decision_required"
+      ) => sql`
+        update inbox_v2_outbound_dispatch_attempts
+           set outcome_kind = 'outcome_unknown',
+               completion_source = 'provider_result',
+               completed_at = ${OUTBOUND_TEST_TIMES.artifactAt},
+               retry_at = null,
+               provider_acknowledgement_token = null,
+               diagnostic_code_id = 'core:provider-artifact-outcomes-mixed',
+               diagnostic_retryable = true,
+               diagnostic_correlation_token =
+                 ${`diagnostic:mixed-artifact-${fixture.suffix}`},
+               diagnostic_safe_operator_hint_id =
+                 'core:review-provider-artifact-outcomes',
+               unknown_required_action = ${requiredAction},
+               revision = 2
+         where tenant_id = ${fixture.tenantId}
+           and id = ${fixture.pendingAttempt.id}
+           and outcome_kind = 'pending'
+         returning id
+      `;
+
+      await expectDatabaseFailure(
+        db.execute(updateMixedAttempt("automated_reconciliation_required")),
+        /23514[\s\S]*inbox_v2\.outbound_mixed_artifact_outcome_requires_operator/u
+      );
+
+      await db.transaction(async (transaction) => {
+        await transaction.execute(
+          sql`set local session_replication_role = replica`
+        );
+        await transaction.execute(sql`
+          update inbox_v2_outbound_dispatch_attempts
+             set retry_safety_mechanism = 'unsafe_or_unknown',
+                 provider_correlation_token = null,
+                 automatic_retry_allowed = false
+           where tenant_id = ${fixture.tenantId}
+             and id = ${fixture.pendingAttempt.id}
+        `);
+        await transaction.execute(
+          sql`set local session_replication_role = origin`
+        );
+      });
+
+      await db.transaction(async (transaction) => {
+        const updatedAttempt = await transaction.execute(
+          updateMixedAttempt("operator_duplicate_risk_decision_required")
+        );
+        expect(updatedAttempt.rows).toHaveLength(1);
+        const updatedDispatch = await transaction.execute(sql`
+          update inbox_v2_outbound_dispatches
+             set state = 'outcome_unknown',
+                 active_attempt_id = null,
+                 revision = 3,
+                 updated_at = ${OUTBOUND_TEST_TIMES.artifactAt}
+           where tenant_id = ${fixture.tenantId}
+             and id = ${fixture.attemptingDispatch.id}
+             and state = 'attempting'
+             and revision = 2
+           returning id
+        `);
+        expect(updatedDispatch.rows).toHaveLength(1);
+      });
+
+      const persisted = await db.execute<{
+        outcome_kind: string;
+        required_action: string;
+      }>(sql`
+        select outcome_kind,
+               unknown_required_action as required_action
+          from inbox_v2_outbound_dispatch_attempts
+         where tenant_id = ${fixture.tenantId}
+           and id = ${fixture.pendingAttempt.id}
+      `);
+      expect(persisted.rows).toEqual([
+        {
+          outcome_kind: "outcome_unknown",
+          required_action: "operator_duplicate_risk_decision_required"
+        }
+      ]);
+    });
+
+    it("serializes direct accepted-artifact and retryable-reconciliation inserts on the exact attempt", async () => {
+      const fixture = fixtureFor("artifact-retry-race");
+      tenantIds.push(fixture.tenantId);
+      await seedOutboundAnchors(db, fixture);
+      const repository = createSqlInboxV2OutboundTransportRepository(db);
+      await expect(
+        persistAtomicOutboundProducer(db, fixture)
+      ).resolves.toMatchObject({ kind: "applied" });
+      await expect(
+        repository.createDispatch(fixture.queuedDispatch)
+      ).resolves.toMatchObject({ kind: "already_exists" });
+      await expect(
+        repository.applyAttempt(fixture.openAttemptCommit)
+      ).resolves.toEqual({ kind: "committed" });
+      await expect(
+        repository.applyAttempt(fixture.completeUnknownCommit)
+      ).resolves.toEqual({ kind: "committed" });
+
+      const decisionDb = createHuleeDatabase({ poolConfig: { max: 1 } });
+      const artifactDb = createHuleeDatabase({ poolConfig: { max: 1 } });
+      const decisionReady = deferred<void>();
+      const artifactReady = deferred<void>();
+      const releaseBoth = deferred<void>();
+      try {
+        const decisionWrite = captureDatabaseWrite(async () => {
+          await decisionDb.transaction(async (transaction) => {
+            await configureConcurrentWrite(transaction);
+            decisionReady.resolve();
+            await releaseBoth.promise;
+            const inserted = await transaction.execute(
+              buildInsertInboxV2OutboundDispatchReconciliationDecisionSql(
+                fixture.reconciliationDecision
+              )
+            );
+            expect(inserted.rows).toHaveLength(1);
+          });
+        });
+        const artifactWrite = captureDatabaseWrite(async () => {
+          await artifactDb.transaction(async (transaction) => {
+            await configureConcurrentWrite(transaction);
+            artifactReady.resolve();
+            await releaseBoth.promise;
+            const inserted = await transaction.execute(
+              buildInsertInboxV2OutboundDispatchArtifactSql(
+                fixture.artifacts[0]!
+              )
+            );
+            expect(inserted.rows).toHaveLength(1);
+          });
+        });
+
+        await Promise.all([decisionReady.promise, artifactReady.promise]);
+        releaseBoth.resolve();
+        const results = await Promise.all([decisionWrite, artifactWrite]);
+        const committed = results.filter(
+          (result) => result.kind === "committed"
+        );
+        const rejected = results.filter((result) => result.kind === "rejected");
+        expect(committed).toHaveLength(1);
+        expect(rejected).toHaveLength(1);
+        expect(databaseFailureEvidence(rejected[0]!.error)).toMatch(
+          /23514[\s\S]*inbox_v2\.outbound_artifact_retry_unsafe/u
+        );
+
+        const persisted = await db.execute<{
+          artifact_count: string;
+          decision_count: string;
+        }>(sql`
+          select
+            (
+              select count(*)::text
+                from inbox_v2_outbound_dispatch_artifacts artifact_row
+               where artifact_row.tenant_id = ${fixture.tenantId}
+                 and artifact_row.dispatch_id = ${fixture.queuedDispatch.id}
+                 and artifact_row.attempt_id = ${fixture.unknownAttempt.id}
+                 and artifact_row.state = 'accepted'
+            ) as artifact_count,
+            (
+              select count(*)::text
+                from inbox_v2_outbound_dispatch_reconciliation_decisions
+                  decision_row
+               where decision_row.tenant_id = ${fixture.tenantId}
+                 and decision_row.dispatch_id = ${fixture.queuedDispatch.id}
+                 and decision_row.unknown_attempt_id =
+                   ${fixture.unknownAttempt.id}
+                 and decision_row.result_state = 'retryable_failure'
+            ) as decision_count
+        `);
+        expect(
+          Number(persisted.rows[0]?.artifact_count) +
+            Number(persisted.rows[0]?.decision_count)
+        ).toBe(1);
+      } finally {
+        releaseBoth.resolve();
+        await Promise.all([
+          closeHuleeDatabase(decisionDb),
+          closeHuleeDatabase(artifactDb)
+        ]);
+      }
+    }, 20_000);
+
     it("fences provider I/O across an expired lease reclaimed by another worker", async () => {
       const fixture = fixtureFor("fenced-provider-race");
       tenantIds.push(fixture.tenantId);
@@ -2087,9 +2315,9 @@ describePostgres(
           kind: "committed"
         });
         for (const artifact of fixture.artifacts) {
-          await expect(repository.appendArtifact(artifact)).resolves.toEqual({
-            kind: "committed"
-          });
+          await expect(
+            db.execute(buildInsertInboxV2OutboundDispatchArtifactSql(artifact))
+          ).resolves.toMatchObject({ rows: [{ id: artifact.id }] });
         }
         await seedAssociationOccurrences(db, fixture);
 
@@ -2377,6 +2605,222 @@ describePostgres(
         outcome_count: "1"
       });
     });
+
+    it.each([
+      "file_erased",
+      "object_quarantined",
+      "file_head_advanced"
+    ] as const)(
+      "rejects provider open with zero attempts when a pinned block becomes %s",
+      async (driftKind) => {
+        const fixture = fixtureFor(`provider-file-fence-${driftKind}`);
+        tenantIds.push(fixture.tenantId);
+        await seedOutboundAnchors(db, fixture);
+        await expect(
+          persistAtomicOutboundProducer(db, fixture)
+        ).resolves.toMatchObject({ kind: "applied" });
+        const pin = await promoteProviderPlanToPinnedFile(db, fixture);
+        await driftPinnedProviderFile(db, pin, driftKind);
+        const providerOpen = await claimProviderOpen(db, fixture, driftKind);
+
+        await expect(
+          createSqlInboxV2OutboundTransportRepository(db).applyAttemptFenced({
+            outboxLease: providerOpen.fence,
+            commit: providerOpen.commit
+          })
+        ).resolves.toEqual({ kind: "binding_fence_conflict" });
+
+        const attempts = await db.execute<{ count: string }>(sql`
+          select count(*)::text as count
+            from inbox_v2_outbound_dispatch_attempts
+           where tenant_id = ${fixture.tenantId}
+             and dispatch_id = ${fixture.queuedDispatch.id}
+        `);
+        expect(attempts.rows[0]?.count).toBe("0");
+      }
+    );
+
+    it("rejects a pinned plan when a concurrent file quarantine wins before its deferred lock", async () => {
+      const fixture = fixtureFor("plan-pin-quarantine-wins");
+      tenantIds.push(fixture.tenantId);
+      await seedOutboundAnchors(db, fixture);
+      await expect(
+        persistAtomicOutboundProducer(db, fixture)
+      ).resolves.toMatchObject({ kind: "applied" });
+      const prepared = await preparePinnedPlanRaceFixture(db, fixture);
+
+      const quarantineDb = createHuleeDatabase({ poolConfig: { max: 1 } });
+      const planDb = createHuleeDatabase({ poolConfig: { max: 1 } });
+      const quarantineHeld = deferred<void>();
+      const releaseQuarantine = deferred<void>();
+      const planPid = deferred<number>();
+      let quarantineWrite: Promise<DatabaseWriteResult> | undefined;
+      let planWrite: Promise<DatabaseWriteResult> | undefined;
+      try {
+        quarantineWrite = captureDatabaseWrite(async () => {
+          await quarantineDb.transaction(async (transaction) => {
+            await configureConcurrentWrite(transaction);
+            await quarantinePinnedFile(transaction, prepared.pin);
+            quarantineHeld.resolve();
+            await releaseQuarantine.promise;
+          });
+        });
+        await quarantineHeld.promise;
+
+        planWrite = captureDatabaseWrite(async () => {
+          await planDb.transaction(async (transaction) => {
+            await configureConcurrentWrite(transaction);
+            planPid.resolve(await databaseBackendPid(transaction));
+            await insertPinnedPlanRows(transaction, prepared.rows);
+          });
+        });
+        const waiting = await waitForDatabaseLockWait(
+          db,
+          await planPid.promise
+        );
+        expect(waiting).toBe(true);
+        releaseQuarantine.resolve();
+
+        await expect(quarantineWrite).resolves.toEqual({ kind: "committed" });
+        const planResult = await planWrite;
+        expect(planResult.kind).toBe("rejected");
+        if (planResult.kind !== "rejected") {
+          throw new Error("A stale pinned plan unexpectedly committed.");
+        }
+        expect(databaseFailureEvidence(planResult.error)).toMatch(
+          /23503[\s\S]*inbox_v2\.outbound_dispatch_block_mapping_invalid/u
+        );
+        const plans = await db.execute<{ count: string }>(sql`
+          select count(*)::text as count
+            from inbox_v2_file_outbound_dispatch_plans
+           where tenant_id = ${fixture.tenantId}
+             and dispatch_id = ${fixture.queuedDispatch.id}
+        `);
+        expect(plans.rows[0]?.count).toBe("0");
+      } finally {
+        releaseQuarantine.resolve();
+        await Promise.allSettled(
+          [quarantineWrite, planWrite].filter(
+            (write): write is Promise<DatabaseWriteResult> =>
+              write !== undefined
+          )
+        );
+        await Promise.all([
+          closeHuleeDatabase(quarantineDb),
+          closeHuleeDatabase(planDb)
+        ]);
+      }
+    }, 20_000);
+
+    it("lets an exact pinned plan commit first, serializes later quarantine, and blocks provider open", async () => {
+      const fixture = fixtureFor("plan-pin-lock-wins");
+      tenantIds.push(fixture.tenantId);
+      await seedOutboundAnchors(db, fixture);
+      await expect(
+        persistAtomicOutboundProducer(db, fixture)
+      ).resolves.toMatchObject({ kind: "applied" });
+      const prepared = await preparePinnedPlanRaceFixture(db, fixture);
+
+      const planDb = createHuleeDatabase({ poolConfig: { max: 1 } });
+      const quarantineDb = createHuleeDatabase({ poolConfig: { max: 1 } });
+      const planLocked = deferred<void>();
+      const releasePlan = deferred<void>();
+      const quarantinePid = deferred<number>();
+      let planWrite: Promise<DatabaseWriteResult> | undefined;
+      let quarantineWrite: Promise<DatabaseWriteResult> | undefined;
+      try {
+        planWrite = captureDatabaseWrite(async () => {
+          await planDb.transaction(async (transaction) => {
+            await configureConcurrentWrite(transaction);
+            await insertPinnedPlanRows(transaction, prepared.rows);
+            await transaction.execute(sql`set constraints all immediate`);
+            planLocked.resolve();
+            await releasePlan.promise;
+          });
+        });
+        await planLocked.promise;
+
+        quarantineWrite = captureDatabaseWrite(async () => {
+          await quarantineDb.transaction(async (transaction) => {
+            await configureConcurrentWrite(transaction);
+            quarantinePid.resolve(await databaseBackendPid(transaction));
+            await quarantinePinnedFile(transaction, prepared.pin);
+          });
+        });
+        expect(
+          await waitForDatabaseLockWait(db, await quarantinePid.promise)
+        ).toBe(true);
+        releasePlan.resolve();
+
+        await expect(planWrite).resolves.toEqual({ kind: "committed" });
+        await expect(quarantineWrite).resolves.toEqual({ kind: "committed" });
+
+        const providerOpen = await claimProviderOpen(
+          db,
+          fixture,
+          "plan-pin-lock-wins"
+        );
+        await expect(
+          createSqlInboxV2OutboundTransportRepository(db).applyAttemptFenced({
+            outboxLease: providerOpen.fence,
+            commit: providerOpen.commit
+          })
+        ).resolves.toEqual({ kind: "binding_fence_conflict" });
+        const attempts = await db.execute<{ count: string }>(sql`
+          select count(*)::text as count
+            from inbox_v2_outbound_dispatch_attempts
+           where tenant_id = ${fixture.tenantId}
+             and dispatch_id = ${fixture.queuedDispatch.id}
+        `);
+        expect(attempts.rows[0]?.count).toBe("0");
+      } finally {
+        releasePlan.resolve();
+        await Promise.allSettled(
+          [planWrite, quarantineWrite].filter(
+            (write): write is Promise<DatabaseWriteResult> =>
+              write !== undefined
+          )
+        );
+        await Promise.all([
+          closeHuleeDatabase(planDb),
+          closeHuleeDatabase(quarantineDb)
+        ]);
+      }
+    }, 20_000);
+
+    it.each([
+      "privacy_erased",
+      "retention_purged",
+      "content_revision_advanced",
+      "fingerprint_expired"
+    ] as const)(
+      "rejects provider open with zero attempts when planned content becomes %s",
+      async (driftKind) => {
+        const fixture = fixtureFor(`provider-content-fence-${driftKind}`);
+        tenantIds.push(fixture.tenantId);
+        await seedOutboundAnchors(db, fixture);
+        await expect(
+          persistAtomicOutboundProducer(db, fixture)
+        ).resolves.toMatchObject({ kind: "applied" });
+        await driftProviderContentFence(db, fixture, driftKind);
+        const providerOpen = await claimProviderOpen(db, fixture, driftKind);
+
+        await expect(
+          createSqlInboxV2OutboundTransportRepository(db).applyAttemptFenced({
+            outboxLease: providerOpen.fence,
+            commit: providerOpen.commit
+          })
+        ).resolves.toEqual({ kind: "binding_fence_conflict" });
+
+        const attempts = await db.execute<{ count: string }>(sql`
+          select count(*)::text as count
+            from inbox_v2_outbound_dispatch_attempts
+           where tenant_id = ${fixture.tenantId}
+             and dispatch_id = ${fixture.queuedDispatch.id}
+        `);
+        expect(attempts.rows[0]?.count).toBe("0");
+      }
+    );
 
     it("rejects a stale binding fence before opening provider I/O", async () => {
       const fixture = fixtureFor("stale-fence");
@@ -3162,21 +3606,22 @@ function canonicalMessageCreationCommit(
     createdAt,
     updatedAt: createdAt
   };
+  const contentBlocks = [
+    {
+      blockKey: "body-1",
+      kind: "text",
+      role: "body",
+      text: "Outbound transport integration message",
+      language: "en"
+    }
+  ] as const;
   const content = inboxV2TimelineContentSchema.parse({
     tenantId,
     id: `timeline_content:outbound-${fixture.suffix}`,
     state: {
       kind: "available",
-      blocks: [
-        {
-          blockKey: "body-1",
-          kind: "text",
-          role: "body",
-          text: "Outbound transport integration message",
-          language: "en"
-        }
-      ],
-      contentDigestSha256: "4".repeat(64)
+      blocks: contentBlocks,
+      contentDigestSha256: calculateInboxV2MessageContentDigest(contentBlocks)
     },
     revision: "1",
     createdAt: committedAt,
@@ -3893,6 +4338,16 @@ async function persistAtomicOutboundProducer(
       if (prepared.kind !== "ready") {
         throw new Error(`Atomic Message preparation failed: ${prepared.kind}`);
       }
+      const contentPlan =
+        await persistInboxV2OutboundDispatchContentPlanInTransaction(
+          context,
+          outboundDispatchContentPlanFor(fixture)
+        );
+      if (contentPlan.kind !== "persisted") {
+        throw new Error(
+          `Atomic dispatch content-plan preparation failed: ${contentPlan.kind}`
+        );
+      }
       return prepared.capability;
     },
     async (context, capability) => {
@@ -3905,6 +4360,735 @@ async function persistAtomicOutboundProducer(
       };
     }
   );
+}
+
+type ProviderPlanFilePin = NonNullable<
+  ReturnType<
+    typeof outboundDispatchContentPlanFor
+  >["blocks"][number]["exactFileObjectPin"]
+>;
+
+async function promoteProviderPlanToPinnedFile(
+  db: HuleeDatabase,
+  fixture: OutboundFixture
+): Promise<ProviderPlanFilePin> {
+  const currentPlan = outboundDispatchContentPlanFor(fixture);
+  const sourceBlock = currentPlan.blocks[0];
+  if (sourceBlock === undefined) {
+    throw new Error("Pinned provider plan requires one source block.");
+  }
+  const rawPin = {
+    file: {
+      tenantId: fixture.tenantId,
+      kind: "file" as const,
+      id: `file:provider-open-${fixture.suffix}`
+    },
+    fileRevision: "2",
+    fileVersion: {
+      tenantId: fixture.tenantId,
+      kind: "file_version" as const,
+      id: `file_version:provider-open-${fixture.suffix}-v1`
+    },
+    objectVersion: {
+      tenantId: fixture.tenantId,
+      kind: "file_object_version" as const,
+      id: `file_object_version:provider-open-${fixture.suffix}-v1`
+    }
+  };
+  const { planDigestSha256: _digest, ...base } = currentPlan;
+  const changed = {
+    ...base,
+    blocks: currentPlan.blocks.map((block, index) =>
+      index === 0
+        ? {
+            ...block,
+            blockKind: "file" as const,
+            exactFileObjectPin: rawPin
+          }
+        : block
+    )
+  };
+  const pinnedPlan = inboxV2OutboundDispatchContentPlanSchema.parse({
+    ...changed,
+    planDigestSha256: calculateInboxV2OutboundDispatchContentPlanDigest(changed)
+  });
+  const pin = pinnedPlan.blocks[0]?.exactFileObjectPin;
+  if (pin === null || pin === undefined) {
+    throw new Error("Pinned provider plan did not retain its exact file pin.");
+  }
+  const createdAt = OUTBOUND_TEST_TIMES.loadedAt;
+  const materializedAt = OUTBOUND_TEST_TIMES.selectedAt;
+  const materializationJobId = `attachment_materialization_job:provider-open-${fixture.suffix}`;
+  const materializationAttachmentId = `message_attachment:provider-open-${fixture.suffix}`;
+  const operationEvidenceId = `object_operation_evidence:provider-open-${fixture.suffix}`;
+  const authorization = authorizedExternalSendInput(fixture);
+  const causeEvent = authorization.records.events[0];
+  const authorizationResource = authorization.revisions.resources[0];
+  if (causeEvent === undefined || authorizationResource === undefined) {
+    throw new Error(
+      "Pinned provider plan requires its committed event and authorization resource."
+    );
+  }
+
+  await db.transaction(async (transaction) => {
+    await transaction.execute(sql`
+      insert into inbox_v2_file_object_versions (
+        tenant_id, id, storage_root_id, storage_object_key,
+        storage_version_identity, versioning_mode, checksum_sha256,
+        size_bytes, declared_media_type, detected_media_type,
+        encryption_key_ref, data_class_id, retention_anchor_at, created_at
+      ) values (
+        ${fixture.tenantId}, ${pin.objectVersion.id},
+        'core:provider-open-file-test',
+        ${`provider-open/${fixture.suffix}/v1`}, 'v1', 'immutable_key',
+        ${"e".repeat(64)}, 1, 'application/octet-stream',
+        'application/octet-stream', null, 'core:message-content',
+        ${createdAt}, ${createdAt}
+      )
+    `);
+    await transaction.execute(sql`
+      insert into inbox_v2_file_objects (
+        tenant_id, id, data_class_id, processing_purpose_id,
+        retention_anchor_at, state, current_file_version_id,
+        current_object_version_id, revision, created_at, updated_at
+      ) values (
+        ${fixture.tenantId}, ${pin.file.id}, 'core:message-content',
+        'core:communication', ${createdAt}, 'pending', null, null, 1,
+        ${createdAt}, ${createdAt}
+      )
+    `);
+    await transaction.execute(sql`
+      insert into inbox_v2_file_versions (
+        tenant_id, id, file_id, version_number, object_version_id, created_at
+      ) values (
+        ${fixture.tenantId}, ${pin.fileVersion.id}, ${pin.file.id}, 1,
+        ${pin.objectVersion.id}, ${createdAt}
+      )
+    `);
+    // This fixture starts immediately before provider byte verification. Seed
+    // the already-authorized active job under replica mode, then return to
+    // origin mode so the successful put evidence and both ready-head guards
+    // are validated exactly as they are in production.
+    await transaction.execute(
+      sql`set local session_replication_role = replica`
+    );
+    await transaction.execute(sql`
+      insert into inbox_v2_file_attachment_materialization_jobs (
+        tenant_id, id, attachment_id, file_id, expected_file_revision,
+        conversation_id, timeline_item_id, parent_message_id,
+        expected_parent_revision, visibility_boundary,
+        timeline_content_id, expected_content_revision, content_block_key,
+        content_mutation_fence_sha256, source_occurrence_id,
+        source_locator_kind, source_locator_reference,
+        source_locator_digest_sha256, reservation_namespace_generation,
+        cause_event_id, cause_mutation_id, cause_stream_commit_id,
+        cause_stream_position, correlation_id, caused_at,
+        authorization_command_id, authorization_command_type_id,
+        authorization_client_mutation_id, authorization_mutation_id,
+        authorization_decision_id, authorization_epoch,
+        authorization_actor_kind, authorization_actor_id,
+        authorization_authorized_at, authorization_decision_set_digest_sha256,
+        authorization_resource_fence_set_digest_sha256,
+        authorization_tenant_rbac_revision,
+        authorization_shared_access_revision,
+        authorization_resource_head_id,
+        authorization_resource_access_revision,
+        authorization_structural_relation_revision,
+        authorization_collaborator_set_revision,
+        authorization_audit_grant_source_ids,
+        authorization_audit_policy_version, idempotency_token,
+        expected_attachment_revision, state, lease_generation,
+        lease_token_hash, lease_owner_id, lease_claimed_at, lease_expires_at,
+        reserved_file_version_id, reserved_object_version_id,
+        reserved_storage_root_id, reserved_storage_object_key,
+        revision, created_at, updated_at
+      ) values (
+        ${fixture.tenantId}, ${materializationJobId},
+        ${materializationAttachmentId}, ${pin.file.id}, 1,
+        ${fixture.references.conversation.id},
+        ${fixture.references.timelineItem.id},
+        ${fixture.messageCreationCommit.message.id}, 1, 'external_work',
+        ${fixture.messageCreationCommit.content.id},
+        ${BigInt(fixture.messageCreationCommit.content.revision)},
+        ${sourceBlock.blockKey}, ${"a".repeat(64)}, null,
+        'derivative', ${`src_ref_${"a".repeat(43)}`}, ${"b".repeat(64)},
+        'provider-open-v1', ${causeEvent.id},
+        ${authorization.records.mutationId},
+        ${authorization.records.streamCommitId}, 1,
+        ${causeEvent.correlationId}, ${causeEvent.occurredAt},
+        ${authorization.command.id},
+        'core:attachment.materialization.reserve',
+        ${authorization.command.clientMutationId},
+        ${authorization.records.mutationId},
+        ${authorization.command.authorizationDecisionId},
+        ${authorization.command.authorizationEpoch},
+        'trusted_service', 'core:source-runtime',
+        ${authorization.command.authorizedAt}, ${"c".repeat(64)},
+        ${"d".repeat(64)},
+        ${BigInt(authorization.revisions.expectedTenantRbacRevision)},
+        ${BigInt(authorization.revisions.expectedSharedAccessRevision)},
+        ${authorizationResource.resourceHeadId},
+        ${BigInt(authorizationResource.expectedResourceAccessRevision)},
+        ${BigInt(authorizationResource.expectedStructuralRelationRevision ?? "1")},
+        ${BigInt(authorizationResource.expectedCollaboratorSetRevision ?? "1")},
+        array['internal-ref:provider-open-fixture']::text[],
+        'core:provider-open-fixture',
+        ${`provider-open-${fixture.suffix}`}, 1,
+        'verifying', 1, ${"e".repeat(64)},
+        'core:source-runtime', ${createdAt},
+        ${OUTBOUND_TEST_TIMES.leaseExpiresAt},
+        ${pin.fileVersion.id}, ${pin.objectVersion.id},
+        'core:provider-open-file-test',
+        ${`provider-open/${fixture.suffix}/v1`},
+        2, ${createdAt}, ${materializedAt}
+      )
+    `);
+    await transaction.execute(sql`set local session_replication_role = origin`);
+    await transaction.execute(sql`
+      insert into inbox_v2_file_object_operation_evidence (
+        tenant_id, id, object_version_id, materialization_job_id,
+        operation_kind, storage_root_id, attempt_token, outcome,
+        safe_reason_id, observed_version_count, affected_bytes,
+        deletion_evidence_digest_sha256, expected_object_head_revision,
+        live_parent_count, active_purpose_count, active_hold_count,
+        deletion_authority_evaluated_at,
+        deletion_authority_decision_sha256, requested_at, completed_at,
+        revision
+      ) values (
+        ${fixture.tenantId}, ${operationEvidenceId}, ${pin.objectVersion.id},
+        ${materializationJobId}, 'put', 'core:provider-open-file-test',
+        ${`provider-open-put-${fixture.suffix}`}, 'succeeded',
+        null, null, 1, null, null, null, null, null, null, null,
+        ${createdAt}, ${materializedAt}, 1
+      )
+    `);
+    await transaction.execute(sql`
+      insert into inbox_v2_file_object_version_heads (
+        tenant_id, object_version_id, state, latest_operation_evidence_id,
+        revision, state_changed_at, created_at
+      ) values (
+        ${fixture.tenantId}, ${pin.objectVersion.id}, 'ready',
+        ${operationEvidenceId}, 1, ${materializedAt}, ${createdAt}
+      )
+    `);
+    await transaction.execute(sql`
+      update inbox_v2_file_objects
+         set state = 'ready',
+             current_file_version_id = ${pin.fileVersion.id},
+             current_object_version_id = ${pin.objectVersion.id},
+             revision = 2,
+             updated_at = ${materializedAt}
+       where tenant_id = ${fixture.tenantId}
+         and id = ${pin.file.id}
+    `);
+
+    await transaction.execute(
+      sql`set local session_replication_role = replica`
+    );
+    const blockUpdate = await transaction.execute(sql`
+      update inbox_v2_file_outbound_artifact_blocks
+         set block_kind = 'file',
+             file_id = ${pin.file.id},
+             file_revision = ${BigInt(pin.fileRevision)},
+             file_version_id = ${pin.fileVersion.id},
+             object_version_id = ${pin.objectVersion.id}
+       where tenant_id = ${fixture.tenantId}
+         and content_plan_id = ${pinnedPlan.id}
+       returning block_key
+    `);
+    expect(blockUpdate.rows).toHaveLength(1);
+    const planUpdate = await transaction.execute(sql`
+      update inbox_v2_file_outbound_dispatch_plans
+         set plan_digest_sha256 = ${pinnedPlan.planDigestSha256}
+       where tenant_id = ${fixture.tenantId}
+         and id = ${pinnedPlan.id}
+       returning id
+    `);
+    expect(planUpdate.rows).toHaveLength(1);
+    await transaction.execute(sql`set local session_replication_role = origin`);
+  });
+  return pin;
+}
+
+type PinnedPlanJsonRows = Readonly<{
+  plan: Record<string, unknown>;
+  artifact: Record<string, unknown>;
+  block: Record<string, unknown>;
+}>;
+
+async function preparePinnedPlanRaceFixture(
+  db: HuleeDatabase,
+  fixture: OutboundFixture
+): Promise<Readonly<{ pin: ProviderPlanFilePin; rows: PinnedPlanJsonRows }>> {
+  const pin = await promoteProviderPlanToPinnedFile(db, fixture);
+  const attachmentId = `message_attachment:provider-open-${fixture.suffix}`;
+  const ownerBlockKey =
+    outboundDispatchContentPlanFor(fixture).blocks[0]?.blockKey;
+  if (ownerBlockKey === undefined) {
+    throw new Error("Pinned plan race fixture requires one owner block.");
+  }
+  return db.transaction(async (transaction) => {
+    await transaction.execute(sql`
+      insert into inbox_v2_message_attachment_anchors (
+        tenant_id, id, owner_message_id, owner_timeline_item_id,
+        owner_timeline_content_id, owner_block_key, materialization_state,
+        revision, created_at
+      ) values (
+        ${fixture.tenantId}, ${attachmentId},
+        ${fixture.messageCreationCommit.message.id},
+        ${fixture.references.timelineItem.id},
+        ${fixture.messageCreationCommit.content.id},
+        ${ownerBlockKey}, 'ready', 1,
+        ${OUTBOUND_TEST_TIMES.loadedAt}
+      )
+      on conflict do nothing
+    `);
+    await transaction.execute(
+      sql`set local session_replication_role = replica`
+    );
+    const payload = await transaction.execute(sql`
+      update inbox_v2_timeline_content_payloads
+         set kind = 'file',
+             text_role = null,
+             text_value = null,
+             language = null,
+             attachment_id = ${attachmentId},
+             attachment_state = 'ready',
+             attachment_file_id = null,
+             attachment_v2_file_id = ${pin.file.id},
+             attachment_file_revision = ${BigInt(pin.fileRevision)},
+             attachment_file_version_id = ${pin.fileVersion.id},
+             attachment_object_version_id = ${pin.objectVersion.id},
+             attachment_failure_reason_id = null,
+             display_name = 'provider-open.bin'
+       where tenant_id = ${fixture.tenantId}
+         and content_id =
+           ${fixture.messageCreationCommit.content.id}
+         and content_revision =
+           ${BigInt(fixture.messageCreationCommit.content.revision)}
+         and ordinal = 0
+       returning block_key
+    `);
+    expect(payload.rows).toHaveLength(1);
+
+    const snapshot = await transaction.execute<{
+      plan_row: Record<string, unknown>;
+      artifact_row: Record<string, unknown>;
+      block_row: Record<string, unknown>;
+    }>(sql`
+      select to_jsonb(plan_row) as plan_row,
+             to_jsonb(artifact_row) as artifact_row,
+             to_jsonb(block_row) as block_row
+        from inbox_v2_file_outbound_dispatch_plans plan_row
+        join inbox_v2_file_outbound_artifact_plans artifact_row
+          on artifact_row.tenant_id = plan_row.tenant_id
+         and artifact_row.content_plan_id = plan_row.id
+        join inbox_v2_file_outbound_artifact_blocks block_row
+          on block_row.tenant_id = artifact_row.tenant_id
+         and block_row.content_plan_id = artifact_row.content_plan_id
+         and block_row.artifact_plan_id = artifact_row.id
+       where plan_row.tenant_id = ${fixture.tenantId}
+         and plan_row.dispatch_id = ${fixture.queuedDispatch.id}
+    `);
+    const row = snapshot.rows[0];
+    if (row === undefined || snapshot.rows.length !== 1) {
+      throw new Error("Pinned plan race fixture must have one complete row.");
+    }
+    await transaction.execute(sql`
+      delete from inbox_v2_file_outbound_artifact_blocks
+       where tenant_id = ${fixture.tenantId}
+         and content_plan_id = ${String(row.plan_row.id)}
+    `);
+    await transaction.execute(sql`
+      delete from inbox_v2_file_outbound_artifact_plans
+       where tenant_id = ${fixture.tenantId}
+         and content_plan_id = ${String(row.plan_row.id)}
+    `);
+    await transaction.execute(sql`
+      delete from inbox_v2_file_outbound_dispatch_plans
+       where tenant_id = ${fixture.tenantId}
+         and id = ${String(row.plan_row.id)}
+    `);
+    await transaction.execute(sql`set local session_replication_role = origin`);
+    return {
+      pin,
+      rows: {
+        plan: row.plan_row,
+        artifact: row.artifact_row,
+        block: row.block_row
+      }
+    };
+  });
+}
+
+async function insertPinnedPlanRows(
+  executor: DatabaseSqlExecutor,
+  rows: PinnedPlanJsonRows
+): Promise<void> {
+  await executor.execute(sql`
+    insert into inbox_v2_file_outbound_dispatch_plans
+    select populated.*
+      from jsonb_populate_record(
+        null::inbox_v2_file_outbound_dispatch_plans,
+        ${JSON.stringify(rows.plan)}::jsonb
+      ) populated
+  `);
+  await executor.execute(sql`
+    insert into inbox_v2_file_outbound_artifact_plans
+    select populated.*
+      from jsonb_populate_record(
+        null::inbox_v2_file_outbound_artifact_plans,
+        ${JSON.stringify(rows.artifact)}::jsonb
+      ) populated
+  `);
+  await executor.execute(sql`
+    insert into inbox_v2_file_outbound_artifact_blocks
+    select populated.*
+      from jsonb_populate_record(
+        null::inbox_v2_file_outbound_artifact_blocks,
+        ${JSON.stringify(rows.block)}::jsonb
+      ) populated
+  `);
+}
+
+async function quarantinePinnedFile(
+  executor: DatabaseSqlExecutor,
+  pin: ProviderPlanFilePin
+): Promise<void> {
+  // MSG-003 makes a ready file head immutable to normal application writes.
+  // These race tests deliberately inject an impossible/corrupt post-plan head
+  // to prove that the deferred plan fence still fails closed under concurrency.
+  await executor.execute(sql`set local session_replication_role = replica`);
+  const updated = await executor.execute(sql`
+    update inbox_v2_file_objects
+       set state = 'quarantined',
+           revision = revision + 1,
+           updated_at = clock_timestamp()
+     where tenant_id = ${pin.file.tenantId}
+       and id = ${pin.file.id}
+       and revision = ${BigInt(pin.fileRevision)}
+       and state = 'ready'
+     returning id
+  `);
+  await executor.execute(sql`set local session_replication_role = origin`);
+  expect(updated.rows).toHaveLength(1);
+}
+
+async function driftPinnedProviderFile(
+  db: HuleeDatabase,
+  pin: ProviderPlanFilePin,
+  driftKind: "file_erased" | "object_quarantined" | "file_head_advanced"
+): Promise<void> {
+  if (driftKind === "object_quarantined") {
+    await db.transaction(async (transaction) => {
+      await transaction.execute(
+        sql`set local session_replication_role = replica`
+      );
+      await transaction.execute(sql`
+        update inbox_v2_file_object_version_heads
+           set state = 'quarantined',
+               state_changed_at = ${OUTBOUND_TEST_TIMES.completedAt}
+         where tenant_id = ${pin.file.tenantId}
+           and object_version_id = ${pin.objectVersion.id}
+      `);
+      await transaction.execute(
+        sql`set local session_replication_role = origin`
+      );
+    });
+    return;
+  }
+
+  await db.transaction(async (transaction) => {
+    // Ready file heads are immutable after MSG-003. Inject the deliberately
+    // inconsistent state under privileged repair mode so provider-open is
+    // still verified as fail-closed if corruption or legacy drift is present.
+    await transaction.execute(
+      sql`set local session_replication_role = replica`
+    );
+    await transaction.execute(sql`
+      update inbox_v2_file_objects
+         set state = ${driftKind === "file_erased" ? "deleted" : "ready"},
+             revision = revision + 1,
+             updated_at = ${OUTBOUND_TEST_TIMES.completedAt}
+       where tenant_id = ${pin.file.tenantId}
+         and id = ${pin.file.id}
+    `);
+    await transaction.execute(sql`set local session_replication_role = origin`);
+  });
+}
+
+type ProviderContentFenceDrift =
+  | "privacy_erased"
+  | "retention_purged"
+  | "content_revision_advanced"
+  | "fingerprint_expired";
+
+async function driftProviderContentFence(
+  db: HuleeDatabase,
+  fixture: OutboundFixture,
+  driftKind: ProviderContentFenceDrift
+): Promise<void> {
+  const plan = outboundDispatchContentPlanFor(fixture);
+  if (driftKind === "fingerprint_expired") {
+    const { planDigestSha256: _digest, ...base } = plan;
+    const changed = {
+      ...base,
+      contentFingerprint: {
+        ...plan.contentFingerprint,
+        validUntil: OUTBOUND_TEST_TIMES.artifactAt
+      }
+    };
+    const expiredPlan = inboxV2OutboundDispatchContentPlanSchema.parse({
+      ...changed,
+      planDigestSha256:
+        calculateInboxV2OutboundDispatchContentPlanDigest(changed)
+    });
+    await db.transaction(async (transaction) => {
+      await transaction.execute(
+        sql`set local session_replication_role = replica`
+      );
+      await transaction.execute(sql`
+        update inbox_v2_file_outbound_dispatch_plans
+           set content_fingerprint_valid_until =
+                 ${expiredPlan.contentFingerprint.validUntil},
+               plan_digest_sha256 = ${expiredPlan.planDigestSha256}
+         where tenant_id = ${fixture.tenantId}
+           and id = ${expiredPlan.id}
+      `);
+      await transaction.execute(
+        sql`set local session_replication_role = origin`
+      );
+    });
+    return;
+  }
+
+  const tombstoneEventId =
+    driftKind === "privacy_erased" || driftKind === "retention_purged"
+      ? `event:provider-content-tombstone-${driftKind}-${fixture.suffix}`
+      : null;
+  await db.transaction(async (transaction) => {
+    if (tombstoneEventId !== null) {
+      await transaction.execute(sql`
+        insert into event_store (
+          id, tenant_id, type, version, occurred_at, idempotency_key,
+          payload, created_at, updated_at
+        ) values (
+          ${tombstoneEventId}, ${fixture.tenantId},
+          'core:timeline-content.tombstoned', 'v1',
+          ${OUTBOUND_TEST_TIMES.completedAt},
+          ${`provider-content-tombstone-${driftKind}-${fixture.suffix}`},
+          ${JSON.stringify({ driftKind })}::jsonb,
+          ${OUTBOUND_TEST_TIMES.completedAt},
+          ${OUTBOUND_TEST_TIMES.completedAt}
+        )
+      `);
+    }
+    await transaction.execute(
+      sql`set local session_replication_role = replica`
+    );
+    if (driftKind === "content_revision_advanced") {
+      await transaction.execute(sql`
+        update inbox_v2_timeline_contents
+           set revision = revision + 1,
+               state_changed_at = ${OUTBOUND_TEST_TIMES.completedAt},
+               updated_at = ${OUTBOUND_TEST_TIMES.completedAt}
+         where tenant_id = ${fixture.tenantId}
+           and id = ${plan.timelineContent.id}
+      `);
+      await transaction.execute(sql`
+        update inbox_v2_messages
+           set content_revision = content_revision + 1,
+               revision = revision + 1,
+               updated_at = ${OUTBOUND_TEST_TIMES.completedAt}
+         where tenant_id = ${fixture.tenantId}
+           and id = ${plan.message.id}
+      `);
+    } else {
+      if (tombstoneEventId === null) {
+        throw new Error("Provider content-fence tombstone event is missing.");
+      }
+      await transaction.execute(sql`
+        update inbox_v2_timeline_contents
+           set state = ${driftKind},
+               content_digest_sha256 = null,
+               tombstone_event_id = ${tombstoneEventId},
+               tombstone_reason_id =
+                 ${driftKind === "privacy_erased" ? "core:test-privacy-erasure" : null},
+               retention_policy_id =
+                 ${driftKind === "retention_purged" ? "core:test-retention" : null},
+               retention_policy_version =
+                 ${driftKind === "retention_purged" ? "1" : null},
+               retention_policy_revision =
+                 ${driftKind === "retention_purged" ? 1 : null},
+               revision = revision + 1,
+               state_changed_at = ${OUTBOUND_TEST_TIMES.completedAt},
+               updated_at = ${OUTBOUND_TEST_TIMES.completedAt}
+         where tenant_id = ${fixture.tenantId}
+           and id = ${plan.timelineContent.id}
+      `);
+      await transaction.execute(sql`
+        update inbox_v2_messages
+           set content_state = ${driftKind},
+               content_revision = content_revision + 1,
+               revision = revision + 1,
+               updated_at = ${OUTBOUND_TEST_TIMES.completedAt}
+         where tenant_id = ${fixture.tenantId}
+           and id = ${plan.message.id}
+      `);
+    }
+    await transaction.execute(sql`set local session_replication_role = origin`);
+  });
+}
+
+async function claimProviderOpen(
+  db: HuleeDatabase,
+  fixture: OutboundFixture,
+  label: string
+) {
+  const providerIntent = authorizedExternalSendInput(
+    fixture
+  ).records.outboxIntents.find(
+    (intent) => intent.typeId === "core:provider.dispatch"
+  );
+  if (providerIntent === undefined) {
+    throw new Error("Provider file-fence fixture has no provider intent.");
+  }
+  const tenantId = inboxV2TenantIdSchema.parse(fixture.tenantId);
+  const workerId = inboxV2NamespacedIdSchema.parse(
+    "core:provider-file-fence-worker"
+  );
+  const outbox = createSqlInboxV2RepositoryOutbox(db, {
+    tokenSource: (count) =>
+      Array.from(
+        { length: count },
+        (_, index) =>
+          `lease-token:file-fence-${label}-${index}-${runId}-${"f".repeat(32)}`
+      )
+  });
+  const claimed = await outbox.claimAvailable({
+    context: { tenantId },
+    workerId,
+    leaseDurationSeconds: 30,
+    batchSize: 2
+  });
+  if (claimed.outcome !== "claimed") {
+    throw new Error("Provider file-fence intent was not claimed.");
+  }
+  const providerClaim = claimed.claims.find(
+    (claim) => claim.work.intentId === providerIntent.id
+  );
+  if (providerClaim === undefined || providerClaim.work.lease === null) {
+    throw new Error("Provider file-fence claim has no exact lease.");
+  }
+  const lease = providerClaim.work.lease;
+  const pendingAttempt = inboxV2OutboundDispatchAttemptSchema.parse({
+    ...fixture.pendingAttempt,
+    openedAt: lease.claimedAt,
+    leaseExpiresAt: lease.expiresAt
+  });
+  const attemptingDispatch = inboxV2OutboundDispatchSchema.parse({
+    ...fixture.attemptingDispatch,
+    updatedAt: pendingAttempt.openedAt
+  });
+  const commit = inboxV2OutboundDispatchAttemptCommitSchema.parse({
+    ...fixture.openAttemptCommit,
+    attempt: pendingAttempt,
+    dispatchAfter: attemptingDispatch
+  });
+  return {
+    fence: {
+      context: { tenantId },
+      intentId: providerIntent.id,
+      workerId,
+      leaseToken: providerClaim.leaseToken,
+      expectedLeaseRevision: lease.leaseRevision,
+      expectedHandlerId: providerIntent.handlerId
+    },
+    commit
+  } as const;
+}
+
+function outboundDispatchContentPlanFor(fixture: OutboundFixture) {
+  const commit = fixture.messageCreationCommit;
+  const route = commit.outboundRoute;
+  const dispatch = commit.outboundDispatch;
+  if (
+    route === null ||
+    dispatch === null ||
+    commit.content.state.kind !== "available"
+  ) {
+    throw new Error("Outbound integration fixture requires available content.");
+  }
+  const blocks = commit.content.state.blocks.map((block) => {
+    if (block.kind === "unsupported_source_content") {
+      throw new Error("Unsupported source content cannot be sent outbound.");
+    }
+    if (
+      block.kind !== "text" &&
+      block.kind !== "location" &&
+      block.kind !== "contact"
+    ) {
+      throw new Error(
+        "This transport integration fixture only supports inline content blocks."
+      );
+    }
+    return {
+      blockKey: block.blockKey,
+      blockKind: block.kind,
+      exactFileObjectPin: null,
+      artifactOrdinal: 1
+    };
+  });
+  const base = {
+    tenantId: commit.tenantId,
+    id: `outbound_dispatch_content_plan:${dispatch.id}`,
+    dispatch: {
+      tenantId: commit.tenantId,
+      kind: "outbound_dispatch" as const,
+      id: dispatch.id
+    },
+    message: {
+      tenantId: commit.tenantId,
+      kind: "message" as const,
+      id: commit.message.id
+    },
+    messageRevision: commit.message.revision,
+    conversation: commit.message.conversation,
+    timelineItem: commit.message.timelineItem,
+    route: {
+      tenantId: commit.tenantId,
+      kind: "outbound_route" as const,
+      id: route.id
+    },
+    timelineContent: commit.message.content.content,
+    contentRevision: commit.content.revision,
+    contentFingerprint: {
+      purposeId: "core:outbound_dispatch_content_plan" as const,
+      keyGeneration: "outbound-content-key:g1",
+      validUntil: "2026-08-18T09:00:00.000Z",
+      hmacSha256: `hmac-sha256:${commit.content.state.contentDigestSha256}`
+    },
+    binding: route.sourceThreadBinding,
+    bindingRevision: fixture.bindingHeadSnapshot.bindingRevision,
+    capabilityRevision: route.bindingFence.capabilityRevision,
+    adapterContract: route.adapterContract,
+    blocks,
+    artifacts: [
+      {
+        ordinal: 1,
+        grouping: "single" as const,
+        capabilityId: "core:message-text-send" as const,
+        operationId: route.operationId,
+        blockKeys: blocks.map((block) => block.blockKey)
+      }
+    ],
+    createdAt: dispatch.createdAt,
+    revision: "1" as const
+  };
+  return inboxV2OutboundDispatchContentPlanSchema.parse({
+    ...base,
+    planDigestSha256: calculateInboxV2OutboundDispatchContentPlanDigest(base)
+  });
 }
 
 async function insertCoherentDuplicateProjectionAndRecheckDomainClosure(
@@ -4273,6 +5457,8 @@ async function seedExistingOutboundRoute(
         administrative_revision:
           fixture.route.bindingFence.administrativeRevision,
         capability_revision: fixture.route.bindingFence.capabilityRevision,
+        provider_access_revision:
+          fixture.bindingHeadSnapshot.providerAccessRevision,
         route_descriptor_revision:
           fixture.route.bindingFence.routeDescriptorRevision,
         remote_access_state: "active",
@@ -4621,18 +5807,86 @@ async function expectDatabaseFailure(
     await promise;
     throw new Error("Expected PostgreSQL to reject the forged write.");
   } catch (error) {
-    const diagnostics: string[] = [];
-    let current: unknown = error;
-    for (let depth = 0; depth < 5 && current !== undefined; depth += 1) {
-      const record =
-        typeof current === "object" && current !== null
-          ? (current as Record<string, unknown>)
-          : {};
-      diagnostics.push(
-        `${String(record.code ?? "")} ${String(record.message ?? current)}`
-      );
-      current = record.cause;
-    }
-    expect(diagnostics.join("\ncaused by: ")).toMatch(pattern);
+    expect(databaseFailureEvidence(error)).toMatch(pattern);
   }
+}
+
+type DatabaseSqlExecutor = Pick<HuleeDatabase, "execute">;
+type DatabaseWriteResult =
+  | Readonly<{ kind: "committed" }>
+  | Readonly<{ kind: "rejected"; error: unknown }>;
+
+async function configureConcurrentWrite(
+  executor: DatabaseSqlExecutor
+): Promise<void> {
+  await executor.execute(sql`set local statement_timeout = '10s'`);
+  await executor.execute(sql`set local lock_timeout = '8s'`);
+}
+
+async function databaseBackendPid(
+  executor: DatabaseSqlExecutor
+): Promise<number> {
+  const result = await executor.execute<{ pid: number }>(
+    sql`select pg_backend_pid() as pid`
+  );
+  const pid = result.rows[0]?.pid;
+  if (!Number.isInteger(pid)) {
+    throw new Error("Concurrent database worker PID is missing.");
+  }
+  return pid!;
+}
+
+async function waitForDatabaseLockWait(
+  observer: HuleeDatabase,
+  pid: number,
+  timeoutMs = 4_000
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const activity = await observer.execute<{
+      wait_event_type: string | null;
+    }>(sql`
+      select wait_event_type
+        from pg_catalog.pg_stat_activity
+       where pid = ${pid}
+    `);
+    if (activity.rows[0]?.wait_event_type === "Lock") return true;
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+  }
+  return false;
+}
+
+async function captureDatabaseWrite(
+  write: () => Promise<void>
+): Promise<DatabaseWriteResult> {
+  try {
+    await write();
+    return { kind: "committed" };
+  } catch (error) {
+    return { kind: "rejected", error };
+  }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve } as const;
+}
+
+function databaseFailureEvidence(error: unknown): string {
+  const diagnostics: string[] = [];
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current !== undefined; depth += 1) {
+    const record =
+      typeof current === "object" && current !== null
+        ? (current as Record<string, unknown>)
+        : {};
+    diagnostics.push(
+      `${String(record.code ?? "")} ${String(record.message ?? current)}`
+    );
+    current = record.cause;
+  }
+  return diagnostics.join("\ncaused by: ");
 }

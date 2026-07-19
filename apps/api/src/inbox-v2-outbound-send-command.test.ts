@@ -5,12 +5,16 @@ import {
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
   INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_ID,
   INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_VERSION,
+  INBOX_V2_OUTBOUND_DISPATCH_CONTENT_FINGERPRINT_PURPOSE_ID,
   calculateInboxV2CanonicalSha256,
+  calculateInboxV2OutboundDispatchContentFingerprint,
+  calculateInboxV2OutboundDispatchContentPlanDigest,
   inboxV2AuthorizationDecisionReferenceSchema,
   inboxV2AuthorizedCommandSchema,
   inboxV2MessageCreationCommitSchema,
   inboxV2OutboundDispatchRerouteCommitSchema,
   inboxV2OutboundDispatchSchema,
+  inboxV2OutboundDispatchContentPlanSchema,
   inboxV2OutboundRoutePrincipalSchema,
   inboxV2OutboundRouteResolutionCommitSchema,
   inboxV2OutboundRouteResolutionInputSchema,
@@ -19,6 +23,8 @@ import {
   materializeInboxV2OutboundRouteResolutionCommit,
   type InboxV2AuthorizationDecisionReference,
   type InboxV2OutboundDispatch,
+  type InboxV2MessageCreationCommit,
+  type InboxV2MessageContentBlock,
   type InboxV2OutboundDispatchRerouteCommit,
   type InboxV2OutboundRoute,
   type InboxV2OutboundRouteResolutionInput
@@ -51,7 +57,8 @@ import {
 import {
   calculateInboxV2OutboundRouteIdempotencyToken,
   calculateInboxV2OutboundSendIntentDigest,
-  createInboxV2OutboundSendCommandService,
+  createInboxV2OutboundSendCommandService as createUnboundInboxV2OutboundSendCommandService,
+  type InboxV2OutboundDispatchContentFingerprintAuthority,
   type InboxV2OutboundSendCommand,
   type InboxV2OutboundSendCommandPreparer,
   type InboxV2OutboundSendCommandServiceOptions,
@@ -73,6 +80,187 @@ const requestScope = {
     employee: fixtureEmployeeReference
   })
 } satisfies InboxV2OutboundSendRequestScope;
+
+const contentFingerprintKey = new Uint8Array(32).fill(23);
+const contentFingerprintKeyGeneration = "outbound-content-key:g1";
+const contentFingerprintValidUntil = "2026-08-18T09:00:00.000Z";
+
+function fixtureContentFingerprintAuthority(): InboxV2OutboundDispatchContentFingerprintAuthority {
+  return {
+    async verify(input) {
+      const validUntil = Date.parse(input.fingerprint.validUntil);
+      if (
+        input.fingerprint.purposeId !==
+          INBOX_V2_OUTBOUND_DISPATCH_CONTENT_FINGERPRINT_PURPOSE_ID ||
+        input.fingerprint.keyGeneration !== contentFingerprintKeyGeneration ||
+        !Number.isFinite(validUntil) ||
+        validUntil > Date.parse(contentFingerprintValidUntil) ||
+        validUntil <= Date.parse(input.at) ||
+        Date.parse(input.planCreatedAt) < Date.parse(fixtureT0) ||
+        Date.parse(input.planCreatedAt) >= validUntil
+      ) {
+        return false;
+      }
+      const expected = calculateInboxV2OutboundDispatchContentFingerprint(
+        {
+          tenantId: input.tenantId,
+          timelineContent: input.timelineContent,
+          contentRevision: input.contentRevision,
+          contentDigestSha256: input.contentDigestSha256
+        },
+        {
+          tenantId: input.tenantId,
+          purposeId: INBOX_V2_OUTBOUND_DISPATCH_CONTENT_FINGERPRINT_PURPOSE_ID,
+          keyGeneration: input.fingerprint.keyGeneration,
+          validUntil: input.fingerprint.validUntil,
+          key: contentFingerprintKey
+        }
+      );
+      return expected.hmacSha256 === input.fingerprint.hmacSha256;
+    }
+  };
+}
+
+type TestOutboundSendServiceOptions = Omit<
+  InboxV2OutboundSendCommandServiceOptions,
+  "contentFingerprintAuthority" | "currentTime"
+> &
+  Partial<
+    Pick<
+      InboxV2OutboundSendCommandServiceOptions,
+      "contentFingerprintAuthority" | "currentTime"
+    >
+  >;
+
+function createInboxV2OutboundSendCommandService(
+  options: TestOutboundSendServiceOptions
+) {
+  return createUnboundInboxV2OutboundSendCommandService({
+    contentFingerprintAuthority: fixtureContentFingerprintAuthority(),
+    currentTime: () => fixtureT2,
+    ...options
+  });
+}
+
+function dispatchContentPlanFor(messageCreation: InboxV2MessageCreationCommit) {
+  const route = messageCreation.outboundRoute;
+  const dispatch = messageCreation.outboundDispatch;
+  const content = messageCreation.content;
+  const binding = messageCreation.outboundBindingSnapshot;
+  if (
+    route === null ||
+    dispatch === null ||
+    binding === null ||
+    content.state.kind !== "available"
+  ) {
+    throw new Error(
+      "Outbound content-plan fixture requires available content."
+    );
+  }
+  const base = {
+    tenantId: messageCreation.tenantId,
+    id: `outbound_dispatch_content_plan:${dispatch.id}`,
+    dispatch: {
+      tenantId: messageCreation.tenantId,
+      kind: "outbound_dispatch" as const,
+      id: dispatch.id
+    },
+    message: {
+      tenantId: messageCreation.tenantId,
+      kind: "message" as const,
+      id: messageCreation.message.id
+    },
+    messageRevision: messageCreation.message.revision,
+    conversation: messageCreation.message.conversation,
+    timelineItem: messageCreation.message.timelineItem,
+    route: {
+      tenantId: messageCreation.tenantId,
+      kind: "outbound_route" as const,
+      id: route.id
+    },
+    timelineContent: messageCreation.message.content.content,
+    contentRevision: content.revision,
+    contentFingerprint: calculateInboxV2OutboundDispatchContentFingerprint(
+      {
+        tenantId: messageCreation.tenantId,
+        timelineContent: messageCreation.message.content.content,
+        contentRevision: content.revision,
+        contentDigestSha256: content.state.contentDigestSha256
+      },
+      {
+        tenantId: messageCreation.tenantId,
+        purposeId: INBOX_V2_OUTBOUND_DISPATCH_CONTENT_FINGERPRINT_PURPOSE_ID,
+        keyGeneration: contentFingerprintKeyGeneration,
+        validUntil: contentFingerprintValidUntil,
+        key: contentFingerprintKey
+      }
+    ),
+    binding: route.sourceThreadBinding,
+    bindingRevision: binding.revision,
+    capabilityRevision: route.bindingFence.capabilityRevision,
+    adapterContract: route.adapterContract,
+    blocks: content.state.blocks.map((block) => ({
+      blockKey: block.blockKey,
+      blockKind: fixtureDispatchBlockKind(block),
+      exactFileObjectPin: fixtureFileObjectPin(block),
+      artifactOrdinal: 1
+    })),
+    artifacts: [
+      {
+        ordinal: 1,
+        grouping: "single" as const,
+        capabilityId: "core:message-text-send" as const,
+        operationId: route.operationId,
+        blockKeys: content.state.blocks.map((block) => block.blockKey)
+      }
+    ],
+    createdAt: dispatch.createdAt,
+    revision: "1" as const
+  };
+  return inboxV2OutboundDispatchContentPlanSchema.parse({
+    ...base,
+    planDigestSha256: calculateInboxV2OutboundDispatchContentPlanDigest(base)
+  });
+}
+
+function fixtureDispatchBlockKind(block: InboxV2MessageContentBlock) {
+  if (block.kind === "unsupported_source_content") {
+    throw new Error(
+      "Unsupported source content cannot be dispatched outbound."
+    );
+  }
+  return block.kind;
+}
+
+function fixtureFileObjectPin(block: InboxV2MessageContentBlock) {
+  if (
+    block.kind === "image" ||
+    block.kind === "audio" ||
+    block.kind === "video" ||
+    block.kind === "file" ||
+    block.kind === "sticker"
+  ) {
+    return block.attachment.state === "ready"
+      ? {
+          file: block.attachment.file,
+          fileRevision: block.attachment.fileRevision,
+          fileVersion: block.attachment.fileVersion,
+          objectVersion: block.attachment.objectVersion
+        }
+      : null;
+  }
+  if (block.kind === "extension") {
+    return block.payloadPin.state === "exact"
+      ? {
+          file: block.payloadFile,
+          fileRevision: block.payloadPin.fileRevision,
+          fileVersion: block.payloadPin.fileVersion,
+          objectVersion: block.payloadPin.objectVersion
+        }
+      : null;
+  }
+  return null;
+}
 
 function preparerReturning(
   prepared: InboxV2PreparedOutboundSendCommand | null
@@ -152,12 +340,225 @@ describe("Inbox V2 outbound send command", () => {
       "reply-authority",
       "route",
       "message.prepare",
+      "content-plan",
       "message.seal"
     ]);
     expect(persistence.persistRoute).toHaveBeenCalledTimes(1);
     expect(persistence.fenceReplyAuthority).toHaveBeenCalledTimes(1);
     expect(persistence.prepareMessage).toHaveBeenCalledTimes(1);
+    expect(persistence.persistContentPlan).toHaveBeenCalledWith(
+      expect.anything(),
+      fixture.prepared.kind === "selected"
+        ? fixture.prepared.dispatchContentPlan
+        : expect.anything()
+    );
     expect(persistence.sealMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("pins the content plan to the binding snapshot revision, not its generation", async () => {
+    const fixture = selectedFixture({ bindingRevision: "7" });
+    if (fixture.prepared.kind !== "selected") {
+      throw new Error("Expected a selected outbound fixture.");
+    }
+    expect(fixture.route.bindingFence.bindingGeneration).toBe("1");
+    expect(fixture.prepared.dispatchContentPlan.bindingRevision).toBe("7");
+
+    const service = createInboxV2OutboundSendCommandService({
+      requestScope,
+      preparer: preparerReturning(fixture.prepared),
+      denialSink: denialSink(),
+      coordinator: appliedCoordinator(fixture, []),
+      persistence: persistenceFixture(fixture, []),
+      authorizationGate: allowGate()
+    });
+
+    await expect(service.send(fixture.command)).resolves.toMatchObject({
+      outcome: "queued",
+      outboundDispatchId: fixture.dispatch.id
+    });
+  });
+
+  it("rejects a validly re-digested content plan that drifts from the Message head", async () => {
+    const fixture = selectedFixture();
+    const selected = fixture.prepared;
+    const coordinator = coordinatorThatMustNotRun();
+    const authority = {
+      verify: vi.fn(fixtureContentFingerprintAuthority().verify)
+    } satisfies InboxV2OutboundDispatchContentFingerprintAuthority;
+    const { planDigestSha256: _digest, ...basePlan } =
+      selected.dispatchContentPlan;
+    const driftedBase = {
+      ...basePlan,
+      contentRevision: String(BigInt(basePlan.contentRevision) + 1n)
+    };
+    const driftedPlan = inboxV2OutboundDispatchContentPlanSchema.parse({
+      ...driftedBase,
+      planDigestSha256:
+        calculateInboxV2OutboundDispatchContentPlanDigest(driftedBase)
+    });
+    const service = createInboxV2OutboundSendCommandService({
+      requestScope,
+      preparer: preparerReturning({
+        ...selected,
+        dispatchContentPlan: driftedPlan
+      }),
+      contentFingerprintAuthority: authority,
+      denialSink: denialSink(),
+      coordinator,
+      authorizationGate: allowGate()
+    });
+
+    await expect(service.send(fixture.command)).rejects.toThrow(
+      "permission.denied"
+    );
+    expect(
+      coordinator.withAuthorizedAtomicMaterialization
+    ).not.toHaveBeenCalled();
+    expect(authority.verify).not.toHaveBeenCalled();
+  });
+
+  it("rejects a public-plan re-digest when fingerprint validity is changed without the tenant key", async () => {
+    const fixture = selectedFixture();
+    const selected = fixture.prepared;
+    const coordinator = coordinatorThatMustNotRun();
+    const persistence = persistenceFixture(fixture, []);
+    const authority = {
+      verify: vi.fn(fixtureContentFingerprintAuthority().verify)
+    } satisfies InboxV2OutboundDispatchContentFingerprintAuthority;
+    const { planDigestSha256: _digest, ...basePlan } =
+      selected.dispatchContentPlan;
+    const tamperedBase = {
+      ...basePlan,
+      contentFingerprint: {
+        ...basePlan.contentFingerprint,
+        validUntil: "2026-08-17T09:00:00.000Z"
+      }
+    };
+    const tamperedPlan = inboxV2OutboundDispatchContentPlanSchema.parse({
+      ...tamperedBase,
+      planDigestSha256:
+        calculateInboxV2OutboundDispatchContentPlanDigest(tamperedBase)
+    });
+    const service = createInboxV2OutboundSendCommandService({
+      requestScope,
+      preparer: preparerReturning({
+        ...selected,
+        dispatchContentPlan: tamperedPlan
+      }),
+      contentFingerprintAuthority: authority,
+      denialSink: denialSink(),
+      coordinator,
+      persistence,
+      authorizationGate: allowGate()
+    });
+
+    await expect(service.send(fixture.command)).resolves.toEqual({
+      outcome: "materialization_rejected",
+      reason: "dispatch_content_fingerprint_rejected"
+    });
+    expect(authority.verify).toHaveBeenCalledOnce();
+    expect(
+      coordinator.withAuthorizedAtomicMaterialization
+    ).not.toHaveBeenCalled();
+    expect(persistence.persistContentPlan).not.toHaveBeenCalled();
+  });
+
+  it("rejects an expired content fingerprint before HMAC authority or persistence", async () => {
+    const fixture = selectedFixture();
+    const coordinator = coordinatorThatMustNotRun();
+    const persistence = persistenceFixture(fixture, []);
+    const authority = {
+      verify: vi.fn(fixtureContentFingerprintAuthority().verify)
+    } satisfies InboxV2OutboundDispatchContentFingerprintAuthority;
+    const service = createInboxV2OutboundSendCommandService({
+      requestScope,
+      preparer: preparerReturning(fixture.prepared),
+      contentFingerprintAuthority: authority,
+      currentTime: () => contentFingerprintValidUntil,
+      denialSink: denialSink(),
+      coordinator,
+      persistence,
+      authorizationGate: allowGate()
+    });
+
+    await expect(service.send(fixture.command)).resolves.toEqual({
+      outcome: "materialization_rejected",
+      reason: "dispatch_content_fingerprint_rejected"
+    });
+    expect(authority.verify).not.toHaveBeenCalled();
+    expect(
+      coordinator.withAuthorizedAtomicMaterialization
+    ).not.toHaveBeenCalled();
+    expect(persistence.persistContentPlan).not.toHaveBeenCalled();
+  });
+
+  it("rejects a re-digested capability substitution before persistence", async () => {
+    const fixture = selectedFixture();
+    const selected = fixture.prepared;
+    const coordinator = coordinatorThatMustNotRun();
+    const { planDigestSha256: _digest, ...basePlan } =
+      selected.dispatchContentPlan;
+    const substitutedBase = {
+      ...basePlan,
+      artifacts: basePlan.artifacts.map((artifact, index) =>
+        index === 0
+          ? { ...artifact, capabilityId: "core:forged-send-capability" }
+          : artifact
+      )
+    };
+    const substitutedPlan = inboxV2OutboundDispatchContentPlanSchema.parse({
+      ...substitutedBase,
+      planDigestSha256:
+        calculateInboxV2OutboundDispatchContentPlanDigest(substitutedBase)
+    });
+    const service = createInboxV2OutboundSendCommandService({
+      requestScope,
+      preparer: preparerReturning({
+        ...selected,
+        dispatchContentPlan: substitutedPlan
+      }),
+      denialSink: denialSink(),
+      coordinator,
+      authorizationGate: allowGate()
+    });
+
+    await expect(service.send(fixture.command)).rejects.toThrow(
+      "permission.denied"
+    );
+    expect(
+      coordinator.withAuthorizedAtomicMaterialization
+    ).not.toHaveBeenCalled();
+  });
+
+  it("rolls the send back when the immutable content plan conflicts before Message seal", async () => {
+    const fixture = selectedFixture();
+    const calls: string[] = [];
+    const persistence = persistenceFixture(fixture, calls);
+    vi.mocked(persistence.persistContentPlan).mockResolvedValueOnce({
+      kind: "conflict",
+      code: "dispatch_plan_conflict"
+    });
+    const service = createInboxV2OutboundSendCommandService({
+      requestScope,
+      preparer: preparerReturning(fixture.prepared),
+      denialSink: denialSink(),
+      coordinator: appliedCoordinator(fixture, calls),
+      persistence,
+      authorizationGate: allowGate()
+    });
+
+    await expect(service.send(fixture.command)).resolves.toEqual({
+      outcome: "materialization_rejected",
+      reason: "dispatch_plan_conflict"
+    });
+    expect(persistence.sealMessage).not.toHaveBeenCalled();
+    expect(persistence.persistContentPlan).toHaveBeenCalledOnce();
+    expect(calls).toEqual([
+      "coordinator",
+      "reply-authority",
+      "route",
+      "message.prepare"
+    ]);
   });
 
   it("passes the production authorization gate for a closed normal send", async () => {
@@ -216,6 +617,7 @@ describe("Inbox V2 outbound send command", () => {
       "reply-authority",
       "reroute",
       "message.prepare",
+      "content-plan",
       "message.seal"
     ]);
     if (fixture.prepared.kind !== "selected") {
@@ -1191,11 +1593,16 @@ describe("Inbox V2 outbound send command", () => {
   });
 });
 
-function selectedFixture() {
+function selectedFixture(options: Readonly<{ bindingRevision?: string }> = {}) {
   const rawMessageCreation = fixtureHuleeCreationCommit();
   const rawRoute = rawMessageCreation.outboundRoute;
   const rawActor = rawMessageCreation.message.appActor;
-  if (rawRoute === null || rawActor?.kind !== "employee") {
+  const rawBinding = rawMessageCreation.outboundBindingSnapshot;
+  if (
+    rawRoute === null ||
+    rawActor?.kind !== "employee" ||
+    rawBinding === null
+  ) {
     throw new Error("Outbound fixture requires an employee route actor.");
   }
   const command: InboxV2OutboundSendCommand = {
@@ -1231,6 +1638,10 @@ function selectedFixture() {
     outboundRoute: {
       ...rawRoute,
       idempotencyToken: routeIdempotencyToken
+    },
+    outboundBindingSnapshot: {
+      ...rawBinding,
+      revision: options.bindingRevision ?? rawBinding.revision
     },
     routeConsumption:
       rawMessageCreation.routeConsumption === null
@@ -1315,15 +1726,16 @@ function selectedFixture() {
     decisions,
     requestHash
   });
-  const prepared: InboxV2PreparedOutboundSendCommand = {
+  const prepared = {
     kind: "selected",
     authorizationPlan,
     denialContext: {} as InboxV2SecurityDenialContext,
     authorizedCommand,
     authorizedMutation,
     routeResolution,
-    messageCreation
-  };
+    messageCreation,
+    dispatchContentPlan: dispatchContentPlanFor(messageCreation)
+  } satisfies Extract<InboxV2PreparedOutboundSendCommand, { kind: "selected" }>;
   return {
     command,
     route,
@@ -1397,7 +1809,7 @@ function activePrimaryFixture() {
     decisions,
     requestHash: calculateInboxV2OutboundSendIntentDigest(base.command)
   });
-  const prepared: InboxV2PreparedOutboundSendCommand = {
+  const prepared = {
     ...base.prepared,
     authorizationPlan,
     authorizedCommand,
@@ -1654,8 +2066,9 @@ function rerouteFixture() {
     authorizedMutation,
     routeResolution,
     messageCreation,
+    dispatchContentPlan: dispatchContentPlanFor(messageCreation),
     rerouteCommit
-  };
+  } satisfies Extract<InboxV2PreparedOutboundSendCommand, { kind: "selected" }>;
   return {
     command,
     route,
@@ -2759,6 +3172,10 @@ function persistenceFixture(
     prepareMessage: vi.fn(async () => {
       calls.push("message.prepare");
       return { kind: "ready" as const, capability };
+    }),
+    persistContentPlan: vi.fn(async () => {
+      calls.push("content-plan");
+      return { kind: "persisted" as const };
     }),
     sealMessage: vi.fn(async () => {
       calls.push("message.seal");

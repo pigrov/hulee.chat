@@ -59,6 +59,9 @@ const inboxV2KnownEntityKinds = [
   "message_provider_lifecycle_operation",
   "deferred_message_source_action",
   "message_attachment",
+  "attachment_materialization_claim",
+  "attachment_materialization_attempt",
+  "attachment_materialization_evidence",
   "event",
   "source_connection",
   "source_account",
@@ -87,6 +90,12 @@ const inboxV2KnownEntityKinds = [
   "outbound_dispatch_artifact_reference_link",
   "outbound_multi_send_operation",
   "file",
+  "file_version",
+  "file_object_version",
+  "file_parent_link",
+  "file_derivative_edge",
+  "object_operation_evidence",
+  "outbound_dispatch_content_plan",
   "watcher_subscription",
   "notification"
 ] as const;
@@ -218,6 +227,18 @@ export type InboxV2MessageAttachmentId = Brand<
   string,
   "InboxV2MessageAttachmentId"
 >;
+export type InboxV2AttachmentMaterializationClaimId = Brand<
+  string,
+  "InboxV2AttachmentMaterializationClaimId"
+>;
+export type InboxV2AttachmentMaterializationAttemptId = Brand<
+  string,
+  "InboxV2AttachmentMaterializationAttemptId"
+>;
+export type InboxV2AttachmentMaterializationEvidenceId = Brand<
+  string,
+  "InboxV2AttachmentMaterializationEvidenceId"
+>;
 export type InboxV2SourceExternalIdentityId = Brand<
   string,
   "InboxV2SourceExternalIdentityId"
@@ -301,6 +322,21 @@ export type InboxV2SourceAccountIdentityTransitionId = Brand<
   "InboxV2SourceAccountIdentityTransitionId"
 >;
 export type InboxV2FileId = Brand<string, "InboxV2FileId">;
+export type InboxV2FileVersionId = Brand<string, "InboxV2FileVersionId">;
+export type InboxV2ObjectVersionId = Brand<string, "InboxV2ObjectVersionId">;
+export type InboxV2FileParentLinkId = Brand<string, "InboxV2FileParentLinkId">;
+export type InboxV2FileLineageEdgeId = Brand<
+  string,
+  "InboxV2FileLineageEdgeId"
+>;
+export type InboxV2ObjectOperationEvidenceId = Brand<
+  string,
+  "InboxV2ObjectOperationEvidenceId"
+>;
+export type InboxV2OutboundDispatchContentPlanId = Brand<
+  string,
+  "InboxV2OutboundDispatchContentPlanId"
+>;
 export type InboxV2WatcherSubscriptionId = Brand<
   string,
   "InboxV2WatcherSubscriptionId"
@@ -554,6 +590,18 @@ export const inboxV2MessageAttachmentIdSchema =
     "message_attachment_",
     "message_attachment-"
   ]);
+export const inboxV2AttachmentMaterializationClaimIdSchema =
+  createInboxV2IdSchema<InboxV2AttachmentMaterializationClaimId>(
+    "attachment_materialization_claim"
+  );
+export const inboxV2AttachmentMaterializationAttemptIdSchema =
+  createInboxV2IdSchema<InboxV2AttachmentMaterializationAttemptId>(
+    "attachment_materialization_attempt"
+  );
+export const inboxV2AttachmentMaterializationEvidenceIdSchema =
+  createInboxV2IdSchema<InboxV2AttachmentMaterializationEvidenceId>(
+    "attachment_materialization_evidence"
+  );
 export const inboxV2SourceExternalIdentityIdSchema =
   createInboxV2IdSchema<InboxV2SourceExternalIdentityId>(
     "source_external_identity"
@@ -622,6 +670,22 @@ export const inboxV2FileIdSchema = createInboxV2IdSchema<InboxV2FileId>(
   "file",
   ["file_", "file-"]
 );
+export const inboxV2FileVersionIdSchema =
+  createInboxV2IdSchema<InboxV2FileVersionId>("file_version");
+export const inboxV2ObjectVersionIdSchema =
+  createInboxV2IdSchema<InboxV2ObjectVersionId>("file_object_version");
+export const inboxV2FileParentLinkIdSchema =
+  createInboxV2IdSchema<InboxV2FileParentLinkId>("file_parent_link");
+export const inboxV2FileLineageEdgeIdSchema =
+  createInboxV2IdSchema<InboxV2FileLineageEdgeId>("file_derivative_edge");
+export const inboxV2ObjectOperationEvidenceIdSchema =
+  createInboxV2IdSchema<InboxV2ObjectOperationEvidenceId>(
+    "object_operation_evidence"
+  );
+export const inboxV2OutboundDispatchContentPlanIdSchema =
+  createInboxV2IdSchema<InboxV2OutboundDispatchContentPlanId>(
+    "outbound_dispatch_content_plan"
+  );
 export const inboxV2WatcherSubscriptionIdSchema =
   createInboxV2IdSchema<InboxV2WatcherSubscriptionId>("watcher_subscription");
 export const inboxV2NotificationIdSchema =
@@ -843,6 +907,21 @@ export const inboxV2MessageAttachmentReferenceSchema =
     "message_attachment",
     inboxV2MessageAttachmentIdSchema
   );
+export const inboxV2AttachmentMaterializationClaimReferenceSchema =
+  createInboxV2TenantScopedReferenceSchema(
+    "attachment_materialization_claim",
+    inboxV2AttachmentMaterializationClaimIdSchema
+  );
+export const inboxV2AttachmentMaterializationAttemptReferenceSchema =
+  createInboxV2TenantScopedReferenceSchema(
+    "attachment_materialization_attempt",
+    inboxV2AttachmentMaterializationAttemptIdSchema
+  );
+export const inboxV2AttachmentMaterializationEvidenceReferenceSchema =
+  createInboxV2TenantScopedReferenceSchema(
+    "attachment_materialization_evidence",
+    inboxV2AttachmentMaterializationEvidenceIdSchema
+  );
 export const inboxV2SourceExternalIdentityReferenceSchema =
   createInboxV2TenantScopedReferenceSchema(
     "source_external_identity",
@@ -975,6 +1054,36 @@ export const inboxV2NormalizedInboundEventReferenceSchema =
   );
 export const inboxV2FileReferenceSchema =
   createInboxV2TenantScopedReferenceSchema("file", inboxV2FileIdSchema);
+export const inboxV2FileVersionReferenceSchema =
+  createInboxV2TenantScopedReferenceSchema(
+    "file_version",
+    inboxV2FileVersionIdSchema
+  );
+export const inboxV2ObjectVersionReferenceSchema =
+  createInboxV2TenantScopedReferenceSchema(
+    "file_object_version",
+    inboxV2ObjectVersionIdSchema
+  );
+export const inboxV2FileParentLinkReferenceSchema =
+  createInboxV2TenantScopedReferenceSchema(
+    "file_parent_link",
+    inboxV2FileParentLinkIdSchema
+  );
+export const inboxV2FileLineageEdgeReferenceSchema =
+  createInboxV2TenantScopedReferenceSchema(
+    "file_derivative_edge",
+    inboxV2FileLineageEdgeIdSchema
+  );
+export const inboxV2ObjectOperationEvidenceReferenceSchema =
+  createInboxV2TenantScopedReferenceSchema(
+    "object_operation_evidence",
+    inboxV2ObjectOperationEvidenceIdSchema
+  );
+export const inboxV2OutboundDispatchContentPlanReferenceSchema =
+  createInboxV2TenantScopedReferenceSchema(
+    "outbound_dispatch_content_plan",
+    inboxV2OutboundDispatchContentPlanIdSchema
+  );
 export const inboxV2WatcherSubscriptionReferenceSchema =
   createInboxV2TenantScopedReferenceSchema(
     "watcher_subscription",
@@ -1108,6 +1217,15 @@ export type InboxV2DeferredMessageSourceActionReference = z.infer<
 export type InboxV2MessageAttachmentReference = z.infer<
   typeof inboxV2MessageAttachmentReferenceSchema
 >;
+export type InboxV2AttachmentMaterializationClaimReference = z.infer<
+  typeof inboxV2AttachmentMaterializationClaimReferenceSchema
+>;
+export type InboxV2AttachmentMaterializationAttemptReference = z.infer<
+  typeof inboxV2AttachmentMaterializationAttemptReferenceSchema
+>;
+export type InboxV2AttachmentMaterializationEvidenceReference = z.infer<
+  typeof inboxV2AttachmentMaterializationEvidenceReferenceSchema
+>;
 export type InboxV2SourceExternalIdentityReference = z.infer<
   typeof inboxV2SourceExternalIdentityReferenceSchema
 >;
@@ -1187,6 +1305,24 @@ export type InboxV2NormalizedInboundEventReference = z.infer<
   typeof inboxV2NormalizedInboundEventReferenceSchema
 >;
 export type InboxV2FileReference = z.infer<typeof inboxV2FileReferenceSchema>;
+export type InboxV2FileVersionReference = z.infer<
+  typeof inboxV2FileVersionReferenceSchema
+>;
+export type InboxV2ObjectVersionReference = z.infer<
+  typeof inboxV2ObjectVersionReferenceSchema
+>;
+export type InboxV2FileParentLinkReference = z.infer<
+  typeof inboxV2FileParentLinkReferenceSchema
+>;
+export type InboxV2FileLineageEdgeReference = z.infer<
+  typeof inboxV2FileLineageEdgeReferenceSchema
+>;
+export type InboxV2ObjectOperationEvidenceReference = z.infer<
+  typeof inboxV2ObjectOperationEvidenceReferenceSchema
+>;
+export type InboxV2OutboundDispatchContentPlanReference = z.infer<
+  typeof inboxV2OutboundDispatchContentPlanReferenceSchema
+>;
 export type InboxV2WatcherSubscriptionReference = z.infer<
   typeof inboxV2WatcherSubscriptionReferenceSchema
 >;

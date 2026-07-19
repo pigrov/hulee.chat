@@ -47,11 +47,13 @@ import type { HuleeDatabase } from "../client";
 import {
   consumeInboxV2AtomicMaterializationSealReceipt,
   registerInboxV2AtomicSealExecutor,
+  revokeInboxV2AtomicAttachmentMaterializationProofs,
   revokeInboxV2AtomicOutboundRerouteProofs,
   revokeInboxV2AtomicOutboundRouteProofs,
   revokeInboxV2AtomicSealExecutor,
   type InboxV2AtomicMaterializationSealReceipt,
   type InboxV2AtomicMessageCreationSealManifest,
+  type InboxV2AtomicMessageMutationSealManifest,
   type InboxV2AtomicStreamEventManifest,
   type InboxV2AtomicTimelineItemCreationSealManifest
 } from "./sql-inbox-v2-atomic-materialization-internal";
@@ -80,11 +82,20 @@ const POST_HEAD_INSERT_TABLES = new Set([
   "inbox_v2_atomic_outbound_dispatch_materializations",
   "inbox_v2_atomic_source_resolution_materializations",
   "inbox_v2_external_message_references",
+  "inbox_v2_file_attachment_materialization_evidence",
+  "inbox_v2_file_object_operation_evidence",
+  "inbox_v2_file_object_version_heads",
+  "inbox_v2_file_object_versions",
+  "inbox_v2_file_parent_link_heads",
+  "inbox_v2_file_parent_links",
+  "inbox_v2_file_parent_set_heads",
+  "inbox_v2_file_versions",
   "inbox_v2_message_reference_canonical_targets",
   "inbox_v2_message_reference_contexts",
   "inbox_v2_message_reference_external_targets",
   "inbox_v2_message_reference_unresolved_candidates",
   "inbox_v2_message_reference_unresolved_targets",
+  "inbox_v2_message_attachment_anchors",
   "inbox_v2_message_revisions",
   "inbox_v2_message_transport_link_heads",
   "inbox_v2_message_transport_links",
@@ -99,6 +110,336 @@ const POST_HEAD_INSERT_TABLES = new Set([
   "inbox_v2_timeline_items",
   "inbox_v2_timeline_subject_details"
 ]);
+const POST_HEAD_INSERT_VALUE = String.raw`(?:\$\d+(?:::[a-z][a-z0-9_]*(?:\[\])?)?|null|\d+|'[a-z_]+'|true|false)`;
+const POST_HEAD_INSERT_VALUE_ROW = String.raw`\(\s*${POST_HEAD_INSERT_VALUE}(?:\s*,\s*${POST_HEAD_INSERT_VALUE})*\s*\)`;
+
+function exactPostHeadInsertPattern(
+  table: string,
+  columns: readonly string[],
+  returning: string,
+  allowMultipleRows = false
+): RegExp {
+  const columnList = columns.join(String.raw`\s*,\s*`);
+  const valueRows = allowMultipleRows
+    ? String.raw`${POST_HEAD_INSERT_VALUE_ROW}(?:\s*,\s*${POST_HEAD_INSERT_VALUE_ROW})*`
+    : POST_HEAD_INSERT_VALUE_ROW;
+  return new RegExp(
+    String.raw`^insert\s+into\s+(?:(?:public)\.)?${table}\s*\(\s*${columnList}\s*\)\s+values\s+${valueRows}\s+returning\s+(?:${returning})\s*$`,
+    "iu"
+  );
+}
+
+const POST_HEAD_EXACT_INSERT_PATTERNS = new Map<string, RegExp>([
+  [
+    "inbox_v2_message_attachment_anchors",
+    exactPostHeadInsertPattern(
+      "inbox_v2_message_attachment_anchors",
+      [
+        "tenant_id",
+        "id",
+        "owner_message_id",
+        "owner_timeline_item_id",
+        "owner_timeline_content_id",
+        "owner_block_key",
+        "materialization_state",
+        "revision",
+        "created_at"
+      ],
+      "id",
+      true
+    )
+  ],
+  [
+    "inbox_v2_action_attributions",
+    exactPostHeadInsertPattern(
+      "inbox_v2_action_attributions",
+      [
+        "tenant_id",
+        "id",
+        "conversation_id",
+        "action_participant_id",
+        "app_actor_kind",
+        "app_actor_employee_id",
+        "app_authorization_epoch",
+        "app_trusted_service_id",
+        "source_occurrence_id",
+        "automation_kind",
+        "automation_cause_event_id",
+        "automation_correlation_id",
+        "automation_caused_at",
+        "automation_initiating_employee_id",
+        "automation_initiating_authorization_epoch",
+        "created_at"
+      ],
+      "id"
+    )
+  ],
+  [
+    "inbox_v2_timeline_content_revisions",
+    exactPostHeadInsertPattern(
+      "inbox_v2_timeline_content_revisions",
+      [
+        "tenant_id",
+        "content_id",
+        "revision",
+        "expected_previous_revision",
+        "transition_kind",
+        "state",
+        "event_id",
+        "reason_id",
+        "retention_policy_id",
+        "retention_policy_version",
+        "retention_policy_revision",
+        "occurred_at",
+        "recorded_at",
+        "recorded_stream_position",
+        "record_revision"
+      ],
+      "content_id\\s+as\\s+id|content_id",
+      true
+    )
+  ],
+  [
+    "inbox_v2_timeline_content_payloads",
+    exactPostHeadInsertPattern(
+      "inbox_v2_timeline_content_payloads",
+      [
+        "tenant_id",
+        "content_id",
+        "content_revision",
+        "ordinal",
+        "block_key",
+        "kind",
+        "text_role",
+        "text_value",
+        "language",
+        "attachment_id",
+        "attachment_state",
+        "attachment_file_id",
+        "attachment_v2_file_id",
+        "attachment_file_revision",
+        "attachment_file_version_id",
+        "attachment_object_version_id",
+        "attachment_failure_reason_id",
+        "display_name",
+        "media_semantic",
+        "latitude",
+        "longitude",
+        "accuracy_meters",
+        "location_mode",
+        "live_until",
+        "heading_degrees",
+        "location_label",
+        "location_address",
+        "contact_display_name",
+        "contact_organization",
+        "unsupported_source_occurrence_id",
+        "provider_content_kind_id",
+        "safe_fallback_reason_id",
+        "extension_block_kind_id",
+        "extension_payload_schema_id",
+        "extension_payload_schema_version",
+        "extension_payload_file_id",
+        "extension_payload_v2_file_id",
+        "extension_payload_file_revision",
+        "extension_payload_file_version_id",
+        "extension_payload_object_version_id",
+        "extension_payload_digest_sha256",
+        "extension_renderer_id",
+        "created_at"
+      ],
+      "content_id\\s+as\\s+id|content_id",
+      true
+    )
+  ],
+  [
+    "inbox_v2_timeline_content_contact_values",
+    exactPostHeadInsertPattern(
+      "inbox_v2_timeline_content_contact_values",
+      [
+        "tenant_id",
+        "content_id",
+        "content_revision",
+        "block_ordinal",
+        "value_ordinal",
+        "kind",
+        "value",
+        "label"
+      ],
+      "content_id\\s+as\\s+id|content_id"
+    )
+  ],
+  [
+    "inbox_v2_message_revisions",
+    exactPostHeadInsertPattern(
+      "inbox_v2_message_revisions",
+      [
+        "tenant_id",
+        "id",
+        "message_id",
+        "timeline_item_id",
+        "expected_previous_revision",
+        "message_revision",
+        "change_kind",
+        "before_content_id",
+        "before_content_revision",
+        "before_content_state",
+        "after_content_id",
+        "after_content_revision",
+        "after_content_state",
+        "provider_operation_id",
+        "reason_id",
+        "action_attribution_id",
+        "occurred_at",
+        "recorded_at",
+        "recorded_stream_position",
+        "record_revision"
+      ],
+      "id"
+    )
+  ],
+  [
+    "inbox_v2_file_object_versions",
+    exactPostHeadInsertPattern(
+      "inbox_v2_file_object_versions",
+      [
+        "tenant_id",
+        "id",
+        "storage_root_id",
+        "storage_object_key",
+        "storage_version_identity",
+        "versioning_mode",
+        "checksum_sha256",
+        "size_bytes",
+        "declared_media_type",
+        "detected_media_type",
+        "encryption_key_ref",
+        "data_class_id",
+        "retention_anchor_at",
+        "created_at"
+      ],
+      "id"
+    )
+  ],
+  [
+    "inbox_v2_file_object_operation_evidence",
+    exactPostHeadInsertPattern(
+      "inbox_v2_file_object_operation_evidence",
+      [
+        "tenant_id",
+        "id",
+        "object_version_id",
+        "materialization_job_id",
+        "operation_kind",
+        "storage_root_id",
+        "attempt_token",
+        "outcome",
+        "safe_reason_id",
+        "observed_version_count",
+        "affected_bytes",
+        "deletion_evidence_digest_sha256",
+        "expected_object_head_revision",
+        "live_parent_count",
+        "active_purpose_count",
+        "active_hold_count",
+        "deletion_authority_evaluated_at",
+        "deletion_authority_decision_sha256",
+        "requested_at",
+        "completed_at",
+        "revision"
+      ],
+      "id"
+    )
+  ],
+  [
+    "inbox_v2_file_object_version_heads",
+    exactPostHeadInsertPattern(
+      "inbox_v2_file_object_version_heads",
+      [
+        "tenant_id",
+        "object_version_id",
+        "state",
+        "latest_operation_evidence_id",
+        "revision",
+        "state_changed_at",
+        "created_at"
+      ],
+      "object_version_id\\s+as\\s+id|object_version_id"
+    )
+  ],
+  [
+    "inbox_v2_file_versions",
+    exactPostHeadInsertPattern(
+      "inbox_v2_file_versions",
+      [
+        "tenant_id",
+        "id",
+        "file_id",
+        "version_number",
+        "object_version_id",
+        "created_at"
+      ],
+      "id"
+    )
+  ],
+  [
+    "inbox_v2_file_parent_set_heads",
+    exactPostHeadInsertPattern(
+      "inbox_v2_file_parent_set_heads",
+      [
+        "tenant_id",
+        "file_id",
+        "revision",
+        "completeness",
+        "completeness_revision",
+        "live_parent_count",
+        "updated_at"
+      ],
+      "file_id\\s+as\\s+id|file_id"
+    )
+  ],
+  [
+    "inbox_v2_file_attachment_materialization_evidence",
+    exactPostHeadInsertPattern(
+      "inbox_v2_file_attachment_materialization_evidence",
+      [
+        "tenant_id",
+        "id",
+        "job_id",
+        "attempt_id",
+        "attachment_id",
+        "file_id",
+        "expected_file_revision",
+        "lease_generation",
+        "expected_attachment_revision",
+        "resulting_attachment_revision",
+        "timeline_content_id",
+        "expected_content_revision",
+        "resulting_content_revision",
+        "content_mutation_fence_sha256",
+        "outcome",
+        "result_file_version_id",
+        "result_object_version_id",
+        "resulting_file_revision",
+        "object_operation_evidence_id",
+        "safe_reason_id",
+        "retryable",
+        "completed_at",
+        "evidence_hash_sha256",
+        "revision"
+      ],
+      "id"
+    )
+  ],
+  [
+    "inbox_v2_file_parent_links",
+    /^insert\s+into\s+(?:(?:public)\.)?inbox_v2_file_parent_links\s*\(\s*tenant_id,\s*id,\s*file_id,\s*file_version_id,\s*object_version_id,\s*parent_identity_digest_sha256,\s*parent_kind,\s*parent_purpose,\s*visibility_boundary,\s*parent_conversation_visibility,\s*parent_entity_id,\s*parent_entity_revision,\s*conversation_id,\s*timeline_item_id,\s*content_id,\s*content_revision,\s*block_key,\s*data_class_id,\s*processing_purpose_id,\s*retention_anchor_at,\s*created_at,\s*revision\s*\)\s+values\s*\(\s*\$\d+,\s*\$\d+,\s*\$\d+,\s*\$\d+,\s*\$\d+,\s*\$\d+,\s*\$\d+,\s*'attachment',\s*\$\d+,\s*\$\d+,\s*\$\d+,\s*\$\d+::bigint,\s*\$\d+,\s*\$\d+,\s*\$\d+,\s*\$\d+::bigint,\s*\$\d+,\s*\$\d+,\s*\$\d+,\s*\$\d+::timestamptz,\s*\$\d+::timestamptz,\s*1\s*\)\s+returning\s+id\s*$/iu
+  ],
+  [
+    "inbox_v2_file_parent_link_heads",
+    /^insert\s+into\s+(?:(?:public)\.)?inbox_v2_file_parent_link_heads\s*\(\s*tenant_id,\s*link_id,\s*file_id,\s*state,\s*detached_by_event_id,\s*revision,\s*updated_at\s*\)\s+values\s*\(\s*\$\d+,\s*\$\d+,\s*\$\d+,\s*'live',\s*null,\s*1,\s*\$\d+::timestamptz\s*\)\s+returning\s+link_id\s+as\s+id\s*$/iu
+  ]
+]);
 const POST_HEAD_FORBIDDEN_SQL_PATTERN =
   /(?:;|--|\/\*|\*\/|\b(?:select|with|merge|delete|truncate|alter|create|drop|grant|revoke|copy|call|lock|from|using|join|union|intersect|except)\b|\bfor\s+(?:update|no\s+key\s+update|share|key\s+share)\b|\bpg_[a-z0-9_]*\s*\()/iu;
 const POST_HEAD_INSERT_PATTERN =
@@ -106,6 +447,48 @@ const POST_HEAD_INSERT_PATTERN =
 const POST_HEAD_UPDATE_PATTERN =
   /^update\s+(?:(?:public)\.)?([a-z][a-z0-9_]*)\b/iu;
 const POST_HEAD_UPDATE_CAS_PREDICATES = new Map<string, readonly RegExp[]>([
+  [
+    "inbox_v2_file_objects",
+    [
+      /^update\s+(?:(?:public)\.)?inbox_v2_file_objects\s+set\s+state\s*=\s*'ready',\s*current_file_version_id\s*=\s*\$\d+,\s*current_object_version_id\s*=\s*\$\d+,\s*revision\s*=\s*revision\s*\+\s*1,\s*updated_at\s*=\s*\$\d+::timestamptz\s+where\s+tenant_id\s*=\s*\$\d+\s+and\s+id\s*=\s*\$\d+\s+and\s+state\s*=\s*'pending'\s+and\s+revision\s*=\s*\$\d+::bigint\s+and\s+current_file_version_id\s+is\s+null\s+and\s+current_object_version_id\s+is\s+null\s+returning\s+id\s*$/iu
+    ]
+  ],
+  [
+    "inbox_v2_message_attachment_anchors",
+    [
+      /^update\s+(?:(?:public)\.)?inbox_v2_message_attachment_anchors\s+set\s+materialization_state\s*=\s*\$\d+,\s*revision\s*=\s*\$\d+::bigint\s+where\s+tenant_id\s*=\s*\$\d+\s+and\s+id\s*=\s*\$\d+\s+and\s+owner_message_id\s*=\s*\$\d+\s+and\s+owner_timeline_item_id\s*=\s*\$\d+\s+and\s+owner_timeline_content_id\s*=\s*\$\d+\s+and\s+owner_block_key\s*=\s*\$\d+\s+and\s+materialization_state\s*=\s*'pending'\s+and\s+revision\s*=\s*\$\d+::bigint\s+and\s+created_at\s*<=\s*\$\d+::timestamptz\s+returning\s+id\s*$/iu
+    ]
+  ],
+  [
+    "inbox_v2_file_attachment_materialization_jobs",
+    [
+      /^update\s+(?:(?:public)\.)?inbox_v2_file_attachment_materialization_jobs\s+set\s+state\s*=\s*\$\d+,\s*lease_token_hash\s*=\s*null,\s*lease_owner_id\s*=\s*null,\s*lease_claimed_at\s*=\s*null,\s*lease_expires_at\s*=\s*null,\s*result_file_version_id\s*=\s*\$\d+,\s*result_object_version_id\s*=\s*\$\d+,\s*result_file_revision\s*=\s*\$\d+::bigint,\s*result_content_revision\s*=\s*\$\d+::bigint,\s*terminal_reason_id\s*=\s*\$\d+,\s*revision\s*=\s*revision\s*\+\s*1,\s*updated_at\s*=\s*\$\d+::timestamptz\s+where\s+tenant_id\s*=\s*\$\d+\s+and\s+id\s*=\s*\$\d+\s+and\s+state\s+in\s*\(\s*'claimed',\s*'transferring',\s*'verifying'\s*\)\s+and\s+revision\s*=\s*\$\d+::bigint\s+and\s+lease_token_hash\s*=\s*\$\d+\s+and\s+lease_expires_at\s*>\s*clock_timestamp\(\)\s+returning\s+id\s*$/iu
+    ]
+  ],
+  [
+    "inbox_v2_file_storage_orphans",
+    [
+      /^update\s+(?:(?:public)\.)?inbox_v2_file_storage_orphans\s+set\s+state\s*=\s*'adopted',\s*claim_token_hash\s*=\s*null,\s*claim_expires_at\s*=\s*null,\s*adopted_object_version_id\s*=\s*\$\d+,\s*terminal_evidence_digest_sha256\s*=\s*\$\d+,\s*safe_reason_id\s*=\s*null,\s*revision\s*=\s*revision\s*\+\s*1,\s*updated_at\s*=\s*\$\d+::timestamptz\s+where\s+tenant_id\s*=\s*\$\d+\s+and\s+id\s*=\s*\$\d+\s+and\s+revision\s*=\s*\$\d+::bigint\s+and\s+state\s*=\s*'open'\s+and\s+materialization_job_id\s*=\s*\$\d+\s+and\s+storage_root_id\s*=\s*\$\d+\s+and\s+storage_object_key\s*=\s*\$\d+\s+and\s+storage_version_identity\s*=\s*\$\d+\s+and\s+checksum_sha256\s*=\s*\$\d+\s+and\s+size_bytes\s*=\s*\$\d+::bigint\s+and\s+detected_media_type\s*=\s*\$\d+\s+and\s+claim_token_hash\s+is\s+null\s+and\s+claim_expires_at\s+is\s+null\s+and\s+adopted_object_version_id\s+is\s+null\s+and\s+terminal_evidence_digest_sha256\s+is\s+null\s+and\s+safe_reason_id\s+is\s+null\s+and\s+quarantine_reason_code\s+is\s+null\s+and\s+quarantine_evidence_digest_sha256\s+is\s+null\s+and\s+quarantine_physical_kind\s+is\s+null\s+returning\s+id\s*$/iu
+    ]
+  ],
+  [
+    "inbox_v2_timeline_contents",
+    [
+      /^update\s+(?:(?:public)\.)?inbox_v2_timeline_contents\s+set\s+state\s*=\s*\$\d+,\s*content_digest_sha256\s*=\s*\$\d+,\s*tombstone_event_id\s*=\s*\$\d+,\s*tombstone_reason_id\s*=\s*\$\d+,\s*retention_policy_id\s*=\s*\$\d+,\s*retention_policy_version\s*=\s*\$\d+,\s*retention_policy_revision\s*=\s*\$\d+,\s*state_changed_at\s*=\s*\$\d+,\s*revision\s*=\s*\$\d+,\s*last_changed_stream_position\s*=\s*\$\d+,\s*updated_at\s*=\s*\$\d+\s+where\s+tenant_id\s*=\s*\$\d+\s+and\s+id\s*=\s*\$\d+\s+and\s+revision\s*=\s*\$\d+\s+and\s+state\s*=\s*\$\d+\s+returning\s+id\s*$/iu
+    ]
+  ],
+  [
+    "inbox_v2_messages",
+    [
+      /^update\s+(?:(?:public)\.)?inbox_v2_messages\s+set\s+content_id\s*=\s*\$\d+,\s*content_revision\s*=\s*\$\d+,\s*content_state\s*=\s*\$\d+,\s*lifecycle\s*=\s*\$\d+,\s*lifecycle_revision_id\s*=\s*\$\d+,\s*lifecycle_reason_id\s*=\s*\$\d+,\s*lifecycle_provider_operation_id\s*=\s*\$\d+,\s*lifecycle_policy_reason_id\s*=\s*\$\d+,\s*lifecycle_changed_at\s*=\s*\$\d+,\s*revision\s*=\s*\$\d+,\s*last_changed_stream_position\s*=\s*\$\d+,\s*updated_at\s*=\s*\$\d+\s+where\s+tenant_id\s*=\s*\$\d+\s+and\s+id\s*=\s*\$\d+\s+and\s+timeline_item_id\s*=\s*\$\d+\s+and\s+revision\s*=\s*\$\d+\s+and\s+content_id\s*=\s*\$\d+\s+and\s+content_revision\s*=\s*\$\d+\s+and\s+content_state\s*=\s*\$\d+\s+and\s+lifecycle\s*=\s*\$\d+\s+returning\s+id\s*$/iu
+    ]
+  ],
+  [
+    "inbox_v2_timeline_items",
+    [
+      /^update\s+(?:(?:public)\.)?inbox_v2_timeline_items\s+set\s+revision\s*=\s*\$\d+,\s*last_changed_stream_position\s*=\s*\$\d+,\s*updated_at\s*=\s*\$\d+\s+where\s+tenant_id\s*=\s*\$\d+\s+and\s+id\s*=\s*\$\d+\s+and\s+conversation_id\s*=\s*\$\d+\s+and\s+timeline_sequence\s*=\s*\$\d+\s+and\s+subject_kind\s*=\s*\$\d+\s+and\s+subject_id\s*=\s*\$\d+\s+and\s+revision\s*=\s*\$\d+\s+returning\s+id\s*$/iu
+    ]
+  ],
   [
     "inbox_v2_conversation_heads",
     [
@@ -116,6 +499,12 @@ const POST_HEAD_UPDATE_CAS_PREDICATES = new Map<string, readonly RegExp[]>([
     "inbox_v2_source_occurrences",
     [
       /\bwhere\s+tenant_id\s*=\s*\$\d+\s+and\s+id\s*=\s*\$\d+\s+and\s+resolution_state\s*=\s*\$\d+\s+and\s+revision\s*=\s*\$\d+\s+and\s+updated_at\s*=\s*\$\d+\s+returning\s+id\s*$/iu
+    ]
+  ],
+  [
+    "inbox_v2_file_parent_set_heads",
+    [
+      /^update\s+(?:(?:public)\.)?inbox_v2_file_parent_set_heads\s+set\s+revision\s*=\s*\$\d+::bigint,\s*completeness_revision\s*=\s*\$\d+::bigint,\s*live_parent_count\s*=\s*\$\d+::integer,\s*updated_at\s*=\s*\$\d+::timestamptz\s+where\s+tenant_id\s*=\s*\$\d+\s+and\s+file_id\s*=\s*\$\d+\s+and\s+revision\s*=\s*\$\d+::bigint\s+and\s+completeness\s*=\s*'complete'\s+and\s+completeness_revision\s*=\s*revision\s+and\s+live_parent_count\s*=\s*\$\d+::integer\s+returning\s+file_id\s+as\s+id\s*$/iu
     ]
   ]
 ]);
@@ -343,6 +732,16 @@ export type InboxV2PrivilegedAuthorizationMutationContext = Readonly<{
   authorizationDecisionId: string;
   authorizationDecisionRefs: readonly InboxV2AuthorizationDecisionReference[];
   authorizationResourceRevisionFences: readonly InboxV2AuthorizationResourceRevisionExpectation[];
+  /**
+   * Exact tenant-wide dependency vector locked by the coordinator for this
+   * command. Long-running follow-up work persists these values and must fail
+   * closed when either head has advanced before it reuses the decision set.
+   */
+  authorizationTenantRbacRevision: string;
+  authorizationSharedAccessRevision: string;
+  /** Canonical evidence inherited by follow-up audit records. */
+  authorizationAuditGrantSourceIds: readonly string[];
+  authorizationAuditPolicyVersion: string | null;
   authorizedAt: string;
   occurredAt: string;
   mutationId: string;
@@ -389,6 +788,12 @@ function snapshotInboxV2AuthorizationResourceRevisionFences(
   return recursivelyFrozenAuthorizationSnapshot(fences);
 }
 
+function snapshotInboxV2AuthorizationGrantSourceIds(
+  grantSourceIds: readonly string[]
+): readonly string[] {
+  return recursivelyFrozenAuthorizationSnapshot(grantSourceIds);
+}
+
 /**
  * Runtime capability check for repositories that may write only from the
  * coordinator-owned transaction callback. Structural TypeScript values are
@@ -420,6 +825,10 @@ export type InboxV2AuthorizedAtomicMaterializationContext = Readonly<{
   authorizationDecisionId: string;
   authorizationDecisionRefs: readonly InboxV2AuthorizationDecisionReference[];
   authorizationResourceRevisionFences: readonly InboxV2AuthorizationResourceRevisionExpectation[];
+  authorizationTenantRbacRevision: string;
+  authorizationSharedAccessRevision: string;
+  authorizationAuditGrantSourceIds: readonly string[];
+  authorizationAuditPolicyVersion: string | null;
   authorizedAt: string;
   occurredAt: string;
   mutationId: string;
@@ -517,13 +926,20 @@ function assertInboxV2PostHeadWriteStatement(statement: string): void {
   const insert = POST_HEAD_INSERT_PATTERN.exec(normalized);
   if (insert !== null) {
     const table = insert[1];
+    const normalizedTable = table?.toLowerCase();
+    const exactPattern =
+      normalizedTable === undefined
+        ? undefined
+        : POST_HEAD_EXACT_INSERT_PATTERNS.get(normalizedTable);
     if (
       table === undefined ||
-      !POST_HEAD_INSERT_TABLES.has(table.toLowerCase()) ||
+      normalizedTable === undefined ||
+      !POST_HEAD_INSERT_TABLES.has(normalizedTable) ||
       !/\)\s+values\s*\(/iu.test(normalized) ||
       (/\bon\s+conflict\b/iu.test(normalized) &&
         !/\bon\s+conflict\s+do\s+nothing\s+returning\b/iu.test(normalized)) ||
-      !/\breturning\s+[a-z][a-z0-9_]*(?:\s+as\s+id)?\s*$/iu.test(normalized)
+      !/\breturning\s+[a-z][a-z0-9_]*(?:\s+as\s+id)?\s*$/iu.test(normalized) ||
+      (exactPattern !== undefined && !exactPattern.test(normalized))
     ) {
       throw invalidPostHeadWrite();
     }
@@ -991,6 +1407,15 @@ async function persistAuthorizedAtomicMaterialization<TPrepared, TResult>(
           snapshotInboxV2AuthorizationResourceRevisionFences(
             input.revisions.resources
           ),
+        authorizationTenantRbacRevision:
+          input.revisions.expectedTenantRbacRevision,
+        authorizationSharedAccessRevision:
+          input.revisions.expectedSharedAccessRevision,
+        authorizationAuditGrantSourceIds:
+          snapshotInboxV2AuthorizationGrantSourceIds(
+            input.records.audit.grantSourceIds
+          ),
+        authorizationAuditPolicyVersion: input.records.audit.policyVersion,
         authorizedAt: input.command.authorizedAt,
         occurredAt: input.occurredAt,
         mutationId: input.records.mutationId,
@@ -1068,6 +1493,15 @@ async function persistAuthorizedAtomicMaterialization<TPrepared, TResult>(
           snapshotInboxV2AuthorizationResourceRevisionFences(
             input.revisions.resources
           ),
+        authorizationTenantRbacRevision:
+          input.revisions.expectedTenantRbacRevision,
+        authorizationSharedAccessRevision:
+          input.revisions.expectedSharedAccessRevision,
+        authorizationAuditGrantSourceIds:
+          snapshotInboxV2AuthorizationGrantSourceIds(
+            input.records.audit.grantSourceIds
+          ),
+        authorizationAuditPolicyVersion: input.records.audit.policyVersion,
         authorizedAt: input.command.authorizedAt,
         occurredAt: input.occurredAt,
         mutationId: input.records.mutationId,
@@ -1089,6 +1523,8 @@ async function persistAuthorizedAtomicMaterialization<TPrepared, TResult>(
       );
       if (sealManifest.kind === "message_creation") {
         assertInboxV2AtomicMessageCreationSealManifest(input, sealManifest);
+      } else if (sealManifest.kind === "message_mutation") {
+        assertInboxV2AtomicMessageMutationSealManifest(input, sealManifest);
       } else {
         assertInboxV2AtomicTimelineItemCreationSealManifest(
           input,
@@ -1128,6 +1564,9 @@ async function persistAuthorizedAtomicMaterialization<TPrepared, TResult>(
       revisionEffects: []
     };
   } finally {
+    revokeInboxV2AtomicAttachmentMaterializationProofs(
+      atomicMaterializationToken
+    );
     revokeInboxV2AtomicOutboundRerouteProofs(atomicMaterializationToken);
     revokeInboxV2AtomicOutboundRouteProofs(atomicMaterializationToken);
   }
@@ -1319,6 +1758,15 @@ async function persistPrivilegedAuthorizationMutation<TResult>(
           snapshotInboxV2AuthorizationResourceRevisionFences(
             input.revisions.resources
           ),
+        authorizationTenantRbacRevision:
+          input.revisions.expectedTenantRbacRevision,
+        authorizationSharedAccessRevision:
+          input.revisions.expectedSharedAccessRevision,
+        authorizationAuditGrantSourceIds:
+          snapshotInboxV2AuthorizationGrantSourceIds(
+            input.records.audit.grantSourceIds
+          ),
+        authorizationAuditPolicyVersion: input.records.audit.policyVersion,
         authorizedAt: input.command.authorizedAt,
         occurredAt: input.occurredAt,
         mutationId: status.mutationId,
@@ -1366,6 +1814,15 @@ async function persistPrivilegedAuthorizationMutation<TResult>(
         snapshotInboxV2AuthorizationResourceRevisionFences(
           input.revisions.resources
         ),
+      authorizationTenantRbacRevision:
+        input.revisions.expectedTenantRbacRevision,
+      authorizationSharedAccessRevision:
+        input.revisions.expectedSharedAccessRevision,
+      authorizationAuditGrantSourceIds:
+        snapshotInboxV2AuthorizationGrantSourceIds(
+          input.records.audit.grantSourceIds
+        ),
+      authorizationAuditPolicyVersion: input.records.audit.policyVersion,
       authorizedAt: input.command.authorizedAt,
       occurredAt: input.occurredAt,
       mutationId: input.records.mutationId,
@@ -1817,8 +2274,10 @@ function normalizeMutationInput(
       "collaborator set"
     );
     if (
-      resource.expectedStructuralRelationRevision !== undefined &&
-      resource.expectedCollaboratorSetRevision !== undefined
+      resource.advanceStructuralRelation !== undefined &&
+      resource.advanceStructuralRelation !== "none" &&
+      resource.advanceCollaboratorSet !== undefined &&
+      resource.advanceCollaboratorSet !== "none"
     ) {
       throw new TypeError(
         "One resource expectation cannot advance two relation aggregates."
@@ -6695,6 +7154,204 @@ function assertInboxV2AtomicMessageCreationSealManifest(
     sourceOccurrenceChange,
     sourceOccurrenceManifest.event
   );
+}
+
+function assertInboxV2AtomicMessageMutationSealManifest(
+  input: WithPrivilegedAuthorizationMutationInput,
+  manifest: InboxV2AtomicMessageMutationSealManifest
+): void {
+  const changes = input.records.changes;
+  const change = changes[0];
+  const state = change?.state;
+  const timeline = change?.timeline;
+  const commandResultReference = input.command.resultReference;
+  const projectionIntents = input.records.outboxIntents.filter(
+    (intent) =>
+      intent.effectClass === "projection" &&
+      intent.typeId === "core:projection.update"
+  );
+  const forbiddenProviderIntents = input.records.outboxIntents.filter(
+    (intent) =>
+      intent.effectClass === "provider_io" ||
+      intent.typeId === "core:provider.dispatch"
+  );
+  const requiredReadPermissionId =
+    manifest.audience === "conversation_external"
+      ? "core:conversation.read"
+      : "core:conversation.internal.read";
+  const requiredPermissionIds = [
+    "core:file.upload",
+    requiredReadPermissionId
+  ].sort(comparePostgresCText);
+  const matchingDecisions =
+    input.records.audit.authorizationDecisionRefs.filter(
+      (decision) =>
+        decision.tenantId === manifest.tenantId &&
+        decision.authorizationEpoch === input.command.authorizationEpoch &&
+        decision.outcome === "allowed" &&
+        Date.parse(decision.decidedAt) <=
+          Date.parse(input.command.authorizedAt) &&
+        Date.parse(input.command.authorizedAt) <
+          Date.parse(decision.notAfter) &&
+        requiredPermissionIds.includes(decision.permissionId) &&
+        decision.resourceScopeId === "core:conversation" &&
+        decision.resource.tenantId === manifest.tenantId &&
+        decision.resource.entityTypeId === "core:conversation" &&
+        String(decision.resource.entityId) ===
+          String(manifest.conversationId) &&
+        decision.principal.kind === "trusted_service" &&
+        decision.principal.trustedServiceId === manifest.trustedServiceId
+    );
+  const primaryDecision = matchingDecisions.find(
+    (decision) => decision.id === input.command.authorizationDecisionId
+  );
+  const conversationFences = input.revisions.resources.filter(
+    (resource) =>
+      resource.resourceKind === "conversation" &&
+      String(resource.resourceId) === String(manifest.conversationId) &&
+      resource.advance === "none"
+  );
+  const decisionAccessRevisions = new Set(
+    matchingDecisions.map(({ resourceAccessRevision }) =>
+      String(resourceAccessRevision)
+    )
+  );
+  const auditTarget = input.records.audit.target;
+  const auditTargetMatches =
+    auditTarget.tenantId === manifest.auditTarget.tenantId &&
+    auditTarget.entityTypeId === manifest.auditTarget.entityTypeId &&
+    String(auditTarget.entityId) === String(manifest.auditTarget.entityId);
+  const auditFacet = input.records.audit.facets[0];
+  const auditFacetMatches =
+    input.records.audit.facets.length === 1 &&
+    auditFacet?.ordinal === 1 &&
+    auditFacet.dimension === "resource" &&
+    auditFacet.relation === "affected" &&
+    auditFacet.reference.tenantId === manifest.auditFacetReference.tenantId &&
+    auditFacet.reference.entityTypeId ===
+      manifest.auditFacetReference.entityTypeId &&
+    String(auditFacet.reference.entityId) ===
+      String(manifest.auditFacetReference.entityId);
+  const materialization = manifest.materialization;
+  const materializationShapeMatches =
+    materialization.tenantId === manifest.tenantId &&
+    materialization.completedByTrustedServiceId === manifest.trustedServiceId &&
+    materialization.causeEventId === manifest.causeEventId &&
+    materialization.correlationId === manifest.correlationId &&
+    materialization.causedAt === manifest.causedAt &&
+    materialization.conversationId === manifest.conversationId &&
+    materialization.timelineItemId === manifest.timelineItemId &&
+    materialization.contentId === manifest.contentId &&
+    materialization.resultingContentRevision === manifest.contentRevision &&
+    materialization.parentKind === "message" &&
+    materialization.parentEntityId === manifest.messageId &&
+    materialization.parentEntityRevision === manifest.messageRevision &&
+    (materialization.outcome === "ready"
+      ? materialization.fileVersionId !== null &&
+        materialization.objectVersionId !== null &&
+        materialization.safeReasonId === null
+      : materialization.fileVersionId === null &&
+        materialization.objectVersionId === null &&
+        materialization.safeReasonId !== null);
+  if (
+    input.command.commandTypeId !==
+      "core:attachment.materialization.complete" ||
+    input.command.actor.kind !== "trusted_service" ||
+    input.command.actor.trustedServiceId !== manifest.trustedServiceId ||
+    input.tenantId !== manifest.tenantId ||
+    input.occurredAt !== manifest.event.occurredAt ||
+    input.occurredAt !== manifest.event.recordedAt ||
+    input.records.correlationId !== manifest.correlationId ||
+    !materializationShapeMatches ||
+    manifest.timelineItemId.length === 0 ||
+    manifest.timelineItemRevision.length === 0 ||
+    manifest.contentId.length === 0 ||
+    manifest.contentRevision.length === 0 ||
+    input.records.changes.length !== 1 ||
+    input.records.events.length !== 1 ||
+    input.records.outboxIntents.length !== 1 ||
+    projectionIntents.length !== 1 ||
+    forbiddenProviderIntents.length !== 0 ||
+    change === undefined ||
+    change.entity.tenantId !== manifest.tenantId ||
+    change.entity.entityTypeId !== "core:message" ||
+    String(change.entity.entityId) !== String(manifest.messageId) ||
+    String(change.resultingRevision) !== manifest.messageRevision ||
+    change.audience !== manifest.audience ||
+    timeline === null ||
+    timeline === undefined ||
+    timeline.conversation.tenantId !== manifest.tenantId ||
+    String(timeline.conversation.id) !== String(manifest.conversationId) ||
+    String(timeline.timelineSequence) !== manifest.timelineSequence ||
+    state?.kind !== "upsert" ||
+    state.stateSchemaId !== manifest.stateSchemaId ||
+    state.stateSchemaVersion !== manifest.stateSchemaVersion ||
+    state.stateHash !== manifest.stateHash ||
+    !payloadReferencesMatch(
+      state.payloadReference,
+      manifest.payloadReference
+    ) ||
+    !payloadReferencesMatch(
+      state.domainCommitReference,
+      manifest.domainCommitReference
+    ) ||
+    commandResultReference === null ||
+    !payloadReferencesMatch(
+      commandResultReference,
+      manifest.payloadReference
+    ) ||
+    input.records.audit.actionId !== input.command.commandTypeId ||
+    !auditTargetMatches ||
+    !auditFacetMatches ||
+    input.records.audit.correlationId !== manifest.correlationId ||
+    input.records.audit.occurredAt !== input.occurredAt ||
+    input.records.audit.recordedAt !== input.occurredAt ||
+    input.records.audit.evidenceReference === null ||
+    !payloadReferencesMatch(
+      input.records.audit.evidenceReference,
+      manifest.domainCommitReference
+    ) ||
+    matchingDecisions.length !== requiredPermissionIds.length ||
+    input.records.audit.authorizationDecisionRefs.length !==
+      requiredPermissionIds.length ||
+    new Set(matchingDecisions.map(({ permissionId }) => permissionId)).size !==
+      requiredPermissionIds.length ||
+    primaryDecision === undefined ||
+    primaryDecision.permissionId !== "core:file.upload" ||
+    conversationFences.length !== 1 ||
+    input.revisions.resources.length !== 1 ||
+    decisionAccessRevisions.size !== 1 ||
+    String(conversationFences[0]?.expectedResourceAccessRevision) !==
+      [...decisionAccessRevisions][0] ||
+    input.records.audit.matchedPermissionIds.length !==
+      requiredPermissionIds.length ||
+    input.records.audit.matchedPermissionIds.some(
+      (permissionId, index) => permissionId !== requiredPermissionIds[index]
+    ) ||
+    input.records.audit.authorizationScopeIds.length !== 1 ||
+    input.records.audit.authorizationScopeIds[0] !== "core:conversation"
+  ) {
+    throw atomicMessageSealManifestMismatch();
+  }
+
+  const event = assertInboxV2AtomicEntityEventAndProjectionClosure(
+    input,
+    change,
+    manifest.event
+  );
+  const projection = projectionIntents[0];
+  if (
+    event.authorizationDecisionRefs.length !== matchingDecisions.length ||
+    event.authorizationDecisionRefs.some(
+      (decision, index) => decision.id !== matchingDecisions[index]?.id
+    ) ||
+    projection === undefined ||
+    String(projection.eventId) !== String(event.id) ||
+    projection.changeIds.length !== 1 ||
+    String(projection.changeIds[0]) !== String(change.id)
+  ) {
+    throw atomicMessageSealManifestMismatch();
+  }
 }
 
 function assertInboxV2AtomicTimelineItemCreationSealManifest(

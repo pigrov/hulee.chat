@@ -148,6 +148,24 @@ export type {
   InboxV2RequirementDecision
 } from "./inbox-v2-authorization-policy";
 export {
+  evaluateInboxV2FileParentDetach,
+  evaluateInboxV2FileUpload,
+  evaluateInboxV2FileView
+} from "./inbox-v2-file-access";
+export type {
+  InboxV2FileAccessAction,
+  InboxV2FileAccessDenialCode,
+  InboxV2FileAccessSnapshot,
+  InboxV2FileDetachDecision,
+  InboxV2FileObjectPin,
+  InboxV2FileParentAccessSnapshot,
+  InboxV2FileParentFence,
+  InboxV2FileParentKind,
+  InboxV2FileParentVisibility,
+  InboxV2FileUploadDecision,
+  InboxV2FileViewDecision
+} from "./inbox-v2-file-access";
+export {
   planInboxV2DirectGrantRevision,
   planInboxV2RoleBindingRevision,
   planInboxV2RoleDefinitionRevision

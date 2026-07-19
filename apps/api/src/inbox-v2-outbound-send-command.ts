@@ -15,6 +15,7 @@ import {
   inboxV2InternalOpaqueReferenceSchema,
   inboxV2MessageCreationCommitSchema,
   inboxV2OutboundDispatchIdSchema,
+  inboxV2OutboundDispatchContentPlanSchema,
   inboxV2OutboundDispatchRerouteCommitSchema,
   inboxV2OutboundRouteIdSchema,
   inboxV2OutboundRoutePrincipalSchema,
@@ -27,7 +28,9 @@ import {
   type InboxV2AuthorizationDecisionReference,
   type InboxV2AuthorizedCommand,
   type InboxV2MessageCreationCommit,
+  type InboxV2MessageContentBlock,
   type InboxV2OutboundDispatchRerouteCommit,
+  type InboxV2OutboundDispatchContentPlan,
   type InboxV2OutboundRouteResolutionCommit,
   type InboxV2OutboundRoutePrincipal,
   type InboxV2TimelineCommandIntent
@@ -43,6 +46,7 @@ import {
   fenceInboxV2OutboundReplyAuthorityInTransaction,
   InboxV2RouteResolutionRollbackError,
   persistInboxV2ExplicitRerouteResolutionInTransaction,
+  persistInboxV2OutboundDispatchContentPlanInTransaction,
   persistInboxV2RouteResolutionInTransaction,
   prepareInboxV2MessageCreation,
   sealInboxV2PreparedMessageCreation,
@@ -126,6 +130,7 @@ export type InboxV2PreparedOutboundSendCommand =
       authorizedMutation: WithInboxV2AuthorizedCommandMutationInput;
       routeResolution: InboxV2OutboundRouteResolutionCommit;
       messageCreation: InboxV2MessageCreationCommit;
+      dispatchContentPlan: InboxV2OutboundDispatchContentPlan;
       rerouteCommit?: InboxV2OutboundDispatchRerouteCommit;
     }>;
 
@@ -152,6 +157,26 @@ export type InboxV2OutboundSendCommandPreparer = Readonly<{
     InboxV2PreparedOutboundSendCommand,
     { kind: "route_rejected" | "selected" }
   > | null>;
+}>;
+
+/**
+ * Server-only verification boundary for a prepared content fingerprint. The
+ * implementation must resolve the tenant/purpose/generation key from trusted
+ * lifecycle authority, verify the HMAC over every supplied field (including
+ * the fingerprint expiry), and reject generations that were not authorized at
+ * `planCreatedAt` or are no longer verifiable at `at`.
+ */
+export type InboxV2OutboundDispatchContentFingerprintAuthority = Readonly<{
+  verify(input: {
+    fingerprint: InboxV2OutboundDispatchContentPlan["contentFingerprint"];
+    tenantId: string;
+    timelineContent: InboxV2OutboundDispatchContentPlan["timelineContent"];
+    contentRevision: string;
+    /** Purgeable current Message/TimelineContent digest; never persisted in the plan. */
+    contentDigestSha256: string;
+    planCreatedAt: string;
+    at: string;
+  }): Promise<boolean>;
 }>;
 
 type AtomicSendResult = Readonly<{
@@ -206,12 +231,17 @@ type OutboundSendPersistence = Readonly<{
   persistRoute: typeof persistInboxV2RouteResolutionInTransaction;
   persistReroute: typeof persistInboxV2ExplicitRerouteResolutionInTransaction;
   prepareMessage: typeof prepareInboxV2MessageCreation;
+  persistContentPlan: typeof persistInboxV2OutboundDispatchContentPlanInTransaction;
   sealMessage: typeof sealInboxV2PreparedMessageCreation;
 }>;
 
 export type InboxV2OutboundSendCommandServiceOptions = Readonly<{
   requestScope: InboxV2OutboundSendRequestScope;
   preparer: InboxV2OutboundSendCommandPreparer;
+  /** Mandatory server-side HMAC/key-lifecycle verification before any write. */
+  contentFingerprintAuthority: InboxV2OutboundDispatchContentFingerprintAuthority;
+  /** Trusted current-time source used for the finite fingerprint fence. */
+  currentTime: () => string;
   denialSink: InboxV2SecurityDenialSink;
   coordinator: InboxV2AuthorizedAtomicMaterializationCoordinator;
   /** Test seam; production uses the non-forgeable DB materialization APIs. */
@@ -231,6 +261,7 @@ const productionPersistence: OutboundSendPersistence = Object.freeze({
   persistRoute: persistInboxV2RouteResolutionInTransaction,
   persistReroute: persistInboxV2ExplicitRerouteResolutionInTransaction,
   prepareMessage: prepareInboxV2MessageCreation,
+  persistContentPlan: persistInboxV2OutboundDispatchContentPlanInTransaction,
   sealMessage: sealInboxV2PreparedMessageCreation
 });
 
@@ -307,6 +338,19 @@ export function createInboxV2OutboundSendCommandService(
       }
 
       const closed = assertSelectedSendClosure(command, requestScope, prepared);
+      if (
+        !(await verifySelectedDispatchContentFingerprint(
+          closed.dispatchContentPlan,
+          closed.messageCreation,
+          options.contentFingerprintAuthority,
+          options.currentTime()
+        ))
+      ) {
+        return {
+          outcome: "materialization_rejected",
+          reason: "dispatch_content_fingerprint_rejected"
+        };
+      }
       try {
         const gated = await authorizationGate({
           authorizationPlan: prepared.authorizationPlan,
@@ -347,6 +391,17 @@ export function createInboxV2OutboundSendCommandService(
                 });
                 if (message.kind !== "ready") {
                   throw new OutboundSendMaterializationRejected(message.kind);
+                }
+                const contentPlan = await persistence.persistContentPlan(
+                  context,
+                  closed.dispatchContentPlan
+                );
+                if (contentPlan.kind !== "persisted") {
+                  throw new OutboundSendMaterializationRejected(
+                    "code" in contentPlan
+                      ? contentPlan.code
+                      : "dispatch_plan_already_persisted"
+                  );
                 }
                 return message.capability;
               },
@@ -414,6 +469,36 @@ export function createInboxV2OutboundSendCommandService(
       }
     }
   });
+}
+
+async function verifySelectedDispatchContentFingerprint(
+  plan: InboxV2OutboundDispatchContentPlan,
+  messageCreation: InboxV2MessageCreationCommit,
+  authority: InboxV2OutboundDispatchContentFingerprintAuthority,
+  currentTime: string
+): Promise<boolean> {
+  const content = messageCreation.content;
+  const currentTimeMillis = Date.parse(currentTime);
+  if (
+    content.state.kind !== "available" ||
+    !Number.isFinite(currentTimeMillis) ||
+    Date.parse(plan.contentFingerprint.validUntil) <= currentTimeMillis
+  ) {
+    return false;
+  }
+  try {
+    return await authority.verify({
+      fingerprint: plan.contentFingerprint,
+      tenantId: messageCreation.tenantId,
+      timelineContent: messageCreation.message.content.content,
+      contentRevision: content.revision,
+      contentDigestSha256: content.state.contentDigestSha256,
+      planCreatedAt: plan.createdAt,
+      at: currentTime
+    });
+  } catch {
+    return false;
+  }
 }
 
 export function calculateInboxV2OutboundSendIntentDigest(
@@ -506,6 +591,9 @@ function assertSelectedSendClosure(
   const messageCreation = inboxV2MessageCreationCommitSchema.parse(
     prepared.messageCreation
   );
+  const dispatchContentPlan = inboxV2OutboundDispatchContentPlanSchema.parse(
+    prepared.dispatchContentPlan
+  );
   const rerouteCommit =
     prepared.rerouteCommit === undefined
       ? null
@@ -537,6 +625,12 @@ function assertSelectedSendClosure(
     !routeInputMatchesCommand(command, requestScope, routeResolution) ||
     !sameValue(routeResult, routeResolution.result) ||
     !sameValue(route, messageCreation.outboundRoute) ||
+    !dispatchContentPlanMatches(
+      dispatchContentPlan,
+      messageCreation,
+      route,
+      dispatch
+    ) ||
     messageCreation.tenantId !== command.tenantId ||
     messageCreation.message.conversation.id !== command.conversationId ||
     messageCreation.message.referenceContext.kind !== "none" ||
@@ -610,9 +704,101 @@ function assertSelectedSendClosure(
     messageCreation,
     route,
     dispatch,
+    dispatchContentPlan,
     rerouteCommit,
     replyAuthority: intent.replyAuthority
   };
+}
+
+function dispatchContentPlanMatches(
+  plan: InboxV2OutboundDispatchContentPlan,
+  messageCreation: InboxV2MessageCreationCommit,
+  route: NonNullable<InboxV2MessageCreationCommit["outboundRoute"]>,
+  dispatch: NonNullable<InboxV2MessageCreationCommit["outboundDispatch"]>
+): boolean {
+  const content = messageCreation.content;
+  const binding = messageCreation.outboundBindingSnapshot;
+  if (content.state.kind !== "available" || binding === null) return false;
+  const artifactCapabilitiesMatch = plan.artifacts.every((artifact) =>
+    binding.capabilities.entries.some(
+      (capability) =>
+        capability.capabilityId === artifact.capabilityId &&
+        capability.operationId === artifact.operationId &&
+        capability.contentKindId === route.contentKindId &&
+        capability.state === "supported" &&
+        (capability.validUntil === null ||
+          Date.parse(capability.validUntil) > Date.parse(plan.createdAt)) &&
+        capability.requiredProviderRoleIds.every((roleId) =>
+          binding.providerAccess.roleIds.includes(roleId)
+        )
+    )
+  );
+  if (
+    plan.tenantId !== messageCreation.tenantId ||
+    String(plan.dispatch.id) !== String(dispatch.id) ||
+    String(plan.message.id) !== String(messageCreation.message.id) ||
+    plan.messageRevision !== messageCreation.message.revision ||
+    String(plan.conversation.id) !==
+      String(messageCreation.message.conversation.id) ||
+    String(plan.timelineItem.id) !==
+      String(messageCreation.message.timelineItem.id) ||
+    String(plan.route.id) !== String(route.id) ||
+    String(plan.timelineContent.id) !== String(content.id) ||
+    plan.contentRevision !== content.revision ||
+    String(plan.binding.id) !== String(route.sourceThreadBinding.id) ||
+    plan.bindingRevision !== binding.revision ||
+    plan.capabilityRevision !== route.bindingFence.capabilityRevision ||
+    binding.capabilities.revision !== plan.capabilityRevision ||
+    !sameValue(plan.adapterContract, route.adapterContract) ||
+    plan.createdAt !== dispatch.createdAt ||
+    plan.blocks.length !== content.state.blocks.length ||
+    !artifactCapabilitiesMatch ||
+    plan.artifacts.some(
+      (artifact) => artifact.operationId !== route.operationId
+    )
+  ) {
+    return false;
+  }
+
+  return content.state.blocks.every((block, index) => {
+    const planned = plan.blocks[index];
+    return (
+      planned !== undefined &&
+      planned.blockKey === block.blockKey &&
+      planned.blockKind === block.kind &&
+      sameValue(planned.exactFileObjectPin, exactFileObjectPinForBlock(block))
+    );
+  });
+}
+
+function exactFileObjectPinForBlock(block: InboxV2MessageContentBlock) {
+  if (
+    block.kind === "image" ||
+    block.kind === "audio" ||
+    block.kind === "video" ||
+    block.kind === "file" ||
+    block.kind === "sticker"
+  ) {
+    return block.attachment.state === "ready"
+      ? {
+          file: block.attachment.file,
+          fileRevision: block.attachment.fileRevision,
+          fileVersion: block.attachment.fileVersion,
+          objectVersion: block.attachment.objectVersion
+        }
+      : null;
+  }
+  if (block.kind === "extension") {
+    return block.payloadPin.state === "exact"
+      ? {
+          file: block.payloadFile,
+          fileRevision: block.payloadPin.fileRevision,
+          fileVersion: block.payloadPin.fileVersion,
+          objectVersion: block.payloadPin.objectVersion
+        }
+      : null;
+  }
+  return null;
 }
 
 function rerouteCommitMatchesSelectedSend(

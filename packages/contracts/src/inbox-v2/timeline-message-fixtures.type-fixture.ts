@@ -1,6 +1,9 @@
 import type { z } from "zod";
 
-import { inboxV2TimelineContentHeadOf } from "./message-content";
+import {
+  calculateInboxV2MessageContentDigest,
+  inboxV2TimelineContentHeadOf
+} from "./message-content";
 import { inboxV2OutboundRouteSchema } from "./outbound-route";
 import { inboxV2TimelineItemSchema } from "./timeline";
 
@@ -225,21 +228,22 @@ export function fixtureParticipant(
 }
 
 export function fixtureContent(overrides: Record<string, unknown> = {}) {
+  const blocks = [
+    {
+      blockKey: "body-1",
+      kind: "text" as const,
+      role: "body" as const,
+      text: "Hello",
+      language: "en"
+    }
+  ];
   return {
     tenantId: fixtureTenantId,
     id: "timeline_content:content-1",
     state: {
       kind: "available" as const,
-      blocks: [
-        {
-          blockKey: "body-1",
-          kind: "text" as const,
-          role: "body" as const,
-          text: "Hello",
-          language: "en"
-        }
-      ],
-      contentDigestSha256: "a".repeat(64)
+      blocks,
+      contentDigestSha256: calculateInboxV2MessageContentDigest(blocks)
     },
     revision: "1",
     createdAt: fixtureT2,

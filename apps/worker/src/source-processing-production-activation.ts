@@ -6,6 +6,10 @@ import {
 
 import type { InboxV2SourceNormalizationProcessor } from "./source-normalization-processor";
 import { createInboxV2SourceNormalizationRuntimeHandler } from "./source-normalization-runtime-handler";
+import {
+  isInboxV2TrustedSourceAttachmentMaterializationHandler,
+  type InboxV2TrustedSourceAttachmentMaterializationHandler
+} from "./source-attachment-materialization-handler";
 import type {
   InboxV2SourceProcessingRuntimeClaim,
   InboxV2SourceProcessingStageHandler
@@ -20,12 +24,13 @@ const NON_RAW_SOURCE_PROCESSING_STAGES =
 const COMPOSITE_SOURCE_PROCESSING_STAGES =
   NON_RAW_SOURCE_PROCESSING_STAGES.filter(
     (stage): stage is InboxV2SourceProcessingCompositeDurableStage =>
-      stage !== "normalization"
+      stage !== "normalization" && stage !== "materialization"
   );
 
 declare const sourceProcessingStageDurabilityBrand: unique symbol;
 declare const sourceProcessingCompositeTransactionBrand: unique symbol;
 declare const sourceProcessingCompositeCapabilitySetBrand: unique symbol;
+declare const sourceAttachmentMaterializationCapabilityBrand: unique symbol;
 declare const sourceProcessingProductionActivationBrand: unique symbol;
 
 export type InboxV2SourceProcessingDurableStage = Exclude<
@@ -35,7 +40,7 @@ export type InboxV2SourceProcessingDurableStage = Exclude<
 
 export type InboxV2SourceProcessingCompositeDurableStage = Exclude<
   InboxV2SourceProcessingDurableStage,
-  "normalization"
+  "normalization" | "materialization"
 >;
 
 /**
@@ -83,6 +88,18 @@ export type InboxV2TrustedSourceProcessingCompositeDurabilityCapabilitySet =
     readonly [sourceProcessingCompositeCapabilitySetBrand]: true;
   }>;
 
+/**
+ * Process-authentic proof that the materialization stage is the reviewed
+ * current-head attachment reservation handler, not a generic composite
+ * callback that could acknowledge work without durable reservation closure.
+ */
+export type InboxV2TrustedSourceAttachmentMaterializationDurabilityCapability =
+  Readonly<{
+    stage: "materialization";
+    boundary: "msg003_source_attachment_reservation";
+    readonly [sourceAttachmentMaterializationCapabilityBrand]: true;
+  }>;
+
 export type InboxV2SourceProcessingProductionActivation = Readonly<{
   stageCount: number;
   readonly [sourceProcessingProductionActivationBrand]: true;
@@ -116,6 +133,11 @@ const trustedCompositeCapabilitySets = new WeakMap<
   TrustedCompositeCapabilitySetRegistration
 >();
 const consumedCompositeCapabilitySets = new WeakSet<object>();
+const trustedMaterializationCapabilities = new WeakMap<
+  object,
+  InboxV2SourceProcessingStageHandler
+>();
+const consumedMaterializationCapabilities = new WeakSet<object>();
 const trustedProductionActivations = new WeakMap<
   object,
   ReadonlyMap<InboxV2SourceProcessingStage, InboxV2SourceProcessingStageHandler>
@@ -134,6 +156,27 @@ export function createInboxV2SourceNormalizationDurabilityCapability(
     boundary: "src003_atomic_normalization" as const
   }) as InboxV2TrustedSourceProcessingStageDurabilityCapability;
   trustedNormalizationCapabilities.set(capability, capability.handler);
+  return capability;
+}
+
+/**
+ * Issues the only materialization capability accepted by production
+ * activation. Structural handlers and copied capability objects have no
+ * process-local registry authority.
+ */
+export function createInboxV2SourceAttachmentMaterializationDurabilityCapability(
+  handler: InboxV2TrustedSourceAttachmentMaterializationHandler
+): InboxV2TrustedSourceAttachmentMaterializationDurabilityCapability {
+  if (!isInboxV2TrustedSourceAttachmentMaterializationHandler(handler)) {
+    throw new TypeError(
+      "Source attachment materialization durability requires the trusted current-head reservation handler."
+    );
+  }
+  const capability = Object.freeze({
+    stage: "materialization" as const,
+    boundary: "msg003_source_attachment_reservation" as const
+  }) as InboxV2TrustedSourceAttachmentMaterializationDurabilityCapability;
+  trustedMaterializationCapabilities.set(capability, handler);
   return capability;
 }
 
@@ -227,6 +270,7 @@ export function createInboxV2SourceProcessingCompositeDurabilityCapabilitySet(
 export function createInboxV2SourceProcessingProductionActivation(input: {
   normalizationCapability: InboxV2TrustedSourceProcessingStageDurabilityCapability;
   compositeCapabilitySet: InboxV2TrustedSourceProcessingCompositeDurabilityCapabilitySet;
+  materializationCapability: InboxV2TrustedSourceAttachmentMaterializationDurabilityCapability;
 }): InboxV2SourceProcessingProductionActivation {
   if (input === null || typeof input !== "object") {
     throw new TypeError(
@@ -280,6 +324,28 @@ export function createInboxV2SourceProcessingProductionActivation(input: {
     );
   }
 
+  const materializationCapability = input.materializationCapability;
+  const materializationHandler =
+    typeof materializationCapability === "object" &&
+    materializationCapability !== null
+      ? trustedMaterializationCapabilities.get(materializationCapability)
+      : undefined;
+  if (
+    materializationHandler === undefined ||
+    materializationCapability.stage !== "materialization" ||
+    materializationCapability.boundary !==
+      "msg003_source_attachment_reservation"
+  ) {
+    throw new TypeError(
+      "Source-processing production activation received an untrusted attachment materialization capability."
+    );
+  }
+  if (consumedMaterializationCapabilities.has(materializationCapability)) {
+    throw new TypeError(
+      "Source attachment materialization capability was already consumed."
+    );
+  }
+
   const handlers = new Map<
     InboxV2SourceProcessingStage,
     InboxV2SourceProcessingStageHandler
@@ -295,6 +361,7 @@ export function createInboxV2SourceProcessingProductionActivation(input: {
     }
     handlers.set(stage, handler);
   }
+  handlers.set("materialization", materializationHandler);
 
   const missingStages = NON_RAW_SOURCE_PROCESSING_STAGES.filter(
     (stage) => !handlers.has(stage)
@@ -309,6 +376,7 @@ export function createInboxV2SourceProcessingProductionActivation(input: {
 
   consumedNormalizationCapabilities.add(normalizationCapability);
   consumedCompositeCapabilitySets.add(compositeCapabilitySet);
+  consumedMaterializationCapabilities.add(materializationCapability);
   const activation = Object.freeze({
     stageCount: handlers.size
   }) as InboxV2SourceProcessingProductionActivation;

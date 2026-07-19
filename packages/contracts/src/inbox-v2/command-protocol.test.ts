@@ -177,6 +177,16 @@ const readyFile = {
   kind: "file" as const,
   id: "file:file-1"
 };
+const readyFileVersion = {
+  tenantId,
+  kind: "file_version" as const,
+  id: "file_version:file-1-r9"
+};
+const readyObjectVersion = {
+  tenantId,
+  kind: "file_object_version" as const,
+  id: "file_object_version:file-1-r9-v1"
+};
 
 type AuthorizationResource = Readonly<{
   tenantId: string;
@@ -909,7 +919,10 @@ describe("Inbox V2 command protocol", () => {
                 kind: "message_attachment" as const,
                 id: "message_attachment:attachment-1"
               },
-              file: readyFile
+              file: readyFile,
+              fileRevision: "9",
+              fileVersion: readyFileVersion,
+              objectVersion: readyObjectVersion
             },
             displayName: "invoice.pdf"
           }
@@ -926,6 +939,8 @@ describe("Inbox V2 command protocol", () => {
             id: "message_attachment:attachment-1"
           },
           expectedFileRevision: "9",
+          fileVersion: readyFileVersion,
+          objectVersion: readyObjectVersion,
           parentConversation: conversation,
           visibilityBoundary: "external_work" as const,
           sourceParent: {
@@ -982,6 +997,32 @@ describe("Inbox V2 command protocol", () => {
         )
       ).success
     ).toBe(false);
+
+    for (const mismatch of [
+      {
+        fileVersion: {
+          ...readyFileVersion,
+          id: "file_version:file-1-r8"
+        }
+      },
+      {
+        objectVersion: {
+          ...readyObjectVersion,
+          id: "file_object_version:file-1-r9-v2"
+        }
+      }
+    ]) {
+      expect(
+        inboxV2TimelineCommandIntentEnvelopeSchema.safeParse({
+          schemaId: "core:inbox-v2.timeline-command-intent",
+          schemaVersion: "v1",
+          payload: {
+            ...intent,
+            fileReadProofs: [{ ...intent.fileReadProofs[0], ...mismatch }]
+          }
+        }).success
+      ).toBe(false);
+    }
 
     expect(
       inboxV2AuthorizedCommandEnvelopeSchema.safeParse(

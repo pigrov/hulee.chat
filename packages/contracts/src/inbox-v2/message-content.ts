@@ -8,14 +8,19 @@ import {
   isInboxV2TimestampOrderValid
 } from "./entity-metadata";
 import {
+  inboxV2AttachmentMaterializationSchema,
+  inboxV2ExtensionPayloadPinSchema,
+  isInboxV2AttachmentMaterializationTransition
+} from "./file-object";
+import {
   inboxV2EventReferenceSchema,
   inboxV2FileReferenceSchema,
-  inboxV2MessageAttachmentReferenceSchema,
   inboxV2SourceOccurrenceReferenceSchema,
   inboxV2TenantIdSchema,
   inboxV2TimelineContentIdSchema,
   inboxV2TimelineContentReferenceSchema
 } from "./ids";
+import { calculateInboxV2CanonicalSha256 } from "./recipient-sync-hash";
 import {
   createInboxV2SchemaEnvelopeSchema,
   INBOX_V2_INITIAL_SCHEMA_VERSION,
@@ -74,39 +79,6 @@ export const inboxV2ContentRendererIdSchema = inboxV2CatalogIdSchema.transform(
 );
 export const inboxV2RetentionPolicyIdSchema = inboxV2CatalogIdSchema.transform(
   (value) => value as InboxV2RetentionPolicyId
-);
-
-export const inboxV2AttachmentMaterializationSchema = z.discriminatedUnion(
-  "state",
-  [
-    z
-      .object({
-        state: z.literal("pending"),
-        attachment: inboxV2MessageAttachmentReferenceSchema
-      })
-      .strict(),
-    z
-      .object({
-        state: z.literal("ready"),
-        attachment: inboxV2MessageAttachmentReferenceSchema,
-        file: inboxV2FileReferenceSchema
-      })
-      .strict(),
-    z
-      .object({
-        state: z.literal("failed"),
-        attachment: inboxV2MessageAttachmentReferenceSchema,
-        reasonId: inboxV2ContentReasonIdSchema
-      })
-      .strict(),
-    z
-      .object({
-        state: z.literal("quarantined"),
-        attachment: inboxV2MessageAttachmentReferenceSchema,
-        reasonId: inboxV2ContentReasonIdSchema
-      })
-      .strict()
-  ]
 );
 
 const blockBase = {
@@ -214,6 +186,7 @@ const extensionBlockSchema = z
     payloadSchemaId: inboxV2SchemaIdSchema,
     payloadSchemaVersion: inboxV2SchemaVersionTokenSchema,
     payloadFile: inboxV2FileReferenceSchema,
+    payloadPin: inboxV2ExtensionPayloadPinSchema,
     payloadDigestSha256: inboxV2ContentDigestSha256Schema,
     rendererId: inboxV2ContentRendererIdSchema
   })
@@ -232,6 +205,25 @@ export const inboxV2MessageContentBlockSchema = z.discriminatedUnion("kind", [
   extensionBlockSchema
 ]);
 
+/** Digest of ordered provider-neutral content, separated from every other hash domain. */
+export function calculateInboxV2MessageContentDigest(
+  blocks: readonly z.input<typeof inboxV2MessageContentBlockSchema>[]
+): InboxV2ContentDigestSha256 {
+  const digest = calculateInboxV2CanonicalSha256({
+    domain: "core:inbox-v2.timeline-content-blocks",
+    hashVersion: INBOX_V2_MESSAGE_CONTENT_SCHEMA_VERSION,
+    blocks
+  });
+  return inboxV2ContentDigestSha256Schema.parse(digest.slice("sha256:".length));
+}
+
+export function verifyInboxV2MessageContentDigest(
+  blocks: readonly z.input<typeof inboxV2MessageContentBlockSchema>[],
+  digest: string
+): boolean {
+  return calculateInboxV2MessageContentDigest(blocks) === digest;
+}
+
 export const inboxV2TimelineContentStateKindSchema = z.enum([
   "available",
   "privacy_erased",
@@ -245,6 +237,8 @@ export const inboxV2TimelineContentDraftSchema = z
   .strict()
   .superRefine((draft, context) => {
     addDuplicateBlockKeyIssues(context, draft.blocks, ["blocks"]);
+    addDuplicateAttachmentIdIssues(context, draft.blocks, ["blocks"]);
+    addLegacyUnpinnedIssues(context, draft.blocks, ["blocks"]);
   });
 
 export const inboxV2TimelineContentStateSchema = z.discriminatedUnion("kind", [
@@ -257,6 +251,19 @@ export const inboxV2TimelineContentStateSchema = z.discriminatedUnion("kind", [
     .strict()
     .superRefine((state, context) => {
       addDuplicateBlockKeyIssues(context, state.blocks, ["blocks"]);
+      addDuplicateAttachmentIdIssues(context, state.blocks, ["blocks"]);
+      if (
+        !verifyInboxV2MessageContentDigest(
+          state.blocks,
+          state.contentDigestSha256
+        )
+      ) {
+        addIssue(
+          context,
+          ["contentDigestSha256"],
+          "Content digest must match the domain-separated canonical ordered blocks."
+        );
+      }
     }),
   z
     .object({
@@ -433,6 +440,17 @@ export const inboxV2TimelineContentTransitionCommitSchema = z
       );
     }
     if (
+      transition.kind === "edit" &&
+      before.state.kind === "available" &&
+      after.state.kind === "available"
+    ) {
+      addAttachmentOwnerContinuityIssues(
+        context,
+        before.state.blocks,
+        after.state.blocks
+      );
+    }
+    if (
       transition.kind === "attachment_materialization" &&
       (before.state.kind !== "available" ||
         after.state.kind !== "available" ||
@@ -498,7 +516,10 @@ function addContentStateTenantIssues(
           block.attachment.attachment,
           ["state", "blocks", index, "attachment", "attachment"]
         );
-        if (block.attachment.state === "ready") {
+        if (
+          block.attachment.state === "ready" ||
+          block.attachment.state === "legacy_unpinned"
+        ) {
           addTenantReferenceIssue(context, tenantId, block.attachment.file, [
             "state",
             "blocks",
@@ -506,6 +527,20 @@ function addContentStateTenantIssues(
             "attachment",
             "file"
           ]);
+        }
+        if (block.attachment.state === "ready") {
+          addTenantReferenceIssue(
+            context,
+            tenantId,
+            block.attachment.fileVersion,
+            ["state", "blocks", index, "attachment", "fileVersion"]
+          );
+          addTenantReferenceIssue(
+            context,
+            tenantId,
+            block.attachment.objectVersion,
+            ["state", "blocks", index, "attachment", "objectVersion"]
+          );
         }
       } else if (block.kind === "unsupported_source_content") {
         addTenantReferenceIssue(context, tenantId, block.sourceOccurrence, [
@@ -521,6 +556,20 @@ function addContentStateTenantIssues(
           index,
           "payloadFile"
         ]);
+        if (block.payloadPin.state === "exact") {
+          addTenantReferenceIssue(
+            context,
+            tenantId,
+            block.payloadPin.fileVersion,
+            ["state", "blocks", index, "payloadPin", "fileVersion"]
+          );
+          addTenantReferenceIssue(
+            context,
+            tenantId,
+            block.payloadPin.objectVersion,
+            ["state", "blocks", index, "payloadPin", "objectVersion"]
+          );
+        }
       }
     }
   } else {
@@ -545,7 +594,7 @@ function isAttachmentMaterializationOnly(
     return false;
   }
 
-  let changed = false;
+  let changedCount = 0;
   for (const [index, beforeBlock] of before.blocks.entries()) {
     const afterBlock = after.blocks[index];
     if (
@@ -576,9 +625,17 @@ function isAttachmentMaterializationOnly(
     if (sameValue(beforeAttachment, afterAttachment)) {
       continue;
     }
-    changed = true;
+    if (
+      !isInboxV2AttachmentMaterializationTransition(
+        beforeAttachment,
+        afterAttachment
+      )
+    ) {
+      return false;
+    }
+    changedCount += 1;
   }
-  return changed;
+  return changedCount === 1;
 }
 
 function sameValue(left: unknown, right: unknown): boolean {
@@ -600,6 +657,93 @@ function addDuplicateBlockKeyIssues(
       );
     }
     seen.add(block.blockKey);
+  }
+}
+
+function addDuplicateAttachmentIdIssues(
+  context: z.RefinementCtx,
+  blocks: readonly z.infer<typeof inboxV2MessageContentBlockSchema>[],
+  path: PropertyKey[]
+): void {
+  const seen = new Set<string>();
+  for (const [index, block] of blocks.entries()) {
+    if (!("attachment" in block)) continue;
+    const attachmentId = block.attachment.attachment.id;
+    if (seen.has(attachmentId)) {
+      addIssue(
+        context,
+        [...path, index, "attachment", "attachment", "id"],
+        "Attachment ids are unique within one ordered content snapshot."
+      );
+    }
+    seen.add(attachmentId);
+  }
+}
+
+function addAttachmentOwnerContinuityIssues(
+  context: z.RefinementCtx,
+  beforeBlocks: readonly z.infer<typeof inboxV2MessageContentBlockSchema>[],
+  afterBlocks: readonly z.infer<typeof inboxV2MessageContentBlockSchema>[]
+): void {
+  const afterAttachmentIds = new Set(
+    afterBlocks.flatMap((block) =>
+      "attachment" in block ? [block.attachment.attachment.id] : []
+    )
+  );
+  for (const block of beforeBlocks) {
+    if (
+      "attachment" in block &&
+      !afterAttachmentIds.has(block.attachment.attachment.id)
+    ) {
+      addIssue(
+        context,
+        ["after", "state", "blocks"],
+        "A semantic edit cannot remove or replace an attachment identity before a detach lifecycle exists."
+      );
+    }
+  }
+  const beforeByAttachmentId = new Map(
+    beforeBlocks.flatMap((block) =>
+      "attachment" in block
+        ? [[block.attachment.attachment.id, block] as const]
+        : []
+    )
+  );
+  for (const [index, block] of afterBlocks.entries()) {
+    if (!("attachment" in block)) continue;
+    const before = beforeByAttachmentId.get(block.attachment.attachment.id);
+    if (before === undefined) continue;
+    if (
+      before.blockKey !== block.blockKey ||
+      before.attachment.state !== block.attachment.state
+    ) {
+      addIssue(
+        context,
+        ["after", "state", "blocks", index, "attachment"],
+        "A semantic edit cannot move an attachment identity or change its materialization state."
+      );
+    }
+  }
+}
+
+function addLegacyUnpinnedIssues(
+  context: z.RefinementCtx,
+  blocks: readonly z.infer<typeof inboxV2MessageContentBlockSchema>[],
+  path: PropertyKey[]
+): void {
+  for (const [index, block] of blocks.entries()) {
+    const legacyAttachment =
+      "attachment" in block && block.attachment.state === "legacy_unpinned";
+    const legacyExtension =
+      block.kind === "extension" &&
+      block.payloadPin.state === "legacy_unpinned";
+    if (legacyAttachment || legacyExtension) {
+      addIssue(
+        context,
+        [...path, index],
+        "Legacy unpinned file state is accepted only while reading the N-1 snapshot, never in a new content draft."
+      );
+    }
   }
 }
 

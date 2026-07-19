@@ -4,6 +4,7 @@ import {
   inboxV2EntityRevisionSchema,
   inboxV2MessageActionAttributionSchema,
   inboxV2MessageCreationCommitSchema,
+  inboxV2MessageContentBlockSchema,
   inboxV2MessageIdSchema,
   inboxV2ProviderSemanticOrderingHeadSchema,
   inboxV2ReactionSemanticSlotKeyFor,
@@ -43,6 +44,7 @@ import {
   buildInsertInboxV2MessageReactionSql,
   buildInsertInboxV2MessageTransportFactCommitSql,
   buildInsertInboxV2MessageTransportLinkSql,
+  buildInsertInboxV2TimelineContentPayloadSql,
   buildInsertInboxV2OutboundRouteConsumptionSql,
   buildInsertInboxV2ProviderLifecycleOperationSql,
   buildInsertInboxV2ProviderSemanticOrderingHeadSql,
@@ -59,6 +61,7 @@ import {
   encodeInboxV2AuxiliaryReadSnapshotToken,
   inboxV2MessageCreationSourceOccurrenceFenceRowMatches,
   mapProviderLifecycleOperationReadRow,
+  mapInboxV2TimelineContentBlockRow,
   mapProviderSemanticOrderingHeadRow,
   mapQueryableReactionReadRow,
   mapQueryableTransportFactReadRow,
@@ -85,6 +88,201 @@ const timelineSequence = inboxV2TimelineSequenceSchema.parse("17");
 const now = "2026-07-14T09:00:00.000Z";
 
 describe("SQL Inbox V2 timeline/message repository", () => {
+  it("round-trips exact V2 attachment and extension pins without using legacy file columns", () => {
+    const attachment = inboxV2MessageContentBlockSchema.parse({
+      blockKey: "image-1",
+      kind: "image",
+      attachment: {
+        state: "ready",
+        attachment: {
+          tenantId,
+          kind: "message_attachment",
+          id: "message_attachment:db005-unit-image"
+        },
+        file: { tenantId, kind: "file", id: "file:db005-unit-image" },
+        fileRevision: "2",
+        fileVersion: {
+          tenantId,
+          kind: "file_version",
+          id: "file_version:db005-unit-image-v1"
+        },
+        objectVersion: {
+          tenantId,
+          kind: "file_object_version",
+          id: "file_object_version:db005-unit-image-v1"
+        }
+      },
+      displayName: "photo.png"
+    });
+    const extension = inboxV2MessageContentBlockSchema.parse({
+      blockKey: "extension-1",
+      kind: "extension",
+      blockKindId: "core:message-extension",
+      payloadSchemaId: "core:message-extension-payload",
+      payloadSchemaVersion: "v1",
+      payloadFile: {
+        tenantId,
+        kind: "file",
+        id: "file:db005-unit-extension"
+      },
+      payloadPin: {
+        state: "exact",
+        fileRevision: "7",
+        fileVersion: {
+          tenantId,
+          kind: "file_version",
+          id: "file_version:db005-unit-extension-v7"
+        },
+        objectVersion: {
+          tenantId,
+          kind: "file_object_version",
+          id: "file_object_version:db005-unit-extension-v7"
+        }
+      },
+      payloadDigestSha256: "a".repeat(64),
+      rendererId: "core:message-extension-renderer"
+    });
+    if (
+      attachment.kind !== "image" ||
+      attachment.attachment.state !== "ready" ||
+      extension.kind !== "extension"
+    ) {
+      throw new Error("Exact pin fixture did not retain its block kinds.");
+    }
+    const insert = buildInsertInboxV2TimelineContentPayloadSql({
+      tenantId,
+      contentId: "timeline_content:db005-unit-pins",
+      contentRevision: revision,
+      blocks: [attachment, extension],
+      createdAt: now
+    });
+    expect(insert).not.toBeNull();
+    if (insert === null) return;
+    const rendered = renderQuery(insert);
+    const statement = normalizeSql(rendered.sql);
+    for (const column of [
+      "attachment_v2_file_id",
+      "attachment_file_revision",
+      "attachment_file_version_id",
+      "attachment_object_version_id",
+      "extension_payload_v2_file_id",
+      "extension_payload_file_revision",
+      "extension_payload_file_version_id",
+      "extension_payload_object_version_id"
+    ]) {
+      expect(statement).toContain(column);
+    }
+    expect(rendered.params).toEqual(
+      expect.arrayContaining([
+        "file:db005-unit-image",
+        "2",
+        "file_version:db005-unit-image-v1",
+        "file_object_version:db005-unit-image-v1",
+        "file:db005-unit-extension",
+        "7",
+        "file_version:db005-unit-extension-v7",
+        "file_object_version:db005-unit-extension-v7"
+      ])
+    );
+
+    expect(
+      mapInboxV2TimelineContentBlockRow(
+        {
+          block_key: attachment.blockKey,
+          kind: attachment.kind,
+          ordinal: 0,
+          attachment_id: attachment.attachment.attachment.id,
+          attachment_state: "ready",
+          attachment_file_id: null,
+          attachment_v2_file_id: attachment.attachment.file.id,
+          attachment_file_revision: "2",
+          attachment_file_version_id: attachment.attachment.fileVersion.id,
+          attachment_object_version_id: attachment.attachment.objectVersion.id,
+          attachment_failure_reason_id: null,
+          display_name: attachment.displayName
+        },
+        [],
+        tenantId
+      )
+    ).toEqual(attachment);
+    expect(
+      mapInboxV2TimelineContentBlockRow(
+        {
+          block_key: extension.blockKey,
+          kind: extension.kind,
+          ordinal: 1,
+          extension_block_kind_id: extension.blockKindId,
+          extension_payload_schema_id: extension.payloadSchemaId,
+          extension_payload_schema_version: extension.payloadSchemaVersion,
+          extension_payload_file_id: null,
+          extension_payload_v2_file_id: extension.payloadFile.id,
+          extension_payload_file_revision: "7",
+          extension_payload_file_version_id:
+            extension.payloadPin.state === "exact"
+              ? extension.payloadPin.fileVersion.id
+              : null,
+          extension_payload_object_version_id:
+            extension.payloadPin.state === "exact"
+              ? extension.payloadPin.objectVersion.id
+              : null,
+          extension_payload_digest_sha256: extension.payloadDigestSha256,
+          extension_renderer_id: extension.rendererId
+        },
+        [],
+        tenantId
+      )
+    ).toEqual(extension);
+  });
+
+  it("reconstructs legacy unpinned compatibility rows explicitly", () => {
+    const legacyAttachment = mapInboxV2TimelineContentBlockRow(
+      {
+        block_key: "legacy-file",
+        kind: "file",
+        ordinal: 0,
+        attachment_id: "message_attachment:db005-unit-legacy",
+        attachment_state: "ready",
+        attachment_file_id: "file:db005-unit-legacy",
+        attachment_v2_file_id: null,
+        attachment_file_revision: null,
+        attachment_file_version_id: null,
+        attachment_object_version_id: null,
+        attachment_failure_reason_id: null,
+        display_name: "legacy.pdf"
+      },
+      [],
+      tenantId
+    );
+    expect(legacyAttachment).toMatchObject({
+      kind: "file",
+      attachment: { state: "legacy_unpinned" }
+    });
+
+    const legacyExtension = mapInboxV2TimelineContentBlockRow(
+      {
+        block_key: "legacy-extension",
+        kind: "extension",
+        ordinal: 1,
+        extension_block_kind_id: "core:message-extension",
+        extension_payload_schema_id: "core:message-extension-payload",
+        extension_payload_schema_version: "v1",
+        extension_payload_file_id: "file:db005-unit-legacy-extension",
+        extension_payload_v2_file_id: null,
+        extension_payload_file_revision: null,
+        extension_payload_file_version_id: null,
+        extension_payload_object_version_id: null,
+        extension_payload_digest_sha256: "b".repeat(64),
+        extension_renderer_id: "core:message-extension-renderer"
+      },
+      [],
+      tenantId
+    );
+    expect(legacyExtension).toMatchObject({
+      kind: "extension",
+      payloadPin: { state: "legacy_unpinned" }
+    });
+  });
+
   it("binds Message creation to the exact command, actor, epoch and Conversation decision", () => {
     const internalCommit = inboxV2MessageCreationCommitSchema.parse(
       fixtureInternalCreationCommit()

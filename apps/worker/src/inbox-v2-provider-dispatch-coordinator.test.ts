@@ -1,5 +1,7 @@
 import {
+  calculateInboxV2OutboundDispatchContentPlanDigest,
   calculateInboxV2OutboxLeaseTokenHash,
+  deriveInboxV2OutboundDispatchArtifactId,
   deriveInboxV2RouteFailureOutboxFinalization,
   inboxV2EntityRevisionSchema,
   inboxV2NamespacedIdSchema,
@@ -9,12 +11,16 @@ import {
   inboxV2OutboxWorkerIdSchema,
   inboxV2OutboundDispatchAttemptCommitSchema,
   inboxV2OutboundDispatchAttemptSchema,
+  inboxV2OutboundDispatchContentPlanSchema,
   inboxV2OutboundDispatchRouteFailureCommitSchema,
   inboxV2OutboundDispatchSchema,
   inboxV2RoutingTrustedServiceIdSchema,
+  inboxV2SafeSourceDiagnosticSchema,
   type InboxV2OutboxClaim,
   type InboxV2OutboxWorkRepositoryPort,
   type InboxV2OutboundDispatch,
+  type InboxV2OutboundDispatchContentPlan,
+  type InboxV2OutboundDispatchContentPlanDigestInput,
   type InboxV2OutboundDispatchAttemptCommit
 } from "@hulee/contracts";
 import { describe, expect, it, vi } from "vitest";
@@ -28,6 +34,7 @@ import {
   InboxV2ProviderDispatchCoordinatorError,
   type InboxV2ProviderDispatchAdapterPort,
   type InboxV2ProviderDispatchFencedMutationResult,
+  type InboxV2ProviderDispatchLoadResult,
   type InboxV2ProviderDispatchPlan,
   type InboxV2ProviderDispatchTransportPort
 } from "./inbox-v2-provider-dispatch-coordinator";
@@ -124,8 +131,210 @@ function clock(...timestamps: readonly string[]) {
   };
 }
 
+function contentPlanFor(
+  dispatch: InboxV2OutboundDispatch,
+  overrides: Partial<InboxV2OutboundDispatchContentPlanDigestInput> = {}
+): InboxV2OutboundDispatchContentPlan {
+  const digestInput: InboxV2OutboundDispatchContentPlanDigestInput = {
+    tenantId: dispatch.tenantId,
+    id: "outbound_dispatch_content_plan:worker-coordinator",
+    dispatch: {
+      tenantId: dispatch.tenantId,
+      kind: "outbound_dispatch",
+      id: dispatch.id
+    },
+    message: dispatch.message,
+    messageRevision: "1",
+    conversation: fixture.route.conversation,
+    timelineItem: {
+      tenantId: dispatch.tenantId,
+      kind: "timeline_item",
+      id: "timeline_item:worker-coordinator"
+    },
+    route: dispatch.route,
+    timelineContent: {
+      tenantId: dispatch.tenantId,
+      kind: "timeline_content",
+      id: "timeline_content:worker-coordinator"
+    },
+    contentRevision: "1",
+    contentFingerprint: {
+      purposeId: "core:outbound_dispatch_content_plan",
+      keyGeneration: "outbound-content-key:g1",
+      validUntil: "2026-08-18T09:00:00.000Z",
+      hmacSha256: `hmac-sha256:${"a".repeat(64)}`
+    },
+    binding: fixture.route.sourceThreadBinding,
+    bindingRevision: fixture.bindingHeadSnapshot.bindingRevision,
+    capabilityRevision: fixture.route.bindingFence.capabilityRevision,
+    adapterContract: fixture.route.adapterContract,
+    blocks: [
+      {
+        blockKey: "text-1",
+        blockKind: "text",
+        exactFileObjectPin: null,
+        artifactOrdinal: 1
+      }
+    ],
+    artifacts: [
+      {
+        ordinal: 1,
+        grouping: "single",
+        capabilityId: "core:send-message",
+        operationId: fixture.route.operationId,
+        blockKeys: ["text-1"]
+      }
+    ],
+    createdAt: dispatch.createdAt,
+    revision: "1",
+    ...overrides
+  };
+  return inboxV2OutboundDispatchContentPlanSchema.parse({
+    ...digestInput,
+    planDigestSha256:
+      calculateInboxV2OutboundDispatchContentPlanDigest(digestInput)
+  });
+}
+
+function multiArtifactContentPlanFor(
+  dispatch: InboxV2OutboundDispatch,
+  overrides: Partial<InboxV2OutboundDispatchContentPlanDigestInput> = {}
+): InboxV2OutboundDispatchContentPlan {
+  return contentPlanFor(dispatch, {
+    id: "outbound_dispatch_content_plan:worker-coordinator-multi",
+    blocks: [
+      {
+        blockKey: "text-1",
+        blockKind: "text",
+        exactFileObjectPin: null,
+        artifactOrdinal: 1
+      },
+      {
+        blockKey: "location-1",
+        blockKind: "location",
+        exactFileObjectPin: null,
+        artifactOrdinal: 2
+      },
+      {
+        blockKey: "contact-1",
+        blockKind: "contact",
+        exactFileObjectPin: null,
+        artifactOrdinal: 3
+      }
+    ],
+    artifacts: [
+      {
+        ordinal: 1,
+        grouping: "split",
+        capabilityId: "core:send-message",
+        operationId: fixture.route.operationId,
+        blockKeys: ["text-1"]
+      },
+      {
+        ordinal: 2,
+        grouping: "split",
+        capabilityId: "core:send-location",
+        operationId: fixture.route.operationId,
+        blockKeys: ["location-1"]
+      },
+      {
+        ordinal: 3,
+        grouping: "split",
+        capabilityId: "core:send-contact",
+        operationId: fixture.route.operationId,
+        blockKeys: ["contact-1"]
+      }
+    ],
+    ...overrides
+  });
+}
+
+const exactMediaPin = {
+  file: {
+    tenantId: fixture.tenantId,
+    kind: "file" as const,
+    id: "file:worker-coordinator-photo"
+  },
+  fileRevision: "4",
+  fileVersion: {
+    tenantId: fixture.tenantId,
+    kind: "file_version" as const,
+    id: "file_version:worker-coordinator-photo-v4"
+  },
+  objectVersion: {
+    tenantId: fixture.tenantId,
+    kind: "file_object_version" as const,
+    id: "file_object_version:worker-coordinator-photo-v4"
+  }
+};
+
+function mediaOnlyContentPlanFor(
+  dispatch: InboxV2OutboundDispatch
+): InboxV2OutboundDispatchContentPlan {
+  return contentPlanFor(dispatch, {
+    id: "outbound_dispatch_content_plan:worker-coordinator-media-only",
+    blocks: [
+      {
+        blockKey: "image-1",
+        blockKind: "image",
+        exactFileObjectPin: exactMediaPin,
+        artifactOrdinal: 1
+      }
+    ],
+    artifacts: [
+      {
+        ordinal: 1,
+        grouping: "single",
+        capabilityId: "core:send-message",
+        operationId: fixture.route.operationId,
+        blockKeys: ["image-1"]
+      }
+    ]
+  });
+}
+
+function captionMediaSplitContentPlanFor(
+  dispatch: InboxV2OutboundDispatch
+): InboxV2OutboundDispatchContentPlan {
+  return contentPlanFor(dispatch, {
+    id: "outbound_dispatch_content_plan:worker-coordinator-caption-media",
+    blocks: [
+      {
+        blockKey: "caption-1",
+        blockKind: "text",
+        exactFileObjectPin: null,
+        artifactOrdinal: 1
+      },
+      {
+        blockKey: "image-1",
+        blockKind: "image",
+        exactFileObjectPin: exactMediaPin,
+        artifactOrdinal: 2
+      }
+    ],
+    artifacts: [
+      {
+        ordinal: 1,
+        grouping: "split",
+        capabilityId: "core:send-message",
+        operationId: fixture.route.operationId,
+        blockKeys: ["caption-1"]
+      },
+      {
+        ordinal: 2,
+        grouping: "split",
+        capabilityId: "core:send-message",
+        operationId: fixture.route.operationId,
+        blockKeys: ["image-1"]
+      }
+    ]
+  });
+}
+
 function createHarness(input: {
   dispatch: InboxV2OutboundDispatch;
+  contentPlan?: InboxV2OutboundDispatchContentPlan | null;
+  loadResult?: InboxV2ProviderDispatchLoadResult;
   plan: InboxV2ProviderDispatchPlan<{ text: string }>;
   adapterResult?: Awaited<
     ReturnType<InboxV2ProviderDispatchAdapterPort<{ text: string }>["dispatch"]>
@@ -145,15 +354,33 @@ function createHarness(input: {
 }) {
   const events = input.events ?? [];
   const attemptResults = [...(input.attemptResults ?? [])];
-  const loadClaimedProviderIo = vi.fn(async () => ({
-    kind: "loaded" as const,
-    intent,
-    dispatch: input.dispatch
-  }));
+  const loadedState =
+    input.loadResult ??
+    (input.contentPlan === null
+      ? { kind: "loaded" as const, intent, dispatch: input.dispatch }
+      : {
+          kind: "loaded" as const,
+          intent,
+          dispatch: input.dispatch,
+          contentPlan: input.contentPlan ?? contentPlanFor(input.dispatch)
+        });
+  const loadClaimedProviderIo = vi.fn(
+    async () => loadedState as unknown as InboxV2ProviderDispatchLoadResult
+  );
   const applyAttemptFenced = vi.fn(async ({ commit }) => {
     events.push(commit.kind === "open_attempt" ? "open" : "complete");
     return attemptResults.shift() ?? ({ kind: "committed" } as const);
   });
+  const applyProviderResultFenced = vi.fn(
+    async (
+      _input: Parameters<
+        InboxV2ProviderDispatchTransportPort["applyProviderResultFenced"]
+      >[0]
+    ) => {
+      events.push("complete");
+      return attemptResults.shift() ?? ({ kind: "committed" } as const);
+    }
+  );
   const applyRouteFailureFenced = vi.fn(async () => {
     events.push("route_failure");
     return input.routeFailureResult ?? ({ kind: "committed" } as const);
@@ -165,6 +392,7 @@ function createHarness(input: {
   const transport = {
     loadClaimedProviderIo,
     applyAttemptFenced,
+    applyProviderResultFenced,
     applyRouteFailureFenced,
     reconcileFenced
   } satisfies InboxV2ProviderDispatchTransportPort;
@@ -173,8 +401,13 @@ function createHarness(input: {
     events.push("adapter");
     if (input.adapterResult === undefined) {
       return {
-        outcome: "accepted" as const,
-        providerAcknowledgementToken: "provider:worker-coordinator-ack"
+        artifacts: (
+          input.contentPlan ?? contentPlanFor(input.dispatch)
+        ).artifacts.map((artifact) => ({
+          artifactOrdinal: artifact.ordinal,
+          outcome: "accepted" as const,
+          providerAcknowledgementToken: "provider:worker-coordinator-ack"
+        }))
       };
     }
     expect(signal).toBeInstanceOf(AbortSignal);
@@ -220,6 +453,7 @@ function createHarness(input: {
     coordinator,
     loadClaimedProviderIo,
     applyAttemptFenced,
+    applyProviderResultFenced,
     applyRouteFailureFenced,
     reconcileFenced,
     planner,
@@ -300,8 +534,10 @@ describe("Inbox V2 provider dispatch coordinator", () => {
   });
 
   it("commits open before provider I/O, commits outcome before outbox finalization and processes accepted delivery", async () => {
+    const contentPlan = contentPlanFor(fixture.queuedDispatch);
     const harness = createHarness({
       dispatch: fixture.queuedDispatch,
+      contentPlan,
       plan: {
         kind: "open_attempt",
         commit: openAttemptCommit,
@@ -316,7 +552,11 @@ describe("Inbox V2 provider dispatch coordinator", () => {
 
     expect(harness.events).toEqual(["open", "adapter", "complete", "finalize"]);
     expect(harness.dispatch).toHaveBeenCalledTimes(1);
-    const completion = harness.applyAttemptFenced.mock.calls[1]?.[0].commit;
+    expect(harness.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ contentPlan })
+    );
+    const completion =
+      harness.applyProviderResultFenced.mock.calls[0]?.[0].commit;
     expect(completion).toMatchObject({
       kind: "complete_attempt",
       attemptAfter: { outcome: { kind: "accepted" } },
@@ -332,6 +572,420 @@ describe("Inbox V2 provider dispatch coordinator", () => {
       })
     );
   });
+
+  it("dispatches a media-only plan with one immutable File/Object pin and reconstructs the same canonical artifact reference", async () => {
+    const contentPlan = mediaOnlyContentPlanFor(fixture.queuedDispatch);
+    const run = async () => {
+      const harness = createHarness({
+        dispatch: fixture.queuedDispatch,
+        contentPlan,
+        plan: {
+          kind: "open_attempt",
+          commit: openAttemptCommit,
+          request: { text: "media-only" }
+        }
+      });
+      await expect(harness.coordinator.process(claim())).resolves.toMatchObject(
+        {
+          outcome: "finalized",
+          source: "provider_result"
+        }
+      );
+      return harness;
+    };
+
+    const first = await run();
+    const replay = await run();
+    const firstPersisted = first.applyProviderResultFenced.mock.calls[0]?.[0];
+    const replayPersisted = replay.applyProviderResultFenced.mock.calls[0]?.[0];
+    const expectedArtifactId = deriveInboxV2OutboundDispatchArtifactId({
+      tenantId: fixture.tenantId,
+      dispatch: openAttemptCommit.attempt.dispatch,
+      route: openAttemptCommit.attempt.route,
+      attempt: {
+        tenantId: fixture.tenantId,
+        kind: "outbound_dispatch_attempt",
+        id: openAttemptCommit.attempt.id
+      },
+      ordinal: 1
+    });
+
+    expect(contentPlan).toMatchObject({
+      dispatch: {
+        id: fixture.queuedDispatch.id
+      },
+      message: fixture.queuedDispatch.message,
+      route: fixture.queuedDispatch.route,
+      blocks: [
+        {
+          blockKey: "image-1",
+          exactFileObjectPin: exactMediaPin,
+          artifactOrdinal: 1
+        }
+      ]
+    });
+    expect(first.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ contentPlan })
+    );
+    expect(firstPersisted?.artifacts).toEqual([
+      expect.objectContaining({
+        id: expectedArtifactId,
+        ordinal: 1,
+        state: "accepted"
+      })
+    ]);
+    expect(replayPersisted?.artifacts).toEqual(firstPersisted?.artifacts);
+    expect(replayPersisted?.contentPlanDigestSha256).toBe(
+      firstPersisted?.contentPlanDigestSha256
+    );
+  });
+
+  it("keeps one canonical Message and route while a caption and pinned media become two provider artifacts", async () => {
+    const contentPlan = captionMediaSplitContentPlanFor(fixture.queuedDispatch);
+    const harness = createHarness({
+      dispatch: fixture.queuedDispatch,
+      contentPlan,
+      plan: {
+        kind: "open_attempt",
+        commit: openAttemptCommit,
+        request: { text: "caption plus media" }
+      },
+      adapterResult: {
+        artifacts: [
+          {
+            artifactOrdinal: 2,
+            outcome: "accepted",
+            providerAcknowledgementToken: "provider:media-receipt"
+          },
+          {
+            artifactOrdinal: 1,
+            outcome: "accepted",
+            providerAcknowledgementToken: "provider:caption-receipt"
+          }
+        ]
+      }
+    });
+
+    await expect(harness.coordinator.process(claim())).resolves.toMatchObject({
+      outcome: "finalized",
+      source: "provider_result"
+    });
+    const persisted = harness.applyProviderResultFenced.mock.calls[0]?.[0];
+    expect(contentPlan).toMatchObject({
+      dispatch: { id: fixture.queuedDispatch.id },
+      message: fixture.queuedDispatch.message,
+      route: fixture.queuedDispatch.route,
+      blocks: [
+        {
+          blockKey: "caption-1",
+          exactFileObjectPin: null,
+          artifactOrdinal: 1
+        },
+        {
+          blockKey: "image-1",
+          exactFileObjectPin: exactMediaPin,
+          artifactOrdinal: 2
+        }
+      ],
+      artifacts: [
+        { ordinal: 1, grouping: "split", blockKeys: ["caption-1"] },
+        { ordinal: 2, grouping: "split", blockKeys: ["image-1"] }
+      ]
+    });
+    expect(persisted?.artifacts).toEqual(
+      [1, 2].map((ordinal) =>
+        expect.objectContaining({
+          id: deriveInboxV2OutboundDispatchArtifactId({
+            tenantId: fixture.tenantId,
+            dispatch: openAttemptCommit.attempt.dispatch,
+            route: openAttemptCommit.attempt.route,
+            attempt: {
+              tenantId: fixture.tenantId,
+              kind: "outbound_dispatch_attempt",
+              id: openAttemptCommit.attempt.id
+            },
+            ordinal
+          }),
+          ordinal,
+          state: "accepted"
+        })
+      )
+    );
+    expect(harness.dispatch).toHaveBeenCalledTimes(1);
+    expect(harness.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ contentPlan })
+    );
+  });
+
+  it("persists every accepted split artifact with deterministic identity while distinct receipts remain non-canonical", async () => {
+    const contentPlan = multiArtifactContentPlanFor(fixture.queuedDispatch);
+    const harness = createHarness({
+      dispatch: fixture.queuedDispatch,
+      contentPlan,
+      plan: {
+        kind: "open_attempt",
+        commit: openAttemptCommit,
+        request: { text: "three provider artifacts" }
+      },
+      adapterResult: {
+        artifacts: [
+          {
+            artifactOrdinal: 3,
+            outcome: "accepted",
+            providerAcknowledgementToken: "provider:artifact-three-receipt"
+          },
+          {
+            artifactOrdinal: 1,
+            outcome: "accepted",
+            providerAcknowledgementToken: "provider:artifact-one-receipt"
+          },
+          {
+            artifactOrdinal: 2,
+            outcome: "accepted",
+            providerAcknowledgementToken: "provider:artifact-two-receipt"
+          }
+        ]
+      }
+    });
+
+    await expect(harness.coordinator.process(claim())).resolves.toMatchObject({
+      outcome: "finalized",
+      source: "provider_result"
+    });
+
+    const persisted = harness.applyProviderResultFenced.mock.calls[0]?.[0];
+    expect(persisted?.commit.attemptAfter.outcome).toEqual({
+      kind: "accepted",
+      completedAt: OUTBOUND_TEST_TIMES.acceptedAt,
+      providerAcknowledgementToken: null
+    });
+    expect(persisted?.contentPlanDigestSha256).toBe(
+      contentPlan.planDigestSha256
+    );
+    expect(persisted?.artifacts).toEqual(
+      contentPlan.artifacts.map((planned) =>
+        expect.objectContaining({
+          id: deriveInboxV2OutboundDispatchArtifactId({
+            tenantId: fixture.tenantId,
+            dispatch: openAttemptCommit.attempt.dispatch,
+            route: openAttemptCommit.attempt.route,
+            attempt: {
+              tenantId: fixture.tenantId,
+              kind: "outbound_dispatch_attempt",
+              id: openAttemptCommit.attempt.id
+            },
+            ordinal: planned.ordinal
+          }),
+          ordinal: planned.ordinal,
+          state: "accepted",
+          diagnostic: null
+        })
+      )
+    );
+    expect(harness.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("turns mixed provider artifact outcomes into reconciliation-only unknown without losing per-artifact evidence", async () => {
+    const contentPlan = multiArtifactContentPlanFor(fixture.queuedDispatch);
+    const retryableDiagnostic = inboxV2SafeSourceDiagnosticSchema.parse({
+      codeId: "core:provider-artifact-temporary-failure",
+      retryable: true,
+      correlationToken: "provider:artifact-two-failure",
+      safeOperatorHintId: null
+    });
+    const harness = createHarness({
+      dispatch: fixture.queuedDispatch,
+      contentPlan,
+      plan: {
+        kind: "open_attempt",
+        commit: openAttemptCommit,
+        request: { text: "mixed provider result" }
+      },
+      adapterResult: {
+        artifacts: [
+          {
+            artifactOrdinal: 1,
+            outcome: "accepted",
+            providerAcknowledgementToken: "provider:artifact-one-receipt"
+          },
+          {
+            artifactOrdinal: 2,
+            outcome: "failed",
+            retryAt: OUTBOUND_TEST_TIMES.retryAt,
+            diagnostic: retryableDiagnostic
+          },
+          {
+            artifactOrdinal: 3,
+            outcome: "accepted",
+            providerAcknowledgementToken: "provider:artifact-three-receipt"
+          }
+        ]
+      }
+    });
+
+    await expect(harness.coordinator.process(claim())).resolves.toMatchObject({
+      outcome: "finalized",
+      source: "provider_result"
+    });
+
+    const persisted = harness.applyProviderResultFenced.mock.calls[0]?.[0];
+    expect(persisted?.commit.attemptAfter.outcome).toMatchObject({
+      kind: "outcome_unknown",
+      diagnostic: {
+        codeId: "core:provider-artifact-outcomes-mixed",
+        retryable: false,
+        correlationToken: openAttemptCommit.attempt.claimToken,
+        safeOperatorHintId: "core:reconcile-before-retry"
+      },
+      requiredAction: "operator_duplicate_risk_decision_required"
+    });
+    expect(persisted?.artifacts.map((artifact) => artifact.state)).toEqual([
+      "accepted",
+      "failed",
+      "accepted"
+    ]);
+    expect(persisted?.artifacts[1]?.diagnostic).toEqual(retryableDiagnostic);
+    expect(harness.applyAttemptFenced).toHaveBeenCalledTimes(1);
+    expect(harness.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("aggregates an all-retryable failed artifact set with its latest retry boundary", async () => {
+    const contentPlan = multiArtifactContentPlanFor(fixture.queuedDispatch);
+    const retryTimes = [
+      "2026-07-14T08:07:00.000Z",
+      OUTBOUND_TEST_TIMES.retryAt,
+      "2026-07-14T08:08:00.000Z"
+    ] as const;
+    const harness = createHarness({
+      dispatch: fixture.queuedDispatch,
+      contentPlan,
+      plan: {
+        kind: "open_attempt",
+        commit: openAttemptCommit,
+        request: { text: "retryable provider result" }
+      },
+      adapterResult: {
+        artifacts: retryTimes.map((retryAt, index) => ({
+          artifactOrdinal: index + 1,
+          outcome: "failed" as const,
+          retryAt,
+          diagnostic: inboxV2SafeSourceDiagnosticSchema.parse({
+            codeId: `core:provider-artifact-${index + 1}-temporary`,
+            retryable: true,
+            correlationToken: `provider:artifact-${index + 1}-failure`,
+            safeOperatorHintId: null
+          })
+        }))
+      }
+    });
+
+    await harness.coordinator.process(claim());
+
+    const persisted = harness.applyProviderResultFenced.mock.calls[0]?.[0];
+    expect(persisted?.commit.attemptAfter.outcome).toMatchObject({
+      kind: "retryable_failure",
+      retryAt: OUTBOUND_TEST_TIMES.retryAt
+    });
+    expect(persisted?.artifacts.map((artifact) => artifact.state)).toEqual([
+      "failed",
+      "failed",
+      "failed"
+    ]);
+  });
+
+  it.each([
+    [
+      "missing",
+      [
+        {
+          artifactOrdinal: 1,
+          outcome: "accepted" as const,
+          providerAcknowledgementToken: null
+        }
+      ]
+    ],
+    [
+      "duplicate",
+      [
+        {
+          artifactOrdinal: 1,
+          outcome: "accepted" as const,
+          providerAcknowledgementToken: null
+        },
+        {
+          artifactOrdinal: 1,
+          outcome: "accepted" as const,
+          providerAcknowledgementToken: null
+        },
+        {
+          artifactOrdinal: 3,
+          outcome: "accepted" as const,
+          providerAcknowledgementToken: null
+        }
+      ]
+    ],
+    [
+      "out-of-plan",
+      [
+        {
+          artifactOrdinal: 1,
+          outcome: "accepted" as const,
+          providerAcknowledgementToken: null
+        },
+        {
+          artifactOrdinal: 2,
+          outcome: "accepted" as const,
+          providerAcknowledgementToken: null
+        },
+        {
+          artifactOrdinal: 4,
+          outcome: "accepted" as const,
+          providerAcknowledgementToken: null
+        }
+      ]
+    ]
+  ] as const)(
+    "persists complete uncertain evidence for an adapter result with %s artifact coverage",
+    async (_case, artifacts) => {
+      const contentPlan = multiArtifactContentPlanFor(fixture.queuedDispatch);
+      const harness = createHarness({
+        dispatch: fixture.queuedDispatch,
+        contentPlan,
+        plan: {
+          kind: "open_attempt",
+          commit: openAttemptCommit,
+          request: { text: "invalid provider artifact set" }
+        },
+        adapterResult: { artifacts }
+      });
+
+      await harness.coordinator.process(claim());
+
+      const persisted = harness.applyProviderResultFenced.mock.calls[0]?.[0];
+      expect(persisted?.commit.attemptAfter.outcome).toMatchObject({
+        kind: "outcome_unknown",
+        diagnostic: {
+          codeId: "core:provider-result-invalid",
+          retryable: false
+        }
+      });
+      expect(persisted?.artifacts).toHaveLength(3);
+      expect(persisted?.artifacts).toEqual(
+        expect.arrayContaining(
+          [1, 2, 3].map((ordinal) =>
+            expect.objectContaining({
+              ordinal,
+              state: "outcome_unknown",
+              diagnostic: expect.objectContaining({
+                codeId: "core:provider-result-invalid"
+              })
+            })
+          )
+        )
+      );
+      expect(harness.dispatch).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it("reports a lost outbox lease after durable completion instead of claiming finalization", async () => {
     const finalizeResult = {
@@ -358,7 +1012,8 @@ describe("Inbox V2 provider dispatch coordinator", () => {
     });
 
     expect(harness.events).toEqual(["open", "adapter", "complete", "finalize"]);
-    expect(harness.applyAttemptFenced).toHaveBeenCalledTimes(2);
+    expect(harness.applyAttemptFenced).toHaveBeenCalledTimes(1);
+    expect(harness.applyProviderResultFenced).toHaveBeenCalledTimes(1);
     expect(harness.dispatch).toHaveBeenCalledTimes(1);
   });
 
@@ -402,7 +1057,8 @@ describe("Inbox V2 provider dispatch coordinator", () => {
       outcome: "finalized"
     });
 
-    const completion = harness.applyAttemptFenced.mock.calls[1]?.[0].commit;
+    const completion =
+      harness.applyProviderResultFenced.mock.calls[0]?.[0].commit;
     expect(completion).toMatchObject({
       kind: "complete_attempt",
       completionSource: "provider_result",
@@ -459,7 +1115,8 @@ describe("Inbox V2 provider dispatch coordinator", () => {
 
     expect(harness.dispatch).not.toHaveBeenCalled();
     expect(harness.events).toEqual(["open", "complete", "finalize"]);
-    const completion = harness.applyAttemptFenced.mock.calls[1]?.[0].commit;
+    const completion =
+      harness.applyProviderResultFenced.mock.calls[0]?.[0].commit;
     expect(completion).toMatchObject({
       kind: "complete_attempt",
       completionSource: "provider_result",
@@ -841,6 +1498,184 @@ describe("Inbox V2 provider dispatch coordinator", () => {
     expect(harness.dispatch).not.toHaveBeenCalled();
   });
 
+  it("rejects a missing loaded content plan before planner or adapter I/O", async () => {
+    const harness = createHarness({
+      dispatch: fixture.queuedDispatch,
+      contentPlan: null,
+      plan: {
+        kind: "open_attempt",
+        commit: openAttemptCommit,
+        request: { text: "missing-content-plan" }
+      }
+    });
+
+    await expect(harness.coordinator.process(claim())).rejects.toMatchObject({
+      code: "provider_dispatch.invalid_intent_linkage",
+      retryable: false
+    });
+    expect(harness.planner.plan).not.toHaveBeenCalled();
+    expect(harness.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the immutable dispatch content plan is absent", async () => {
+    const harness = createHarness({
+      dispatch: fixture.queuedDispatch,
+      loadResult: { kind: "outbox_dispatch_content_plan_not_found" },
+      plan: {
+        kind: "open_attempt",
+        commit: openAttemptCommit,
+        request: { text: "must-not-run" }
+      }
+    });
+
+    await expect(harness.coordinator.process(claim())).resolves.toEqual({
+      outcome: "load_rejected",
+      reason: "outbox_dispatch_content_plan_not_found"
+    });
+    expect(harness.planner.plan).not.toHaveBeenCalled();
+    expect(harness.applyAttemptFenced).not.toHaveBeenCalled();
+    expect(harness.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed canonical plan digest before planner or adapter I/O", async () => {
+    const validPlan = contentPlanFor(fixture.queuedDispatch);
+    const harness = createHarness({
+      dispatch: fixture.queuedDispatch,
+      contentPlan: {
+        ...validPlan,
+        planDigestSha256: "0".repeat(64)
+      } as unknown as InboxV2OutboundDispatchContentPlan,
+      plan: {
+        kind: "open_attempt",
+        commit: openAttemptCommit,
+        request: { text: "malformed-plan-digest" }
+      }
+    });
+
+    await expect(harness.coordinator.process(claim())).rejects.toMatchObject({
+      code: "provider_dispatch.invalid_intent_linkage",
+      retryable: false
+    });
+    expect(harness.planner.plan).not.toHaveBeenCalled();
+    expect(harness.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("rejects canonically re-digested dispatch linkage drift before planner or adapter I/O", async () => {
+    const driftedPlans = [
+      contentPlanFor(fixture.queuedDispatch, {
+        dispatch: {
+          ...contentPlanFor(fixture.queuedDispatch).dispatch,
+          id: "outbound_dispatch:drifted-dispatch"
+        }
+      }),
+      contentPlanFor(fixture.queuedDispatch, {
+        message: {
+          ...fixture.queuedDispatch.message,
+          id: "message:drifted-message"
+        }
+      }),
+      contentPlanFor(fixture.queuedDispatch, {
+        route: {
+          ...fixture.queuedDispatch.route,
+          id: "outbound_route:drifted-route"
+        }
+      })
+    ];
+
+    for (const contentPlan of driftedPlans) {
+      const harness = createHarness({
+        dispatch: fixture.queuedDispatch,
+        contentPlan,
+        plan: {
+          kind: "open_attempt",
+          commit: openAttemptCommit,
+          request: { text: "redigested-linkage-drift" }
+        }
+      });
+
+      await expect(harness.coordinator.process(claim())).rejects.toMatchObject({
+        code: "provider_dispatch.invalid_intent_linkage",
+        retryable: false
+      });
+      expect(harness.planner.plan).not.toHaveBeenCalled();
+      expect(harness.dispatch).not.toHaveBeenCalled();
+    }
+  });
+
+  it("opens against the current binding revision when binding generation is an independent axis", async () => {
+    const bindingRevision = "17";
+    const independentAxisOpen = requireOpenCommit(
+      inboxV2OutboundDispatchAttemptCommitSchema.parse({
+        ...openAttemptCommit,
+        bindingHeadSnapshot: {
+          ...openAttemptCommit.bindingHeadSnapshot,
+          bindingRevision
+        }
+      })
+    );
+    const contentPlan = contentPlanFor(fixture.queuedDispatch, {
+      bindingRevision
+    });
+    const harness = createHarness({
+      dispatch: fixture.queuedDispatch,
+      contentPlan,
+      plan: {
+        kind: "open_attempt",
+        commit: independentAxisOpen,
+        request: { text: "independent binding revision" }
+      }
+    });
+
+    expect(bindingRevision).not.toBe(
+      independentAxisOpen.routeSnapshot.bindingFence.bindingGeneration
+    );
+    await expect(harness.coordinator.process(claim())).resolves.toMatchObject({
+      outcome: "finalized",
+      source: "provider_result"
+    });
+    expect(harness.applyAttemptFenced).toHaveBeenCalledTimes(1);
+    expect(harness.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects route-snapshot fence drift after planning but before durable open or adapter I/O", async () => {
+    const routeDriftPlans = [
+      contentPlanFor(fixture.queuedDispatch, {
+        conversation: {
+          ...fixture.route.conversation,
+          id: "conversation:drifted-conversation"
+        }
+      }),
+      contentPlanFor(fixture.queuedDispatch, { bindingRevision: "99" }),
+      contentPlanFor(fixture.queuedDispatch, { capabilityRevision: "99" }),
+      contentPlanFor(fixture.queuedDispatch, {
+        adapterContract: {
+          ...fixture.route.adapterContract,
+          declarationRevision: "99"
+        }
+      })
+    ];
+
+    for (const contentPlan of routeDriftPlans) {
+      const harness = createHarness({
+        dispatch: fixture.queuedDispatch,
+        contentPlan,
+        plan: {
+          kind: "open_attempt",
+          commit: openAttemptCommit,
+          request: { text: "route-snapshot-drift" }
+        }
+      });
+
+      await expect(harness.coordinator.process(claim())).rejects.toMatchObject({
+        code: "provider_dispatch.invalid_plan",
+        retryable: false
+      });
+      expect(harness.planner.plan).toHaveBeenCalledTimes(1);
+      expect(harness.applyAttemptFenced).not.toHaveBeenCalled();
+      expect(harness.dispatch).not.toHaveBeenCalled();
+    }
+  });
+
   it("fails closed on wrong handler linkage before planning or provider I/O", async () => {
     const harness = createHarness({
       dispatch: fixture.queuedDispatch,
@@ -858,6 +1693,7 @@ describe("Inbox V2 provider dispatch coordinator", () => {
       transport: {
         loadClaimedProviderIo: harness.loadClaimedProviderIo,
         applyAttemptFenced: harness.applyAttemptFenced,
+        applyProviderResultFenced: harness.applyProviderResultFenced,
         applyRouteFailureFenced: harness.applyRouteFailureFenced,
         reconcileFenced: harness.reconcileFenced
       },

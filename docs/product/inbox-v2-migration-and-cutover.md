@@ -440,6 +440,24 @@ and passes its workload, and the PostgreSQL/object restore plus release controls
 below pass. The DB-008 test-only compatibility switch is not exposed through
 CLI or environment and must never be used as deployment authority.
 
+The pinned DB-008 process currently proves query, reply, routing, outbox and
+WorkItem compatibility; it does not exercise an old-shape attachment-anchor
+write or an in-flight attachment transfer. Consequently, nullable attachment
+bridge columns alone do not authorize Inbox V2 attachment activation.
+`INB2-MIG-002` must either add that exact supported N-1 workload and a compatible
+online bridge, or record and enforce a drain checkpoint proving that every
+supported old attachment writer and transfer is stopped before V2 becomes the
+attachment owner.
+
+Attachment reservation namespace rotation has the same cutover boundary. The
+MSG-003 drain query is a bounded observation, not a pause receipt or key-removal
+capability. `INB2-MIG-002` must durably pause materialization admission on every
+replica, serialize the pause revision with a second zero unfinished-work and
+zero nonterminal-job observation for the exact tenant/generation, persist the
+consumed drain receipt, remove the key, and resume on the next generation.
+Until that control exists, a retired-generation verification deadline fails
+closed before provider or storage I/O and the key must not be removed.
+
 Exit: fresh DB and representative V1 snapshot both migrate; old compatible app
 still reads, writes and processes worker work; PostgreSQL and object-storage
 restore rehearsal succeeds for the release profile, including orphan/reference

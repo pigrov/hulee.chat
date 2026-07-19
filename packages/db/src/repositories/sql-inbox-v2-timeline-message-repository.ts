@@ -1,5 +1,7 @@
 import {
   INBOX_V2_MESSAGE_CREATION_COMMIT_SCHEMA_ID,
+  INBOX_V2_MESSAGE_REVISION_SCHEMA_ID,
+  INBOX_V2_MESSAGE_LIFECYCLE_SCHEMA_VERSION,
   INBOX_V2_MESSAGE_SCHEMA_ID,
   INBOX_V2_MESSAGE_SCHEMA_VERSION,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
@@ -82,8 +84,11 @@ import type { HuleeDatabase } from "../client";
 import {
   consumeInboxV2AtomicOutboundRouteProof,
   consumeInboxV2AtomicOutboundRerouteProof,
+  consumeInboxV2AtomicAttachmentMaterializationProof,
+  deriveInboxV2AttachmentMaterializationAuditReference,
   issueInboxV2AtomicMaterializationSealReceipt,
   requireInboxV2AtomicSealExecutor,
+  type InboxV2AtomicAttachmentMaterializationProof,
   type InboxV2AtomicMaterializationSealReceipt
 } from "./sql-inbox-v2-atomic-materialization-internal";
 import {
@@ -92,6 +97,12 @@ import {
   type InboxV2AuthorizedAtomicMaterializationContext,
   type InboxV2AuthorizedCommandMutationContext
 } from "./sql-inbox-v2-authorization-repository";
+import {
+  prepareInboxV2FileParentAttachmentsInTransaction,
+  sealInboxV2PreparedFileParentAttachmentsInTransaction,
+  type InboxV2PreparedFileParentAttachmentsCapability,
+  type InboxV2ReadyFileParentAttachment
+} from "./sql-inbox-v2-file-parent-materialization";
 import type {
   RawSqlExecutor,
   RawSqlQueryResult
@@ -282,6 +293,81 @@ export type PersistInboxV2MessageMutationResult<TResult = undefined> =
       current: InboxV2Message;
     }>
   | Readonly<{ kind: "message_not_found" }>;
+
+const inboxV2PreparedAttachmentMaterializationMessageMutationCapabilityBrand: unique symbol =
+  Symbol(
+    "inbox-v2-prepared-attachment-materialization-message-mutation-capability"
+  );
+
+export type InboxV2PreparedAttachmentMaterializationMessageMutationCapability =
+  Readonly<{
+    [inboxV2PreparedAttachmentMaterializationMessageMutationCapabilityBrand]: true;
+  }>;
+
+export type InboxV2MessageMutationPlanCurrent = Readonly<{
+  message: InboxV2Message;
+  timelineItem: InboxV2TimelineItem;
+  content: InboxV2TimelineContent;
+  /** Database clock sampled after the exact Message/Timeline/Content locks. */
+  databaseNow: string;
+}>;
+
+export type PrepareInboxV2AttachmentMaterializationMessageMutationResult =
+  | Readonly<{
+      kind: "ready";
+      capability: InboxV2PreparedAttachmentMaterializationMessageMutationCapability;
+      commit: InboxV2MessageMutationCommit;
+    }>
+  | Readonly<{
+      kind: "already_applied";
+      commit: InboxV2MessageMutationCommit;
+      message: InboxV2Message;
+      timelineItem: InboxV2TimelineItem;
+      streamPosition: InboxV2BigintCounter;
+    }>
+  | Readonly<{
+      kind: "conflict";
+      code: "revision.conflict" | "message.state_conflict";
+      current: InboxV2Message;
+    }>
+  | Readonly<{ kind: "message_not_found" }>;
+
+/**
+ * Server-side terminal-command preflight. This is a read-only snapshot; the
+ * opaque prepare capability below re-locks and verifies the same aggregate in
+ * the authorized transaction before any stream position can be consumed.
+ */
+export async function readInboxV2AttachmentMaterializationMessageCurrent(
+  executor: RawSqlExecutor,
+  input: Readonly<{
+    tenantId: InboxV2TenantId;
+    conversationId: InboxV2ConversationId;
+    messageId: InboxV2MessageId;
+  }>
+): Promise<InboxV2MessageMutationPlanCurrent | null> {
+  const tenantId = inboxV2TenantIdSchema.parse(input.tenantId);
+  const conversationId = inboxV2ConversationIdSchema.parse(
+    input.conversationId
+  );
+  const messageId = inboxV2MessageIdSchema.parse(input.messageId);
+  const current = await loadTimelineMessageAggregate(executor, {
+    tenantId,
+    messageId,
+    lock: false
+  });
+  if (
+    current === null ||
+    String(current.message.conversation.id) !== String(conversationId)
+  ) {
+    return null;
+  }
+  return Object.freeze({
+    message: current.message,
+    timelineItem: current.timelineItem,
+    content: current.content,
+    databaseNow: current.databaseNow
+  });
+}
 
 export type PersistInboxV2MessageAuxiliaryResult<TResult = undefined> =
   | Readonly<{
@@ -664,6 +750,7 @@ type ConversationHeadRow = {
   updated_at: unknown;
 };
 type MessageHeadRow = {
+  database_now?: unknown;
   tenant_id: unknown;
   message_id: unknown;
   conversation_id: unknown;
@@ -1091,6 +1178,7 @@ type PreparedInboxV2MessageCreationState = {
   readonly commit: InboxV2MessageCreationCommit;
   readonly timelineItem: InboxV2TimelineItem;
   readonly routeDisposition: InboxV2OutboundRouteConsumptionDisposition;
+  readonly fileParentAttachmentsCapability: InboxV2PreparedFileParentAttachmentsCapability;
   consumed: boolean;
 };
 type SealInboxV2PreparedMessageCreationOptions = Readonly<{
@@ -1110,6 +1198,17 @@ type NormalizedMessageMutationInput = Readonly<{
   commit: InboxV2MessageMutationCommit;
   streamPosition: InboxV2BigintCounter;
 }>;
+type PreparedInboxV2AttachmentMaterializationMessageMutationState = {
+  readonly atomicMaterializationToken: object;
+  readonly sealExecutor: RawSqlExecutor;
+  readonly commit: InboxV2MessageMutationCommit;
+  readonly current: LoadedTimelineMessageAggregate;
+  consumed: boolean;
+};
+const preparedInboxV2AttachmentMaterializationMessageMutations = new WeakMap<
+  InboxV2PreparedAttachmentMaterializationMessageMutationCapability,
+  PreparedInboxV2AttachmentMaterializationMessageMutationState
+>();
 export type InboxV2OutboundRouteConsumptionRecord = Readonly<{
   tenantId: InboxV2TenantId;
   consumerKind: "message_creation" | "provider_lifecycle" | "reaction";
@@ -1150,6 +1249,7 @@ type LoadedTimelineMessageAggregate = Readonly<{
   message: InboxV2Message;
   timelineItem: InboxV2TimelineItem;
   content: InboxV2TimelineContent;
+  databaseNow: string;
   streamPosition: InboxV2BigintCounter;
 }>;
 
@@ -1580,6 +1680,50 @@ async function prepareInboxV2MessageCreationInTransaction(
     }
   }
 
+  const attachmentAnchors = messageAttachmentAnchorBlocks(
+    commit.content.state.kind === "available" ? commit.content.state.blocks : []
+  );
+  if (
+    attachmentAnchors.length > 0 &&
+    (
+      await executor.execute<Record<string, unknown>>(
+        buildFindInboxV2ClaimedMessageAttachmentAnchorsSql({
+          tenantId: commit.tenantId,
+          attachmentIds: attachmentAnchors.map(
+            ({ attachmentId }) => attachmentId
+          )
+        })
+      )
+    ).rows.length > 0
+  ) {
+    return {
+      kind: "conflict",
+      code: "message.reference_conflict",
+      current: null
+    };
+  }
+
+  const fileParentPreparation =
+    await prepareInboxV2FileParentAttachmentsInTransaction(
+      executor,
+      sealExecutor,
+      atomicMaterializationToken,
+      {
+        tenantId: commit.tenantId,
+        attachments: deriveInboxV2MessageCreationReadyFileParents(
+          commit,
+          timelineItem
+        )
+      }
+    );
+  if (fileParentPreparation.kind !== "ready") {
+    return {
+      kind: "conflict",
+      code: "message.reference_conflict",
+      current: null
+    };
+  }
+
   const capability = Object.freeze({
     [inboxV2PreparedMessageCreationCapabilityBrand]: true as const
   });
@@ -1589,9 +1733,87 @@ async function prepareInboxV2MessageCreationInTransaction(
     commit,
     timelineItem,
     routeDisposition,
+    fileParentAttachmentsCapability: fileParentPreparation.capability,
     consumed: false
   });
   return { kind: "ready", capability };
+}
+
+export function deriveInboxV2MessageCreationReadyFileParents(
+  commit: InboxV2MessageCreationCommit,
+  timelineItem: InboxV2TimelineItem
+): readonly InboxV2ReadyFileParentAttachment[] {
+  const visibilityBoundary =
+    timelineItem.visibility === "conversation_external"
+      ? "external_work"
+      : "internal";
+  const commonParent = Object.freeze({
+    kind: "message" as const,
+    visibilityBoundary,
+    parentConversationVisibility: null,
+    entityId: commit.message.id,
+    entityRevision: commit.message.revision,
+    conversationId: commit.message.conversation.id,
+    timelineItemId: timelineItem.id,
+    contentId: commit.content.id,
+    contentRevision: commit.content.revision
+  });
+  const attachments: InboxV2ReadyFileParentAttachment[] = [];
+  if (commit.content.state.kind !== "available") {
+    return Object.freeze(attachments);
+  }
+  for (const block of commit.content.state.blocks) {
+    if (block.kind === "extension") {
+      if (block.payloadPin.state !== "exact") continue;
+      attachments.push({
+        fileId: block.payloadFile.id,
+        expectedFileRevision: block.payloadPin.fileRevision,
+        fileVersionId: block.payloadPin.fileVersion.id,
+        objectVersionId: block.payloadPin.objectVersion.id,
+        parent: {
+          ...commonParent,
+          purpose: "extension_payload",
+          blockKey: block.blockKey
+        },
+        processingPurposeId:
+          commit.timelineAllocation.conversationAfter.purposeId,
+        retentionAnchorAt: timelineItem.occurredAt
+      });
+      continue;
+    }
+    if (
+      block.kind !== "image" &&
+      block.kind !== "audio" &&
+      block.kind !== "video" &&
+      block.kind !== "file" &&
+      block.kind !== "sticker"
+    ) {
+      continue;
+    }
+    if (block.attachment.state !== "ready") continue;
+    attachments.push({
+      fileId: block.attachment.file.id,
+      expectedFileRevision: block.attachment.fileRevision,
+      fileVersionId: block.attachment.fileVersion.id,
+      objectVersionId: block.attachment.objectVersion.id,
+      parent: {
+        ...commonParent,
+        purpose: "attachment",
+        blockKey: block.blockKey
+      },
+      processingPurposeId:
+        commit.timelineAllocation.conversationAfter.purposeId,
+      retentionAnchorAt: timelineItem.occurredAt
+    });
+  }
+  attachments.sort((left, right) => {
+    const fileOrder = left.fileId.localeCompare(right.fileId);
+    if (fileOrder !== 0) return fileOrder;
+    return (left.parent.blockKey ?? "").localeCompare(
+      right.parent.blockKey ?? ""
+    );
+  });
+  return Object.freeze(attachments);
 }
 
 export function deriveInboxV2MessageCreationSourceOccurrenceFence(
@@ -1781,7 +2003,12 @@ async function sealInboxV2PreparedMessageCreationInTransaction<TResult>(
   }
   prepared.consumed = true;
 
-  const { commit, timelineItem, routeDisposition } = prepared;
+  const {
+    commit,
+    timelineItem,
+    routeDisposition,
+    fileParentAttachmentsCapability
+  } = prepared;
   const envelope = messageEnvelope({
     message: commit.message,
     timelineItem,
@@ -1832,7 +2059,6 @@ async function sealInboxV2PreparedMessageCreationInTransaction<TResult>(
     }),
     "Message content revision insert"
   );
-  await persistAvailableContentPayload(executor, commit.content);
   await expectOneRow(
     executor,
     buildInsertInboxV2TimelineItemSql({ item: timelineItem, streamPosition }),
@@ -1846,6 +2072,24 @@ async function sealInboxV2PreparedMessageCreationInTransaction<TResult>(
       streamPosition
     }),
     "Message head insert"
+  );
+  await persistNewMessageAttachmentAnchors(executor, {
+    tenantId: commit.tenantId,
+    messageId: commit.message.id,
+    timelineItemId: timelineItem.id,
+    timelineContentId: commit.content.id,
+    blocks: messageAttachmentAnchorBlocks(
+      commit.content.state.kind === "available"
+        ? commit.content.state.blocks
+        : []
+    ),
+    createdAt: commit.message.createdAt
+  });
+  await persistAvailableContentPayload(executor, commit.content);
+  await sealInboxV2PreparedFileParentAttachmentsInTransaction(
+    executor,
+    options.atomicMaterializationToken,
+    fileParentAttachmentsCapability
   );
   if (options.materializeSourceResolution) {
     await persistInboxV2AtomicSourceMessageResolution(executor, commit);
@@ -2661,6 +2905,398 @@ function externalMessageSourceAccountAuthorityError(): Error {
   );
 }
 
+export const INBOX_V2_ATTACHMENT_MATERIALIZATION_COMPLETION_COMMAND_TYPE_ID =
+  "core:attachment.materialization.complete" as const;
+
+function assertInboxV2AttachmentMaterializationMessageMutationAuthority(
+  context: Readonly<{
+    tenantId: string;
+    commandTypeId: string;
+    actor: InboxV2AuthorizedCommandMutationContext["actor"];
+    authorizationEpoch: string;
+    authorizationDecisionId: string;
+    authorizationDecisionRefs: readonly InboxV2AuthorizationDecisionReference[];
+    authorizationResourceRevisionFences: InboxV2AuthorizedCommandMutationContext["authorizationResourceRevisionFences"];
+    occurredAt: string;
+  }>,
+  commit: InboxV2MessageMutationCommit
+): void {
+  const transition = commit.contentTransition;
+  const attribution = commit.revision.actionAttribution;
+  const actor = attribution.appActor;
+  const causation = attribution.automationCausation;
+  if (context.actor.kind !== "trusted_service") {
+    throw invariantError(
+      "Attachment materialization completion requires a trusted-service actor."
+    );
+  }
+  const authorizedTrustedServiceId = context.actor.trustedServiceId;
+  if (
+    context.commandTypeId !==
+      INBOX_V2_ATTACHMENT_MATERIALIZATION_COMPLETION_COMMAND_TYPE_ID ||
+    actor?.kind !== "trusted_service" ||
+    actor.trustedServiceId !== authorizedTrustedServiceId ||
+    commit.tenantId !== context.tenantId ||
+    transition === null ||
+    transition.transition.kind !== "attachment_materialization" ||
+    commit.revision.change.kind !== "attachment_materialized" ||
+    commit.providerOperation !== null ||
+    commit.providerOperationCreationCommit !== null ||
+    attribution.actionParticipant !== null ||
+    attribution.sourceOccurrence !== null ||
+    causation === null ||
+    causation.kind !== "system_event" ||
+    causation.causeEvent.tenantId !== context.tenantId ||
+    commit.revision.occurredAt !== context.occurredAt ||
+    commit.revision.recordedAt !== context.occurredAt ||
+    transition.transition.occurredAt !== context.occurredAt ||
+    transition.transition.event.tenantId !== context.tenantId
+  ) {
+    throw invariantError(
+      "Attachment materialization requires one exact trusted-service command, system-event causation and authorized command timestamp."
+    );
+  }
+
+  const conversationId = commit.beforeMessage.conversation.id;
+  const requiredReadPermissionId =
+    commit.beforeTimelineItem.visibility === "conversation_external"
+      ? "core:conversation.read"
+      : commit.beforeTimelineItem.visibility === "internal_participants"
+        ? "core:conversation.internal.read"
+        : null;
+  if (requiredReadPermissionId === null) {
+    throw invariantError(
+      "Attachment materialization is closed to staff-note and non-Message visibility until its dedicated authority contract exists."
+    );
+  }
+  const requiredPermissionIds = new Set([
+    "core:file.upload",
+    requiredReadPermissionId
+  ]);
+  const decisions = context.authorizationDecisionRefs.filter(
+    (candidate) =>
+      candidate.tenantId === context.tenantId &&
+      candidate.authorizationEpoch === context.authorizationEpoch &&
+      requiredPermissionIds.has(candidate.permissionId) &&
+      candidate.resourceScopeId === "core:conversation" &&
+      candidate.outcome === "allowed" &&
+      candidate.resource.tenantId === context.tenantId &&
+      candidate.resource.entityTypeId === "core:conversation" &&
+      String(candidate.resource.entityId) === String(conversationId) &&
+      candidate.principal.kind === "trusted_service" &&
+      candidate.principal.trustedServiceId === authorizedTrustedServiceId
+  );
+  const primaryDecision = context.authorizationDecisionRefs.find(
+    (candidate) => candidate.id === context.authorizationDecisionId
+  );
+  if (
+    context.authorizationDecisionRefs.length !== requiredPermissionIds.size ||
+    decisions.length !== requiredPermissionIds.size ||
+    new Set(decisions.map(({ permissionId }) => permissionId)).size !==
+      requiredPermissionIds.size ||
+    primaryDecision === undefined ||
+    primaryDecision.permissionId !== "core:file.upload" ||
+    !decisions.some(({ id }) => id === primaryDecision.id)
+  ) {
+    throw invariantError(
+      "Attachment materialization requires the exact file-upload and current Conversation-visibility decisions."
+    );
+  }
+  const fileUploadDecision = decisions.find(
+    ({ permissionId }) => permissionId === "core:file.upload"
+  );
+  const readDecision = decisions.find(
+    ({ permissionId }) => permissionId === requiredReadPermissionId
+  );
+  const fences = context.authorizationResourceRevisionFences.filter(
+    (fence) =>
+      fence.resourceKind === "conversation" &&
+      String(fence.resourceId) === String(conversationId) &&
+      fileUploadDecision !== undefined &&
+      readDecision !== undefined &&
+      String(fence.expectedResourceAccessRevision) ===
+        String(fileUploadDecision.resourceAccessRevision) &&
+      String(fence.expectedResourceAccessRevision) ===
+        String(readDecision.resourceAccessRevision) &&
+      fence.advance === "none"
+  );
+  if (
+    context.authorizationResourceRevisionFences.length !== 1 ||
+    fences.length !== 1
+  ) {
+    throw invariantError(
+      "Attachment materialization requires the exact Conversation authorization revision fence."
+    );
+  }
+}
+
+export async function prepareInboxV2AttachmentMaterializationMessageMutation(
+  context: InboxV2AuthorizedCommandMutationContext,
+  input: Readonly<{
+    tenantId: InboxV2TenantId;
+    conversationId: InboxV2ConversationId;
+    messageId: InboxV2MessageId;
+    plan: (
+      current: InboxV2MessageMutationPlanCurrent
+    ) => InboxV2MessageMutationCommit;
+  }>
+): Promise<PrepareInboxV2AttachmentMaterializationMessageMutationResult> {
+  assertInboxV2AuthorizedCommandMutationContext(context);
+  const { atomicMaterializationToken } = context;
+  if (atomicMaterializationToken === undefined) {
+    throw invariantError(
+      "Attachment materialization requires the coordinator-owned atomic prepare token."
+    );
+  }
+  const sealExecutor = requireInboxV2AtomicSealExecutor(context);
+  const tenantId = inboxV2TenantIdSchema.parse(input.tenantId);
+  const conversationId = inboxV2ConversationIdSchema.parse(
+    input.conversationId
+  );
+  const messageId = inboxV2MessageIdSchema.parse(input.messageId);
+  const prepared = await prepareMessageMutationInTransaction(context.executor, {
+    tenantId,
+    conversationId,
+    messageId,
+    plan: input.plan
+  });
+  if (prepared.kind !== "ready") return prepared;
+  if (
+    prepared.commit.revision.change.kind !== "attachment_materialized" ||
+    prepared.commit.contentTransition?.transition.kind !==
+      "attachment_materialization" ||
+    prepared.commit.providerOperation !== null ||
+    prepared.commit.providerOperationCreationCommit !== null
+  ) {
+    throw invariantError(
+      "Prepared attachment materialization must be one trusted local Message content transition."
+    );
+  }
+  assertInboxV2AttachmentMaterializationMessageMutationAuthority(
+    context,
+    prepared.commit
+  );
+  const capability = Object.freeze({
+    [inboxV2PreparedAttachmentMaterializationMessageMutationCapabilityBrand]:
+      true as const
+  });
+  preparedInboxV2AttachmentMaterializationMessageMutations.set(capability, {
+    atomicMaterializationToken,
+    sealExecutor,
+    commit: prepared.commit,
+    current: prepared.current,
+    consumed: false
+  });
+  return { kind: "ready", capability, commit: prepared.commit };
+}
+
+export async function sealInboxV2PreparedAttachmentMaterializationMessageMutation(
+  context: InboxV2AuthorizedAtomicMaterializationContext,
+  input: Readonly<{
+    capability: InboxV2PreparedAttachmentMaterializationMessageMutationCapability;
+  }>
+): Promise<
+  Extract<
+    PersistInboxV2MessageMutationResult<undefined>,
+    Readonly<{ kind: "applied" }>
+  > &
+    Readonly<{ receipt: InboxV2AtomicMaterializationSealReceipt }>
+> {
+  assertInboxV2AuthorizedAtomicMaterializationContext(context);
+  const prepared = preparedInboxV2AttachmentMaterializationMessageMutations.get(
+    input.capability
+  );
+  if (prepared === undefined) {
+    throw invariantError(
+      "Attachment materialization capability was not issued by this repository."
+    );
+  }
+  if (prepared.consumed) {
+    throw invariantError(
+      "Attachment materialization capability was already consumed."
+    );
+  }
+  if (
+    prepared.atomicMaterializationToken !== context.atomicMaterializationToken
+  ) {
+    throw invariantError(
+      "Attachment materialization capability belongs to a different live authorized mutation."
+    );
+  }
+  assertInboxV2AttachmentMaterializationMessageMutationAuthority(
+    context,
+    prepared.commit
+  );
+  prepared.consumed = true;
+  const result = await applyPreparedMessageMutationWrites(
+    prepared.sealExecutor,
+    prepared.current,
+    prepared.commit,
+    inboxV2BigintCounterSchema.parse(context.streamPosition),
+    async () => undefined
+  );
+  if (result.kind !== "applied") {
+    throw invariantError(
+      "Prepared attachment materialization produced a non-write-only Message result."
+    );
+  }
+  const messagePayloadReference = inboxV2AtomicPayloadReference({
+    tenantId: prepared.commit.tenantId,
+    recordId: prepared.commit.afterMessage.id,
+    schemaId: INBOX_V2_MESSAGE_SCHEMA_ID,
+    schemaVersion: INBOX_V2_MESSAGE_SCHEMA_VERSION,
+    payload: prepared.commit.afterMessage
+  });
+  const domainCommitReference = inboxV2AtomicPayloadReference({
+    tenantId: prepared.commit.tenantId,
+    recordId: prepared.commit.revision.id,
+    schemaId: INBOX_V2_MESSAGE_REVISION_SCHEMA_ID,
+    schemaVersion: INBOX_V2_MESSAGE_LIFECYCLE_SCHEMA_VERSION,
+    payload: prepared.commit.revision
+  });
+  const causation =
+    prepared.commit.revision.actionAttribution.automationCausation;
+  const actor = prepared.commit.revision.actionAttribution.appActor;
+  const contentTransition = prepared.commit.contentTransition;
+  const materialization = consumeInboxV2AtomicAttachmentMaterializationProof(
+    context.atomicMaterializationToken
+  );
+  assertInboxV2AttachmentMaterializationProofMatchesCommit(
+    materialization,
+    prepared.commit
+  );
+  if (
+    actor?.kind !== "trusted_service" ||
+    contentTransition === null ||
+    causation === null ||
+    causation.kind !== "system_event"
+  ) {
+    throw invariantError(
+      "Attachment materialization seal requires trusted-service system-event causation."
+    );
+  }
+  return {
+    ...result,
+    receipt: issueInboxV2AtomicMaterializationSealReceipt(
+      context.atomicMaterializationToken,
+      {
+        kind: "message_mutation",
+        tenantId: prepared.commit.tenantId,
+        messageId: prepared.commit.afterMessage.id,
+        messageRevision: prepared.commit.afterMessage.revision,
+        conversationId: prepared.commit.afterMessage.conversation.id,
+        timelineSequence: prepared.commit.afterTimelineItem.timelineSequence,
+        timelineItemId: prepared.commit.afterTimelineItem.id,
+        timelineItemRevision: prepared.commit.afterTimelineItem.revision,
+        contentId: contentTransition.after.id,
+        contentRevision: contentTransition.after.revision,
+        audience: inboxV2AtomicMessageAudience(
+          prepared.commit.afterTimelineItem.visibility
+        ),
+        stateSchemaId: INBOX_V2_MESSAGE_SCHEMA_ID,
+        stateSchemaVersion: INBOX_V2_MESSAGE_SCHEMA_VERSION,
+        stateHash: messagePayloadReference.digest,
+        payloadReference: messagePayloadReference,
+        domainCommitReference,
+        auditTarget: deriveInboxV2AttachmentMaterializationAuditReference({
+          tenantId: prepared.commit.tenantId,
+          entityTypeId: "core:message",
+          referenceDomain: "message",
+          entityId: prepared.commit.afterMessage.id
+        }),
+        auditFacetReference:
+          deriveInboxV2AttachmentMaterializationAuditReference({
+            tenantId: prepared.commit.tenantId,
+            entityTypeId: "core:conversation",
+            referenceDomain: "conversation",
+            entityId: prepared.commit.afterMessage.conversation.id
+          }),
+        trustedServiceId: actor.trustedServiceId,
+        causeEventId: causation.causeEvent.id,
+        correlationId: causation.correlationId,
+        causedAt: causation.causedAt,
+        materialization,
+        event: {
+          typeId: "core:message.changed",
+          payloadSchemaId: INBOX_V2_MESSAGE_REVISION_SCHEMA_ID,
+          payloadSchemaVersion: INBOX_V2_MESSAGE_LIFECYCLE_SCHEMA_VERSION,
+          payloadReference: domainCommitReference,
+          occurredAt: prepared.commit.revision.occurredAt,
+          recordedAt: prepared.commit.revision.recordedAt
+        }
+      }
+    )
+  };
+}
+
+function assertInboxV2AttachmentMaterializationProofMatchesCommit(
+  proof: InboxV2AtomicAttachmentMaterializationProof,
+  commit: InboxV2MessageMutationCommit
+): void {
+  const transition = commit.contentTransition;
+  const actor = commit.revision.actionAttribution.appActor;
+  const causation = commit.revision.actionAttribution.automationCausation;
+  if (
+    transition === null ||
+    transition.after.state.kind !== "available" ||
+    actor?.kind !== "trusted_service" ||
+    causation === null ||
+    causation.kind !== "system_event"
+  ) {
+    throw invariantError(
+      "Attachment materialization proof requires available terminal Message content."
+    );
+  }
+  const matchingBlocks = transition.after.state.blocks.filter(
+    (block) =>
+      block.blockKey === proof.contentBlockKey &&
+      "attachment" in block &&
+      block.attachment.attachment.id === proof.attachmentId
+  );
+  const block = matchingBlocks[0];
+  const sharedMatches =
+    proof.tenantId === commit.tenantId &&
+    proof.completedByTrustedServiceId === actor.trustedServiceId &&
+    proof.causeEventId === causation.causeEvent.id &&
+    proof.correlationId === causation.correlationId &&
+    proof.causedAt === causation.causedAt &&
+    proof.conversationId === commit.afterMessage.conversation.id &&
+    proof.timelineItemId === commit.afterTimelineItem.id &&
+    proof.contentId === transition.after.id &&
+    proof.resultingContentRevision === transition.after.revision &&
+    proof.parentKind === "message" &&
+    proof.parentEntityId === commit.afterMessage.id &&
+    proof.parentEntityRevision === commit.afterMessage.revision &&
+    matchingBlocks.length === 1 &&
+    block !== undefined &&
+    "attachment" in block;
+  if (!sharedMatches || block === undefined || !("attachment" in block)) {
+    throw invariantError(
+      "File/Object materialization proof does not match the exact Message content transition."
+    );
+  }
+  const attachment = block.attachment;
+  const outcomeMatches =
+    proof.outcome === "ready"
+      ? attachment.state === "ready" &&
+        attachment.file.id === proof.fileId &&
+        attachment.fileRevision === proof.resultingFileRevision &&
+        proof.fileVersionId !== null &&
+        attachment.fileVersion.id === proof.fileVersionId &&
+        proof.objectVersionId !== null &&
+        attachment.objectVersion.id === proof.objectVersionId &&
+        proof.safeReasonId === null
+      : attachment.state === "failed" &&
+        attachment.reasonId === proof.safeReasonId &&
+        proof.fileVersionId === null &&
+        proof.objectVersionId === null;
+  if (!outcomeMatches) {
+    throw invariantError(
+      "File/Object materialization outcome does not match the exact terminal attachment block."
+    );
+  }
+}
+
 async function persistMessageMutation<TResult>(
   transactionExecutor: InboxV2TimelineMessageTransactionExecutor,
   input: NormalizedMessageMutationInput,
@@ -2676,197 +3312,283 @@ async function persistMessageMutation<TResult>(
   return runTimelineMessageTransaction(
     transactionExecutor,
     async (transaction) => {
-      const conversationLock = await transaction.execute<ConversationHeadRow>(
-        buildLockInboxV2TimelineConversationHeadSql({
-          tenantId: commit.tenantId,
-          conversationId: commit.beforeMessage.conversation.id
-        })
-      );
-      assertAtMostOneRow(
-        conversationLock,
-        "Message mutation Conversation lock"
-      );
-      if (conversationLock.rows.length === 0) {
-        return { kind: "message_not_found" } as const;
-      }
-      const current = await loadTimelineMessageAggregate(transaction, {
+      const prepared = await prepareMessageMutationInTransaction(transaction, {
         tenantId: commit.tenantId,
+        conversationId: commit.beforeMessage.conversation.id,
         messageId: commit.beforeMessage.id,
-        lock: true
+        plan: () => commit
       });
-      if (current === null) return { kind: "message_not_found" } as const;
-
-      const envelope = messageEnvelope({
-        message: commit.afterMessage,
-        timelineItem: commit.afterTimelineItem,
+      if (prepared.kind === "already_applied") {
+        return {
+          kind: "already_applied",
+          message: prepared.message,
+          timelineItem: prepared.timelineItem,
+          envelope: messageEnvelope({
+            message: prepared.message,
+            timelineItem: prepared.timelineItem,
+            streamPosition: prepared.streamPosition,
+            changeKind: prepared.commit.revision.change.kind,
+            occurredAt: prepared.commit.revision.occurredAt
+          })
+        } as const;
+      }
+      if (prepared.kind !== "ready") return prepared;
+      return applyPreparedMessageMutationWrites(
+        transaction,
+        prepared.current,
+        prepared.commit,
         streamPosition,
-        changeKind: commit.revision.change.kind,
-        occurredAt: commit.revision.occurredAt
-      });
-      const replay = await inspectMessageRevisionReplay(
-        transaction,
-        commit.revision
+        persist
       );
-      if (replay.kind === "exact") {
-        return sameValue(current.message, commit.afterMessage) &&
-          sameValue(current.timelineItem, commit.afterTimelineItem) &&
-          (commit.contentTransition === null ||
-            sameValue(current.content, commit.contentTransition.after))
-          ? ({
-              kind: "already_applied",
-              message: current.message,
-              timelineItem: current.timelineItem,
-              envelope: messageEnvelope({
-                message: current.message,
-                timelineItem: current.timelineItem,
-                streamPosition: replay.streamPosition,
-                changeKind: replay.revision.change.kind,
-                occurredAt: replay.revision.occurredAt
-              })
-            } as const)
-          : ({
-              kind: "conflict",
-              code: "message.state_conflict",
-              current: current.message
-            } as const);
-      }
-      if (replay.kind === "conflict") {
-        return {
-          kind: "conflict",
-          code: "message.state_conflict",
-          current: current.message
-        } as const;
-      }
-      if (
-        !sameValue(current.message, commit.beforeMessage) ||
-        !sameValue(current.timelineItem, commit.beforeTimelineItem) ||
-        (commit.contentTransition !== null &&
-          !sameValue(current.content, commit.contentTransition.before))
-      ) {
-        return {
-          kind: "conflict",
-          code:
-            current.message.revision === commit.beforeMessage.revision
-              ? "message.state_conflict"
-              : "revision.conflict",
-          current: current.message
-        } as const;
-      }
-
-      const attributionId = derivedInboxV2Id(
-        "action_attribution",
-        commit.revision.id
-      );
-      await expectOneRow(
-        transaction,
-        buildInsertInboxV2ActionAttributionSql({
-          tenantId: commit.tenantId,
-          id: attributionId,
-          conversationId: commit.beforeMessage.conversation.id,
-          attribution: commit.revision.actionAttribution,
-          createdAt: commit.revision.recordedAt
-        }),
-        "Message mutation attribution insert"
-      );
-
-      if (
-        commit.providerOperationCreationCommit !== null &&
-        commit.providerOperation !== null
-      ) {
-        const operationPersistence =
-          await persistProviderLifecycleCreationInTransaction(transaction, {
-            commit: commit.providerOperationCreationCommit,
-            streamPosition
-          });
-        if (operationPersistence.kind === "conflict") {
-          return {
-            kind: "conflict",
-            code: "message.state_conflict",
-            current: current.message
-          } as const;
-        }
-      }
-
-      if (commit.contentTransition !== null) {
-        const transition = commit.contentTransition;
-        await expectOneRow(
-          transaction,
-          buildInsertInboxV2TimelineContentRevisionSql({
-            tenantId: commit.tenantId,
-            content: transition.after,
-            transitionKind: transition.transition.kind,
-            expectedPreviousRevision: transition.transition.expectedRevision,
-            eventId: transition.transition.event.id,
-            occurredAt: transition.transition.occurredAt,
-            recordedAt: commit.revision.recordedAt,
-            streamPosition
-          }),
-          "Message content revision append"
-        );
-        if (transition.after.state.kind === "available") {
-          await persistAvailableContentPayload(transaction, transition.after);
-        } else {
-          await transaction.execute(
-            buildPurgeInboxV2TimelineContentPayloadSql({
-              tenantId: commit.tenantId,
-              contentId: transition.after.id
-            })
-          );
-        }
-        await expectOneRow(
-          transaction,
-          buildAdvanceInboxV2TimelineContentSql({
-            before: transition.before,
-            after: transition.after,
-            streamPosition
-          }),
-          "Message content head CAS"
-        );
-      }
-
-      await expectOneRow(
-        transaction,
-        buildAdvanceInboxV2MessageSql({
-          before: commit.beforeMessage,
-          after: commit.afterMessage,
-          streamPosition
-        }),
-        "Message head CAS"
-      );
-      await expectOneRow(
-        transaction,
-        buildAdvanceInboxV2TimelineItemSql({
-          before: commit.beforeTimelineItem,
-          after: commit.afterTimelineItem,
-          streamPosition
-        }),
-        "Message TimelineItem CAS"
-      );
-      await expectOneRow(
-        transaction,
-        buildInsertInboxV2MessageRevisionSql({
-          revision: commit.revision,
-          actionAttributionId: attributionId,
-          streamPosition
-        }),
-        "Message revision append"
-      );
-      const result = await persist({
-        executor: transaction,
-        message: commit.afterMessage,
-        timelineItem: commit.afterTimelineItem,
-        envelope
-      });
-      return {
-        kind: "applied",
-        message: commit.afterMessage,
-        timelineItem: commit.afterTimelineItem,
-        envelope,
-        result
-      } as const;
     },
     retrySafe ? TRANSACTION_ATTEMPTS : 1
   );
+}
+
+async function prepareMessageMutationInTransaction(
+  transaction: RawSqlExecutor,
+  input: Readonly<{
+    tenantId: InboxV2TenantId;
+    conversationId: InboxV2ConversationId;
+    messageId: InboxV2MessageId;
+    plan: (
+      current: InboxV2MessageMutationPlanCurrent
+    ) => InboxV2MessageMutationCommit;
+  }>
+) {
+  const conversationLock = await transaction.execute<ConversationHeadRow>(
+    buildLockInboxV2TimelineConversationHeadSql({
+      tenantId: input.tenantId,
+      conversationId: input.conversationId
+    })
+  );
+  assertAtMostOneRow(conversationLock, "Message mutation Conversation lock");
+  if (conversationLock.rows.length === 0) {
+    return { kind: "message_not_found" } as const;
+  }
+  const current = await loadTimelineMessageAggregate(transaction, {
+    tenantId: input.tenantId,
+    messageId: input.messageId,
+    lock: true
+  });
+  if (current === null) return { kind: "message_not_found" } as const;
+  const commit = inboxV2MessageMutationCommitSchema.parse(input.plan(current));
+  if (
+    commit.tenantId !== input.tenantId ||
+    commit.beforeMessage.id !== input.messageId ||
+    commit.beforeMessage.conversation.id !== input.conversationId
+  ) {
+    throw invariantError(
+      "Message mutation plan crossed its prepared tenant, Conversation or Message boundary."
+    );
+  }
+  const replay = await inspectMessageRevisionReplay(
+    transaction,
+    commit.revision
+  );
+  if (replay.kind === "exact") {
+    return sameValue(current.message, commit.afterMessage) &&
+      sameValue(current.timelineItem, commit.afterTimelineItem) &&
+      (commit.contentTransition === null ||
+        sameValue(current.content, commit.contentTransition.after))
+      ? ({
+          kind: "already_applied",
+          commit,
+          message: current.message,
+          timelineItem: current.timelineItem,
+          streamPosition: replay.streamPosition
+        } as const)
+      : ({
+          kind: "conflict",
+          code: "message.state_conflict",
+          current: current.message
+        } as const);
+  }
+  if (replay.kind === "conflict") {
+    return {
+      kind: "conflict",
+      code: "message.state_conflict",
+      current: current.message
+    } as const;
+  }
+  if (
+    !sameValue(current.message, commit.beforeMessage) ||
+    !sameValue(current.timelineItem, commit.beforeTimelineItem) ||
+    (commit.contentTransition !== null &&
+      !sameValue(current.content, commit.contentTransition.before))
+  ) {
+    return {
+      kind: "conflict",
+      code:
+        current.message.revision === commit.beforeMessage.revision
+          ? "message.state_conflict"
+          : "revision.conflict",
+      current: current.message
+    } as const;
+  }
+  const newAttachmentIds = deriveNewMessageAttachmentAnchorBlocks(commit).map(
+    ({ attachmentId }) => attachmentId
+  );
+  if (
+    newAttachmentIds.length > 0 &&
+    (
+      await transaction.execute<Record<string, unknown>>(
+        buildFindInboxV2ClaimedMessageAttachmentAnchorsSql({
+          tenantId: commit.tenantId,
+          attachmentIds: newAttachmentIds
+        })
+      )
+    ).rows.length > 0
+  ) {
+    return {
+      kind: "conflict",
+      code: "message.state_conflict",
+      current: current.message
+    } as const;
+  }
+  return { kind: "ready", commit, current } as const;
+}
+
+async function applyPreparedMessageMutationWrites<TResult>(
+  transaction: RawSqlExecutor,
+  current: LoadedTimelineMessageAggregate,
+  commit: InboxV2MessageMutationCommit,
+  streamPosition: InboxV2BigintCounter,
+  persist: (context: {
+    executor: RawSqlExecutor;
+    message: InboxV2Message;
+    timelineItem: InboxV2TimelineItem;
+    envelope: InboxV2SafeGenericEnvelope;
+  }) => Promise<TResult>
+): Promise<PersistInboxV2MessageMutationResult<TResult>> {
+  const envelope = messageEnvelope({
+    message: commit.afterMessage,
+    timelineItem: commit.afterTimelineItem,
+    streamPosition,
+    changeKind: commit.revision.change.kind,
+    occurredAt: commit.revision.occurredAt
+  });
+  const attributionId = derivedInboxV2Id(
+    "action_attribution",
+    commit.revision.id
+  );
+  await expectOneRow(
+    transaction,
+    buildInsertInboxV2ActionAttributionSql({
+      tenantId: commit.tenantId,
+      id: attributionId,
+      conversationId: commit.beforeMessage.conversation.id,
+      attribution: commit.revision.actionAttribution,
+      createdAt: commit.revision.recordedAt
+    }),
+    "Message mutation attribution insert"
+  );
+
+  if (
+    commit.providerOperationCreationCommit !== null &&
+    commit.providerOperation !== null
+  ) {
+    const operationPersistence =
+      await persistProviderLifecycleCreationInTransaction(transaction, {
+        commit: commit.providerOperationCreationCommit,
+        streamPosition
+      });
+    if (operationPersistence.kind === "conflict") {
+      return {
+        kind: "conflict",
+        code: "message.state_conflict",
+        current: current.message
+      } as const;
+    }
+  }
+
+  if (commit.contentTransition !== null) {
+    const transition = commit.contentTransition;
+    await expectOneRow(
+      transaction,
+      buildInsertInboxV2TimelineContentRevisionSql({
+        tenantId: commit.tenantId,
+        content: transition.after,
+        transitionKind: transition.transition.kind,
+        expectedPreviousRevision: transition.transition.expectedRevision,
+        eventId: transition.transition.event.id,
+        occurredAt: transition.transition.occurredAt,
+        recordedAt: commit.revision.recordedAt,
+        streamPosition
+      }),
+      "Message content revision append"
+    );
+    if (transition.after.state.kind === "available") {
+      if (transition.transition.kind === "edit") {
+        await persistNewMessageAttachmentAnchors(transaction, {
+          tenantId: commit.tenantId,
+          messageId: commit.afterMessage.id,
+          timelineItemId: commit.afterTimelineItem.id,
+          timelineContentId: transition.after.id,
+          blocks: deriveNewMessageAttachmentAnchorBlocks(commit),
+          createdAt: transition.after.updatedAt
+        });
+      }
+      await persistAvailableContentPayload(transaction, transition.after);
+    } else {
+      await transaction.execute(
+        buildPurgeInboxV2TimelineContentPayloadSql({
+          tenantId: commit.tenantId,
+          contentId: transition.after.id
+        })
+      );
+    }
+    await expectOneRow(
+      transaction,
+      buildAdvanceInboxV2TimelineContentSql({
+        before: transition.before,
+        after: transition.after,
+        streamPosition
+      }),
+      "Message content head CAS"
+    );
+  }
+
+  await expectOneRow(
+    transaction,
+    buildAdvanceInboxV2MessageSql({
+      before: commit.beforeMessage,
+      after: commit.afterMessage,
+      streamPosition
+    }),
+    "Message head CAS"
+  );
+  await expectOneRow(
+    transaction,
+    buildAdvanceInboxV2TimelineItemSql({
+      before: commit.beforeTimelineItem,
+      after: commit.afterTimelineItem,
+      streamPosition
+    }),
+    "Message TimelineItem CAS"
+  );
+  await expectOneRow(
+    transaction,
+    buildInsertInboxV2MessageRevisionSql({
+      revision: commit.revision,
+      actionAttributionId: attributionId,
+      streamPosition
+    }),
+    "Message revision append"
+  );
+  const result = await persist({
+    executor: transaction,
+    message: commit.afterMessage,
+    timelineItem: commit.afterTimelineItem,
+    envelope
+  });
+  return {
+    kind: "applied",
+    message: commit.afterMessage,
+    timelineItem: commit.afterTimelineItem,
+    envelope,
+    result
+  } as const;
 }
 
 async function persistTransportFact(
@@ -3990,6 +4712,71 @@ async function reactionEvidenceReplayMatches(
         );
 }
 
+type InboxV2MessageAttachmentAnchorBlock = Readonly<{
+  attachmentId: string;
+  blockKey: string;
+  materializationState: "pending" | "ready" | "failed" | "quarantined";
+}>;
+
+function messageAttachmentAnchorBlocks(
+  blocks: readonly InboxV2MessageContentBlock[]
+): readonly InboxV2MessageAttachmentAnchorBlock[] {
+  return blocks.flatMap((block) => {
+    if (!("attachment" in block)) return [];
+    if (block.attachment.state === "legacy_unpinned") {
+      throw invariantError(
+        "A new Message content revision cannot persist a legacy unpinned attachment anchor."
+      );
+    }
+    return [
+      Object.freeze({
+        attachmentId: block.attachment.attachment.id,
+        blockKey: block.blockKey,
+        materializationState: block.attachment.state
+      })
+    ];
+  });
+}
+
+function deriveNewMessageAttachmentAnchorBlocks(
+  commit: InboxV2MessageMutationCommit
+): readonly InboxV2MessageAttachmentAnchorBlock[] {
+  const transition = commit.contentTransition;
+  if (transition === null || transition.after.state.kind !== "available") {
+    return [];
+  }
+  const beforeIds = new Set(
+    transition.before.state.kind === "available"
+      ? messageAttachmentAnchorBlocks(transition.before.state.blocks).map(
+          ({ attachmentId }) => attachmentId
+        )
+      : []
+  );
+  return messageAttachmentAnchorBlocks(transition.after.state.blocks).filter(
+    ({ attachmentId }) => !beforeIds.has(attachmentId)
+  );
+}
+
+async function persistNewMessageAttachmentAnchors(
+  executor: RawSqlExecutor,
+  input: Readonly<{
+    tenantId: InboxV2TenantId;
+    messageId: string;
+    timelineItemId: string;
+    timelineContentId: string;
+    blocks: readonly InboxV2MessageAttachmentAnchorBlock[];
+    createdAt: string;
+  }>
+): Promise<void> {
+  if (input.blocks.length === 0) return;
+  await expectRows(
+    executor,
+    buildInsertInboxV2MessageAttachmentAnchorsSql(input),
+    input.blocks.length,
+    "Message attachment anchor insert"
+  );
+}
+
 async function persistAvailableContentPayload(
   executor: RawSqlExecutor,
   content: InboxV2TimelineContent
@@ -4180,7 +4967,15 @@ async function loadTimelineMessageAggregate(
       "Message and TimelineItem last-changed stream positions diverged."
     );
   }
-  return { message, timelineItem, content, streamPosition };
+  const databaseNow =
+    row.database_now === undefined
+      ? [
+          message.updatedAt,
+          timelineItem.updatedAt,
+          content.updatedAt
+        ].sort()[2]!
+      : parseTimestamp(row.database_now, "Message aggregate database clock");
+  return { message, timelineItem, content, databaseNow, streamPosition };
 }
 
 async function loadTimelineContent(
@@ -6103,6 +6898,7 @@ export function buildFindInboxV2TimelineMessageSql(input: {
     : sql``;
   return sql`
     select
+      clock_timestamp() as database_now,
       message_row.tenant_id,
       message_row.id as message_id,
       message_row.conversation_id,
@@ -6315,6 +7111,56 @@ export function buildInsertInboxV2ActionAttributionSql(input: {
   `;
 }
 
+function buildFindInboxV2ClaimedMessageAttachmentAnchorsSql(input: {
+  tenantId: InboxV2TenantId;
+  attachmentIds: readonly string[];
+}): SQL {
+  if (input.attachmentIds.length === 0) {
+    throw invariantError("Attachment-anchor conflict lookup cannot be empty.");
+  }
+  return sql`
+    select id
+      from inbox_v2_message_attachment_anchors
+     where tenant_id = ${input.tenantId}
+       and id in (${sql.join(
+         input.attachmentIds.map((attachmentId) => sql`${attachmentId}`),
+         sql`, `
+       )})
+     order by id collate "C"
+     for update
+  `;
+}
+
+function buildInsertInboxV2MessageAttachmentAnchorsSql(
+  input: Readonly<{
+    tenantId: InboxV2TenantId;
+    messageId: string;
+    timelineItemId: string;
+    timelineContentId: string;
+    blocks: readonly InboxV2MessageAttachmentAnchorBlock[];
+    createdAt: string;
+  }>
+): SQL {
+  if (input.blocks.length === 0) {
+    throw invariantError("Attachment-anchor insert cannot be empty.");
+  }
+  const rows = input.blocks.map(
+    (block) => sql`(
+      ${input.tenantId}, ${block.attachmentId}, ${input.messageId},
+      ${input.timelineItemId}, ${input.timelineContentId}, ${block.blockKey},
+      ${block.materializationState}, 1, ${input.createdAt}::timestamptz
+    )`
+  );
+  return sql`
+    insert into inbox_v2_message_attachment_anchors (
+      tenant_id, id, owner_message_id, owner_timeline_item_id,
+      owner_timeline_content_id, owner_block_key, materialization_state,
+      revision, created_at
+    ) values ${sql.join(rows, sql`, `)}
+    returning id
+  `;
+}
+
 export function buildInsertInboxV2TimelineContentSql(input: {
   tenantId: InboxV2TenantId;
   ownerKind: "message" | "staff_note";
@@ -6399,7 +7245,11 @@ export function buildInsertInboxV2TimelineContentPayloadSql(input: {
       ${ordinal}, ${block.blockKey}, ${block.kind},
       ${columns.textRole}, ${columns.textValue}, ${columns.language},
       ${columns.attachmentId}, ${columns.attachmentState},
-      ${columns.attachmentFileId}, ${columns.attachmentFailureReasonId},
+      ${columns.attachmentFileId}, ${columns.attachmentV2FileId},
+      ${columns.attachmentFileRevision},
+      ${columns.attachmentFileVersionId},
+      ${columns.attachmentObjectVersionId},
+      ${columns.attachmentFailureReasonId},
       ${columns.displayName}, ${columns.mediaSemantic},
       ${columns.latitude}, ${columns.longitude}, ${columns.accuracyMeters},
       ${columns.locationMode}, ${columns.liveUntil}, ${columns.headingDegrees},
@@ -6410,6 +7260,10 @@ export function buildInsertInboxV2TimelineContentPayloadSql(input: {
       ${columns.extensionBlockKindId}, ${columns.extensionPayloadSchemaId},
       ${columns.extensionPayloadSchemaVersion},
       ${columns.extensionPayloadFileId},
+      ${columns.extensionPayloadV2FileId},
+      ${columns.extensionPayloadFileRevision},
+      ${columns.extensionPayloadFileVersionId},
+      ${columns.extensionPayloadObjectVersionId},
       ${columns.extensionPayloadDigestSha256}, ${columns.extensionRendererId},
       ${input.createdAt}
     )`;
@@ -6418,14 +7272,21 @@ export function buildInsertInboxV2TimelineContentPayloadSql(input: {
     insert into inbox_v2_timeline_content_payloads (
       tenant_id, content_id, content_revision, ordinal, block_key, kind,
       text_role, text_value, language, attachment_id, attachment_state,
-      attachment_file_id, attachment_failure_reason_id, display_name,
+      attachment_file_id, attachment_v2_file_id,
+      attachment_file_revision,
+      attachment_file_version_id, attachment_object_version_id,
+      attachment_failure_reason_id, display_name,
       media_semantic, latitude, longitude, accuracy_meters, location_mode,
       live_until, heading_degrees, location_label, location_address,
       contact_display_name, contact_organization,
       unsupported_source_occurrence_id, provider_content_kind_id,
       safe_fallback_reason_id, extension_block_kind_id,
       extension_payload_schema_id, extension_payload_schema_version,
-      extension_payload_file_id, extension_payload_digest_sha256,
+      extension_payload_file_id, extension_payload_v2_file_id,
+      extension_payload_file_revision,
+      extension_payload_file_version_id,
+      extension_payload_object_version_id,
+      extension_payload_digest_sha256,
       extension_renderer_id, created_at
     ) values ${sql.join(rows, sql`, `)}
     returning content_id as id
@@ -7832,6 +8693,9 @@ export function buildListInboxV2TimelineContentPayloadSql(input: {
       tenant_id, content_id, content_revision, ordinal, block_key, kind,
       text_role, text_value, language,
       attachment_id, attachment_state, attachment_file_id,
+      attachment_v2_file_id, attachment_file_revision,
+      attachment_file_version_id,
+      attachment_object_version_id,
       attachment_failure_reason_id, display_name, media_semantic,
       latitude, longitude, accuracy_meters, location_mode, live_until,
       heading_degrees, location_label, location_address,
@@ -7839,7 +8703,11 @@ export function buildListInboxV2TimelineContentPayloadSql(input: {
       unsupported_source_occurrence_id, provider_content_kind_id,
       safe_fallback_reason_id, extension_block_kind_id,
       extension_payload_schema_id, extension_payload_schema_version,
-      extension_payload_file_id, extension_payload_digest_sha256,
+      extension_payload_file_id, extension_payload_v2_file_id,
+      extension_payload_file_revision,
+      extension_payload_file_version_id,
+      extension_payload_object_version_id,
+      extension_payload_digest_sha256,
       extension_renderer_id, created_at
       from inbox_v2_timeline_content_payloads
      where tenant_id = ${input.tenantId}
@@ -8525,6 +9393,10 @@ type ContentBlockColumns = Readonly<{
   attachmentId: string | null;
   attachmentState: string | null;
   attachmentFileId: string | null;
+  attachmentV2FileId: string | null;
+  attachmentFileRevision: InboxV2EntityRevision | null;
+  attachmentFileVersionId: string | null;
+  attachmentObjectVersionId: string | null;
   attachmentFailureReasonId: string | null;
   displayName: string | null;
   mediaSemantic: string | null;
@@ -8545,6 +9417,10 @@ type ContentBlockColumns = Readonly<{
   extensionPayloadSchemaId: string | null;
   extensionPayloadSchemaVersion: string | null;
   extensionPayloadFileId: string | null;
+  extensionPayloadV2FileId: string | null;
+  extensionPayloadFileRevision: InboxV2EntityRevision | null;
+  extensionPayloadFileVersionId: string | null;
+  extensionPayloadObjectVersionId: string | null;
   extensionPayloadDigestSha256: string | null;
   extensionRendererId: string | null;
 }>;
@@ -8559,6 +9435,10 @@ function contentBlockColumns(
     attachmentId: null,
     attachmentState: null,
     attachmentFileId: null,
+    attachmentV2FileId: null,
+    attachmentFileRevision: null,
+    attachmentFileVersionId: null,
+    attachmentObjectVersionId: null,
     attachmentFailureReasonId: null,
     displayName: null,
     mediaSemantic: null,
@@ -8579,6 +9459,10 @@ function contentBlockColumns(
     extensionPayloadSchemaId: null,
     extensionPayloadSchemaVersion: null,
     extensionPayloadFileId: null,
+    extensionPayloadV2FileId: null,
+    extensionPayloadFileRevision: null,
+    extensionPayloadFileVersionId: null,
+    extensionPayloadObjectVersionId: null,
     extensionPayloadDigestSha256: null,
     extensionRendererId: null
   };
@@ -8636,7 +9520,24 @@ function contentBlockColumns(
         extensionBlockKindId: block.blockKindId,
         extensionPayloadSchemaId: block.payloadSchemaId,
         extensionPayloadSchemaVersion: block.payloadSchemaVersion,
-        extensionPayloadFileId: block.payloadFile.id,
+        extensionPayloadFileId:
+          block.payloadPin.state === "legacy_unpinned"
+            ? block.payloadFile.id
+            : null,
+        extensionPayloadV2FileId:
+          block.payloadPin.state === "exact" ? block.payloadFile.id : null,
+        extensionPayloadFileRevision:
+          block.payloadPin.state === "exact"
+            ? block.payloadPin.fileRevision
+            : null,
+        extensionPayloadFileVersionId:
+          block.payloadPin.state === "exact"
+            ? block.payloadPin.fileVersion.id
+            : null,
+        extensionPayloadObjectVersionId:
+          block.payloadPin.state === "exact"
+            ? block.payloadPin.objectVersion.id
+            : null,
         extensionPayloadDigestSha256: block.payloadDigestSha256,
         extensionRendererId: block.rendererId
       };
@@ -8653,12 +9554,28 @@ function attachmentColumns(
   | "attachmentId"
   | "attachmentState"
   | "attachmentFileId"
+  | "attachmentV2FileId"
+  | "attachmentFileRevision"
+  | "attachmentFileVersionId"
+  | "attachmentObjectVersionId"
   | "attachmentFailureReasonId"
 > {
   return {
     attachmentId: attachment.attachment.id,
-    attachmentState: attachment.state,
-    attachmentFileId: attachment.state === "ready" ? attachment.file.id : null,
+    // The legacy SQL enum predates the explicit contract compatibility state.
+    // Column family, not a forged V2 pin, distinguishes legacy_unpinned.
+    attachmentState:
+      attachment.state === "legacy_unpinned" ? "ready" : attachment.state,
+    attachmentFileId:
+      attachment.state === "legacy_unpinned" ? attachment.file.id : null,
+    attachmentV2FileId:
+      attachment.state === "ready" ? attachment.file.id : null,
+    attachmentFileRevision:
+      attachment.state === "ready" ? attachment.fileRevision : null,
+    attachmentFileVersionId:
+      attachment.state === "ready" ? attachment.fileVersion.id : null,
+    attachmentObjectVersionId:
+      attachment.state === "ready" ? attachment.objectVersion.id : null,
     attachmentFailureReasonId:
       attachment.state === "failed" || attachment.state === "quarantined"
         ? attachment.reasonId
@@ -10371,14 +11288,54 @@ function mapContentBlockRow(
         payloadFile: {
           tenantId,
           kind: "file",
-          id: row.extension_payload_file_id as string
+          id:
+            row.extension_payload_v2_file_id === null
+              ? (row.extension_payload_file_id as string)
+              : (row.extension_payload_v2_file_id as string)
         },
+        payloadPin:
+          row.extension_payload_v2_file_id === null
+            ? { state: "legacy_unpinned" }
+            : {
+                state: "exact",
+                fileRevision: parseRevision(
+                  row.extension_payload_file_revision,
+                  "Extension payload file revision"
+                ),
+                fileVersion: {
+                  tenantId,
+                  kind: "file_version",
+                  id: row.extension_payload_file_version_id as string
+                },
+                objectVersion: {
+                  tenantId,
+                  kind: "file_object_version",
+                  id: row.extension_payload_object_version_id as string
+                }
+              },
         payloadDigestSha256: row.extension_payload_digest_sha256 as never,
         rendererId: row.extension_renderer_id as never
       });
     default:
       throw invariantError("TimelineContent payload kind is unknown.");
   }
+}
+
+/**
+ * Public row mapper used by repository contract tests and migration probes.
+ * It intentionally accepts a raw SQL row so tests exercise the same strict
+ * V2-versus-legacy reconstruction path as production reads.
+ */
+export function mapInboxV2TimelineContentBlockRow(
+  row: Record<string, unknown>,
+  contacts: readonly Record<string, unknown>[],
+  tenantId: InboxV2TenantId
+): InboxV2MessageContentBlock {
+  return mapContentBlockRow(
+    row as ContentPayloadRow,
+    contacts as readonly ContactValueRow[],
+    tenantId
+  );
 }
 
 function mapAttachmentRow(
@@ -10393,10 +11350,39 @@ function mapAttachmentRow(
   if (row.attachment_state === "pending")
     return { state: "pending", attachment };
   if (row.attachment_state === "ready") {
+    if (row.attachment_v2_file_id === null) {
+      return {
+        state: "legacy_unpinned",
+        attachment,
+        file: {
+          tenantId,
+          kind: "file",
+          id: row.attachment_file_id as string
+        }
+      };
+    }
     return {
       state: "ready",
       attachment,
-      file: { tenantId, kind: "file", id: row.attachment_file_id as string }
+      file: {
+        tenantId,
+        kind: "file",
+        id: row.attachment_v2_file_id as string
+      },
+      fileRevision: parseRevision(
+        row.attachment_file_revision,
+        "Attachment file revision"
+      ),
+      fileVersion: {
+        tenantId,
+        kind: "file_version",
+        id: row.attachment_file_version_id as string
+      },
+      objectVersion: {
+        tenantId,
+        kind: "file_object_version",
+        id: row.attachment_object_version_id as string
+      }
     };
   }
   if (

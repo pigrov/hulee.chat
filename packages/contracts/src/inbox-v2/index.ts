@@ -10,6 +10,7 @@ export * from "./entity-metadata";
 export * from "./employee-conversation-state";
 export * from "./external-message-reference";
 export * from "./external-thread";
+export * from "./file-object";
 export * from "./ids";
 export * from "./message";
 export * from "./message-content";

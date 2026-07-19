@@ -8,6 +8,7 @@ import {
   INBOX_V2_SOURCE_THREAD_BINDING_SCHEMA_ID,
   INBOX_V2_STAFF_NOTE_SCHEMA_ID,
   INBOX_V2_WORK_ITEM_SCHEMA_ID,
+  calculateInboxV2MessageContentDigest,
   inboxV2AuthorizationDependencyVectorSchema,
   inboxV2AuthorizationEpochSchema,
   inboxV2AuthorizationEpochSnapshotSchema,
@@ -736,21 +737,22 @@ export function inboxV2ScenarioContent(input: {
   revision?: string;
   updatedAt?: string;
 }) {
+  const blocks = [
+    {
+      blockKey: "body-1",
+      kind: "text" as const,
+      role: "body" as const,
+      text: input.text ?? "Hello",
+      language: "en"
+    }
+  ];
   return inboxV2TimelineContentSchema.parse({
     tenantId: input.tenantId,
     id: input.id ?? "timeline_content:scenario-1",
     state: {
       kind: "available" as const,
-      blocks: [
-        {
-          blockKey: "body-1",
-          kind: "text" as const,
-          role: "body" as const,
-          text: input.text ?? "Hello",
-          language: "en"
-        }
-      ],
-      contentDigestSha256: (input.revision === "2" ? "b" : "a").repeat(64)
+      blocks,
+      contentDigestSha256: calculateInboxV2MessageContentDigest(blocks)
     },
     revision: input.revision ?? "1",
     createdAt: inboxV2ScenarioNow,
