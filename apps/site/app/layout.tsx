@@ -106,6 +106,23 @@ export const viewport: Viewport = {
   colorScheme: "light dark"
 };
 
+const themeScript = `
+(() => {
+  try {
+    const saved = window.localStorage.getItem("hulee-site-theme");
+    const resolved =
+      saved === "light" || saved === "dark"
+        ? saved
+        : window.matchMedia("(prefers-color-scheme: dark)").matches
+          ? "dark"
+          : "light";
+    document.documentElement.dataset.theme = resolved;
+  } catch {
+    document.documentElement.dataset.theme = "light";
+  }
+})();
+`;
+
 export default function RootLayout({
   children
 }: {
@@ -113,7 +130,10 @@ export default function RootLayout({
 }): ReactNode {
   return (
     <html className={sansation.variable} lang="ru" suppressHydrationWarning>
-      <body className={sansation.className}>{children}</body>
+      <body className={sansation.className}>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+        {children}
+      </body>
     </html>
   );
 }

@@ -1,12 +1,402 @@
 {
   "metadata": {
-    "title": "{product} - site refresh in progress",
-    "description": "The {product} marketing site is being refreshed. The current design has been archived while a new product page is rebuilt from scratch."
+    "title": "{product} - requests and teams in one workspace",
+    "description": "{product} brings customer and internal requests from every channel into one workspace, helping teams respond faster and control company data."
   },
-  "placeholder": {
-    "kicker": "Site refresh in progress",
-    "title": "{product} is preparing a new landing page",
-    "lead": "The current design has been archived while we rebuild the product page from scratch.",
-    "action": "Sign in"
+  "navigation": [
+    { "label": "Product", "href": "#product" },
+    { "label": "Channels", "href": "#channels" },
+    { "label": "For teams", "href": "#audience" },
+    { "label": "Pricing", "href": "#pricing" },
+    { "label": "Data", "href": "#data" }
+  ],
+  "languages": {
+    "ariaLabel": "Language selection",
+    "options": [
+      { "code": "ru", "label": "RU" },
+      { "code": "en", "label": "EN" },
+      { "code": "kk", "label": "KZ" }
+    ]
+  },
+  "themeToggle": {
+    "label": "Theme switcher",
+    "light": "Light theme",
+    "dark": "Dark theme"
+  },
+  "actions": {
+    "signIn": "Sign in",
+    "primary": "Try for free",
+    "secondary": "View product"
+  },
+  "hero": {
+    "eyebrow": "Communication platform",
+    "title": "All requests and the whole team in one workspace.",
+    "lead": "{product} collects customer and internal requests from every channel in one place, helping teams reply faster, keep context, and work with full transparency.",
+    "imageAlt": "{product} interface with a unified request workspace",
+    "metrics": [
+      { "value": "$0", "label": "per channel in {product}" },
+      { "value": "$0", "label": "per teammate" },
+      { "icon": "storage", "label": "Storage-based usage" }
+    ]
+  },
+  "dataPreview": {
+    "kicker": "Reliability and control",
+    "title": "Your data stays protected",
+    "items": [
+      {
+        "title": "Cloud or your own servers",
+        "description": "Flexible deployment without compromise",
+        "icon": "cloud"
+      },
+      {
+        "title": "History export",
+        "description": "Export every conversation in one click",
+        "icon": "download"
+      },
+      {
+        "title": "Activity log",
+        "description": "Transparent team control",
+        "icon": "database"
+      },
+      {
+        "title": "API and webhooks",
+        "description": "Integrations without lock-in",
+        "icon": "code"
+      }
+    ]
+  },
+  "productWorkflow": {
+    "kicker": "Product",
+    "title": "One request. The whole path of work.",
+    "lead": "{product} turns inbound messages from different sources into a clear workflow: customer context, history, files, owner, response SLA, and access rules.",
+    "imageAlt": "{product} request workflow interface",
+    "steps": [
+      {
+        "title": "Accept",
+        "description": "Requests from every channel arrive in one shared inbound flow.",
+        "icon": "inbox"
+      },
+      {
+        "title": "Understand the customer",
+        "description": "Conversation history, customer profile, and files stay at hand.",
+        "icon": "user"
+      },
+      {
+        "title": "Hand off to work",
+        "description": "Assign an owner and start the internal team process.",
+        "icon": "handoff"
+      },
+      {
+        "title": "Keep control",
+        "description": "Statuses, deadlines, and reports help keep everything under control.",
+        "icon": "chart"
+      }
+    ]
+  },
+  "channelsShowcase": {
+    "kicker": "Channels",
+    "title": "Customers write where it is convenient. The team replies from one place.",
+    "lead": "Hulee collects requests from every channel and brings them into one workspace. Nothing gets lost, replies are faster, and customers stay informed.",
+    "tabsLabel": "Channel categories",
+    "visualLabel": "How different channels flow into one Hulee workspace",
+    "hubLabel": "Hulee",
+    "inboxTitle": "Inbox",
+    "inboxCount": "128",
+    "categories": [
+      {
+        "title": "Messengers",
+        "icon": "messengers",
+        "channels": [
+          {
+            "title": "Telegram",
+            "description": "Bots and personal connections",
+            "status": "available",
+            "statusTone": "success",
+            "icon": "telegram"
+          },
+          {
+            "title": "WhatsApp",
+            "description": "Customer conversations and notifications",
+            "status": "available",
+            "statusTone": "success",
+            "icon": "whatsapp"
+          },
+          {
+            "title": "MAX",
+            "description": "A new channel for customer requests",
+            "status": "in progress",
+            "statusTone": "info",
+            "icon": "max"
+          },
+          {
+            "title": "WABA",
+            "description": "Official business connections",
+            "status": "on request",
+            "statusTone": "warning",
+            "icon": "chat"
+          }
+        ]
+      },
+      {
+        "title": "Social",
+        "icon": "social",
+        "channels": [
+          {
+            "title": "VK",
+            "description": "Messages from communities and pages",
+            "status": "available",
+            "statusTone": "success",
+            "icon": "vk"
+          },
+          {
+            "title": "Comments",
+            "description": "Public reactions and customer questions",
+            "status": "in progress",
+            "statusTone": "info",
+            "icon": "message"
+          },
+          {
+            "title": "Groups",
+            "description": "Requests from work communities",
+            "status": "on request",
+            "statusTone": "warning",
+            "icon": "users"
+          }
+        ]
+      },
+      {
+        "title": "Marketplaces",
+        "icon": "commerce",
+        "channels": [
+          {
+            "title": "Ozon",
+            "description": "Buyer questions and order statuses",
+            "status": "on request",
+            "statusTone": "warning",
+            "icon": "marketplace"
+          },
+          {
+            "title": "Wildberries",
+            "description": "Messages about orders and product cards",
+            "status": "on request",
+            "statusTone": "warning",
+            "icon": "store"
+          },
+          {
+            "title": "Kaspi",
+            "description": "Requests and conversations from the marketplace",
+            "status": "on request",
+            "statusTone": "warning",
+            "icon": "commerce"
+          }
+        ]
+      },
+      {
+        "title": "Classifieds",
+        "icon": "classifieds",
+        "channels": [
+          {
+            "title": "Avito",
+            "description": "Messages about listings",
+            "status": "available",
+            "statusTone": "success",
+            "icon": "store"
+          },
+          {
+            "title": "OLX",
+            "description": "Conversations about classifieds",
+            "status": "on request",
+            "statusTone": "warning",
+            "icon": "classifieds"
+          },
+          {
+            "title": "Kolesa",
+            "description": "Requests from classifieds",
+            "status": "on request",
+            "statusTone": "warning",
+            "icon": "message"
+          },
+          {
+            "title": "Krisha",
+            "description": "Requests about properties and listings",
+            "status": "on request",
+            "statusTone": "warning",
+            "icon": "globe"
+          }
+        ]
+      },
+      {
+        "title": "Website and email",
+        "icon": "globe",
+        "channels": [
+          {
+            "title": "Email",
+            "description": "Messages from company and personal addresses",
+            "status": "available",
+            "statusTone": "success",
+            "icon": "email"
+          },
+          {
+            "title": "Website chat",
+            "description": "Online chat and a chat widget for your website",
+            "status": "available",
+            "statusTone": "success",
+            "icon": "chat"
+          },
+          {
+            "title": "Website forms",
+            "description": "Feedback forms, requests, and surveys",
+            "status": "available",
+            "statusTone": "success",
+            "icon": "form"
+          },
+          {
+            "title": "Callback",
+            "description": "Call requests from the website",
+            "status": "on request",
+            "statusTone": "warning",
+            "icon": "callback"
+          },
+          {
+            "title": "SMS",
+            "description": "Customer messages by SMS",
+            "status": "on request",
+            "statusTone": "warning",
+            "icon": "sms"
+          },
+          {
+            "title": "Mailboxes",
+            "description": "External mailbox connections",
+            "status": "in progress",
+            "statusTone": "info",
+            "icon": "mail"
+          }
+        ]
+      },
+      {
+        "title": "Telephony",
+        "icon": "phone",
+        "channels": [
+          {
+            "title": "Calls",
+            "description": "Incoming calls as requests",
+            "status": "on request",
+            "statusTone": "warning",
+            "icon": "phone"
+          },
+          {
+            "title": "Voice messages",
+            "description": "Audio messages in customer history",
+            "status": "in progress",
+            "statusTone": "info",
+            "icon": "message"
+          },
+          {
+            "title": "Call tracking",
+            "description": "Connect calls with request sources",
+            "status": "on request",
+            "statusTone": "warning",
+            "icon": "callback"
+          }
+        ]
+      },
+      {
+        "title": "Internal requests",
+        "icon": "internal",
+        "channels": [
+          {
+            "title": "Team requests",
+            "description": "Internal employee requests",
+            "status": "available",
+            "statusTone": "success",
+            "icon": "users"
+          },
+          {
+            "title": "Service desk",
+            "description": "IT, office, procurement, and support",
+            "status": "available",
+            "statusTone": "success",
+            "icon": "inbox"
+          },
+          {
+            "title": "Approvals",
+            "description": "Processes inside the team",
+            "status": "in progress",
+            "statusTone": "info",
+            "icon": "settings"
+          }
+        ]
+      },
+      {
+        "title": "API",
+        "icon": "api",
+        "channels": [
+          {
+            "title": "Public API",
+            "description": "Send requests from your systems",
+            "status": "in progress",
+            "statusTone": "info",
+            "icon": "api"
+          },
+          {
+            "title": "Webhooks",
+            "description": "Events and statuses to external systems",
+            "status": "available",
+            "statusTone": "success",
+            "icon": "webhook"
+          },
+          {
+            "title": "Custom adapters",
+            "description": "Connections for private processes",
+            "status": "on request",
+            "statusTone": "warning",
+            "icon": "code"
+          }
+        ]
+      }
+    ]
+  },
+  "pricingLogic": {
+    "kicker": "How pricing works",
+    "title": "Channels and teammates should not inflate the bill.",
+    "lead": "Typical tools make the price grow with every connection. {product} treats channels and teammates as the way work happens; the paid resource is stored data, history, files, and optional services.",
+    "marketLabel": "Typical market model",
+    "huleeLabel": "Hulee",
+    "items": [
+      {
+        "title": "Channels",
+        "market": "Each new WhatsApp, Telegram, Avito, or other source can become a separate billing line.",
+        "hulee": "Connecting channels is not a separate Hulee subscription fee.",
+        "metric": "$0 per channel",
+        "icon": "channels"
+      },
+      {
+        "title": "Teammates",
+        "market": "Team growth often increases subscription cost even when workload stays the same.",
+        "hulee": "The team can grow without a fee for every teammate account.",
+        "metric": "$0 per teammate",
+        "icon": "operators"
+      },
+      {
+        "title": "Conversations",
+        "market": "Plans can limit the number of requests, leads, or active conversations per month.",
+        "hulee": "History is stored as company data, not as an artificial conversation limit.",
+        "metric": "History under control",
+        "icon": "dialogs"
+      },
+      {
+        "title": "Transparency",
+        "market": "The final price is hard to forecast as channels, branches, and teams grow.",
+        "hulee": "The bill is explained by storage volume, history period, and external provider costs.",
+        "metric": "Clear model",
+        "icon": "control"
+      }
+    ],
+    "metrics": [
+      { "value": "$0", "label": "per channel in {product}" },
+      { "value": "$0", "label": "per teammate" },
+      { "value": "GB", "label": "storage volume is the calculation base" }
+    ],
+    "note": "External provider costs, such as WhatsApp Business, SMS, AI, or audio transcription, are shown separately and transparently."
   }
 }

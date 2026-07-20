@@ -1,12 +1,402 @@
 {
   "metadata": {
-    "title": "{product} - сайт обновляется",
-    "description": "Маркетинговый сайт {product} обновляется. Мы упаковали текущий дизайн и собираем новую продуктовую страницу с нуля."
+    "title": "{product} - обращения и команда в одном рабочем пространстве",
+    "description": "{product} собирает клиентские и внутренние обращения со всех каналов в одном окне, помогает быстрее отвечать и контролировать данные компании."
   },
-  "placeholder": {
-    "kicker": "Сайт обновляется",
-    "title": "{product} готовит новый лендинг",
-    "lead": "Мы упаковали текущий дизайн в архив и собираем новую продуктовую страницу с нуля.",
-    "action": "Войти"
+  "navigation": [
+    { "label": "Продукт", "href": "#product" },
+    { "label": "Каналы", "href": "#channels" },
+    { "label": "Для кого", "href": "#audience" },
+    { "label": "Цена", "href": "#pricing" },
+    { "label": "Данные", "href": "#data" }
+  ],
+  "languages": {
+    "ariaLabel": "Выбор языка",
+    "options": [
+      { "code": "ru", "label": "RU" },
+      { "code": "en", "label": "EN" },
+      { "code": "kk", "label": "KZ" }
+    ]
+  },
+  "themeToggle": {
+    "label": "Переключение темы",
+    "light": "Светлая тема",
+    "dark": "Темная тема"
+  },
+  "actions": {
+    "signIn": "Войти",
+    "primary": "Попробовать бесплатно",
+    "secondary": "Посмотреть продукт"
+  },
+  "hero": {
+    "eyebrow": "Платформа коммуникаций",
+    "title": "Все обращения и вся команда - в одном рабочем пространстве.",
+    "lead": "{product} собирает клиентские и внутренние обращения со всех каналов в одном окне, помогает быстрее отвечать, не терять важное и работать всей командой с полной прозрачностью.",
+    "imageAlt": "Интерфейс {product} с единым окном обращений",
+    "metrics": [
+      { "value": "0 ₽", "label": "за канал в {product}" },
+      { "value": "0 ₽", "label": "за сотрудника" },
+      { "icon": "storage", "label": "Оплата за объем хранения" }
+    ]
+  },
+  "dataPreview": {
+    "kicker": "Надежность и контроль",
+    "title": "Ваши данные под защитой",
+    "items": [
+      {
+        "title": "Облако или свои серверы",
+        "description": "Гибкое размещение без компромиссов",
+        "icon": "cloud"
+      },
+      {
+        "title": "Выгрузка истории",
+        "description": "Экспорт всей переписки в один клик",
+        "icon": "download"
+      },
+      {
+        "title": "Журнал действий",
+        "description": "Прозрачность и контроль команды",
+        "icon": "database"
+      },
+      {
+        "title": "Программный интерфейс и вебхуки",
+        "description": "Интеграция без ограничений",
+        "icon": "code"
+      }
+    ]
+  },
+  "productWorkflow": {
+    "kicker": "Продукт",
+    "title": "Одно обращение. Весь путь работы.",
+    "lead": "{product} собирает входящие из разных источников и превращает их в понятный рабочий процесс: с клиентом, историей, файлами, ответственным, сроком ответа и правилами доступа.",
+    "imageAlt": "Рабочий путь обращения в интерфейсе {product}",
+    "steps": [
+      {
+        "title": "Принять",
+        "description": "Все обращения из всех каналов поступают в единый входящий поток.",
+        "icon": "inbox"
+      },
+      {
+        "title": "Понять клиента",
+        "description": "История переписки, карточка клиента и файлы всегда под рукой.",
+        "icon": "user"
+      },
+      {
+        "title": "Передать в работу",
+        "description": "Назначьте исполнителя и запустите процесс внутри команды.",
+        "icon": "handoff"
+      },
+      {
+        "title": "Проконтролировать",
+        "description": "Статусы, сроки и отчеты помогут держать все под контролем.",
+        "icon": "chart"
+      }
+    ]
+  },
+  "channelsShowcase": {
+    "kicker": "Каналы",
+    "title": "Клиент пишет где удобно. Команда отвечает из одного места.",
+    "lead": "Hulee собирает обращения из всех каналов и объединяет их в одном окне. Ничего не теряется, ответы быстрее, клиенты довольны.",
+    "tabsLabel": "Категории каналов",
+    "visualLabel": "Как разные каналы сходятся в единое окно Hulee",
+    "hubLabel": "Hulee",
+    "inboxTitle": "Входящие",
+    "inboxCount": "128",
+    "categories": [
+      {
+        "title": "Мессенджеры",
+        "icon": "messengers",
+        "channels": [
+          {
+            "title": "Telegram",
+            "description": "Боты и личные подключения",
+            "status": "доступно",
+            "statusTone": "success",
+            "icon": "telegram"
+          },
+          {
+            "title": "WhatsApp",
+            "description": "Клиентские диалоги и уведомления",
+            "status": "доступно",
+            "statusTone": "success",
+            "icon": "whatsapp"
+          },
+          {
+            "title": "MAX",
+            "description": "Новый канал для клиентских обращений",
+            "status": "в работе",
+            "statusTone": "info",
+            "icon": "max"
+          },
+          {
+            "title": "WABA",
+            "description": "Официальные бизнес-подключения",
+            "status": "по запросу",
+            "statusTone": "warning",
+            "icon": "chat"
+          }
+        ]
+      },
+      {
+        "title": "Соцсети",
+        "icon": "social",
+        "channels": [
+          {
+            "title": "VK",
+            "description": "Сообщения сообществ и страниц",
+            "status": "доступно",
+            "statusTone": "success",
+            "icon": "vk"
+          },
+          {
+            "title": "Комментарии",
+            "description": "Публичные реакции и вопросы клиентов",
+            "status": "в работе",
+            "statusTone": "info",
+            "icon": "message"
+          },
+          {
+            "title": "Группы",
+            "description": "Обращения из рабочих сообществ",
+            "status": "по запросу",
+            "statusTone": "warning",
+            "icon": "users"
+          }
+        ]
+      },
+      {
+        "title": "Торговые площадки",
+        "icon": "commerce",
+        "channels": [
+          {
+            "title": "Ozon",
+            "description": "Вопросы покупателей и статусы заказов",
+            "status": "по запросу",
+            "statusTone": "warning",
+            "icon": "marketplace"
+          },
+          {
+            "title": "Wildberries",
+            "description": "Сообщения по заказам и карточкам",
+            "status": "по запросу",
+            "statusTone": "warning",
+            "icon": "store"
+          },
+          {
+            "title": "Kaspi",
+            "description": "Заявки и обращения с площадки",
+            "status": "по запросу",
+            "statusTone": "warning",
+            "icon": "commerce"
+          }
+        ]
+      },
+      {
+        "title": "Доски объявлений",
+        "icon": "classifieds",
+        "channels": [
+          {
+            "title": "Avito",
+            "description": "Сообщения по объявлениям",
+            "status": "доступно",
+            "statusTone": "success",
+            "icon": "store"
+          },
+          {
+            "title": "OLX",
+            "description": "Диалоги по объявлениям",
+            "status": "по запросу",
+            "statusTone": "warning",
+            "icon": "classifieds"
+          },
+          {
+            "title": "Kolesa",
+            "description": "Обращения из классифайдов",
+            "status": "по запросу",
+            "statusTone": "warning",
+            "icon": "message"
+          },
+          {
+            "title": "Krisha",
+            "description": "Заявки по объектам и объявлениям",
+            "status": "по запросу",
+            "statusTone": "warning",
+            "icon": "globe"
+          }
+        ]
+      },
+      {
+        "title": "Сайт и почта",
+        "icon": "globe",
+        "channels": [
+          {
+            "title": "Email",
+            "description": "Письма с корпоративного и личных адресов",
+            "status": "доступно",
+            "statusTone": "success",
+            "icon": "email"
+          },
+          {
+            "title": "Чат на сайте",
+            "description": "Онлайн-чат и чат-виджет на вашем сайте",
+            "status": "доступно",
+            "statusTone": "success",
+            "icon": "chat"
+          },
+          {
+            "title": "Формы на сайте",
+            "description": "Формы обратной связи, заявки и опросы",
+            "status": "доступно",
+            "statusTone": "success",
+            "icon": "form"
+          },
+          {
+            "title": "Обратный звонок",
+            "description": "Заявки на звонок с сайта",
+            "status": "по запросу",
+            "statusTone": "warning",
+            "icon": "callback"
+          },
+          {
+            "title": "SMS",
+            "description": "Сообщения от клиентов по SMS",
+            "status": "по запросу",
+            "statusTone": "warning",
+            "icon": "sms"
+          },
+          {
+            "title": "Почтовые ящики",
+            "description": "Подключение внешних почтовых ящиков",
+            "status": "в работе",
+            "statusTone": "info",
+            "icon": "mail"
+          }
+        ]
+      },
+      {
+        "title": "Телефония",
+        "icon": "phone",
+        "channels": [
+          {
+            "title": "Звонки",
+            "description": "Входящие звонки как обращения",
+            "status": "по запросу",
+            "statusTone": "warning",
+            "icon": "phone"
+          },
+          {
+            "title": "Голосовые",
+            "description": "Аудиосообщения в истории клиента",
+            "status": "в работе",
+            "statusTone": "info",
+            "icon": "message"
+          },
+          {
+            "title": "Коллтрекинг",
+            "description": "Связь звонков с источниками заявок",
+            "status": "по запросу",
+            "statusTone": "warning",
+            "icon": "callback"
+          }
+        ]
+      },
+      {
+        "title": "Внутренние заявки",
+        "icon": "internal",
+        "channels": [
+          {
+            "title": "Запросы команды",
+            "description": "Внутренние обращения сотрудников",
+            "status": "доступно",
+            "statusTone": "success",
+            "icon": "users"
+          },
+          {
+            "title": "Сервисные заявки",
+            "description": "IT, офис, закупки и поддержка",
+            "status": "доступно",
+            "statusTone": "success",
+            "icon": "inbox"
+          },
+          {
+            "title": "Согласования",
+            "description": "Процессы внутри команды",
+            "status": "в работе",
+            "statusTone": "info",
+            "icon": "settings"
+          }
+        ]
+      },
+      {
+        "title": "Программный интерфейс",
+        "icon": "api",
+        "channels": [
+          {
+            "title": "Public API",
+            "description": "Передача обращений из ваших систем",
+            "status": "в работе",
+            "statusTone": "info",
+            "icon": "api"
+          },
+          {
+            "title": "Webhooks",
+            "description": "События и статусы наружу",
+            "status": "доступно",
+            "statusTone": "success",
+            "icon": "webhook"
+          },
+          {
+            "title": "Custom adapters",
+            "description": "Подключения под частные процессы",
+            "status": "по запросу",
+            "statusTone": "warning",
+            "icon": "code"
+          }
+        ]
+      }
+    ]
+  },
+  "pricingLogic": {
+    "kicker": "Как считается цена",
+    "title": "Каналы и сотрудники не должны раздувать счет.",
+    "lead": "Обычно цена растет от количества подключений. {product} считает иначе: канал и сотрудник - это способ работы, а оплачиваемый ресурс - данные, история, файлы и дополнительные сервисы.",
+    "marketLabel": "Обычно на рынке",
+    "huleeLabel": "Hulee",
+    "items": [
+      {
+        "title": "Каналы",
+        "market": "Каждый новый WhatsApp, Telegram, Avito или другой источник может становиться отдельной строкой счета.",
+        "hulee": "Подключение каналов не является отдельной абонплатой Hulee.",
+        "metric": "0 ₽ за канал",
+        "icon": "channels"
+      },
+      {
+        "title": "Сотрудники",
+        "market": "Рост команды часто увеличивает стоимость, даже если люди работают с той же нагрузкой.",
+        "hulee": "Команда может расти без платы за каждую учетную запись сотрудника.",
+        "metric": "0 ₽ за сотрудника",
+        "icon": "operators"
+      },
+      {
+        "title": "Диалоги",
+        "market": "Тариф может ограничивать количество обращений, лидов или активных диалогов в месяц.",
+        "hulee": "История хранится как данные компании, а не как искусственный лимит переписки.",
+        "metric": "История под контролем",
+        "icon": "dialogs"
+      },
+      {
+        "title": "Прозрачность",
+        "market": "Итоговую стоимость сложно прогнозировать при росте каналов, филиалов и команды.",
+        "hulee": "Счет объясняется объемом хранения, сроком истории и внешними расходами поставщиков.",
+        "metric": "Понятная модель",
+        "icon": "control"
+      }
+    ],
+    "metrics": [
+      { "value": "0 ₽", "label": "за канал в {product}" },
+      { "value": "0 ₽", "label": "за сотрудника" },
+      { "value": "GB", "label": "основа расчета - объем хранения" }
+    ],
+    "note": "Внешние расходы поставщиков, например WhatsApp Business, SMS, AI или расшифровка аудио, показываются отдельно и прозрачно."
   }
 }
