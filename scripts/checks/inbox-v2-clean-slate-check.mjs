@@ -78,6 +78,8 @@ export function validateInboxV2CleanSlateFreeze(input) {
     "a worker without explicit features must be provider-free"
   );
 
+  validateRuntimeDetachment(issues, input);
+
   for (const [label, source] of [
     ["ADR 0016", input.adr],
     ["canonical backlog", input.backlog],
@@ -117,7 +119,13 @@ async function main() {
     backlog,
     migrationStrategy,
     agentInstructions,
-    packageSource
+    packageSource,
+    apiIndexSource,
+    workerRunnerSource,
+    webInboxPageSource,
+    webFileRouteSource,
+    foundationSeedSource,
+    productionCompose
   ] = await Promise.all(
     [
       ".github/workflows/deploy.yml",
@@ -127,7 +135,13 @@ async function main() {
       "docs/product/inbox-v2-backlog.md",
       "docs/product/inbox-v2-migration-and-cutover.md",
       "AGENTS.md",
-      "package.json"
+      "package.json",
+      "apps/api/src/index.ts",
+      "apps/worker/src/runner.ts",
+      "apps/web/app/page.tsx",
+      "apps/web/app/files/[fileId]/route.ts",
+      "scripts/db/seed-foundation.ts",
+      "deploy/production/docker-compose.yml"
     ].map((path) => readFile(resolve(repositoryRoot, path), "utf8"))
   );
   const issues = validateInboxV2CleanSlateFreeze({
@@ -138,14 +152,22 @@ async function main() {
     backlog,
     migrationStrategy,
     agentInstructions,
-    packageSource
+    packageSource,
+    apiIndexSource,
+    workerRunnerSource,
+    webInboxPageSource,
+    webFileRouteSource,
+    foundationSeedSource,
+    productionCompose
   });
   if (issues.length > 0) {
     throw new Error(
       `Inbox V2 clean-slate freeze check failed:\n- ${issues.join("\n- ")}`
     );
   }
-  console.log("Inbox V2 clean-slate deployment and CI freeze passed.");
+  console.log(
+    "Inbox V2 clean-slate deployment, CI freeze and runtime detachment passed."
+  );
 }
 
 function requireText(issues, source, expected, message) {
@@ -158,6 +180,185 @@ function forbidText(issues, source, forbidden, message) {
 
 function requireMatch(issues, source, pattern, message) {
   if (!pattern.test(source)) issues.push(message);
+}
+
+function forbidMatch(issues, source, pattern, message) {
+  if (pattern.test(source)) issues.push(message);
+}
+
+function validateRuntimeDetachment(issues, input) {
+  const apiIndexSource = stripJavaScriptComments(input.apiIndexSource);
+  forbidMatch(
+    issues,
+    apiIndexSource,
+    /\b(?:createExternalMessageRepository|createPublicApiCommandService|createExternalChannelCommandService)\s*\(/u,
+    "API production composition must not create a V1 message service"
+  );
+  forbidMatch(
+    issues,
+    apiIndexSource,
+    /\b(?:createSqlInternalInboxAuthorizationService|createSqlInternalInboxQueryService|createInternalInboxCommandService|createInternalFileService)\s*\(|\b(?:inboxQueries|inboxCommands|files)\s*:/u,
+    "API production composition must not create V1 Inbox services"
+  );
+  forbidMatch(
+    issues,
+    apiIndexSource,
+    /\b(?:createTelegramWebhookHandler|createChannelConnectorTelegramWebhookConnectorResolver)\s*\(/u,
+    "API production composition must not create a V1 Telegram webhook service"
+  );
+  requireMatch(
+    issues,
+    apiIndexSource,
+    /commands:\s*createCleanSlatePublicApiCommandService\(\)/u,
+    "API public message composition must remain fail closed"
+  );
+  requireMatch(
+    issues,
+    apiIndexSource,
+    /return\s+createCleanSlateTelegramWebhookHandler\(\);/u,
+    "API Telegram webhook composition must remain intentionally detached"
+  );
+  requireMatch(
+    issues,
+    apiIndexSource,
+    /createInternalIntegrationService\(\{[\s\S]*?\bproviderIoEnabled:\s*false\b[\s\S]*?\}\)/u,
+    "API integration composition must disable provider I/O"
+  );
+
+  const workerRunnerSource = stripJavaScriptComments(input.workerRunnerSource);
+  forbidMatch(
+    issues,
+    workerRunnerSource,
+    /\b(?:createSqlOutboxRepository|createWorkerOutboxHandler|processOutboxBatch|createWorkerTelegramPollingSweeper|createWorkerTelegramAttachmentTransferSweeper|createWorkerDirectAccountAuthSweeper|createWorkerDirectAccountSessionMonitor)\s*\(/u,
+    "worker production runner must not compose provider polling, outbound or direct-account loops"
+  );
+
+  const webInboxPageSource = stripJavaScriptComments(input.webInboxPageSource);
+  forbidMatch(
+    issues,
+    webInboxPageSource,
+    /\bloadInboxViewModel\b/u,
+    "Web root must not load the V1 Inbox view model"
+  );
+  requireText(
+    issues,
+    webInboxPageSource,
+    't("inbox.cleanSlate.title")',
+    "Web root must expose the clean-slate unavailable surface"
+  );
+
+  const webFileRouteSource = stripJavaScriptComments(input.webFileRouteSource);
+  forbidMatch(
+    issues,
+    webFileRouteSource,
+    /\bfetch\s*\(|\/internal\/v1\/files\/|\b(?:buildInternalApiHeaders|resolveWebConfig)\b/u,
+    "Web file route must not proxy the V1 file API"
+  );
+  requireMatch(
+    issues,
+    webFileRouteSource,
+    /status:\s*410\b/u,
+    "Web V1 file route must fail closed with HTTP 410"
+  );
+  requireText(
+    issues,
+    webFileRouteSource,
+    '"x-hulee-inbox-runtime": "clean-slate-detached"',
+    "Web V1 file route must identify the detached clean-slate runtime"
+  );
+
+  const foundationSeedSource = stripJavaScriptComments(
+    input.foundationSeedSource
+  );
+  forbidMatch(
+    issues,
+    foundationSeedSource,
+    /\b(?:createMvpTenantWorkspace|createTenantWorkspaceRepository|saveWorkspace)\b|HULEE_SEED_(?:CLIENT|INBOUND|OUTBOUND|TELEGRAM|WHATSAPP|MAX|VIBER|WECHAT|IMO)|\b(?:moduleConfigs|clientDisplayName|conversationId|inboundMessageId|outboundMessageId|providerConfig|providerConfiguration|sourceConnectionConfig|channelExternalId|botTokenSecretRef|webhookConnectorId|webhookSecretTokenSecretRef)\b/iu,
+    "foundation seed must not create demo Inbox or provider state"
+  );
+  requireMatch(
+    issues,
+    foundationSeedSource,
+    /\bcreateTenantRegistrationRepository\s*\(/u,
+    "foundation seed must use the retained tenant registration repository"
+  );
+  requireMatch(
+    issues,
+    foundationSeedSource,
+    /\bregisterTenant\s*\(/u,
+    "foundation seed must create only the retained tenant foundation"
+  );
+
+  forbidText(
+    issues,
+    input.packageSource,
+    "db:seed:mvp",
+    "package scripts must not expose the V1 MVP seed"
+  );
+  forbidText(
+    issues,
+    input.productionCompose,
+    "db:seed:mvp",
+    "production compose must not invoke the V1 MVP seed"
+  );
+  requireText(
+    issues,
+    input.productionCompose,
+    'command: ["pnpm", "db:seed:foundation"]',
+    "production compose must invoke the foundation-only seed"
+  );
+  requireText(
+    issues,
+    input.productionCompose,
+    'command: ["pnpm", "db:migrate"]',
+    "production compose must use the clean-slate migration runner"
+  );
+  forbidMatch(
+    issues,
+    input.productionCompose,
+    /\bdb:inbox-v2:install\b|\ballow-reviewed-online-bridge\b/u,
+    "production compose must not invoke the historical preserve installer"
+  );
+  forbidMatch(
+    issues,
+    input.productionCompose,
+    /^ {2}(?:egress-gateway|worker-provider-egress):\s*$|\b(?:HULEE_PROVIDER_EGRESS_WORKER_FEATURES|HULEE_EGRESS_GATEWAY_IMAGE|hulee_chat_worker_provider_egress|hulee_chat_vpn_gateway)\b/mu,
+    "production compose must not define a provider worker or egress gateway"
+  );
+  validateProductionWorkerFeatures(issues, input.productionCompose);
+}
+
+function validateProductionWorkerFeatures(issues, productionCompose) {
+  const workerBlock = extractTopLevelYamlEntry(productionCompose, "worker");
+  const featureLines = workerBlock
+    .replaceAll("\r\n", "\n")
+    .split("\n")
+    .filter((line) => /^\s+HULEE_WORKER_FEATURES:/u.test(line));
+
+  if (
+    featureLines.length !== 1 ||
+    featureLines[0]?.trim() !== "HULEE_WORKER_FEATURES: core"
+  ) {
+    issues.push(
+      "production worker must set HULEE_WORKER_FEATURES to the literal core value"
+    );
+  }
+}
+
+function extractTopLevelYamlEntry(source, key) {
+  const lines = source.replaceAll("\r\n", "\n").split("\n");
+  const start = lines.findIndex((line) => line === `  ${key}:`);
+  if (start === -1) return "";
+
+  const endOffset = lines
+    .slice(start + 1)
+    .findIndex((line) => /^ {2}[A-Za-z0-9_-]+:\s*$/u.test(line));
+  const end = endOffset === -1 ? lines.length : start + 1 + endOffset;
+  return lines.slice(start, end).join("\n");
+}
+
+function stripJavaScriptComments(source) {
+  return source.replace(/\/\*[\s\S]*?\*\//gu, "").replace(/^\s*\/\/.*$/gmu, "");
 }
 
 function parseWorkflowTriggers(source) {
@@ -200,6 +401,9 @@ function validatePackageScripts(issues, packageSource) {
     !scripts.check.includes("pnpm inbox-v2:clean-slate:check")
   ) {
     issues.push("pnpm check must execute the clean-slate guard");
+  }
+  if (scripts?.["db:seed:foundation"] !== "tsx scripts/db/seed-foundation.ts") {
+    issues.push("package.json must expose the foundation-only seed command");
   }
 }
 

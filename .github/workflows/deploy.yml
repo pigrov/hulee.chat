@@ -127,59 +127,29 @@ jobs:
             ensure_env_var HULEE_OBJECT_STORAGE_SECRET_ACCESS_KEY "$(random_secret)"
           fi
           ensure_env_var HULEE_OBJECT_STORAGE_FORCE_PATH_STYLE true
-          provider_egress_enabled=false
-          if grep -Eiq '^[[:space:]]*HULEE_PROVIDER_EGRESS_ENABLED[[:space:]]*=[[:space:]]*(true|1|yes)[[:space:]]*$' .env; then
-            provider_egress_enabled=true
-          fi
-          if [ "$provider_egress_enabled" = true ] && [ ! -c /dev/net/tun ]; then
-            echo "Provider egress is enabled, but /dev/net/tun is not available on the host." >&2
+          legacy_provider_egress_enabled=$(grep -E '^[[:space:]]*HULEE_PROVIDER_EGRESS_ENABLED[[:space:]]*=' .env | tail -n 1 | cut -d= -f2- | sed 's/[[:space:]]*#.*$//' | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' || true)
+          if [[ "$legacy_provider_egress_enabled" =~ ^(true|1|yes)$ ]]; then
+            echo "Legacy provider egress is enabled in .env. INB2-CLEAN-002 requires it to stay disabled until an Inbox V2 adapter is reviewed." >&2
             exit 1
           fi
+          configured_worker_features=$(grep -E '^[[:space:]]*HULEE_WORKER_FEATURES[[:space:]]*=' .env | tail -n 1 | cut -d= -f2- | sed 's/[[:space:]]*#.*$//' | tr -d '[:space:]' || true)
+          if [ -n "$configured_worker_features" ] && [ "$configured_worker_features" != "core" ]; then
+            echo "Production HULEE_WORKER_FEATURES must be exactly core during the Inbox V2 clean-slate rebuild." >&2
+            exit 1
+          fi
+          for stale_container in hulee_chat_worker_provider_egress hulee_chat_vpn_gateway; do
+            if docker container inspect "$stale_container" >/dev/null 2>&1; then
+              echo "Legacy provider runtime container $stale_container still exists. Complete the INB2-CLEAN-002 drain and remove it before deployment." >&2
+              exit 1
+            fi
+          done
           compose=(docker compose --env-file .env --env-file .release.env -f docker-compose.yml)
           core_services=(postgres minio minio-create-bucket api worker web site)
           pull_services=(postgres minio minio-create-bucket api worker web site)
           image_containers=(hulee_chat_api hulee_chat_web hulee_chat_worker hulee_site)
-          if [ "$provider_egress_enabled" = true ]; then
-            compose+=(--profile provider-egress)
-            pull_services+=(worker-provider-egress)
-            image_containers+=(hulee_chat_worker_provider_egress)
-            egress_gateway_image=$(grep -E '^[[:space:]]*HULEE_EGRESS_GATEWAY_IMAGE[[:space:]]*=' .env | tail -n 1 | cut -d= -f2- | xargs || true)
-            egress_gateway_image=${egress_gateway_image:-qmcgaw/gluetun:v3.40}
-            if [[ "$egress_gateway_image" == */* ]]; then
-              echo "Pulling registry egress gateway image: $egress_gateway_image"
-              pull_services+=(egress-gateway)
-            elif docker image inspect "$egress_gateway_image" >/dev/null 2>&1; then
-              echo "Using existing egress gateway image on server: $egress_gateway_image"
-            else
-              echo "Egress gateway image is not present locally: $egress_gateway_image" >&2
-              echo "Build or pull it on the server before enabling provider egress." >&2
-              exit 1
-            fi
-          fi
           "${compose[@]}" pull "${pull_services[@]}"
           "${compose[@]}" run --rm -T migrate </dev/null
           "${compose[@]}" up -d --force-recreate --wait --wait-timeout 180 "${core_services[@]}"
-          if [ "$provider_egress_enabled" = true ]; then
-            postgres_ip=$(docker inspect --format '{{with index .NetworkSettings.Networks "hulee-chat_default"}}{{.IPAddress}}{{end}}' hulee_chat_postgres)
-            api_ip=$(docker inspect --format '{{with index .NetworkSettings.Networks "hulee-chat_default"}}{{.IPAddress}}{{end}}' hulee_chat_api)
-            if [ -z "$postgres_ip" ] || [ -z "$api_ip" ]; then
-              echo "Could not resolve provider egress internal hosts: postgres=$postgres_ip api=$api_ip" >&2
-              exit 1
-            fi
-            minio_ip=$(docker inspect --format '{{with index .NetworkSettings.Networks "hulee-chat_default"}}{{.IPAddress}}{{end}}' hulee_chat_minio)
-            if [ -z "$minio_ip" ]; then
-              echo "Could not resolve provider egress internal host: minio=$minio_ip" >&2
-              exit 1
-            fi
-            cat > .provider-egress.env <<PROVIDER_EGRESS_ENV
-          HULEE_PROVIDER_EGRESS_POSTGRES_HOST=$postgres_ip
-          HULEE_PROVIDER_EGRESS_API_HOST=$api_ip
-          HULEE_PROVIDER_EGRESS_MINIO_HOST=$minio_ip
-          PROVIDER_EGRESS_ENV
-            compose+=(--env-file .provider-egress.env)
-            "${compose[@]}" up -d --force-recreate --wait --wait-timeout 180 egress-gateway
-            "${compose[@]}" up -d --force-recreate --no-deps --wait --wait-timeout 180 worker-provider-egress
-          fi
           for container in "${image_containers[@]}"; do
             actual_image=$(docker inspect --format '{{.Config.Image}}' "$container")
             if [ "$actual_image" != "$expected_image" ]; then

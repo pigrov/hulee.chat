@@ -570,6 +570,7 @@ export {
   hashEmployeeInvitationToken
 } from "./sql-employee-directory-repository";
 export { createTenantWorkspaceRepository } from "./drizzle-tenant-workspace-repository";
+export { createTenantRegistrationRepository } from "./drizzle-tenant-registration-repository";
 export {
   assertTenantScopedRows,
   collectTenantBoundaryViolations
@@ -848,17 +849,19 @@ export type {
 export type { TenantScopedRow } from "./tenant-scope";
 export {
   collectReplyTenantScopedRows,
-  collectTenantRegistrationTenantScopedRows,
   collectWorkspaceTenantScopedRows,
   mapReplyToPersistenceRows,
-  mapTenantRegistrationToPersistenceRows,
   mapWorkspaceToPersistenceRows
 } from "./vertical-slice-mapper";
 export type {
   ReplyPersistenceRows,
-  TenantRegistrationPersistenceRows,
   WorkspacePersistenceRows
 } from "./vertical-slice-mapper";
+export {
+  collectTenantRegistrationTenantScopedRows,
+  mapTenantRegistrationToPersistenceRows
+} from "./tenant-registration-mapper";
+export type { TenantRegistrationPersistenceRows } from "./tenant-registration-mapper";
 export * from "./sql-inbox-v2-access-plan-repository";
 export * from "./sql-inbox-v2-source-registry-repository";
 export * from "./sql-inbox-v2-membership-transaction-policy";

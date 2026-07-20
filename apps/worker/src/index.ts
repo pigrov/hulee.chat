@@ -31,7 +31,6 @@ import {
   createSqlInboxV2SourceProcessingRuntimeRepository,
   createDrizzlePersistenceExecutor,
   createExternalMessageRepository,
-  createSqlOutboundDispatchRepository,
   createSqlSourceIntegrationRepository,
   createSqlTenantSecretRepository,
   type InboxV2SourceDeadLetterLifecycleResolver as SqlInboxV2SourceDeadLetterLifecycleResolver,
@@ -41,7 +40,7 @@ import {
   type InboxV2SourceReplayEpisodeIdSource,
   type HuleeDatabase
 } from "@hulee/db";
-import { createExternalChannelCommandService } from "@hulee/core";
+import { CoreError, createExternalChannelCommandService } from "@hulee/core";
 import { createS3ObjectStorage, type ObjectStorage } from "@hulee/storage";
 
 import type { OutboxHandler } from "./outbox-processor";
@@ -53,9 +52,7 @@ import {
 } from "./telegram-attachment-transfer";
 import {
   createTenantSecretResolver,
-  createTelegramOutboundDispatcher,
-  type SecretResolver,
-  type TelegramBotApiClientFactory
+  type SecretResolver
 } from "./telegram-outbound-dispatcher";
 import {
   createTelegramProviderOperationDispatcher,
@@ -130,6 +127,7 @@ export function createWorkerRuntime(
   env: EnvSource = process.env
 ): WorkerRuntime {
   const config = loadWorkerConfig(env);
+  assertCleanSlateWorkerFeatures(config.workerFeatures);
   const baseLogger = createJsonLogger({
     service: "worker",
     defaultContext: {
@@ -142,6 +140,17 @@ export function createWorkerRuntime(
     config,
     logger: createLevelFilteredLogger(baseLogger, config.logLevel)
   };
+}
+
+export function assertCleanSlateWorkerFeatures(
+  features: WorkerConfig["workerFeatures"]
+): void {
+  if (features.some((feature) => feature !== "core")) {
+    throw new CoreError(
+      "module.disabled",
+      "Provider worker features are disabled during the Inbox V2 clean-slate epoch."
+    );
+  }
 }
 
 export type WorkerInboxV2ProviderDispatchCoordinatorOptions<
@@ -328,7 +337,6 @@ export type WorkerOutboxHandlerOptions = {
   database: HuleeDatabase;
   secretEncryptionKey?: string;
   secretResolver?: SecretResolver;
-  telegramBotApiClientFactory?: TelegramBotApiClientFactory;
   telegramProviderBotApiClientFactory?: TelegramProviderOperationBotApiClientFactory;
   telegramProviderValidationBotApiClientFactory?: TelegramProviderValidationBotApiClientFactory;
   egressRuntime?: EgressRuntime;
@@ -370,7 +378,8 @@ export function createWorkerOutboxHandler(
       botApiClientFactory: options.telegramProviderBotApiClientFactory,
       egressRuntime,
       telegramApiBaseUrl: options.telegramApiBaseUrl,
-      publicWebhookBaseUrl: options.publicWebhookBaseUrl
+      publicWebhookBaseUrl: options.publicWebhookBaseUrl,
+      allowWebhookSet: false
     }
   );
   const providerValidationDispatcher =
@@ -384,20 +393,10 @@ export function createWorkerOutboxHandler(
       egressRuntime,
       telegramApiBaseUrl: options.telegramApiBaseUrl
     });
-  const outboundDispatcher = createTelegramOutboundDispatcher({
-    outboundRepository: createSqlOutboundDispatchRepository(options.database),
-    connectorRepository,
-    secretResolver,
-    botApiClientFactory: options.telegramBotApiClientFactory,
-    egressRuntime,
-    telegramApiBaseUrl: options.telegramApiBaseUrl
-  });
-
   return {
     async handle(record) {
       await providerValidationDispatcher.handle(record);
       await providerOperationDispatcher.handle(record);
-      await outboundDispatcher.handle(record);
     }
   };
 }

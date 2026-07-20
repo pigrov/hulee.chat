@@ -78,8 +78,7 @@ services:
     <<: *app-base
     container_name: hulee_chat_migrate
     restart: "no"
-    command:
-      ["pnpm", "db:inbox-v2:install", "--", "--allow-reviewed-online-bridge"]
+    command: ["pnpm", "db:migrate"]
 
   seed:
     <<: *app-base
@@ -87,7 +86,7 @@ services:
     restart: "no"
     profiles:
       - bootstrap
-    command: ["pnpm", "db:seed:mvp"]
+    command: ["pnpm", "db:seed:foundation"]
 
   api:
     <<: *app-base
@@ -127,7 +126,7 @@ services:
       HULEE_INTERNAL_API_SECRET: ${HULEE_INTERNAL_API_SECRET:?HULEE_INTERNAL_API_SECRET is required}
       HULEE_PUBLIC_BASE_URL: ${HULEE_PUBLIC_BASE_URL:?HULEE_PUBLIC_BASE_URL is required}
       HULEE_PUBLIC_WEBHOOK_BASE_URL: ${HULEE_PUBLIC_WEBHOOK_BASE_URL:?HULEE_PUBLIC_WEBHOOK_BASE_URL is required}
-      HULEE_WORKER_FEATURES: ${HULEE_WORKER_FEATURES:-core}
+      HULEE_WORKER_FEATURES: core
     command: ["pnpm", "--filter", "@hulee/worker", "start"]
     depends_on:
       postgres:
@@ -136,101 +135,6 @@ services:
         condition: service_healthy
       minio-create-bucket:
         condition: service_completed_successfully
-
-  egress-gateway:
-    image: ${HULEE_EGRESS_GATEWAY_IMAGE:-qmcgaw/gluetun:v3.40}
-    container_name: hulee_chat_vpn_gateway
-    profiles:
-      - provider-egress
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    sysctls:
-      net.ipv6.conf.all.disable_ipv6: "0"
-    env_file:
-      - .env
-    environment:
-      # gluetun-compatible gateway image envs.
-      VPN_SERVICE_PROVIDER: ${HULEE_EGRESS_VPN_SERVICE_PROVIDER:-nordvpn}
-      VPN_TYPE: ${HULEE_EGRESS_VPN_TYPE:-openvpn}
-      OPENVPN_USER: ${HULEE_EGRESS_OPENVPN_USER:-}
-      OPENVPN_PASSWORD: ${HULEE_EGRESS_OPENVPN_PASSWORD:-}
-      SERVER_COUNTRIES: ${HULEE_EGRESS_SERVER_COUNTRIES:-Netherlands}
-      OPENVPN_PROTOCOL: ${HULEE_EGRESS_OPENVPN_PROTOCOL:-udp}
-      DOT: ${HULEE_EGRESS_DOT:-on}
-      DOT_PROVIDERS: ${HULEE_EGRESS_DOT_PROVIDERS:-cloudflare}
-      DOT_CACHING: ${HULEE_EGRESS_DOT_CACHING:-on}
-      DOT_IPV6: ${HULEE_EGRESS_DOT_IPV6:-off}
-      DNS_ADDRESS: ${HULEE_EGRESS_DNS_ADDRESS:-127.0.0.1}
-      DNS_KEEP_NAMESERVER: ${HULEE_EGRESS_DNS_KEEP_NAMESERVER:-off}
-      DNS_UPDATE_PERIOD: ${HULEE_EGRESS_DNS_UPDATE_PERIOD:-24h}
-      FIREWALL_OUTBOUND_SUBNETS: ${HULEE_EGRESS_FIREWALL_OUTBOUND_SUBNETS:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
-      # Bridge-compatible NordVPN gateway image envs.
-      NORDVPN_TOKEN: ${HULEE_EGRESS_NORDVPN_TOKEN:-}
-      NORDVPN_TECHNOLOGY: ${HULEE_EGRESS_NORDVPN_TECHNOLOGY:-}
-      NORDVPN_COUNTRY: ${HULEE_EGRESS_NORDVPN_COUNTRY:-}
-      NORDVPN_TARGETS: ${HULEE_EGRESS_NORDVPN_TARGETS:-}
-      NORDVPN_HEALTHCHECK_URLS: ${HULEE_EGRESS_NORDVPN_HEALTHCHECK_URLS:-}
-      NORDVPN_RECONNECT_AFTER_FAILURES: ${HULEE_EGRESS_NORDVPN_RECONNECT_AFTER_FAILURES:-3}
-      NORDVPN_RECONNECT_COOLDOWN_SECONDS: ${HULEE_EGRESS_NORDVPN_RECONNECT_COOLDOWN_SECONDS:-300}
-      NORDVPN_HEALTHCHECK_TIMEOUT_SECONDS: ${HULEE_EGRESS_NORDVPN_HEALTHCHECK_TIMEOUT_SECONDS:-8}
-      NORDVPN_LOG_PREFIX: hulee_chat_vpn_gateway
-      NORDVPN_ALLOW_SUBNETS: ${HULEE_EGRESS_NORDVPN_ALLOW_SUBNETS:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
-      NORDVPN_ALLOW_PORTS: ${HULEE_EGRESS_NORDVPN_ALLOW_PORTS:-}
-      NORDVPN_KILL_SWITCH: ${HULEE_EGRESS_NORDVPN_KILL_SWITCH:-}
-      NORDVPN_LAN_DISCOVERY: ${HULEE_EGRESS_NORDVPN_LAN_DISCOVERY:-}
-    networks:
-      - default
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          'if command -v nordvpn >/dev/null 2>&1; then timeout 8s nordvpn status | grep -q ''Status: Connected''; else wget -q --spider "$${HULEE_EGRESS_HEALTHCHECK_URL:-https://www.gstatic.com/generate_204}"; fi'
-        ]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-    restart: unless-stopped
-
-  worker-provider-egress:
-    <<: *app-base
-    container_name: hulee_chat_worker_provider_egress
-    profiles:
-      - provider-egress
-    network_mode: "service:egress-gateway"
-    environment:
-      NODE_ENV: production
-      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
-      HULEE_DEPLOYMENT_TYPE: ${HULEE_DEPLOYMENT_TYPE:-saas_shared}
-      HULEE_LOG_LEVEL: ${HULEE_LOG_LEVEL:-info}
-      HULEE_INTERNAL_API_SECRET: ${HULEE_INTERNAL_API_SECRET:?HULEE_INTERNAL_API_SECRET is required}
-      HULEE_PUBLIC_BASE_URL: ${HULEE_PUBLIC_BASE_URL:?HULEE_PUBLIC_BASE_URL is required}
-      HULEE_PUBLIC_WEBHOOK_BASE_URL: ${HULEE_PUBLIC_WEBHOOK_BASE_URL:?HULEE_PUBLIC_WEBHOOK_BASE_URL is required}
-      HULEE_WORKER_FEATURES: ${HULEE_PROVIDER_EGRESS_WORKER_FEATURES:-telegram_bot,telegram_user,whatsapp_user,whatsapp_official,max_user}
-      HULEE_EGRESS_PROFILE_ID: ${HULEE_PROVIDER_EGRESS_PROFILE_ID:-hulee_chat_vpn_gateway}
-      HULEE_EGRESS_PROFILE_KIND: vpn_namespace
-      HULEE_EGRESS_PROFILE_STATUS: ${HULEE_PROVIDER_EGRESS_PROFILE_STATUS:-ready}
-      HULEE_EGRESS_OPERATOR_HINT: ${HULEE_PROVIDER_EGRESS_OPERATOR_HINT:-Provider traffic is routed through hulee_chat_vpn_gateway.}
-      HULEE_PROVIDER_EGRESS_POSTGRES_HOST: ${HULEE_PROVIDER_EGRESS_POSTGRES_HOST:-}
-      HULEE_PROVIDER_EGRESS_API_HOST: ${HULEE_PROVIDER_EGRESS_API_HOST:-}
-      HULEE_PROVIDER_EGRESS_MINIO_HOST: ${HULEE_PROVIDER_EGRESS_MINIO_HOST:-}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-      minio-create-bucket:
-        condition: service_completed_successfully
-      egress-gateway:
-        condition: service_healthy
-    command:
-      [
-        "sh",
-        "-lc",
-        "if [ -n \"$${HULEE_PROVIDER_EGRESS_POSTGRES_HOST:-}\" ]; then printf '%s postgres\\n' \"$${HULEE_PROVIDER_EGRESS_POSTGRES_HOST}\" >> /etc/hosts; fi; if [ -n \"$${HULEE_PROVIDER_EGRESS_API_HOST:-}\" ]; then printf '%s api\\n' \"$${HULEE_PROVIDER_EGRESS_API_HOST}\" >> /etc/hosts; fi; if [ -n \"$${HULEE_PROVIDER_EGRESS_MINIO_HOST:-}\" ]; then printf '%s minio\\n' \"$${HULEE_PROVIDER_EGRESS_MINIO_HOST}\" >> /etc/hosts; fi; exec pnpm --filter @hulee/worker start"
-      ]
 
   web:
     <<: *app-base

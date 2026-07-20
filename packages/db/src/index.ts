@@ -320,6 +320,7 @@ export {
   createSqlTenantSecretRepository,
   createSqlTenantApiKeyRepository,
   createTenantSecretRef,
+  createTenantRegistrationRepository,
   createTenantWorkspaceRepository,
   hashAuthEmailToken,
   hashAuthSessionToken,

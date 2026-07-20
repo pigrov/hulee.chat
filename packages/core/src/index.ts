@@ -251,6 +251,7 @@ export type {
 export type {
   PersistTenantRegistrationInput,
   PersistConversationReplyInput,
+  TenantRegistrationRepository,
   TenantWorkspaceRepository
 } from "./repositories";
 export { registerTenant } from "./tenant-registration";

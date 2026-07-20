@@ -11,6 +11,18 @@ server `.env`; do not add provider tokens or this key to GitHub Secrets.
 and api containers for internal API headers. Keep the same value in both
 containers through the server `.env`.
 
+## Deployment freeze
+
+Application deployment remains frozen until `INB2-CLEAN-GATE` passes. The
+workflow is manual (`workflow_dispatch`) and proceeds only when repository
+variable `HULEE_CLEAN_SLATE_DEPLOY_UNLOCKED` is `true` and the operator enters
+the exact `DEPLOY_CLEAN_SLATE_V2` confirmation. These controls are an explicit
+temporary exception gate, not permission to restore Inbox V1 or provider I/O.
+
+The known pre-production runtime drain is recorded separately in
+`docs/product/inbox-v2-clean-002-runtime-detachment.md`. Do not infer remote
+drain state from this deployment recipe.
+
 Initial server preparation:
 
 ```bash
@@ -20,13 +32,17 @@ cp /path/to/env.example /srv/hulee-chat/.env
 chmod 600 /srv/hulee-chat/.env
 ```
 
-After the first deploy creates containers and runs migrations, bootstrap seed can
-be run once:
+After the first deploy creates containers and runs migrations, the foundation
+bootstrap seed can be run once:
 
 ```bash
 cd /srv/hulee-chat
 docker compose --env-file .env --env-file .release.env -f docker-compose.yml --profile bootstrap run --rm seed
 ```
+
+This seed creates only the platform foundation: tenant, administrator and API
+key. It does not create Inbox clients, conversations, messages, channel
+connectors or provider credentials.
 
 The nginx config in `deploy/nginx/chat.hulee.ru.conf` is a template for the
 existing `transcribe_nginx` reverse proxy. Apply it only after the app container
@@ -40,81 +56,31 @@ proxies the apex domain to that container. Keep `chat.hulee.ru` pointed at
 
 ## Object storage
 
-Production compose runs a private MinIO service for message files and provider
-media. The deploy workflow appends missing `HULEE_OBJECT_STORAGE_*` values to
-the server `.env`, including a generated storage secret. These values stay on
-the server and are not GitHub Secrets.
+Production compose runs a private MinIO service for product files. The deploy
+workflow appends missing `HULEE_OBJECT_STORAGE_*` values to the server `.env`,
+including a generated storage secret. These values stay on the server and are
+not GitHub Secrets.
 
 The default internal endpoint is `http://minio:9000`, bucket `hulee-files`.
-Provider-egress workers resolve `minio` through an `/etc/hosts` entry because
-they run inside the VPN gateway network namespace.
 
-## Provider egress
+## Clean-slate provider runtime fence
 
-Telegram and WhatsApp provider traffic for Hulee-managed SaaS must run through a
-deployment egress profile. The production compose file keeps `api`, `web`,
-`postgres` and the regular `worker` on normal Docker networking. Provider-facing
-runtime jobs can be enabled separately with the `provider-egress` compose
-profile:
+The production compose file intentionally contains no provider-egress worker or
+VPN gateway while Inbox V2 is rebuilt. Its only worker is pinned to the `core`
+feature; provider listeners, polling and outbound dispatch cannot be activated
+through server `.env` overrides.
 
-```bash
-HULEE_PROVIDER_EGRESS_ENABLED=true
-HULEE_WORKER_FEATURES=core
-HULEE_PROVIDER_EGRESS_WORKER_FEATURES=telegram_bot,telegram_user,whatsapp_user,whatsapp_official
-HULEE_EGRESS_OPENVPN_USER=...
-HULEE_EGRESS_OPENVPN_PASSWORD=...
-HULEE_EGRESS_PROBES_ENABLED=true
-HULEE_EGRESS_PROBE_INTERVAL_MS=30000
-HULEE_EGRESS_PROBE_TIMEOUT_MS=8000
-```
+The migration service runs only `pnpm db:migrate`; the historical preserve
+installer and reviewed-online-bridge override are not part of production
+composition.
 
-The compose service supports two first-step gateway env shapes:
+The deploy workflow rejects a legacy
+`HULEE_PROVIDER_EGRESS_ENABLED=true` setting and any non-core
+`HULEE_WORKER_FEATURES` value. Before unlocking deployment, operators must also
+drain and remove any old `hulee_chat_worker_provider_egress` or
+`hulee_chat_vpn_gateway` container; the workflow refuses to deploy while either
+container still exists.
 
-- `qmcgaw/gluetun` through `HULEE_EGRESS_OPENVPN_*` and related gluetun envs;
-- the Bridge-compatible NordVPN gateway image through
-  `HULEE_EGRESS_NORDVPN_*` values.
-
-These values belong in the server `.env`; do not put VPN credentials or tenant
-channel secrets in GitHub Secrets. The deploy workflow auto-detects
-`HULEE_PROVIDER_EGRESS_ENABLED=true` and starts `hulee_chat_vpn_gateway` plus
-`hulee_chat_worker_provider_egress`. Without that flag, the normal app services
-deploy without VPN requirements.
-
-The provider-egress worker uses the VPN gateway network namespace, so the deploy
-workflow writes `.provider-egress.env` with current internal IPs for `postgres`
-and `api`. The worker writes those values to `/etc/hosts` before startup, which
-lets Gluetun use VPN-backed DNS instead of Docker's default nameserver for
-external provider traffic.
-
-For the pinned `qmcgaw/gluetun:v3.40` image, DNS-over-TLS is configured with
-the legacy `DOT_*` environment variables exposed as `HULEE_EGRESS_DOT*`. Keep
-`HULEE_EGRESS_DNS_KEEP_NAMESERVER=off`; otherwise Gluetun warns that Docker's
-default nameserver can leak DNS outside the VPN. A startup log line like
-`using plaintext DNS at address 1.1.1.1` is expected before the DoT server is
-ready. Treat it as a problem only if it is not followed by
-`DNS server listening` and `ready`, or if the gateway/worker `/etc/resolv.conf`
-does not point at `127.0.0.1`.
-
-The provider-egress worker writes runtime probe snapshots to
-`deployment_egress_status_snapshots`. Platform admins can see the latest VPN
-state, failed probes, consecutive failures and public egress IP on `/platform`.
-If the snapshot becomes stale, the UI marks the profile degraded so a stopped
-provider worker is visible even when the deployment config still says `ready`.
-
-Platform admins can also choose desired egress routing per provider on
-`/platform`. Those rows are stored in `deployment_egress_provider_policies` and
-are enforced by provider workers before they call external APIs. The setting is
-desired state, not an in-process network switch: if a policy says `direct` while
-the Telegram worker is still running inside `hulee_chat_vpn_gateway`, calls are
-blocked with egress diagnostics until the matching worker profile is deployed.
-Switching between `direct` and `vpn_namespace` requires moving provider worker
-features to the correct compose service and restarting/redeploying it.
-
-Registry gateway images such as `qmcgaw/gluetun:v3.40` are pulled by the deploy
-workflow. Server-local gateway images such as `bridge-nordvpn-gateway:latest`
-must already exist on the host; the deploy workflow verifies them locally and
-does not try to pull them from a registry.
-
-The first gateway implementation uses the Hulee-owned compose service
-`hulee_chat_vpn_gateway` with a configurable gateway image and provider envs.
-It does not depend on Bridge containers or files.
+Provider egress may return only through an explicitly reviewed Inbox V2 adapter
+activation after the clean-slate gate. Retained egress policy and diagnostics
+schemas are platform foundations and do not grant runtime provider authority.

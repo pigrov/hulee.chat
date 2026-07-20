@@ -26,7 +26,7 @@
     "db:inbox-v2:reset": "node scripts/db/reset-inbox-v2.mjs",
     "db:inbox-v2:rbac-dry-run": "tsx scripts/db/inbox-v2-rbac-dry-run.mjs",
     "db:inbox-v2:n1-bundle": "node scripts/db/fixtures/inbox-v2/generate-db008-n1-bundle.mjs",
-    "db:seed:mvp": "tsx scripts/db/seed-mvp.ts",
+    "db:seed:foundation": "tsx scripts/db/seed-foundation.ts",
     "test:inbox-v2:conversation-head-integrity": "vitest run --no-file-parallelism scripts/db/inbox-v2-conversation-timeline-head-migration.integration.test.mjs",
     "test:inbox-v2:source-registry-integrity": "vitest run --no-file-parallelism scripts/db/inbox-v2-source-registry-migration.integration.test.mjs",
     "test:inbox-v2:source": "node scripts/test/run-inbox-v2-source-gate.mjs",

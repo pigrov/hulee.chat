@@ -70,6 +70,7 @@ function createHandler(input?: {
   session?: InternalApiSession | null;
   view?: InternalInboxViewResponse;
   fileDownloadsConfigured?: boolean;
+  inboxV1ServicesConfigured?: boolean;
 }) {
   const loadInboxView = vi.fn(async () => input?.view ?? inboxView);
   const sendReply = vi.fn(async () => ({
@@ -618,9 +619,13 @@ function createHandler(input?: {
         return input?.session === undefined ? session : input.session;
       }
     },
-    inboxQueries: { loadInboxView },
-    inboxCommands: { sendReply, updateConversationRouting },
-    files: { loadFileContent },
+    ...(input?.inboxV1ServicesConfigured === false
+      ? {}
+      : {
+          inboxQueries: { loadInboxView },
+          inboxCommands: { sendReply, updateConversationRouting },
+          files: { loadFileContent }
+        }),
     ...(input?.fileDownloadsConfigured === false
       ? {}
       : { fileDownloads: { issueFileDownload, redeemFileDownload } }),
@@ -758,6 +763,51 @@ describe("internal API handler", () => {
       }
     });
   });
+
+  it.each([
+    ["inbox view", "GET", "/internal/v1/inbox", undefined],
+    [
+      "reply",
+      "POST",
+      "/internal/v1/inbox/conversations/conversation-1/replies",
+      { text: "must not be parsed" }
+    ],
+    [
+      "routing",
+      "PATCH",
+      "/internal/v1/inbox/conversations/conversation-1/routing",
+      { assignedEmployeeId: "employee-2" }
+    ],
+    ["file content", "GET", "/internal/v1/files/file-1/content", undefined]
+  ] as const)(
+    "fails closed detached V1 %s in production-style composition",
+    async (_label, method, path, body) => {
+      const {
+        handler,
+        loadInboxView,
+        sendReply,
+        updateConversationRouting,
+        loadFileContent
+      } = createHandler({ inboxV1ServicesConfigured: false });
+      const response = await handler.handle({
+        method,
+        path,
+        ...(body === undefined ? {} : { body })
+      });
+
+      expect(response.status).toBe(403);
+      expect(response.body).toMatchObject({
+        error: {
+          code: "module.disabled",
+          requestId: "request-1"
+        }
+      });
+      expect(loadInboxView).not.toHaveBeenCalled();
+      expect(sendReply).not.toHaveBeenCalled();
+      expect(updateConversationRouting).not.toHaveBeenCalled();
+      expect(loadFileContent).not.toHaveBeenCalled();
+    }
+  );
 
   it("loads inbox through the tenant-scoped session context", async () => {
     const { handler, loadInboxView } = createHandler();

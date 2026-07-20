@@ -152,6 +152,26 @@ describe("telegram provider operation dispatcher", () => {
     });
   });
 
+  it("drops stale webhook activation while clean-slate provider I/O is fenced", async () => {
+    const initial = createTelegramConnector();
+    const repository = new InMemoryChannelConnectorRepository([initial]);
+    const clientFactory = vi.fn();
+    const dispatcher = createTelegramProviderOperationDispatcher({
+      connectorRepository: repository,
+      secretResolver: envSecretResolver(),
+      botApiClientFactory: clientFactory,
+      egressRuntime: readyVpnEgressRuntime(),
+      publicWebhookBaseUrl: "https://example.test/",
+      allowWebhookSet: false,
+      now: () => now
+    });
+
+    await dispatcher.handle(createOutboxRecord("telegram.webhook.set"));
+
+    expect(clientFactory).not.toHaveBeenCalled();
+    expect(repository.records.get(connectorId)).toEqual(initial);
+  });
+
   it("reports active Telegram webhooks as a polling mode conflict", async () => {
     const repository = new InMemoryChannelConnectorRepository([
       createTelegramConnector({ mode: "polling" })

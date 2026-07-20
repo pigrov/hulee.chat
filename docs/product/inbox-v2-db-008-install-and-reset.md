@@ -93,7 +93,11 @@ bootstrap. Both settings are reset before the advisory-lock connection is
 released. Install fails closed if cleanup cannot restore them, and the result
 contains backend/settings/reset evidence under `migrationDdlBudget`.
 
-### Preserve expand DDL preflight
+### Historical preserve expand DDL preflight (ADR 0016)
+
+This subsection records the retired DB-008 preserve proof. ADR 0016 removed it
+from the active install path for the current pre-production epoch; the commands,
+switches and evidence below do not authorize a current V1 upgrade.
 
 The preflight returns
 `core:inbox-v2.expand-ddl-risk-evidence@v2`. It binds the checked migration
@@ -149,10 +153,26 @@ error rather than an overwrite. Re-running the same bootstrap keeps one tenant
 stream head, generation, checkpoint and reader head with unchanged epoch and
 revision.
 
-The old `db:seed:mvp` remains a V1 compatibility seed and is not called by this
-workflow.
+After a fresh migration, the separate one-shot retained-foundation seed is:
 
-## Preserve V1 Upgrade Lane
+```bash
+pnpm db:seed:foundation
+```
+
+It creates the initial tenant, tenant settings and brand profile, module rows,
+entitlements, local account and admin employee, tenant RBAC
+role/permissions/binding, domain events and outbox rows, and one tenant API key.
+It creates no Client, Conversation, Message, attachment, delivery, source
+connector/session, webhook or other provider configuration. It is intentionally
+not an Inbox demo seed and does not replace the explicit Inbox V2 stream/
+projection bootstrap above. Run it once on a fresh database; existing foundation
+conflicts fail instead of being overwritten.
+
+## Historical Preserve V1 Upgrade Lane (ADR 0016)
+
+This entire lane is retained as DB-008 evidence only. ADR 0016 superseded its
+disposition, removed it from the active release gates and requires current test
+databases to be recreated without V1 data migration.
 
 `scripts/db/inbox-v2-preserve-upgrade.integration.test.mjs` creates an isolated
 database at the representative migration-0027 prefix and inserts two tenants,
@@ -408,8 +428,8 @@ The suite fails setup instead of skipping the prepared-transaction branch when
 `max_prepared_transactions` is zero. Use a strictly disposable PostgreSQL 16
 instance; the connection database itself is never reset.
 
-The preserve lane uses the same isolated-child-database rule but does not need
-destructive-reset authority or prepared transactions:
+Historically, the preserve lane used the same isolated-child-database rule but
+did not need destructive-reset authority or prepared transactions:
 
 ```powershell
 $env:HULEE_DB_INTEGRATION = '1'
@@ -418,13 +438,13 @@ $env:NODE_ENV = 'test'
 pnpm test:inbox-v2:preserve
 ```
 
-CI runs this command shape sequentially in the
-`inbox-v2-preserve-upgrade` job so its global PostgreSQL role fixtures cannot
-race each other. That job fetches full Git history, regenerates the N-1 bundle
-and contract and rejects any diff before running the preserve tests. A separate
-`inbox-v2-disposable-lifecycle` job starts PostgreSQL 16 with
-`max_prepared_transactions=10`, runs the guarded install/reset suite and always
-stops the container.
+Before ADR 0016, CI ran this command shape sequentially in the historical
+`inbox-v2-preserve-upgrade` job so its global PostgreSQL role fixtures could not
+race each other. That retired job fetched full Git history, regenerated the N-1
+bundle and contract and rejected any diff before running the preserve tests.
+The preserved text below describes that completed evidence, not the current CI
+feedback path. The disposable clean-install/reset coverage remains relevant
+until `INB2-DB-011` replaces the unpublished migration chain.
 
 Final local evidence on `2026-07-16`: preserve/RBAC/N-1 passed `3` files / `17`
 tests; lifecycle/DDL/RBAC/install/routing focused suites passed `5` files / `72`
@@ -485,13 +505,12 @@ Verified scenarios:
 - an injected failed migration rolls back its V1 mutation, marker and journal
   entry while the same N-1 process remains operational.
 
-The DB-008 disposable and preserve repository harnesses are complete; they do
-not authorize production expand. `INB2-MIG-002` owns the reviewed online bridge
-needed before dual materialization, including the historical `0029`/`0036`
-boundaries. `INB2-MIG-003` owns operational backfill. Real supported N-1 image
-startup and backup/restore release proof remain in `INB2-MIG-006`, packaged
-migration/start ordering in `INB2-OPS-009`, and productized restore evidence in
-`INB2-OPS-007`.
+The DB-008 disposable and preserve repository harnesses are complete historical
+evidence and do not authorize production expand. ADR 0016 deferred the former
+`INB2-MIG-002` online bridge, `INB2-MIG-003` backfill and preserve-era N-1/
+rollback path for this epoch. Future real releases regain their own supported
+upgrade, backup and rollback requirements after the clean-slate baseline is
+frozen; this historical lane grants no migration authority to them.
 
 The disposable inventory deliberately performs a complete deterministic scan
 and sort of managed relation contents. It is a pre-production disposition gate,

@@ -2,9 +2,6 @@ import { loadApiConfig, type ApiConfig, type EnvSource } from "@hulee/config";
 import {
   createAesGcmTenantSecretCipher,
   createSqlDomainEventRepository,
-  createDrizzlePersistenceExecutor,
-  createExternalMessageRepository,
-  createSqlFileAccessRepository,
   createSqlPublicApiAuditSink,
   createSqlChannelAuthChallengeRepository,
   createSqlChannelConnectorRepository,
@@ -31,7 +28,6 @@ import {
   type EgressRuntime
 } from "@hulee/modules";
 import {
-  createS3ObjectStorage,
   type ObjectStorage,
   type TenantScopedVersionAwareObjectStorageResolver
 } from "@hulee/storage";
@@ -46,17 +42,9 @@ import {
   createSignedInternalSessionResolver,
   type InternalApiHandler
 } from "./http/internal-api-handler";
-import {
-  createInternalInboxCommandService,
-  createSqlInternalInboxAuthorizationService,
-  createSqlInternalInboxQueryService
-} from "./internal-inbox-service";
 import { createInternalAccessDecisionService } from "./internal-access-decision-service";
 import { createInternalEgressStatusService } from "./internal-egress-status-service";
-import {
-  createInternalFileService,
-  createInternalInboxV2FileDownloadService
-} from "./internal-file-service";
+import { createInternalInboxV2FileDownloadService } from "./internal-file-service";
 import type { InboxV2FileDownloadTicketService } from "./inbox-v2-file-download-ticket";
 import {
   createTenantSecretResolver,
@@ -65,13 +53,11 @@ import {
 import { createInternalOrgStructureService } from "./internal-org-structure-service";
 import { createInternalRbacService } from "./internal-rbac-service";
 import { createInternalTenantSettingsService } from "./internal-tenant-service";
-import { createExternalChannelCommandService } from "./external-channel-command-service";
-import { createPublicApiCommandService } from "./public-api-command-service";
+import { type TelegramWebhookHandler } from "./http/telegram-webhook-handler";
 import {
-  createChannelConnectorTelegramWebhookConnectorResolver,
-  createTelegramWebhookHandler,
-  type TelegramWebhookHandler
-} from "./http/telegram-webhook-handler";
+  createCleanSlatePublicApiCommandService,
+  createCleanSlateTelegramWebhookHandler
+} from "./clean-slate-inbox-runtime";
 
 export type ApiAppBoundary = {
   exposesPublicApi: true;
@@ -115,17 +101,10 @@ export type PublicApiDataPlaneHandlerOptions = {
 export function createPublicApiDataPlaneHandler(
   options: PublicApiDataPlaneHandlerOptions
 ): PublicApiHandler {
-  const externalMessageRepository = createExternalMessageRepository({
-    rawExecutor: options.database,
-    persistenceExecutor: createDrizzlePersistenceExecutor(options.database)
-  });
-
   return createPublicApiHandler({
     authenticator: createSqlTenantApiKeyRepository(options.database),
     auditSink: createSqlPublicApiAuditSink(options.database),
-    commands: createPublicApiCommandService({
-      repository: externalMessageRepository
-    }),
+    commands: createCleanSlatePublicApiCommandService(),
     logger: options.logger,
     requestIdFactory: options.requestIdFactory
   });
@@ -152,10 +131,6 @@ export type InternalApiDataPlaneHandlerOptions = {
 export function createInternalApiDataPlaneHandler(
   options: InternalApiDataPlaneHandlerOptions
 ): InternalApiHandler {
-  const externalMessageRepository = createExternalMessageRepository({
-    rawExecutor: options.database,
-    persistenceExecutor: createDrizzlePersistenceExecutor(options.database)
-  });
   const tenantSecretCipher = options.secretEncryptionKey
     ? createAesGcmTenantSecretCipher({
         key: options.secretEncryptionKey
@@ -164,14 +139,6 @@ export function createInternalApiDataPlaneHandler(
   const tenantSecrets = tenantSecretCipher
     ? createSqlTenantSecretRepository(options.database, tenantSecretCipher)
     : undefined;
-  const inboxAuthorization = createSqlInternalInboxAuthorizationService({
-    database: options.database
-  });
-  const objectStorage =
-    options.objectStorage ??
-    (options.objectStorageConfig
-      ? createS3ObjectStorage(options.objectStorageConfig)
-      : undefined);
   const inboxV2FileDownloads =
     options.inboxV2FileDownloadTicketService === undefined
       ? undefined
@@ -186,20 +153,6 @@ export function createInternalApiDataPlaneHandler(
   return createInternalApiHandler({
     sessionResolver: createSignedInternalSessionResolver({
       secret: options.internalApiSecret
-    }),
-    inboxQueries: createSqlInternalInboxQueryService({
-      database: options.database,
-      authorization: inboxAuthorization
-    }),
-    inboxCommands: createInternalInboxCommandService({
-      repository: externalMessageRepository,
-      authorization: inboxAuthorization,
-      audit: createSqlSecurityAuditRepository(options.database)
-    }),
-    files: createInternalFileService({
-      repository: createSqlFileAccessRepository(options.database),
-      authorization: inboxAuthorization,
-      objectStorage
     }),
     fileDownloads: inboxV2FileDownloads,
     integrations: createInternalIntegrationService({
@@ -232,7 +185,8 @@ export function createInternalApiDataPlaneHandler(
             })
           : undefined),
       telegramApiBaseUrl: options.telegramApiBaseUrl,
-      publicWebhookBaseUrl: options.publicWebhookBaseUrl
+      publicWebhookBaseUrl: options.publicWebhookBaseUrl,
+      providerIoEnabled: false
     }),
     tenantSettings: createInternalTenantSettingsService({
       database: options.database
@@ -279,39 +233,9 @@ export type TelegramWebhookDataPlaneHandlerOptions = {
 };
 
 export function createTelegramWebhookDataPlaneHandler(
-  options: TelegramWebhookDataPlaneHandlerOptions
+  _options: TelegramWebhookDataPlaneHandlerOptions
 ): TelegramWebhookHandler {
-  const externalMessageRepository = createExternalMessageRepository({
-    rawExecutor: options.database,
-    persistenceExecutor: createDrizzlePersistenceExecutor(options.database)
-  });
-  const connectorRepository = createSqlChannelConnectorRepository(
-    options.database
-  );
-  const tenantSecrets = options.secretEncryptionKey
-    ? createSqlTenantSecretRepository(
-        options.database,
-        createAesGcmTenantSecretCipher({
-          key: options.secretEncryptionKey
-        })
-      )
-    : undefined;
-
-  return createTelegramWebhookHandler({
-    commands: createExternalChannelCommandService({
-      repository: externalMessageRepository
-    }),
-    connectorRepository,
-    connectorResolver: createChannelConnectorTelegramWebhookConnectorResolver({
-      repository: connectorRepository
-    }),
-    secretResolver: createTenantSecretResolver({
-      env: options.env,
-      tenantSecrets
-    }),
-    logger: options.logger,
-    requestIdFactory: options.requestIdFactory
-  });
+  return createCleanSlateTelegramWebhookHandler();
 }
 
 export type ApiDataPlaneHandlerOptions = PublicApiDataPlaneHandlerOptions &

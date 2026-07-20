@@ -33,7 +33,6 @@ import {
   loadChannelConnectors,
   loadTelegramIntegration,
   sendInboxReply,
-  setTelegramWebhook,
   startChannelAuthChallenge,
   submitChannelAuthChallenge,
   updateChannelConnector,
@@ -533,11 +532,7 @@ async function applyTelegramIntegrationUpdate(
   const providerCheckQueued = enabled && normalizedBotToken !== undefined;
 
   if (providerCheckQueued) {
-    if (mode === "webhook") {
-      await setTelegramWebhook(internalApiAccess, {
-        connectorId
-      });
-    } else {
+    if (mode !== "webhook") {
       await deleteTelegramWebhook(internalApiAccess, {
         connectorId
       });

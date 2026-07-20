@@ -5,7 +5,7 @@ Local and on-prem data-plane commands:
 ```bash
 pnpm infra:up
 pnpm db:migrate
-pnpm db:seed:mvp
+pnpm db:seed:foundation
 ```
 
 `db:migrate` requires an explicit `DATABASE_URL`, takes the Inbox V2 database
@@ -29,17 +29,19 @@ tenant prerequisite, tenant stream head and projection generation/checkpoint/
 head. Re-running it verifies and preserves the same epoch/revisions; it does not
 write legacy Client/Conversation/Message rows.
 
-Preserve upgrades from an already populated V1/V2-prefix database may contain
-expand DDL that the normal `db:migrate` runner refuses with
-`inbox_v2.expand_online_bridge_required`. The production compose migration
-service uses the explicitly reviewed install path:
+The following preserve note is historical DB-008 evidence only. ADR 0016
+superseded the V1 preserve disposition for the current pre-production epoch;
+current databases are recreated and must not use this bridge as an active
+upgrade path. Historically, a populated V1/V2-prefix database could contain
+expand DDL that the normal `db:migrate` runner refused with
+`inbox_v2.expand_online_bridge_required`, and the reviewed install command was:
 
 ```bash
 pnpm db:inbox-v2:install -- --allow-reviewed-online-bridge
 ```
 
-This keeps the default local/on-prem command conservative while making the
-deployment bridge decision visible in the returned expand-DDL risk evidence.
+The command and its expand-DDL risk evidence remain only for historical DB-008
+reproducibility until `INB2-DB-011` replaces the unpublished migration chain.
 
 The destructive command is deliberately separate:
 
@@ -78,21 +80,31 @@ If the process/host dies after the target was fenced, follow the exact
 `ALLOW_CONNECTIONS=true` control-database recovery and system-identifier check
 in `docs/product/inbox-v2-db-008-install-and-reset.md` before retrying.
 
-`db:seed:mvp` is the temporary Inbox V1 compatibility seed. It creates an
-idempotent MVP tenant/admin/client/conversation scenario through the current V1
-core/repository path and is not the Inbox V2 canonical bootstrap. Configure it
-with:
+`db:seed:foundation` is the one-shot retained-foundation seed for a freshly
+migrated database. It creates the initial tenant, tenant settings and brand
+profile, module rows, entitlements, local account and admin employee, tenant
+RBAC role/permissions/binding, domain events and outbox rows, followed by one
+tenant API key. When both platform-admin credentials are supplied, it also
+creates or updates the separate platform-admin account.
+
+The seed deliberately creates no Client, Conversation, Message, attachment,
+delivery, source connector/session, webhook or other provider configuration.
+It is not a demo Inbox seed and is not an Inbox V2 projection bootstrap. Run it
+once after `db:migrate` on a fresh clean-slate database; foundation conflicts
+fail instead of being overwritten. Configure it with:
 
 - `DATABASE_URL`
 - `HULEE_SEED_TENANT_SLUG`
 - `HULEE_SEED_TENANT_NAME`
 - `HULEE_SEED_PRODUCT_NAME`
 - `HULEE_SEED_ADMIN_EMAIL`
-- `HULEE_SEED_CLIENT_NAME`
-- `HULEE_SEED_INBOUND_TEXT`
 - `HULEE_SEED_API_KEY`
 - `HULEE_SEED_API_KEY_NAME`
 - `HULEE_SEED_ID_SEED`
+- `HULEE_SEED_NOW`
+- `HULEE_PLATFORM_ADMIN_USER`
+- `HULEE_PLATFORM_ADMIN_PASS`
+- `HULEE_PLATFORM_ADMIN_DISPLAY_NAME`
 
 If `HULEE_SEED_API_KEY` is not set, the seed creates a local development API
 key with the raw value `hulee-local-dev-key`. Only the hash is stored in

@@ -48,6 +48,7 @@ export type TelegramProviderOperationDispatcherOptions = {
   egressRuntime?: EgressRuntime;
   telegramApiBaseUrl?: string;
   publicWebhookBaseUrl?: string;
+  allowWebhookSet?: boolean;
   now?: () => Date;
 };
 
@@ -73,6 +74,13 @@ export function createTelegramProviderOperationDispatcher(
 
       if (request.tenantId !== record.tenantId) {
         throw new CoreError("tenant.boundary_violation");
+      }
+
+      if (
+        request.operation === "telegram.webhook.set" &&
+        options.allowWebhookSet === false
+      ) {
+        return;
       }
 
       await runTelegramProviderOperation({

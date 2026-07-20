@@ -5,8 +5,15 @@ Local and simple on-prem infrastructure for the data-plane.
 ```bash
 pnpm infra:up
 pnpm db:migrate
-pnpm db:seed:mvp
+pnpm db:seed:foundation
 ```
+
+`db:seed:foundation` is a one-shot command for a freshly migrated clean-slate
+database. It creates only the retained tenant/settings/brand, modules,
+entitlements, account/admin employee, tenant RBAC, events/outbox and tenant API
+key foundation. It creates no Client, Conversation, Message or provider
+configuration. A conflicting existing foundation fails instead of being
+overwritten.
 
 If another local project already uses PostgreSQL or MinIO default ports:
 
@@ -18,7 +25,7 @@ pnpm infra:up
 
 $env:DATABASE_URL = "postgres://hulee:hulee@localhost:55432/hulee"
 pnpm db:migrate
-pnpm db:seed:mvp
+pnpm db:seed:foundation
 ```
 
 Services:

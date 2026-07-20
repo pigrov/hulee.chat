@@ -10,7 +10,7 @@ import {
   createSqlSecurityAuditRepository,
   createSqlLocalAuthRepository,
   createSqlTenantRbacRepository,
-  createTenantWorkspaceRepository,
+  createTenantRegistrationRepository,
   type AuthSessionPrincipal,
   type LocalAuthRepository,
   type PlatformAuditAction,
@@ -333,7 +333,7 @@ export async function registerLocalTenant(
   const passwordHash = await hashLocalPassword(password);
   const repository = getAuthRepository();
 
-  await createTenantWorkspaceRepository(
+  await createTenantRegistrationRepository(
     createDrizzlePersistenceExecutor(getWebDatabase())
   ).registerTenant({
     registration,

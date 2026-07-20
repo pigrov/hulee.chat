@@ -171,6 +171,61 @@ textarea {
   color: var(--hulee-color-text-default);
 }
 
+.cleanSlateInboxSurface {
+  display: grid;
+  min-width: 0;
+  grid-column: 2 / -1;
+  place-items: center;
+  padding: clamp(24px, 7vw, 96px);
+}
+
+.cleanSlateInboxCard {
+  display: grid;
+  width: min(100%, 640px);
+  justify-items: start;
+  gap: 16px;
+  padding: clamp(24px, 5vw, 48px);
+  border: 1px solid var(--hulee-color-border);
+  border-radius: calc(var(--hulee-radius-control) * 2);
+  background: color-mix(
+    in srgb,
+    var(--hulee-color-surface-default) 94%,
+    transparent
+  );
+  box-shadow: 0 24px 80px
+    color-mix(in srgb, var(--hulee-color-text-default) 9%, transparent);
+}
+
+.cleanSlateInboxIcon {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--hulee-color-surface-muted);
+  color: var(--hulee-color-brand-primary);
+}
+
+.cleanSlateInboxDescription {
+  max-width: 56ch;
+  margin: 0;
+  color: var(--hulee-color-text-muted);
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.cleanSlateInboxStatus {
+  width: 100%;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--hulee-color-border);
+  border-radius: var(--hulee-radius-control);
+  background: var(--hulee-color-surface-muted);
+  color: var(--hulee-color-text-default);
+  font-size: 13px;
+  font-weight: 650;
+}
+
 .navigationRail {
   display: flex;
   flex-direction: column;
@@ -4366,6 +4421,10 @@ button.managementRow:not(.adminNavLink):not(.integrationNavLink):focus-visible {
 @media (max-width: 760px) {
   .appFrame {
     grid-template-columns: 1fr;
+  }
+
+  .cleanSlateInboxSurface {
+    grid-column: 1;
   }
 
   .navigationRail {

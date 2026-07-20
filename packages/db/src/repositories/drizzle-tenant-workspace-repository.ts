@@ -1,6 +1,5 @@
 import type {
   MvpTenantWorkspace,
-  PersistTenantRegistrationInput,
   PersistConversationReplyInput,
   TenantWorkspaceRepository
 } from "@hulee/core";
@@ -25,8 +24,8 @@ import {
 } from "../schema/tables";
 import type { PersistenceExecutor } from "./persistence-executor";
 import { tableRef } from "./persistence-executor";
+import { createTenantRegistrationRepository } from "./drizzle-tenant-registration-repository";
 import {
-  mapTenantRegistrationToPersistenceRows,
   mapReplyToPersistenceRows,
   mapWorkspaceToPersistenceRows
 } from "./vertical-slice-mapper";
@@ -59,61 +58,10 @@ const tableRefs = {
 export function createTenantWorkspaceRepository(
   executor: PersistenceExecutor
 ): TenantWorkspaceRepository {
-  return {
-    async registerTenant(input: PersistTenantRegistrationInput): Promise<void> {
-      const rows = mapTenantRegistrationToPersistenceRows(input);
+  const registrationRepository = createTenantRegistrationRepository(executor);
 
-      await executor.transaction(async (transaction) => {
-        await transaction.insertRows(tableRefs.tenants, rows.tenants, {
-          onConflict: "fail"
-        });
-        await transaction.insertRows(
-          tableRefs.tenantSettings,
-          rows.tenantSettings,
-          { onConflict: "fail" }
-        );
-        await transaction.insertRows(
-          tableRefs.tenantBrandProfiles,
-          rows.tenantBrandProfiles,
-          { onConflict: "fail" }
-        );
-        await transaction.insertRows(
-          tableRefs.tenantModules,
-          rows.tenantModules,
-          { onConflict: "fail" }
-        );
-        await transaction.insertRows(
-          tableRefs.tenantEntitlements,
-          rows.tenantEntitlements,
-          { onConflict: "fail" }
-        );
-        await transaction.insertRows(tableRefs.accounts, rows.accounts, {
-          onConflict: "fail"
-        });
-        await transaction.insertRows(tableRefs.employees, rows.employees, {
-          onConflict: "fail"
-        });
-        await transaction.insertRows(tableRefs.tenantRoles, rows.tenantRoles, {
-          onConflict: "fail"
-        });
-        await transaction.insertRows(
-          tableRefs.tenantRolePermissions,
-          rows.tenantRolePermissions,
-          { onConflict: "fail" }
-        );
-        await transaction.insertRows(
-          tableRefs.tenantRoleBindings,
-          rows.tenantRoleBindings,
-          { onConflict: "fail" }
-        );
-        await transaction.insertRows(tableRefs.eventStore, rows.eventStore, {
-          onConflict: "fail"
-        });
-        await transaction.insertRows(tableRefs.outbox, rows.outbox, {
-          onConflict: "fail"
-        });
-      });
-    },
+  return {
+    registerTenant: registrationRepository.registerTenant,
 
     async saveWorkspace(workspace: MvpTenantWorkspace): Promise<void> {
       const rows = mapWorkspaceToPersistenceRows(workspace);

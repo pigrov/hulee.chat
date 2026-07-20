@@ -2962,8 +2962,9 @@ dual materialization, backfill, N-1 V1 runtime or soak window is required.
     repository lint; no task file is implicated. Three independent final reviews
     found no remaining implementation/documentation blocker.
 
-- [ ] `INB2-CLEAN-002` Detach and fail-close every Inbox V1 runtime path.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-CLEAN-001`.
+- [x] `INB2-CLEAN-002` Detach and fail-close every Inbox V1 runtime path.
+  - State: `done`; Priority: `P0`; Started: `2026-07-20`; Completed:
+    `2026-07-20`; Owner: `Codex`; Depends on: `INB2-CLEAN-001`.
   - Acceptance: Web Inbox, internal Inbox routes/DTOs, Public API message
     composition, Telegram V1 webhook/polling/outbound/attachment paths, worker
     loops and V1 seed are removed from production composition; unfinished V2
@@ -2973,7 +2974,17 @@ dual materialization, backfill, N-1 V1 runtime or soak window is required.
     revoked or intentionally dropped, and stale workers cannot reconnect.
   - Verification: API/Web/worker composition and remote process/provider checks
     show zero V1 read/write/listener/dispatch authority; shared admin/auth startup
-    still passes. Evidence: -
+    still passes.
+  - Evidence: `docs/product/inbox-v2-clean-002-runtime-detachment.md`; production
+    API/Web/worker/seed/provider composition is fail-closed and guarded; the
+    disposable remote provider runtime was drained and sanitized. Focused
+    CLEAN-002 suites passed `10/177`, retained auth/admin/source suites including
+    registration-to-auth/admin proof `10/88`, Web client `1/15`, and full
+    sequential Vitest `386/4261` (`44/427`
+    skipped by declared environment gates); typecheck, `db:check`, formatting,
+    task-scoped ESLint, i18n, encoding, branding, native, clean-slate, Compose
+    parse and diff checks passed. Independent final reviews found no remaining
+    task blocker.
 
 - [ ] `INB2-DB-011` Replace the unpublished migration history with one V2 baseline.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-CLEAN-002`,
@@ -3390,3 +3401,4 @@ the task state, checkbox and evidence above.
 | 2026-07-19 | `INB2-MSG-004`     | Reply/forward; PG 33/342; preserve 3/17; full 375/4125 + all gates         | task commit  | Codex + independent final review  |
 | 2026-07-20 | `INB2-MSG-005`     | Edit/delete; PG 35/374; source 83/1244; full 381/4222 + all gates          | task commit  | Codex + independent final review  |
 | 2026-07-20 | `INB2-CLEAN-001`   | ADR0016; guard/config 2/33; full unit 382/4235; DB/type/lint/aux gates     | task commit  | Codex + three independent reviews |
+| 2026-07-20 | `INB2-CLEAN-002`   | Runtime detached; remote drain; focused 10/177; full 386/4261 + gates      | task commit  | Codex + independent final reviews |

@@ -8,10 +8,6 @@ import {
   internalChannelCatalogResponseSchema,
   internalChannelConnectorsResponseSchema,
   internalEgressStatusResponseSchema,
-  internalInboxConversationRoutingUpdateRequestSchema,
-  internalInboxConversationRoutingUpdateResponseSchema,
-  internalInboxReplyResponseSchema,
-  internalInboxViewResponseSchema,
   internalRbacDirectGrantCreateRequestSchema,
   internalRbacDirectGrantResponseSchema,
   internalRbacDirectGrantsResponseSchema,
@@ -100,118 +96,33 @@ export type InternalApiAccessOptions<
   readonly effectivePermissionOverride: TPermission;
 };
 
-export async function loadInboxViewModel(input?: {
+export async function loadInboxViewModel(_input?: {
   selectedConversationId?: string;
   queueId?: string;
   assignedToMe?: boolean;
 }): Promise<InboxViewModel> {
-  const url = new URL("/internal/v1/inbox", resolveInternalApiBaseUrl());
-
-  if (input?.selectedConversationId) {
-    url.searchParams.set("conversationId", input.selectedConversationId);
-  }
-
-  if (input?.queueId) {
-    url.searchParams.set("queueId", input.queueId);
-  }
-
-  if (input?.assignedToMe === true) {
-    url.searchParams.set("assigned", "me");
-  }
-
-  const response = await fetch(url, {
-    cache: "no-store",
-    headers: await buildInternalApiHeaders({
-      method: "GET",
-      path: internalPath(url)
-    })
-  });
-
-  if (!response.ok) {
-    await throwInternalApiErrorResponse({
-      response,
-      message: "Internal inbox API returned"
-    });
-  }
-
-  return internalInboxViewResponseSchema.parse(await response.json());
+  return rejectDetachedInboxV1Client();
 }
 
-export async function sendInboxReply(input: {
+export async function sendInboxReply(_input: {
   conversationId: string;
   text: string;
   idempotencyKey?: string;
 }): Promise<InternalInboxReplyResponse> {
-  const url = new URL(
-    `/internal/v1/inbox/conversations/${encodeURIComponent(
-      input.conversationId
-    )}/replies`,
-    resolveInternalApiBaseUrl()
-  );
-  const body = {
-    text: input.text,
-    idempotencyKey: input.idempotencyKey
-  };
-  const response = await fetch(url, {
-    method: "POST",
-    cache: "no-store",
-    headers: {
-      ...(await buildInternalApiHeaders({
-        method: "POST",
-        path: internalPath(url),
-        body
-      })),
-      "content-type": "application/json; charset=utf-8"
-    },
-    body: JSON.stringify(body)
-  });
-
-  if (!response.ok) {
-    await throwInternalApiErrorResponse({
-      response,
-      message: "Internal reply API returned"
-    });
-  }
-
-  return internalInboxReplyResponseSchema.parse(await response.json());
+  return rejectDetachedInboxV1Client();
 }
 
-export async function updateInboxConversationRouting(input: {
+export async function updateInboxConversationRouting(_input: {
   conversationId: string;
   request: InternalInboxConversationRoutingUpdateRequest;
 }): Promise<InternalInboxConversationRoutingUpdateResponse> {
-  const request = internalInboxConversationRoutingUpdateRequestSchema.parse(
-    input.request
-  );
-  const url = new URL(
-    `/internal/v1/inbox/conversations/${encodeURIComponent(
-      input.conversationId
-    )}/routing`,
-    resolveInternalApiBaseUrl()
-  );
-  const response = await fetch(url, {
-    method: "PATCH",
-    cache: "no-store",
-    headers: {
-      ...(await buildInternalApiHeaders({
-        method: "PATCH",
-        path: internalPath(url),
-        body: request
-      })),
-      "content-type": "application/json; charset=utf-8"
-    },
-    body: JSON.stringify(request)
-  });
+  return rejectDetachedInboxV1Client();
+}
 
-  if (!response.ok) {
-    await throwInternalApiErrorResponse({
-      response,
-      message: "Internal conversation routing API returned"
-    });
-  }
-
-  return internalInboxConversationRoutingUpdateResponseSchema.parse(
-    await response.json()
+function rejectDetachedInboxV1Client(): never {
+  throw new CoreError(
+    "module.disabled",
+    "Inbox V1 Web clients are detached during the Inbox V2 clean-slate epoch."
   );
 }
 

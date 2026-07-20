@@ -271,6 +271,122 @@ function replaceSourceOnboardingDecision(
 }
 
 describe("internal integrations service", () => {
+  it("fails closed provider I/O before jobs, events, secrets or connector writes", async () => {
+    const connectorRepository = new InMemoryChannelConnectorRepository();
+    const channelSessionRepository = new InMemoryChannelSessionRepository();
+    const authChallengeRepository =
+      new InMemoryChannelAuthChallengeRepository();
+    const providerValidationJobRepository =
+      new InMemoryChannelProviderValidationJobRepository();
+    const providerOperationEvents = new InMemoryDomainEventRepository();
+    const secretWriter = new InMemorySecretWriter();
+    const secretResolver = {
+      resolveSecret: vi.fn(async () => "must-not-be-read")
+    };
+    const authChallengeCipher = {
+      encrypt: vi.fn(fakeAuthChallengeCipher.encrypt),
+      decrypt: vi.fn(fakeAuthChallengeCipher.decrypt)
+    };
+    const botApiClientFactory = vi.fn();
+    const service = createInternalIntegrationService({
+      connectorRepository,
+      channelSessionRepository,
+      authChallengeRepository,
+      authChallengeCipher,
+      providerValidationJobRepository,
+      providerOperationEvents,
+      secretResolver,
+      secretWriter,
+      botApiClientFactory,
+      providerIoEnabled: false,
+      now: () => now
+    });
+    const invocations = [
+      () =>
+        service.enableChannelConnector(context, {
+          connectorId: "telegram_bot:detached"
+        }),
+      () => service.startChannelAuthChallenge(context, {} as never),
+      () => service.submitChannelAuthChallenge(context, {} as never),
+      () => service.validateTelegramBotToken(context, {} as never),
+      () =>
+        service.updateTelegramIntegration(context, {
+          enabled: true,
+          outboundEnabled: false
+        } as never),
+      () =>
+        service.refreshTelegramDiagnostics(context, {
+          connectorId: "telegram_bot:detached"
+        }),
+      () =>
+        service.setTelegramWebhook(context, {
+          connectorId: "telegram_bot:detached"
+        }),
+      () =>
+        service.deleteTelegramWebhook(context, {
+          connectorId: "telegram_bot:detached"
+        })
+    ];
+
+    for (const invoke of invocations) {
+      await expect(invoke()).rejects.toMatchObject({
+        code: "module.disabled"
+      });
+    }
+    expect(connectorRepository.records.size).toBe(0);
+    expect(channelSessionRepository.records.size).toBe(0);
+    expect(channelSessionRepository.events).toEqual([]);
+    expect(authChallengeRepository.records.size).toBe(0);
+    expect(providerValidationJobRepository.records.size).toBe(0);
+    expect(providerOperationEvents.events).toEqual([]);
+    expect(secretWriter.upserts).toEqual([]);
+    expect(secretResolver.resolveSecret).not.toHaveBeenCalled();
+    expect(authChallengeCipher.encrypt).not.toHaveBeenCalled();
+    expect(authChallengeCipher.decrypt).not.toHaveBeenCalled();
+    expect(botApiClientFactory).not.toHaveBeenCalled();
+  });
+
+  it("fails closed standalone source onboarding before adapter prepare or persistence", async () => {
+    const connectorRepository = new InMemoryChannelConnectorRepository();
+    const sourceRepository = new InMemorySourceIntegrationRepository();
+    const prepare = vi.fn();
+    const fixture = createTestMegaPbxSourceAdapterRegistry({
+      onPrepare: prepare
+    });
+    const unitOfWork = new InMemorySourceRegistryOnboardingUnitOfWork(
+      sourceRepository
+    );
+    const service = createInternalIntegrationService({
+      connectorRepository,
+      sourceRepository,
+      sourceCatalogItemResolver: availableMegaPbxCatalogItemResolver,
+      sourceAdapterRegistry: fixture.registry,
+      sourceOnboardingAuthorizationResolver:
+        currentSourceOnboardingAuthorizationResolver(),
+      sourceRegistryOnboardingUnitOfWork: unitOfWork,
+      providerIoEnabled: false,
+      ...sourceOnboardingSecurityOptions,
+      now: () => now
+    });
+
+    await expect(
+      service.createSourceConnection(
+        context,
+        sourceCreateRequest({
+          sourceName: "megapbx",
+          webhookToken: "must-not-reach-adapter"
+        })
+      )
+    ).rejects.toMatchObject({
+      code: "module.disabled"
+    });
+    expect(prepare).not.toHaveBeenCalled();
+    expect(unitOfWork.commits).toHaveLength(0);
+    expect(unitOfWork.secretWrites).toHaveLength(0);
+    expect(sourceRepository.connections.size).toBe(0);
+    expect(connectorRepository.records.size).toBe(0);
+  });
+
   it("returns channel catalog entries with onboarding flows", async () => {
     const service = createInternalIntegrationService({
       connectorRepository: new InMemoryChannelConnectorRepository(),

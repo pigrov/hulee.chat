@@ -257,6 +257,7 @@ export type InternalIntegrationServiceOptions = {
   sourceOnboardingIngressRouteMaterialFactory?: () => Uint8Array;
   providerValidationTimeoutMs?: number;
   providerValidationPollIntervalMs?: number;
+  providerIoEnabled?: boolean;
   now?: () => Date;
 };
 
@@ -752,6 +753,7 @@ export function createInternalIntegrationService(
     options.webhookSecretTokenFactory ?? createTelegramWebhookSecretToken;
   const sourceCatalogItemResolver =
     options.sourceCatalogItemResolver ?? findSourceCatalogItem;
+  const providerIoEnabled = options.providerIoEnabled ?? true;
 
   return {
     async listChannelCatalog() {
@@ -812,6 +814,10 @@ export function createInternalIntegrationService(
     },
 
     async createSourceConnection(context, request) {
+      if (!providerIoEnabled) {
+        rejectCleanSlateProviderIo();
+      }
+
       const source = sourceCatalogItemResolver(request.sourceName);
 
       if (
@@ -1060,6 +1066,10 @@ export function createInternalIntegrationService(
     },
 
     async enableChannelConnector(context, input) {
+      if (!providerIoEnabled) {
+        rejectCleanSlateProviderIo();
+      }
+
       return updateChannelConnectorLifecycle({
         context,
         repository: options.connectorRepository,
@@ -1093,6 +1103,10 @@ export function createInternalIntegrationService(
     },
 
     async startChannelAuthChallenge(context, input) {
+      if (!providerIoEnabled) {
+        rejectCleanSlateProviderIo();
+      }
+
       const authChallengeRepository = requireAuthChallengeRepository(
         options.authChallengeRepository
       );
@@ -1205,6 +1219,10 @@ export function createInternalIntegrationService(
     },
 
     async submitChannelAuthChallenge(context, input) {
+      if (!providerIoEnabled) {
+        rejectCleanSlateProviderIo();
+      }
+
       const authChallengeRepository = requireAuthChallengeRepository(
         options.authChallengeRepository
       );
@@ -1311,6 +1329,10 @@ export function createInternalIntegrationService(
     },
 
     async validateTelegramBotToken(context, request) {
+      if (!providerIoEnabled) {
+        rejectCleanSlateProviderIo();
+      }
+
       if (
         options.providerOperationEvents &&
         options.providerValidationJobRepository &&
@@ -1358,6 +1380,10 @@ export function createInternalIntegrationService(
     },
 
     async updateTelegramIntegration(context, request) {
+      if (!providerIoEnabled && (request.enabled || request.outboundEnabled)) {
+        rejectCleanSlateProviderIo();
+      }
+
       const updatedAt = now();
       const connectorId = requireTelegramConnectorId(request);
       const existingRecord = await loadExistingTelegramConnector({
@@ -1469,6 +1495,10 @@ export function createInternalIntegrationService(
     },
 
     async refreshTelegramDiagnostics(context, input) {
+      if (!providerIoEnabled) {
+        rejectCleanSlateProviderIo();
+      }
+
       if (options.providerOperationEvents) {
         return enqueueTelegramProviderOperation({
           context,
@@ -1497,6 +1527,10 @@ export function createInternalIntegrationService(
     },
 
     async setTelegramWebhook(context, input) {
+      if (!providerIoEnabled) {
+        rejectCleanSlateProviderIo();
+      }
+
       if (options.providerOperationEvents) {
         return enqueueTelegramProviderOperation({
           context,
@@ -1526,6 +1560,10 @@ export function createInternalIntegrationService(
     },
 
     async deleteTelegramWebhook(context, input) {
+      if (!providerIoEnabled) {
+        rejectCleanSlateProviderIo();
+      }
+
       if (options.providerOperationEvents) {
         return enqueueTelegramProviderOperation({
           context,
@@ -1629,6 +1667,13 @@ function requireTelegramConnectorId(
   }
 
   return connectorId;
+}
+
+function rejectCleanSlateProviderIo(): never {
+  throw new CoreError(
+    "module.disabled",
+    "Provider I/O is disabled during the Inbox V2 clean-slate epoch."
+  );
 }
 
 async function loadExistingTelegramConnector(input: {

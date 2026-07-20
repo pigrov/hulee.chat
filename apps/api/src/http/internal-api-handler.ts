@@ -98,9 +98,9 @@ export type InternalApiSessionResolver = {
 
 export type InternalApiHandlerOptions = {
   sessionResolver: InternalApiSessionResolver;
-  inboxQueries: InternalInboxQueryService;
-  inboxCommands: InternalInboxCommandService;
-  files: InternalFileService;
+  inboxQueries?: InternalInboxQueryService;
+  inboxCommands?: InternalInboxCommandService;
+  files?: InternalFileService;
   fileDownloads?: InternalInboxV2FileDownloadService;
   integrations: InternalIntegrationService;
   tenantSettings: InternalTenantSettingsService;
@@ -468,9 +468,9 @@ async function handleAuthenticatedRoute(input: {
   request: ApiHttpRequest;
   route: Exclude<RouteMatch, { route: "health" }>;
   session: InternalApiSession;
-  inboxQueries: InternalInboxQueryService;
-  inboxCommands: InternalInboxCommandService;
-  files: InternalFileService;
+  inboxQueries: InternalInboxQueryService | undefined;
+  inboxCommands: InternalInboxCommandService | undefined;
+  files: InternalFileService | undefined;
   fileDownloads?: InternalInboxV2FileDownloadService;
   integrations: InternalIntegrationService;
   tenantSettings: InternalTenantSettingsService;
@@ -483,8 +483,9 @@ async function handleAuthenticatedRoute(input: {
 
   switch (input.route.route) {
     case "inbox_view": {
+      const inboxQueries = requireInboxV1Service(input.inboxQueries);
       const response: InternalInboxViewResponse =
-        await input.inboxQueries.loadInboxView(input.session, {
+        await inboxQueries.loadInboxView(input.session, {
           selectedConversationId: input.route.selectedConversationId,
           filters: {
             queueId: input.route.queueId,
@@ -496,9 +497,10 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "inbox_reply": {
+      const inboxCommands = requireInboxV1Service(input.inboxCommands);
       const request = internalInboxReplyRequestSchema.parse(input.request.body);
       const response: InternalInboxReplyResponse =
-        await input.inboxCommands.sendReply(input.session, {
+        await inboxCommands.sendReply(input.session, {
           conversationId: input.route.conversationId,
           request
         });
@@ -507,11 +509,12 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "inbox_routing_update": {
+      const inboxCommands = requireInboxV1Service(input.inboxCommands);
       const request = internalInboxConversationRoutingUpdateRequestSchema.parse(
         input.request.body
       );
       const response: InternalInboxConversationRoutingUpdateResponse =
-        await input.inboxCommands.updateConversationRouting(input.session, {
+        await inboxCommands.updateConversationRouting(input.session, {
           conversationId: input.route.conversationId,
           request
         });
@@ -520,7 +523,8 @@ async function handleAuthenticatedRoute(input: {
     }
 
     case "file_content": {
-      const file = await input.files.loadFileContent(input.session, {
+      const files = requireInboxV1Service(input.files);
+      const file = await files.loadFileContent(input.session, {
         fileId: input.route.fileId
       });
 
@@ -951,6 +955,17 @@ async function handleAuthenticatedRoute(input: {
       return jsonResponse(200, response);
     }
   }
+}
+
+function requireInboxV1Service<T>(service: T | undefined): T {
+  if (service === undefined) {
+    throw new CoreError(
+      "module.disabled",
+      "Inbox V1 is detached while the Inbox V2 production composition is incomplete."
+    );
+  }
+
+  return service;
 }
 
 function assertRouteConnectorMatchesRequest(

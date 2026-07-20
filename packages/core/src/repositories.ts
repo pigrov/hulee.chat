@@ -10,11 +10,14 @@ export type PersistConversationReplyInput = {
 
 export type PersistTenantRegistrationInput = {
   registration: RegisteredTenant;
-  adminPasswordHash: string;
+  adminPasswordHash: string | null;
 };
 
-export type TenantWorkspaceRepository = {
+export type TenantRegistrationRepository = {
   registerTenant(input: PersistTenantRegistrationInput): Promise<void>;
+};
+
+export type TenantWorkspaceRepository = TenantRegistrationRepository & {
   saveWorkspace(workspace: MvpTenantWorkspace): Promise<void>;
   saveReply(input: PersistConversationReplyInput): Promise<void>;
 };
