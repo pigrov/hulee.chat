@@ -97,7 +97,11 @@ function expectNoAtomicStreamClosure(
   expect(executor.timeline).not.toContain("advance_stream_head");
 }
 
-function preparedFileParentPostHeadStatements(): readonly SQL[] {
+function preparedFileParentPostHeadStatements(
+  purpose: "attachment" | "extension_payload" = "extension_payload"
+): readonly SQL[] {
+  const parentPurpose =
+    purpose === "attachment" ? sql`'attachment'` : sql`${purpose}`;
   return [
     sql`
       insert into inbox_v2_file_parent_links (
@@ -111,7 +115,7 @@ function preparedFileParentPostHeadStatements(): readonly SQL[] {
       ) values (
         ${tenantId}, ${"file_parent_link:link-1"}, ${"file:file-1"},
         ${"file_version:version-1"}, ${"file_object_version:object-1"},
-        ${"a".repeat(64)}, ${"message"}, 'attachment',
+        ${"a".repeat(64)}, ${"message"}, ${parentPurpose},
         ${"external_work"}, ${null}, ${"message:message-1"},
         ${"1"}::bigint, ${"conversation:conversation-1"},
         ${"timeline_item:item-1"}, ${"timeline_content:content-1"},
@@ -248,7 +252,7 @@ function preparedFileTerminalPostHeadStatements(): readonly SQL[] {
       )
       returning file_id as id
     `,
-    ...preparedFileParentPostHeadStatements().slice(0, 2),
+    ...preparedFileParentPostHeadStatements("attachment").slice(0, 2),
     sql`
       insert into inbox_v2_file_attachment_materialization_evidence (
         tenant_id, id, job_id, attempt_id, attachment_id, file_id,
@@ -2060,7 +2064,7 @@ describe("SQL Inbox V2 authorization mutation repository", () => {
                 ${tenantId}, ${"file_parent_link:forged-purpose"},
                 ${"file:file-1"}, ${"file_version:version-1"},
                 ${"file_object_version:object-1"}, ${"a".repeat(64)},
-                ${"message"}, ${"attachment"}, ${"external_work"}, ${null},
+                ${"message"}, 'upload_staging', ${"external_work"}, ${null},
                 ${"message:message-1"}, ${"1"}::bigint,
                 ${"conversation:conversation-1"}, ${"timeline_item:item-1"},
                 ${"timeline_content:content-1"}, ${"1"}::bigint,

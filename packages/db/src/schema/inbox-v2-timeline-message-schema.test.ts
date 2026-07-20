@@ -379,6 +379,32 @@ describe("Inbox V2 timeline and Message schema", () => {
     expect(semanticProof).toContain("core:message.lifecycle");
     expect(semanticProof).toContain("pg_column_size");
     expect(semanticProof).toContain("semantic_ordering_commit_digest_sha256");
+
+    const activeOperationIndex = getTableConfig(
+      inboxV2MessageProviderLifecycleOperations
+    ).indexes.find(
+      (candidate) =>
+        candidate.config.name ===
+        "inbox_v2_provider_lifecycle_active_message_unique"
+    );
+    expect(activeOperationIndex?.config.unique).toBe(true);
+    expect(
+      indexColumns(
+        inboxV2MessageProviderLifecycleOperations,
+        "inbox_v2_provider_lifecycle_active_message_unique"
+      )
+    ).toEqual(["tenant_id", "message_id"]);
+    if (!activeOperationIndex?.config.where) {
+      throw new Error("Active provider lifecycle index requires a predicate.");
+    }
+    const activePredicate = new PgDialect().sqlToQuery(
+      activeOperationIndex.config.where
+    ).sql;
+    expect(activePredicate).toContain("origin");
+    expect(activePredicate).toContain("'hulee_requested'");
+    expect(activePredicate).toContain(
+      "'pending', 'accepted', 'outcome_unknown'"
+    );
   });
 
   it("materializes one typed provider semantic ordering head shared by consumers", () => {
@@ -688,6 +714,44 @@ describe("Inbox V2 timeline and Message schema", () => {
     ).toContain(
       "when latest_row.transition_kind in (\n           'privacy_erasure', 'retention_purge'\n         ) then latest_row.event_id"
     );
+    const lifecycleCoherence = sqlFunctionSource(
+      invariantSql,
+      "inbox_v2_tm_aux_coherence"
+    );
+    const messageHistory = sqlFunctionSource(
+      invariantSql,
+      "inbox_v2_tm_message_history_valid"
+    );
+    const genericActionAttribution = sqlFunctionSource(
+      invariantSql,
+      "inbox_v2_tm_action_attribution_valid"
+    );
+    for (const migrationCreationFence of [
+      "history_row.message_revision = 1",
+      "history_row.change_kind = 'created'",
+      "message_row.origin_kind = 'migration'",
+      "attribution_row.action_participant_id =\n                    message_row.author_participant_id",
+      "attribution_row.app_actor_kind = 'trusted_service'",
+      "attribution_row.source_occurrence_id is null",
+      "attribution_row.automation_kind is not null",
+      "migration_author_row.conversation_id =\n                             message_row.conversation_id",
+      "migration_author_row.subject_kind in (\n                         'legacy_unknown', 'system'"
+    ]) {
+      expect(messageHistory).toContain(migrationCreationFence);
+    }
+    expect(genericActionAttribution).not.toContain(
+      "message_row.origin_kind = 'migration'"
+    );
+    expect(lifecycleCoherence).toContain(
+      "lifecycle_route_row.required_conversation_permission_id =\n              'core:conversation.read'"
+    );
+    for (const actionPermissionId of [
+      "core:message.edit_own",
+      "core:message.delete_own",
+      "core:message.moderate_external"
+    ]) {
+      expect(lifecycleCoherence).not.toContain(`'${actionPermissionId}'`);
+    }
     expect(
       combinedInvariantSql.match(
         /set search_path = pg_catalog, public, pg_temp/gu

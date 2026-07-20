@@ -53,6 +53,7 @@ import {
   revokeInboxV2AtomicSealExecutor,
   type InboxV2AtomicMaterializationSealReceipt,
   type InboxV2AtomicMessageCreationSealManifest,
+  type InboxV2AtomicMessageLifecycleSealManifest,
   type InboxV2AtomicMessageMutationSealManifest,
   type InboxV2AtomicStreamEventManifest,
   type InboxV2AtomicTimelineItemCreationSealManifest
@@ -96,6 +97,7 @@ const POST_HEAD_INSERT_TABLES = new Set([
   "inbox_v2_message_reference_unresolved_candidates",
   "inbox_v2_message_reference_unresolved_targets",
   "inbox_v2_message_attachment_anchors",
+  "inbox_v2_message_provider_lifecycle_operations",
   "inbox_v2_message_revisions",
   "inbox_v2_message_transport_link_heads",
   "inbox_v2_message_transport_links",
@@ -433,7 +435,7 @@ const POST_HEAD_EXACT_INSERT_PATTERNS = new Map<string, RegExp>([
   ],
   [
     "inbox_v2_file_parent_links",
-    /^insert\s+into\s+(?:(?:public)\.)?inbox_v2_file_parent_links\s*\(\s*tenant_id,\s*id,\s*file_id,\s*file_version_id,\s*object_version_id,\s*parent_identity_digest_sha256,\s*parent_kind,\s*parent_purpose,\s*visibility_boundary,\s*parent_conversation_visibility,\s*parent_entity_id,\s*parent_entity_revision,\s*conversation_id,\s*timeline_item_id,\s*content_id,\s*content_revision,\s*block_key,\s*data_class_id,\s*processing_purpose_id,\s*retention_anchor_at,\s*created_at,\s*revision\s*\)\s+values\s*\(\s*\$\d+,\s*\$\d+,\s*\$\d+,\s*\$\d+,\s*\$\d+,\s*\$\d+,\s*\$\d+,\s*'attachment',\s*\$\d+,\s*\$\d+,\s*\$\d+,\s*\$\d+::bigint,\s*\$\d+,\s*\$\d+,\s*\$\d+,\s*\$\d+::bigint,\s*\$\d+,\s*\$\d+,\s*\$\d+,\s*\$\d+::timestamptz,\s*\$\d+::timestamptz,\s*1\s*\)\s+returning\s+id\s*$/iu
+    /^insert\s+into\s+(?:(?:public)\.)?inbox_v2_file_parent_links\s*\(\s*tenant_id,\s*id,\s*file_id,\s*file_version_id,\s*object_version_id,\s*parent_identity_digest_sha256,\s*parent_kind,\s*parent_purpose,\s*visibility_boundary,\s*parent_conversation_visibility,\s*parent_entity_id,\s*parent_entity_revision,\s*conversation_id,\s*timeline_item_id,\s*content_id,\s*content_revision,\s*block_key,\s*data_class_id,\s*processing_purpose_id,\s*retention_anchor_at,\s*created_at,\s*revision\s*\)\s+values\s*\(\s*\$\d+,\s*\$\d+,\s*\$\d+,\s*\$\d+,\s*\$\d+,\s*\$\d+,\s*\$\d+,\s*(?:\$\d+|'attachment'),\s*\$\d+,\s*\$\d+,\s*\$\d+,\s*\$\d+::bigint,\s*\$\d+,\s*\$\d+,\s*\$\d+,\s*\$\d+::bigint,\s*\$\d+,\s*\$\d+,\s*\$\d+,\s*\$\d+::timestamptz,\s*\$\d+::timestamptz,\s*1\s*\)\s+returning\s+id\s*$/iu
   ],
   [
     "inbox_v2_file_parent_link_heads",
@@ -1523,6 +1525,8 @@ async function persistAuthorizedAtomicMaterialization<TPrepared, TResult>(
       );
       if (sealManifest.kind === "message_creation") {
         assertInboxV2AtomicMessageCreationSealManifest(input, sealManifest);
+      } else if (sealManifest.kind === "message_lifecycle") {
+        assertInboxV2AtomicMessageLifecycleSealManifest(input, sealManifest);
       } else if (sealManifest.kind === "message_mutation") {
         assertInboxV2AtomicMessageMutationSealManifest(input, sealManifest);
       } else {
@@ -7154,6 +7158,291 @@ function assertInboxV2AtomicMessageCreationSealManifest(
     sourceOccurrenceChange,
     sourceOccurrenceManifest.event
   );
+}
+
+function assertInboxV2AtomicMessageLifecycleSealManifest(
+  input: WithPrivilegedAuthorizationMutationInput,
+  manifest: InboxV2AtomicMessageLifecycleSealManifest
+): void {
+  const mismatch = atomicMessageSealManifestMismatch;
+  const expectedCommandTypeId =
+    manifest.commandKind === "edit"
+      ? "core:message.edit"
+      : manifest.commandKind === "local_delete"
+        ? "core:message.delete_local"
+        : "core:message.delete_provider";
+  const messageChanges = input.records.changes.filter(
+    (change) => change.entity.entityTypeId === "core:message"
+  );
+  const providerOperationChanges = input.records.changes.filter(
+    (change) =>
+      change.entity.entityTypeId === "core:message-provider-lifecycle-operation"
+  );
+  const messageChange = messageChanges[0];
+  const providerOperationChange = providerOperationChanges[0];
+  const expectsMessage = manifest.commandKind !== "provider_delete";
+  const expectsProviderOperation = manifest.providerOperation !== null;
+  // Audit targets deliberately use a random tenant-local internal-ref. The
+  // public Message id is therefore bound through the stream change/event
+  // subject below, while the minimized audit skeleton binds only tenant/type.
+  if (
+    input.tenantId !== manifest.tenantId ||
+    input.command.commandTypeId !== expectedCommandTypeId ||
+    input.occurredAt !== manifest.event.recordedAt ||
+    input.records.audit.actionId !== expectedCommandTypeId ||
+    input.records.audit.target.tenantId !== manifest.tenantId ||
+    input.records.audit.target.entityTypeId !== "core:message" ||
+    input.records.events.length !== 1 ||
+    messageChanges.length !== (expectsMessage ? 1 : 0) ||
+    providerOperationChanges.length !== (expectsProviderOperation ? 1 : 0) ||
+    input.records.changes.length !==
+      (expectsMessage ? 1 : 0) + (expectsProviderOperation ? 1 : 0) ||
+    (manifest.commandKind === "edit" && manifest.message === null) ||
+    (manifest.commandKind === "local_delete" &&
+      (manifest.message === null || manifest.providerOperation !== null)) ||
+    (manifest.commandKind === "provider_delete" &&
+      (manifest.message !== null || manifest.providerOperation === null))
+  ) {
+    throw mismatch();
+  }
+
+  if (manifest.message !== null) {
+    const state = messageChange?.state;
+    const timeline = messageChange?.timeline;
+    if (
+      messageChange === undefined ||
+      messageChange.entity.tenantId !== manifest.tenantId ||
+      String(messageChange.entity.entityId) !== String(manifest.messageId) ||
+      String(messageChange.resultingRevision) !==
+        manifest.message.messageRevision ||
+      messageChange.audience !== manifest.message.audience ||
+      timeline === null ||
+      timeline === undefined ||
+      timeline.conversation.tenantId !== manifest.tenantId ||
+      String(timeline.conversation.id) !== String(manifest.conversationId) ||
+      String(timeline.timelineSequence) !== manifest.timelineSequence ||
+      state?.kind !== "upsert" ||
+      state.stateSchemaId !== manifest.message.stateSchemaId ||
+      state.stateSchemaVersion !== manifest.message.stateSchemaVersion ||
+      state.stateHash !== manifest.message.stateHash ||
+      !payloadReferencesMatch(
+        state.payloadReference,
+        manifest.message.payloadReference
+      ) ||
+      !payloadReferencesMatch(
+        state.domainCommitReference,
+        manifest.message.domainCommitReference
+      )
+    ) {
+      throw mismatch();
+    }
+  }
+
+  if (manifest.providerOperation !== null) {
+    const state = providerOperationChange?.state;
+    if (
+      providerOperationChange === undefined ||
+      providerOperationChange.entity.tenantId !== manifest.tenantId ||
+      String(providerOperationChange.entity.entityId) !==
+        String(manifest.providerOperation.operationId) ||
+      String(providerOperationChange.resultingRevision) !==
+        manifest.providerOperation.operationRevision ||
+      providerOperationChange.audience !== "conversation_external" ||
+      state?.kind !== "upsert" ||
+      state.stateSchemaId !== manifest.providerOperation.stateSchemaId ||
+      state.stateSchemaVersion !==
+        manifest.providerOperation.stateSchemaVersion ||
+      state.stateHash !== manifest.providerOperation.stateHash ||
+      !payloadReferencesMatch(
+        state.payloadReference,
+        manifest.providerOperation.payloadReference
+      ) ||
+      !payloadReferencesMatch(
+        state.domainCommitReference,
+        manifest.providerOperation.domainCommitReference
+      )
+    ) {
+      throw mismatch();
+    }
+  }
+
+  const expectedResultReference =
+    manifest.commandKind === "provider_delete"
+      ? manifest.providerOperation?.payloadReference
+      : manifest.message?.payloadReference;
+  if (
+    input.command.resultReference === null ||
+    expectedResultReference === undefined ||
+    !payloadReferencesMatch(
+      input.command.resultReference,
+      expectedResultReference
+    )
+  ) {
+    throw mismatch();
+  }
+
+  const event = input.records.events[0];
+  const expectedChangeIds = input.records.changes.map(({ id }) => String(id));
+  const eventChangeIds = event?.changeIds.map(String) ?? [];
+  if (
+    event === undefined ||
+    event.typeId !== manifest.event.typeId ||
+    event.payloadSchemaId !== manifest.event.payloadSchemaId ||
+    event.payloadSchemaVersion !== manifest.event.payloadSchemaVersion ||
+    event.occurredAt !== manifest.event.occurredAt ||
+    event.recordedAt !== manifest.event.recordedAt ||
+    event.payloadReference === null ||
+    !payloadReferencesMatch(
+      event.payloadReference,
+      manifest.event.payloadReference
+    ) ||
+    eventChangeIds.length !== expectedChangeIds.length ||
+    expectedChangeIds.some((id) => !eventChangeIds.includes(id)) ||
+    !event.subjects.some(
+      (subject) =>
+        subject.tenantId === manifest.tenantId &&
+        subject.entityTypeId === "core:message" &&
+        String(subject.entityId) === String(manifest.messageId)
+    )
+  ) {
+    throw mismatch();
+  }
+
+  const projectionIntents = input.records.outboxIntents.filter(
+    (intent) =>
+      intent.typeId === "core:projection.update" &&
+      intent.effectClass === "projection"
+  );
+  const providerIntents = input.records.outboxIntents.filter(
+    (intent) => intent.effectClass === "provider_io"
+  );
+  const projection = projectionIntents[0];
+  if (
+    projectionIntents.length !== 1 ||
+    projection === undefined ||
+    String(projection.eventId) !== String(event.id) ||
+    projection.changeIds.length !== expectedChangeIds.length ||
+    expectedChangeIds.some(
+      (id) =>
+        !projection.changeIds.some((candidate) => String(candidate) === id)
+    ) ||
+    input.records.outboxIntents.length !==
+      1 + (expectsProviderOperation ? 1 : 0)
+  ) {
+    throw mismatch();
+  }
+  if (!expectsProviderOperation) {
+    if (providerIntents.length !== 0) throw mismatch();
+  } else {
+    const providerIntent = providerIntents[0];
+    if (
+      providerIntents.length !== 1 ||
+      providerIntent === undefined ||
+      providerIntent.typeId !== "core:provider.message_lifecycle" ||
+      providerIntent.effectClass !== "provider_io" ||
+      String(providerIntent.eventId) !== String(event.id) ||
+      providerIntent.changeIds.length !== 1 ||
+      providerOperationChange === undefined ||
+      String(providerIntent.changeIds[0]) !==
+        String(providerOperationChange.id) ||
+      providerIntent.payloadReference === null ||
+      !payloadReferencesMatch(
+        providerIntent.payloadReference,
+        manifest.providerOperation!.payloadReference
+      )
+    ) {
+      throw mismatch();
+    }
+  }
+
+  const fileParentAttachments = manifest.fileParentAttachments;
+  if (
+    !Number.isSafeInteger(fileParentAttachments.materializedParentCount) ||
+    fileParentAttachments.materializedParentCount < 0 ||
+    fileParentAttachments.materializedParentCount > 64 ||
+    !SHA256_PATTERN.test(fileParentAttachments.planDigestSha256) ||
+    !SHA256_PATTERN.test(fileParentAttachments.linkIdsDigestSha256) ||
+    (manifest.commandKind !== "edit" &&
+      fileParentAttachments.materializedParentCount !== 0)
+  ) {
+    throw mismatch();
+  }
+
+  const primaryDecisions = input.records.audit.authorizationDecisionRefs.filter(
+    (decision) => decision.id === input.command.authorizationDecisionId
+  );
+  const primaryDecision = primaryDecisions[0];
+  const ownPermissionId =
+    manifest.commandKind === "edit"
+      ? "core:message.edit_own"
+      : "core:message.delete_own";
+  const externalBoundary =
+    manifest.commandKind === "provider_delete" ||
+    manifest.message?.audience === "conversation_external";
+  const allowedPermissions = new Set([
+    ownPermissionId,
+    externalBoundary
+      ? "core:message.moderate_external"
+      : "core:message.moderate_internal"
+  ]);
+  const primaryTargetsConversation =
+    primaryDecision?.permissionId === "core:message.moderate_internal";
+  const expectedPrimaryScopeId = primaryTargetsConversation
+    ? "core:conversation"
+    : "core:timeline-item";
+  const expectedPrimaryEntityId = primaryTargetsConversation
+    ? manifest.conversationId
+    : manifest.timelineItemId;
+  const readPermissionId = externalBoundary
+    ? "core:conversation.read"
+    : "core:conversation.internal.read";
+  const readDecisions = input.records.audit.authorizationDecisionRefs.filter(
+    (decision) =>
+      decision.permissionId === readPermissionId &&
+      decision.resourceScopeId === "core:conversation" &&
+      decision.resource.tenantId === manifest.tenantId &&
+      decision.resource.entityTypeId === "core:conversation" &&
+      String(decision.resource.entityId) === String(manifest.conversationId)
+  );
+  const readDecision = readDecisions[0];
+  const conversationFences =
+    readDecision === undefined
+      ? []
+      : input.revisions.resources.filter(
+          (resource) =>
+            resource.resourceKind === "conversation" &&
+            String(resource.resourceId) === String(manifest.conversationId) &&
+            String(resource.expectedResourceAccessRevision) ===
+              String(readDecision.resourceAccessRevision) &&
+            resource.advance === "none"
+        );
+  if (
+    primaryDecisions.length !== 1 ||
+    primaryDecision === undefined ||
+    !allowedPermissions.has(primaryDecision.permissionId) ||
+    primaryDecision.resourceScopeId !== expectedPrimaryScopeId ||
+    primaryDecision.resource.tenantId !== manifest.tenantId ||
+    primaryDecision.resource.entityTypeId !== expectedPrimaryScopeId ||
+    String(primaryDecision.resource.entityId) !==
+      String(expectedPrimaryEntityId) ||
+    primaryDecision.outcome !== "allowed" ||
+    (!primaryTargetsConversation &&
+      String(primaryDecision.resourceAccessRevision) !==
+        String(manifest.timelineItemRevision)) ||
+    readDecisions.length !== 1 ||
+    (primaryTargetsConversation &&
+      primaryDecision.resourceAccessRevision !==
+        readDecision?.resourceAccessRevision) ||
+    conversationFences.length !== 1 ||
+    event.authorizationDecisionRefs.length !==
+      input.records.audit.authorizationDecisionRefs.length ||
+    event.authorizationDecisionRefs.some(
+      (decision, index) =>
+        decision.id !== input.records.audit.authorizationDecisionRefs[index]?.id
+    )
+  ) {
+    throw mismatch();
+  }
 }
 
 function assertInboxV2AtomicMessageMutationSealManifest(

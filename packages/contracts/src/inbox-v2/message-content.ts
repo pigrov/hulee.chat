@@ -831,12 +831,12 @@ function addAttachmentOwnerContinuityIssues(
     if (before === undefined) continue;
     if (
       before.blockKey !== block.blockKey ||
-      before.attachment.state !== block.attachment.state
+      !sameValue(before.attachment, block.attachment)
     ) {
       addIssue(
         context,
         ["after", "state", "blocks", index, "attachment"],
-        "A semantic edit cannot move an attachment identity or change its materialization state."
+        "A semantic edit cannot move an attachment identity or change its exact materialization facts."
       );
     }
   }

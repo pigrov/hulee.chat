@@ -3279,6 +3279,14 @@ export const inboxV2MessageProviderLifecycleOperations = pgTable(
       table.updatedAt,
       table.id
     ),
+    uniqueIndex("inbox_v2_provider_lifecycle_active_message_unique")
+      .on(table.tenantId, table.messageId)
+      .where(
+        sql`${table.origin} = 'hulee_requested'
+          and ${table.outcome} in (
+            'pending', 'accepted', 'outcome_unknown'
+          )`
+      ),
     index("inbox_v2_provider_lifecycle_semantic_consumer_idx")
       .on(
         table.tenantId,
@@ -6065,7 +6073,7 @@ begin
        and capability_row.state = 'supported'
        and (
          capability_row.valid_until is null
-         or capability_row.valid_until >= expected_authority_at
+         or capability_row.valid_until > expected_authority_at
        )
        and not exists (
          select 1
@@ -7347,11 +7355,40 @@ as $function$
             and history_row.message_id = message_row.id
             and (
               history_row.timeline_item_id <> message_row.timeline_item_id
-              or not public.inbox_v2_tm_action_attribution_valid(
-                history_row.tenant_id,
-                history_row.action_attribution_id,
-                message_row.conversation_id,
-                true
+              or not (
+                public.inbox_v2_tm_action_attribution_valid(
+                  history_row.tenant_id,
+                  history_row.action_attribution_id,
+                  message_row.conversation_id,
+                  true
+                )
+                or (
+                  history_row.message_revision = 1
+                  and history_row.change_kind = 'created'
+                  and message_row.origin_kind = 'migration'
+                  and attribution_row.conversation_id =
+                    message_row.conversation_id
+                  and attribution_row.action_participant_id =
+                    message_row.author_participant_id
+                  and attribution_row.app_actor_kind = 'trusted_service'
+                  and attribution_row.app_trusted_service_id is not null
+                  and attribution_row.source_occurrence_id is null
+                  and attribution_row.automation_kind is not null
+                  and exists (
+                    select 1
+                      from public.inbox_v2_conversation_participants
+                        migration_author_row
+                     where migration_author_row.tenant_id =
+                             message_row.tenant_id
+                       and migration_author_row.id =
+                             message_row.author_participant_id
+                       and migration_author_row.conversation_id =
+                             message_row.conversation_id
+                       and migration_author_row.subject_kind in (
+                         'legacy_unknown', 'system'
+                       )
+                  )
+                )
               )
               or attribution_row.created_at <> history_row.recorded_at
               or (history_row.message_revision > 1 and (
@@ -8056,6 +8093,9 @@ begin
         on reference_row.tenant_id = op_row.tenant_id
        and reference_row.id = op_row.external_message_reference_id
        and reference_row.message_id = op_row.message_id
+      left join public.inbox_v2_outbound_routes lifecycle_route_row
+        on lifecycle_route_row.tenant_id = op_row.tenant_id
+       and lifecycle_route_row.id = op_row.outbound_route_id
      where op_row.tenant_id = tenant_key
        and op_row.id = operation_key
        and public.inbox_v2_tm_provider_lifecycle_history_valid(
@@ -8065,6 +8105,9 @@ begin
        and (
          (op_row.origin = 'provider_observed' and op_row.outbound_route_id is null)
          or (op_row.origin = 'hulee_requested'
+           and lifecycle_route_row.id is not null
+            and lifecycle_route_row.required_conversation_permission_id =
+              'core:conversation.read'
            and public.inbox_v2_tm_outbound_route_action_valid(
              op_row.tenant_id,
              op_row.outbound_route_id,
@@ -8074,7 +8117,7 @@ begin
              op_row.recorded_at,
              op_row.recorded_at,
              'core:message.' || op_row.action::text,
-             'core:message.' || op_row.action::text || '_external',
+             lifecycle_route_row.required_conversation_permission_id,
              op_row.external_message_reference_id,
              op_row.source_occurrence_id,
              op_row.source_account_id,

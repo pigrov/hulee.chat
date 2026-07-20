@@ -5,6 +5,8 @@ import {
   createInboxV2AuthorizedCommandContract,
   createInboxV2ClientCommandRequestEnvelopeSchema,
   decideInboxV2CommandIdempotency,
+  deriveInboxV2MessageEditFileSourceAuthorityPlan,
+  deriveInboxV2MessageEditFileUploadAuthorityPlan,
   discloseInboxV2CommandResult,
   INBOX_V2_AUTHORIZED_COMMAND_SCHEMA_ID,
   INBOX_V2_CLIENT_COMMAND_REQUEST_SCHEMA_ID,
@@ -12,7 +14,9 @@ import {
   inboxV2CommandIdempotencyRecordSchema,
   inboxV2CommandIdempotencyScopeSchema,
   inboxV2CommandResultSchema,
+  inboxV2EntityRevisionSchema,
   inboxV2TimelineCommandIntentEnvelopeSchema,
+  inboxV2TimelineCommandIntentSchema,
   parseInboxV2AuthorizedCommandEnvelope,
   parseInboxV2CommandResultEnvelope
 } from "../index";
@@ -157,6 +161,11 @@ const message = {
   kind: "message" as const,
   id: "message:message-1"
 };
+const timelineItem = {
+  tenantId,
+  kind: "timeline_item" as const,
+  id: "timeline_item:message-1"
+};
 const outboundRoute = {
   tenantId,
   kind: "outbound_route" as const,
@@ -252,6 +261,55 @@ function textContent() {
   };
 }
 
+function readyAttachmentContent() {
+  return {
+    blocks: [
+      {
+        blockKey: "file-1",
+        kind: "file" as const,
+        attachment: {
+          state: "ready" as const,
+          attachment: {
+            tenantId,
+            kind: "message_attachment" as const,
+            id: "message_attachment:attachment-1"
+          },
+          file: readyFile,
+          fileRevision: "9",
+          fileVersion: readyFileVersion,
+          objectVersion: readyObjectVersion
+        },
+        displayName: "invoice.pdf"
+      }
+    ]
+  };
+}
+
+function uploadStagingFileReadProof(
+  visibilityBoundary: "external_work" | "internal"
+) {
+  return {
+    blockKey: "file-1",
+    purpose: "attachment" as const,
+    file: readyFile,
+    attachment: {
+      tenantId,
+      kind: "message_attachment" as const,
+      id: "message_attachment:attachment-1"
+    },
+    expectedFileRevision: "9",
+    fileVersion: readyFileVersion,
+    objectVersion: readyObjectVersion,
+    parentConversation: conversation,
+    visibilityBoundary,
+    sourceParent: {
+      kind: "upload_staging" as const,
+      appActor: employeeAppActor(),
+      uploadRevision: "1"
+    }
+  };
+}
+
 function conversationEvidence(
   actionPermissionId: string,
   readPermissionId = "core:conversation.read"
@@ -273,6 +331,25 @@ function conversationEvidence(
       resourceScopeId: "core:conversation",
       resource,
       accessRevision: "4"
+    }
+  ];
+}
+
+function lifecycleEvidence(
+  actionPermissionId: string,
+  readPermissionId = "core:conversation.read"
+): AuthorizationEvidence[] {
+  return [
+    conversationEvidence(actionPermissionId, readPermissionId)[0]!,
+    {
+      permissionId: actionPermissionId,
+      resourceScopeId: "core:timeline-item",
+      resource: {
+        tenantId,
+        entityTypeId: "core:timeline-item",
+        entityId: timelineItem.id
+      },
+      accessRevision: "6"
     }
   ];
 }
@@ -306,13 +383,13 @@ function fileEvidence(): AuthorizationEvidence {
 function fileUploadEvidence(): AuthorizationEvidence {
   return {
     permissionId: "core:file.upload",
-    resourceScopeId: "core:conversation",
+    resourceScopeId: "core:file",
     resource: {
       tenantId,
-      entityTypeId: "core:conversation",
-      entityId: conversation.id
+      entityTypeId: "core:file",
+      entityId: readyFile.id
     },
-    accessRevision: "4"
+    accessRevision: "9"
   };
 }
 
@@ -1345,19 +1422,54 @@ describe("Inbox V2 command protocol", () => {
         appActor: employeeAppActor(),
         conversation,
         message,
+        timelineItem,
         authorParticipant,
         expectedAuthorshipRevision: "2"
       },
       content: textContent(),
       transport: { kind: "internal" as const }
     };
-    const evidence = conversationEvidence(
+    const evidence = lifecycleEvidence(
       "core:message.edit_own",
       "core:conversation.internal.read"
     );
     expect(
       inboxV2AuthorizedCommandEnvelopeSchema.safeParse(
         authorizedTimelineCommand(intent, evidence)
+      ).success
+    ).toBe(true);
+    expect(
+      inboxV2AuthorizedCommandEnvelopeSchema.safeParse(
+        authorizedTimelineCommand(
+          intent,
+          conversationEvidence(
+            "core:message.edit_own",
+            "core:conversation.internal.read"
+          )
+        )
+      ).success
+    ).toBe(false);
+
+    const moderateInternalIntent = {
+      ...intent,
+      mutationAuthority: {
+        kind: "moderate_internal" as const,
+        appActor: employeeAppActor(),
+        conversation,
+        message,
+        timelineItem,
+        reasonId: "core:moderation.internal"
+      }
+    };
+    expect(
+      inboxV2AuthorizedCommandEnvelopeSchema.safeParse(
+        authorizedTimelineCommand(
+          moderateInternalIntent,
+          conversationEvidence(
+            "core:message.moderate_internal",
+            "core:conversation.internal.read"
+          )
+        )
       ).success
     ).toBe(true);
 
@@ -1386,10 +1498,218 @@ describe("Inbox V2 command protocol", () => {
             appActor: employeeAppActor(),
             conversation,
             message,
+            timelineItem,
             reasonId: "core:moderation"
           }
         }
       }).success
+    ).toBe(false);
+  });
+
+  it("requires edit attachment parent authority and exact File upload evidence", () => {
+    const baseIntent = {
+      kind: "edit_message" as const,
+      ...authoredIntentFields(),
+      message,
+      expectedMessageRevision: "6",
+      mutationAuthority: {
+        kind: "own" as const,
+        appActor: employeeAppActor(),
+        conversation,
+        message,
+        timelineItem,
+        authorParticipant,
+        expectedAuthorshipRevision: "2"
+      },
+      content: readyAttachmentContent()
+    };
+    const internalIntent = {
+      ...baseIntent,
+      fileReadProofs: [uploadStagingFileReadProof("internal")],
+      transport: { kind: "internal" as const }
+    };
+    const internalSendEvidence = conversationEvidence(
+      "core:message.send_internal",
+      "core:conversation.internal.read"
+    )[1]!;
+    const internalEvidence = [
+      ...lifecycleEvidence(
+        "core:message.edit_own",
+        "core:conversation.internal.read"
+      ),
+      internalSendEvidence,
+      fileEvidence(),
+      fileUploadEvidence()
+    ];
+
+    const parsedInternal = inboxV2AuthorizedCommandEnvelopeSchema.safeParse(
+      authorizedTimelineCommand(internalIntent, internalEvidence)
+    );
+    expect(
+      parsedInternal.success,
+      parsedInternal.success
+        ? undefined
+        : JSON.stringify(parsedInternal.error.issues, null, 2)
+    ).toBe(true);
+    if (!parsedInternal.success) {
+      throw new Error("expected authorized internal attachment edit");
+    }
+    expect(
+      parsedInternal.data.payload.authorizationDecisionRefs.filter(
+        ({ permissionId }) => permissionId === "core:conversation.internal.read"
+      )
+    ).toHaveLength(1);
+    const canonicalInternalIntent =
+      inboxV2TimelineCommandIntentSchema.parse(internalIntent);
+    if (canonicalInternalIntent.kind !== "edit_message") {
+      throw new Error("expected canonical edit intent");
+    }
+    expect(
+      deriveInboxV2MessageEditFileUploadAuthorityPlan(canonicalInternalIntent)
+    ).toEqual([
+      {
+        file: readyFile,
+        expectedFileRevision: "9"
+      }
+    ]);
+    expect(
+      deriveInboxV2MessageEditFileSourceAuthorityPlan(canonicalInternalIntent, {
+        message: canonicalInternalIntent.message,
+        expectedMessageRevision: inboxV2EntityRevisionSchema.parse("7")
+      })
+    ).toEqual([
+      {
+        blockKey: "file-1",
+        purpose: "attachment",
+        attachment: {
+          tenantId,
+          kind: "message_attachment",
+          id: "message_attachment:attachment-1"
+        },
+        file: readyFile,
+        expectedFileRevision: "9",
+        fileVersion: readyFileVersion,
+        objectVersion: readyObjectVersion,
+        targetParent: {
+          kind: "message",
+          message,
+          expectedMessageRevision: "7"
+        },
+        sourceParent: {
+          kind: "upload_staging",
+          appActor: employeeAppActor(),
+          uploadRevision: "1"
+        }
+      }
+    ]);
+    expect(
+      deriveInboxV2MessageEditFileUploadAuthorityPlan(
+        inboxV2TimelineCommandIntentSchema.parse({
+          ...internalIntent,
+          fileReadProofs: [
+            {
+              ...internalIntent.fileReadProofs[0],
+              sourceParent: {
+                kind: "message",
+                conversation,
+                message,
+                expectedMessageRevision: "6",
+                visibilityBoundary: "internal"
+              }
+            }
+          ]
+        }) as Extract<
+          ReturnType<typeof inboxV2TimelineCommandIntentSchema.parse>,
+          { kind: "edit_message" }
+        >
+      )
+    ).toEqual([]);
+
+    for (const missingPermissionId of [
+      "core:message.send_internal",
+      "core:file.view",
+      "core:file.upload"
+    ]) {
+      expect(
+        inboxV2AuthorizedCommandEnvelopeSchema.safeParse(
+          authorizedTimelineCommand(
+            internalIntent,
+            internalEvidence.filter(
+              ({ permissionId }) => permissionId !== missingPermissionId
+            )
+          )
+        ).success
+      ).toBe(false);
+    }
+
+    const wrongUploadEvidence: AuthorizationEvidence = {
+      permissionId: "core:file.upload",
+      resourceScopeId: "core:conversation",
+      resource: {
+        tenantId,
+        entityTypeId: "core:conversation",
+        entityId: conversation.id
+      },
+      accessRevision: "4"
+    };
+    expect(
+      inboxV2AuthorizedCommandEnvelopeSchema.safeParse(
+        authorizedTimelineCommand(internalIntent, [
+          ...internalEvidence.filter(
+            ({ permissionId }) => permissionId !== "core:file.upload"
+          ),
+          wrongUploadEvidence
+        ])
+      ).success
+    ).toBe(false);
+
+    const externalIntent = {
+      ...baseIntent,
+      fileReadProofs: [uploadStagingFileReadProof("external_work")],
+      transport: {
+        kind: "external" as const,
+        externalMessageReference: {
+          tenantId,
+          kind: "external_message_reference" as const,
+          id: "external_message_reference:message-1"
+        },
+        sourceOccurrence: {
+          tenantId,
+          kind: "source_occurrence" as const,
+          id: "source_occurrence:message-1"
+        },
+        outboundRoute,
+        routeAuthorization: routeAuthorization()
+      }
+    };
+    const externalReplyEvidence = conversationEvidence(
+      "core:message.reply_external"
+    )[1]!;
+    const externalEvidence = [
+      ...lifecycleEvidence("core:message.edit_own"),
+      externalReplyEvidence,
+      routeEvidence(),
+      fileEvidence(),
+      fileUploadEvidence()
+    ];
+    const parsedExternal = inboxV2AuthorizedCommandEnvelopeSchema.safeParse(
+      authorizedTimelineCommand(externalIntent, externalEvidence)
+    );
+    expect(
+      parsedExternal.success,
+      parsedExternal.success
+        ? undefined
+        : JSON.stringify(parsedExternal.error.issues, null, 2)
+    ).toBe(true);
+    expect(
+      inboxV2AuthorizedCommandEnvelopeSchema.safeParse(
+        authorizedTimelineCommand(
+          externalIntent,
+          externalEvidence.filter(
+            ({ permissionId }) => permissionId !== "core:message.reply_external"
+          )
+        )
+      ).success
     ).toBe(false);
   });
 

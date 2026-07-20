@@ -257,6 +257,10 @@ export const inboxV2MessageCreationCommitSchema = z
         initialRevision.actionAttribution.appActor,
         message.appActor
       ) ||
+      !sameValue(
+        initialRevision.actionAttribution.automationCausation,
+        message.automationCausation
+      ) ||
       (message.origin.kind === "source_originated"
         ? initialRevision.actionAttribution.sourceOccurrence?.id !==
           message.origin.originOccurrence.id
@@ -265,7 +269,7 @@ export const inboxV2MessageCreationCommitSchema = z
       addIssue(
         context,
         ["initialRevision", "actionAttribution"],
-        "Initial revision preserves the exact author, app actor and source occurrence planes."
+        "Initial revision preserves the exact author, app actor, automation causation and source occurrence planes."
       );
     }
     addOriginIssues(context, commit, timelineItem);

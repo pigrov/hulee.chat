@@ -197,6 +197,103 @@ describe("Inbox V2 Message and StaffNote contracts", () => {
     ).toBe(false);
   });
 
+  it("binds trusted-service migration causation to the initial revision exactly", () => {
+    const base = fixtureInternalCreationCommit();
+    const provenanceId = "core:inbox-v1-message-import";
+    const appActor = {
+      kind: "trusted_service" as const,
+      trustedServiceId: "core:inbox-v1-migration"
+    };
+    const automationCausation = {
+      kind: "system_event" as const,
+      causeEvent: fixtureReference("event", "event:message-migration-import"),
+      correlationId: "correlation:message-migration-import",
+      causedAt: fixtureT0
+    };
+    const authorParticipant = fixtureParticipant("legacy");
+    const authorReference = fixtureReference(
+      "conversation_participant",
+      authorParticipant.id
+    );
+    const timelineItem = fixtureTimelineItem("internal", {
+      activity: {
+        kind: "migration",
+        provenanceId,
+        importedAt: fixtureT2
+      }
+    });
+    const message = {
+      ...base.message,
+      authorParticipant: authorReference,
+      origin: { kind: "migration" as const, provenanceId },
+      appActor,
+      automationCausation
+    };
+    const commit = {
+      ...base,
+      timelineAllocation: fixtureTimelineAllocation("internal", timelineItem),
+      authorParticipant,
+      message,
+      initialRevision: {
+        ...base.initialRevision,
+        actionAttribution: {
+          actionParticipant: authorReference,
+          appActor,
+          sourceOccurrence: null,
+          automationCausation
+        }
+      }
+    };
+
+    expect(inboxV2MessageCreationCommitSchema.safeParse(commit).success).toBe(
+      true
+    );
+
+    const mismatch = inboxV2MessageCreationCommitSchema.safeParse({
+      ...commit,
+      initialRevision: {
+        ...commit.initialRevision,
+        actionAttribution: {
+          ...commit.initialRevision.actionAttribution,
+          automationCausation: {
+            ...automationCausation,
+            correlationId: "correlation:message-migration-other"
+          }
+        }
+      }
+    });
+    expect(mismatch.success).toBe(false);
+    if (!mismatch.success) {
+      expect(mismatch.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: ["initialRevision", "actionAttribution"],
+            message:
+              "Initial revision preserves the exact author, app actor, automation causation and source occurrence planes."
+          })
+        ])
+      );
+    }
+
+    const missingMessageCausation =
+      inboxV2MessageCreationCommitSchema.safeParse({
+        ...commit,
+        message: { ...commit.message, automationCausation: null }
+      });
+    expect(missingMessageCausation.success).toBe(false);
+    if (!missingMessageCausation.success) {
+      expect(missingMessageCausation.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: ["initialRevision", "actionAttribution"],
+            message:
+              "Initial revision preserves the exact author, app actor, automation causation and source occurrence planes."
+          })
+        ])
+      );
+    }
+  });
+
   it("uses reply_external authority for a normal external send", () => {
     const commit = fixtureHuleeCreationCommit();
     expect(commit.outboundRoute.operationId).toBe("core:message.send");
@@ -1730,6 +1827,42 @@ describe("Inbox V2 Message and StaffNote contracts", () => {
             }
           ]
         }
+      }).success
+    ).toBe(false);
+  });
+
+  it("binds a local-delete reason to its exact moderation authority", () => {
+    const conversation = fixtureReference(
+      "conversation",
+      "conversation:conversation-1"
+    );
+    const base = {
+      kind: "delete_message_local" as const,
+      tenantId: fixtureTenantId,
+      conversation,
+      message: fixtureMessageReference,
+      expectedMessageRevision: "1",
+      visibilityBoundary: "external_work" as const,
+      mutationAuthority: {
+        kind: "moderate_external" as const,
+        appActor: fixtureEmployeeActor,
+        conversation,
+        message: fixtureMessageReference,
+        timelineItem: fixtureTimelineItemReference,
+        reasonId: "core:moderation.spam"
+      },
+      appActor: fixtureEmployeeActor,
+      reasonId: "core:moderation.spam",
+      occurredAt: fixtureT2
+    };
+
+    expect(inboxV2TimelineCommandIntentSchema.safeParse(base).success).toBe(
+      true
+    );
+    expect(
+      inboxV2TimelineCommandIntentSchema.safeParse({
+        ...base,
+        reasonId: "core:moderation.other"
       }).success
     ).toBe(false);
   });

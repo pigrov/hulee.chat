@@ -8274,6 +8274,7 @@ declare
   v_facet_count integer;
   v_invalid_count integer;
   v_message_change_count integer;
+  v_provider_operation_change_count integer;
   v_message_row_count integer;
   v_source_change_count integer;
   v_source_materialization_count integer;
@@ -8505,19 +8506,20 @@ begin
        or event_row.mutation_id <> new.mutation_id
        or event_row.correlation_id <> intent_row.correlation_id
        or (
-         intent_row.type_id = 'core:provider.dispatch'
-         and intent_row.effect_class <> 'provider_io'
+         intent_row.type_id in (
+           'core:provider.dispatch', 'core:provider.message_lifecycle'
+         ) and intent_row.effect_class <> 'provider_io'
        )
        or (
          intent_row.effect_class = 'provider_io'
          and (
-           intent_row.type_id <> 'core:provider.dispatch'
-           or intent_row.payload_reference is null
-           or intent_row.payload_reference->>'schemaId' <>
-             'core:inbox-v2.outbound-dispatch'
-           or intent_row.payload_reference->>'schemaVersion' <> 'v1'
-           or jsonb_array_length(intent_row.change_ids) <> 1
-           or event_row.type_id <> 'core:message.changed'
+           intent_row.type_id not in (
+             'core:provider.dispatch', 'core:provider.message_lifecycle'
+           )
+            or intent_row.payload_reference is null
+            or intent_row.payload_reference->>'schemaVersion' <> 'v1'
+            or jsonb_array_length(intent_row.change_ids) <> 1
+            or event_row.type_id <> 'core:message.changed'
            or exists (
              select 1
                from public.inbox_v2_tenant_stream_changes referenced_change
@@ -8533,9 +8535,14 @@ begin
                   or referenced_change.entity_type_id = 'core:staff-note'
                 )
            )
-           or not exists (
-             select 1
-               from public.inbox_v2_tenant_stream_changes dispatch_change
+            or (
+              intent_row.type_id = 'core:provider.dispatch'
+              and (
+                intent_row.payload_reference->>'schemaId' <>
+                  'core:inbox-v2.outbound-dispatch'
+                or not exists (
+              select 1
+                from public.inbox_v2_tenant_stream_changes dispatch_change
               where dispatch_change.tenant_id = intent_row.tenant_id
                 and dispatch_change.stream_commit_id =
                   intent_row.stream_commit_id
@@ -8595,9 +8602,128 @@ begin
                            attempt_row
                         where attempt_row.tenant_id = dispatch_row.tenant_id
                           and attempt_row.dispatch_id = dispatch_row.id
-                     )
                 )
-           )
+              )
+            )
+            or (
+              intent_row.type_id = 'core:provider.message_lifecycle'
+              and (
+                intent_row.payload_reference->>'schemaId' <>
+                  'core:inbox-v2.message-provider-lifecycle-operation'
+                or not exists (
+                  select 1
+                  from public.inbox_v2_message_provider_lifecycle_operations
+                    operation_row
+                  join public.inbox_v2_outbound_route_consumptions consumption_row
+                    on consumption_row.tenant_id = operation_row.tenant_id
+                   and consumption_row.consumer_kind = 'provider_lifecycle'
+                   and consumption_row.consumer_id = operation_row.id
+                   and consumption_row.message_id = operation_row.message_id
+                   and consumption_row.outbound_route_id =
+                     operation_row.outbound_route_id
+                  join public.inbox_v2_tenant_stream_changes lifecycle_change
+                    on lifecycle_change.tenant_id = operation_row.tenant_id
+                   and lifecycle_change.stream_commit_id =
+                     intent_row.stream_commit_id
+                   and lifecycle_change.mutation_id = intent_row.mutation_id
+                   and lifecycle_change.id in (
+                     select jsonb_array_elements_text(intent_row.change_ids)
+                   )
+                  where operation_row.tenant_id = intent_row.tenant_id
+                    and operation_row.id =
+                      intent_row.payload_reference->>'recordId'
+                    and operation_row.origin = 'hulee_requested'
+                    and operation_row.outcome = 'pending'
+                    and operation_row.outbound_route_id is not null
+                    and operation_row.revision = 1
+                    and operation_row.created_stream_position = v_stream.position
+                    and operation_row.last_changed_stream_position =
+                      v_stream.position
+                    and operation_row.recorded_at = new.committed_at
+                    and operation_row.created_at = new.committed_at
+                    and operation_row.updated_at = new.committed_at
+                    and event_row.subjects @> jsonb_build_array(
+                      jsonb_build_object(
+                        'tenantId', operation_row.tenant_id,
+                        'entityTypeId', 'core:message',
+                        'entityId', operation_row.message_id
+                      )
+                    )
+                    and lifecycle_change.entity_type_id =
+                      'core:message-provider-lifecycle-operation'
+                    and lifecycle_change.entity_id = operation_row.id
+                    and lifecycle_change.resulting_revision =
+                      operation_row.revision
+                    and lifecycle_change.state_kind = 'upsert'
+                    and lifecycle_change.state_schema_id =
+                      'core:inbox-v2.message-provider-lifecycle-operation'
+                    and lifecycle_change.state_schema_version = 'v1'
+                    and lifecycle_change.payload_reference =
+                      intent_row.payload_reference
+                    and lifecycle_change.state_hash =
+                      lifecycle_change.payload_reference->>'digest'
+                    and (
+                      (
+                        operation_row.action = 'edit'
+                        and exists (
+                          select 1
+                          from public.inbox_v2_tenant_stream_changes
+                            message_change
+                          join public.inbox_v2_message_revisions revision_row
+                            on revision_row.tenant_id =
+                              message_change.tenant_id
+                           and revision_row.message_id =
+                              message_change.entity_id
+                           and revision_row.message_revision =
+                              message_change.resulting_revision
+                          where message_change.tenant_id =
+                              operation_row.tenant_id
+                            and message_change.stream_commit_id =
+                              intent_row.stream_commit_id
+                            and message_change.mutation_id =
+                              intent_row.mutation_id
+                            and message_change.entity_type_id = 'core:message'
+                            and message_change.entity_id =
+                              operation_row.message_id
+                            and message_change.state_kind = 'upsert'
+                            and message_change.state_schema_id =
+                              'core:inbox-v2.message'
+                            and message_change.state_schema_version = 'v1'
+                            and message_change.state_hash =
+                              message_change.payload_reference->>'digest'
+                            and revision_row.change_kind = 'edited'
+                            and revision_row.provider_operation_id =
+                              operation_row.id
+                            and revision_row.recorded_stream_position =
+                              v_stream.position
+                            and event_row.change_ids @> jsonb_build_array(
+                              lifecycle_change.id,
+                              message_change.id
+                            )
+                        )
+                      ) or (
+                        operation_row.action = 'delete'
+                        and not exists (
+                          select 1
+                          from public.inbox_v2_tenant_stream_changes
+                            message_change
+                          where message_change.tenant_id =
+                              operation_row.tenant_id
+                            and message_change.stream_commit_id =
+                              intent_row.stream_commit_id
+                            and message_change.mutation_id =
+                              intent_row.mutation_id
+                            and message_change.entity_type_id = 'core:message'
+                            and message_change.entity_id =
+                              operation_row.message_id
+                        )
+                      )
+                    )
+                )
+              )
+            )
+         )
+       )
          )
        )
        or not (v_stream.change_ids @> intent_row.change_ids)
@@ -8889,8 +9015,12 @@ begin
      and message_change.stream_commit_id = new.stream_commit_id
      and message_change.mutation_id = new.mutation_id
      and message_change.entity_type_id = 'core:message'
-     and v_command.command_type_id <>
-       'core:attachment.materialization.complete'
+     and v_command.command_type_id not in (
+       'core:attachment.materialization.complete',
+       'core:message.edit',
+       'core:message.delete_local',
+       'core:message.delete_provider'
+     )
      and (
        message_change.resulting_revision <> 1
        or message_change.state_kind <> 'upsert'
@@ -9056,6 +9186,256 @@ begin
             and source_materialization.stream_commit_id =
               message_change.stream_commit_id
        ))
+     );
+
+  -- Message lifecycle commands advance an existing Message aggregate. They
+  -- must not pass through the revision-1 creation validator above: the exact
+  -- Message revision, current heads, event and projection are closed here.
+  select v_invalid_count + count(*)::integer into v_invalid_count
+    from public.inbox_v2_tenant_stream_changes message_change
+    left join public.inbox_v2_messages message_row
+      on message_row.tenant_id = message_change.tenant_id
+     and message_row.id = message_change.entity_id
+    left join public.inbox_v2_timeline_items timeline_row
+      on timeline_row.tenant_id = message_row.tenant_id
+     and timeline_row.id = message_row.timeline_item_id
+    left join public.inbox_v2_message_revisions lifecycle_revision_row
+      on lifecycle_revision_row.tenant_id = message_change.tenant_id
+     and lifecycle_revision_row.id =
+       message_change.domain_commit_reference->>'recordId'
+    left join public.inbox_v2_timeline_contents content_row
+      on content_row.tenant_id = message_row.tenant_id
+     and content_row.id = message_row.content_id
+    left join public.inbox_v2_timeline_content_revisions
+      content_revision_row
+      on content_revision_row.tenant_id = content_row.tenant_id
+     and content_revision_row.content_id = content_row.id
+     and content_revision_row.revision = content_row.revision
+   where message_change.tenant_id = new.tenant_id
+     and message_change.stream_commit_id = new.stream_commit_id
+     and message_change.mutation_id = new.mutation_id
+     and message_change.entity_type_id = 'core:message'
+     and v_command.command_type_id in (
+       'core:message.edit',
+       'core:message.delete_local'
+     )
+     and (
+       message_change.resulting_revision < 2
+       or message_change.state_kind <> 'upsert'
+       or message_change.state_schema_id is distinct from
+          'core:inbox-v2.message'
+       or message_change.state_schema_version is distinct from 'v1'
+       or message_change.payload_reference->>'tenantId' is distinct from
+          message_change.tenant_id
+       or message_change.payload_reference->>'recordId' is distinct from
+          message_change.entity_id
+       or message_change.payload_reference->>'schemaId' is distinct from
+          'core:inbox-v2.message'
+       or message_change.payload_reference->>'schemaVersion' is distinct from
+          'v1'
+       or message_change.payload_reference is distinct from
+          v_command.result_reference
+       or message_change.state_hash is distinct from
+          message_change.payload_reference->>'digest'
+       or message_change.domain_commit_reference->>'tenantId' is distinct from
+          message_change.tenant_id
+       or message_change.domain_commit_reference->>'schemaId' is distinct from
+          'core:inbox-v2.message-revision'
+       or message_change.domain_commit_reference->>'schemaVersion' is distinct
+          from 'v1'
+       or v_audit.evidence_reference is distinct from
+          message_change.domain_commit_reference
+       or message_change.audience not in (
+         'conversation_external', 'internal_participants'
+       )
+       or message_row.id is null
+       or message_row.revision <> message_change.resulting_revision
+       or message_row.last_changed_stream_position <>
+          message_change.stream_position
+       or message_row.updated_at <> new.committed_at
+       or timeline_row.id is null
+       or timeline_row.subject_kind <> 'message'
+       or timeline_row.subject_id <> message_row.id
+       or timeline_row.conversation_id <> message_row.conversation_id
+       or timeline_row.revision <> message_row.revision
+       or timeline_row.visibility::text <> message_change.audience::text
+       or timeline_row.last_changed_stream_position <>
+          message_change.stream_position
+       or timeline_row.updated_at <> new.committed_at
+       or message_change.timeline is distinct from jsonb_build_object(
+         'conversation', jsonb_build_object(
+           'tenantId', message_row.tenant_id,
+           'id', message_row.conversation_id,
+           'kind', 'conversation'
+         ),
+         'timelineSequence', timeline_row.timeline_sequence::text
+       )
+       or lifecycle_revision_row.id is null
+       or lifecycle_revision_row.message_id <> message_row.id
+       or lifecycle_revision_row.timeline_item_id <> message_row.timeline_item_id
+       or lifecycle_revision_row.message_revision <>
+          message_change.resulting_revision
+       or lifecycle_revision_row.expected_previous_revision <>
+          message_change.resulting_revision - 1
+       or lifecycle_revision_row.recorded_stream_position <>
+          message_change.stream_position
+       or lifecycle_revision_row.recorded_at <> new.committed_at
+       or lifecycle_revision_row.record_revision <> 1
+       or (
+         v_command.command_type_id = 'core:message.edit'
+         and (
+           lifecycle_revision_row.change_kind <> 'edited'
+           or lifecycle_revision_row.after_content_id is distinct from
+              message_row.content_id
+           or lifecycle_revision_row.after_content_revision is distinct from
+              message_row.content_revision
+           or lifecycle_revision_row.after_content_state::text is distinct from
+              message_row.content_state::text
+           or lifecycle_revision_row.before_content_id is null
+           or lifecycle_revision_row.before_content_revision is null
+           or lifecycle_revision_row.before_content_state is null
+           or lifecycle_revision_row.reason_id is not null
+           or message_row.lifecycle <> 'active'
+           or content_row.id is null
+           or content_row.owner_kind <> 'message'
+           or content_row.owner_id <> message_row.id
+           or content_row.revision <> message_row.content_revision
+           or content_row.state <> message_row.content_state
+           or content_row.last_changed_stream_position <>
+              message_change.stream_position
+           or content_row.updated_at <> new.committed_at
+           or content_revision_row.content_id is null
+           or content_revision_row.transition_kind <> 'edit'
+           or content_revision_row.expected_previous_revision <>
+              content_revision_row.revision - 1
+           or content_revision_row.recorded_stream_position <>
+              message_change.stream_position
+           or content_revision_row.occurred_at <>
+              lifecycle_revision_row.occurred_at
+           or content_revision_row.recorded_at <> new.committed_at
+           or (
+             select count(*)
+               from public.inbox_v2_tenant_stream_changes operation_change
+              where operation_change.tenant_id = message_change.tenant_id
+                and operation_change.stream_commit_id =
+                  message_change.stream_commit_id
+                and operation_change.mutation_id = message_change.mutation_id
+                and operation_change.entity_type_id =
+                  'core:message-provider-lifecycle-operation'
+                and operation_change.entity_id =
+                  lifecycle_revision_row.provider_operation_id
+           ) <> case
+             when lifecycle_revision_row.provider_operation_id is null then 0
+             else 1
+           end
+         )
+       )
+       or (
+         v_command.command_type_id = 'core:message.delete_local'
+         and (
+           lifecycle_revision_row.change_kind <>
+             'local_delete_tombstone'
+           or lifecycle_revision_row.provider_operation_id is not null
+           or lifecycle_revision_row.reason_id is distinct from
+              v_audit.reason_code_id
+           or num_nonnulls(
+             lifecycle_revision_row.before_content_id,
+             lifecycle_revision_row.before_content_revision,
+             lifecycle_revision_row.before_content_state,
+             lifecycle_revision_row.after_content_id,
+             lifecycle_revision_row.after_content_revision,
+             lifecycle_revision_row.after_content_state
+           ) <> 0
+           or message_row.lifecycle <> 'local_delete_tombstone'
+           or message_row.lifecycle_revision_id is distinct from
+              lifecycle_revision_row.id
+           or message_row.lifecycle_reason_id is distinct from
+              lifecycle_revision_row.reason_id
+           or exists (
+             select 1
+               from public.inbox_v2_tenant_stream_changes operation_change
+              where operation_change.tenant_id = message_change.tenant_id
+                and operation_change.stream_commit_id =
+                  message_change.stream_commit_id
+                and operation_change.mutation_id = message_change.mutation_id
+                and operation_change.entity_type_id =
+                  'core:message-provider-lifecycle-operation'
+           )
+         )
+       )
+       or (
+         select count(*)
+           from public.inbox_v2_domain_events message_event
+          where message_event.tenant_id = message_change.tenant_id
+            and message_event.stream_commit_id =
+              message_change.stream_commit_id
+            and message_event.mutation_id = message_change.mutation_id
+            and message_event.type_id = 'core:message.changed'
+            and message_event.payload_schema_id =
+              message_change.domain_commit_reference->>'schemaId'
+            and message_event.payload_schema_version =
+              message_change.domain_commit_reference->>'schemaVersion'
+            and message_event.payload_reference =
+              message_change.domain_commit_reference
+            and message_event.change_ids ? message_change.id
+            and message_event.subjects @> jsonb_build_array(
+              jsonb_build_object(
+                'tenantId', message_change.tenant_id,
+                'entityTypeId', 'core:message',
+                'entityId', message_change.entity_id
+              )
+            )
+            and message_event.occurred_at =
+              lifecycle_revision_row.occurred_at
+            and message_event.recorded_at = new.committed_at
+       ) <> 1
+       or (
+         select count(*)
+           from public.inbox_v2_domain_events related_event
+          where related_event.tenant_id = message_change.tenant_id
+            and related_event.stream_commit_id =
+              message_change.stream_commit_id
+            and related_event.mutation_id = message_change.mutation_id
+            and (
+              related_event.change_ids ? message_change.id
+              or related_event.subjects @> jsonb_build_array(
+                jsonb_build_object(
+                  'tenantId', message_change.tenant_id,
+                  'entityTypeId', 'core:message',
+                  'entityId', message_change.entity_id
+                )
+              )
+            )
+       ) <> 1
+       or (
+         select count(*)
+           from public.inbox_v2_outbox_intents projection_intent
+           join public.inbox_v2_domain_events projection_event
+             on projection_event.tenant_id = projection_intent.tenant_id
+            and projection_event.id = projection_intent.event_id
+          where projection_intent.tenant_id = message_change.tenant_id
+            and projection_intent.stream_commit_id =
+              message_change.stream_commit_id
+            and projection_intent.mutation_id = message_change.mutation_id
+            and projection_intent.effect_class = 'projection'
+            and projection_intent.type_id = 'core:projection.update'
+            and projection_intent.change_ids ? message_change.id
+            and projection_event.stream_commit_id =
+              message_change.stream_commit_id
+            and projection_event.mutation_id = message_change.mutation_id
+            and projection_event.type_id = 'core:message.changed'
+            and projection_event.change_ids ? message_change.id
+       ) <> 1
+       or exists (
+         select 1
+           from public.inbox_v2_atomic_source_resolution_materializations
+             source_materialization
+          where source_materialization.tenant_id = message_change.tenant_id
+            and source_materialization.message_id = message_change.entity_id
+            and source_materialization.mutation_id = message_change.mutation_id
+            and source_materialization.stream_commit_id =
+              message_change.stream_commit_id
+       )
      );
 
   select v_invalid_count + count(*)::integer into v_invalid_count
@@ -9330,6 +9710,64 @@ begin
        ) then
       raise exception using errcode = '23514',
         message = 'inbox_v2.domain_mutation_message_cardinality_invalid';
+    end if;
+  end if;
+
+  if v_command.command_type_id in (
+    'core:message.edit',
+    'core:message.delete_local',
+    'core:message.delete_provider'
+  ) then
+    select count(*)::integer into v_message_change_count
+      from public.inbox_v2_tenant_stream_changes message_change
+     where message_change.tenant_id = new.tenant_id
+       and message_change.stream_commit_id = new.stream_commit_id
+       and message_change.mutation_id = new.mutation_id
+       and message_change.stream_position = v_stream.position
+       and message_change.entity_type_id = 'core:message';
+    select count(*)::integer into v_provider_operation_change_count
+      from public.inbox_v2_tenant_stream_changes operation_change
+     where operation_change.tenant_id = new.tenant_id
+       and operation_change.stream_commit_id = new.stream_commit_id
+       and operation_change.mutation_id = new.mutation_id
+       and operation_change.stream_position = v_stream.position
+       and operation_change.entity_type_id =
+         'core:message-provider-lifecycle-operation';
+
+    if v_event_count <> 1
+       or v_projection_count <> 1
+       or (
+         v_command.command_type_id = 'core:message.edit'
+         and (
+           v_message_change_count <> 1
+           or v_provider_operation_change_count not in (0, 1)
+           or v_change_count <>
+              1 + v_provider_operation_change_count
+           or v_outbox_count <>
+              1 + v_provider_operation_change_count
+         )
+       )
+       or (
+         v_command.command_type_id = 'core:message.delete_local'
+         and (
+           v_message_change_count <> 1
+           or v_provider_operation_change_count <> 0
+           or v_change_count <> 1
+           or v_outbox_count <> 1
+         )
+       )
+       or (
+         v_command.command_type_id = 'core:message.delete_provider'
+         and (
+           v_message_change_count <> 0
+           or v_provider_operation_change_count <> 1
+           or v_change_count <> 1
+           or v_outbox_count <> 2
+         )
+       ) then
+      raise exception using errcode = '23514',
+        message =
+          'inbox_v2.domain_mutation_message_lifecycle_cardinality_invalid';
     end if;
   end if;
 

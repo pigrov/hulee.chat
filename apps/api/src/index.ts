@@ -382,6 +382,10 @@ export {
   createInboxV2OutboundSendCommandService
 } from "./inbox-v2-outbound-send-command";
 export {
+  calculateInboxV2MessageLifecycleIntentDigest,
+  createInboxV2MessageLifecycleCommandService
+} from "./inbox-v2-message-lifecycle-command";
+export {
   calculateInboxV2OutboundReferenceIntentDigest,
   calculateInboxV2OutboundReferenceRouteIdempotencyToken,
   createInboxV2OutboundReferenceCommandService
@@ -427,6 +431,18 @@ export type {
   InboxV2PreparedIdentityClaimAuthorizationBinding,
   InboxV2PreparedIdentityClaimCommand
 } from "./inbox-v2-identity-claim-command";
+export type {
+  InboxV2MessageLifecycleAtomicCoordinator,
+  InboxV2MessageLifecycleAtomicResult,
+  InboxV2MessageLifecycleCommand,
+  InboxV2MessageLifecycleCommandPreparer,
+  InboxV2MessageLifecycleCommandResult,
+  InboxV2MessageLifecycleCommandService,
+  InboxV2MessageLifecycleCommandServiceOptions,
+  InboxV2MessageLifecycleIdempotencyScope,
+  InboxV2MessageLifecycleRequestScope,
+  InboxV2PreparedMessageLifecycleCommand
+} from "./inbox-v2-message-lifecycle-command";
 export type {
   InboxV2OutboundSendCommand,
   InboxV2OutboundSendCommandPreparer,

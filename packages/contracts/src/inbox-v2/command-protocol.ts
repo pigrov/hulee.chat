@@ -640,21 +640,44 @@ function requiredAuthorizationsForIntent(
       }
     });
   }
-  for (const proof of fileReadProofsForIntent(intent)) {
+  const fileReadProofs = fileReadProofsForIntent(intent);
+  if (intent.kind === "edit_message" && fileReadProofs.length > 0) {
+    // Editing content establishes a new live File parent just like the
+    // corresponding send path. Keep that destination authority separate from
+    // the lifecycle edit action and let the exact-requirement map deduplicate
+    // the Conversation read already required above.
+    required.push(
+      {
+        permissionId: conversationReadPermissionForIntent(intent),
+        resourceScopeId: "core:conversation",
+        resource: conversation
+      },
+      {
+        permissionId:
+          intent.transport.kind === "internal"
+            ? "core:message.send_internal"
+            : "core:message.reply_external",
+        resourceScopeId: "core:conversation",
+        resource: conversation
+      }
+    );
+  }
+  for (const proof of fileReadProofs) {
+    const fileResource = {
+      tenantId: proof.file.tenantId,
+      entityTypeId: "core:file",
+      entityId: proof.file.id
+    };
     required.push({
       permissionId: "core:file.view",
       resourceScopeId: "core:file",
-      resource: {
-        tenantId: proof.file.tenantId,
-        entityTypeId: "core:file",
-        entityId: proof.file.id
-      }
+      resource: fileResource
     });
     if (proof.sourceParent.kind === "upload_staging") {
       required.push({
         permissionId: "core:file.upload",
-        resourceScopeId: "core:conversation",
-        resource: conversation
+        resourceScopeId: "core:file",
+        resource: fileResource
       });
     } else {
       const sourceConversation = {
@@ -956,28 +979,26 @@ function requiredActionAuthorizationForIntent(
         resource: conversationResource
       };
     case "edit_message":
-      return {
-        permissionId:
-          intent.mutationAuthority?.kind === "moderate_external"
-            ? "core:message.moderate_external"
-            : intent.mutationAuthority?.kind === "moderate_internal"
-              ? "core:message.moderate_internal"
-              : "core:message.edit_own",
-        resourceScopeId: "core:conversation",
-        resource: conversationResource
-      };
+      return lifecycleActionAuthorization(
+        intent,
+        intent.mutationAuthority?.kind === "moderate_external"
+          ? "core:message.moderate_external"
+          : intent.mutationAuthority?.kind === "moderate_internal"
+            ? "core:message.moderate_internal"
+            : "core:message.edit_own",
+        conversationResource
+      );
     case "delete_message_local":
     case "delete_message_provider":
-      return {
-        permissionId:
-          intent.mutationAuthority?.kind === "moderate_external"
-            ? "core:message.moderate_external"
-            : intent.mutationAuthority?.kind === "moderate_internal"
-              ? "core:message.moderate_internal"
-              : "core:message.delete_own",
-        resourceScopeId: "core:conversation",
-        resource: conversationResource
-      };
+      return lifecycleActionAuthorization(
+        intent,
+        intent.mutationAuthority?.kind === "moderate_external"
+          ? "core:message.moderate_external"
+          : intent.mutationAuthority?.kind === "moderate_internal"
+            ? "core:message.moderate_internal"
+            : "core:message.delete_own",
+        conversationResource
+      );
     case "forward_content_copy":
       return {
         permissionId:
@@ -1007,6 +1028,37 @@ function requiredActionAuthorizationForIntent(
         resource: conversationResource
       };
   }
+}
+
+function lifecycleActionAuthorization(
+  intent: Extract<
+    InboxV2TimelineCommandIntent,
+    {
+      kind: "edit_message" | "delete_message_local" | "delete_message_provider";
+    }
+  >,
+  permissionId: string,
+  conversationResource: InboxV2RequiredAuthorization["resource"]
+): InboxV2RequiredAuthorization {
+  const authority = intent.mutationAuthority;
+  if (authority === undefined || authority.kind === "moderate_internal") {
+    // An incomplete lifecycle intent is rejected separately. Keeping the
+    // fallback total avoids manufacturing an untrusted TimelineItem ID.
+    return {
+      permissionId,
+      resourceScopeId: "core:conversation",
+      resource: conversationResource
+    };
+  }
+  return {
+    permissionId,
+    resourceScopeId: "core:timeline-item",
+    resource: {
+      tenantId: authority.timelineItem.tenantId,
+      entityTypeId: "core:timeline-item",
+      entityId: authority.timelineItem.id
+    }
+  };
 }
 
 function decisionPrincipalMatches(

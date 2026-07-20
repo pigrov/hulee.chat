@@ -93,6 +93,50 @@ export type InboxV2AtomicMessageMutationSealManifest = Readonly<{
   event: InboxV2AtomicStreamEventManifest;
 }>;
 
+/**
+ * Canonical closure for edit/local-delete/provider-delete commands. Provider
+ * lifecycle work is always represented by its own stream entity even when an
+ * external edit advances the Message in the same event.
+ */
+export type InboxV2AtomicMessageLifecycleSealManifest = Readonly<{
+  kind: "message_lifecycle";
+  commandKind: "edit" | "local_delete" | "provider_delete";
+  tenantId: string;
+  conversationId: string;
+  messageId: string;
+  timelineItemId: string;
+  /** Revision locked before the lifecycle mutation and authorized by the primary decision. */
+  timelineItemRevision: string;
+  timelineSequence: string;
+  message: Readonly<{
+    messageRevision: string;
+    audience: "internal_participants" | "conversation_external";
+    stateSchemaId: string;
+    stateSchemaVersion: string;
+    stateHash: string;
+    payloadReference: InboxV2PayloadReference;
+    domainCommitReference: InboxV2PayloadReference;
+  }> | null;
+  providerOperation: Readonly<{
+    operationId: string;
+    operationRevision: string;
+    stateSchemaId: string;
+    stateSchemaVersion: string;
+    stateHash: string;
+    payloadReference: InboxV2PayloadReference;
+    domainCommitReference: InboxV2PayloadReference;
+  }> | null;
+  fileParentAttachments: Readonly<{
+    /** Exact number of revision-scoped parent links sealed by this command. */
+    materializedParentCount: number;
+    /** Canonical digest of the prepared ready-pin parent plan. */
+    planDigestSha256: string;
+    /** Canonical digest of the exact link IDs returned by the one-shot seal. */
+    linkIdsDigestSha256: string;
+  }>;
+  event: InboxV2AtomicStreamEventManifest;
+}>;
+
 export function deriveInboxV2AttachmentMaterializationAuditReference(input: {
   tenantId: string;
   entityTypeId: "core:message" | "core:conversation";
@@ -162,6 +206,7 @@ export type InboxV2AtomicTimelineItemCreationSealManifest = Readonly<{
 
 export type InboxV2AtomicMaterializationSealManifest =
   | InboxV2AtomicMessageCreationSealManifest
+  | InboxV2AtomicMessageLifecycleSealManifest
   | InboxV2AtomicMessageMutationSealManifest
   | InboxV2AtomicTimelineItemCreationSealManifest;
 
@@ -546,6 +591,7 @@ function recursivelyFrozenManifest(
     typeof manifest !== "object" ||
     manifest === null ||
     (manifest.kind !== "message_creation" &&
+      manifest.kind !== "message_lifecycle" &&
       manifest.kind !== "message_mutation" &&
       manifest.kind !== "timeline_item_creation")
   ) {

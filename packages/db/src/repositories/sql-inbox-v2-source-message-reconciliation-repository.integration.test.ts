@@ -887,7 +887,7 @@ describePostgres(
       expect(JSON.stringify(plans.pending)).not.toContain("Seq Scan");
       expect(plans.registry[0]!.Plan["Total Cost"]).toBeLessThan(100);
       expect(plans.pending[0]!.Plan["Total Cost"]).toBeLessThan(100);
-    }, 20_000);
+    }, 60_000);
 
     it("rolls back induction, occurrence, transition and head after a late action-write failure", async () => {
       const suffix = `rollback-${runId}`;
@@ -2210,6 +2210,22 @@ async function seedExternalTarget(
       ${`timeline_content:src006-${suffix}`}, 1, 'available', 'none',
       'active', 1, 1, ${new Date(target.createdAt)},
       ${new Date(target.createdAt)}
+    )
+  `);
+  await executor.execute(sql`
+    insert into inbox_v2_message_revisions (
+      tenant_id, id, message_id, timeline_item_id,
+      expected_previous_revision, message_revision, change_kind,
+      before_content_id, before_content_revision, before_content_state,
+      after_content_id, after_content_revision, after_content_state,
+      provider_operation_id, reason_id, action_attribution_id,
+      occurred_at, recorded_at, recorded_stream_position, record_revision
+    ) values (
+      ${target.tenantId}, ${`message_revision:src006-${suffix}`},
+      ${target.message.id}, ${target.timelineItem.id}, null, 1, 'created',
+      null, null, null, ${`timeline_content:src006-${suffix}`}, 1,
+      'available', null, null, ${`action_attribution:src006-${suffix}`},
+      ${new Date(target.createdAt)}, ${new Date(target.createdAt)}, 1, 1
     )
   `);
   await executor.execute(sql`

@@ -15,6 +15,10 @@ import {
 } from "./ids";
 import { inboxV2NamespacedIdSchema } from "./namespace";
 import {
+  INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_OPERATION_SCHEMA_ID,
+  INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_SCHEMA_VERSION
+} from "./message-provider-lifecycle";
+import {
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION
 } from "./outbound-dispatch";
@@ -69,9 +73,13 @@ export const INBOX_V2_CORE_OUTBOX_INTENT_TYPE_IDS = [
   "core:projection.update",
   "core:notification.evaluate",
   "core:provider.dispatch",
+  "core:provider.message_lifecycle",
   "core:search.index",
   "core:workflow.evaluate"
 ] as const;
+
+export const INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_OPERATION_ENTITY_TYPE_ID =
+  "core:message-provider-lifecycle-operation" as const;
 
 const moduleNamespacedIdSchema = inboxV2NamespacedIdSchema.refine(
   (value) => value.startsWith("module:"),
@@ -461,20 +469,31 @@ export const inboxV2OutboxIntentSchema = z
         message: "Outbox payload reference must belong to the intent tenant."
       });
     }
+    const providerPayloadKind =
+      intent.typeId === "core:provider.dispatch"
+        ? "dispatch"
+        : intent.typeId === "core:provider.message_lifecycle"
+          ? "message_lifecycle"
+          : null;
     if (
       intent.effectClass === "provider_io" &&
-      (intent.typeId !== "core:provider.dispatch" ||
+      (providerPayloadKind === null ||
         intent.payloadReference === null ||
-        String(intent.payloadReference.schemaId) !==
-          INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID ||
-        intent.payloadReference.schemaVersion !==
-          INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION ||
+        (providerPayloadKind === "dispatch"
+          ? String(intent.payloadReference.schemaId) !==
+              INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID ||
+            intent.payloadReference.schemaVersion !==
+              INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION
+          : String(intent.payloadReference.schemaId) !==
+              INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_OPERATION_SCHEMA_ID ||
+            intent.payloadReference.schemaVersion !==
+              INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_SCHEMA_VERSION) ||
         intent.changeIds.length === 0)
     ) {
       context.addIssue({
         code: "custom",
         message:
-          "Provider I/O requires an explicit dispatch intent, payload reference and owning changes."
+          "Provider I/O requires an explicit dispatch or message-lifecycle intent, exact payload reference and owning changes."
       });
     }
   });
@@ -841,18 +860,38 @@ function validateOutboxIntents(
           change.audience === "staff_only" ||
           String(change.entity.entityTypeId) === "core:staff-note"
       );
-    const hasPinnedOutboundDispatch =
+    const expectedProviderEntityTypeId =
+      intent.typeId === "core:provider.dispatch"
+        ? "core:outbound-dispatch"
+        : intent.typeId === "core:provider.message_lifecycle"
+          ? INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_OPERATION_ENTITY_TYPE_ID
+          : null;
+    const expectedProviderStateSchemaId =
+      intent.typeId === "core:provider.dispatch"
+        ? INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID
+        : intent.typeId === "core:provider.message_lifecycle"
+          ? INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_OPERATION_SCHEMA_ID
+          : null;
+    const pinnedProviderOperations =
+      expectedProviderEntityTypeId === null ||
+      expectedProviderStateSchemaId === null ||
+      intent.payloadReference === null
+        ? []
+        : referencedChanges.filter(
+            (change) =>
+              change !== undefined &&
+              String(change.entity.entityTypeId) ===
+                expectedProviderEntityTypeId &&
+              change.state.kind === "upsert" &&
+              String(change.state.stateSchemaId) ===
+                expectedProviderStateSchemaId &&
+              sameValue(change.state.payloadReference, intent.payloadReference)
+          );
+    const hasPinnedProviderOperation =
       intent.effectClass !== "provider_io" ||
-      (intent.payloadReference !== null &&
-        referencedChanges.some(
-          (change) =>
-            change !== undefined &&
-            String(change.entity.entityTypeId) === "core:outbound-dispatch" &&
-            change.state.kind === "upsert" &&
-            String(change.state.stateSchemaId) ===
-              INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID &&
-            sameValue(change.state.payloadReference, intent.payloadReference)
-        ));
+      (intent.typeId === "core:provider.message_lifecycle"
+        ? pinnedProviderOperations.length === 1
+        : pinnedProviderOperations.length > 0);
     if (
       !sameCommit(intent.commit, bundle.commit) ||
       intent.tenantId !== bundle.commit.tenantId ||
@@ -872,7 +911,7 @@ function validateOutboxIntents(
         intent.availableAt
       ) ||
       leaksStaffOnly ||
-      !hasPinnedOutboundDispatch
+      !hasPinnedProviderOperation
     ) {
       addIssue(
         context,
@@ -984,6 +1023,7 @@ function coreOutboxEffectClass(
     case "core:notification.evaluate":
       return "notification";
     case "core:provider.dispatch":
+    case "core:provider.message_lifecycle":
       return "provider_io";
     case "core:search.index":
       return "search";

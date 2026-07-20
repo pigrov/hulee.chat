@@ -23,7 +23,11 @@ import {
 } from "./outbound-transport";
 import { inboxV2SourceOccurrences } from "./source-occurrence";
 import { inboxV2SourceThreadBindings } from "./source-thread-binding";
-import { inboxV2Messages } from "./timeline-message";
+import {
+  inboxV2MessageProviderLifecycleOperations,
+  inboxV2MessageRevisions,
+  inboxV2Messages
+} from "./timeline-message";
 
 export const inboxV2DeferredSourceActionKind = pgEnum(
   "inbox_v2_deferred_source_action_kind",
@@ -339,6 +343,13 @@ export const inboxV2DeferredMessageSourceActions = pgTable(
     appliedMessageRevision: bigint("applied_message_revision", {
       mode: "bigint"
     }),
+    appliedProviderLifecycleOperationId: text(
+      "applied_provider_lifecycle_operation_id"
+    ),
+    appliedProviderLifecycleOperationRevision: bigint(
+      "applied_provider_lifecycle_operation_revision",
+      { mode: "bigint" }
+    ),
     effectKind: inboxV2DeferredSourceActionEffectKind("effect_kind"),
     relatedActionId: text("related_action_id"),
     stateReasonId: text("state_reason_id"),
@@ -500,6 +511,32 @@ export const inboxV2DeferredMessageSourceActions = pgTable(
       name: "inbox_v2_deferred_actions_applied_message_fk",
       columns: [table.tenantId, table.appliedMessageId],
       foreignColumns: [inboxV2Messages.tenantId, inboxV2Messages.id]
+    }),
+    foreignKey({
+      name: "inbox_v2_deferred_actions_applied_message_revision_fk",
+      columns: [
+        table.tenantId,
+        table.appliedMessageId,
+        table.appliedMessageRevision
+      ],
+      foreignColumns: [
+        inboxV2MessageRevisions.tenantId,
+        inboxV2MessageRevisions.messageId,
+        inboxV2MessageRevisions.messageRevision
+      ]
+    }),
+    foreignKey({
+      name: "inbox_v2_deferred_actions_applied_provider_operation_fk",
+      columns: [
+        table.tenantId,
+        table.appliedProviderLifecycleOperationId,
+        table.appliedProviderLifecycleOperationRevision
+      ],
+      foreignColumns: [
+        inboxV2MessageProviderLifecycleOperations.tenantId,
+        inboxV2MessageProviderLifecycleOperations.id,
+        inboxV2MessageProviderLifecycleOperations.revision
+      ]
     }),
     foreignKey({
       name: "inbox_v2_deferred_actions_related_action_fk",
@@ -825,6 +862,13 @@ export const inboxV2DeferredMessageSourceActionTransitions = pgTable(
     appliedMessageRevision: bigint("applied_message_revision", {
       mode: "bigint"
     }),
+    appliedProviderLifecycleOperationId: text(
+      "applied_provider_lifecycle_operation_id"
+    ),
+    appliedProviderLifecycleOperationRevision: bigint(
+      "applied_provider_lifecycle_operation_revision",
+      { mode: "bigint" }
+    ),
     effectKind: inboxV2DeferredSourceActionEffectKind("effect_kind"),
     relatedActionId: text("related_action_id"),
     reasonId: text("reason_id"),
@@ -885,6 +929,32 @@ export const inboxV2DeferredMessageSourceActionTransitions = pgTable(
       name: "inbox_v2_deferred_action_transitions_message_fk",
       columns: [table.tenantId, table.targetMessageId],
       foreignColumns: [inboxV2Messages.tenantId, inboxV2Messages.id]
+    }),
+    foreignKey({
+      name: "inbox_v2_deferred_action_transitions_message_revision_fk",
+      columns: [
+        table.tenantId,
+        table.targetMessageId,
+        table.appliedMessageRevision
+      ],
+      foreignColumns: [
+        inboxV2MessageRevisions.tenantId,
+        inboxV2MessageRevisions.messageId,
+        inboxV2MessageRevisions.messageRevision
+      ]
+    }),
+    foreignKey({
+      name: "inbox_v2_deferred_action_transitions_provider_operation_fk",
+      columns: [
+        table.tenantId,
+        table.appliedProviderLifecycleOperationId,
+        table.appliedProviderLifecycleOperationRevision
+      ],
+      foreignColumns: [
+        inboxV2MessageProviderLifecycleOperations.tenantId,
+        inboxV2MessageProviderLifecycleOperations.id,
+        inboxV2MessageProviderLifecycleOperations.revision
+      ]
     }),
     foreignKey({
       name: "inbox_v2_deferred_action_transitions_related_fk",
@@ -1384,6 +1454,8 @@ type DeferredActionStateColumns = Readonly<{
   appliedExternalMessageReferenceId: SQLWrapper;
   appliedMessageId: SQLWrapper;
   appliedMessageRevision: SQLWrapper;
+  appliedProviderLifecycleOperationId: SQLWrapper;
+  appliedProviderLifecycleOperationRevision: SQLWrapper;
   effectKind: SQLWrapper;
   relatedActionId: SQLWrapper;
   stateReasonId: SQLWrapper;
@@ -1399,6 +1471,8 @@ type DeferredTransitionStateColumns = Readonly<{
   targetExternalMessageReferenceId: SQLWrapper;
   targetMessageId: SQLWrapper;
   appliedMessageRevision: SQLWrapper;
+  appliedProviderLifecycleOperationId: SQLWrapper;
+  appliedProviderLifecycleOperationRevision: SQLWrapper;
   effectKind: SQLWrapper;
   relatedActionId: SQLWrapper;
   reasonId: SQLWrapper;
@@ -1512,7 +1586,9 @@ function deferredActionStateSql(table: DeferredActionStateColumns) {
       and ${table.revision} = 1
       and num_nonnulls(
         ${table.appliedExternalMessageReferenceId}, ${table.appliedMessageId},
-        ${table.appliedMessageRevision}, ${table.effectKind},
+        ${table.appliedMessageRevision},
+        ${table.appliedProviderLifecycleOperationId},
+        ${table.appliedProviderLifecycleOperationRevision}, ${table.effectKind},
         ${table.relatedActionId}, ${table.stateReasonId},
         ${table.conflictCandidateDigestSha256}, ${table.terminalAt}
       ) = 0
@@ -1524,6 +1600,14 @@ function deferredActionStateSql(table: DeferredActionStateColumns) {
       and ${table.appliedMessageId} is not null
       and ${table.appliedMessageRevision} >= 1
       and ${table.effectKind} is not null
+      and (
+        (${table.effectKind} = 'provider_delete_retain_local'
+          and ${table.appliedProviderLifecycleOperationId} is not null
+          and ${table.appliedProviderLifecycleOperationRevision} >= 1)
+        or (${table.effectKind} <> 'provider_delete_retain_local'
+          and ${table.appliedProviderLifecycleOperationId} is null
+          and ${table.appliedProviderLifecycleOperationRevision} is null)
+      )
       and ${table.relatedActionId} is null
       and ${table.stateReasonId} is null
       and ${table.conflictCandidateCount} = 0
@@ -1538,7 +1622,9 @@ function deferredActionStateSql(table: DeferredActionStateColumns) {
       and isfinite(${table.terminalAt})
       and num_nonnulls(
         ${table.appliedExternalMessageReferenceId}, ${table.appliedMessageId},
-        ${table.appliedMessageRevision}, ${table.effectKind},
+        ${table.appliedMessageRevision},
+        ${table.appliedProviderLifecycleOperationId},
+        ${table.appliedProviderLifecycleOperationRevision}, ${table.effectKind},
         ${table.relatedActionId}
       ) = 0
     ) or (
@@ -1550,7 +1636,9 @@ function deferredActionStateSql(table: DeferredActionStateColumns) {
       and ${table.conflictCandidateCount} = 0
       and num_nonnulls(
         ${table.appliedExternalMessageReferenceId}, ${table.appliedMessageId},
-        ${table.appliedMessageRevision}, ${table.effectKind},
+        ${table.appliedMessageRevision},
+        ${table.appliedProviderLifecycleOperationId},
+        ${table.appliedProviderLifecycleOperationRevision}, ${table.effectKind},
         ${table.stateReasonId}, ${table.conflictCandidateDigestSha256}
       ) = 0
     ) or (
@@ -1563,7 +1651,9 @@ function deferredActionStateSql(table: DeferredActionStateColumns) {
       and ${table.conflictCandidateCount} = 0
       and num_nonnulls(
         ${table.appliedExternalMessageReferenceId}, ${table.appliedMessageId},
-        ${table.appliedMessageRevision}, ${table.effectKind},
+        ${table.appliedMessageRevision},
+        ${table.appliedProviderLifecycleOperationId},
+        ${table.appliedProviderLifecycleOperationRevision}, ${table.effectKind},
         ${table.conflictCandidateDigestSha256}
       ) = 0
     ) or (
@@ -1574,7 +1664,9 @@ function deferredActionStateSql(table: DeferredActionStateColumns) {
       and ${table.conflictCandidateCount} = 0
       and num_nonnulls(
         ${table.appliedExternalMessageReferenceId}, ${table.appliedMessageId},
-        ${table.appliedMessageRevision}, ${table.effectKind},
+        ${table.appliedMessageRevision},
+        ${table.appliedProviderLifecycleOperationId},
+        ${table.appliedProviderLifecycleOperationRevision}, ${table.effectKind},
         ${table.relatedActionId}, ${table.conflictCandidateDigestSha256}
       ) = 0
     )`;
@@ -1588,6 +1680,14 @@ function transitionStateSql(table: DeferredTransitionStateColumns) {
       and ${table.targetMessageId} is not null
       and ${table.appliedMessageRevision} >= 1
       and ${table.effectKind} is not null
+      and (
+        (${table.effectKind} = 'provider_delete_retain_local'
+          and ${table.appliedProviderLifecycleOperationId} is not null
+          and ${table.appliedProviderLifecycleOperationRevision} >= 1)
+        or (${table.effectKind} <> 'provider_delete_retain_local'
+          and ${table.appliedProviderLifecycleOperationId} is null
+          and ${table.appliedProviderLifecycleOperationRevision} is null)
+      )
       and ${table.sourceOccurrenceExpectedRevision} >= 1
       and ${table.sourceOccurrenceResultingRevision} =
         ${table.sourceOccurrenceExpectedRevision} + 1
@@ -1605,7 +1705,9 @@ function transitionStateSql(table: DeferredTransitionStateColumns) {
       and ${sha256PrefixedSql(table.conflictCandidateDigestSha256)}
       and num_nonnulls(
         ${table.targetExternalMessageReferenceId}, ${table.targetMessageId},
-        ${table.appliedMessageRevision}, ${table.effectKind},
+        ${table.appliedMessageRevision},
+        ${table.appliedProviderLifecycleOperationId},
+        ${table.appliedProviderLifecycleOperationRevision}, ${table.effectKind},
         ${table.relatedActionId}, ${table.sourceOccurrenceExpectedRevision},
         ${table.sourceOccurrenceResultingRevision},
         ${table.sourceOccurrenceResolutionDigestSha256},
@@ -1623,6 +1725,8 @@ function transitionStateSql(table: DeferredTransitionStateColumns) {
       and ${table.conflictCandidateCount} = 0
       and ${table.effectKind} is null
       and ${table.appliedMessageRevision} is null
+      and ${table.appliedProviderLifecycleOperationId} is null
+      and ${table.appliedProviderLifecycleOperationRevision} is null
       and ${table.reasonId} is null
       and ${table.conflictCandidateDigestSha256} is null
       and ${table.effectProofDigestSha256} is null
@@ -1655,7 +1759,9 @@ function transitionStateSql(table: DeferredTransitionStateColumns) {
       and ${table.conflictCandidateCount} = 0
       and num_nonnulls(
         ${table.targetExternalMessageReferenceId}, ${table.targetMessageId},
-        ${table.appliedMessageRevision}, ${table.effectKind},
+        ${table.appliedMessageRevision},
+        ${table.appliedProviderLifecycleOperationId},
+        ${table.appliedProviderLifecycleOperationRevision}, ${table.effectKind},
         ${table.conflictCandidateDigestSha256},
         ${table.sourceOccurrenceExpectedRevision},
         ${table.sourceOccurrenceResultingRevision},
@@ -1670,7 +1776,9 @@ function transitionStateSql(table: DeferredTransitionStateColumns) {
       and ${table.conflictCandidateCount} = 0
       and num_nonnulls(
         ${table.targetExternalMessageReferenceId}, ${table.targetMessageId},
-        ${table.appliedMessageRevision}, ${table.effectKind},
+        ${table.appliedMessageRevision},
+        ${table.appliedProviderLifecycleOperationId},
+        ${table.appliedProviderLifecycleOperationRevision}, ${table.effectKind},
         ${table.conflictCandidateDigestSha256},
         ${table.sourceOccurrenceExpectedRevision},
         ${table.sourceOccurrenceResultingRevision},
@@ -2051,7 +2159,9 @@ begin
        to_jsonb(new) - array[
          'message_key_digest_sha256',
          'state', 'applied_external_message_reference_id',
-         'applied_message_id', 'applied_message_revision', 'effect_kind',
+         'applied_message_id', 'applied_message_revision',
+         'applied_provider_lifecycle_operation_id',
+         'applied_provider_lifecycle_operation_revision', 'effect_kind',
          'related_action_id', 'state_reason_id', 'conflict_candidate_count',
          'conflict_candidate_digest_sha256', 'terminal_at', 'revision',
          'updated_at'
@@ -2060,7 +2170,9 @@ begin
        to_jsonb(old) - array[
          'message_key_digest_sha256',
          'state', 'applied_external_message_reference_id',
-         'applied_message_id', 'applied_message_revision', 'effect_kind',
+         'applied_message_id', 'applied_message_revision',
+         'applied_provider_lifecycle_operation_id',
+         'applied_provider_lifecycle_operation_revision', 'effect_kind',
          'related_action_id', 'state_reason_id', 'conflict_candidate_count',
          'conflict_candidate_digest_sha256', 'terminal_at', 'revision',
          'updated_at'
@@ -2076,7 +2188,9 @@ begin
       and keys.key <> all (array[
         'message_key_digest_sha256',
         'state', 'applied_external_message_reference_id',
-        'applied_message_id', 'applied_message_revision', 'effect_kind',
+        'applied_message_id', 'applied_message_revision',
+        'applied_provider_lifecycle_operation_id',
+        'applied_provider_lifecycle_operation_revision', 'effect_kind',
         'related_action_id', 'state_reason_id', 'conflict_candidate_count',
         'conflict_candidate_digest_sha256', 'terminal_at', 'revision',
         'updated_at'
@@ -2335,7 +2449,11 @@ begin
          new.applied_message_id
        or transition_row.applied_message_revision is distinct from
          new.applied_message_revision
-     ))
+       or transition_row.applied_provider_lifecycle_operation_id is distinct
+         from new.applied_provider_lifecycle_operation_id
+       or transition_row.applied_provider_lifecycle_operation_revision is
+         distinct from new.applied_provider_lifecycle_operation_revision
+      ))
      or transition_row.related_action_id is distinct from new.related_action_id
      or transition_row.reason_id is distinct from new.state_reason_id
      or transition_row.conflict_candidate_count <>
@@ -2490,6 +2608,77 @@ begin
     raise exception using
       errcode = '23514',
       message = 'inbox_v2.deferred_source_action_exact_target_mismatch';
+  end if;
+
+  if new.state = 'applied' and not exists (
+    select 1
+    from public.inbox_v2_message_revisions revision_row
+    where revision_row.tenant_id = new.tenant_id
+      and revision_row.message_id = new.applied_message_id
+      and revision_row.message_revision = new.applied_message_revision
+  ) then
+    raise exception using
+      errcode = '23514',
+      message = 'inbox_v2.deferred_source_action_applied_revision_missing';
+  end if;
+
+  if new.state = 'applied'
+     and new.effect_kind = 'message_lifecycle'
+     and new.action_kind in ('edit', 'delete')
+     and not exists (
+       select 1
+       from public.inbox_v2_message_revisions revision_row
+       join public.inbox_v2_message_provider_lifecycle_operations operation_row
+         on operation_row.tenant_id = revision_row.tenant_id
+        and operation_row.id = revision_row.provider_operation_id
+       where revision_row.tenant_id = new.tenant_id
+         and revision_row.message_id = new.applied_message_id
+         and revision_row.message_revision = new.applied_message_revision
+         and revision_row.change_kind = case new.action_kind
+           when 'edit' then 'edited'::public.inbox_v2_message_revision_change
+           else 'provider_delete_policy_tombstone'::public.inbox_v2_message_revision_change
+         end
+         and operation_row.message_id = new.applied_message_id
+         and operation_row.action::text = new.action_kind::text
+         and operation_row.origin = 'provider_observed'
+         and operation_row.source_occurrence_id = new.source_occurrence_id
+         and operation_row.source_account_id = new.source_account_id
+         and operation_row.source_thread_binding_id = new.source_thread_binding_id
+         and operation_row.binding_generation = new.binding_generation
+     ) then
+    raise exception using
+      errcode = '23514',
+      message = 'inbox_v2.deferred_source_action_lifecycle_effect_mismatch';
+  end if;
+
+  if new.state = 'applied'
+     and new.effect_kind = 'provider_delete_retain_local'
+     and not exists (
+       select 1
+       from public.inbox_v2_message_provider_lifecycle_operations operation_row
+       join public.inbox_v2_message_provider_lifecycle_transitions transition_effect
+         on transition_effect.tenant_id = operation_row.tenant_id
+        and transition_effect.operation_id = operation_row.id
+        and transition_effect.resulting_revision = operation_row.revision
+       where operation_row.tenant_id = new.tenant_id
+         and operation_row.id = new.applied_provider_lifecycle_operation_id
+         and operation_row.revision =
+           new.applied_provider_lifecycle_operation_revision
+         and operation_row.message_id = new.applied_message_id
+         and operation_row.action = 'delete'
+         and operation_row.origin = 'provider_observed'
+         and operation_row.source_occurrence_id = new.source_occurrence_id
+         and operation_row.source_account_id = new.source_account_id
+         and operation_row.source_thread_binding_id = new.source_thread_binding_id
+         and operation_row.binding_generation = new.binding_generation
+         and operation_row.outcome = 'observed'
+         and operation_row.delete_local_effect = 'retain_local'
+         and transition_effect.delete_local_effect = 'retain_local'
+         and transition_effect.recorded_at = new.terminal_at
+     ) then
+    raise exception using
+      errcode = '23514',
+      message = 'inbox_v2.deferred_source_action_retain_local_effect_mismatch';
   end if;
 
   if transition_row.source_occurrence_resulting_revision is not null then

@@ -18,6 +18,11 @@ export type {
   InboxV2OutboundReplyAuthorityFenceRejectionReason,
   InboxV2OutboundReplyAuthorityFenceResult
 } from "./repositories/sql-inbox-v2-outbound-reply-authority-repository";
+export { createSqlInboxV2MessageLifecycleAtomicCoordinator } from "./repositories/sql-inbox-v2-message-lifecycle-command-coordinator";
+export type {
+  InboxV2MessageLifecycleAtomicCoordinator,
+  InboxV2MessageLifecycleAtomicResult
+} from "./repositories/sql-inbox-v2-message-lifecycle-command-coordinator";
 export {
   createSqlInboxV2FencedOutboundTransportRuntimeRepository,
   InboxV2RouteResolutionRollbackError,
@@ -672,5 +677,14 @@ export * from "./repositories/sql-inbox-v2-source-normalization-repository";
 export * from "./repositories/sql-inbox-v2-source-identity-resolution-repository";
 export * from "./repositories/sql-inbox-v2-source-identity-resolution-lifecycle";
 export * from "./repositories/sql-inbox-v2-source-message-reconciliation-repository";
+export { createInboxV2SourceMessageLifecycleCallbacks } from "./repositories/sql-inbox-v2-source-message-lifecycle-adapter";
+export type {
+  CreateInboxV2SourceMessageLifecycleCallbacksOptions,
+  InboxV2DeferredLifecycleSourceAction,
+  InboxV2SourceMessageLifecycleAdvancePlan,
+  InboxV2SourceMessageLifecycleAdvancePlanResult,
+  InboxV2SourceMessageLifecycleAdvancePlanner,
+  InboxV2SourceMessageLifecycleEffectClosure
+} from "./repositories/sql-inbox-v2-source-message-lifecycle-adapter";
 export * from "./repositories/sql-inbox-v2-source-processing-runtime-repository";
 export * from "./schema/inbox-v2/membership-privilege-boundary";

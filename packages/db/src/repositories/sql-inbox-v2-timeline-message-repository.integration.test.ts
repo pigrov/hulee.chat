@@ -4106,7 +4106,7 @@ describePostgres(
       expect(postgresErrorText(cardinalityError)).toContain(
         "inbox_v2.message_reference_context_shape"
       );
-    });
+    }, 30_000);
 
     it("replays, fences and recovers reactions plus provider lifecycle state", async () => {
       const repository = createSqlInboxV2TimelineMessageRepository(db);

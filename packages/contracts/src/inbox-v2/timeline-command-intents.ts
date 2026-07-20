@@ -218,6 +218,7 @@ export const inboxV2MessageMutationAuthoritySchema = z.discriminatedUnion(
         appActor: inboxV2AppActorSchema,
         conversation: inboxV2ConversationReferenceSchema,
         message: inboxV2MessageReferenceSchema,
+        timelineItem: inboxV2TimelineItemReferenceSchema,
         authorParticipant: inboxV2ConversationParticipantReferenceSchema,
         expectedAuthorshipRevision: inboxV2EntityRevisionSchema
       })
@@ -228,6 +229,7 @@ export const inboxV2MessageMutationAuthoritySchema = z.discriminatedUnion(
         appActor: inboxV2EmployeeAppActorSchema,
         conversation: inboxV2ConversationReferenceSchema,
         message: inboxV2MessageReferenceSchema,
+        timelineItem: inboxV2TimelineItemReferenceSchema,
         reasonId: z.string().trim().min(1).max(256)
       })
       .strict(),
@@ -237,6 +239,7 @@ export const inboxV2MessageMutationAuthoritySchema = z.discriminatedUnion(
         appActor: inboxV2EmployeeAppActorSchema,
         conversation: inboxV2ConversationReferenceSchema,
         message: inboxV2MessageReferenceSchema,
+        timelineItem: inboxV2TimelineItemReferenceSchema,
         reasonId: z.string().trim().min(1).max(256)
       })
       .strict()
@@ -499,6 +502,17 @@ const localDeleteSchema = z
       intent,
       intent.visibilityBoundary === "internal" ? "internal" : "external"
     );
+    if (
+      intent.mutationAuthority !== undefined &&
+      intent.mutationAuthority.kind !== "own" &&
+      intent.reasonId !== intent.mutationAuthority.reasonId
+    ) {
+      addIssue(
+        context,
+        ["reasonId"],
+        "Local-delete reason must exactly match the server-stamped moderation authority."
+      );
+    }
   });
 
 const providerDeleteSchema = z
@@ -854,6 +868,150 @@ export type InboxV2TimelineCommandIntent = z.infer<
   typeof inboxV2TimelineCommandIntentSchema
 >;
 
+/**
+ * Exact File revisions which must retain `core:file.upload` authority while an
+ * edit turns upload staging into live Message parents. Retained/copy sources
+ * deliberately do not appear here: they require source-read plus File-view
+ * authority, but must not be upgraded to upload authority.
+ */
+export const inboxV2MessageEditFileUploadAuthorityTargetSchema = z
+  .object({
+    file: inboxV2FileReferenceSchema,
+    expectedFileRevision: inboxV2EntityRevisionSchema
+  })
+  .strict();
+
+export type InboxV2MessageEditFileUploadAuthorityTarget = z.infer<
+  typeof inboxV2MessageEditFileUploadAuthorityTargetSchema
+>;
+
+const messageEditFileSourceAuthorityTargetBase = {
+  blockKey: inboxV2ContentBlockKeySchema,
+  file: inboxV2FileReferenceSchema,
+  expectedFileRevision: inboxV2EntityRevisionSchema,
+  fileVersion: inboxV2FileVersionReferenceSchema,
+  objectVersion: inboxV2ObjectVersionReferenceSchema,
+  targetParent: z
+    .object({
+      kind: z.literal("message"),
+      message: inboxV2MessageReferenceSchema,
+      expectedMessageRevision: inboxV2EntityRevisionSchema
+    })
+    .strict(),
+  sourceParent: inboxV2TimelineFileSourceParentSchema
+} as const;
+
+/**
+ * Exact live source relation which the DB must revalidate while it holds the
+ * destination File parent-set lock. This closes the gap between trusted intent
+ * resolution and the atomic Message edit.
+ */
+export const inboxV2MessageEditFileSourceAuthorityTargetSchema =
+  z.discriminatedUnion("purpose", [
+    z
+      .object({
+        ...messageEditFileSourceAuthorityTargetBase,
+        purpose: z.literal("attachment"),
+        attachment: inboxV2MessageAttachmentReferenceSchema
+      })
+      .strict(),
+    z
+      .object({
+        ...messageEditFileSourceAuthorityTargetBase,
+        purpose: z.literal("extension_payload")
+      })
+      .strict()
+  ]);
+
+export type InboxV2MessageEditFileSourceAuthorityTarget = z.infer<
+  typeof inboxV2MessageEditFileSourceAuthorityTargetSchema
+>;
+
+export function deriveInboxV2MessageEditFileSourceAuthorityPlan(
+  intent: Extract<InboxV2TimelineCommandIntent, { kind: "edit_message" }>,
+  target: Readonly<{
+    message: z.infer<typeof inboxV2MessageReferenceSchema>;
+    expectedMessageRevision: z.infer<typeof inboxV2EntityRevisionSchema>;
+  }>
+): readonly InboxV2MessageEditFileSourceAuthorityTarget[] {
+  if (
+    target.message.tenantId !== intent.message.tenantId ||
+    target.message.id !== intent.message.id
+  ) {
+    throw new TypeError(
+      "Message edit source authority must target the authorized Message."
+    );
+  }
+  const targets = (intent.fileReadProofs ?? []).map((proof) =>
+    inboxV2MessageEditFileSourceAuthorityTargetSchema.parse({
+      blockKey: proof.blockKey,
+      purpose: proof.purpose,
+      file: proof.file,
+      expectedFileRevision: proof.expectedFileRevision,
+      fileVersion: proof.fileVersion,
+      objectVersion: proof.objectVersion,
+      ...(proof.purpose === "attachment"
+        ? { attachment: proof.attachment }
+        : {}),
+      targetParent: {
+        kind: "message",
+        message: target.message,
+        expectedMessageRevision: target.expectedMessageRevision
+      },
+      sourceParent: proof.sourceParent
+    })
+  );
+  targets.sort((left, right) =>
+    messageEditFileSourceAuthorityOrderKey(left).localeCompare(
+      messageEditFileSourceAuthorityOrderKey(right)
+    )
+  );
+  const keys = targets.map(messageEditFileSourceAuthorityOrderKey);
+  if (new Set(keys).size !== keys.length) {
+    throw new TypeError(
+      "Message edit source authority cannot contain duplicate File parent targets."
+    );
+  }
+  return Object.freeze(targets.map((entry) => Object.freeze(entry)));
+}
+
+export function deriveInboxV2MessageEditFileUploadAuthorityPlan(
+  intent: Extract<InboxV2TimelineCommandIntent, { kind: "edit_message" }>
+): readonly InboxV2MessageEditFileUploadAuthorityTarget[] {
+  const byFile = new Map<string, InboxV2MessageEditFileUploadAuthorityTarget>();
+  for (const proof of intent.fileReadProofs ?? []) {
+    if (proof.sourceParent.kind !== "upload_staging") continue;
+    const key = `${proof.file.tenantId}\u0000${proof.file.id}`;
+    const existing = byFile.get(key);
+    if (
+      existing !== undefined &&
+      existing.expectedFileRevision !== proof.expectedFileRevision
+    ) {
+      throw new TypeError(
+        "Message edit upload authority cannot target two revisions of one File."
+      );
+    }
+    byFile.set(
+      key,
+      Object.freeze({
+        file: proof.file,
+        expectedFileRevision: proof.expectedFileRevision
+      })
+    );
+  }
+  return Object.freeze(
+    [...byFile.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([, target]) => target)
+  );
+}
+
+function messageEditFileSourceAuthorityOrderKey(
+  target: InboxV2MessageEditFileSourceAuthorityTarget
+): string {
+  return `${target.file.tenantId}\u0000${target.file.id}\u0000${target.blockKey}\u0000${target.purpose}`;
+}
+
 function isInternalReferenceContext(
   reference: InboxV2MessageReferenceContext
 ): boolean {
@@ -948,6 +1106,7 @@ function addMessageMutationAuthorityIssues(
     authority.conversation.id !== intent.conversation.id ||
     authority.message.tenantId !== intent.message.tenantId ||
     authority.message.id !== intent.message.id ||
+    authority.timelineItem.tenantId !== intent.conversation.tenantId ||
     !sameAppActor(authority.appActor, intent.appActor) ||
     (authority.kind === "moderate_external" && boundary !== "external") ||
     (authority.kind === "moderate_internal" && boundary !== "internal")

@@ -218,6 +218,48 @@ function outboundDispatchChange(): z.input<
   };
 }
 
+function providerLifecycleIntent(): z.input<typeof inboxV2OutboxIntentSchema> {
+  return {
+    ...providerIntent(),
+    id: "outbox-intent:message-lifecycle-1",
+    typeId: "core:provider.message_lifecycle",
+    handlerId: "core:provider-message-lifecycle-handler",
+    changeIds: ["change:message-lifecycle-1"],
+    payloadReference: providerLifecyclePayloadReference()
+  };
+}
+
+function providerLifecyclePayloadReference() {
+  return {
+    ...payloadReference("message-provider-lifecycle-operation:operation-1"),
+    schemaId: "core:inbox-v2.message-provider-lifecycle-operation"
+  };
+}
+
+function providerLifecycleChange(): z.input<
+  typeof inboxV2TenantStreamChangeSchema
+> {
+  const base = change({
+    changeId: "change:message-lifecycle-1",
+    ordinal: "2",
+    entityTypeId: "core:message-provider-lifecycle-operation",
+    entityId: "message_provider_lifecycle_operation:operation-1"
+  });
+  if (base.state.kind !== "upsert") {
+    throw new Error(
+      "Fixture invariant: provider lifecycle change must be an upsert."
+    );
+  }
+  return {
+    ...base,
+    state: {
+      ...base.state,
+      stateSchemaId: "core:inbox-v2.message-provider-lifecycle-operation",
+      payloadReference: providerLifecyclePayloadReference()
+    }
+  };
+}
+
 function commandRecord() {
   return {
     scope: {
@@ -502,6 +544,96 @@ describe("Inbox V2 tenant stream", () => {
         ...withDispatch,
         outboxIntents: [
           { ...intent, effectClass: "workflow", payloadReference: null }
+        ]
+      }).success
+    ).toBe(false);
+  });
+
+  it("routes provider message lifecycle through its own exact outbox payload", () => {
+    const withLifecycle = bundle();
+    const intent = providerLifecycleIntent();
+    const lifecycleChange = providerLifecycleChange();
+    withLifecycle.changes.push(lifecycleChange);
+    withLifecycle.commit.changeIds.push(lifecycleChange.reference.changeId);
+    withLifecycle.events[0]!.changeIds.push(lifecycleChange.reference.changeId);
+    withLifecycle.events[0]!.subjects.push(lifecycleChange.entity);
+    withLifecycle.commit.outboxIntentIds = [intent.id];
+    withLifecycle.outboxIntents = [intent];
+
+    expect(
+      inboxV2AtomicMutationCommitSchema.safeParse(withLifecycle).success
+    ).toBe(true);
+    expect(
+      inboxV2OutboxIntentSchema.safeParse({
+        ...intent,
+        typeId: "core:provider.dispatch"
+      }).success
+    ).toBe(false);
+    expect(
+      inboxV2OutboxIntentSchema.safeParse({
+        ...intent,
+        payloadReference: dispatchPayloadReference()
+      }).success
+    ).toBe(false);
+    expect(
+      inboxV2AtomicMutationCommitSchema.safeParse({
+        ...withLifecycle,
+        changes: [
+          {
+            ...lifecycleChange,
+            entity: {
+              ...lifecycleChange.entity,
+              entityTypeId: "core:outbound-dispatch"
+            }
+          }
+        ]
+      }).success
+    ).toBe(false);
+
+    const duplicateOperationChange = {
+      ...lifecycleChange,
+      reference: {
+        ...lifecycleChange.reference,
+        changeId: "change:message-lifecycle-2",
+        ordinal: "3"
+      },
+      entity: {
+        ...lifecycleChange.entity,
+        entityId: "message_provider_lifecycle_operation:operation-2"
+      }
+    };
+    expect(
+      inboxV2AtomicMutationCommitSchema.safeParse({
+        ...withLifecycle,
+        commit: {
+          ...withLifecycle.commit,
+          changeIds: [
+            ...withLifecycle.commit.changeIds,
+            duplicateOperationChange.reference.changeId
+          ]
+        },
+        changes: [...withLifecycle.changes, duplicateOperationChange],
+        events: [
+          {
+            ...withLifecycle.events[0]!,
+            changeIds: [
+              ...withLifecycle.events[0]!.changeIds,
+              duplicateOperationChange.reference.changeId
+            ],
+            subjects: [
+              ...withLifecycle.events[0]!.subjects,
+              duplicateOperationChange.entity
+            ]
+          }
+        ],
+        outboxIntents: [
+          {
+            ...intent,
+            changeIds: [
+              lifecycleChange.reference.changeId,
+              duplicateOperationChange.reference.changeId
+            ]
+          }
         ]
       }).success
     ).toBe(false);

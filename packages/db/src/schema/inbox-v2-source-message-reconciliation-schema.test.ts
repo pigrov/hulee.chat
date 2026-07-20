@@ -6,6 +6,10 @@ import { normalizedInboundEvents } from "./tables";
 import { inboxV2ExternalMessageReferences } from "./inbox-v2/outbound-transport";
 import { inboxV2SourceOccurrences } from "./inbox-v2/source-occurrence";
 import {
+  inboxV2MessageProviderLifecycleOperations,
+  inboxV2MessageRevisions
+} from "./inbox-v2/timeline-message";
+import {
   INBOX_V2_SOURCE_MESSAGE_RECONCILIATION_INTEGRITY_SQL,
   inboxV2DeferredMessageSourceActions,
   inboxV2DeferredMessageSourceActionTransitions,
@@ -134,6 +138,24 @@ describe("Inbox V2 source message reconciliation schema", () => {
       ["tenant_id", "normalized_inbound_event_id"],
       ["tenant_id", "id"]
     );
+    expectForeignKey(
+      inboxV2DeferredMessageSourceActions,
+      "inbox_v2_deferred_actions_applied_message_revision_fk",
+      inboxV2MessageRevisions,
+      ["tenant_id", "applied_message_id", "applied_message_revision"],
+      ["tenant_id", "message_id", "message_revision"]
+    );
+    expectForeignKey(
+      inboxV2DeferredMessageSourceActions,
+      "inbox_v2_deferred_actions_applied_provider_operation_fk",
+      inboxV2MessageProviderLifecycleOperations,
+      [
+        "tenant_id",
+        "applied_provider_lifecycle_operation_id",
+        "applied_provider_lifecycle_operation_revision"
+      ],
+      ["tenant_id", "id", "revision"]
+    );
 
     const columns = columnNames(inboxV2DeferredMessageSourceActions);
     expect(columns).toEqual(
@@ -146,7 +168,9 @@ describe("Inbox V2 source message reconciliation schema", () => {
         "action_detail",
         "action_detail_digest_sha256",
         "semantic_proof_detail",
-        "semantic_proof_detail_digest_sha256"
+        "semantic_proof_detail_digest_sha256",
+        "applied_provider_lifecycle_operation_id",
+        "applied_provider_lifecycle_operation_revision"
       ])
     );
     expect(columns).not.toEqual(
@@ -225,6 +249,24 @@ describe("Inbox V2 source message reconciliation schema", () => {
         "message_key_digest_sha256"
       ]
     );
+    expectForeignKey(
+      inboxV2DeferredMessageSourceActionTransitions,
+      "inbox_v2_deferred_action_transitions_message_revision_fk",
+      inboxV2MessageRevisions,
+      ["tenant_id", "target_message_id", "applied_message_revision"],
+      ["tenant_id", "message_id", "message_revision"]
+    );
+    expectForeignKey(
+      inboxV2DeferredMessageSourceActionTransitions,
+      "inbox_v2_deferred_action_transitions_provider_operation_fk",
+      inboxV2MessageProviderLifecycleOperations,
+      [
+        "tenant_id",
+        "applied_provider_lifecycle_operation_id",
+        "applied_provider_lifecycle_operation_revision"
+      ],
+      ["tenant_id", "id", "revision"]
+    );
     const candidateCheck = checkSql(
       inboxV2DeferredSourceActionConflictCandidates,
       "inbox_v2_deferred_action_candidates_values_check"
@@ -240,6 +282,12 @@ describe("Inbox V2 source message reconciliation schema", () => {
     expect(stateCheck).toContain("\"state\" = 'target_conflicted'");
     expect(stateCheck).toContain(
       '"conflict_candidate_count" between 2 and 100'
+    );
+    expect(stateCheck).toContain(
+      "\"effect_kind\" = 'provider_delete_retain_local'"
+    );
+    expect(stateCheck).toContain(
+      '"applied_provider_lifecycle_operation_revision" >= 1'
     );
 
     const transitionStateCheck = checkSql(
@@ -257,6 +305,12 @@ describe("Inbox V2 source message reconciliation schema", () => {
       '"source_occurrence_resolution_digest_sha256"'
     );
     expect(transitionStateCheck).toContain(") = 5");
+    expect(transitionStateCheck).toContain(
+      "\"effect_kind\" = 'provider_delete_retain_local'"
+    );
+    expect(transitionStateCheck).toContain(
+      '"applied_provider_lifecycle_operation_id" is null'
+    );
     const transitionOrderingCheck = checkSql(
       inboxV2DeferredMessageSourceActionTransitions,
       "inbox_v2_deferred_action_transitions_ordering_check"
@@ -425,6 +479,25 @@ describe("Inbox V2 source message reconciliation schema", () => {
     );
     expect(ddl).toContain("deferred_source_action_candidate_key_mismatch");
     expect(ddl).toContain("deferred_source_ordering_head_action_mismatch");
+    expect(ddl).toContain(
+      "inbox_v2.deferred_source_action_applied_revision_missing"
+    );
+    expect(ddl).toContain(
+      "inbox_v2.deferred_source_action_lifecycle_effect_mismatch"
+    );
+    expect(ddl).toContain(
+      "inbox_v2.deferred_source_action_retain_local_effect_mismatch"
+    );
+    expect(ddl).toContain("revision_row.provider_operation_id");
+    expect(ddl).toContain(
+      "operation_row.source_occurrence_id = new.source_occurrence_id"
+    );
+    expect(ddl).toContain(
+      "operation_row.source_thread_binding_id = new.source_thread_binding_id"
+    );
+    expect(ddl).toContain(
+      "operation_row.binding_generation = new.binding_generation"
+    );
     expect(ddl).toContain(
       "head_row.revision >= transition_row.resulting_ordering_head_revision"
     );

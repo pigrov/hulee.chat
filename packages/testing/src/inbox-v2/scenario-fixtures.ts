@@ -1025,6 +1025,7 @@ export function inboxV2ExternalMessageEditScenarioAuthorization(input: {
     input.sourceAccountId
   );
   const operation = input.operation ?? "edit";
+  const requiresProviderMutation = operation === "edit";
   const actionRequirementId = `message-${operation}`;
   const sourceRequirementId = `message-${operation}-source-use`;
   const readRequirementId = `message-${operation}-conversation-read`;
@@ -1179,34 +1180,63 @@ export function inboxV2ExternalMessageEditScenarioAuthorization(input: {
               targetResource: timelineItemResource,
               state: "none" as const,
               revisionChecks: [
-                { kind: "state" as const, expected: "1", actual: "1" }
+                {
+                  kind: "legal_hold_set" as const,
+                  expected: "1",
+                  actual: "1"
+                }
               ]
             }
           : null,
-      originalRouteRequirementId: sourceRequirementId,
-      originalSourceAccountId: sourceAccountId,
-      originalSourceAccountResource: sourceAccountResource,
-      originalBindingResource: bindingResource,
-      originalBindingSourceAccountResource: sourceAccountResource,
-      externalReferenceResource,
-      externalReferenceBindingResource: bindingResource,
-      externalReferenceTargetResource: timelineItemResource,
-      routeRevisionChecks: [
-        { kind: "binding" as const, expected: "1", actual: "1" },
-        { kind: "route" as const, expected: "1", actual: "1" },
-        { kind: "state" as const, expected: "1", actual: "1" }
-      ],
-      capabilityId:
-        operation === "edit"
-          ? "core:capability.message.edit"
-          : "core:capability.message.delete",
-      capabilityManifestResource: actionCapabilityManifest,
-      capabilityManifestSourceAccountResource: sourceAccountResource,
-      capabilityRevisionChecks: [
-        { kind: "manifest" as const, expected: "1", actual: "1" }
-      ],
-      capabilityState: "supported",
-      capabilityNotAfter: inboxV2ScenarioNotAfter
+      originalRouteRequirementId: requiresProviderMutation
+        ? sourceRequirementId
+        : null,
+      originalSourceAccountId: requiresProviderMutation
+        ? sourceAccountId
+        : null,
+      originalSourceAccountResource: requiresProviderMutation
+        ? sourceAccountResource
+        : null,
+      originalBindingResource: requiresProviderMutation
+        ? bindingResource
+        : null,
+      originalBindingSourceAccountResource: requiresProviderMutation
+        ? sourceAccountResource
+        : null,
+      externalReferenceResource: requiresProviderMutation
+        ? externalReferenceResource
+        : null,
+      externalReferenceBindingResource: requiresProviderMutation
+        ? bindingResource
+        : null,
+      externalReferenceTargetResource: requiresProviderMutation
+        ? timelineItemResource
+        : null,
+      routeRevisionChecks: requiresProviderMutation
+        ? [
+            { kind: "binding" as const, expected: "1", actual: "1" },
+            { kind: "route" as const, expected: "1", actual: "1" },
+            { kind: "state" as const, expected: "1", actual: "1" }
+          ]
+        : [],
+      capabilityId: requiresProviderMutation
+        ? "core:capability.message.edit"
+        : null,
+      capabilityManifestResource: requiresProviderMutation
+        ? actionCapabilityManifest
+        : null,
+      capabilityManifestSourceAccountResource: requiresProviderMutation
+        ? sourceAccountResource
+        : null,
+      capabilityRevisionChecks: requiresProviderMutation
+        ? [{ kind: "manifest" as const, expected: "1", actual: "1" }]
+        : [],
+      capabilityState: requiresProviderMutation
+        ? "supported"
+        : "not_applicable",
+      capabilityNotAfter: requiresProviderMutation
+        ? inboxV2ScenarioNotAfter
+        : null
     }
   } satisfies InboxV2PolicyGuardEvidence;
 
@@ -1228,21 +1258,25 @@ export function inboxV2ExternalMessageEditScenarioAuthorization(input: {
         ],
         guard: actionGuard
       },
-      {
-        id: sourceRequirementId,
-        permissionId: "core:source_account.use",
-        resource: sourceAccountResource,
-        scopeFacts: [
-          {
-            kind: "source_account",
-            ...scopePath(sourceAccountResource, sourceAccountResource),
-            sourceAccountId,
-            validUntil: inboxV2ScenarioNotAfter
-          }
-        ],
-        guard: sourceGuard,
-        visibility: "secondary_hidden"
-      },
+      ...(requiresProviderMutation
+        ? [
+            {
+              id: sourceRequirementId,
+              permissionId: "core:source_account.use" as const,
+              resource: sourceAccountResource,
+              scopeFacts: [
+                {
+                  kind: "source_account" as const,
+                  ...scopePath(sourceAccountResource, sourceAccountResource),
+                  sourceAccountId,
+                  validUntil: inboxV2ScenarioNotAfter
+                }
+              ],
+              guard: sourceGuard,
+              visibility: "secondary_hidden" as const
+            }
+          ]
+        : []),
       {
         id: readRequirementId,
         permissionId: "core:conversation.read",
@@ -1260,11 +1294,19 @@ export function inboxV2ExternalMessageEditScenarioAuthorization(input: {
         permissionId,
         scope: { type: "conversation", tenantId, id: conversationId }
       },
-      {
-        id: sourceRequirementId,
-        permissionId: "core:source_account.use",
-        scope: { type: "source_account", tenantId, id: sourceAccountId }
-      },
+      ...(requiresProviderMutation
+        ? [
+            {
+              id: sourceRequirementId,
+              permissionId: "core:source_account.use" as const,
+              scope: {
+                type: "source_account" as const,
+                tenantId,
+                id: sourceAccountId
+              }
+            }
+          ]
+        : []),
       {
         id: readRequirementId,
         permissionId: "core:conversation.read"

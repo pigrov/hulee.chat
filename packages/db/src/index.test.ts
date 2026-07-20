@@ -49,6 +49,9 @@ describe("@hulee/db public export surface", () => {
       publicDatabase.persistInboxV2OutboundDispatchContentPlanInTransaction
     ).toBeTypeOf("function");
     expect(
+      publicDatabase.createInboxV2SourceMessageLifecycleCallbacks
+    ).toBeTypeOf("function");
+    expect(
       publicDatabase.INBOX_V2_ATTACHMENT_MATERIALIZATION_COMPLETION_RESULT_CODE
     ).toBe("core:attachment.materialization.completed");
 

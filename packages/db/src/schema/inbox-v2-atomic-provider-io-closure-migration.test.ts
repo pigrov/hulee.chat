@@ -6,17 +6,32 @@ import {
   INBOX_V2_AUTH_DOMAIN_PROVIDER_IO_CLOSURE_SQL,
   INBOX_V2_AUTHORIZATION_RELATIONS_INTEGRITY_SQL
 } from "./inbox-v2/authorization-relations";
+import { restoreInboxV2HistoricalSqlFunction } from "./inbox-v2-migration-test-support";
 
 const migrationPath = new URL(
   "../../drizzle/0046_inbox_v2_atomic_provider_io_closure.sql",
   import.meta.url
 );
 const migration = readFileSync(migrationPath, "utf8").replaceAll("\r\n", "\n");
-const historicalSchemaSql = restorePreMsg003AttachmentAuthorizationSql(
-  restorePreMsg002AtomicProviderIoSql(
-    INBOX_V2_AUTH_DOMAIN_PROVIDER_IO_CLOSURE_SQL.trim()
-  )
+const msg005Migration = readFileSync(
+  new URL(
+    "../../drizzle/0055_inbox_v2_message_lifecycle_commands.sql",
+    import.meta.url
+  ),
+  "utf8"
+).replaceAll("\r\n", "\n");
+const currentSchemaSql = INBOX_V2_AUTH_DOMAIN_PROVIDER_IO_CLOSURE_SQL.trim();
+const schemaBeforeMsg005 = restorePreMsg003AttachmentAuthorizationSql(
+  restorePreMsg002AtomicProviderIoSql(currentSchemaSql)
 );
+const historicalSchemaSql = restoreInboxV2HistoricalSqlFunction({
+  sqlToRestore: schemaBeforeMsg005,
+  currentSchemaSql,
+  successorMigrationSql: msg005Migration,
+  predecessorSql: migration,
+  functionName: "public.inbox_v2_auth_domain_mutation_coherence",
+  label: "MSG-005 provider lifecycle closure"
+});
 
 describe("Inbox V2 atomic provider-I/O closure migration", () => {
   it("installs the reviewed domain-coherence SQL verbatim", () => {
@@ -374,11 +389,15 @@ function restorePreMsg003AttachmentAuthorizationSql(current: string): string {
   let historicalDomain = replaceExactlyOnce(
     currentDomain,
     `     and message_change.entity_type_id = 'core:message'\n` +
-      `     and v_command.command_type_id <>\n` +
-      `       'core:attachment.materialization.complete'\n` +
+      `     and v_command.command_type_id not in (\n` +
+      `       'core:attachment.materialization.complete',\n` +
+      `       'core:message.edit',\n` +
+      `       'core:message.delete_local',\n` +
+      `       'core:message.delete_provider'\n` +
+      `     )\n` +
       `     and (`,
     `     and message_change.entity_type_id = 'core:message'\n` + `     and (`,
-    "MSG-003 message creation command exclusion"
+    "MSG-003/MSG-005 message creation command exclusions"
   );
   historicalDomain = removeExactBoundedSpan(
     historicalDomain,

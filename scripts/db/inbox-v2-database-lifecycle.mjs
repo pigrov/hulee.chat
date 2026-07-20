@@ -29,6 +29,8 @@ const MSG003_TYPED_CONTENT_AUTHORIZATION_MARKER =
   "INBOX_V2_FILE_OBJECT_MIGRATION_FINALIZED_V1";
 const MSG004_REPLY_FORWARD_MARKER =
   "INBOX_V2_REPLY_FORWARD_MIGRATION_FINALIZED_V1";
+const MSG005_MESSAGE_LIFECYCLE_MARKER =
+  "INBOX_V2_MESSAGE_LIFECYCLE_MIGRATION_FINALIZED_V1";
 const MIGRATION_DDL_BUDGET_EVIDENCE_SCHEMA_ID =
   "core:inbox-v2.migration-ddl-budget-evidence@v1";
 const MAX_MIGRATION_LOCK_TIMEOUT_MS = 60_000;
@@ -90,6 +92,9 @@ const REQUIRED_CURRENT_FUNCTIONS = [
   "public.inbox_v2_tm_head_guard()",
   "public.inbox_v2_tm_core_coherence()",
   "public.inbox_v2_tm_outbound_route_action_valid(text,text,text,text,text,timestamptz,timestamptz,text,text,text,text,text,text,bigint,text,text,bigint,text,text,timestamptz,text,bigint,text,boolean)",
+  "public.inbox_v2_tm_aux_coherence()",
+  "public.inbox_v2_deferred_source_action_guard()",
+  "public.inbox_v2_deferred_source_action_assert()",
   "public.inbox_v2_auth_domain_mutation_coherence()",
   "public.inbox_v2_atomic_message_creation_coherence()",
   "public.inbox_v2_atomic_outbound_creation_coherence()",
@@ -1000,6 +1005,13 @@ const REQUIRED_CURRENT_INDEXES = [
     name: "inbox_v2_timeline_subject_details_system_event_unique",
     definition:
       "create unique index inbox_v2_timeline_subject_details_system_event_unique on public.inbox_v2_timeline_subject_details using btree (tenant_id, system_event_id) where (system_event_id is not null)",
+    unique: true,
+    primary: false
+  }),
+  Object.freeze({
+    name: "inbox_v2_provider_lifecycle_active_message_unique",
+    definition:
+      "create unique index inbox_v2_provider_lifecycle_active_message_unique on public.inbox_v2_message_provider_lifecycle_operations using btree (tenant_id, message_id) where ((origin = 'hulee_requested'::inbox_v2_provider_lifecycle_origin) and (outcome = any (array['pending'::inbox_v2_provider_lifecycle_outcome, 'accepted'::inbox_v2_provider_lifecycle_outcome, 'outcome_unknown'::inbox_v2_provider_lifecycle_outcome])))",
     unique: true,
     primary: false
   }),
@@ -3424,7 +3436,8 @@ function expectedFunctionContract(bundle, signature) {
   if (
     migrationBundleContains(bundle, MSG002_OUTBOUND_SEND_AUTHORITY_MARKER) &&
     !statement.includes(MSG003_TYPED_CONTENT_AUTHORIZATION_MARKER) &&
-    !statement.includes(MSG004_REPLY_FORWARD_MARKER)
+    !statement.includes(MSG004_REPLY_FORWARD_MARKER) &&
+    !statement.includes(MSG005_MESSAGE_LIFECYCLE_MARKER)
   ) {
     body = applyInboxV2Msg002ExpectedFunctionOverlay(signature, body, bundle);
   }

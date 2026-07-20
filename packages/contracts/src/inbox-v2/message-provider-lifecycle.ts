@@ -436,6 +436,8 @@ export const inboxV2MessageProviderLifecycleOperationCreationCommitSchema = z
     }
 
     const expectedAuthority = expectedLifecycleRouteAuthority(operation.action);
+    const referenceContext = outboundRoute?.referenceContext;
+    const selectionIntent = outboundRoute?.selection.intent;
     if (
       providerSemanticProof !== null ||
       semanticOrderingCommit !== null ||
@@ -456,8 +458,9 @@ export const inboxV2MessageProviderLifecycleOperationCreationCommitSchema = z
       operation.capabilityRevision !==
         outboundRoute.bindingFence.capabilityRevision ||
       outboundRoute.operationId !== expectedAuthority.operationId ||
-      outboundRoute.requiredConversationPermissionId !==
-        expectedAuthority.permissionId ||
+      !expectedAuthority.permissionIds.includes(
+        outboundRoute.requiredConversationPermissionId
+      ) ||
       !outboundBindingSupportsLifecycleAction(
         outboundBindingSnapshot,
         outboundRoute,
@@ -474,11 +477,40 @@ export const inboxV2MessageProviderLifecycleOperationCreationCommitSchema = z
       routeConsumption.consumedAt !== operation.recordedAt ||
       routeConsumption.consumedByTrustedServiceId !==
         outboundRoute.adapterContract.loadedByTrustedServiceId ||
-      outboundRoute.referenceContext.kind !== "external_message" ||
-      outboundRoute.referenceContext.externalMessageReference.id !==
-        externalMessageReference.id ||
-      outboundRoute.referenceContext.sourceOccurrence.id !==
-        sourceOccurrence.id ||
+      referenceContext?.kind !== "external_message" ||
+      (referenceContext?.kind === "external_message" &&
+        (referenceContext.externalMessageReference.id !==
+          externalMessageReference.id ||
+          referenceContext.sourceOccurrence.id !== sourceOccurrence.id ||
+          Date.parse(referenceContext.resolutionDecision.notAfter) <
+            Date.parse(operation.recordedAt) ||
+          Date.parse(
+            referenceContext.resolutionDecision.availabilityObservation.notAfter
+          ) < Date.parse(operation.recordedAt) ||
+          referenceContext.resolutionDecision.referenceWindow.state ===
+            "expired" ||
+          (referenceContext.resolutionDecision.referenceWindow.state ===
+            "valid" &&
+            Date.parse(
+              referenceContext.resolutionDecision.referenceWindow.notAfter
+            ) < Date.parse(operation.recordedAt)))) ||
+      selectionIntent?.kind !== "explicit_occurrence" ||
+      (selectionIntent?.kind === "explicit_occurrence" &&
+        selectionIntent.occurrence.id !== sourceOccurrence.id) ||
+      outboundRoute.selection.reason !== "explicit_occurrence" ||
+      Date.parse(outboundRoute.createdAt) > Date.parse(operation.recordedAt) ||
+      Date.parse(outboundRoute.adapterContract.loadedAt) >
+        Date.parse(operation.recordedAt) ||
+      Date.parse(outboundRoute.runtimeObservationAtResolution.observedAt) >
+        Date.parse(operation.recordedAt) ||
+      Date.parse(outboundRoute.selection.selectedAt) >
+        Date.parse(operation.recordedAt) ||
+      Date.parse(outboundRoute.conversationAuthorization.notAfter) <
+        Date.parse(operation.recordedAt) ||
+      Date.parse(outboundRoute.sourceAccountAuthorization.notAfter) <
+        Date.parse(operation.recordedAt) ||
+      Date.parse(outboundRoute.selection.candidateSnapshotNotAfter) <
+        Date.parse(operation.recordedAt) ||
       !sameAppPrincipal(outboundRoute.principal, operation.appActor)
     ) {
       addIssue(
@@ -787,6 +819,12 @@ function outboundBindingSupportsLifecycleAction(
     binding.remoteAccess.state === "active" &&
     binding.administrative.state === "enabled" &&
     binding.runtimeHealth.state === "ready" &&
+    binding.runtimeHealth.state ===
+      route.runtimeObservationAtResolution.state &&
+    binding.runtimeHealth.revision ===
+      route.runtimeObservationAtResolution.revision &&
+    binding.runtimeHealth.checkedAt ===
+      route.runtimeObservationAtResolution.observedAt &&
     Date.parse(binding.updatedAt) <= Date.parse(at) &&
     Date.parse(binding.capabilities.capturedAt) <= Date.parse(at) &&
     sameValue(binding.capabilities.adapterContract, route.adapterContract) &&
@@ -800,11 +838,14 @@ function outboundBindingSupportsLifecycleAction(
 
 function expectedLifecycleRouteAuthority(action: "edit" | "delete"): {
   operationId: string;
-  permissionId: string;
+  permissionIds: readonly string[];
 } {
   return {
     operationId: `core:message.${action}`,
-    permissionId: `core:message.${action}_external`
+    // The Message action itself is authorized against the exact TimelineItem.
+    // An OutboundRoute carries the independent Conversation access decision;
+    // conflating the two makes a real canonical authorization plan impossible.
+    permissionIds: ["core:conversation.read"]
   };
 }
 

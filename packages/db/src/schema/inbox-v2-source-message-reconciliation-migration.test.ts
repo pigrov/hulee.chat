@@ -3,12 +3,36 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { INBOX_V2_SOURCE_MESSAGE_RECONCILIATION_INTEGRITY_SQL } from "./inbox-v2/source-message-reconciliation";
+import { restoreInboxV2HistoricalSqlFunction } from "./inbox-v2-migration-test-support";
 
 const migrationPath = new URL(
   "../../drizzle/0045_inbox_v2_source_message_reconciliation.sql",
   import.meta.url
 );
 const migration = readFileSync(migrationPath, "utf8").replaceAll("\r\n", "\n");
+const msg005Migration = readFileSync(
+  new URL(
+    "../../drizzle/0055_inbox_v2_message_lifecycle_commands.sql",
+    import.meta.url
+  ),
+  "utf8"
+).replaceAll("\r\n", "\n");
+const integrityBeforeMsg005Guard = restoreInboxV2HistoricalSqlFunction({
+  sqlToRestore: INBOX_V2_SOURCE_MESSAGE_RECONCILIATION_INTEGRITY_SQL.trim(),
+  currentSchemaSql: INBOX_V2_SOURCE_MESSAGE_RECONCILIATION_INTEGRITY_SQL.trim(),
+  successorMigrationSql: msg005Migration,
+  predecessorSql: migration,
+  functionName: "public.inbox_v2_deferred_source_action_guard",
+  label: "MSG-005 source-action mutable-column guard"
+});
+const historicalIntegritySql = restoreInboxV2HistoricalSqlFunction({
+  sqlToRestore: integrityBeforeMsg005Guard,
+  currentSchemaSql: INBOX_V2_SOURCE_MESSAGE_RECONCILIATION_INTEGRITY_SQL.trim(),
+  successorMigrationSql: msg005Migration,
+  predecessorSql: migration,
+  functionName: "public.inbox_v2_deferred_source_action_assert",
+  label: "MSG-005 source-action coherence"
+});
 
 describe("Inbox V2 source message reconciliation migration", () => {
   it("is an additive migration over the six reconciliation tables", () => {
@@ -97,11 +121,8 @@ describe("Inbox V2 source message reconciliation migration", () => {
     expect(migration).toContain(
       "--> statement-breakpoint\n-- INBOX_V2_SOURCE_MESSAGE_RECONCILIATION_FINALIZED_V1"
     );
-    expect(
-      migration.endsWith(
-        `${INBOX_V2_SOURCE_MESSAGE_RECONCILIATION_INTEGRITY_SQL.trim()}\n`
-      )
-    ).toBe(true);
+    const historicalTail = `${historicalIntegritySql}\n`;
+    expect(migration.slice(-historicalTail.length)).toBe(historicalTail);
     expect(migration).toContain(
       "create constraint trigger inbox_v2_deferred_source_action_constraint_trigger"
     );

@@ -1,15 +1,19 @@
 import {
   inboxV2BigintCounterSchema,
+  calculateInboxV2MessageContentDigest,
   inboxV2ConversationIdSchema,
   inboxV2EntityRevisionSchema,
   inboxV2MessageActionAttributionSchema,
   inboxV2MessageCreationCommitSchema,
   inboxV2MessageContentBlockSchema,
+  inboxV2MessageMutationCommitSchema,
   inboxV2MessageIdSchema,
   inboxV2ProviderSemanticOrderingHeadSchema,
   inboxV2ReactionSemanticSlotKeyFor,
   inboxV2TenantIdSchema,
   inboxV2TimelineItemIdSchema,
+  inboxV2TimelineContentHeadOf,
+  inboxV2TimelineContentSchema,
   inboxV2TimelineSequenceSchema
 } from "@hulee/contracts";
 import type { SQL } from "drizzle-orm";
@@ -19,6 +23,7 @@ import { describe, expect, it } from "vitest";
 import {
   fixtureHuleeCreationCommit,
   fixtureInternalCreationCommit,
+  fixtureReference,
   fixtureSourceCreationCommit
 } from "../../../contracts/src/inbox-v2/timeline-message-fixtures.type-fixture";
 import type {
@@ -50,6 +55,10 @@ import {
   buildInsertInboxV2ProviderSemanticOrderingHeadSql,
   buildInsertInboxV2ProviderReceiptObservationSql,
   buildInsertInboxV2ProviderReceiptOpaquePayloadSql,
+  buildLockActiveInboxV2RequestedProviderLifecycleOperationSql,
+  buildLockInboxV2CapabilityRequiredRoleSetSql,
+  buildLockInboxV2MessageOwnAuthorshipSql,
+  buildLockInboxV2TimelineConversationHeadForShareSql,
   buildLockInboxV2OutboundRouteForConsumptionSql,
   buildLockInboxV2ProviderSemanticOrderingReferenceSql,
   buildPurgeInboxV2TimelineContentPayloadSql,
@@ -57,9 +66,13 @@ import {
   decodeInboxV2AuxiliaryReadCursor,
   decodeInboxV2AuxiliaryReadSnapshotToken,
   deriveInboxV2MessageCreationSourceOccurrenceFence,
+  deriveInboxV2MessageEditReadyFileParents,
   encodeInboxV2AuxiliaryReadCursor,
   encodeInboxV2AuxiliaryReadSnapshotToken,
   inboxV2MessageCreationSourceOccurrenceFenceRowMatches,
+  inboxV2CapabilityRequiredRoleSetMatches,
+  inboxV2RequestedProviderLifecycleCapabilityId,
+  buildInboxV2RequestedProviderLifecycleSharedLockClauseSql,
   mapProviderLifecycleOperationReadRow,
   mapInboxV2TimelineContentBlockRow,
   mapProviderSemanticOrderingHeadRow,
@@ -78,6 +91,9 @@ import {
 } from "./sql-inbox-v2-timeline-message-repository";
 
 const tenantId = inboxV2TenantIdSchema.parse("tenant:db005-unit");
+const conversationId = inboxV2ConversationIdSchema.parse(
+  "conversation:db005-unit"
+);
 const messageId = inboxV2MessageIdSchema.parse("message:db005-unit");
 const timelineItemId = inboxV2TimelineItemIdSchema.parse(
   "timeline_item:db005-unit"
@@ -88,6 +104,129 @@ const timelineSequence = inboxV2TimelineSequenceSchema.parse("17");
 const now = "2026-07-14T09:00:00.000Z";
 
 describe("SQL Inbox V2 timeline/message repository", () => {
+  it("uses a shared Conversation-head lock for canonical cross-copy prelocks", () => {
+    const query = renderQuery(
+      buildLockInboxV2TimelineConversationHeadForShareSql({
+        tenantId,
+        conversationId
+      })
+    );
+    const statement = normalizeSql(query.sql);
+    expect(statement).toContain("from inbox_v2_conversations c");
+    expect(statement).toContain("for share of c, h");
+    expect(query.params).toEqual([tenantId, conversationId]);
+  });
+
+  it("locks the one active Hulee-requested provider operation for a Message", () => {
+    const query = renderQuery(
+      buildLockActiveInboxV2RequestedProviderLifecycleOperationSql({
+        tenantId,
+        messageId
+      })
+    );
+    const statement = normalizeSql(query.sql);
+    expect(statement).toContain(
+      "from inbox_v2_message_provider_lifecycle_operations"
+    );
+    expect(statement).toContain("and origin = 'hulee_requested'");
+    expect(statement).toContain(
+      "and outcome in ('pending', 'accepted', 'outcome_unknown')"
+    );
+    expect(statement).toContain("order by id for share");
+    expect(query.params).toEqual([tenantId, messageId]);
+  });
+
+  it("locks and compares the exact lifecycle capability role set", () => {
+    expect(inboxV2RequestedProviderLifecycleCapabilityId("edit")).toBe(
+      "core:message-edit"
+    );
+    expect(inboxV2RequestedProviderLifecycleCapabilityId("delete")).toBe(
+      "core:message-delete"
+    );
+    const query = renderQuery(
+      buildLockInboxV2CapabilityRequiredRoleSetSql({
+        tenantId,
+        bindingId: "source_thread_binding:db005-unit",
+        capabilityRevision: "7",
+        capabilityOrdinal: 3
+      })
+    );
+    expect(normalizeSql(query.sql)).toContain(
+      "from inbox_v2_source_thread_binding_capability_required_roles required_role_row"
+    );
+    expect(normalizeSql(query.sql)).toContain(
+      "order by required_role_row.provider_role_id for share of required_role_row"
+    );
+    expect(query.params).toEqual([
+      tenantId,
+      "source_thread_binding:db005-unit",
+      7n,
+      3
+    ]);
+
+    const exactRows = [
+      { provider_role_id: "module:synthetic:administrator" },
+      { provider_role_id: "module:synthetic:member" }
+    ];
+    expect(
+      inboxV2CapabilityRequiredRoleSetMatches(exactRows, [
+        "module:synthetic:member",
+        "module:synthetic:administrator"
+      ])
+    ).toBe(true);
+    expect(
+      inboxV2CapabilityRequiredRoleSetMatches(
+        [exactRows[0], { provider_role_id: "module:synthetic:substituted" }],
+        ["module:synthetic:member", "module:synthetic:administrator"]
+      )
+    ).toBe(false);
+    expect(
+      inboxV2CapabilityRequiredRoleSetMatches(exactRows.slice(0, 1), [
+        "module:synthetic:member",
+        "module:synthetic:administrator"
+      ])
+    ).toBe(false);
+
+    const routeLock = normalizeSql(
+      renderQuery(buildInboxV2RequestedProviderLifecycleSharedLockClauseSql())
+        .sql
+    );
+    expect(routeLock).toBe(
+      "for share of route_row, binding_head, capability_row, occurrence_row, reference_row"
+    );
+    expect(routeLock).not.toContain("for update");
+  });
+
+  it("locks the exact mutable participant snapshot with a shared row lock", () => {
+    const query = renderQuery(
+      buildLockInboxV2MessageOwnAuthorshipSql({
+        tenantId,
+        participantId: "conversation_participant:db005-unit-author",
+        conversationId: "conversation:db005-unit",
+        employeeId: "employee:db005-unit-author",
+        revision: "9",
+        createdAt: now,
+        updatedAt: now
+      })
+    );
+    const statement = normalizeSql(query.sql);
+    expect(statement).toContain(
+      "from inbox_v2_conversation_participants where tenant_id = $1"
+    );
+    expect(statement).toContain("and revision = $5");
+    expect(statement).toContain("for share");
+    expect(statement).not.toContain("for key share");
+    expect(query.params).toEqual([
+      tenantId,
+      "conversation_participant:db005-unit-author",
+      "conversation:db005-unit",
+      "employee:db005-unit-author",
+      9n,
+      now,
+      now
+    ]);
+  });
+
   it("round-trips exact V2 attachment and extension pins without using legacy file columns", () => {
     const attachment = inboxV2MessageContentBlockSchema.parse({
       blockKey: "image-1",
@@ -232,6 +371,199 @@ describe("SQL Inbox V2 timeline/message repository", () => {
         tenantId
       )
     ).toEqual(extension);
+  });
+
+  it("derives every ready attachment and exact extension pin for the resulting edit revision", () => {
+    const creation = inboxV2MessageCreationCommitSchema.parse(
+      fixtureInternalCreationCommit()
+    );
+    const beforeTimelineItem = creation.timelineAllocation.items[0];
+    if (
+      beforeTimelineItem === undefined ||
+      beforeTimelineItem.subject.kind !== "message" ||
+      creation.content.state.kind !== "available"
+    ) {
+      throw new Error("Edit FileParent fixture is incomplete.");
+    }
+    const readyAttachment = inboxV2MessageContentBlockSchema.parse({
+      blockKey: "retained-image",
+      kind: "image",
+      attachment: {
+        state: "ready",
+        attachment: fixtureReference(
+          "message_attachment",
+          "message_attachment:db005-edit-retained",
+          creation.tenantId
+        ),
+        file: fixtureReference(
+          "file",
+          "file:db005-edit-retained",
+          creation.tenantId
+        ),
+        fileRevision: "4",
+        fileVersion: fixtureReference(
+          "file_version",
+          "file_version:db005-edit-retained-v4",
+          creation.tenantId
+        ),
+        objectVersion: fixtureReference(
+          "file_object_version",
+          "file_object_version:db005-edit-retained-v4",
+          creation.tenantId
+        )
+      },
+      displayName: "retained.png"
+    });
+    const extension = inboxV2MessageContentBlockSchema.parse({
+      blockKey: "new-extension",
+      kind: "extension",
+      blockKindId: "core:message-extension",
+      payloadSchemaId: "core:message-extension-payload",
+      payloadSchemaVersion: "v1",
+      payloadFile: fixtureReference(
+        "file",
+        "file:db005-edit-extension",
+        creation.tenantId
+      ),
+      payloadPin: {
+        state: "exact",
+        fileRevision: "7",
+        fileVersion: fixtureReference(
+          "file_version",
+          "file_version:db005-edit-extension-v7",
+          creation.tenantId
+        ),
+        objectVersion: fixtureReference(
+          "file_object_version",
+          "file_object_version:db005-edit-extension-v7",
+          creation.tenantId
+        )
+      },
+      payloadDigestSha256: "b".repeat(64),
+      rendererId: "core:message-extension-renderer"
+    });
+    const beforeBlocks = [...creation.content.state.blocks, readyAttachment];
+    const beforeContent = inboxV2TimelineContentSchema.parse({
+      ...creation.content,
+      state: {
+        kind: "available",
+        blocks: beforeBlocks,
+        contentDigestSha256: calculateInboxV2MessageContentDigest(beforeBlocks)
+      }
+    });
+    const beforeMessage = {
+      ...creation.message,
+      content: inboxV2TimelineContentHeadOf(beforeContent)
+    };
+    const afterBlocks = [...beforeBlocks, extension];
+    const afterContent = inboxV2TimelineContentSchema.parse({
+      ...beforeContent,
+      state: {
+        kind: "available",
+        blocks: afterBlocks,
+        contentDigestSha256: calculateInboxV2MessageContentDigest(afterBlocks)
+      },
+      revision: "2",
+      updatedAt: now
+    });
+    const afterMessage = {
+      ...beforeMessage,
+      content: inboxV2TimelineContentHeadOf(afterContent),
+      revision: "2",
+      updatedAt: now
+    };
+    const afterTimelineItem = {
+      ...beforeTimelineItem,
+      subject: {
+        ...beforeTimelineItem.subject,
+        messageRevision: "2"
+      },
+      revision: "2",
+      updatedAt: now
+    };
+    const mutation = inboxV2MessageMutationCommitSchema.parse({
+      tenantId: creation.tenantId,
+      beforeMessage,
+      beforeTimelineItem,
+      contentTransition: {
+        tenantId: creation.tenantId,
+        before: beforeContent,
+        transition: {
+          kind: "edit",
+          expectedRevision: "1",
+          resultingRevision: "2",
+          event: fixtureReference(
+            "event",
+            "event:db005-edit-file-parents",
+            creation.tenantId
+          ),
+          occurredAt: now
+        },
+        after: afterContent
+      },
+      providerOperation: null,
+      providerOperationCreationCommit: null,
+      actionParticipantSnapshot: creation.authorParticipant,
+      revision: {
+        tenantId: creation.tenantId,
+        id: "message_revision:db005-edit-file-parents",
+        message: creation.initialRevision.message,
+        timelineItem: creation.initialRevision.timelineItem,
+        expectedPreviousRevision: "1",
+        messageRevision: "2",
+        change: {
+          kind: "edited",
+          beforeContent: beforeMessage.content,
+          afterContent: afterMessage.content,
+          providerOperation: null
+        },
+        actionAttribution: {
+          actionParticipant: beforeMessage.authorParticipant,
+          appActor: beforeMessage.appActor,
+          sourceOccurrence: null,
+          automationCausation: null
+        },
+        occurredAt: now,
+        recordedAt: now,
+        recordRevision: "1",
+        createdAt: now
+      },
+      afterMessage,
+      afterTimelineItem
+    });
+
+    expect(
+      deriveInboxV2MessageEditReadyFileParents(
+        mutation,
+        "core:support",
+        creation.content.createdAt
+      )
+    ).toEqual([
+      expect.objectContaining({
+        fileId: "file:db005-edit-extension",
+        expectedFileRevision: "7",
+        processingPurposeId: "core:support",
+        retentionAnchorAt: creation.content.createdAt,
+        parent: expect.objectContaining({
+          purpose: "extension_payload",
+          entityRevision: "2",
+          contentRevision: "2",
+          blockKey: "new-extension"
+        })
+      }),
+      expect.objectContaining({
+        fileId: "file:db005-edit-retained",
+        expectedFileRevision: "4",
+        processingPurposeId: "core:support",
+        retentionAnchorAt: creation.content.createdAt,
+        parent: expect.objectContaining({
+          purpose: "attachment",
+          entityRevision: "2",
+          contentRevision: "2",
+          blockKey: "retained-image"
+        })
+      })
+    ]);
   });
 
   it("reconstructs legacy unpinned compatibility rows explicitly", () => {

@@ -1,5 +1,8 @@
 import {
   INBOX_V2_MESSAGE_CREATION_COMMIT_SCHEMA_ID,
+  INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_CREATION_COMMIT_SCHEMA_ID,
+  INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_OPERATION_SCHEMA_ID,
+  INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_SCHEMA_VERSION,
   INBOX_V2_MESSAGE_REVISION_SCHEMA_ID,
   INBOX_V2_MESSAGE_LIFECYCLE_SCHEMA_VERSION,
   INBOX_V2_MESSAGE_SCHEMA_ID,
@@ -12,6 +15,7 @@ import {
   INBOX_V2_SOURCE_OCCURRENCE_RESOLUTION_COMMIT_SCHEMA_ID,
   INBOX_V2_SOURCE_OCCURRENCE_SCHEMA_ID,
   INBOX_V2_TIMELINE_MESSAGE_COMMIT_SCHEMA_VERSION,
+  calculateInboxV2CanonicalSha256,
   inboxV2BigintCounterSchema,
   inboxV2AdapterContractSnapshotSchema,
   inboxV2AppActorSchema,
@@ -20,6 +24,7 @@ import {
   inboxV2ConversationParticipantIdSchema,
   inboxV2EntityRevisionSchema,
   inboxV2MessageCreationCommitSchema,
+  inboxV2MessageEditFileSourceAuthorityTargetSchema,
   inboxV2MessageIdSchema,
   inboxV2MessageContentBlockSchema,
   inboxV2MessageLifecycleSchema,
@@ -68,6 +73,8 @@ import {
   type InboxV2Message,
   type InboxV2MessageContentBlock,
   type InboxV2MessageId,
+  type InboxV2MessageEditFileSourceAuthorityTarget,
+  type InboxV2MessageEditFileUploadAuthorityTarget,
   type InboxV2MessageRevision,
   type InboxV2OutboundDispatchRerouteCommit,
   type InboxV2SourceOccurrenceId,
@@ -87,9 +94,11 @@ import {
   consumeInboxV2AtomicAttachmentMaterializationProof,
   deriveInboxV2AttachmentMaterializationAuditReference,
   issueInboxV2AtomicMaterializationSealReceipt,
+  registerInboxV2AtomicOutboundRouteProof,
   requireInboxV2AtomicSealExecutor,
   type InboxV2AtomicAttachmentMaterializationProof,
-  type InboxV2AtomicMaterializationSealReceipt
+  type InboxV2AtomicMaterializationSealReceipt,
+  type InboxV2AtomicMessageLifecycleSealManifest
 } from "./sql-inbox-v2-atomic-materialization-internal";
 import {
   assertInboxV2AuthorizedAtomicMaterializationContext,
@@ -101,6 +110,7 @@ import {
   prepareInboxV2FileParentAttachmentsInTransaction,
   sealInboxV2PreparedFileParentAttachmentsInTransaction,
   type InboxV2PreparedFileParentAttachmentsCapability,
+  type InboxV2FileParentSourceAuthorityFence,
   type InboxV2ReadyFileParentAttachment
 } from "./sql-inbox-v2-file-parent-materialization";
 import type {
@@ -160,6 +170,12 @@ type InboxV2ProviderSemanticOrderingHead = ReturnType<
 >;
 
 export type InboxV2TimelineMessageTransactionExecutor = RawSqlExecutor & {
+  /**
+   * `ambient` means a caller already owns the database transaction and its
+   * whole-unit retry policy. Retrying one repository callback inside an
+   * aborted PostgreSQL transaction would mask the original retryable SQLSTATE.
+   */
+  readonly transactionScope?: "owned" | "ambient";
   transaction<TResult>(
     work: (transaction: RawSqlExecutor) => Promise<TResult>,
     config: Readonly<{
@@ -331,6 +347,52 @@ export type PrepareInboxV2AttachmentMaterializationMessageMutationResult =
       current: InboxV2Message;
     }>
   | Readonly<{ kind: "message_not_found" }>;
+
+const inboxV2PreparedMessageLifecycleCommandCapabilityBrand: unique symbol =
+  Symbol("inbox-v2-prepared-message-lifecycle-command-capability");
+
+export type InboxV2PreparedMessageLifecycleCommandCapability = Readonly<{
+  [inboxV2PreparedMessageLifecycleCommandCapabilityBrand]: true;
+}>;
+
+export type PrepareInboxV2MessageLifecycleCommandInput =
+  | Readonly<{
+      kind: "message_mutation";
+      tenantId: InboxV2TenantId;
+      conversationId: InboxV2ConversationId;
+      messageId: InboxV2MessageId;
+      fileUploadAuthorityPlan: readonly InboxV2MessageEditFileUploadAuthorityTarget[];
+      fileSourceAuthorityPlan: readonly InboxV2MessageEditFileSourceAuthorityTarget[];
+      plan: (
+        current: InboxV2MessageMutationPlanCurrent
+      ) => InboxV2MessageMutationCommit;
+    }>
+  | Readonly<{
+      kind: "provider_lifecycle";
+      commit: InboxV2MessageProviderLifecycleCreationCommit;
+    }>;
+
+export type PrepareInboxV2MessageLifecycleCommandResult =
+  | Readonly<{
+      kind: "ready";
+      capability: InboxV2PreparedMessageLifecycleCommandCapability;
+      commandKind: "edit" | "local_delete" | "provider_delete";
+    }>
+  | Readonly<{
+      kind: "conflict";
+      code: "revision.conflict" | "message.state_conflict";
+      current: InboxV2Message;
+    }>
+  | Readonly<{ kind: "message_not_found" }>;
+
+export type SealInboxV2PreparedMessageLifecycleCommandResult = Readonly<{
+  kind: "applied";
+  commandKind: "edit" | "local_delete" | "provider_delete";
+  message: InboxV2Message;
+  timelineItem: InboxV2TimelineItem;
+  envelope: InboxV2SafeGenericEnvelope;
+  receipt: InboxV2AtomicMaterializationSealReceipt;
+}>;
 
 /**
  * Server-side terminal-command preflight. This is a read-only snapshot; the
@@ -742,6 +804,7 @@ type MessageRevisionReplayRow = Record<string, unknown> & {
 };
 type ConversationHeadRow = {
   id: unknown;
+  purpose_id: unknown;
   revision: unknown;
   latest_timeline_sequence: unknown;
   latest_activity_item_id: unknown;
@@ -778,6 +841,7 @@ type MessageHeadRow = {
   content_revision: unknown;
   content_state: unknown;
   content_digest_sha256: unknown;
+  content_retention_anchor_at: unknown;
   tombstone_event_id: unknown;
   tombstone_reason_id: unknown;
   retention_policy_id: unknown;
@@ -1209,6 +1273,28 @@ const preparedInboxV2AttachmentMaterializationMessageMutations = new WeakMap<
   InboxV2PreparedAttachmentMaterializationMessageMutationCapability,
   PreparedInboxV2AttachmentMaterializationMessageMutationState
 >();
+type PreparedProviderLifecycleCreationForAtomicSeal = Readonly<{
+  routeConsumption: InboxV2OutboundRouteConsumptionRecord;
+  routeDisposition: "absent";
+}>;
+type PreparedInboxV2MessageLifecycleCommandState = {
+  readonly atomicMaterializationToken: object;
+  readonly sealExecutor: RawSqlExecutor;
+  readonly current: LoadedTimelineMessageAggregate;
+  readonly commandKind: "edit" | "local_delete" | "provider_delete";
+  readonly messageMutation: InboxV2MessageMutationCommit | null;
+  readonly providerLifecycleCommit: InboxV2MessageProviderLifecycleCreationCommit | null;
+  readonly providerLifecyclePreparation: PreparedProviderLifecycleCreationForAtomicSeal | null;
+  readonly fileParentAttachmentsCapability: InboxV2PreparedFileParentAttachmentsCapability | null;
+  readonly fileParentAttachmentPlan: readonly InboxV2ReadyFileParentAttachment[];
+  readonly fileUploadAuthorityPlan: readonly InboxV2MessageEditFileUploadAuthorityTarget[];
+  readonly fileSourceAuthorityPlan: readonly InboxV2MessageEditFileSourceAuthorityTarget[];
+  consumed: boolean;
+};
+const preparedInboxV2MessageLifecycleCommands = new WeakMap<
+  InboxV2PreparedMessageLifecycleCommandCapability,
+  PreparedInboxV2MessageLifecycleCommandState
+>();
 export type InboxV2OutboundRouteConsumptionRecord = Readonly<{
   tenantId: InboxV2TenantId;
   consumerKind: "message_creation" | "provider_lifecycle" | "reaction";
@@ -1249,6 +1335,7 @@ type LoadedTimelineMessageAggregate = Readonly<{
   message: InboxV2Message;
   timelineItem: InboxV2TimelineItem;
   content: InboxV2TimelineContent;
+  contentRetentionAnchorAt: string;
   databaseNow: string;
   streamPosition: InboxV2BigintCounter;
 }>;
@@ -1804,6 +1891,93 @@ export function deriveInboxV2MessageCreationReadyFileParents(
       processingPurposeId:
         commit.timelineAllocation.conversationAfter.purposeId,
       retentionAnchorAt: timelineItem.occurredAt
+    });
+  }
+  attachments.sort((left, right) => {
+    const fileOrder = left.fileId.localeCompare(right.fileId);
+    if (fileOrder !== 0) return fileOrder;
+    return (left.parent.blockKey ?? "").localeCompare(
+      right.parent.blockKey ?? ""
+    );
+  });
+  return Object.freeze(attachments);
+}
+
+/**
+ * Every available pin in the resulting edit revision receives its own exact
+ * revision-scoped FileParent. Retained pins are intentionally included: their
+ * previous parent points at the previous Message/Content revision, while the
+ * attachment-anchor table remains deduplicated separately by attachment ID.
+ */
+export function deriveInboxV2MessageEditReadyFileParents(
+  commit: InboxV2MessageMutationCommit,
+  processingPurposeId: string,
+  retentionAnchorAt: string
+): readonly InboxV2ReadyFileParentAttachment[] {
+  const transition = commit.contentTransition;
+  if (
+    transition === null ||
+    transition.transition.kind !== "edit" ||
+    transition.after.state.kind !== "available"
+  ) {
+    return Object.freeze([]);
+  }
+  const visibilityBoundary =
+    commit.afterTimelineItem.visibility === "conversation_external"
+      ? "external_work"
+      : "internal";
+  const commonParent = Object.freeze({
+    kind: "message" as const,
+    visibilityBoundary,
+    parentConversationVisibility: null,
+    entityId: commit.afterMessage.id,
+    entityRevision: commit.afterMessage.revision,
+    conversationId: commit.afterMessage.conversation.id,
+    timelineItemId: commit.afterTimelineItem.id,
+    contentId: transition.after.id,
+    contentRevision: transition.after.revision
+  });
+  const attachments: InboxV2ReadyFileParentAttachment[] = [];
+  for (const block of transition.after.state.blocks) {
+    if (block.kind === "extension") {
+      if (block.payloadPin.state !== "exact") continue;
+      attachments.push({
+        fileId: block.payloadFile.id,
+        expectedFileRevision: block.payloadPin.fileRevision,
+        fileVersionId: block.payloadPin.fileVersion.id,
+        objectVersionId: block.payloadPin.objectVersion.id,
+        parent: {
+          ...commonParent,
+          purpose: "extension_payload",
+          blockKey: block.blockKey
+        },
+        processingPurposeId,
+        retentionAnchorAt
+      });
+      continue;
+    }
+    if (
+      block.kind !== "image" &&
+      block.kind !== "audio" &&
+      block.kind !== "video" &&
+      block.kind !== "file" &&
+      block.kind !== "sticker"
+    ) {
+      continue;
+    }
+    if (block.attachment.state !== "ready") continue;
+    attachments.push({
+      fileId: block.attachment.file.id,
+      expectedFileRevision: block.attachment.fileRevision,
+      fileVersionId: block.attachment.fileVersion.id,
+      objectVersionId: block.attachment.objectVersion.id,
+      parent: {
+        ...commonParent,
+        purpose: "attachment",
+        blockKey: block.blockKey
+      },
+      processingPurposeId,
+      retentionAnchorAt
     });
   }
   attachments.sort((left, right) => {
@@ -2957,6 +3131,1660 @@ function externalMessageSourceAccountAuthorityError(): Error {
   );
 }
 
+async function lockInboxV2MessageLifecycleConversations(
+  executor: RawSqlExecutor,
+  input: Readonly<{
+    tenantId: InboxV2TenantId;
+    targetConversationId: InboxV2ConversationId;
+    targetMessageId: InboxV2MessageId;
+    fileSourceAuthorityPlan: readonly InboxV2MessageEditFileSourceAuthorityTarget[];
+  }>
+): Promise<boolean> {
+  const locks = new Map<string, "share" | "update">([
+    [input.targetConversationId, "update"]
+  ]);
+  for (const target of input.fileSourceAuthorityPlan) {
+    const source = target.sourceParent;
+    if (
+      target.file.tenantId !== input.tenantId ||
+      target.fileVersion.tenantId !== input.tenantId ||
+      target.objectVersion.tenantId !== input.tenantId ||
+      target.targetParent.message.tenantId !== input.tenantId ||
+      target.targetParent.message.id !== input.targetMessageId ||
+      (source.kind === "upload_staging"
+        ? source.appActor.kind === "employee" &&
+          source.appActor.employee.tenantId !== input.tenantId
+        : source.conversation.tenantId !== input.tenantId ||
+          (source.kind === "message"
+            ? source.message.tenantId !== input.tenantId
+            : source.staffNote.tenantId !== input.tenantId))
+    ) {
+      throw invariantError(
+        "Message lifecycle File source authority crossed its tenant or target Message boundary."
+      );
+    }
+    if (source.kind !== "upload_staging") {
+      const sourceConversationId = inboxV2ConversationIdSchema.parse(
+        source.conversation.id
+      );
+      if (!locks.has(sourceConversationId)) {
+        locks.set(sourceConversationId, "share");
+      }
+    }
+  }
+  // The normal mutation loader already locks the target Conversation first.
+  // A separate canonical prelock is required only when a source Conversation
+  // could otherwise invert that order in a concurrent cross-copy.
+  if (locks.size === 1) return true;
+  for (const [conversationId, mode] of [...locks].sort(([left], [right]) =>
+    left.localeCompare(right)
+  )) {
+    const locked = await executor.execute<ConversationHeadRow>(
+      mode === "update"
+        ? buildLockInboxV2TimelineConversationHeadSql({
+            tenantId: input.tenantId,
+            conversationId: inboxV2ConversationIdSchema.parse(conversationId)
+          })
+        : buildLockInboxV2TimelineConversationHeadForShareSql({
+            tenantId: input.tenantId,
+            conversationId: inboxV2ConversationIdSchema.parse(conversationId)
+          })
+    );
+    assertAtMostOneRow(locked, "Message lifecycle Conversation prelock");
+    if (locked.rows.length !== 1) return false;
+  }
+  return true;
+}
+
+export async function prepareInboxV2MessageLifecycleCommand(
+  context: InboxV2AuthorizedCommandMutationContext,
+  input: PrepareInboxV2MessageLifecycleCommandInput
+): Promise<PrepareInboxV2MessageLifecycleCommandResult> {
+  assertInboxV2AuthorizedCommandMutationContext(context);
+  if (context.profile !== "domain") {
+    throw invariantError(
+      "Inbox V2 Message lifecycle preparation requires an authorized domain context."
+    );
+  }
+  const atomicMaterializationToken = context.atomicMaterializationToken;
+  if (atomicMaterializationToken === undefined) {
+    throw invariantError(
+      "Inbox V2 Message lifecycle preparation requires an atomic materialization token."
+    );
+  }
+  const sealExecutor = requireInboxV2AtomicSealExecutor(context);
+  const fileSourceAuthorityPlan =
+    input.kind === "message_mutation"
+      ? Object.freeze(
+          input.fileSourceAuthorityPlan.map((target) =>
+            Object.freeze(
+              inboxV2MessageEditFileSourceAuthorityTargetSchema.parse(target)
+            )
+          )
+        )
+      : Object.freeze([] as InboxV2MessageEditFileSourceAuthorityTarget[]);
+
+  let current: LoadedTimelineMessageAggregate;
+  let commandKind: "edit" | "local_delete" | "provider_delete";
+  let messageMutation: InboxV2MessageMutationCommit | null;
+  let providerLifecycleCommit: InboxV2MessageProviderLifecycleCreationCommit | null;
+  let conversationPurposeId: string | null = null;
+
+  if (input.kind === "message_mutation") {
+    const tenantId = inboxV2TenantIdSchema.parse(input.tenantId);
+    const conversationId = inboxV2ConversationIdSchema.parse(
+      input.conversationId
+    );
+    const messageId = inboxV2MessageIdSchema.parse(input.messageId);
+    const conversationLocks = await lockInboxV2MessageLifecycleConversations(
+      context.executor,
+      {
+        tenantId,
+        targetConversationId: conversationId,
+        targetMessageId: messageId,
+        fileSourceAuthorityPlan
+      }
+    );
+    if (!conversationLocks) return { kind: "message_not_found" };
+    const prepared = await prepareMessageMutationInTransaction(
+      context.executor,
+      {
+        tenantId,
+        conversationId,
+        messageId,
+        plan: input.plan
+      }
+    );
+    if (prepared.kind === "message_not_found") return prepared;
+    if (prepared.kind === "already_applied") {
+      return {
+        kind: "conflict",
+        code: "message.state_conflict",
+        current: prepared.message
+      };
+    }
+    if (prepared.kind === "conflict") return prepared;
+    current = prepared.current;
+    conversationPurposeId = prepared.conversationPurposeId;
+    messageMutation = prepared.commit;
+    providerLifecycleCommit = prepared.commit.providerOperationCreationCommit;
+    if (prepared.commit.revision.change.kind === "edited") {
+      commandKind = "edit";
+    } else if (
+      prepared.commit.revision.change.kind === "local_delete_tombstone"
+    ) {
+      commandKind = "local_delete";
+    } else {
+      throw invariantError(
+        "Inbox V2 Message lifecycle command accepts only edit or local-delete Message revisions."
+      );
+    }
+  } else {
+    const commit =
+      inboxV2MessageProviderLifecycleOperationCreationCommitSchema.parse(
+        input.commit
+      );
+    if (
+      commit.tenantId !== context.tenantId ||
+      commit.operation.origin !== "hulee_requested" ||
+      commit.operation.action !== "delete" ||
+      commit.operation.outcome.state !== "pending" ||
+      commit.operation.deleteLocalPolicy?.effect !== "not_evaluated" ||
+      commit.semanticOrderingCommit !== null
+    ) {
+      throw invariantError(
+        "Inbox V2 provider-delete command requires one pending requested delete operation."
+      );
+    }
+    const conversationLock =
+      await context.executor.execute<ConversationHeadRow>(
+        buildLockInboxV2TimelineConversationHeadSql({
+          tenantId: commit.tenantId,
+          conversationId: commit.message.conversation.id
+        })
+      );
+    assertAtMostOneRow(
+      conversationLock,
+      "Provider-delete command Conversation lock"
+    );
+    if (conversationLock.rows.length === 0) {
+      return { kind: "message_not_found" };
+    }
+    const loaded = await loadTimelineMessageAggregate(context.executor, {
+      tenantId: commit.tenantId,
+      messageId: commit.message.id,
+      lock: true
+    });
+    if (loaded === null) return { kind: "message_not_found" };
+    if (
+      !sameValue(loaded.message, commit.message) ||
+      !sameValue(loaded.timelineItem, commit.timelineItem)
+    ) {
+      return {
+        kind: "conflict",
+        code:
+          loaded.message.revision === commit.message.revision
+            ? "message.state_conflict"
+            : "revision.conflict",
+        current: loaded.message
+      };
+    }
+    current = loaded;
+    commandKind = "provider_delete";
+    messageMutation = null;
+    providerLifecycleCommit = commit;
+  }
+
+  if (current.message.lifecycle.kind !== "active") {
+    return {
+      kind: "conflict",
+      code: "message.state_conflict",
+      current: current.message
+    };
+  }
+  const activeProviderOperation = await context.executor.execute<IdRow>(
+    buildLockActiveInboxV2RequestedProviderLifecycleOperationSql({
+      tenantId: current.message.tenantId,
+      messageId: current.message.id
+    })
+  );
+  assertAtMostOneRow(
+    activeProviderOperation,
+    "Active requested provider lifecycle operation lock"
+  );
+  if (activeProviderOperation.rows.length !== 0) {
+    return {
+      kind: "conflict",
+      code: "message.state_conflict",
+      current: current.message
+    };
+  }
+  if (
+    commandKind === "edit" &&
+    (messageMutation === null || conversationPurposeId === null)
+  ) {
+    throw invariantError(
+      "Prepared Message edit lost its mutation or current Conversation purpose."
+    );
+  }
+  const fileParentAttachmentPlan =
+    commandKind === "edit"
+      ? deriveInboxV2MessageEditReadyFileParents(
+          messageMutation!,
+          conversationPurposeId!,
+          current.contentRetentionAnchorAt
+        )
+      : Object.freeze([] as InboxV2ReadyFileParentAttachment[]);
+  const fileUploadAuthorityPlan =
+    input.kind === "message_mutation"
+      ? Object.freeze(
+          input.fileUploadAuthorityPlan.map((target) =>
+            Object.freeze({
+              file: Object.freeze({ ...target.file }),
+              expectedFileRevision: target.expectedFileRevision
+            })
+          )
+        )
+      : Object.freeze([] as InboxV2MessageEditFileUploadAuthorityTarget[]);
+  const lifecyclePermissionId = assertInboxV2MessageLifecycleCommandAuthority(
+    context,
+    {
+      commandKind,
+      message: current.message,
+      timelineItem: current.timelineItem,
+      actionAttribution: messageMutation?.revision.actionAttribution ?? {
+        actionParticipant:
+          providerLifecycleCommit?.operation.actionParticipant ?? null,
+        appActor: providerLifecycleCommit?.operation.appActor ?? null,
+        sourceOccurrence: null,
+        automationCausation:
+          providerLifecycleCommit?.operation.automationCausation ?? null
+      },
+      actionParticipantSnapshot:
+        messageMutation?.actionParticipantSnapshot ??
+        providerLifecycleCommit?.actionParticipantSnapshot ??
+        null,
+      recordedAt:
+        messageMutation?.revision.recordedAt ??
+        providerLifecycleCommit?.operation.recordedAt ??
+        context.occurredAt,
+      providerLifecycleCommit,
+      messageMutation,
+      fileParentAttachmentPlan,
+      fileUploadAuthorityPlan,
+      fileSourceAuthorityPlan
+    }
+  );
+  if (
+    (lifecyclePermissionId === "core:message.edit_own" ||
+      lifecyclePermissionId === "core:message.delete_own") &&
+    !(await lockExactInboxV2MessageOwnAuthorship(
+      context.executor,
+      current.message,
+      messageMutation?.actionParticipantSnapshot ??
+        providerLifecycleCommit?.actionParticipantSnapshot ??
+        null,
+      context.actor
+    ))
+  ) {
+    return {
+      kind: "conflict",
+      code: "message.state_conflict",
+      current: current.message
+    };
+  }
+
+  let providerLifecyclePreparation: PreparedProviderLifecycleCreationForAtomicSeal | null =
+    null;
+  if (providerLifecycleCommit !== null) {
+    const inspection = await inspectProviderLifecycleCreationReplay(
+      context.executor,
+      providerLifecycleCommit
+    );
+    if (
+      inspection.kind !== "absent" ||
+      inspection.routeConsumption === null ||
+      inspection.routeDisposition !== "absent" ||
+      !(await lockExactInboxV2RequestedProviderLifecycleFence(
+        context.executor,
+        providerLifecycleCommit
+      ))
+    ) {
+      return {
+        kind: "conflict",
+        code: "message.state_conflict",
+        current: current.message
+      };
+    }
+    providerLifecyclePreparation = {
+      routeConsumption: inspection.routeConsumption,
+      routeDisposition: "absent"
+    };
+    registerInboxV2AtomicOutboundRouteProof(
+      atomicMaterializationToken,
+      inboxV2AtomicOutboundRouteProofFromProviderLifecycleCommit(
+        providerLifecycleCommit
+      )
+    );
+  }
+
+  const fileParentPreparation =
+    commandKind === "edit"
+      ? await prepareInboxV2FileParentAttachmentsInTransaction(
+          context.executor,
+          sealExecutor,
+          atomicMaterializationToken,
+          {
+            tenantId: current.message.tenantId,
+            attachments: fileParentAttachmentPlan,
+            sourceAuthorityFences: deriveInboxV2FileParentSourceAuthorityFences(
+              fileSourceAuthorityPlan
+            )
+          }
+        )
+      : null;
+  if (
+    fileParentPreparation !== null &&
+    fileParentPreparation.kind !== "ready"
+  ) {
+    return {
+      kind: "conflict",
+      code: "message.state_conflict",
+      current: current.message
+    };
+  }
+
+  const capability = Object.freeze({
+    [inboxV2PreparedMessageLifecycleCommandCapabilityBrand]: true as const
+  });
+  preparedInboxV2MessageLifecycleCommands.set(capability, {
+    atomicMaterializationToken,
+    sealExecutor,
+    current,
+    commandKind,
+    messageMutation,
+    providerLifecycleCommit,
+    providerLifecyclePreparation,
+    fileParentAttachmentsCapability:
+      fileParentPreparation?.kind === "ready"
+        ? fileParentPreparation.capability
+        : null,
+    fileParentAttachmentPlan,
+    fileUploadAuthorityPlan,
+    fileSourceAuthorityPlan,
+    consumed: false
+  });
+  return { kind: "ready", capability, commandKind };
+}
+
+export async function sealInboxV2PreparedMessageLifecycleCommand(
+  context: InboxV2AuthorizedAtomicMaterializationContext,
+  input: Readonly<{
+    capability: InboxV2PreparedMessageLifecycleCommandCapability;
+  }>
+): Promise<SealInboxV2PreparedMessageLifecycleCommandResult> {
+  assertInboxV2AuthorizedAtomicMaterializationContext(context);
+  const prepared = preparedInboxV2MessageLifecycleCommands.get(
+    input.capability
+  );
+  if (prepared === undefined) {
+    throw invariantError(
+      "Message lifecycle capability was not issued by this repository."
+    );
+  }
+  if (prepared.consumed) {
+    throw invariantError("Message lifecycle capability was already consumed.");
+  }
+  if (
+    prepared.atomicMaterializationToken !==
+      context.atomicMaterializationToken ||
+    prepared.current.message.tenantId !== context.tenantId
+  ) {
+    throw invariantError(
+      "Message lifecycle capability belongs to a different live authorized mutation."
+    );
+  }
+  assertInboxV2MessageLifecycleCommandAuthority(context, {
+    commandKind: prepared.commandKind,
+    message: prepared.current.message,
+    timelineItem: prepared.current.timelineItem,
+    actionAttribution: prepared.messageMutation?.revision.actionAttribution ?? {
+      actionParticipant:
+        prepared.providerLifecycleCommit?.operation.actionParticipant ?? null,
+      appActor: prepared.providerLifecycleCommit?.operation.appActor ?? null,
+      sourceOccurrence: null,
+      automationCausation:
+        prepared.providerLifecycleCommit?.operation.automationCausation ?? null
+    },
+    actionParticipantSnapshot:
+      prepared.messageMutation?.actionParticipantSnapshot ??
+      prepared.providerLifecycleCommit?.actionParticipantSnapshot ??
+      null,
+    recordedAt:
+      prepared.messageMutation?.revision.recordedAt ??
+      prepared.providerLifecycleCommit?.operation.recordedAt ??
+      context.occurredAt,
+    providerLifecycleCommit: prepared.providerLifecycleCommit,
+    messageMutation: prepared.messageMutation,
+    fileParentAttachmentPlan: prepared.fileParentAttachmentPlan,
+    fileUploadAuthorityPlan: prepared.fileUploadAuthorityPlan,
+    fileSourceAuthorityPlan: prepared.fileSourceAuthorityPlan
+  });
+  prepared.consumed = true;
+  consumeInboxV2AtomicOutboundRouteProof(
+    context.atomicMaterializationToken,
+    prepared.providerLifecycleCommit === null
+      ? null
+      : inboxV2AtomicOutboundRouteProofFromProviderLifecycleCommit(
+          prepared.providerLifecycleCommit
+        )
+  );
+
+  const streamPosition = inboxV2BigintCounterSchema.parse(
+    context.streamPosition
+  );
+  let message: InboxV2Message;
+  let timelineItem: InboxV2TimelineItem;
+  let envelope: InboxV2SafeGenericEnvelope;
+  if (prepared.messageMutation !== null) {
+    const result = await applyPreparedMessageMutationWrites(
+      prepared.sealExecutor,
+      prepared.current,
+      prepared.messageMutation,
+      streamPosition,
+      async () => undefined,
+      prepared.providerLifecyclePreparation
+    );
+    if (result.kind !== "applied") {
+      throw invariantError(
+        "Prepared Message lifecycle command produced a non-write-only result."
+      );
+    }
+    message = result.message;
+    timelineItem = result.timelineItem;
+    envelope = result.envelope;
+  } else {
+    if (
+      prepared.providerLifecycleCommit === null ||
+      prepared.providerLifecyclePreparation === null
+    ) {
+      throw invariantError(
+        "Prepared provider-delete command lost its provider operation."
+      );
+    }
+    await applyPreparedProviderLifecycleCreationWrites(prepared.sealExecutor, {
+      commit: prepared.providerLifecycleCommit,
+      preparation: prepared.providerLifecyclePreparation,
+      streamPosition
+    });
+    message = prepared.current.message;
+    timelineItem = prepared.current.timelineItem;
+    envelope = buildInboxV2SafeGenericEnvelope({
+      tenantId: message.tenantId,
+      entityKind: "provider_lifecycle",
+      entityId: prepared.providerLifecycleCommit.operation.id,
+      entityRevision: prepared.providerLifecycleCommit.operation.revision,
+      timelineItemId: timelineItem.id,
+      timelineSequence: timelineItem.timelineSequence,
+      streamPosition,
+      changeKind: "provider_lifecycle.delete.hulee_requested",
+      occurredAt: prepared.providerLifecycleCommit.operation.occurredAt
+    });
+  }
+
+  let materializedFileParentLinkIds: readonly string[] = Object.freeze([]);
+  if (prepared.fileParentAttachmentsCapability !== null) {
+    const sealedFileParents =
+      await sealInboxV2PreparedFileParentAttachmentsInTransaction(
+        prepared.sealExecutor,
+        context.atomicMaterializationToken,
+        prepared.fileParentAttachmentsCapability
+      );
+    materializedFileParentLinkIds = sealedFileParents.linkIds;
+  }
+  if (
+    materializedFileParentLinkIds.length !==
+      prepared.fileParentAttachmentPlan.length ||
+    new Set(materializedFileParentLinkIds).size !==
+      materializedFileParentLinkIds.length
+  ) {
+    throw invariantError(
+      "Prepared Message lifecycle FileParent seal does not match its exact ready-pin plan."
+    );
+  }
+  const fileParentAttachments = inboxV2AtomicMessageLifecycleFileParentClosure(
+    prepared.fileParentAttachmentPlan,
+    materializedFileParentLinkIds
+  );
+
+  const manifest = inboxV2AtomicMessageLifecycleSealManifest(prepared, {
+    message,
+    timelineItem,
+    fileParentAttachments
+  });
+  return {
+    kind: "applied",
+    commandKind: prepared.commandKind,
+    message,
+    timelineItem,
+    envelope,
+    receipt: issueInboxV2AtomicMaterializationSealReceipt(
+      context.atomicMaterializationToken,
+      manifest
+    )
+  };
+}
+
+function inboxV2AtomicMessageLifecycleSealManifest(
+  prepared: PreparedInboxV2MessageLifecycleCommandState,
+  applied: Readonly<{
+    message: InboxV2Message;
+    timelineItem: InboxV2TimelineItem;
+    fileParentAttachments: InboxV2AtomicMessageLifecycleSealManifest["fileParentAttachments"];
+  }>
+): InboxV2AtomicMessageLifecycleSealManifest {
+  const messageCommit = prepared.messageMutation;
+  const providerCommit = prepared.providerLifecycleCommit;
+  const messagePayloadReference =
+    messageCommit === null
+      ? null
+      : inboxV2AtomicPayloadReference({
+          tenantId: messageCommit.tenantId,
+          recordId: messageCommit.afterMessage.id,
+          schemaId: INBOX_V2_MESSAGE_SCHEMA_ID,
+          schemaVersion: INBOX_V2_MESSAGE_SCHEMA_VERSION,
+          payload: messageCommit.afterMessage
+        });
+  const messageDomainCommitReference =
+    messageCommit === null
+      ? null
+      : inboxV2AtomicPayloadReference({
+          tenantId: messageCommit.tenantId,
+          recordId: messageCommit.revision.id,
+          schemaId: INBOX_V2_MESSAGE_REVISION_SCHEMA_ID,
+          schemaVersion: INBOX_V2_MESSAGE_LIFECYCLE_SCHEMA_VERSION,
+          payload: messageCommit.revision
+        });
+  const providerPayloadReference =
+    providerCommit === null
+      ? null
+      : inboxV2AtomicPayloadReference({
+          tenantId: providerCommit.tenantId,
+          recordId: providerCommit.operation.id,
+          schemaId: INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_OPERATION_SCHEMA_ID,
+          schemaVersion: INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_SCHEMA_VERSION,
+          payload: providerCommit.operation
+        });
+  const providerDomainCommitReference =
+    providerCommit === null
+      ? null
+      : inboxV2AtomicPayloadReference({
+          tenantId: providerCommit.tenantId,
+          recordId: providerCommit.operation.id,
+          schemaId:
+            INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_CREATION_COMMIT_SCHEMA_ID,
+          schemaVersion: INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_SCHEMA_VERSION,
+          payload: providerCommit
+        });
+  const eventReference =
+    messageDomainCommitReference ?? providerDomainCommitReference;
+  if (eventReference === null) {
+    throw invariantError("Message lifecycle seal has no domain event payload.");
+  }
+  const occurredAt =
+    messageCommit?.revision.occurredAt ?? providerCommit?.operation.occurredAt;
+  const recordedAt =
+    messageCommit?.revision.recordedAt ?? providerCommit?.operation.recordedAt;
+  if (occurredAt === undefined || recordedAt === undefined) {
+    throw invariantError("Message lifecycle seal has no event timestamps.");
+  }
+  return {
+    kind: "message_lifecycle",
+    commandKind: prepared.commandKind,
+    tenantId: applied.message.tenantId,
+    conversationId: applied.message.conversation.id,
+    messageId: applied.message.id,
+    timelineItemId: prepared.current.timelineItem.id,
+    timelineItemRevision: prepared.current.timelineItem.revision,
+    timelineSequence: applied.timelineItem.timelineSequence,
+    message:
+      messagePayloadReference === null || messageDomainCommitReference === null
+        ? null
+        : {
+            messageRevision: applied.message.revision,
+            audience: inboxV2AtomicMessageAudience(
+              applied.timelineItem.visibility
+            ),
+            stateSchemaId: INBOX_V2_MESSAGE_SCHEMA_ID,
+            stateSchemaVersion: INBOX_V2_MESSAGE_SCHEMA_VERSION,
+            stateHash: messagePayloadReference.digest,
+            payloadReference: messagePayloadReference,
+            domainCommitReference: messageDomainCommitReference
+          },
+    providerOperation:
+      providerCommit === null ||
+      providerPayloadReference === null ||
+      providerDomainCommitReference === null
+        ? null
+        : {
+            operationId: providerCommit.operation.id,
+            operationRevision: providerCommit.operation.revision,
+            stateSchemaId:
+              INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_OPERATION_SCHEMA_ID,
+            stateSchemaVersion:
+              INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_SCHEMA_VERSION,
+            stateHash: providerPayloadReference.digest,
+            payloadReference: providerPayloadReference,
+            domainCommitReference: providerDomainCommitReference
+          },
+    fileParentAttachments: applied.fileParentAttachments,
+    event: {
+      typeId: "core:message.changed",
+      payloadSchemaId: eventReference.schemaId,
+      payloadSchemaVersion: eventReference.schemaVersion,
+      payloadReference: eventReference,
+      occurredAt,
+      recordedAt
+    }
+  };
+}
+
+function inboxV2AtomicMessageLifecycleFileParentClosure(
+  plan: readonly InboxV2ReadyFileParentAttachment[],
+  linkIds: readonly string[]
+): InboxV2AtomicMessageLifecycleSealManifest["fileParentAttachments"] {
+  const canonicalLinkIds = [...linkIds].sort((left, right) =>
+    left.localeCompare(right)
+  );
+  return Object.freeze({
+    materializedParentCount: plan.length,
+    planDigestSha256: calculateInboxV2CanonicalSha256({
+      domain: "core:inbox-v2.message-lifecycle-file-parent-plan@v1",
+      attachments: plan
+    }),
+    linkIdsDigestSha256: calculateInboxV2CanonicalSha256({
+      domain: "core:inbox-v2.message-lifecycle-file-parent-links@v1",
+      linkIds: canonicalLinkIds
+    })
+  });
+}
+
+function inboxV2AtomicOutboundRouteProofFromProviderLifecycleCommit(
+  commit: InboxV2MessageProviderLifecycleCreationCommit
+) {
+  const route = commit.outboundRoute;
+  if (route === null) {
+    throw invariantError(
+      "Requested provider lifecycle operation has no OutboundRoute."
+    );
+  }
+  return {
+    tenantId: commit.tenantId,
+    routeId: route.id,
+    conversationId: route.conversation.id,
+    sourceAccountId: route.sourceAccount.id,
+    routePolicyId: route.routePolicy.id,
+    routePolicyRevision: route.routePolicyRevision,
+    routeDigest: computeInboxV2OutboundRouteDigest(route)
+  };
+}
+
+async function lockExactInboxV2RequestedProviderLifecycleFence(
+  transaction: RawSqlExecutor,
+  commit: InboxV2MessageProviderLifecycleCreationCommit
+): Promise<boolean> {
+  const route = commit.outboundRoute;
+  const binding = commit.outboundBindingSnapshot;
+  if (route === null || binding === null) return false;
+  const expectedCapabilityId = inboxV2RequestedProviderLifecycleCapabilityId(
+    commit.operation.action
+  );
+  const capabilityEntries = binding.capabilities.entries.filter(
+    (entry) =>
+      entry.capabilityId === expectedCapabilityId &&
+      entry.operationId === route.operationId &&
+      entry.contentKindId === route.contentKindId
+  );
+  const capability = capabilityEntries[0];
+  if (
+    capabilityEntries.length !== 1 ||
+    capability === undefined ||
+    capability.state !== "supported" ||
+    (capability.validUntil !== null &&
+      Date.parse(capability.validUntil) <=
+        Date.parse(commit.operation.recordedAt))
+  ) {
+    return false;
+  }
+  const capabilityOrdinal = binding.capabilities.entries.indexOf(capability);
+  if (capabilityOrdinal < 0) return false;
+  const principalEmployeeId =
+    route.principal.kind === "employee" ? route.principal.employee.id : null;
+  const principalTrustedServiceId =
+    route.principal.kind === "trusted_service"
+      ? route.principal.trustedServiceId
+      : null;
+  const sourceOccurrence = commit.sourceOccurrence;
+  const externalReference = commit.externalMessageReference;
+  const adapter = route.adapterContract;
+  const capabilityAdapter = binding.capabilities.adapterContract;
+  const routeDescriptor = binding.routeDescriptor;
+  const result = await transaction.execute<IdRow>(sql`
+    select route_row.id
+      from inbox_v2_outbound_routes route_row
+      join inbox_v2_source_thread_binding_heads binding_head
+        on binding_head.tenant_id = route_row.tenant_id
+       and binding_head.binding_id = route_row.source_thread_binding_id
+      join inbox_v2_source_thread_binding_capability_entries capability_row
+        on capability_row.tenant_id = binding_head.tenant_id
+       and capability_row.binding_id = binding_head.binding_id
+       and capability_row.capability_revision =
+           binding_head.capability_revision
+      join inbox_v2_source_occurrences occurrence_row
+        on occurrence_row.tenant_id = route_row.tenant_id
+       and occurrence_row.id = ${sourceOccurrence.id}
+      join inbox_v2_external_message_references reference_row
+        on reference_row.tenant_id = occurrence_row.tenant_id
+       and reference_row.id = occurrence_row.resolved_external_message_reference_id
+     where route_row.tenant_id = ${commit.tenantId}
+       and route_row.id = ${route.id}
+       and route_row.principal_kind = ${route.principal.kind}
+       and route_row.principal_employee_id is not distinct from
+           ${principalEmployeeId}
+       and route_row.principal_trusted_service_id is not distinct from
+           ${principalTrustedServiceId}
+       and route_row.conversation_id = ${route.conversation.id}
+       and route_row.external_thread_id = ${route.externalThread.id}
+       and route_row.source_thread_binding_id = ${route.sourceThreadBinding.id}
+       and route_row.source_connection_id = ${route.sourceConnection.id}
+       and route_row.source_account_id = ${route.sourceAccount.id}
+       and route_row.operation_id = ${route.operationId}
+       and route_row.content_kind_id is not distinct from ${route.contentKindId}
+       and route_row.authorization_epoch = ${route.authorizationEpoch}
+       and route_row.required_conversation_permission_id =
+           ${route.requiredConversationPermissionId}
+       and route_row.binding_revision = ${binding.revision}
+       and route_row.account_generation =
+           ${route.bindingFence.accountGeneration}
+       and route_row.binding_generation =
+           ${route.bindingFence.bindingGeneration}
+       and route_row.remote_access_revision =
+           ${route.bindingFence.remoteAccessRevision}
+       and route_row.administrative_revision =
+           ${route.bindingFence.administrativeRevision}
+       and route_row.capability_revision =
+           ${route.bindingFence.capabilityRevision}
+       and route_row.route_descriptor_revision =
+           ${route.bindingFence.routeDescriptorRevision}
+       and route_row.adapter_contract_id = ${adapter.contractId}
+       and route_row.adapter_contract_version = ${adapter.contractVersion}
+       and route_row.adapter_declaration_revision =
+           ${adapter.declarationRevision}
+       and route_row.adapter_surface_id = ${adapter.surfaceId}
+       and route_row.adapter_loaded_by_trusted_service_id =
+           ${adapter.loadedByTrustedServiceId}
+       and route_row.adapter_loaded_at = ${adapter.loadedAt}
+       and route_row.adapter_contract_snapshot = ${jsonbDetail(adapter)}
+       and route_row.route_descriptor_snapshot =
+           ${jsonbDetail(route.routeDescriptor)}
+       and route_row.route_descriptor_digest_sha256 =
+           ${route.routeDescriptor.descriptorDigestSha256}
+       and route_row.route_policy_id = ${route.routePolicy.id}
+       and route_row.route_policy_revision = ${route.routePolicyRevision}
+       and route_row.conversation_authorization_snapshot =
+           ${jsonbDetail(route.conversationAuthorization)}
+       and route_row.source_account_authorization_snapshot =
+           ${jsonbDetail(route.sourceAccountAuthorization)}
+       and route_row.reference_context_snapshot =
+           ${jsonbDetail(route.referenceContext)}
+       and route_row.runtime_observation_snapshot =
+           ${jsonbDetail(route.runtimeObservationAtResolution)}
+       and route_row.selection_intent_kind = ${route.selection.intent.kind}
+       and route_row.selection_intent_snapshot =
+           ${jsonbDetail(route.selection.intent)}
+       and route_row.selection_reason = ${route.selection.reason}
+       and route_row.candidate_snapshot_token =
+           ${route.selection.candidateSnapshotToken}
+       and route_row.candidate_snapshot_not_after =
+           ${route.selection.candidateSnapshotNotAfter}
+       and route_row.fallback_policy_ordinal is not distinct from
+           ${route.selection.fallbackPolicyOrdinal}
+       and route_row.selected_at = ${route.selection.selectedAt}
+       and route_row.mutation_token = ${route.mutationToken}
+       and route_row.idempotency_token = ${route.idempotencyToken}
+       and route_row.correlation_token = ${route.correlationToken}
+       and route_row.revision = ${route.revision}
+       and route_row.created_at = ${route.createdAt}
+       and binding_head.external_thread_id = ${binding.externalThread.id}
+       and binding_head.source_connection_id = ${binding.sourceConnection.id}
+       and binding_head.source_account_id = ${binding.sourceAccount.id}
+       and binding_head.account_generation =
+           ${binding.accountIdentitySnapshot.accountGeneration}
+       and binding_head.binding_generation = ${binding.bindingGeneration}
+       and binding_head.remote_access_state = 'active'
+       and binding_head.remote_access_revision =
+           ${binding.remoteAccess.revision}
+       and binding_head.administrative_state = 'enabled'
+       and binding_head.administrative_revision =
+           ${binding.administrative.revision}
+       and binding_head.runtime_health_state = 'ready'
+       and binding_head.provider_role_count =
+           ${binding.providerAccess.roleIds.length}
+       and (
+         select coalesce(
+           jsonb_agg(
+             provider_role_row.provider_role_id
+             order by provider_role_row.provider_role_id
+           ),
+           '[]'::jsonb
+         )
+           from inbox_v2_source_thread_binding_provider_roles
+             provider_role_row
+          where provider_role_row.tenant_id = binding_head.tenant_id
+            and provider_role_row.binding_id = binding_head.binding_id
+            and provider_role_row.provider_access_revision =
+                binding_head.provider_access_revision
+       ) = ${jsonbDetail([...binding.providerAccess.roleIds].sort())}
+       and binding_head.capability_contract_id =
+           ${capabilityAdapter.contractId}
+       and binding_head.capability_contract_version =
+           ${capabilityAdapter.contractVersion}
+       and binding_head.capability_declaration_revision =
+           ${capabilityAdapter.declarationRevision}
+       and binding_head.capability_surface_id = ${capabilityAdapter.surfaceId}
+       and binding_head.capability_loaded_by_trusted_service_id =
+           ${capabilityAdapter.loadedByTrustedServiceId}
+       and binding_head.capability_loaded_at = ${capabilityAdapter.loadedAt}
+       and binding_head.capability_revision = ${binding.capabilities.revision}
+       and binding_head.capability_entry_count =
+           ${binding.capabilities.entries.length}
+       and binding_head.capability_captured_at =
+           ${binding.capabilities.capturedAt}
+       and binding_head.route_contract_id =
+           ${routeDescriptor.adapterContract.contractId}
+       and binding_head.route_contract_version =
+           ${routeDescriptor.adapterContract.contractVersion}
+       and binding_head.route_declaration_revision =
+           ${routeDescriptor.adapterContract.declarationRevision}
+       and binding_head.route_surface_id =
+           ${routeDescriptor.adapterContract.surfaceId}
+       and binding_head.route_loaded_by_trusted_service_id =
+           ${routeDescriptor.adapterContract.loadedByTrustedServiceId}
+       and binding_head.route_loaded_at =
+           ${routeDescriptor.adapterContract.loadedAt}
+       and binding_head.route_descriptor_revision =
+           ${route.bindingFence.routeDescriptorRevision}
+       and binding_head.route_descriptor_digest_sha256 =
+           ${routeDescriptor.descriptorDigestSha256}
+       and binding_head.updated_at = ${binding.updatedAt}
+       and capability_row.capability_id = ${capability.capabilityId}
+       and capability_row.operation_id = ${capability.operationId}
+       and capability_row.content_kind_id is not distinct from
+           ${capability.contentKindId}
+       and capability_row.state = 'supported'
+       and capability_row.reference_portability =
+           ${capability.referencePortability}
+       and capability_row.valid_until is not distinct from
+           ${capability.validUntil}
+       and capability_row.required_provider_role_count =
+           ${capability.requiredProviderRoleIds.length}
+       and (
+         select coalesce(
+           jsonb_agg(
+             required_role_row.provider_role_id
+             order by required_role_row.provider_role_id
+           ),
+           '[]'::jsonb
+         )
+           from inbox_v2_source_thread_binding_capability_required_roles
+             required_role_row
+          where required_role_row.tenant_id = capability_row.tenant_id
+            and required_role_row.binding_id = capability_row.binding_id
+            and required_role_row.capability_revision =
+                capability_row.capability_revision
+            and required_role_row.capability_ordinal = capability_row.ordinal
+       ) = ${jsonbDetail([...capability.requiredProviderRoleIds].sort())}
+       and occurrence_row.conversation_id = ${commit.message.conversation.id}
+       and occurrence_row.external_thread_id = ${route.externalThread.id}
+       and occurrence_row.source_connection_id = ${route.sourceConnection.id}
+       and occurrence_row.source_account_id = ${commit.operation.sourceAccount.id}
+       and occurrence_row.source_thread_binding_id =
+           ${commit.operation.sourceThreadBinding.id}
+       and occurrence_row.binding_generation =
+           ${commit.operation.bindingGeneration}
+       and occurrence_row.adapter_contract_id =
+           ${sourceOccurrence.descriptor.adapterContract.contractId}
+       and occurrence_row.adapter_contract_version =
+           ${sourceOccurrence.descriptor.adapterContract.contractVersion}
+       and occurrence_row.adapter_declaration_revision =
+           ${sourceOccurrence.descriptor.adapterContract.declarationRevision}
+       and occurrence_row.adapter_surface_id =
+           ${sourceOccurrence.descriptor.adapterContract.surfaceId}
+       and occurrence_row.capability_revision =
+           ${sourceOccurrence.descriptor.capabilityRevision}
+       and occurrence_row.descriptor_digest_sha256 =
+           ${sourceOccurrence.descriptor.descriptorDigestSha256}
+       and occurrence_row.resolution_state = 'resolved'
+       and occurrence_row.resolved_external_message_reference_id =
+           ${externalReference.id}
+       and occurrence_row.revision = ${sourceOccurrence.revision}
+       and reference_row.id = ${externalReference.id}
+       and reference_row.external_thread_id = ${externalReference.externalThread.id}
+       and reference_row.conversation_id = ${commit.message.conversation.id}
+       and reference_row.timeline_item_id = ${commit.timelineItem.id}
+       and reference_row.message_id = ${commit.message.id}
+       and reference_row.revision = ${externalReference.revision}
+       and reference_row.created_at = ${externalReference.createdAt}
+     ${buildInboxV2RequestedProviderLifecycleSharedLockClauseSql()}
+  `);
+  assertAtMostOneRow(result, "Requested provider lifecycle exact route fence");
+  if (result.rows.length !== 1) return false;
+
+  const requiredRoles = await transaction.execute<ProviderRoleIdRow>(
+    buildLockInboxV2CapabilityRequiredRoleSetSql({
+      tenantId: commit.tenantId,
+      bindingId: binding.id,
+      capabilityRevision: binding.capabilities.revision,
+      capabilityOrdinal
+    })
+  );
+  return inboxV2CapabilityRequiredRoleSetMatches(
+    requiredRoles.rows,
+    capability.requiredProviderRoleIds
+  );
+}
+
+export type ProviderRoleIdRow = Readonly<{ provider_role_id: string }>;
+
+export function buildInboxV2RequestedProviderLifecycleSharedLockClauseSql(): SQL {
+  return sql`for share of route_row, binding_head, capability_row,
+    occurrence_row, reference_row`;
+}
+
+export function buildLockInboxV2CapabilityRequiredRoleSetSql(
+  input: Readonly<{
+    tenantId: string;
+    bindingId: string;
+    capabilityRevision: string;
+    capabilityOrdinal: number;
+  }>
+): SQL {
+  return sql`
+    select required_role_row.provider_role_id
+      from inbox_v2_source_thread_binding_capability_required_roles
+        required_role_row
+     where required_role_row.tenant_id = ${input.tenantId}
+       and required_role_row.binding_id = ${input.bindingId}
+       and required_role_row.capability_revision =
+           ${BigInt(input.capabilityRevision)}
+       and required_role_row.capability_ordinal = ${input.capabilityOrdinal}
+     order by required_role_row.provider_role_id
+     for share of required_role_row
+  `;
+}
+
+export function inboxV2CapabilityRequiredRoleSetMatches(
+  rows: readonly ProviderRoleIdRow[],
+  expectedProviderRoleIds: readonly string[]
+): boolean {
+  return sameValue(
+    rows.map((row) => row.provider_role_id),
+    [...expectedProviderRoleIds].sort()
+  );
+}
+
+export function inboxV2RequestedProviderLifecycleCapabilityId(
+  action: "edit" | "delete"
+): "core:message-edit" | "core:message-delete" {
+  return action === "edit" ? "core:message-edit" : "core:message-delete";
+}
+
+async function lockExactInboxV2MessageOwnAuthorship(
+  transaction: RawSqlExecutor,
+  message: InboxV2Message,
+  participant: InboxV2MessageMutationCommit["actionParticipantSnapshot"],
+  actor: InboxV2AuthorizedCommandMutationContext["actor"]
+): Promise<boolean> {
+  if (
+    actor.kind !== "employee" ||
+    participant === null ||
+    participant.id !== message.authorParticipant.id ||
+    participant.subject.kind !== "employee" ||
+    participant.subject.employee.id !== actor.employeeId
+  ) {
+    return false;
+  }
+  const result = await transaction.execute<IdRow>(
+    buildLockInboxV2MessageOwnAuthorshipSql({
+      tenantId: message.tenantId,
+      participantId: participant.id,
+      conversationId: message.conversation.id,
+      employeeId: actor.employeeId,
+      revision: participant.revision,
+      createdAt: participant.createdAt,
+      updatedAt: participant.updatedAt
+    })
+  );
+  assertAtMostOneRow(result, "Message lifecycle own authorship fence");
+  return result.rows.length === 1;
+}
+
+export function buildLockInboxV2MessageOwnAuthorshipSql(
+  input: Readonly<{
+    tenantId: string;
+    participantId: string;
+    conversationId: string;
+    employeeId: string;
+    revision: string;
+    createdAt: string;
+    updatedAt: string;
+  }>
+): SQL {
+  return sql`
+    select id
+      from inbox_v2_conversation_participants
+     where tenant_id = ${input.tenantId}
+       and id = ${input.participantId}
+       and conversation_id = ${input.conversationId}
+       and subject_kind = 'employee'
+       and subject_employee_id = ${input.employeeId}
+       and revision = ${BigInt(input.revision)}
+       and created_at = ${input.createdAt}
+       and updated_at = ${input.updatedAt}
+     for share
+  `;
+}
+
+/**
+ * Every lifecycle command already owns the Message row lock before calling
+ * this query. Provider transitions acquire the same Message lock first, so an
+ * active operation cannot become terminal between this fence and the seal.
+ */
+export function buildLockActiveInboxV2RequestedProviderLifecycleOperationSql(
+  input: Readonly<{ tenantId: string; messageId: string }>
+): SQL {
+  return sql`
+    select id
+      from inbox_v2_message_provider_lifecycle_operations
+     where tenant_id = ${input.tenantId}
+       and message_id = ${input.messageId}
+       and origin = 'hulee_requested'
+       and outcome in ('pending', 'accepted', 'outcome_unknown')
+     order by id
+     for share
+  `;
+}
+
+function assertInboxV2MessageLifecycleCommandAuthority(
+  context: Pick<
+    InboxV2AuthorizedCommandMutationContext,
+    | "tenantId"
+    | "commandTypeId"
+    | "actor"
+    | "authorizationEpoch"
+    | "authorizationDecisionId"
+    | "authorizationDecisionRefs"
+    | "authorizationResourceRevisionFences"
+    | "occurredAt"
+  >,
+  input: Readonly<{
+    commandKind: "edit" | "local_delete" | "provider_delete";
+    message: InboxV2Message;
+    timelineItem: Pick<InboxV2TimelineItem, "id" | "revision" | "visibility">;
+    actionAttribution: InboxV2MessageMutationCommit["revision"]["actionAttribution"];
+    actionParticipantSnapshot: InboxV2MessageMutationCommit["actionParticipantSnapshot"];
+    recordedAt: string;
+    providerLifecycleCommit: InboxV2MessageProviderLifecycleCreationCommit | null;
+    messageMutation: InboxV2MessageMutationCommit | null;
+    fileParentAttachmentPlan: readonly InboxV2ReadyFileParentAttachment[];
+    fileUploadAuthorityPlan: readonly InboxV2MessageEditFileUploadAuthorityTarget[];
+    fileSourceAuthorityPlan: readonly InboxV2MessageEditFileSourceAuthorityTarget[];
+  }>
+):
+  | "core:message.edit_own"
+  | "core:message.delete_own"
+  | "core:message.moderate_external"
+  | "core:message.moderate_internal" {
+  const expectedCommandTypeId =
+    input.commandKind === "edit"
+      ? "core:message.edit"
+      : input.commandKind === "local_delete"
+        ? "core:message.delete_local"
+        : "core:message.delete_provider";
+  if (
+    context.commandTypeId !== expectedCommandTypeId ||
+    context.tenantId !== input.message.tenantId ||
+    context.occurredAt !== input.recordedAt
+  ) {
+    throw invariantError(
+      "Message lifecycle commit does not match its authorized command scope."
+    );
+  }
+  const ownPermissionId =
+    input.commandKind === "edit"
+      ? "core:message.edit_own"
+      : "core:message.delete_own";
+  const boundary =
+    input.timelineItem.visibility === "internal_participants"
+      ? "internal"
+      : input.timelineItem.visibility === "conversation_external"
+        ? "external"
+        : null;
+  if (boundary === null) {
+    throw invariantError(
+      "Message lifecycle command requires an external or internal Message TimelineItem visibility."
+    );
+  }
+  const moderationPermissionId =
+    boundary === "internal"
+      ? "core:message.moderate_internal"
+      : "core:message.moderate_external";
+  const allowedPrimaryPermissions = new Set([
+    ownPermissionId,
+    moderationPermissionId
+  ]);
+  const primaryDecisions = context.authorizationDecisionRefs.filter(
+    (candidate) => candidate.id === context.authorizationDecisionId
+  );
+  const primaryDecision = primaryDecisions[0];
+  const primaryTargetsConversation =
+    primaryDecision?.permissionId === "core:message.moderate_internal";
+  const expectedPrimaryScopeId = primaryTargetsConversation
+    ? "core:conversation"
+    : "core:timeline-item";
+  const expectedPrimaryEntityId = primaryTargetsConversation
+    ? input.message.conversation.id
+    : input.timelineItem.id;
+  if (
+    primaryDecisions.length !== 1 ||
+    primaryDecision === undefined ||
+    primaryDecision.tenantId !== context.tenantId ||
+    primaryDecision.authorizationEpoch !== context.authorizationEpoch ||
+    !allowedPrimaryPermissions.has(primaryDecision.permissionId) ||
+    primaryDecision.resourceScopeId !== expectedPrimaryScopeId ||
+    primaryDecision.outcome !== "allowed" ||
+    primaryDecision.resource.tenantId !== context.tenantId ||
+    primaryDecision.resource.entityTypeId !== expectedPrimaryScopeId ||
+    String(primaryDecision.resource.entityId) !==
+      String(expectedPrimaryEntityId) ||
+    (!primaryTargetsConversation &&
+      String(primaryDecision.resourceAccessRevision) !==
+        String(input.timelineItem.revision)) ||
+    !messageAuthorizationDecisionPrincipalMatchesActor(
+      primaryDecision,
+      context.actor
+    )
+  ) {
+    throw invariantError(
+      "Message lifecycle command requires the exact allowed action authorization decision."
+    );
+  }
+  const readPermissionId =
+    boundary === "internal"
+      ? "core:conversation.internal.read"
+      : "core:conversation.read";
+  const readDecisions = context.authorizationDecisionRefs.filter(
+    (candidate) =>
+      candidate.tenantId === context.tenantId &&
+      candidate.authorizationEpoch === context.authorizationEpoch &&
+      candidate.permissionId === readPermissionId &&
+      candidate.resourceScopeId === "core:conversation" &&
+      candidate.outcome === "allowed" &&
+      candidate.resource.tenantId === context.tenantId &&
+      candidate.resource.entityTypeId === "core:conversation" &&
+      String(candidate.resource.entityId) ===
+        String(input.message.conversation.id) &&
+      messageAuthorizationDecisionPrincipalMatchesActor(
+        candidate,
+        context.actor
+      )
+  );
+  const readDecision = readDecisions[0];
+  const conversationFences = context.authorizationResourceRevisionFences.filter(
+    (fence) =>
+      readDecision !== undefined &&
+      fence.resourceKind === "conversation" &&
+      String(fence.resourceId) === String(input.message.conversation.id) &&
+      String(fence.expectedResourceAccessRevision) ===
+        String(readDecision.resourceAccessRevision) &&
+      fence.advance === "none"
+  );
+  if (
+    readDecisions.length !== 1 ||
+    conversationFences.length !== 1 ||
+    (primaryTargetsConversation &&
+      primaryDecision.resourceAccessRevision !==
+        readDecision?.resourceAccessRevision)
+  ) {
+    throw invariantError(
+      "Message lifecycle command requires its exact Conversation read decision and revision fence."
+    );
+  }
+  assertInboxV2MessageLifecycleFileSourceAuthorityPlan({
+    commandKind: input.commandKind,
+    messageMutation: input.messageMutation,
+    fileParentAttachmentPlan: input.fileParentAttachmentPlan,
+    fileSourceAuthorityPlan: input.fileSourceAuthorityPlan
+  });
+  const plannedFiles = new Map<string, string>();
+  for (const attachment of input.fileParentAttachmentPlan) {
+    const existingRevision = plannedFiles.get(attachment.fileId);
+    if (
+      existingRevision !== undefined &&
+      existingRevision !== attachment.expectedFileRevision
+    ) {
+      throw invariantError(
+        "Message lifecycle FileParent plan contains conflicting revisions for one File."
+      );
+    }
+    plannedFiles.set(attachment.fileId, attachment.expectedFileRevision);
+  }
+  const fileViewDecisions = context.authorizationDecisionRefs.filter(
+    (candidate) => candidate.permissionId === "core:file.view"
+  );
+  const fileUploadDecisions = context.authorizationDecisionRefs.filter(
+    (candidate) => candidate.permissionId === "core:file.upload"
+  );
+  const requiredUploadFiles = new Map<string, string>();
+  let previousUploadFileKey: string | null = null;
+  for (const target of input.fileUploadAuthorityPlan) {
+    const fileKey = `${target.file.tenantId}\u0000${target.file.id}`;
+    if (
+      target.file.tenantId !== context.tenantId ||
+      target.file.kind !== "file" ||
+      (previousUploadFileKey !== null &&
+        previousUploadFileKey.localeCompare(fileKey) >= 0) ||
+      plannedFiles.get(target.file.id) !== target.expectedFileRevision
+    ) {
+      throw invariantError(
+        "Message lifecycle File upload authority plan must be a canonical exact subset of the FileParent plan."
+      );
+    }
+    previousUploadFileKey = fileKey;
+    requiredUploadFiles.set(target.file.id, target.expectedFileRevision);
+  }
+  const exactPlannedFileDecision = (
+    candidate: InboxV2AuthorizationDecisionReference,
+    fileId: string,
+    fileRevision: string
+  ) =>
+    candidate.tenantId === context.tenantId &&
+    candidate.authorizationEpoch === context.authorizationEpoch &&
+    candidate.resourceScopeId === "core:file" &&
+    candidate.outcome === "allowed" &&
+    candidate.resource.tenantId === context.tenantId &&
+    candidate.resource.entityTypeId === "core:file" &&
+    String(candidate.resource.entityId) === fileId &&
+    String(candidate.resourceAccessRevision) === fileRevision &&
+    messageAuthorizationDecisionPrincipalMatchesActor(candidate, context.actor);
+  const fileDecisionSetMatchesPlan = (
+    decisions: readonly InboxV2AuthorizationDecisionReference[],
+    plan: ReadonlyMap<string, string>
+  ) =>
+    decisions.length === plan.size &&
+    [...plan].every(
+      ([fileId, fileRevision]) =>
+        decisions.filter((candidate) =>
+          exactPlannedFileDecision(candidate, fileId, fileRevision)
+        ).length === 1
+    );
+  if (
+    !fileDecisionSetMatchesPlan(fileViewDecisions, plannedFiles) ||
+    !fileDecisionSetMatchesPlan(fileUploadDecisions, requiredUploadFiles)
+  ) {
+    throw invariantError(
+      "Message lifecycle FileParent plan requires exact File view and upload authority subsets with no extra File authority."
+    );
+  }
+  const destinationPermissionId =
+    boundary === "internal"
+      ? "core:message.send_internal"
+      : "core:message.reply_external";
+  const destinationPermissionIds = new Set([
+    "core:message.send_internal",
+    "core:message.reply_external"
+  ]);
+  const destinationDecisions = context.authorizationDecisionRefs.filter(
+    (candidate) => destinationPermissionIds.has(candidate.permissionId)
+  );
+  const exactDestinationDecisions = destinationDecisions.filter(
+    (candidate) =>
+      candidate.tenantId === context.tenantId &&
+      candidate.authorizationEpoch === context.authorizationEpoch &&
+      candidate.permissionId === destinationPermissionId &&
+      candidate.resourceScopeId === "core:conversation" &&
+      candidate.outcome === "allowed" &&
+      candidate.resource.tenantId === context.tenantId &&
+      candidate.resource.entityTypeId === "core:conversation" &&
+      String(candidate.resource.entityId) ===
+        String(input.message.conversation.id) &&
+      candidate.resourceAccessRevision ===
+        readDecision?.resourceAccessRevision &&
+      messageAuthorizationDecisionPrincipalMatchesActor(
+        candidate,
+        context.actor
+      )
+  );
+  if (
+    (plannedFiles.size === 0 && destinationDecisions.length !== 0) ||
+    (plannedFiles.size > 0 &&
+      (destinationDecisions.length !== 1 ||
+        exactDestinationDecisions.length !== 1))
+  ) {
+    throw invariantError(
+      "Message lifecycle FileParent plan requires its exact destination Conversation authority."
+    );
+  }
+  const appActor = input.actionAttribution.appActor;
+  const actorMatches =
+    context.actor.kind === "employee"
+      ? appActor?.kind === "employee" &&
+        appActor.employee.id === context.actor.employeeId &&
+        appActor.authorizationEpoch === context.authorizationEpoch
+      : appActor?.kind === "trusted_service" &&
+        appActor.trustedServiceId === context.actor.trustedServiceId;
+  if (!actorMatches) {
+    throw invariantError(
+      "Message lifecycle action actor must match the authenticated command actor."
+    );
+  }
+  if (primaryDecision.permissionId === ownPermissionId) {
+    const participant = input.actionParticipantSnapshot;
+    if (
+      context.actor.kind !== "employee" ||
+      participant === null ||
+      input.actionAttribution.actionParticipant?.id !==
+        input.message.authorParticipant.id ||
+      participant.id !== input.message.authorParticipant.id ||
+      participant.conversation.id !== input.message.conversation.id ||
+      participant.subject.kind !== "employee" ||
+      participant.subject.employee.id !== context.actor.employeeId
+    ) {
+      throw invariantError(
+        "Own Message lifecycle authority requires the immutable Employee author participant."
+      );
+    }
+  }
+
+  const providerCommit = input.providerLifecycleCommit;
+  if (providerCommit === null) {
+    return primaryDecision.permissionId as
+      | "core:message.edit_own"
+      | "core:message.delete_own"
+      | "core:message.moderate_external"
+      | "core:message.moderate_internal";
+  }
+  if (boundary !== "external") {
+    throw invariantError(
+      "Provider lifecycle operations cannot target an internal Message."
+    );
+  }
+  const route = providerCommit.outboundRoute;
+  if (
+    route === null ||
+    route.authorizationEpoch !== context.authorizationEpoch ||
+    route.conversation.id !== input.message.conversation.id ||
+    route.requiredConversationPermissionId !== readPermissionId
+  ) {
+    throw invariantError(
+      "Provider lifecycle command requires its exact authorized OutboundRoute."
+    );
+  }
+  const conversationRouteDecisions = readDecisions.filter((candidate) =>
+    messageRouteAuthorizationSnapshotMatchesDecision(
+      route.conversationAuthorization,
+      candidate,
+      route,
+      "conversation"
+    )
+  );
+  const sourceAccountDecisions = context.authorizationDecisionRefs.filter(
+    (candidate) =>
+      candidate.tenantId === context.tenantId &&
+      candidate.authorizationEpoch === context.authorizationEpoch &&
+      candidate.permissionId === "core:source_account.use" &&
+      candidate.resourceScopeId === "core:source-account" &&
+      candidate.outcome === "allowed" &&
+      candidate.resource.tenantId === context.tenantId &&
+      candidate.resource.entityTypeId === "core:source-account" &&
+      String(candidate.resource.entityId) === String(route.sourceAccount.id) &&
+      messageAuthorizationDecisionPrincipalMatchesActor(
+        candidate,
+        context.actor
+      ) &&
+      messageRouteAuthorizationSnapshotMatchesDecision(
+        route.sourceAccountAuthorization,
+        candidate,
+        route,
+        "source_account"
+      )
+  );
+  const sourceAccountDecision = sourceAccountDecisions[0];
+  const sourceAccountFences =
+    sourceAccountDecision === undefined
+      ? []
+      : context.authorizationResourceRevisionFences.filter(
+          (fence) =>
+            fence.resourceKind === "source_account" &&
+            String(fence.resourceId) === String(route.sourceAccount.id) &&
+            String(fence.expectedResourceAccessRevision) ===
+              String(sourceAccountDecision.resourceAccessRevision) &&
+            fence.advance === "none"
+        );
+  if (
+    conversationRouteDecisions.length !== 1 ||
+    sourceAccountDecisions.length !== 1 ||
+    sourceAccountFences.length !== 1
+  ) {
+    throw invariantError(
+      "Provider lifecycle command requires exact Conversation and SourceAccount route authority."
+    );
+  }
+  return primaryDecision.permissionId as
+    | "core:message.edit_own"
+    | "core:message.delete_own"
+    | "core:message.moderate_external"
+    | "core:message.moderate_internal";
+}
+
+function assertInboxV2MessageLifecycleFileSourceAuthorityPlan(input: {
+  commandKind: "edit" | "local_delete" | "provider_delete";
+  messageMutation: InboxV2MessageMutationCommit | null;
+  fileParentAttachmentPlan: readonly InboxV2ReadyFileParentAttachment[];
+  fileSourceAuthorityPlan: readonly InboxV2MessageEditFileSourceAuthorityTarget[];
+}): void {
+  if (input.commandKind !== "edit") {
+    if (
+      input.fileParentAttachmentPlan.length !== 0 ||
+      input.fileSourceAuthorityPlan.length !== 0
+    ) {
+      throw invariantError(
+        "Only Message edits can carry File source-authority fences."
+      );
+    }
+    return;
+  }
+  const mutation = input.messageMutation;
+  const afterBlocks =
+    mutation?.contentTransition?.transition.kind === "edit" &&
+    mutation.contentTransition.after.state.kind === "available"
+      ? mutation.contentTransition.after.state.blocks
+      : [];
+  if (
+    mutation === null ||
+    input.fileSourceAuthorityPlan.length !==
+      input.fileParentAttachmentPlan.length
+  ) {
+    throw invariantError(
+      "Message edit File source authority must exactly cover every destination parent."
+    );
+  }
+  const attachmentTargets = new Set(
+    input.fileParentAttachmentPlan.map(fileParentSourceAuthorityTargetKey)
+  );
+  let previousOrderKey: string | null = null;
+  const sourceTargets = new Set<string>();
+  for (const target of input.fileSourceAuthorityPlan) {
+    const orderKey = `${target.file.tenantId}\u0000${target.file.id}\u0000${target.blockKey}\u0000${target.purpose}`;
+    const targetKey = messageEditFileSourceAuthorityTargetKey(target);
+    const source = target.sourceParent;
+    const tenantMatches =
+      target.file.tenantId === mutation.tenantId &&
+      target.fileVersion.tenantId === mutation.tenantId &&
+      target.objectVersion.tenantId === mutation.tenantId &&
+      target.targetParent.message.tenantId === mutation.tenantId &&
+      target.targetParent.message.id === mutation.afterMessage.id &&
+      target.targetParent.expectedMessageRevision ===
+        mutation.afterMessage.revision &&
+      (source.kind === "upload_staging"
+        ? source.appActor.kind === "employee"
+          ? source.appActor.employee.tenantId === mutation.tenantId
+          : true
+        : source.conversation.tenantId === mutation.tenantId &&
+          (source.kind === "message"
+            ? source.message.tenantId === mutation.tenantId
+            : source.staffNote.tenantId === mutation.tenantId));
+    if (
+      !tenantMatches ||
+      (previousOrderKey !== null &&
+        previousOrderKey.localeCompare(orderKey) >= 0) ||
+      !attachmentTargets.has(targetKey) ||
+      sourceTargets.has(targetKey)
+    ) {
+      throw invariantError(
+        "Message edit File source authority must be canonical and match the exact destination parent plan."
+      );
+    }
+    previousOrderKey = orderKey;
+    sourceTargets.add(targetKey);
+
+    const block = afterBlocks.find(
+      (candidate) => candidate.blockKey === target.blockKey
+    );
+    const exactContentPin =
+      target.purpose === "attachment"
+        ? block !== undefined &&
+          "attachment" in block &&
+          block.attachment.state === "ready" &&
+          block.attachment.attachment.id === target.attachment.id
+        : block?.kind === "extension" && block.payloadPin.state === "exact";
+    if (!exactContentPin) {
+      throw invariantError(
+        "Message edit File source authority must pin the exact resulting content use."
+      );
+    }
+    if (
+      source.kind === "upload_staging" &&
+      calculateInboxV2CanonicalSha256(source.appActor) !==
+        calculateInboxV2CanonicalSha256(
+          mutation.revision.actionAttribution.appActor
+        )
+    ) {
+      throw invariantError(
+        "Upload-staging File source authority must match the Message action actor."
+      );
+    }
+  }
+  if (
+    sourceTargets.size !== attachmentTargets.size ||
+    [...attachmentTargets].some((target) => !sourceTargets.has(target))
+  ) {
+    throw invariantError(
+      "Message edit File source authority must exactly cover every destination parent."
+    );
+  }
+}
+
+function fileParentSourceAuthorityTargetKey(
+  attachment: InboxV2ReadyFileParentAttachment
+): string {
+  return [
+    attachment.fileId,
+    attachment.expectedFileRevision,
+    attachment.fileVersionId,
+    attachment.objectVersionId,
+    attachment.parent.kind,
+    attachment.parent.entityId,
+    attachment.parent.entityRevision,
+    attachment.parent.blockKey ?? "",
+    attachment.parent.purpose
+  ].join("\u0000");
+}
+
+function messageEditFileSourceAuthorityTargetKey(
+  target: InboxV2MessageEditFileSourceAuthorityTarget
+): string {
+  return [
+    target.file.id,
+    target.expectedFileRevision,
+    target.fileVersion.id,
+    target.objectVersion.id,
+    target.targetParent.kind,
+    target.targetParent.message.id,
+    target.targetParent.expectedMessageRevision,
+    target.blockKey,
+    target.purpose
+  ].join("\u0000");
+}
+
+function deriveInboxV2FileParentSourceAuthorityFences(
+  plan: readonly InboxV2MessageEditFileSourceAuthorityTarget[]
+): readonly InboxV2FileParentSourceAuthorityFence[] {
+  return Object.freeze(
+    plan.map((target) => {
+      const source = target.sourceParent;
+      const sourceParent: InboxV2FileParentSourceAuthorityFence["sourceParent"] =
+        source.kind === "message"
+          ? Object.freeze({
+              kind: "message",
+              messageId: source.message.id,
+              expectedMessageRevision: source.expectedMessageRevision,
+              conversationId: source.conversation.id,
+              visibilityBoundary: source.visibilityBoundary
+            })
+          : source.kind === "staff_note"
+            ? Object.freeze({
+                kind: "staff_note",
+                staffNoteId: source.staffNote.id,
+                expectedStaffNoteRevision: source.expectedStaffNoteRevision,
+                conversationId: source.conversation.id,
+                visibilityBoundary: source.visibilityBoundary,
+                parentConversationVisibility:
+                  source.parentConversationVisibility
+              })
+            : Object.freeze({
+                kind: "upload_staging",
+                attachmentId:
+                  target.purpose === "attachment" ? target.attachment.id : null,
+                uploadRevision: source.uploadRevision,
+                actor:
+                  source.appActor.kind === "employee"
+                    ? Object.freeze({
+                        kind: "employee" as const,
+                        employeeId: source.appActor.employee.id,
+                        authorizationEpoch: source.appActor.authorizationEpoch
+                      })
+                    : Object.freeze({
+                        kind: "trusted_service" as const,
+                        trustedServiceId: source.appActor.trustedServiceId
+                      })
+              });
+      return Object.freeze({
+        fileId: target.file.id,
+        expectedFileRevision: target.expectedFileRevision,
+        fileVersionId: target.fileVersion.id,
+        objectVersionId: target.objectVersion.id,
+        targetParentKind: target.targetParent.kind,
+        targetParentEntityId: target.targetParent.message.id,
+        targetParentEntityRevision: target.targetParent.expectedMessageRevision,
+        targetBlockKey: target.blockKey,
+        purpose: target.purpose,
+        sourceParent
+      });
+    })
+  );
+}
+
 export const INBOX_V2_ATTACHMENT_MATERIALIZATION_COMPLETION_COMMAND_TYPE_ID =
   "core:attachment.materialization.complete" as const;
 
@@ -3415,9 +5243,14 @@ async function prepareMessageMutationInTransaction(
     })
   );
   assertAtMostOneRow(conversationLock, "Message mutation Conversation lock");
-  if (conversationLock.rows.length === 0) {
+  const conversationHead = conversationLock.rows[0];
+  if (conversationHead === undefined) {
     return { kind: "message_not_found" } as const;
   }
+  const conversationPurposeId = requireString(
+    conversationHead.purpose_id,
+    "Message mutation Conversation purpose"
+  );
   const current = await loadTimelineMessageAggregate(transaction, {
     tenantId: input.tenantId,
     messageId: input.messageId,
@@ -3498,7 +5331,12 @@ async function prepareMessageMutationInTransaction(
       current: current.message
     } as const;
   }
-  return { kind: "ready", commit, current } as const;
+  return {
+    kind: "ready",
+    commit,
+    current,
+    conversationPurposeId
+  } as const;
 }
 
 async function applyPreparedMessageMutationWrites<TResult>(
@@ -3511,7 +5349,8 @@ async function applyPreparedMessageMutationWrites<TResult>(
     message: InboxV2Message;
     timelineItem: InboxV2TimelineItem;
     envelope: InboxV2SafeGenericEnvelope;
-  }) => Promise<TResult>
+  }) => Promise<TResult>,
+  providerLifecyclePreparation?: PreparedProviderLifecycleCreationForAtomicSeal | null
 ): Promise<PersistInboxV2MessageMutationResult<TResult>> {
   const envelope = messageEnvelope({
     message: commit.afterMessage,
@@ -3540,18 +5379,38 @@ async function applyPreparedMessageMutationWrites<TResult>(
     commit.providerOperationCreationCommit !== null &&
     commit.providerOperation !== null
   ) {
-    const operationPersistence =
-      await persistProviderLifecycleCreationInTransaction(transaction, {
+    if (providerLifecyclePreparation === undefined) {
+      const operationPersistence =
+        await persistProviderLifecycleCreationInTransaction(transaction, {
+          commit: commit.providerOperationCreationCommit,
+          streamPosition
+        });
+      if (operationPersistence.kind === "conflict") {
+        return {
+          kind: "conflict",
+          code: "message.state_conflict",
+          current: current.message
+        } as const;
+      }
+    } else {
+      if (providerLifecyclePreparation === null) {
+        throw invariantError(
+          "Prepared external edit lost its provider lifecycle creation fence."
+        );
+      }
+      await applyPreparedProviderLifecycleCreationWrites(transaction, {
         commit: commit.providerOperationCreationCommit,
+        preparation: providerLifecyclePreparation,
         streamPosition
       });
-    if (operationPersistence.kind === "conflict") {
-      return {
-        kind: "conflict",
-        code: "message.state_conflict",
-        current: current.message
-      } as const;
     }
+  } else if (
+    providerLifecyclePreparation !== undefined &&
+    providerLifecyclePreparation !== null
+  ) {
+    throw invariantError(
+      "Prepared local Message mutation cannot carry provider lifecycle work."
+    );
   }
 
   if (commit.contentTransition !== null) {
@@ -4330,6 +6189,69 @@ async function persistProviderLifecycleCreationInTransaction(
   return { kind: "inserted" };
 }
 
+/**
+ * Post-stream-head write phase for an operation whose replay/route checks were
+ * completed under locks during prepare. This function deliberately performs
+ * INSERT-only work so the atomic coordinator can audit the exact write set.
+ */
+async function applyPreparedProviderLifecycleCreationWrites(
+  transaction: RawSqlExecutor,
+  input: Readonly<{
+    commit: InboxV2MessageProviderLifecycleCreationCommit;
+    preparation: PreparedProviderLifecycleCreationForAtomicSeal;
+    streamPosition: InboxV2BigintCounter;
+  }>
+): Promise<void> {
+  const { commit, preparation, streamPosition } = input;
+  if (
+    commit.operation.origin !== "hulee_requested" ||
+    commit.semanticOrderingCommit !== null ||
+    preparation.routeDisposition !== "absent" ||
+    !sameValue(
+      preparation.routeConsumption,
+      providerLifecycleRouteConsumptionRecord(commit)
+    )
+  ) {
+    throw invariantError(
+      "Prepared provider lifecycle creation lost its exact requested route fence."
+    );
+  }
+  const actionAttributionId = derivedInboxV2Id(
+    "action_attribution",
+    commit.operation.id
+  );
+  await expectOneRow(
+    transaction,
+    buildInsertInboxV2ActionAttributionSql({
+      tenantId: commit.tenantId,
+      id: actionAttributionId,
+      conversationId: commit.message.conversation.id,
+      attribution: {
+        actionParticipant: commit.operation.actionParticipant,
+        appActor: commit.operation.appActor,
+        sourceOccurrence: null,
+        automationCausation: commit.operation.automationCausation
+      },
+      createdAt: commit.operation.recordedAt
+    }),
+    "Prepared provider lifecycle action attribution insert"
+  );
+  await expectOneRow(
+    transaction,
+    buildInsertInboxV2ProviderLifecycleOperationSql({
+      commit,
+      actionAttributionId,
+      streamPosition
+    }),
+    "Prepared provider lifecycle operation insert"
+  );
+  await expectOneRow(
+    transaction,
+    buildInsertInboxV2OutboundRouteConsumptionSql(preparation.routeConsumption),
+    "Prepared provider lifecycle outbound-route consumption insert"
+  );
+}
+
 async function persistProviderLifecycleTransition(
   transactionExecutor: InboxV2TimelineMessageTransactionExecutor,
   input: Readonly<{
@@ -5027,7 +6949,17 @@ async function loadTimelineMessageAggregate(
           content.updatedAt
         ].sort()[2]!
       : parseTimestamp(row.database_now, "Message aggregate database clock");
-  return { message, timelineItem, content, databaseNow, streamPosition };
+  return {
+    message,
+    timelineItem,
+    content,
+    contentRetentionAnchorAt: parseTimestamp(
+      row.content_retention_anchor_at,
+      "Message content retention anchor"
+    ),
+    databaseNow,
+    streamPosition
+  };
 }
 
 async function loadTimelineContent(
@@ -6904,7 +8836,7 @@ export function buildLockInboxV2TimelineConversationHeadSql(input: {
   conversationId: InboxV2ConversationId;
 }): SQL {
   return sql`
-    select c.id, h.revision, h.latest_timeline_sequence,
+    select c.id, c.purpose_id, h.revision, h.latest_timeline_sequence,
            h.latest_activity_item_id, h.latest_activity_timeline_sequence,
            h.latest_activity_at, h.updated_at
       from inbox_v2_conversations c
@@ -6914,6 +8846,24 @@ export function buildLockInboxV2TimelineConversationHeadSql(input: {
      where c.tenant_id = ${input.tenantId}
        and c.id = ${input.conversationId}
      for update of c, h
+  `;
+}
+
+export function buildLockInboxV2TimelineConversationHeadForShareSql(input: {
+  tenantId: InboxV2TenantId;
+  conversationId: InboxV2ConversationId;
+}): SQL {
+  return sql`
+    select c.id, c.purpose_id, h.revision, h.latest_timeline_sequence,
+           h.latest_activity_item_id, h.latest_activity_timeline_sequence,
+           h.latest_activity_at, h.updated_at
+      from inbox_v2_conversations c
+      inner join inbox_v2_conversation_heads h
+        on h.tenant_id = c.tenant_id
+       and h.conversation_id = c.id
+     where c.tenant_id = ${input.tenantId}
+       and c.id = ${input.conversationId}
+     for share of c, h
   `;
 }
 
@@ -6983,6 +8933,7 @@ export function buildFindInboxV2TimelineMessageSql(input: {
       message_row.content_revision,
       message_row.content_state,
       content_row.content_digest_sha256,
+      content_row.retention_anchor_at as content_retention_anchor_at,
       content_row.tombstone_event_id,
       content_row.tombstone_reason_id,
       content_row.retention_policy_id,
@@ -12227,14 +14178,18 @@ async function runTimelineMessageTransaction<TResult>(
   work: (transaction: RawSqlExecutor) => Promise<TResult>,
   attempts = TRANSACTION_ATTEMPTS
 ): Promise<TResult> {
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+  const effectiveAttempts =
+    executor.transactionScope === "ambient" ? 1 : attempts;
+  for (let attempt = 1; attempt <= effectiveAttempts; attempt += 1) {
     try {
       return await executor.transaction(
         work,
         TIMELINE_MESSAGE_TRANSACTION_CONFIG
       );
     } catch (error) {
-      if (attempt === attempts || !hasRetryableSqlState(error)) throw error;
+      if (attempt === effectiveAttempts || !hasRetryableSqlState(error)) {
+        throw error;
+      }
     }
   }
   throw invariantError("Timeline/Message transaction retry exhausted.");

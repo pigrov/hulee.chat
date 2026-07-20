@@ -615,6 +615,105 @@ describe("Inbox V2 message content contracts", () => {
     ).toBe(false);
   });
 
+  it("keeps every retained attachment materialization pin exact across semantic edits", () => {
+    const editCommit = (
+      beforeAttachment: unknown,
+      afterAttachment: unknown
+    ) => {
+      const beforeBlocks = [
+        {
+          blockKey: "file-1",
+          kind: "file" as const,
+          attachment: beforeAttachment,
+          displayName: "evidence.bin"
+        },
+        {
+          blockKey: "body-1",
+          kind: "text" as const,
+          role: "body" as const,
+          text: "Before",
+          language: "en"
+        }
+      ];
+      const afterBlocks = [
+        {
+          ...beforeBlocks[0],
+          attachment: afterAttachment
+        },
+        { ...beforeBlocks[1], text: "After" }
+      ];
+      return {
+        tenantId: fixtureTenantId,
+        before: fixtureContent({
+          state: {
+            kind: "available",
+            blocks: beforeBlocks,
+            contentDigestSha256: calculateInboxV2MessageContentDigest(
+              beforeBlocks as never
+            )
+          }
+        }),
+        transition: {
+          kind: "edit",
+          expectedRevision: "1",
+          resultingRevision: "2",
+          event: fixtureReference("event", "event:content-edit-retained-pin-1"),
+          occurredAt: fixtureT3
+        },
+        after: fixtureContent({
+          state: {
+            kind: "available",
+            blocks: afterBlocks,
+            contentDigestSha256: calculateInboxV2MessageContentDigest(
+              afterBlocks as never
+            )
+          },
+          revision: "2",
+          updatedAt: fixtureT3
+        })
+      };
+    };
+    const expectRejected = (
+      beforeAttachment: unknown,
+      afterAttachment: unknown
+    ) => {
+      expect(
+        inboxV2TimelineContentTransitionCommitSchema.safeParse(
+          editCommit(beforeAttachment, afterAttachment)
+        ).success
+      ).toBe(false);
+    };
+
+    const ready = attachment("ready");
+    expectRejected(ready, {
+      ...ready,
+      file: fixtureReference("file", "file:substituted-1")
+    });
+    expectRejected(ready, { ...ready, fileRevision: "2" });
+    expectRejected(ready, {
+      ...ready,
+      fileVersion: fixtureReference(
+        "file_version",
+        "file_version:substituted-1-r1"
+      )
+    });
+    expectRejected(ready, {
+      ...ready,
+      objectVersion: fixtureReference(
+        "file_object_version",
+        "file_object_version:substituted-1-r1-v1"
+      )
+    });
+
+    const failed = attachment("failed");
+    expectRejected(failed, { ...failed, reasonId: "core:failed-reclassified" });
+    const quarantined = attachment("quarantined");
+    expectRejected(quarantined, {
+      ...quarantined,
+      reasonId: "core:quarantine-reclassified"
+    });
+  });
+
   it("materializes exactly one attachment block per content revision", () => {
     const beforeBlocks = ["image-1", "image-2"].map((blockKey) => ({
       blockKey,

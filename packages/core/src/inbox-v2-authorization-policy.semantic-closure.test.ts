@@ -1346,7 +1346,9 @@ function deleteOwnScenario(): SemanticScenario {
           ),
           targetResource: timelineItemResource,
           state: "none",
-          revisionChecks: [{ kind: "state", expected: "1", actual: "1" }]
+          revisionChecks: [
+            { kind: "legal_hold_set", expected: "1", actual: "1" }
+          ]
         },
         originalRouteRequirementId: null,
         originalSourceAccountId: null,

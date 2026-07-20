@@ -376,7 +376,7 @@ describe("Inbox V2 Message lifecycle contracts", () => {
     };
     const route = fixtureExternalTargetRoute(
       "core:message.edit",
-      "core:message.edit_external"
+      "core:conversation.read"
     );
     const operation = {
       ...providerDeleteOperation({
@@ -900,7 +900,7 @@ describe("Inbox V2 Message lifecycle contracts", () => {
 
     const route = fixtureExternalTargetRoute(
       "core:message.delete",
-      "core:message.delete_external"
+      "core:conversation.read"
     );
     const requested = providerDeleteOperation({
       origin: "hulee_requested",
@@ -913,22 +913,79 @@ describe("Inbox V2 Message lifecycle contracts", () => {
       capabilityRevision: route.bindingFence.capabilityRevision,
       outcome: { state: "pending" }
     });
+    const requestedCommit = {
+      ...observedCommit,
+      message: fixtureMessage("hulee"),
+      outboundRoute: route,
+      outboundBindingSnapshot: fixtureOutboundBindingSnapshot(
+        route,
+        "core:message-delete"
+      ),
+      actionParticipantSnapshot: fixtureParticipant("employee"),
+      providerSemanticProof: null,
+      semanticOrderingCommit: null,
+      routeConsumption: providerRouteConsumption(route, requested),
+      operation: requested
+    };
+    expect(
+      inboxV2MessageProviderLifecycleOperationCreationCommitSchema.safeParse(
+        requestedCommit
+      ).success
+    ).toBe(true);
+    const actionPermissionRoute = fixtureExternalTargetRoute(
+      "core:message.delete",
+      "core:message.moderate_external"
+    );
     expect(
       inboxV2MessageProviderLifecycleOperationCreationCommitSchema.safeParse({
-        ...observedCommit,
-        message: fixtureMessage("hulee"),
-        outboundRoute: route,
+        ...requestedCommit,
+        outboundRoute: actionPermissionRoute,
         outboundBindingSnapshot: fixtureOutboundBindingSnapshot(
-          route,
+          actionPermissionRoute,
           "core:message-delete"
         ),
-        actionParticipantSnapshot: fixtureParticipant("employee"),
-        providerSemanticProof: null,
-        semanticOrderingCommit: null,
-        routeConsumption: providerRouteConsumption(route, requested),
-        operation: requested
+        routeConsumption: providerRouteConsumption(
+          actionPermissionRoute,
+          requested
+        )
       }).success
-    ).toBe(true);
+    ).toBe(false);
+    const unrelatedPermissionRoute = fixtureExternalTargetRoute(
+      "core:message.delete",
+      "core:message.reply_external"
+    );
+    expect(
+      inboxV2MessageProviderLifecycleOperationCreationCommitSchema.safeParse({
+        ...requestedCommit,
+        outboundRoute: unrelatedPermissionRoute,
+        outboundBindingSnapshot: fixtureOutboundBindingSnapshot(
+          unrelatedPermissionRoute,
+          "core:message-delete"
+        ),
+        routeConsumption: providerRouteConsumption(
+          unrelatedPermissionRoute,
+          requested
+        )
+      }).success
+    ).toBe(false);
+    expect(
+      inboxV2MessageProviderLifecycleOperationCreationCommitSchema.safeParse({
+        ...requestedCommit,
+        outboundRoute: {
+          ...route,
+          selection: {
+            ...route.selection,
+            intent: {
+              kind: "explicit_occurrence",
+              occurrence: fixtureReference(
+                "source_occurrence",
+                "source_occurrence:unrelated"
+              )
+            }
+          }
+        }
+      }).success
+    ).toBe(false);
     expect(
       inboxV2MessageProviderLifecycleOperationCreationCommitSchema.safeParse({
         ...observedCommit,
@@ -957,12 +1014,12 @@ describe("Inbox V2 Message lifecycle contracts", () => {
         message: fixtureMessage("hulee"),
         outboundRoute: fixtureExternalTargetRoute(
           "core:message.edit",
-          "core:message.edit_external"
+          "core:conversation.read"
         ),
         outboundBindingSnapshot: fixtureOutboundBindingSnapshot(
           fixtureExternalTargetRoute(
             "core:message.edit",
-            "core:message.edit_external"
+            "core:conversation.read"
           ),
           "core:message-delete"
         ),
@@ -972,7 +1029,7 @@ describe("Inbox V2 Message lifecycle contracts", () => {
         routeConsumption: providerRouteConsumption(
           fixtureExternalTargetRoute(
             "core:message.edit",
-            "core:message.edit_external"
+            "core:conversation.read"
           ),
           requested
         ),
@@ -1046,7 +1103,7 @@ describe("Inbox V2 Message lifecycle contracts", () => {
   it("requires a trusted adapter result for every requested provider outcome", () => {
     const route = fixtureExternalTargetRoute(
       "core:message.delete",
-      "core:message.delete_external"
+      "core:conversation.read"
     );
     const before = providerDeleteOperation({
       origin: "hulee_requested",
@@ -1210,7 +1267,7 @@ describe("Inbox V2 Message lifecycle contracts", () => {
     const requestedBeforeTimelineItem = fixtureTimelineItem("external");
     const requestedRoute = fixtureExternalTargetRoute(
       "core:message.delete",
-      "core:message.delete_external"
+      "core:conversation.read"
     );
     const requestedOccurrence = fixtureOccurrence();
     const requestedInitialOperation = providerDeleteOperation({

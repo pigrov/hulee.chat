@@ -2,7 +2,7 @@
 
 Status: `active`  
 Canonical task tracker: this file  
-Last updated: `2026-07-19`
+Last updated: `2026-07-20`
 
 ## Purpose
 
@@ -1802,8 +1802,9 @@ future non-chat items without a universal JSON message.
     Detailed evidence is in
     `docs/product/inbox-v2-msg-004-reply-and-forward.md`.
 
-- [ ] `INB2-MSG-005` Implement edit/delete revisions and tombstones.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-MSG-002`,
+- [x] `INB2-MSG-005` Implement edit/delete revisions and tombstones.
+  - State: `done`; Priority: `P0`; Started: `2026-07-19`; Completed:
+    `2026-07-20`; Owner: `Codex`; Depends on: `INB2-MSG-002`,
     `INB2-RBAC-002`.
   - Acceptance: revisions are append-only/auditable, the current item is
     deterministic, and lifecycle/provider delete never silently removes history
@@ -1813,7 +1814,21 @@ future non-chat items without a universal JSON message.
     binding/reference generation/capability and never reroutes.
   - Verification: duplicate, stale and edit/delete-before-create lifecycle tests
     plus unauthorized/cross-account/changed-binding cases converge to one
-    revision with no provider call/reroute. Evidence: -
+    revision with no provider call/reroute. Evidence: atomic edit/local-delete/
+    provider-delete command boundary, separate exact action and Conversation-read
+    authority, TimelineItem/Conversation primary-resource selection, legal-hold
+    fences for every delete, exact File/source/route locks, one-use FileParent
+    sealing, retained materialized pin identity, append-only revision/tombstone
+    state, active-operation DB fences, migration-history compatibility and
+    deferred source-action inverse verification are implemented. Focused suites
+    passed `22/22` files / `822/822`; source and preserve gates passed `83/83` /
+    `1,244/1,244` and `3/3` / `17/17`; real PostgreSQL passed `35/35` files /
+    `374` tests (`6` skipped) with all `57/57` migrations; default Vitest passed
+    `381` files / `4,222` tests (`44` files / `427` tests skipped). Typecheck,
+    `db:check`, reproducible N-1 bundle, task-scoped lint/format and auxiliary
+    repository checks passed; independent final review returned `READY` with no
+    P0/P1 findings. Detailed evidence and provider-runtime scope are in
+    `docs/product/inbox-v2-msg-005-edit-delete-and-tombstones.md`.
 
 - [ ] `INB2-MSG-006` Implement reaction and delivery/receipt models.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-MSG-002`,
@@ -3253,3 +3268,4 @@ the task state, checkbox and evidence above.
 | 2026-07-18 | `INB2-MSG-002`     | Scoped 16/373; PG 32/322; preserve 3/17; full 356/3808 + all gates         | task commit  | Codex + independent final reviews |
 | 2026-07-19 | `INB2-MSG-003`     | Typed media/storage; PG 33/341; preserve 3/17; full 374/4077 + all gates   | task commit  | Codex + independent audits        |
 | 2026-07-19 | `INB2-MSG-004`     | Reply/forward; PG 33/342; preserve 3/17; full 375/4125 + all gates         | task commit  | Codex + independent final review  |
+| 2026-07-20 | `INB2-MSG-005`     | Edit/delete; PG 35/374; source 83/1244; full 381/4222 + all gates          | task commit  | Codex + independent final review  |

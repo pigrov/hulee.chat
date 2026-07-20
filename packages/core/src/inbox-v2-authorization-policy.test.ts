@@ -1100,7 +1100,7 @@ describe("Inbox V2 authorization policy", () => {
         ),
         targetResource: timelineItemResource,
         state: "none" as const,
-        revisionChecks: currentRevisionChecks("state")
+        revisionChecks: currentRevisionChecks("legal_hold_set")
       },
       originalRouteRequirementId: "moderation-source",
       originalSourceAccountId: sourceAccountId,
@@ -1127,6 +1127,25 @@ describe("Inbox V2 authorization policy", () => {
       deletionMode: null,
       holdProof: null,
       capabilityNotAfter: "2026-07-12T10:12:00.000Z"
+    };
+    const localDeleteAction = {
+      ...action,
+      deletionMode: "local_tombstone" as const,
+      originalRouteRequirementId: null,
+      originalSourceAccountId: null,
+      originalSourceAccountResource: null,
+      originalBindingResource: null,
+      originalBindingSourceAccountResource: null,
+      externalReferenceResource: null,
+      externalReferenceBindingResource: null,
+      externalReferenceTargetResource: null,
+      routeRevisionChecks: [],
+      capabilityId: null,
+      capabilityManifestResource: null,
+      capabilityManifestSourceAccountResource: null,
+      capabilityRevisionChecks: [],
+      capabilityState: "not_applicable" as const,
+      capabilityNotAfter: null
     };
     const moderation = (
       actionEvidence: Extract<
@@ -1171,6 +1190,26 @@ describe("Inbox V2 authorization policy", () => {
         makeInput([moderation(action), contentRead, sourceUse], grants)
       ).outcome
     ).toBe("allowed");
+    expect(
+      evaluateInboxV2AuthorizationPlan(
+        makeInput([moderation(localDeleteAction), contentRead], grants)
+      ).outcome
+    ).toBe("allowed");
+    expect(
+      evaluateInboxV2AuthorizationPlan(
+        makeInput(
+          [
+            moderation({
+              ...localDeleteAction,
+              originalRouteRequirementId: "moderation-source"
+            }),
+            contentRead,
+            sourceUse
+          ],
+          grants
+        )
+      ).outcome
+    ).toBe("denied");
     const editDecision = evaluateInboxV2AuthorizationPlan(
       makeInput([moderation(editAction), contentRead, sourceUse], grants)
     );
@@ -1896,27 +1935,28 @@ describe("Inbox V2 authorization policy", () => {
       permissionId: "core:conversation.read",
       visibility: "secondary_hidden"
     });
+    const fileGuard = {
+      profileId: "core:rbac.guard.file_parent_content" as const,
+      targetResource: fileResource,
+      parentResource: conversationResource,
+      ...fileRelationEvidence(conversationResource),
+      parentBoundary: "external" as const,
+      parentRequirementIds: ["parent-read"],
+      retentionState: "available" as const,
+      holdState: "none" as const,
+      operation: "view" as const,
+      storagePolicyState: "allowed" as const,
+      actorEmployeeId: employeeId,
+      uploaderEmployeeId: null,
+      moderationRequirementId: null,
+      expectedFileRevision: "1",
+      currentFileRevision: "1"
+    };
     const file = makeRequirement({
       id: "file",
       permissionId: "core:file.view",
       resource: fileResource,
-      guard: {
-        profileId: "core:rbac.guard.file_parent_content",
-        targetResource: fileResource,
-        parentResource: conversationResource,
-        ...fileRelationEvidence(conversationResource),
-        parentBoundary: "external",
-        parentRequirementIds: ["parent-read"],
-        retentionState: "available",
-        holdState: "none",
-        operation: "view",
-        storagePolicyState: "allowed",
-        actorEmployeeId: employeeId,
-        uploaderEmployeeId: null,
-        moderationRequirementId: null,
-        expectedFileRevision: "1",
-        currentFileRevision: "1"
-      }
+      guard: fileGuard
     });
     const grants = [
       makeGrant("core:file.view", { type: "tenant", tenantId }, "grant-file"),
@@ -1962,6 +2002,18 @@ describe("Inbox V2 authorization policy", () => {
         grants
       )
     );
+    const staleFile = evaluateInboxV2AuthorizationPlan(
+      makeInput(
+        [
+          {
+            ...file,
+            guard: { ...fileGuard, currentFileRevision: "2" }
+          },
+          parentRead
+        ],
+        grants
+      )
+    );
 
     expect(allowed.outcome).toBe("allowed");
     expect(missingParent).toMatchObject({
@@ -1971,6 +2023,10 @@ describe("Inbox V2 authorization policy", () => {
     expect(unrelatedParent).toMatchObject({
       outcome: "denied",
       diagnostics: { reason: "secondary_resource_denied" }
+    });
+    expect(staleFile).toMatchObject({
+      outcome: "denied",
+      diagnostics: { reason: "hard_boundary_denied" }
     });
   });
 
@@ -2128,6 +2184,169 @@ describe("Inbox V2 authorization policy", () => {
             parentRead
           ],
           grants
+        )
+      ).outcome
+    ).toBe("denied");
+  });
+
+  it("requires exact destination authority before an edit can attach an uploaded File", () => {
+    const externalParents = externalReplyRequirements().map(
+      (requirement): InboxV2AuthorizationRequirement =>
+        requirement.id === "reply"
+          ? { ...requirement, visibility: "secondary_hidden" }
+          : requirement
+    );
+    const externalUploadGuard = {
+      profileId: "core:rbac.guard.file_parent_content" as const,
+      targetResource: fileResource,
+      parentResource: conversationResource,
+      ...fileRelationEvidence(conversationResource),
+      parentBoundary: "external" as const,
+      parentRequirementIds: ["conversation-read", "reply"],
+      retentionState: "available" as const,
+      holdState: "none" as const,
+      operation: "upload" as const,
+      storagePolicyState: "allowed" as const,
+      actorEmployeeId: employeeId,
+      uploaderEmployeeId: null,
+      moderationRequirementId: null,
+      expectedFileRevision: "2",
+      currentFileRevision: "2"
+    };
+    const externalUpload = makeRequirement({
+      id: "edit-external-file-upload",
+      permissionId: "core:file.upload",
+      resource: fileResource,
+      guard: externalUploadGuard
+    });
+    const externalGrants = [
+      ...externalOperationGrants("core:message.reply_external"),
+      makeGrant(
+        "core:file.upload",
+        { type: "tenant", tenantId },
+        "edit-external-file-upload"
+      )
+    ];
+
+    const externalAllowed = evaluateInboxV2AuthorizationPlan(
+      makeInput([externalUpload, ...externalParents], externalGrants)
+    );
+    expect(externalAllowed, JSON.stringify(externalAllowed)).toMatchObject({
+      outcome: "allowed"
+    });
+    expect(
+      evaluateInboxV2AuthorizationPlan(
+        makeInput(
+          [externalUpload, ...externalParents],
+          externalGrants.filter(
+            ({ permissionId }) => permissionId !== "core:message.reply_external"
+          )
+        )
+      ).outcome
+    ).toBe("denied");
+    expect(
+      evaluateInboxV2AuthorizationPlan(
+        makeInput(
+          [
+            {
+              ...externalUpload,
+              guard: {
+                ...externalUploadGuard,
+                currentFileRevision: "3"
+              }
+            },
+            ...externalParents
+          ],
+          externalGrants
+        )
+      )
+    ).toMatchObject({
+      outcome: "denied",
+      diagnostics: { reason: "hard_boundary_denied" }
+    });
+
+    const internalScopeFact: InboxV2CanonicalScopeFact = {
+      kind: "internal_participant",
+      ...scopePath(conversationResource, conversationResource),
+      employeeId,
+      conversationId,
+      origin: "hulee_internal_command",
+      state: "active",
+      role: "member",
+      membershipRevision: revision,
+      currentMembershipRevision: revision,
+      validUntil: GRANT_END
+    };
+    const internalGuard: InboxV2PolicyGuardEvidence = {
+      profileId: "core:rbac.guard.internal_membership",
+      conversationId,
+      employeeId,
+      membershipState: "active",
+      membershipOrigin: "hulee_internal_command",
+      membershipRole: "member",
+      contentBoundary: "internal",
+      validUntil: GRANT_END
+    };
+    const internalRead = makeRequirement({
+      id: "edit-internal-parent-read",
+      permissionId: "core:conversation.internal.read",
+      resource: conversationResource,
+      scopeFacts: [internalScopeFact],
+      guard: internalGuard,
+      visibility: "secondary_hidden"
+    });
+    const internalSend = makeRequirement({
+      id: "edit-internal-parent-send",
+      permissionId: "core:message.send_internal",
+      resource: conversationResource,
+      scopeFacts: [internalScopeFact],
+      guard: internalGuard,
+      visibility: "secondary_hidden"
+    });
+    const internalUpload = makeRequirement({
+      id: "edit-internal-file-upload",
+      permissionId: "core:file.upload",
+      resource: fileResource,
+      guard: {
+        ...externalUploadGuard,
+        parentBoundary: "internal",
+        relationBoundary: "internal",
+        parentRequirementIds: [
+          "edit-internal-parent-read",
+          "edit-internal-parent-send"
+        ]
+      }
+    });
+    const internalGrants = [
+      makeGrant(
+        "core:conversation.internal.read",
+        { type: "internal_participant", tenantId },
+        "edit-internal-parent-read"
+      ),
+      makeGrant(
+        "core:message.send_internal",
+        { type: "internal_participant", tenantId },
+        "edit-internal-parent-send"
+      ),
+      makeGrant(
+        "core:file.upload",
+        { type: "tenant", tenantId },
+        "edit-internal-file-upload"
+      )
+    ];
+
+    expect(
+      evaluateInboxV2AuthorizationPlan(
+        makeInput([internalUpload, internalRead, internalSend], internalGrants)
+      ).outcome
+    ).toBe("allowed");
+    expect(
+      evaluateInboxV2AuthorizationPlan(
+        makeInput(
+          [internalUpload, internalRead, internalSend],
+          internalGrants.filter(
+            ({ permissionId }) => permissionId !== "core:message.send_internal"
+          )
         )
       ).outcome
     ).toBe("denied");
@@ -5387,8 +5606,27 @@ describe("Inbox V2 authorization policy", () => {
         ),
         targetResource: timelineItemResource,
         state: "none" as const,
-        revisionChecks: currentRevisionChecks("state")
+        revisionChecks: currentRevisionChecks("legal_hold_set")
       }
+    };
+    const localDeleteAction = {
+      ...deleteAction,
+      deletionMode: "local_tombstone" as const,
+      originalRouteRequirementId: null,
+      originalSourceAccountId: null,
+      originalSourceAccountResource: null,
+      originalBindingResource: null,
+      originalBindingSourceAccountResource: null,
+      externalReferenceResource: null,
+      externalReferenceBindingResource: null,
+      externalReferenceTargetResource: null,
+      routeRevisionChecks: [],
+      capabilityId: null,
+      capabilityManifestResource: null,
+      capabilityManifestSourceAccountResource: null,
+      capabilityRevisionChecks: [],
+      capabilityState: "not_applicable" as const,
+      capabilityNotAfter: null
     };
     const remove = (
       actionEvidence: Extract<
@@ -5444,6 +5682,11 @@ describe("Inbox V2 authorization policy", () => {
           [remove(deleteAction), sourceUse, lifecycleContentRead],
           grants
         )
+      ).outcome
+    ).toBe("allowed");
+    expect(
+      evaluateInboxV2AuthorizationPlan(
+        makeInput([remove(localDeleteAction), lifecycleContentRead], grants)
       ).outcome
     ).toBe("allowed");
     expect(
@@ -7546,7 +7789,13 @@ function scopePath(resource: InboxV2EntityKey, scopeTarget: InboxV2EntityKey) {
 }
 
 function currentRevisionChecks(
-  kind: "entity" | "relation" | "state" | "manifest" | "policy" = "state"
+  kind:
+    | "entity"
+    | "relation"
+    | "state"
+    | "manifest"
+    | "policy"
+    | "legal_hold_set" = "state"
 ) {
   return [{ kind, expected: "1", actual: "1" }] as const;
 }

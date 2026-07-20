@@ -217,6 +217,7 @@ export type InboxV2PolicyRevisionCheck = Readonly<{
     | "route"
     | "policy"
     | "manifest"
+    | "legal_hold_set"
     | "high_water"
     | "handler";
   expected: string;
@@ -601,23 +602,53 @@ type InboxV2CanonicalActionEvidence =
       topologyConversationResource: InboxV2EntityKey;
       topologyBoundary: "external";
       topologyRevisionChecks: readonly InboxV2PolicyRevisionCheck[];
-      originalRouteRequirementId: string;
-      originalSourceAccountId: InboxV2SourceAccountId;
-      originalSourceAccountResource: InboxV2EntityKey;
-      originalBindingResource: InboxV2EntityKey;
-      originalBindingSourceAccountResource: InboxV2EntityKey;
-      externalReferenceResource: InboxV2EntityKey;
-      externalReferenceBindingResource: InboxV2EntityKey;
-      externalReferenceTargetResource: InboxV2EntityKey;
+      originalRouteRequirementId: string | null;
+      originalSourceAccountId: InboxV2SourceAccountId | null;
+      originalSourceAccountResource: InboxV2EntityKey | null;
+      originalBindingResource: InboxV2EntityKey | null;
+      originalBindingSourceAccountResource: InboxV2EntityKey | null;
+      externalReferenceResource: InboxV2EntityKey | null;
+      externalReferenceBindingResource: InboxV2EntityKey | null;
+      externalReferenceTargetResource: InboxV2EntityKey | null;
       routeRevisionChecks: readonly InboxV2PolicyRevisionCheck[];
       capabilityId:
         | "core:capability.message.edit"
-        | "core:capability.message.delete";
-      capabilityManifestResource: InboxV2EntityKey;
-      capabilityManifestSourceAccountResource: InboxV2EntityKey;
+        | "core:capability.message.delete"
+        | null;
+      capabilityManifestResource: InboxV2EntityKey | null;
+      capabilityManifestSourceAccountResource: InboxV2EntityKey | null;
       capabilityRevisionChecks: readonly InboxV2PolicyRevisionCheck[];
-      capabilityState: "supported" | "unsupported" | "expired";
+      capabilityState:
+        | "not_applicable"
+        | "supported"
+        | "unsupported"
+        | "expired";
       capabilityNotAfter: InboxV2PolicyTimestamp | null;
+    }>
+  | Readonly<{
+      kind: "internal_moderation";
+      operation: "edit" | "delete";
+      targetResource: InboxV2EntityKey;
+      contentReadResource: InboxV2EntityKey;
+      contentRelationTargetResource: InboxV2EntityKey;
+      contentRelationReadResource: InboxV2EntityKey;
+      contentRelationRevisionChecks: readonly InboxV2PolicyRevisionCheck[];
+      reason: string;
+      auditEventId: string | null;
+      contentReadRequirementId: string;
+      deletionMode: "local_tombstone" | null;
+      holdProof: Readonly<{
+        resource: InboxV2EntityKey;
+        targetResource: InboxV2EntityKey;
+        state: "none" | "active";
+        revisionChecks: readonly InboxV2PolicyRevisionCheck[];
+      }> | null;
+      targetRevisionChecks: readonly InboxV2PolicyRevisionCheck[];
+      contentTopologyResource: InboxV2EntityKey;
+      topologyTimelineItemResource: InboxV2EntityKey;
+      topologyConversationResource: InboxV2EntityKey;
+      topologyBoundary: "internal";
+      topologyRevisionChecks: readonly InboxV2PolicyRevisionCheck[];
     }>
   | Readonly<{
       kind: "internal_owner_recovery";
@@ -712,6 +743,10 @@ type InboxV2InternalMembershipGuard = Readonly<{
   membershipRole: "owner" | "admin" | "member" | "observer";
   contentBoundary: "internal" | "external" | "staff_only";
   validUntil: InboxV2PolicyTimestamp | null;
+  moderationAction?: Extract<
+    InboxV2CanonicalActionEvidence,
+    { kind: "internal_moderation" }
+  >;
   membershipChange?: Readonly<{
     operation: "add" | "remove" | "change_role";
     targetEmployeeId: InboxV2EmployeeId;
@@ -2837,20 +2872,32 @@ function areCompanionRequirementsSemanticallyValid(
       }
       if (action.kind === "external_moderation") {
         const contentRead = byId(action.contentReadRequirementId);
-        const route = byId(action.originalRouteRequirementId);
+        const requiresProviderRoute =
+          action.operation === "edit" ||
+          action.deletionMode === "provider_delete";
+        const route =
+          action.originalRouteRequirementId === null
+            ? undefined
+            : byId(action.originalRouteRequirementId);
         return (
           contentRead !== undefined &&
-          route !== undefined &&
           isAllowedPermission(
             contentRead.id,
             isExternalResourceReadPermission
           ) &&
           sameEntityKey(contentRead.resource, action.contentReadResource) &&
-          isAllowedPermission(
-            route.id,
-            (permissionId) => permissionId === "core:source_account.use"
-          ) &&
-          sameEntityKey(route.resource, action.originalSourceAccountResource)
+          (requiresProviderRoute
+            ? route !== undefined &&
+              action.originalSourceAccountResource !== null &&
+              isAllowedPermission(
+                route.id,
+                (permissionId) => permissionId === "core:source_account.use"
+              ) &&
+              sameEntityKey(
+                route.resource,
+                action.originalSourceAccountResource
+              )
+            : action.originalRouteRequirementId === null)
         );
       }
       if (action.kind === "internal_owner_recovery") {
@@ -2960,13 +3007,38 @@ function areCompanionRequirementsSemanticallyValid(
       );
     }
     case "core:rbac.guard.internal_membership": {
+      if (requirement.permissionId === "core:message.moderate_internal") {
+        const action = guard.moderationAction;
+        if (guard.membershipChange !== undefined || action === undefined) {
+          return false;
+        }
+        const contentRead = byId(action.contentReadRequirementId);
+        return (
+          contentRead !== undefined &&
+          isAllowedPermission(
+            contentRead.id,
+            (permissionId) => permissionId === "core:conversation.internal.read"
+          ) &&
+          sameEntityKey(contentRead.resource, action.contentReadResource) &&
+          sameEntityKey(contentRead.resource, requirement.resource) &&
+          sameEntityKey(
+            action.topologyConversationResource,
+            requirement.resource
+          )
+        );
+      }
       if (
         requirement.permissionId !== "core:conversation.internal.members.manage"
       ) {
-        return guard.membershipChange === undefined;
+        return (
+          guard.membershipChange === undefined &&
+          guard.moderationAction === undefined
+        );
       }
       const change = guard.membershipChange;
-      if (change === undefined) return false;
+      if (change === undefined || guard.moderationAction !== undefined) {
+        return false;
+      }
       const targetDirectory = byId(change.targetDirectoryRequirementId);
       const successor =
         change.successorOwnerRequirementId === null
@@ -5276,6 +5348,7 @@ function evaluateGuard(
         const change = guard.membershipChange;
         if (
           change === undefined ||
+          guard.moderationAction !== undefined ||
           !internalMembershipChangeIsCurrent(
             change,
             requirementResource,
@@ -5295,7 +5368,37 @@ function evaluateGuard(
           guard.validUntil
         );
       }
-      if (guard.membershipChange !== undefined) {
+      if (permissionId === "core:message.moderate_internal") {
+        const action = guard.moderationAction;
+        if (
+          guard.membershipChange !== undefined ||
+          action === undefined ||
+          !sameEntityKey(
+            action.topologyConversationResource,
+            requirementResource
+          ) ||
+          !sameEntityKey(action.contentReadResource, requirementResource)
+        ) {
+          return guardDeny("hard_boundary_denied", "permission.denied");
+        }
+        const moderation = evaluateCanonicalAction(
+          permissionId,
+          action,
+          context
+        );
+        if (moderation.outcome === "denied") {
+          return moderation;
+        }
+        return guardAllow(
+          moderation.companionRequirementIds,
+          guard.validUntil,
+          ...moderation.boundaries
+        );
+      }
+      if (
+        guard.membershipChange !== undefined ||
+        guard.moderationAction !== undefined
+      ) {
         return guardDeny("hard_boundary_denied", "permission.denied");
       }
       return guardAllow([], guard.validUntil);
@@ -6129,12 +6232,12 @@ function evaluateGuard(
         return guardDeny("secondary_resource_denied", "file.parent_forbidden");
       }
       if (
+        guard.expectedFileRevision !== guard.currentFileRevision ||
         guard.retentionState !== "available" ||
         (guard.operation === "upload" &&
           guard.storagePolicyState !== "allowed") ||
         (guard.operation === "delete" &&
           (guard.holdState === "active" ||
-            guard.expectedFileRevision !== guard.currentFileRevision ||
             (guard.uploaderEmployeeId !== actorEmployeeId &&
               guard.moderationRequirementId === null)))
       ) {
@@ -9443,7 +9546,15 @@ function evaluateCanonicalAction(
         : "core:capability.message.delete";
     if (
       action.kind !== "message_author_action" ||
-      action.operation !== expectedOperation ||
+      action.operation !== expectedOperation
+    ) {
+      return guardDeny("hard_boundary_denied", "permission.denied");
+    }
+    const requiresProviderMutation =
+      action.contentBoundary === "external" &&
+      (action.operation === "edit" ||
+        action.deletionMode === "provider_delete");
+    if (
       actorEmployeeId === null ||
       action.actorEmployeeId !== actorEmployeeId ||
       action.authorEmployeeId !== actorEmployeeId ||
@@ -9483,28 +9594,13 @@ function evaluateCanonicalAction(
           (action.contentBoundary !== "external" &&
             action.deletionMode !== "local_tombstone")
         : action.deletionMode !== null || action.holdProof !== null) ||
-      (action.contentBoundary === "external" &&
-        (action.originalRouteRequirementId === null ||
+      (requiresProviderMutation
+        ? action.originalRouteRequirementId === null ||
           action.capabilityId !== expectedCapabilityId ||
           !canonicalCapabilityManifestIsCurrent(action) ||
           action.capabilityState !== "supported" ||
-          !canonicalRouteEvidenceIsValid(action))) ||
-      (action.contentBoundary !== "external" &&
-        (action.capabilityId !== null ||
-          action.capabilityManifestResource !== null ||
-          action.capabilityManifestSourceAccountResource !== null ||
-          action.capabilityRevisionChecks.length > 0 ||
-          action.capabilityState !== "not_applicable" ||
-          action.capabilityNotAfter !== null ||
-          action.originalRouteRequirementId !== null ||
-          action.originalSourceAccountId !== null ||
-          action.originalSourceAccountResource !== null ||
-          action.originalBindingResource !== null ||
-          action.originalBindingSourceAccountResource !== null ||
-          action.externalReferenceResource !== null ||
-          action.externalReferenceBindingResource !== null ||
-          action.externalReferenceTargetResource !== null ||
-          action.routeRevisionChecks.length > 0))
+          !canonicalRouteEvidenceIsValid(action)
+        : !canonicalProviderMutationEvidenceIsAbsent(action))
     ) {
       return guardDeny("hard_boundary_denied", "permission.denied");
     }
@@ -9573,12 +9669,16 @@ function evaluateCanonicalAction(
     );
   }
   if (permissionId === "core:message.moderate_external") {
+    if (action.kind !== "external_moderation") {
+      return guardDeny("route_guard_failed", "route.inactive");
+    }
     const expectedCapabilityId =
-      action.kind === "external_moderation" && action.operation === "edit"
+      action.operation === "edit"
         ? "core:capability.message.edit"
         : "core:capability.message.delete";
+    const requiresProviderMutation =
+      action.operation === "edit" || action.deletionMode === "provider_delete";
     if (
-      action.kind !== "external_moderation" ||
       !canonicalContentRelationIsCurrent(
         action.targetResource,
         action.contentReadResource,
@@ -9597,7 +9697,8 @@ function evaluateCanonicalAction(
         action.topologyRevisionChecks
       ) ||
       (action.operation === "delete"
-        ? action.deletionMode !== "provider_delete" ||
+        ? (action.deletionMode !== "local_tombstone" &&
+            action.deletionMode !== "provider_delete") ||
           !messageDeletionHoldIsClear(
             action.targetResource,
             action.deletionMode,
@@ -9607,23 +9708,71 @@ function evaluateCanonicalAction(
       action.reason.trim().length === 0 ||
       action.auditEventId === null ||
       action.auditEventId.trim().length === 0 ||
-      action.capabilityId !== expectedCapabilityId ||
-      !canonicalCapabilityManifestIsCurrent(action) ||
-      action.capabilityState !== "supported" ||
-      (action.capabilityNotAfter !== null &&
-        (!isTimestamp(action.capabilityNotAfter) ||
-          !isStrictlyAfter(
-            action.capabilityNotAfter,
-            context.input.evaluatedAt
-          ))) ||
-      !canonicalRouteEvidenceIsValid(action)
+      (requiresProviderMutation
+        ? action.originalRouteRequirementId === null ||
+          action.capabilityId !== expectedCapabilityId ||
+          !canonicalCapabilityManifestIsCurrent(action) ||
+          action.capabilityState !== "supported" ||
+          (action.capabilityNotAfter !== null &&
+            (!isTimestamp(action.capabilityNotAfter) ||
+              !isStrictlyAfter(
+                action.capabilityNotAfter,
+                context.input.evaluatedAt
+              ))) ||
+          !canonicalRouteEvidenceIsValid(action)
+        : !canonicalProviderMutationEvidenceIsAbsent(action))
     ) {
       return guardDeny("route_guard_failed", "route.inactive");
     }
     return guardAllow(
-      [action.contentReadRequirementId, action.originalRouteRequirementId],
+      [
+        action.contentReadRequirementId,
+        ...(action.originalRouteRequirementId === null
+          ? []
+          : [action.originalRouteRequirementId])
+      ],
       action.capabilityNotAfter
     );
+  }
+  if (permissionId === "core:message.moderate_internal") {
+    if (
+      action.kind !== "internal_moderation" ||
+      !canonicalContentRelationIsCurrent(
+        action.targetResource,
+        action.contentReadResource,
+        action.contentRelationTargetResource,
+        action.contentRelationReadResource,
+        action.contentRelationRevisionChecks
+      ) ||
+      !sameEntityKey(
+        action.contentReadResource,
+        action.topologyConversationResource
+      ) ||
+      !timelineContentTopologyIsCurrent(
+        action.targetResource,
+        "internal",
+        action.contentTopologyResource,
+        action.topologyTimelineItemResource,
+        action.topologyConversationResource,
+        action.topologyBoundary,
+        action.targetRevisionChecks,
+        action.topologyRevisionChecks
+      ) ||
+      (action.operation === "delete"
+        ? action.deletionMode !== "local_tombstone" ||
+          !messageDeletionHoldIsClear(
+            action.targetResource,
+            action.deletionMode,
+            action.holdProof
+          )
+        : action.deletionMode !== null || action.holdProof !== null) ||
+      action.reason.trim().length === 0 ||
+      action.auditEventId === null ||
+      action.auditEventId.trim().length === 0
+    ) {
+      return guardDeny("hard_boundary_denied", "permission.denied");
+    }
+    return guardAllow([action.contentReadRequirementId]);
   }
   if (permissionId === "core:conversation.internal.owner_recover") {
     const approverGrant =
@@ -9921,7 +10070,32 @@ function messageDeletionHoldIsClear(
     proof.resource.tenantId === targetResource.tenantId &&
     sameEntityKey(proof.targetResource, targetResource) &&
     proof.state === "none" &&
-    identityRevisionSetIsCurrent(proof.revisionChecks, "state")
+    proof.revisionChecks.length === 1 &&
+    identityRevisionSetIsCurrent(proof.revisionChecks, "legal_hold_set")
+  );
+}
+
+function canonicalProviderMutationEvidenceIsAbsent(
+  action:
+    | Extract<InboxV2CanonicalActionEvidence, { kind: "message_author_action" }>
+    | Extract<InboxV2CanonicalActionEvidence, { kind: "external_moderation" }>
+): boolean {
+  return (
+    action.originalRouteRequirementId === null &&
+    action.originalSourceAccountId === null &&
+    action.originalSourceAccountResource === null &&
+    action.originalBindingResource === null &&
+    action.originalBindingSourceAccountResource === null &&
+    action.externalReferenceResource === null &&
+    action.externalReferenceBindingResource === null &&
+    action.externalReferenceTargetResource === null &&
+    action.routeRevisionChecks.length === 0 &&
+    action.capabilityId === null &&
+    action.capabilityManifestResource === null &&
+    action.capabilityManifestSourceAccountResource === null &&
+    action.capabilityRevisionChecks.length === 0 &&
+    action.capabilityState === "not_applicable" &&
+    action.capabilityNotAfter === null
   );
 }
 
@@ -11856,6 +12030,7 @@ function canonicalActionTargetsResource(
     action.kind === "report_export" ||
     action.kind === "message_reaction" ||
     action.kind === "external_moderation" ||
+    action.kind === "internal_moderation" ||
     action.kind === "sensitive_content"
     ? sameEntityKey(action.targetResource, resource)
     : true;

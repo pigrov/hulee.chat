@@ -2264,6 +2264,7 @@ export function buildInsertInboxV2DeferredSourceActionTransitionSql(
   commit: InboxV2DeferredMessageSourceActionCommit
 ): SQL {
   const terminal = deferredTerminalColumns(commit.after.state);
+  const providerLifecycleAnchor = deferredProviderLifecycleAnchor(commit);
   const orderingHead = commit.afterOrderingHead ?? commit.beforeOrderingHead;
   return sql`
     insert into public.inbox_v2_deferred_message_source_action_transitions (
@@ -2273,7 +2274,9 @@ export function buildInsertInboxV2DeferredSourceActionTransitionSql(
       ordering_head_scope_token, ordering_head_comparator_id,
       ordering_head_comparator_revision,
       target_external_message_reference_id, target_message_id,
-      applied_message_revision, effect_kind, related_action_id, reason_id,
+      applied_message_revision, applied_provider_lifecycle_operation_id,
+      applied_provider_lifecycle_operation_revision, effect_kind,
+      related_action_id, reason_id,
       conflict_candidate_count, conflict_candidate_digest_sha256,
       source_occurrence_expected_revision,
       source_occurrence_resulting_revision,
@@ -2294,6 +2297,8 @@ export function buildInsertInboxV2DeferredSourceActionTransitionSql(
       ${commit.targetExternalMessageReference?.id ?? null},
       ${commit.targetExternalMessageReference?.message.id ?? null},
       ${nullableBigint(terminal.appliedMessageRevision)},
+      ${providerLifecycleAnchor?.operationId ?? null},
+      ${nullableBigint(providerLifecycleAnchor?.operationRevision ?? null)},
       ${terminal.effectKind}, ${terminal.relatedActionId},
       ${terminal.reasonId}, ${terminal.conflictCandidateCount},
       ${terminal.conflictCandidateDigestSha256},
@@ -2433,6 +2438,7 @@ export function buildCommitInboxV2DeferredMessageSourceActionSql(
   commit: InboxV2DeferredMessageSourceActionCommit
 ): SQL {
   const terminal = deferredTerminalColumns(commit.after.state);
+  const providerLifecycleAnchor = deferredProviderLifecycleAnchor(commit);
   return sql`
     update public.inbox_v2_deferred_message_source_actions
        set state = ${commit.after.state.state},
@@ -2441,6 +2447,10 @@ export function buildCommitInboxV2DeferredMessageSourceActionSql(
            applied_message_id = ${terminal.messageId},
            applied_message_revision =
              ${nullableBigint(terminal.appliedMessageRevision)},
+           applied_provider_lifecycle_operation_id =
+             ${providerLifecycleAnchor?.operationId ?? null},
+           applied_provider_lifecycle_operation_revision =
+             ${nullableBigint(providerLifecycleAnchor?.operationRevision ?? null)},
            effect_kind = ${terminal.effectKind},
            related_action_id = ${terminal.relatedActionId},
            state_reason_id = ${terminal.reasonId},
@@ -2676,6 +2686,21 @@ type DeferredTerminalColumns = Readonly<{
   conflictCandidateDigestSha256: string | null;
   terminalAt: string;
 }>;
+
+function deferredProviderLifecycleAnchor(
+  commit: InboxV2DeferredMessageSourceActionCommit
+): Readonly<{ operationId: string; operationRevision: string }> | null {
+  if (
+    commit.after.state.state !== "applied" ||
+    commit.effectProof?.kind !== "provider_delete_retain_local"
+  ) {
+    return null;
+  }
+  return {
+    operationId: commit.effectProof.policyTransitionCommit.after.id,
+    operationRevision: commit.effectProof.policyTransitionCommit.after.revision
+  };
+}
 
 function deferredTerminalColumns(
   state: InboxV2DeferredMessageSourceAction["state"]

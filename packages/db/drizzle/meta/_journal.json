@@ -386,6 +386,20 @@
       "when": 1784474844088,
       "tag": "0054_inbox_v2_reply_and_forward",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1784488256018,
+      "tag": "0055_inbox_v2_message_lifecycle_commands",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1784493970784,
+      "tag": "0056_inbox_v2_active_provider_lifecycle_operation",
+      "breakpoints": true
     }
   ]
 }

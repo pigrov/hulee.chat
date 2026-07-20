@@ -250,6 +250,49 @@ describe("Inbox V2 P1 exact relation and capability evidence", () => {
       currentMembershipRevision: revision,
       validUntil: LATER
     };
+    const timelineItemResource = resource(
+      "core:timeline-item",
+      "timeline_item:p1-internal-message"
+    );
+    const moderationAction = {
+      kind: "internal_moderation" as const,
+      operation: "delete" as const,
+      targetResource: timelineItemResource,
+      contentReadResource: conversationResource,
+      contentRelationTargetResource: timelineItemResource,
+      contentRelationReadResource: conversationResource,
+      contentRelationRevisionChecks: [
+        { kind: "relation" as const, expected: "1", actual: "1" }
+      ],
+      reason: "remove policy-violating internal message",
+      auditEventId: "audit-event:p1-internal-moderation",
+      contentReadRequirementId: "moderate-internal-read",
+      deletionMode: "local_tombstone" as const,
+      holdProof: {
+        resource: resource(
+          "core:content-hold-index",
+          "content_hold_index:p1-internal-message"
+        ),
+        targetResource: timelineItemResource,
+        state: "none" as const,
+        revisionChecks: [
+          { kind: "legal_hold_set" as const, expected: "1", actual: "1" }
+        ]
+      },
+      targetRevisionChecks: [
+        { kind: "entity" as const, expected: "1", actual: "1" }
+      ],
+      contentTopologyResource: resource(
+        "core:timeline-content-topology",
+        "timeline_content_topology:p1-internal-message"
+      ),
+      topologyTimelineItemResource: timelineItemResource,
+      topologyConversationResource: conversationResource,
+      topologyBoundary: "internal" as const,
+      topologyRevisionChecks: [
+        { kind: "state" as const, expected: "1", actual: "1" }
+      ]
+    };
     const requirement = makeRequirement({
       id: "moderate-internal",
       permissionId: "core:message.moderate_internal",
@@ -263,26 +306,110 @@ describe("Inbox V2 P1 exact relation and capability evidence", () => {
         membershipOrigin: "hulee_internal_command",
         membershipRole: "owner",
         contentBoundary: "internal",
+        validUntil: AUTHORITY_END,
+        moderationAction
+      }
+    });
+    const contentRead = makeRequirement({
+      id: "moderate-internal-read",
+      permissionId: "core:conversation.internal.read",
+      resource: conversationResource,
+      scopeFacts: [scopeFact],
+      visibility: "secondary_hidden",
+      guard: {
+        profileId: "core:rbac.guard.internal_membership",
+        conversationId,
+        employeeId,
+        membershipState: "active",
+        membershipOrigin: "hulee_internal_command",
+        membershipRole: "owner",
+        contentBoundary: "internal",
         validUntil: AUTHORITY_END
       }
     });
-    const decision = evaluateInboxV2AuthorizationPlan(
-      makeInput(
-        [requirement],
-        [
-          makeGrant(
-            "core:message.moderate_internal",
-            { type: "internal_participant", tenantId },
-            "moderate-internal"
-          )
-        ]
+    const grants = [
+      makeGrant(
+        "core:message.moderate_internal",
+        { type: "internal_participant", tenantId },
+        "moderate-internal"
+      ),
+      makeGrant(
+        "core:conversation.internal.read",
+        { type: "internal_participant", tenantId },
+        "moderate-internal-read"
       )
+    ];
+    const decision = evaluateInboxV2AuthorizationPlan(
+      makeInput([requirement, contentRead], grants)
     );
 
     expect(decision, JSON.stringify(decision)).toMatchObject({
       outcome: "allowed",
       notAfter: AUTHORITY_END
     });
+    const internalGuard = requirement.guard;
+    if (internalGuard.profileId !== "core:rbac.guard.internal_membership") {
+      throw new Error("expected internal membership guard");
+    }
+    expect(
+      evaluateInboxV2AuthorizationPlan(
+        makeInput(
+          [
+            {
+              ...requirement,
+              guard: { ...internalGuard, moderationAction: undefined }
+            },
+            contentRead
+          ],
+          grants
+        )
+      ).outcome
+    ).toBe("denied");
+    expect(
+      evaluateInboxV2AuthorizationPlan(
+        makeInput(
+          [
+            {
+              ...requirement,
+              guard: {
+                ...internalGuard,
+                moderationAction: {
+                  ...moderationAction,
+                  holdProof: {
+                    ...moderationAction.holdProof,
+                    state: "active"
+                  }
+                }
+              }
+            },
+            contentRead
+          ],
+          grants
+        )
+      ).outcome
+    ).toBe("denied");
+    expect(
+      evaluateInboxV2AuthorizationPlan(
+        makeInput(
+          [
+            {
+              ...requirement,
+              guard: {
+                ...internalGuard,
+                moderationAction: {
+                  ...moderationAction,
+                  topologyRevisionChecks: [
+                    { kind: "state", expected: "1", actual: "2" }
+                  ]
+                }
+              }
+            },
+            contentRead
+          ],
+          grants
+        )
+      ).outcome
+    ).toBe("denied");
   });
 });
 
