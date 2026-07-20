@@ -1,10 +1,16 @@
-name: Deploy
+name: Deploy (clean-slate freeze)
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
+    inputs:
+      confirmation:
+        description: Type DEPLOY_CLEAN_SLATE_V2 after INB2-CLEAN-GATE approval
+        required: true
+        type: string
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -16,7 +22,18 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: production
     steps:
+      - name: Enforce the Inbox V2 clean-slate deployment freeze
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          UNLOCKED: ${{ vars.HULEE_CLEAN_SLATE_DEPLOY_UNLOCKED }}
+        run: |
+          if [[ "$UNLOCKED" != "true" || "$CONFIRMATION" != "DEPLOY_CLEAN_SLATE_V2" ]]; then
+            echo "::error::Application deployment is frozen by INB2-CLEAN-001 until INB2-CLEAN-GATE passes."
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
 
       - uses: pnpm/action-setup@v4

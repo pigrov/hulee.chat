@@ -90,7 +90,7 @@ canonical backlog.
 | External thread and route           | ADR 0011: adapter-declared realm/scope, canonical ExternalThread, account binding, exact immutable route and occurrences  | `INB2-CON-005`, `INB2-DB-003`, `INB2-SRC-005/006`, `INB2-MSG-002/007`       | `ACC-007..013`, `025`, `032`                           |
 | Transaction and realtime recovery   | ADR 0012: independent sequence/revision/position/checkpoint/cursor, atomic commit and snapshot-plus-stream recovery       | `INB2-CON-008`, `INB2-DB-007`, `INB2-PRJ-003`, `INB2-API-*`, `RT-*`         | `ACC-014..016`, `028`, `033`, `048`                    |
 | Responsibility and authorization    | ADR 0013: default-deny permission plus server-derived relation/scope/revision; roles/provider state are not authority     | `INB2-RBAC-001..007`, `INB2-WRK-003..006`, scoped API/realtime/report tasks | `ACC-017..024`, `029..038`, `041`, `045`, `047`        |
-| Migration and cutover               | ADR 0014: inventory, additive V2, one side-effect owner, conservative backfill, shadow comparison and explicit rollback   | `INB2-MIG-001..007`                                                         | `ACC-028` plus Epic 14/G7 evidence                     |
+| Migration and cutover               | ADR 0016: owner-approved disposable epoch, V1 runtime/schema removal, one clean V2 baseline and future append-only freeze | `INB2-CLEAN-001..003`, `INB2-DB-011`, `INB2-CLEAN-GATE`                     | `ACC-028` plus Epic 14/G7 evidence                     |
 | Lifecycle, privacy and audit        | ADR 0015: typed class/purpose/period, purgeable content, hold/restriction separation, bounded deletion and restore ledger | `INB2-CON-010`, `INB2-DB-009`, `INB2-OPS-006/007/010..014`                  | `ACC-037..048`                                         |
 | Direct-provider capability evidence | Hulee matrix: capability and evidence are per provider surface/account/group model; no provider-wide or RIK-derived claim | `INB2-DMX-*`, `INB2-TG-*`, `INB2-WA-001`, `INB2-MAX-001`                    | 504 canonical cells and later automated/live evidence  |
 
@@ -162,12 +162,12 @@ canonical backlog.
   content or privacy-request payload.
 - Plan/license state cannot invent authority or retention purpose and cannot
   disable required local read/export/delete/hold evidence operations.
-- V1 is compatibility evidence, not a model to port. Migration never infers
-  author, route, Client or responsibility from the current scalar row when exact
-  history is absent.
-- Cutover uses one canonical command/side-effect owner and a server-owned state
-  machine. No reset, destructive cascade, provider cohort split or symmetric
-  dual-send is inferred from environment labels.
+- V1 is deletion-scope evidence, not a model or dataset to port. ADR 0016 records
+  the product owner's explicit disposal authority; no environment label, row
+  count or heuristic supplies that authority.
+- Clean-slate first stops every V1 writer/listener/side-effect owner, then resets
+  the disposable epoch and installs one V2 baseline. No symmetric dual-send or
+  ambiguous legacy import is allowed.
 
 ## Explicitly Invalid States
 
@@ -188,7 +188,7 @@ canonical backlog.
 | One parent purge deletes a still-shared file/object               | detach link; physical deletion after all parents/purposes/holds allow it       | `MSG-003`, `OPS-011`                            |
 | Unknown module storage root or missing delete/verify handler      | fail build/activation/upgrade/uninstall closed                                 | `CON-010`, `DB-009`, `EXT-006`, `OPS-005/009`   |
 | Internal backup residual is reported as external completion       | bounded-backup-pending or internal-verification-blocked state                  | `CON-010`, `DB-009`, `OPS-007/012`              |
-| V1 and V2 both own provider side effects                          | one canonical side-effect owner selected by fenced rollout state               | `MIG-002/004/005`                               |
+| V1 and V2 both own provider side effects                          | stop V1 provider authority before any V2 adapter activation                    | `CLEAN-002`, `CLEAN-GATE`                       |
 | Provider/RIK behavior is marked complete without Hulee evidence   | keep automated/live evidence missing or an explicit limitation                 | direct-messenger cell ledger and provider tasks |
 
 ## Open Questions And Non-Blocking Boundary

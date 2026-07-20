@@ -1,13 +1,28 @@
-# Inbox V1 Inventory And Preserve Disposition
+# Inbox V1 Inventory And Historical Preserve Disposition
 
-- Status: `completed inventory; preserve path selected`
+- Status: `completed inventory; preserve decision superseded by ADR 0016`
 - Owner task: `INB2-MIG-001`
 - Evidence revision: `mig-001-preserve-2026-07-16-r1`
 - Observed at: `2026-07-16T01:15:08+03:00`
 - Applies to: repository code, the current developer data plane, the known Hulee
   shared SaaS data plane and unknown/unregistered isolated or on-prem deployments.
 
-## Decision
+## Current Owner Disposition
+
+On `2026-07-20` the product owner classified all environments and every stored
+V1/provider/object/backup root in this inventory as disposable pre-production
+test state. There is no required V1 data migration, supported customer install
+or committed consumer of the current V1 semantics. ADR 0016 revision
+`clean-slate-2026-07-20-r1` supersedes this document's preserve conclusion for
+the active Inbox V2 transition.
+
+The inventory remains valuable as a deletion map: shared platform roots are
+retained by ownership, while V1-owned runtime/schema roots are detached and
+removed. It is no longer a backfill, N-1 or online-bridge requirement. Unknown
+historical copies are unsupported test artifacts and must never be reattached to
+the new schema epoch.
+
+## Historical Decision (Superseded)
 
 Inbox V1 is **not eligible for the pre-production destructive fast path**.
 The additive `preserve` path from ADR 0014 is active.

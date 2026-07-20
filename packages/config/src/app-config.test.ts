@@ -174,9 +174,9 @@ describe("app config", () => {
     });
   });
 
-  it("defaults worker features to core and Telegram Bot for local bootstrap", () => {
+  it("defaults worker features to provider-free core during clean-slate", () => {
     expect(loadWorkerConfig({})).toMatchObject({
-      workerFeatures: ["core", "telegram_bot"]
+      workerFeatures: ["core"]
     });
   });
 

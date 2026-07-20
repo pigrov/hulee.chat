@@ -44,8 +44,9 @@ not treated as legally identical labels.
 
 The current V1 schema has raw/provider/audit/notification JSON payloads without
 classification or expiry, Message text in canonical rows and object storage with
-put/get but no delete/version contract. It is evidence to migrate, not the V2
-policy model.
+put/get but no delete/version contract. It is historical deletion-scope
+evidence, not the V2 policy model. ADR 0016 classifies all current contents as
+disposable test state and imports none of it into the clean baseline.
 
 ## Decision
 
@@ -476,8 +477,9 @@ neutral core contracts.
 - `INB2-OPS-012`: privacy request, tenant export and erasure orchestration.
 - `INB2-OPS-013`: finite typed audit and destruction evidence.
 - `INB2-OPS-007`: backup/restore ledger reapplication and offline proof.
-- `INB2-MIG-001`/`003`: V1 payload-copy inventory, classification and safe
-  migration without cascade/reset.
+- `INB2-MIG-001`: historical V1 payload-copy inventory and deletion map;
+  `INB2-CLEAN-002`/`INB2-DB-011`/`INB2-CLEAN-GATE`: writer shutdown, disposable
+  reset and proof that stale roots cannot reconnect.
 
 ## Consequences
 

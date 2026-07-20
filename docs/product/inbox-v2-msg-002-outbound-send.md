@@ -6,6 +6,11 @@ Task: `INB2-MSG-002`
 
 Date: `2026-07-18`
 
+> Clean-slate amendment (`2026-07-20`): ADR 0016 imports no V1 rows and requires
+> no online/N-1 bridge. Historical migration verification below remains evidence
+> for MSG-002 invariants; `INB2-CLEAN-002` stops old writers and `INB2-DB-011`
+> installs the clean baseline.
+
 ## Scope
 
 `INB2-MSG-002` establishes the application and persistence boundary for a
@@ -128,13 +133,14 @@ decision trigger consumes it, and deferred coherence rejects any transaction
 that tries to commit the marker without its WorkItem. An N-1 writer that does
 not know the marker is advanced once by the same compatibility trigger.
 
-The expand migration first performs an additive backfill, then acquires capture
+The historical expand migration first performed an additive backfill, then acquired capture
 locks in the legacy writer order `Conversation -> WorkItems -> creation
 decisions`, installs the compatibility triggers and performs a final
 reconciliation while those locks remain held. This closes the visibility gap
 without a DDL/writer deadlock. The reviewed blocking bridge is explicit in the
-database lifecycle evidence; production zero-downtime rollout mechanics remain
-owned by `INB2-MIG-002`.
+database lifecycle evidence. Those production preserve mechanics are superseded;
+old-writer shutdown and clean-baseline proof are owned by
+`INB2-CLEAN-002`/`INB2-DB-011`.
 
 The two send/create transactions therefore serialize deterministically: either
 the exact no-work send commits first, or a new actionable decision makes the

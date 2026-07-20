@@ -6,6 +6,10 @@ Task: `INB2-MSG-004`
 
 Date: `2026-07-19`
 
+> Clean-slate amendment (`2026-07-20`): the reviewed preserve/online-bridge DDL
+> below is historical. ADR 0016 assigns old-writer shutdown to
+> `INB2-CLEAN-002` and a single current baseline to `INB2-DB-011`.
+
 ## Scope
 
 `INB2-MSG-004` separates three operations that a provider UI may present with
@@ -128,7 +132,8 @@ rows from a mutable Message head to the exact immutable Message revision and
 installs the current route/reference/action coherence functions. The immediate
 unique/FK/check replacement is intentionally classified as reviewed online-
 bridge DDL for a populated upgrade; it is not silently accepted as an ordinary
-online install. Production rollout/drain mechanics remain `INB2-MIG-002`.
+online install. Current rollout/drain mechanics belong to
+`INB2-CLEAN-002`/`INB2-DB-011`; no V1 upgrade is supported.
 
 ## Verification
 

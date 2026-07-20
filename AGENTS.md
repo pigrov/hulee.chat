@@ -37,6 +37,7 @@
 - `docs/adr/0013-inbox-v2-responsibility-collaboration-and-rbac.md`
 - `docs/adr/0014-inbox-v1-to-v2-migration-cutover.md`
 - `docs/adr/0015-inbox-v2-data-lifecycle-privacy-and-audit.md`
+- `docs/adr/0016-inbox-v2-preproduction-clean-slate.md`
 
 ## Цель
 

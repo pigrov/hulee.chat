@@ -1338,10 +1338,13 @@ The current code is not an implementation of this policy:
   erasure ledger or post-restore replay exists;
 - no retention worker or proof that derived/index/cache/provider copies are gone.
 
-`INB2-MIG-001` must inventory V1 payload copies and every deployment before
-cutover. V1 data is preserved during migration until the V2 policy can classify,
-export and delete it safely; reset or cascade deletion is not an acceptable
-privacy migration.
+`INB2-MIG-001` inventoried the historical V1 payload copies and deployment
+roots. On `2026-07-20` the product owner classified every current root as
+disposable test state through ADR 0016, so none is migrated, exported or retained
+as customer data. `INB2-CLEAN-002` stops writers/provider listeners and
+`INB2-DB-011` recreates the schema epoch; `INB2-CLEAN-GATE` proves stale roots
+cannot reconnect. This one pre-production authorization does not weaken the
+lifecycle/export/delete obligations for future real data.
 
 ## Official Evidence Baseline
 

@@ -9,7 +9,7 @@
     "pnpm": ">=10.0.0"
   },
   "scripts": {
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm db:check && pnpm i18n:check && pnpm encoding:check && pnpm branding:check && pnpm native:check",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm db:check && pnpm i18n:check && pnpm encoding:check && pnpm branding:check && pnpm native:check && pnpm inbox-v2:clean-slate:check",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "format": "prettier --write .",
@@ -37,7 +37,8 @@
     "i18n:check": "node scripts/checks/i18n-check.mjs",
     "encoding:check": "node scripts/checks/encoding-check.mjs",
     "branding:check": "node scripts/checks/branding-check.mjs",
-    "native:check": "node scripts/checks/native-check.mjs"
+    "native:check": "node scripts/checks/native-check.mjs",
+    "inbox-v2:clean-slate:check": "node scripts/checks/inbox-v2-clean-slate-check.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",

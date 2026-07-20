@@ -1,11 +1,18 @@
 # ADR 0014: Inbox V1 To V2 Migration And Cutover
 
-- Status: Accepted
+- Status: Superseded by ADR 0016 for the current pre-production epoch
 - Date: 2026-07-10
 - Owners: Product and platform architecture
 - Decision task: `INB2-ARCH-009`
 - Detailed runbook contract:
   `docs/product/inbox-v2-migration-and-cutover.md`
+
+> Historical decision notice (`2026-07-20`): the product owner classified all
+> current environments and data as disposable test state and removed every V1
+> migration obligation. ADR 0016 and disposition
+> `clean-slate-2026-07-20-r1` now govern the active transition. The preserve
+> design below remains only as decision history and as a reference for future
+> real production upgrades; it is not an active Inbox V2 dependency.
 
 ## Context
 

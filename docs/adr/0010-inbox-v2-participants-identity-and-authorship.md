@@ -520,11 +520,13 @@ The existing source identity candidate/confidence/provenance contract and
 phone/email normalizers can be reused after safe scope/canonicalization rules;
 they do not themselves implement identity ownership or authorization.
 
-## Compatibility And Migration
+## Historical Compatibility Mapping And Current Clean Slate
 
-Migration is additive and versioned. Existing authentication
-`external_identity_links` keeps its Account-login semantics and is neither
-renamed nor backfilled as a source participant table.
+The mapping rules below were designed for the superseded ADR 0014 preserve
+path and remain evidence of what must never be guessed. ADR 0016 imports no V1
+participant/authorship rows. Existing authentication `external_identity_links`
+remains an Account-login schema/code boundary only where retained independently;
+it is not a source participant table.
 
 Existing employee-only participant rows can be deterministically converted to
 Employee participant anchors with one synthetic `migration` membership
@@ -539,9 +541,9 @@ author/route/identity becomes explicit `legacy_unknown` plus a diagnostic;
 migration must not guess current Client, responsible, SourceAccount owner or
 first external handle.
 
-V1 API/event contracts are not changed in place. V2 consumers use versioned
-participant/authorship contracts, while the cutover strategy is completed by
-`INB2-ARCH-009`.
+Versioned API/event contracts remain independent. V2 consumers use versioned
+participant/authorship contracts, while obsolete V1 rows are deleted rather
+than backfilled.
 
 ## Consequences
 

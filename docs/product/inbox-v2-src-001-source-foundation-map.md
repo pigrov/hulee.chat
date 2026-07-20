@@ -63,8 +63,8 @@ placing another writer beside the current provider paths.
 | `SOURCE-100` | Source types and records in `packages/contracts/src/index.ts`; source boundary in ADR 0008 and `source-integrations.md` | Source-vs-channel boundary and four-stage source vocabulary                       | `SRC-002..010`, `DMX-001`                      |
 | `SOURCE-101` | `SourceConnection`, `source_connections`, SQL repository, internal admin API and integrations UI                        | Tenant row, source type/name and admin discovery shell                            | `SRC-010`, `DMX-001`, `OPS-010/013`            |
 | `SOURCE-102` | `SourceAccount`, `source_accounts`, direct-account sync and V2 account identity/alias foundation                        | Account anchor and current composite account-to-connection relationship           | `SRC-010`, `DMX-001`, `TG/WA/MAX-001`          |
-| `SOURCE-103` | `RawInboundEvent`, `raw_inbound_events`, `recordRawInboundEvent` and tenant idempotency index                           | Occurrence ID, received/provider timestamps and account-scoped raw dedupe concept | `SRC-002`, `SRC-008`, `MIG-003`                |
-| `SOURCE-104` | `NormalizedInboundEvent`, `normalized_inbound_events` and `recordNormalizedInboundEvent`                                | Versioned normalized envelope concept and raw-to-normalized scope inheritance     | `SRC-003`, `SRC-006/007/008`, `MIG-003`        |
+| `SOURCE-103` | `RawInboundEvent`, `raw_inbound_events`, `recordRawInboundEvent` and tenant idempotency index                           | Occurrence ID, received/provider timestamps and account-scoped raw dedupe concept | `SRC-002`, `SRC-008`, `DB-011`                 |
+| `SOURCE-104` | `NormalizedInboundEvent`, `normalized_inbound_events` and `recordNormalizedInboundEvent`                                | Versioned normalized envelope concept and raw-to-normalized scope inheritance     | `SRC-003`, `SRC-006/007/008`, `DB-011`         |
 | `SOURCE-105` | `source-capabilities.ts` safe defaults and reply decision                                                               | Coarse non-authoritative defaults and reply-mode vocabulary                       | `DMX-001`, `MSG-002`                           |
 | `SOURCE-106` | `source-idempotency.ts`; separate raw/normalized phase, transport, connection, account and event-type segments          | Phase separation and account-scoped occurrence-key principle                      | `SRC-002/003/006/008`                          |
 | `SOURCE-107` | `source-identity.ts` candidate kinds, confidence and evidence-first resolver handoff                                    | Candidate vocabulary and resolver ownership principle                             | `SRC-003/004`                                  |
@@ -88,9 +88,9 @@ leaking production data.
 | `SFG-004` | P0       | Normalized payload/reply capability are arbitrary JSON; external thread/message/user and canonical conversation/message references are unscoped or unconstrained                                                  | `SRC-003`, `SRC-007`                              |
 | `SFG-005` | P0       | Identity and conversation helpers lowercase every candidate key, including case-sensitive opaque provider IDs; any unscoped `externalThreadId` becomes an exact conversation key                                  | `SRC-003/004/005`                                 |
 | `SFG-006` | P0       | Repository callers may provide any idempotency string; a tenant-level key conflict silently returns the old row without checking connection/account/event/payload coherence                                       | `SRC-002/003/006`                                 |
-| `SFG-007` | P0       | The source repository is not the current Telegram/direct/Public API message authority; enabling it beside current paths would create duplicate or divergent materialization                                       | `SRC-007`, `MIG-002/005`, `TG-001..004`           |
+| `SFG-007` | P0       | The source repository is not the current Telegram/direct/Public API message authority; enabling it beside current paths would create duplicate or divergent materialization                                       | `SRC-007`, `CLEAN-002/GATE`, `TG-001..004`        |
 | `SFG-008` | P0       | SourceConnection/SourceAccount/connector/session registry has global-ID-only edges, mutable untyped status/config/capabilities/diagnostics/metadata, provisional identity replacement and incomplete secret setup | `SRC-010`                                         |
-| `SFG-009` | P0       | Connection/account/raw/normalized rows have no executable data-class, purpose, subject/parent, policy, deadline, hold, purge or absence-verification references                                                   | `SRC-002/003/008/010`, `MIG-003`, `OPS-010/011`   |
+| `SFG-009` | P0       | Connection/account/raw/normalized rows have no executable data-class, purpose, subject/parent, policy, deadline, hold, purge or absence-verification references                                                   | `SRC-002/003/008/010`, `DB-011`, `OPS-010/011`    |
 | `SFG-010` | P1       | Diagnostic redaction is a key-name denylist; secrets, contact/content or unbounded provider errors can survive under innocuous keys, URLs or nested values                                                        | `SRC-008`, `DMX-004`, `SRC-010`                   |
 | `SFG-011` | P1       | Clear external event/signature/fingerprint segments are persisted in dedupe keys with no tenant-keyed HMAC generation, finite guarantee window or terminal expiry state                                           | `SRC-008`                                         |
 | `SFG-012` | P0       | The current normalizer harness does not execute a versioned adapter manifest or reject unsafe raw shapes, missing identity realms/scopes, raw provider fragments, incomplete roster evidence or lifecycle gaps    | `SRC-002/003`, `DMX-001`                          |
@@ -143,7 +143,7 @@ bind their JSON/content to those classes.
 | SourceAccount identity, replacement and aliases     | `core:source_account_identity_and_alias`                    | Preserve temporal identity while invalidating stale route authority       | `DB-003`, `SRC-010`      |
 | Source occurrence and external provider reference   | `core:source_occurrence_and_external_reference`             | Keep exact provenance separately from canonical Message dedupe            | `SRC-006/007`            |
 | Connection/account/connector config and diagnostics | Exact registered source/connector classes and storage roots | Typed projections/secret refs with purpose and compatible lifecycle hooks | `SRC-010`, `DMX-001/004` |
-| Legacy arbitrary source JSON                        | Same classes after verified mapping                         | Classify/backfill or restrict; never infer purpose from table membership  | `MIG-003`                |
+| Legacy arbitrary source JSON                        | Not imported into the clean-slate epoch                     | Delete disposable rows; never infer purpose from table membership         | `CLEAN-002`, `DB-011`    |
 
 ## New Registry Task Boundary
 
@@ -171,7 +171,8 @@ It does not absorb the following owners:
 - exact direct-surface capabilities: `INB2-DMX-001`;
 - channel-auth revoke/cancel/expiry and destruction of usable credentials:
   `INB2-DMX-005`;
-- existing-row classification/backfill: `INB2-MIG-003`;
+- disposable old-writer shutdown and schema reset: `INB2-CLEAN-002`,
+  `INB2-DB-011`;
 - physical purge and residual verification: `INB2-OPS-010/011`.
 
 The critical path is now:

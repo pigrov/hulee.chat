@@ -1,41 +1,57 @@
 # Inbox V2 Migration And Cutover Strategy
 
-- Status: `approved architecture baseline; preserve path activated`
-- Owner tasks: `INB2-ARCH-009`, `INB2-MIG-001`
-- Last verified: `2026-07-16`
-- Applies to: fresh installs, disposable and preserved development data, shared
-  SaaS, isolated SaaS and on-prem/private deployments.
+- Status: `approved clean-slate pre-production epoch`
+- Owner tasks: `INB2-ARCH-009`, `INB2-MIG-001`, `INB2-CLEAN-001`
+- Last verified: `2026-07-20`
+- Applies to: the currently known shared/local/CI Hulee fleet explicitly
+  classified as disposable pre-production test state. Future real shared,
+  isolated or on-prem deployments use the post-baseline append-only policy and
+  are not granted destructive authority by this document.
 
-## Current Disposition: Preserve
+## Current Disposition: Clean Slate
 
-The product owner confirmed on `2026-07-11` that Hulee is not in production.
-The target remains one V2 implementation, not a permanent V1/V2 compatibility
-platform. However, `INB2-MIG-001` completed on `2026-07-16` and found a live
-shared SaaS deployment, V1 data, active API/provider/session state, object and
-backup copies, plus unknown fleet/external-consumer/off-host roots. The
-conditional direct-replacement fast path therefore failed and the additive
-preserve strategy below applies automatically.
+On `2026-07-20` the product owner classified every current Hulee environment,
+including the known shared SaaS host, as pre-production test infrastructure and
+classified all V1 database/object/provider/backup state as disposable. There is
+no supported customer installation, V1 data migration requirement or committed
+consumer of current Inbox V1 semantics.
 
-The evidence revision is
-`docs/product/inbox-v2-mig-001-inventory-and-disposition.md`. It reactivates
-`INB2-MIG-002/003`, expands the required `INB2-DB-008` verification and forbids
-using guarded reset against the known shared SaaS or current local database.
-Compatibility remains temporary and is removed after preserving cutover and
-acceptance, not skipped through a destructive reset.
+ADR 0016 and disposition `clean-slate-2026-07-20-r1` supersede the historical
+preserve result from `INB2-MIG-001`. The active path is:
+
+```text
+freeze automatic application/provider deployment
+  -> detach V1 Web/API/worker/provider runtime
+  -> remove V1 code and schema
+  -> squash to one unpublished V2 baseline
+  -> recreate disposable database/object state
+  -> pass clean install/reset/repository/startup gates
+  -> resume V2-only feature delivery
+```
+
+No V1 rows or objects are migrated. Dual materialization, backfill, semantic
+shadow, V1 N-1 runtime compatibility, online preserve bridge and calendar soak
+windows are not active requirements. Existing stale application images must not
+connect to the new schema epoch.
 
 `schemaVersion`, event/realtime/module API versions and the first public `/v1`
-contract remain. They protect persisted/replayed data and independent clients;
-they do not require retaining the old Inbox implementation. Only a future,
-separately approved disposable target whose fast-path evidence remains current
-may use a single pre-release cleanup to rename internal `InboxV2` symbols/schema
-IDs to neutral `Inbox` names and squash unpublished migrations without aliases.
-The selected preserve path keeps persisted/published IDs and migration history
-stable or changes them through an explicit versioned compatibility migration.
+contract remain independent versioned contracts. Generic `/internal/v1` routes
+unrelated to Inbox are not removed by prefix. Internal `InboxV2` names are not
+renamed during this cleanup.
 
-## Decision
+Until `INB2-CLEAN-GATE`, application deployment is manual and guarded by
+`HULEE_CLEAN_SLATE_DEPLOY_UNLOCKED=true`; the variable must remain absent or
+false. The already running test environment is stopped/reset through the
+runtime-detachment and baseline tasks rather than being inferred from this
+repository workflow change.
 
-Inbox V2 has two explicit paths. The current path is the following additive
-preserve path because the eligibility inventory failed:
+## Historical Preserve Decision (Superseded)
+
+The remainder of this document records the former additive preserve design. It
+is retained for decision history and as a future real-production migration
+reference, but it does not constrain the current clean-slate epoch.
+
+The historical preserve flow was:
 
 ```text
 classify deployment

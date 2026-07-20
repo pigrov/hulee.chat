@@ -884,7 +884,12 @@ The diagnostic access-decision endpoint may evaluate hypothetical resources for
 an administrator, but it is not an enforcement oracle. Commands always reload
 the actual resource context through the authoritative server-only resolver.
 
-### V1 compatibility and migration
+### Historical V1 compatibility mapping and current clean slate
+
+The conservative mapping rules below were verified for the former preserve
+path. ADR 0016 performs no V1 RBAC/business-row migration; they remain useful
+negative rules for seeds, imports and future external migration tools. Current
+V2 bootstrap creates the scoped model directly.
 
 The V1 catalog is not broadened in place. Inbox V2 introduces a versioned
 catalog/resource resolver and a conservative migration report:
@@ -904,9 +909,9 @@ catalog/resource resolver and a conservative migration report:
   directly by V2 runtime authorization. The V1 `assertEmployeeCan`/system-template
   compatibility path is blocked by tests and removed at cutover.
 
-Migration provides a dry-run diff, flags lost/broadened access and requires
-administrator review for ambiguous grants. It never auto-broadens access to
-preserve a V1 screen.
+The retired preserve migration would have required a dry-run diff and manual
+review. The clean-slate epoch instead deletes disposable V1 grants and never
+auto-broadens access to reproduce a V1 screen.
 
 ## Required implementation boundaries
 

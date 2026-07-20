@@ -66,6 +66,27 @@ Required where relevant:
 - native bridge contract tests.
 - mobile/desktop packaging smoke tests where relevant.
 
+## Inbox V2 Pre-Production Schema Epoch
+
+ADR 0016 revision `clean-slate-2026-07-20-r1` replaces V1 preserve/N-1 gates
+with one clean-slate gate until the first real release. `INB2-CLEAN-001` retains
+the current unit/type/schema, PostgreSQL repository, Conversation-head and
+disposable reset gates while freezing deployment. `INB2-DB-011` and
+`INB2-CLEAN-GATE` must evolve CI to verify the final target:
+
+- one current baseline and deterministic schema drift/invariant checks;
+- fresh empty install plus idempotent tenant/projection bootstrap;
+- explicitly guarded disposable reset and stream-epoch rotation;
+- Inbox V2 PostgreSQL repository and Conversation-head integrity tests;
+- schema ownership, role and ACL audit;
+- API/Web/worker startup with provider egress disabled;
+- a repository guard that keeps application deployment manual and locked until
+  `INB2-CLEAN-GATE`.
+
+No V1 preserve-upgrade, N-1 V1 runtime bundle, backfill or online-bridge lane is
+required for this unpublished epoch. The first real production/on-prem baseline
+restores append-only migration and supported-release upgrade gates.
+
 ## E2E Tests
 
 E2E should cover only critical user paths:

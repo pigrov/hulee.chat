@@ -607,9 +607,12 @@ but direct-account capabilities become adapter/binding-specific. Current
 evidence only until wrapped in the versioned realm/scope descriptors. Generic
 lowercase dedupe is not used for opaque V2 keys.
 
-## Compatibility And Migration
+## Historical Compatibility Mapping And Current Clean Slate
 
-V2 contracts/endpoints are additive; V1 APIs are not changed in place.
+The mapping constraints below remain historical proof that legacy routes cannot
+be guessed. ADR 0016 does not backfill V1 thread/message rows; disposable state
+is deleted and new V2 source traffic starts from exact versioned evidence.
+Public contract versioning remains independent from the internal reset.
 
 Migration can backfill an ExternalThread only when provider/adapter realm,
 thread object kind, scope owner and exact subject are provable. Existing
@@ -622,8 +625,9 @@ connector or active account cannot fill it. Account/session IDs are mapped to a
 durable SourceAccount only when account identity is verified. Session reauth is
 not a new SourceAccount; actual account replacement is.
 
-Detailed shadow/backfill/cutover/rollback mechanics remain in
-`INB2-ARCH-009`.
+The active clean-slate/reset mechanics are defined by ADR 0016 and
+`INB2-CLEAN-002`/`INB2-DB-011`; ADR 0014 retains the historical shadow/backfill
+design.
 
 ## Required Implementation Verification
 

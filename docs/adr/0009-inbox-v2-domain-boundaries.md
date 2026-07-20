@@ -281,17 +281,16 @@ transitions.
 
 ## Compatibility And Migration
 
-ADR 0014 now owns this decision. Because Hulee has not entered production, its
-preferred disposition is a pre-production V1 removal rather than permanent
-dual implementation, but only after the revisioned cutover inventory proves no
-deployment, promised consumer, valuable persisted data, legal/audit hold,
-provider side effect or unknown dependency requires preservation. If any guard
-fails, the preserve path and explicit compatibility migration apply.
+ADR 0016 now owns the active decision. On `2026-07-20` the product owner
+classified every current environment/data root as disposable test state, so V1
+is removed without data migration, dual implementation or a preserve bridge.
+ADR 0014 remains the historical fail-closed design for the period before that
+authority was known and for any future real-data upgrade analysis.
 
 This implementation decision does not remove schema/event/realtime/module or
-public API version fields. Ambiguous legacy author, route or group roster data
-is reported rather than invented in either disposition. Detailed reset/
-backfill, shadow verification, authority switch and rollback mechanics live in
+public API version fields. No ambiguous legacy author, route or group roster is
+imported into the clean baseline. Detailed reset, deletion and future
+post-release migration boundaries live in
 `docs/product/inbox-v2-migration-and-cutover.md`.
 
 ## Consequences
@@ -312,7 +311,7 @@ Costs:
 
 - more explicit tables/contracts/events than the current V1 vertical slice;
 - cross-boundary workflows require idempotent commands and outbox events;
-- V1 removal or preservation must follow the guarded ADR 0014 disposition;
+- the current V1 removal must follow ADR 0016 and the clean-slate gate;
 - projection rebuild/reconciliation and migration diagnostics become required
   operational features;
 - product teams must use precise status/owner vocabulary rather than one generic

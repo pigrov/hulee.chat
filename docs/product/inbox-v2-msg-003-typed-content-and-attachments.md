@@ -6,6 +6,11 @@ Task: `INB2-MSG-003`
 
 Date: `2026-07-19`
 
+> Clean-slate amendment (`2026-07-20`): ADR 0016 retires V1/N-1 attachment
+> migration. `INB2-CLEAN-002` drains every disposable old writer/transfer and
+> `INB2-DB-011` starts from one current namespace. Future real-release key
+> retirement still requires its own bounded admission pause and drain receipt.
+
 ## Scope
 
 `INB2-MSG-003` establishes the provider-neutral content and file boundary for
@@ -92,9 +97,9 @@ the provider callback can observe a source handle.
 The SQL repository can report bounded counts for unfinished materialization
 work and nonterminal jobs pinned to one generation. That result is deliberately
 an observation only: it neither proves that every replica has paused admission
-nor authorizes key removal. Production attachment activation and key removal
-remain blocked on `INB2-MIG-002`, which must add a durable all-replica admission
-pause and a serialized, consumed drain receipt. `INB2-OPS-008` owns the alert and
+nor authorizes key removal. Clean-slate attachment activation requires the
+`INB2-CLEAN-002` old-writer drain and `INB2-CLEAN-GATE` proof.
+`INB2-OPS-008` owns the future-release alert and
 operator runbook before a verification deadline. Until those controls exist,
 an expired or unavailable exact generation fails closed before provider or
 storage I/O; the system never falls back to the active key and never silently
@@ -125,8 +130,9 @@ must all keep the key available.
 
 This read-only observation is deliberately dormant: Inbox V2 activation and
 key-removal paths must not consume it as a capability or receipt. Retirement
-remains forbidden until `INB2-MIG-002` provides a durable all-replica admission
-pause and a serialized drain receipt in the same operational boundary.
+remains forbidden until the clean-slate writer drain is verified; future real
+releases require a durable all-replica admission pause and serialized drain
+receipt in the same operational boundary.
 
 ## Outbound artifact and duplicate-safety boundary
 
@@ -176,12 +182,11 @@ That production composition must also replace the bounded in-memory verifier
 with a verified disk/object spool and an explicit concurrency budget before
 large-file/high-concurrency downloads are enabled.
 
-It also does not claim N-1 attachment-writer compatibility. The pinned DB-008
+It also historically did not claim N-1 attachment-writer compatibility. The pinned DB-008
 process exercises query, reply, routing, outbox and WorkItem paths, but not an
-old-shape attachment-anchor write or an in-flight attachment transfer. Nullable
-expand columns are therefore only a bridge surface. `INB2-MIG-002` must prove
-the exact supported old attachment workload or durably drain those writers and
-transfers before V2 attachment ownership is activated.
+old-shape attachment-anchor write or an in-flight attachment transfer. ADR 0016
+does not support that workload: `INB2-CLEAN-002` durably stops those writers and
+transfers before the clean V2 baseline is activated.
 
 ## Privacy boundary
 

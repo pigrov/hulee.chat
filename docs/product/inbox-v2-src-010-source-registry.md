@@ -2,12 +2,17 @@
 
 Status: implementation evidence for `INB2-SRC-010`.
 
+> Clean-slate amendment (`2026-07-20`): ADR 0016 imports no legacy source rows.
+> Retained source/auth schema ownership remains, but current row/object contents
+> are disposable. `INB2-CLEAN-002` stops old writers and `INB2-DB-011` creates
+> the registry directly from the current V2 baseline.
+
 ## Boundary
 
-Inbox V2 uses an additive source-registry authority. Existing
+Inbox V2 uses the source-registry authority. Existing
 `source_connections`, `source_accounts`, `channel_connectors`, channel sessions
-and auth rows remain compatibility anchors during the N-1 expand window, but a
-legacy row without a current V2 registry head is never route authority.
+and auth models are retained platform roots, but no legacy row without a current
+V2 registry head is imported or treated as route authority.
 
 The registry reuses, and does not duplicate, the following authorities:
 
@@ -35,13 +40,13 @@ For SourceAccount route activation, the head additionally pins the current
 DB-003 identity revision and account generation. A reconnect or re-auth result
 cannot revive a stale identity generation.
 
-## Compatibility rules
+## Current clean-slate and future compatibility rules
 
-- Migration is additive: N-1 code may continue writing legacy scalar/JSON
-  columns while the expand migration is live.
+- No N-1 V1 writer is supported in the current clean-slate epoch; stale writers
+  are stopped before reset and rejected after epoch rotation.
 - Legacy arbitrary JSON and inline session/challenge ciphertext are not copied
-  into the V2 authority and remain denied until an explicit classified backfill
-  owned by `INB2-MIG-003`/`INB2-MIG-007`.
+  into the V2 authority; disposable legacy rows are deleted by
+  `INB2-CLEAN-002`/`INB2-DB-011`.
 - Existing bindings, occurrences, SourceAccount identity history and source
   rows are preserved on disable, delete, replacement and reconnect.
 - Disable, delete, replacement and reconnect always advance or revoke the route

@@ -60,20 +60,31 @@ commands even when the SaaS control plane is offline or the license is expired.
 - On-prem upgrades must run migrations explicitly and produce a rollback/backup plan.
 - Company-layer must declare compatible core version.
 
-Inbox V1 to V2 disposition follows ADR 0014 and
-`docs/product/inbox-v2-migration-and-cutover.md`. The current pre-production
-fast path directly replaces V1 only after inventory proves no supported
-deployment/consumer/valuable data; a preserve deployment still uses expand-only
-migrations, one fenced side-effect owner and a separate destructive contraction
-after backup/restore and observation evidence.
+The current Inbox transition follows ADR 0016 and disposition
+`clean-slate-2026-07-20-r1`. The product owner classified every existing Hulee
+environment/data root as disposable pre-production test state, so V1 is removed
+without data migration and the unpublished migration chain is replaced by one
+V2 baseline. Application/provider deployment stays frozen until
+`INB2-CLEAN-GATE`. The first real production/on-prem release freezes that
+baseline; later supported releases return to append-only migrations,
+backup/restore and explicit rollback planning. ADR 0014 remains the historical
+preserve design, not the active epoch.
 
 ## RBAC Migration State
 
 Scoped RBAC is the active authorization model. Effective permissions are resolved from tenant roles, role bindings and direct grants.
 
-Legacy `employee_roles` is removed by migration after RBAC backfill. Runtime code must not read or write it for authorization, audit previews or bootstrap flows. New deployments and seed flows must create tenant roles and tenant-scoped bindings for initial administrators.
+The clean baseline omits legacy `employee_roles` and creates scoped tenant roles
+and bindings directly; no current legacy RBAC rows are backfilled. Runtime code
+must not read or write the legacy shape for authorization, audit previews or
+bootstrap flows. New deployments and seed flows create tenant roles and
+tenant-scoped bindings for initial administrators.
 
-Rollback from RBAC migration defects should use an application release rollback plus database backup/restore runbook. There is no runtime flag that re-enables fixed employee roles as an authorization fallback.
+During the disposable epoch, rollback means recreating the clean baseline and
+returning to the last compatible V2 application image. After the first real
+release, RBAC migration defects use the application plus database backup/restore
+runbook. There is no runtime flag that re-enables fixed employee roles as an
+authorization fallback.
 
 ## Client App Distribution
 

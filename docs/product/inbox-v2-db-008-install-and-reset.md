@@ -1,12 +1,26 @@
 # Inbox V2 Clean Install And Guarded Reset
 
-Status: `verified; repository preserve-compatibility and disposable lanes complete; production preserve expand fails closed pending an online bridge`
+Status: `verified historical lifecycle; clean-slate baseline replacement pending INB2-DB-011`
 
 Owner task: `INB2-DB-008`
 
 Last verified: `2026-07-16`
 
-## Scope And Current Gate
+## Current Clean-Slate Use
+
+ADR 0016 superseded the preserve disposition on `2026-07-20`. All current
+databases and object roots are explicitly disposable test state, so the
+preserve-upgrade, N-1 V1 runtime, RBAC mapping and online-bridge portions of this
+runbook are no longer release gates. They remain historical evidence until
+`INB2-DB-011` replaces the 57-migration chain with one unpublished V2 baseline.
+
+The retained requirements are explicit target selection, advisory locking,
+exact baseline verification, tenant/projection bootstrap, guarded destructive
+reset, stream-epoch rotation, rollback on failed reset and schema/ACL audit. No
+current database is upgraded from V1; it is recreated after the V1 runtime is
+detached.
+
+## Historical DB-008 Scope
 
 This runbook implements the DB-008 portion that is independent of deployment
 disposition:
@@ -27,13 +41,11 @@ disposition:
   `reset_noop`;
 - stream-epoch rotation after every successful reset.
 
-`INB2-MIG-001` completed on `2026-07-16` and selected `preserve`. DB-008 now
-verifies that path with a populated migration-0027 V1 snapshot, a read-only RBAC
-dry run, a pinned migration-0034 source-bundled N-1 compatibility harness and an
-injected failed-migration rollback. The current development and known shared
-SaaS databases must still never be reset. The destructive workflow is verified
-only against strictly named synthetic disposable databases, and no usable local
-disposable manifest is committed to the repository.
+`INB2-MIG-001` completed on `2026-07-16` and historically selected `preserve`.
+DB-008 verified that path with a populated migration-0027 V1 snapshot, a
+read-only RBAC dry run, a pinned migration-0034 source-bundled N-1 compatibility
+harness and an injected failed-migration rollback. ADR 0016 has since made these
+preserve-only checks obsolete for the current epoch.
 
 The raw historical migration chain contains operations that are not valid as a
 normal online preserve expand. DB-008 therefore proves its functional and data

@@ -5,6 +5,11 @@
 - Started: `2026-07-17`
 - Finished: `2026-07-18`
 
+> Clean-slate amendment (`2026-07-20`): ADR 0016 retires additive V1/N-1 source
+> compatibility and dual materialization. The source lifecycle remains canonical
+> V2 evidence; `INB2-CLEAN-002` stops legacy/provider authority and
+> `INB2-DB-011` installs it from one clean baseline.
+
 ## Scope
 
 `INB2-SRC-008` closes the inbound source-processing lifecycle left deliberately
@@ -177,7 +182,7 @@ replayability becomes explicitly `expired`. When the guarantee and skeleton
 window end, the outcome skeleton is eligible for hard deletion and duplicate
 prevention is no longer promised.
 
-## Additive migration and N-1
+## Historical additive migration and N-1 evidence
 
 The persistence layer is additive. Existing SRC-002 raw work remains the N-1
 compatibility queue while the new runtime relations are installed dormant and
@@ -203,8 +208,9 @@ transaction composite. Individual downstream handlers cannot be mixed,
 partially registered, structurally forged or reused, and every issued handler
 is pinned to the exact claimed stage. This closes the V2 runtime composition
 boundary without switching any legacy/provider authority. The audited dual
-materialization phase and actual worker/provider cutover remain owned by
-`INB2-MIG-002` and `INB2-MIG-005`.
+materialization phase and worker/provider preserve cutover are now retired.
+Clean-slate authority shutdown is owned by `INB2-CLEAN-002` and verified by
+`INB2-CLEAN-GATE`.
 
 ## Verification
 
@@ -235,4 +241,4 @@ Completed on `2026-07-18` with the following evidence:
   none of which was changed or included in this task;
 - independent acceptance and activation-boundary review found no remaining
   P0/P1 defect. Concrete provider/legacy authority wiring is deliberately
-  deferred to `INB2-MIG-002` and `INB2-MIG-005`, not silently claimed here.
+  assigned to `INB2-CLEAN-002` and `INB2-CLEAN-GATE`, not silently claimed here.

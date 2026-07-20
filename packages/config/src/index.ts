@@ -23,10 +23,7 @@ export const workerFeatureValues = [
   "max_user"
 ] as const;
 export type WorkerFeature = (typeof workerFeatureValues)[number];
-const defaultWorkerFeatures: readonly WorkerFeature[] = [
-  "core",
-  "telegram_bot"
-];
+const defaultWorkerFeatures: readonly WorkerFeature[] = ["core"];
 
 export type EnvSource = Record<string, string | undefined>;
 

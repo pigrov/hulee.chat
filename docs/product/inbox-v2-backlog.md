@@ -42,8 +42,9 @@ documents required by `AGENTS.md`. For Inbox V2 work, also read:
   `docs/adr/0015-inbox-v2-data-lifecycle-privacy-and-audit.md`, the approved
   retention, privacy, export/delete, legal-hold and audit policy;
 - `docs/product/inbox-v2-migration-and-cutover.md` and
-  `docs/adr/0014-inbox-v1-to-v2-migration-cutover.md`, the approved V1/V2
-  compatibility, migration, rollback and removal policy;
+  `docs/adr/0016-inbox-v2-preproduction-clean-slate.md`, the active clean-slate
+  epoch and removal policy; ADR 0014 is retained there as historical preserve
+  design;
 - `D:/vscode/rik/docs/direct-messenger-feature-matrix.md` only as reference
   evidence and a source of regression scenarios, never as proof that Hulee is
   complete.
@@ -78,6 +79,11 @@ documents required by `AGENTS.md`. For Inbox V2 work, also read:
   before implementation and preserve the original acceptance intent.
 - Do not mark a task done by deleting or weakening an unverified acceptance
   criterion. Record a blocker or an approved scope decision instead.
+- Clean-slate entry gate: after `INB2-CLEAN-001` starts and until
+  `INB2-CLEAN-GATE` is done, no non-cleanup Inbox feature task may start. This
+  temporary global gate takes precedence over individual task dependencies and
+  prevents new work from extending the migration chain or V1 runtime while they
+  are being removed.
 
 ### Required task update flow
 
@@ -102,8 +108,10 @@ runtime <fixture/E2E/smoke reference>; verified <person/Codex task and date>.
 
 For a docs-only decision, evidence must name the reviewed ADR/docs and the
 consistency check. For a migration, include fresh-database and upgrade-path
-results. For provider behavior, include provider/account surface and scenario,
-without secrets or customer payloads.
+results. A clean-slate baseline task whose approved contract explicitly rejects
+old-database upgrade instead includes repeated fresh install/reset plus retained-
+catalog comparison. For provider behavior, include provider/account surface and
+scenario, without secrets or customer payloads.
 
 ## Definition Of Ready
 
@@ -178,11 +186,13 @@ requires an ADR update and backlog impact review.
   RBAC, provider delete and privacy erasure are distinct.
 - Data-storing modules declare typed lifecycle/lineage/export/delete handlers and
   fail closed when a storage root or compatible handler is missing.
-- V1 disposition is explicit: `INB2-MIG-001` rejected the conditional
-  pre-production fast path and selected preserve. Additive backfill, shadow,
-  rollback and observation gates are active before the internal V1
-  implementation can be removed. Contract versioning remains independent of
-  legacy implementation compatibility.
+- V1 disposition is explicit and revisioned. `INB2-MIG-001` correctly selected
+  preserve while current roots were unclassified; the product owner subsequently
+  classified all environments/data as disposable test state. ADR 0016 revision
+  `clean-slate-2026-07-20-r1` supersedes preserve for the current pre-production
+  epoch: no V1 data migration, dual materialization, backfill, N-1 V1 runtime or
+  soak gate is required. Contract versioning remains independent of obsolete
+  implementation compatibility.
 - Provider access models and capability/evidence are surface-specific. Consumer
   QR/web/desktop access is never treated as a supported programmable connector
   without approved transport and current evidence.
@@ -216,11 +226,12 @@ Critical path:
 architecture
   -> contracts
   -> database
-  -> source resolution + messages + work items
+  -> source resolution + message foundation through MSG-005
+  -> clean-slate V1 runtime/schema removal + one V2 baseline
+  -> remaining messages + work items
   -> projections/API/realtime
   -> normalized app-shell/UI
   -> Telegram V2 vertical slice
-  -> preserve upgrade/backfill + fenced V2 cutover
   -> WA/MAX provider parity + notifications + CRM
   -> reporting + operational hardening
   -> V2-only production release / G7
@@ -373,7 +384,9 @@ expanding Inbox V1.
     otherwise the original preserve path remains mandatory. `INB2-MIG-001`
     completed on `2026-07-16` and selected preserve after finding a live shared
     SaaS deployment, V1/provider/object/backup state and unknown fleet/consumer
-    roots.
+    roots. This historical fail-closed result was superseded on `2026-07-20`
+    when the product owner classified every current environment/root as
+    disposable test state; ADR 0016 now governs the clean-slate epoch.
 
 - [x] `INB2-ARCH-010` Record messenger access models and provider evidence policy.
   - State: `done`; Priority: `P1`; Depends on:
@@ -1250,8 +1263,9 @@ PostgreSQL gate passes. `INB2-DB-005` cannot start before both are complete.
 
 - [x] `INB2-DB-008` Add repeatable clean V2 install and guarded reset migrations.
   - State: `done`; Priority: `P0`; Started: `2026-07-15`; Completed:
-    `2026-07-16`; Owner: `Codex`; Preserve lane activated by completed
-    `INB2-MIG-001`; Depends on: `INB2-DB-007`, `INB2-DB-009`,
+    `2026-07-16`; Owner: `Codex`; Historical preserve lane activated by completed
+    `INB2-MIG-001` and superseded by ADR 0016 on `2026-07-20`; Depends on:
+    `INB2-DB-007`, `INB2-DB-009`,
     `INB2-ARCH-009`, `INB2-MIG-001`.
   - Acceptance: owns clean V2 DDL/seed/bootstrap and an explicitly guarded
     disposable reset path; it never infers reset authority from environment or
@@ -1302,8 +1316,9 @@ PostgreSQL gate passes. `INB2-DB-005` cannot start before both are complete.
     intentionally skipped, plus formatting, ESLint, TypeScript, DB, i18n,
     encoding, branding and native gates on `2026-07-16`. Guarded reset remains
     available only to a separately reviewed, explicitly disposable personal/
-    ephemeral target. Production preserve expand remains fail-closed until
-    `INB2-MIG-002`; backfill remains `INB2-MIG-003`.
+    ephemeral target. ADR 0016 now classifies every current target as disposable;
+    the preserve bridge/backfill clauses remain historical and are replaced by
+    `INB2-DB-011` clean baseline verification.
 
 - [x] `INB2-DB-010` Close Conversation/Head/timeline database coherence gaps.
   - State: `done`; Priority: `P0`; Started: `2026-07-16`; Completed:
@@ -1330,8 +1345,9 @@ PostgreSQL gate passes. `INB2-DB-005` cannot start before both are complete.
     files / `42` tests; schema invariant `5/5`; migration SQL/snapshot/journal
     parity `39/39/39`; full `pnpm check` `303` passed files / `3031` passed tests
     with `31` files / `257` integration tests intentionally skipped. Three
-    independent reviews found no remaining P0/P1/P2 blocker. Production preserve
-    expand remains fail-closed until `INB2-MIG-002` supplies its online bridge.
+    independent reviews found no remaining P0/P1/P2 blocker. The historical
+    production preserve expand remained fail-closed; ADR 0016 supersedes that
+    bridge with `INB2-CLEAN-002` writer shutdown and `INB2-DB-011` reset.
 
 - [x] `INB2-EPIC-2-GATE` Verify Epic 2 exit gate.
   - State: `done`; Priority: `P0`; Started: `2026-07-16`;
@@ -1647,8 +1663,8 @@ participant set.
     and passed `30/30` files / `294/294` executed tests; preserve/N-1/RBAC
     passed `3/3` / `17/17`, and the pinned N-1 bundle rebuilt successfully.
     Production composition now requires one opaque all-stage process-local
-    composite; actual dual materialization and provider/legacy worker cutover
-    remain explicitly owned by `INB2-MIG-002` and `INB2-MIG-005`. Detailed
+    composite. Historical dual materialization is retired; provider/legacy
+    worker shutdown is owned by `INB2-CLEAN-002`/`INB2-CLEAN-GATE`. Detailed
     evidence is in
     `docs/product/inbox-v2-src-008-replay-dlq-diagnostics-backpressure.md`.
 
@@ -1775,9 +1791,10 @@ future non-chat items without a universal JSON message.
     skipped). Preserve/N-1/RBAC passed `3/3` files / `17/17`; default Vitest
     passed `374` files / `4077` tests (`43` files / `395` tests skipped).
     Typecheck, `db:check`, reproducible N-1 bundle, task-scoped lint/formatting
-    and auxiliary gates passed. Production upload staging, download composition,
-    object purge and old-writer drain remain explicitly owned by `INB2-API-003`,
-    `INB2-API-002`, `INB2-OPS-010`/`INB2-OPS-011` and `INB2-MIG-002`.
+    and auxiliary gates passed. Production upload staging, download composition
+    and object purge remain owned by `INB2-API-003`, `INB2-API-002`,
+    `INB2-OPS-010`/`INB2-OPS-011`; disposable old-writer drain and baseline
+    reset are owned by `INB2-CLEAN-002`/`INB2-DB-011`.
     Detailed evidence is in
     `docs/product/inbox-v2-msg-003-typed-content-and-attachments.md`.
 
@@ -2262,7 +2279,7 @@ provider-specific architecture.
 
 - [ ] `INB2-WA-001` Implement WhatsApp direct private/group V2 flow.
   - State: `planned`; Priority: `P1`; Depends on: `INB2-TG-004`,
-    `INB2-DMX-001`, `INB2-DMX-005`, `INB2-MIG-007`.
+    `INB2-DMX-001`, `INB2-DMX-005`, `INB2-CLEAN-GATE`.
   - Acceptance: QR/link runtime, private chat, group JID/roster, participant
     changes, multi-account route, echo/history and core lifecycle use V2 only.
   - Verification: automated private/group suite plus live smoke covers text,
@@ -2270,7 +2287,7 @@ provider-specific architecture.
 
 - [ ] `INB2-MAX-001` Implement MAX direct private/group V2 flow.
   - State: `planned`; Priority: `P1`; Depends on: `INB2-TG-004`,
-    `INB2-DMX-001`, `INB2-DMX-005`, `INB2-MIG-007`.
+    `INB2-DMX-001`, `INB2-DMX-005`, `INB2-CLEAN-GATE`.
   - Acceptance: phone/code/password runtime, private/group identity and roster,
     multi-account route, echo/history and lifecycle use V2 only.
   - Verification: automated private/group suite plus live smoke covers text,
@@ -2317,7 +2334,7 @@ unread state across web, mobile and desktop without mixing provider receipts.
 
 - [ ] `INB2-NOT-001` Implement notification preferences and endpoint lifecycle.
   - State: `planned`; Priority: `P1`; Depends on: `INB2-PRJ-002`,
-    `INB2-MIG-007`.
+    `INB2-CLEAN-GATE`.
   - Acceptance: per-employee levels, mute/quiet hours and web/mobile/desktop
     endpoints support register, refresh, disable and tenant-safe cleanup through
     self-only preference/endpoint permissions. Notification-domain temporal
@@ -2390,7 +2407,7 @@ lifecycle, including several clients in one group.
 
 - [ ] `INB2-CRM-001` Implement client/contact identity linking and history.
   - State: `planned`; Priority: `P1`; Depends on: `INB2-CON-004`,
-    `INB2-CON-010`, `INB2-DB-002`, `INB2-DB-009`, `INB2-MIG-007`.
+    `INB2-CON-010`, `INB2-DB-002`, `INB2-DB-009`, `INB2-CLEAN-GATE`.
   - Acceptance: source identities claim/unlink/reassign to ClientContacts while
     Conversation-Client links and ClientContact/Client merge remain explicit;
     ClientContact-claim permission is distinct from Employee-claim permission;
@@ -2479,7 +2496,7 @@ immutable facts rather than current mutable rows.
 
 - [ ] `INB2-REP-001` Approve the metric dictionary and fact grains.
   - State: `planned`; Priority: `P1`; Depends on: `INB2-EPIC-0-GATE`,
-    `INB2-ARCH-006`, `INB2-ARCH-007`, `INB2-MIG-007`.
+    `INB2-ARCH-006`, `INB2-ARCH-007`, `INB2-CLEAN-GATE`.
   - Acceptance: define inbound/outbound/internal, physical message, response
     cycle, queue wait, assignment, SLA, reopen, client attribution, timezone and
     business-hours formulas and exclusions; person-level facts, subject bridges
@@ -2865,9 +2882,11 @@ SaaS, isolated SaaS and on-prem data planes.
   - Acceptance: runbooks cover lag, stuck lease, DLQ/replay, broken account,
     projection rebuild, notification failure, policy/hold, privacy request,
     partial export/delete, object/provider residual, backup erasure replay,
-    backfill and rollback with thresholds. They also alert before attachment
-    namespace verification deadlines and prohibit key removal until the exact
-    `INB2-MIG-002` admission-pause/drain receipt has been verified.
+    schema reset and rollback with thresholds. They also alert before attachment
+    namespace verification deadlines. During clean-slate they require the exact
+    V1 writer/provider drain evidence from `INB2-CLEAN-002` and
+    `INB2-CLEAN-GATE`; future real releases retain their own bounded admission
+    pause/drain receipt before key removal.
   - Verification: another operator can execute representative recovery steps. Evidence: -
 
 - [ ] `INB2-EPIC-13-GATE` Verify Epic 13 exit gate.
@@ -2876,13 +2895,14 @@ SaaS, isolated SaaS and on-prem data planes.
     release profile.
   - Verification: saved load, security, failure and restore evidence is complete. Evidence: -
 
-## Epic 14. V1 Compatibility, Cutover And Removal
+## Epic 14. Pre-Production Clean-Slate And V1 Removal
 
-Goal: preserve and reconcile the discovered live V1/provider/object/backup state,
-move all internal clients/source flows to V2 and remove the obsolete V1
-implementation before WA/MAX/CRM/reporting expansion. `INB2-MIG-001` failed the
-conditional pre-production fast-path gate, so compatibility/backfill/shadow and
-the full ADR 0014 preserve path are active.
+Goal: remove the obsolete V1 runtime/schema and continue from one clean Inbox V2
+baseline before WA/MAX/CRM/reporting expansion. The `INB2-MIG-001` inventory is
+retained as a deletion map, but its preserve disposition was superseded by the
+product owner's `clean-slate-2026-07-20-r1` classification in ADR 0016. Every
+current environment/data root is disposable test state; no V1 data migration,
+dual materialization, backfill, N-1 V1 runtime or soak window is required.
 
 - [x] `INB2-MIG-001` Inventory every Inbox V1 producer, consumer and stored row.
   - State: `done`; Priority: `P0`; Started: `2026-07-16`; Completed:
@@ -2906,12 +2926,97 @@ the full ADR 0014 preserve path are active.
     live data plane, non-empty provider/API/session/object/backup state and
     unknown fleet/consumer roots select `preserve`; unknown external roots are
     fail-closed and assigned to downstream tasks. Exact operational evidence is
-    retained outside the public repository.
+    retained outside the public repository. On `2026-07-20` the product owner
+    supplied the missing disposal authority for every current root. ADR 0016
+    supersedes only the preserve disposition; this completed inventory remains
+    the authoritative retain/remove map.
+
+- [x] `INB2-CLEAN-001` Approve the pre-production clean-slate epoch and freeze V1 deployment targets.
+  - State: `done`; Priority: `P0`; Started: `2026-07-20`; Completed:
+    `2026-07-20`; Owner: `Codex`; Depends on: `INB2-MIG-001`,
+    `INB2-ARCH-009`.
+  - Acceptance: record the product owner's explicit disposable classification
+    for every current database/object/provider/backup root; supersede ADR 0014
+    preserve controls without weakening future real-production migration rules;
+    keep public/event/module versioning independent; stop automatic `main`
+    application deployment and guard manual deployment until the clean-slate
+    gate; remove preserve/N-1 CI from the active feedback path without deleting
+    retained PostgreSQL integrity coverage.
+  - Verification: ADR 0016 revision `clean-slate-2026-07-20-r1`, canonical docs
+    and task dependencies agree; deploy is `workflow_dispatch`-only and requires
+    `HULEE_CLEAN_SLATE_DEPLOY_UNLOCKED=true`; a repository check enforces the
+    freeze; CI keeps normal checks, PostgreSQL repositories, Conversation-head
+    integrity and disposable reset while no longer running preserve/N-1. The
+    repository freeze does not claim that an already-running remote worker was
+    stopped; that operational drain belongs to `INB2-CLEAN-002`.
+  - Evidence: ADR 0016 plus migration/baseline/deployment/quality/backlog
+    coherence review; deploy `workflow_dispatch`-only with a first-step
+    two-factor fail-loud guard; default worker features `core`; preserve/N-1 CI
+    removed while PostgreSQL, Conversation-head and disposable reset gates stay.
+    Clean-slate/config focused tests passed `2` files / `33` tests; full unit
+    suite passed `382` files / `4,235` tests (`44` files / `427` tests skipped);
+    typecheck, `db:check`, format, filtered full-repository ESLint, i18n,
+    encoding, branding, native and clean-slate checks passed. Ordinary
+    `pnpm check` was additionally attempted and reached ESLint, where unrelated
+    user-owned `.codex-runtime-logs` Chrome extension files fail the unfiltered
+    repository lint; no task file is implicated. Three independent final reviews
+    found no remaining implementation/documentation blocker.
+
+- [ ] `INB2-CLEAN-002` Detach and fail-close every Inbox V1 runtime path.
+  - State: `planned`; Priority: `P0`; Depends on: `INB2-CLEAN-001`.
+  - Acceptance: Web Inbox, internal Inbox routes/DTOs, Public API message
+    composition, Telegram V1 webhook/polling/outbound/attachment paths, worker
+    loops and V1 seed are removed from production composition; unfinished V2
+    surfaces fail closed with no V1 fallback. Shared auth/admin/integration,
+    source-account/session and platform foundations remain available. The known
+    disposable remote runtime is drained, provider webhooks/listeners are
+    revoked or intentionally dropped, and stale workers cannot reconnect.
+  - Verification: API/Web/worker composition and remote process/provider checks
+    show zero V1 read/write/listener/dispatch authority; shared admin/auth startup
+    still passes. Evidence: -
+
+- [ ] `INB2-DB-011` Replace the unpublished migration history with one V2 baseline.
+  - State: `planned`; Priority: `P0`; Depends on: `INB2-CLEAN-002`,
+    `INB2-EPIC-2-GATE`.
+  - Acceptance: remove V1-only relations/enums and squash the unpublished
+    migration/snapshot chain into one current baseline containing every retained
+    platform and V2 object. Old databases are unsupported and recreated; no
+    backfill/online bridge path remains. A one-time ephemeral catalog comparison
+    proves that retained tables, columns, keys, indexes, functions, triggers,
+    roles and ACLs were not lost.
+  - Verification: two fresh installs and two guarded resets, schema/ACL audit,
+    bootstrap/idempotency, V2 PostgreSQL repositories and catalog fingerprint
+    comparison pass. Evidence: -
+
+- [ ] `INB2-CLEAN-003` Delete residual V1 code and preserve-only tooling.
+  - State: `planned`; Priority: `P0`; Depends on: `INB2-CLEAN-002`,
+    `INB2-DB-011`.
+  - Acceptance: obsolete V1 core/contracts/repositories/routes/workers/UI/tests,
+    preserve/N-1/online-bridge/RBAC-mapping scripts, fixtures and package commands
+    are deleted. Shared versioned `/v1` contracts and non-Inbox internal routes
+    remain; deletion is ownership-based rather than prefix-based.
+  - Verification: dependency-aware repository search has only reviewed public or
+    historical V1 references and every retained gate passes. Evidence: -
+
+- [ ] `INB2-CLEAN-GATE` Verify the V2-only clean-slate boundary.
+  - State: `planned`; Priority: `P0`; Depends on: `INB2-CLEAN-002`,
+    `INB2-DB-011`, `INB2-CLEAN-003`.
+  - Acceptance: one baseline and one canonical Inbox implementation remain;
+    stale images/epochs fail closed; provider egress is disabled until a V2
+    adapter path is explicitly activated. Passing this gate may remove the
+    temporary deployment freeze but does not itself activate a provider.
+  - Verification: clean install/reset, V2 PostgreSQL repositories,
+    schema/ACL/invariants, API/Web/worker startup and allowlisted V1 search pass;
+    remote DB/object/provider state is reset and no V1 process reconnects.
+    Evidence: -
 
 - [ ] `INB2-MIG-002` Implement additive compatibility and dual materialization.
-  - State: `planned`; Priority: `P0`; Reactivated: `2026-07-16` by the
-    `INB2-MIG-001` preserve disposition; Depends on: `INB2-EPIC-2-GATE`,
-    `INB2-EPIC-5-GATE`, `INB2-MIG-001`.
+  - State: `deferred`; Priority: `P0`; Superseded and excluded from active scope
+    by ADR 0016 revision `clean-slate-2026-07-20-r1`.
+  - Scope decision: no current V1 data is migrated. The online bridge and dual
+    materialization acceptance below remain historical, not unverified blockers;
+    runtime shutdown moves to `INB2-CLEAN-002` and baseline replacement to
+    `INB2-DB-011`.
   - Activation reason: the known shared SaaS deployment and current local
     upgrade fixture must be preserved; provider I/O cannot be duplicated.
   - Acceptance: first supplies a reviewed, resumable online schema bridge for
@@ -2935,9 +3040,11 @@ the full ADR 0014 preserve path are active.
     Evidence: -
 
 - [ ] `INB2-MIG-003` Implement repeatable backfill and diagnostic report.
-  - State: `planned`; Priority: `P0`; Reactivated: `2026-07-16` by the
-    `INB2-MIG-001` preserve disposition; Depends on: `INB2-MIG-002`,
-    `INB2-DB-008`.
+  - State: `deferred`; Priority: `P0`; Superseded and excluded from active scope
+    by ADR 0016 revision `clean-slate-2026-07-20-r1`.
+  - Scope decision: all current data is disposable and old databases are
+    recreated. The historical backfill acceptance below is intentionally not
+    implemented and does not block `INB2-CLEAN-GATE`.
   - Activation reason: legacy business/provider/object/backup state must be
     reconciled without inventing author, route, roster or delivery facts.
   - Acceptance: owns the operational, bounded and resumable MigrationRun/entity
@@ -2952,8 +3059,10 @@ the full ADR 0014 preserve path are active.
     stable. Evidence: -
 
 - [ ] `INB2-MIG-004` Finalize migration disposition and required cutover controls.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-MIG-001`,
-    `INB2-MIG-002`, `INB2-MIG-003`, `INB2-EPIC-6-GATE`.
+  - State: `deferred`; Priority: `P0`; Superseded and replaced by completed
+    `INB2-CLEAN-001` and ADR 0016.
+  - Scope decision: preserve phase/shadow/rollback controls below are historical;
+    the active disposition/deployment freeze is verified by `INB2-CLEAN-001`.
   - Acceptance: records the revisioned preserve disposition and every eligibility
     condition; `INB2-MIG-002/003` are completed, and this task implements one
     validated server-owned phase, semantic shadow, tenant/Conversation-sticky
@@ -2964,8 +3073,12 @@ the full ADR 0014 preserve path are active.
     diff and proves legal canary/rollback transitions. Evidence: -
 
 - [ ] `INB2-MIG-005` Cut over all internal Inbox and Telegram paths directly to V2.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-MIG-004`,
-    `INB2-DB-008`, `INB2-EPIC-6-GATE`, `INB2-EPIC-7-GATE`, `INB2-TG-004`.
+  - State: `deferred`; Priority: `P0`; Superseded and replaced by
+    `INB2-CLEAN-002` for V1 runtime detachment and the API/realtime/UI/Telegram
+    V2 feature tasks for new production composition.
+  - Scope decision: there is no authority-switch CAS from preserved V1 state.
+    The zero-fallback intent below remains mandatory through the replacement
+    tasks, while preserve-only gates are retired.
   - Acceptance: Public API composition, Telegram Bot/direct runtime, web/API/
     realtime, workers and seeds use the same V2 command/projection/source owners;
     provider I/O remains exactly-once-authoritative and no V2 handler calls V1
@@ -2982,11 +3095,12 @@ the full ADR 0014 preserve path are active.
     path and zero legacy fallback. Evidence: -
 
 - [ ] `INB2-MIG-006` Complete pre-removal V2 acceptance and rollback drill.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-MIG-005`,
-    `INB2-MIG-001`, `INB2-ARCH-007`, `INB2-EPIC-0-GATE`,
-    `INB2-EPIC-1-GATE`, `INB2-EPIC-2-GATE`, `INB2-EPIC-3-GATE`,
-    `INB2-EPIC-4-GATE`, `INB2-EPIC-5-GATE`, `INB2-EPIC-6-GATE`,
-    `INB2-EPIC-7-GATE`.
+  - State: `deferred`; Priority: `P0`; Superseded preserve/removal dossier
+    replaced by `INB2-CLEAN-GATE`.
+  - Scope decision: the V1 upgrade/rollback/30-day dossier below is retired.
+    Functional V2 vertical-slice proof remains owned by Epic 3-8 and
+    API/realtime/UI/Telegram gates; zero-V1 cleanup proof moves to
+    `INB2-CLEAN-GATE`.
   - Acceptance: the V2 domain/source/message/work/projection/API/realtime/UI and
     Telegram private/group slice pass together. For the selected preserve path,
     this task owns the early V1-applicable removal subgate required by
@@ -3010,8 +3124,11 @@ the full ADR 0014 preserve path are active.
     later privacy/operations gate rather than scoped V1 removal. Evidence: -
 
 - [ ] `INB2-MIG-007` Remove V1 reads, writes, fallback routes and obsolete schema.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-MIG-001`,
-    `INB2-MIG-005`, `INB2-MIG-006`, `INB2-ARCH-007`.
+  - State: `deferred`; Priority: `P0`; Superseded and replaced by
+    `INB2-CLEAN-002` -> `INB2-DB-011` -> `INB2-CLEAN-003` ->
+    `INB2-CLEAN-GATE`.
+  - Scope decision: the deletion intent and ownership-safe `/v1` distinction
+    below are retained, but every preserve-only prerequisite is retired.
   - Acceptance: the signed `INB2-MIG-006` early-removal dossier is current and
     every selected preserve-path backfill, shadow, observation, backup/rollback,
     hold/evidence, fleet/consumer and supported-version removal gate still passes;
@@ -3032,7 +3149,7 @@ the full ADR 0014 preserve path are active.
     Evidence: -
 
 - [ ] `INB2-MIG-008` Publish final V2 operating and development documentation.
-  - State: `planned`; Priority: `P1`; Depends on: `INB2-MIG-007`.
+  - State: `planned`; Priority: `P1`; Depends on: `INB2-CLEAN-GATE`.
   - Acceptance: product docs, ADRs, adapter guide, runbooks, API/event docs and
     onboarding explain one canonical Inbox implementation; public/event/module
     schema versions remain explicit and are not described as legacy support.
@@ -3040,12 +3157,15 @@ the full ADR 0014 preserve path are active.
     and on-prem package. Evidence: -
 
 - [ ] `INB2-EPIC-14-GATE` Verify Epic 14 and release gate `G7`.
-  - State: `planned`; Priority: `P0`; Depends on: all Epic 14 tasks,
+  - State: `planned`; Priority: `P0`; Depends on: `INB2-CLEAN-GATE`,
+    `INB2-MIG-008`,
     `INB2-EPIC-8-GATE`, `INB2-EPIC-9-GATE`, `INB2-EPIC-10-GATE`,
     `INB2-EPIC-11-GATE`, `INB2-EPIC-12-GATE`, `INB2-EPIC-13-GATE`.
-  - Acceptance: V2 is the only supported production path and V1 removal is
-    complete after the selected preserve backfill, observation and release gates;
-    rollback remains possible up to the documented irreversible boundary.
+  - Scope: `INB2-MIG-002` through `INB2-MIG-007` are superseded historical tasks and
+    are explicitly excluded from this gate.
+  - Acceptance: V2 is the only supported production path, V1 removal and the
+    disposable epoch reset are complete, and the first real-release baseline is
+    ready to become append-only.
   - Verification: final release evidence and verification log are complete. Evidence: -
 
 ## Cross-Epic Acceptance Scenarios
@@ -3269,3 +3389,4 @@ the task state, checkbox and evidence above.
 | 2026-07-19 | `INB2-MSG-003`     | Typed media/storage; PG 33/341; preserve 3/17; full 374/4077 + all gates   | task commit  | Codex + independent audits        |
 | 2026-07-19 | `INB2-MSG-004`     | Reply/forward; PG 33/342; preserve 3/17; full 375/4125 + all gates         | task commit  | Codex + independent final review  |
 | 2026-07-20 | `INB2-MSG-005`     | Edit/delete; PG 35/374; source 83/1244; full 381/4222 + all gates          | task commit  | Codex + independent final review  |
+| 2026-07-20 | `INB2-CLEAN-001`   | ADR0016; guard/config 2/33; full unit 382/4235; DB/type/lint/aux gates     | task commit  | Codex + three independent reviews |

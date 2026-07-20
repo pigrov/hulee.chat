@@ -31,14 +31,14 @@ conversation. It is not a safe foundation for multi-client groups, clientless
 employee chats, exact external-thread routing, resumable realtime, CRM history
 or event-backed reporting.
 
-Inbox V2 should be added as a new versioned domain/read-model slice. Existing
-source, authentication, RBAC, event/outbox, storage and client-platform
-foundations should be reused. The `2026-07-11` ADR 0014 amendment selects a
-pre-production direct replacement after inventory proves there is no supported
-deployment/consumer/valuable-data obligation. `INB2-MIG-001` subsequently found
-such deployment/data/provider/backup obligations on `2026-07-16`, so the
-additive preserve path is now active. V1 remains temporarily runnable only until
-the preserving V2/Telegram cutover and removal gates pass.
+Inbox V2 is the only target domain/read-model slice. Existing source,
+authentication, RBAC, event/outbox, storage and client-platform foundations are
+reused by ownership rather than copied from V1. `INB2-MIG-001` correctly chose a
+fail-closed preserve disposition while the live deployment/data/provider/backup
+roots were unclassified. On `2026-07-20` the product owner classified every
+current root as disposable pre-production test state. ADR 0016 now selects a
+clean-slate replacement with no V1 data migration, dual materialization,
+backfill or N-1 V1 runtime requirement.
 
 ## Verified Current Slices
 
@@ -251,9 +251,9 @@ a lifecycle revision (`packages/modules/src/telegram-channel.ts:342-353` and
 The V1 message event name is also semantically overloaded: a queued outbound
 Message emits `message.sent`, and the worker consumes that factual-looking event
 as a dispatch command. Inbox V2 must keep dispatch intent and confirmed
-sent/delivery facts distinct while V1 remains the temporary runtime, then remove
-the overloaded V1 event only after preserve cutover, observation and removal
-gates pass.
+sent/delivery facts distinct. `INB2-CLEAN-002` removes the overloaded V1 event
+and dispatcher from production composition before the clean baseline is
+activated; no preserve cutover or observation window applies.
 
 ## Correctness And Compatibility Risks
 
@@ -266,7 +266,7 @@ gates pass.
 | P0       | No durable snapshot/realtime cursor or revision                                | Refresh-only client; no EventSource implementation                            | `INB2-ARCH-005`, `INB2-RT-001`, `INB2-RT-002`  |
 | P1       | Telegram edit is materialized as a new-message shape                           | Envelope accepts edited events; normalizer has no lifecycle event             | `INB2-SRC-003`, `INB2-MSG-005`                 |
 | P1       | External ingestion has no participant materialization                          | Production save path inserts client/conversation/message but not participants | `INB2-SRC-004`, `INB2-DB-002`                  |
-| P1       | Queued command is named `message.sent`                                         | V1 event is both dispatch intent and apparent fact                            | `INB2-CON-008`, `INB2-MIG-002`                 |
+| P1       | Queued command is named `message.sent`                                         | V1 event is both dispatch intent and apparent fact                            | `INB2-CON-008`, `INB2-CLEAN-002`               |
 | P1       | One broad direct capability profile overstates provider parity                 | Shared WA/TG/MAX capability object                                            | `INB2-DMX-001`                                 |
 | P1       | Outbox processing rows have no stale lease reclaim                             | `processing` status has no owner/expiry                                       | `INB2-SRC-002`                                 |
 
@@ -357,37 +357,34 @@ The baseline does not yet include tests for:
 - logical notification recipient/dedupe policy;
 - CRM stage/custom-field history and historically correct reporting.
 
-## Temporary V1 Boundary And Removal Requirements
+## Current Clean-Slate Boundary And Removal Requirements
 
-`INB2-MIG-001` found state, provider sessions, backups and unknown consumers/
-deployments that must be preserved. The current target therefore follows
-`expand -> one-command materialize -> diagnostic backfill -> shadow/canary ->
-V2 only -> observe -> remove V1`.
+`INB2-MIG-001` found state, provider sessions, backups and unknown roots and
+correctly failed closed. The product owner subsequently classified every current
+root as disposable test state. ADR 0016 now selects:
 
-Until the preserving cutover is complete:
+`freeze deploy -> stop V1 writers/providers -> delete V1 runtime/schema -> one
+V2 baseline -> reset -> verify -> resume V2-only delivery`.
 
-- do not break existing Public API v1 or `internal-api-v1` schemas;
-- keep current Telegram Bot/Public API flows and seed/test scenarios working;
-- add versioned Inbox V2 contracts/endpoints instead of growing the V1 response
-  into a large optional union;
-- keep `packages/core/src/vertical-slice.ts` as a compatibility adapter rather
-  than the new V2 aggregate model;
-- prefer explicit V2 source binding for outbound and measure any temporary
-  legacy external-handle fallback;
-- preserve current IDs where deterministic backfill is possible;
-- delete V1 columns/routes only after preserve-path reconciliation, rollback,
-  zero-use observation and V2 replacement tests pass.
+Until `INB2-CLEAN-GATE` passes:
 
-The representative V1 snapshot/additive-upgrade harness is now required in
-`INB2-DB-008`; operational backfill and its legacy mapping rules belong to
-`INB2-MIG-003`. A legacy outbound author or provider group roster cannot always
-be reconstructed safely; ambiguous data must produce a migration diagnostic
-instead of invented identity/route data. The exact inventory and disposition are
-in `docs/product/inbox-v2-mig-001-inventory-and-disposition.md`.
+- do not deploy application/provider runtime from `main`;
+- keep public/event/module version identifiers independent from Inbox V1;
+- retain generic non-Inbox auth/admin/integration `/internal/v1` surfaces;
+- fail unfinished V2 message surfaces closed without legacy fallback;
+- do not add new migrations or feature work outside the cleanup sequence;
+- do not import IDs, authors, routes, rosters or provider outcomes from V1;
+- prevent stale application images, webhooks, workers and sessions from
+  reconnecting to the new schema epoch.
 
-The approved environment classification, one-command materialization, backfill,
-shadow, rollout, rollback and V1 removal policy is defined by ADR 0014 and
-`docs/product/inbox-v2-migration-and-cutover.md`.
+The old preserve/N-1/backfill evidence remains historical. `INB2-CLEAN-002`
+owns runtime/provider drain, `INB2-DB-011` owns the clean baseline and reset,
+and `INB2-CLEAN-003` removes dead compatibility tooling. The exact historical
+inventory remains in
+`docs/product/inbox-v2-mig-001-inventory-and-disposition.md` as a deletion map.
+The active policy is defined by ADR 0016 and
+`docs/product/inbox-v2-migration-and-cutover.md`; ADR 0014 is superseded for this
+epoch.
 
 The approved separation of immutable technical history from purgeable content,
 data-class retention, legal hold, subject export/delete, audit evidence and
@@ -398,7 +395,7 @@ backup/restore erasure is defined by ADR 0015 and
 
 - [x] Current contracts, schema, API, worker, UI and tests are inventoried.
 - [x] Reusable platform foundations are separated from Inbox V1 limitations.
-- [x] Compatibility risks and additive migration requirements are recorded.
+- [x] Compatibility risks and the superseding clean-slate decision are recorded.
 - [x] Current code paths are referenced with reproducible file/line locations.
 - [x] Final `pnpm check` result is recorded after formatting the first work
       package.
