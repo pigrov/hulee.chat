@@ -20,7 +20,6 @@ import type { EgressRuntime } from "@hulee/modules";
 import {
   createAesGcmTenantSecretCipher,
   createSqlChannelAuthChallengeRepository,
-  createSqlAttachmentTransferRepository,
   createSqlChannelConnectorRepository,
   createSqlChannelSessionRepository,
   createSqlChannelProviderValidationJobRepository,
@@ -29,8 +28,6 @@ import {
   createSqlInboxV2RepositoryOutbox,
   createSqlInboxV2SecurityDenialRetentionRepository,
   createSqlInboxV2SourceProcessingRuntimeRepository,
-  createDrizzlePersistenceExecutor,
-  createExternalMessageRepository,
   createSqlSourceIntegrationRepository,
   createSqlTenantSecretRepository,
   type InboxV2SourceDeadLetterLifecycleResolver as SqlInboxV2SourceDeadLetterLifecycleResolver,
@@ -40,16 +37,9 @@ import {
   type InboxV2SourceReplayEpisodeIdSource,
   type HuleeDatabase
 } from "@hulee/db";
-import { CoreError, createExternalChannelCommandService } from "@hulee/core";
-import { createS3ObjectStorage, type ObjectStorage } from "@hulee/storage";
+import { CoreError } from "@hulee/core";
 
 import type { OutboxHandler } from "./outbox-processor";
-import {
-  createTelegramAttachmentTransferSweeper,
-  type TelegramAttachmentTransferBotApiClientFactory,
-  type TelegramAttachmentTransferSweepResult,
-  type TelegramAttachmentTransferSweeper
-} from "./telegram-attachment-transfer";
 import {
   createTenantSecretResolver,
   type SecretResolver
@@ -62,12 +52,6 @@ import {
   createTelegramProviderValidationDispatcher,
   type TelegramProviderValidationBotApiClientFactory
 } from "./telegram-provider-validation-dispatcher";
-import {
-  runTelegramPollingSweep,
-  type TelegramPollingBotApiClientFactory,
-  type TelegramPollingSweepOptions,
-  type TelegramPollingSweepResult
-} from "./telegram-polling-sweeper";
 import { createPolicyAwareDeploymentEgressRuntime } from "./policy-egress-runtime";
 import {
   createDirectAccountAuthSweeper,
@@ -401,36 +385,6 @@ export function createWorkerOutboxHandler(
   };
 }
 
-export type WorkerTelegramPollingSweeperOptions = {
-  database: HuleeDatabase;
-  secretEncryptionKey?: string;
-  secretResolver?: SecretResolver;
-  telegramBotApiClientFactory?: TelegramPollingBotApiClientFactory;
-  egressRuntime?: EgressRuntime;
-  egressProfile?: WorkerConfig["egressProfile"];
-  telegramApiBaseUrl?: string;
-};
-
-export type WorkerTelegramPollingSweeper = {
-  sweep(): Promise<TelegramPollingSweepResult>;
-};
-
-export type WorkerTelegramAttachmentTransferSweeperOptions = {
-  database: HuleeDatabase;
-  objectStorageConfig: NonNullable<WorkerConfig["objectStorage"]>;
-  secretEncryptionKey?: string;
-  secretResolver?: SecretResolver;
-  objectStorage?: ObjectStorage;
-  telegramBotApiClientFactory?: TelegramAttachmentTransferBotApiClientFactory;
-  egressRuntime?: EgressRuntime;
-  egressProfile?: WorkerConfig["egressProfile"];
-  telegramApiBaseUrl?: string;
-};
-
-export type WorkerTelegramAttachmentTransferSweeper = {
-  sweep(): Promise<TelegramAttachmentTransferSweepResult>;
-};
-
 export type WorkerDirectAccountAuthSweeperOptions = {
   database: HuleeDatabase;
   secretEncryptionKey?: string;
@@ -478,83 +432,6 @@ export type WorkerSecurityDenialRetentionSweeperOptions = {
 export type WorkerSecurityDenialRetentionSweeper = {
   sweep(): Promise<SecurityDenialRetentionSweepResult>;
 };
-
-export function createWorkerTelegramPollingSweeper(
-  options: WorkerTelegramPollingSweeperOptions
-): WorkerTelegramPollingSweeper {
-  const tenantSecrets = options.secretEncryptionKey
-    ? createSqlTenantSecretRepository(
-        options.database,
-        createAesGcmTenantSecretCipher({
-          key: options.secretEncryptionKey
-        })
-      )
-    : undefined;
-  const externalMessageRepository = createExternalMessageRepository({
-    rawExecutor: options.database,
-    persistenceExecutor: createDrizzlePersistenceExecutor(options.database)
-  });
-  const sweepOptions: TelegramPollingSweepOptions = {
-    connectorRepository: createSqlChannelConnectorRepository(options.database),
-    secretResolver:
-      options.secretResolver ??
-      createTenantSecretResolver({
-        tenantSecrets
-      }),
-    commands: createExternalChannelCommandService({
-      repository: externalMessageRepository
-    }),
-    botApiClientFactory: options.telegramBotApiClientFactory,
-    egressRuntime:
-      options.egressRuntime ??
-      createWorkerDeploymentEgressRuntime({
-        database: options.database,
-        egressProfile: options.egressProfile
-      }),
-    telegramApiBaseUrl: options.telegramApiBaseUrl
-  };
-
-  return {
-    async sweep() {
-      return runTelegramPollingSweep(sweepOptions);
-    }
-  };
-}
-
-export function createWorkerTelegramAttachmentTransferSweeper(
-  options: WorkerTelegramAttachmentTransferSweeperOptions
-): TelegramAttachmentTransferSweeper {
-  const tenantSecrets = options.secretEncryptionKey
-    ? createSqlTenantSecretRepository(
-        options.database,
-        createAesGcmTenantSecretCipher({
-          key: options.secretEncryptionKey
-        })
-      )
-    : undefined;
-  const egressRuntime =
-    options.egressRuntime ??
-    createWorkerDeploymentEgressRuntime({
-      database: options.database,
-      egressProfile: options.egressProfile
-    });
-
-  return createTelegramAttachmentTransferSweeper({
-    repository: createSqlAttachmentTransferRepository(options.database),
-    connectorRepository: createSqlChannelConnectorRepository(options.database),
-    secretResolver:
-      options.secretResolver ??
-      createTenantSecretResolver({
-        tenantSecrets
-      }),
-    objectStorage:
-      options.objectStorage ??
-      createS3ObjectStorage(options.objectStorageConfig),
-    botApiClientFactory: options.telegramBotApiClientFactory,
-    egressRuntime,
-    telegramApiBaseUrl: options.telegramApiBaseUrl
-  });
-}
 
 export function createWorkerDirectAccountAuthSweeper(
   options: WorkerDirectAccountAuthSweeperOptions

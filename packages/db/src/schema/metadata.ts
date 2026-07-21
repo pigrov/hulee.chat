@@ -589,20 +589,7 @@ export const initialTables = [
   // from the reset inventory digest only to avoid hashing its own receipt row.
   // prettier-ignore
   { name: "inbox_v2_database_reset_receipts", scope: "tenant", requiresTenantId: true },
-  { name: "conversations", scope: "tenant", requiresTenantId: true },
-  {
-    name: "conversation_participants",
-    scope: "tenant",
-    requiresTenantId: true
-  },
-  { name: "messages", scope: "tenant", requiresTenantId: true },
-  {
-    name: "message_delivery_attempts",
-    scope: "tenant",
-    requiresTenantId: true
-  },
   { name: "files", scope: "tenant", requiresTenantId: true },
-  { name: "message_attachments", scope: "tenant", requiresTenantId: true },
   { name: "event_store", scope: "tenant", requiresTenantId: true },
   { name: "outbox", scope: "tenant", requiresTenantId: true },
   { name: "audit_log", scope: "tenant", requiresTenantId: true },

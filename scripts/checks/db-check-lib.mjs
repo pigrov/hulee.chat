@@ -331,6 +331,56 @@ export async function generateExpectedDrizzleMigration({
   }
 }
 
+export async function generateExpectedDrizzleBaseline({
+  workspaceRoot,
+  schemaPaths
+}) {
+  const root = resolve(workspaceRoot);
+  const temporaryParent = join(root, "node_modules", ".cache");
+  await mkdir(temporaryParent, { recursive: true });
+  const temporaryRoot = await mkdtemp(
+    join(temporaryParent, "hulee-db-baseline-check-")
+  );
+  const outputDirectory = join(temporaryRoot, "drizzle");
+  const outputMetadataDirectory = join(outputDirectory, "meta");
+  const configPath = join(temporaryRoot, "drizzle.config.mjs");
+
+  try {
+    await mkdir(outputDirectory, { recursive: true });
+    await writeFile(
+      configPath,
+      drizzleConfigSource({ root, outputDirectory, schemaPaths }),
+      "utf8"
+    );
+
+    const generationOutput = runDrizzleGenerate({
+      root,
+      configPath,
+      migrationName: "inbox_v2_baseline_schema_parity"
+    });
+    const outputFiles = await readdir(outputDirectory);
+    const generatedSqlFiles = outputFiles.filter(
+      (fileName) => fileName.startsWith("0000_") && fileName.endsWith(".sql")
+    );
+    if (generatedSqlFiles.length !== 1) {
+      throw new Error(
+        `Expected one generated 0000 baseline migration, found ${generatedSqlFiles.length}; output contained: ${outputFiles.join(", ")}.\n${generationOutput}`
+      );
+    }
+
+    const [sql, snapshot] = await Promise.all([
+      readFile(join(outputDirectory, generatedSqlFiles[0]), "utf8"),
+      readJson(join(outputMetadataDirectory, "0000_snapshot.json"))
+    ]);
+    return {
+      statements: splitMigrationStatements(sql),
+      snapshot
+    };
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+}
+
 // Compatibility aliases for callers that have not migrated to the generic
 // helper names yet. They retain exactly the same strict behavior.
 export const collectFinalizedFoundationDdlStatements = (input) =>
@@ -363,7 +413,11 @@ function drizzleConfigSource({ root, outputDirectory, schemaPaths }) {
   )};\n`;
 }
 
-function runDrizzleGenerate({ root, configPath }) {
+function runDrizzleGenerate({
+  root,
+  configPath,
+  migrationName = "inbox_v2_schema_parity"
+}) {
   const drizzleKitEntry = require.resolve("drizzle-kit");
   const drizzleKitCli = join(dirname(drizzleKitEntry), "bin.cjs");
   const result = spawnSync(
@@ -374,7 +428,7 @@ function runDrizzleGenerate({ root, configPath }) {
       "--config",
       configPath,
       "--name",
-      "inbox_v2_schema_parity"
+      migrationName
     ],
     {
       cwd: root,

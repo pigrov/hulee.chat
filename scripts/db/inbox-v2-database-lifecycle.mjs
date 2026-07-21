@@ -6,7 +6,6 @@ import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import pg from "pg";
 
-import { inspectInboxV2ExpandDdlRisk } from "./inbox-v2-expand-ddl-risk.mjs";
 import {
   InboxV2DatabaseLifecycleContractError,
   assertInboxV2DisposableResetAuthorized,
@@ -801,7 +800,7 @@ const REQUIRED_CURRENT_CONSTRAINTS = [
     name: "inbox_v2_outbound_routes_selection_check",
     type: "c",
     definitionSha256:
-      "sha256:1cd6a2e369f00076de7b794b83ac7e02675f23f3ea054842a148459ebef774de",
+      "sha256:e7c199dd9c04191b8bed52c4e7d47cfd096ce7193cb970994a7f095b598f966f",
     definitionFragments: [
       "selection_intent_kind = 'explicit_reroute'",
       "selection_reason = 'explicit_reroute'",
@@ -944,7 +943,7 @@ const REQUIRED_CURRENT_CONSTRAINTS = [
     name: "inbox_v2_database_reset_receipts_values_check",
     type: "c",
     definitionSha256:
-      "sha256:86cd77e69b713d4662d7f12c91f51bf6033b5901897c88a14e35bddc3fd99e38",
+      "sha256:e9c7cbd7e1ed0a5b1dab373bce942560af24dd73c2078e36367e03aac9692831",
     definitionFragments: [
       "manifest_sha256",
       "migration_contract_sha256",
@@ -1047,43 +1046,9 @@ export async function installInboxV2Database(options) {
       lockClient,
       migrationDdlBudget,
       async (migrationClient) => {
-        const journalPrefix = await assertMigrationJournalPrefix(
-          migrationClient,
-          migrationsFolder
-        );
+        await assertMigrationJournalPrefix(migrationClient, migrationsFolder);
         await assertNoUnsafeInboxV2DefaultPrivileges(migrationClient);
         await assertNoPublicSchemaCreate(migrationClient);
-        const expandDdlRisk = await inspectInboxV2ExpandDdlRisk(
-          migrationClient,
-          {
-            migrations: migrationBundle.migrations,
-            appliedCount: journalPrefix.applied.length,
-            allowEphemeralBlockingDdlCompatibilityTest:
-              options.allowEphemeralBlockingDdlCompatibilityTest,
-            allowReviewedOnlineBridge: options.allowReviewedOnlineBridge
-          }
-        );
-        if (
-          expandDdlRisk.overrideRequested &&
-          !expandDdlRisk.overrideAuthorized
-        ) {
-          throw lifecycleError(
-            "inbox_v2.expand_ddl_test_override_forbidden",
-            "The blocking-DDL compatibility override is restricted to strictly named DB-008 ephemeral integration-test databases.",
-            { evidence: expandDdlRisk }
-          );
-        }
-        if (
-          expandDdlRisk.requiresOnlineBridge &&
-          !expandDdlRisk.overrideAuthorized &&
-          !expandDdlRisk.reviewedOnlineBridgeAuthorized
-        ) {
-          throw lifecycleError(
-            "inbox_v2.expand_online_bridge_required",
-            `Pending preserve DDL contains ${expandDdlRisk.violationCount} operation(s) that require an explicitly reviewed online bridge instead of the normal install runner.`,
-            { evidence: expandDdlRisk }
-          );
-        }
         await migrate(drizzle(migrationClient), { migrationsFolder });
         const journal = await assertCurrentMigrationJournalAgainstBundle(
           migrationClient,
@@ -1099,7 +1064,6 @@ export async function installInboxV2Database(options) {
               );
         return Object.freeze({
           journal,
-          expandDdlRisk,
           bootstrapResult
         });
       }
@@ -1110,7 +1074,6 @@ export async function installInboxV2Database(options) {
       migrationCount: lifecycle.result.journal.applied.length,
       migrationContractSha256: lifecycle.result.journal.expectedDigest,
       migrationJournalSha256: lifecycle.result.journal.appliedDigest,
-      expandDdlRisk: lifecycle.result.expandDdlRisk,
       migrationDdlBudget: lifecycle.evidence,
       bootstrapSha256: bootstrapDocument?.digest ?? null,
       bootstrap: lifecycle.result.bootstrapResult
@@ -1380,10 +1343,7 @@ export async function resetInboxV2Database(options) {
       );
       const historicalResetReceipts = await readAllResetReceipts(lockClient);
 
-      await resetManagedDatabaseSchemasInTransaction(
-        lockClient,
-        target.databaseOwner
-      );
+      await resetManagedDatabaseSchemasInTransaction(lockClient);
       if (
         options.testOnlyFailAfterSchemaReset === true &&
         process.env.NODE_ENV === "test"
@@ -2619,7 +2579,7 @@ async function fingerprintRelationContent(
   return `sha256:${hash.digest("hex")}`;
 }
 
-async function fingerprintManagedSchemaCatalog(client) {
+export async function collectInboxV2ManagedSchemaCatalog(client) {
   const queries = [
     `select 'schema' as object_kind, namespace.nspname as schema_name,
             namespace.nspname as object_name,
@@ -2726,10 +2686,11 @@ async function fingerprintManagedSchemaCatalog(client) {
               trigger_row.tgisinternal::text,
               pg_get_triggerdef(trigger_row.oid, true))::text as definition
        from pg_catalog.pg_trigger trigger_row
-       join pg_catalog.pg_class relation on relation.oid = trigger_row.tgrelid
-       join pg_catalog.pg_namespace namespace
+      join pg_catalog.pg_class relation on relation.oid = trigger_row.tgrelid
+      join pg_catalog.pg_namespace namespace
          on namespace.oid = relation.relnamespace
-      where namespace.nspname in ('public', 'drizzle')`,
+      where namespace.nspname in ('public', 'drizzle')
+        and not trigger_row.tgisinternal`,
     `select 'type' as object_kind, namespace.nspname as schema_name,
             type_row.typname as object_name,
             pg_get_userbyid(type_row.typowner) as owner_name,
@@ -2813,7 +2774,13 @@ async function fingerprintManagedSchemaCatalog(client) {
     const rightValue = JSON.stringify(right);
     return leftValue < rightValue ? -1 : leftValue > rightValue ? 1 : 0;
   });
-  return sha256(JSON.stringify(catalogRows));
+  return Object.freeze(catalogRows.map((row) => Object.freeze(row)));
+}
+
+async function fingerprintManagedSchemaCatalog(client) {
+  return sha256(
+    JSON.stringify(await collectInboxV2ManagedSchemaCatalog(client))
+  );
 }
 
 async function countSemanticRows(client, observedAt, specifications) {
@@ -3277,12 +3244,10 @@ async function assertResetSchemaSet(client) {
   }
 }
 
-async function resetManagedDatabaseSchemasInTransaction(client, databaseOwner) {
+async function resetManagedDatabaseSchemasInTransaction(client) {
   await client.query("drop schema if exists public cascade");
   await client.query("drop schema if exists drizzle cascade");
-  await client.query(
-    `create schema public authorization ${quoteIdentifier(databaseOwner)}`
-  );
+  await client.query("create schema public authorization pg_database_owner");
   await client.query("grant usage on schema public to public");
   await client.query("set local search_path to public, pg_catalog");
 }
@@ -3429,7 +3394,7 @@ function expectedFunctionContract(bundle, signature) {
   }
   const config = [
     ...header.matchAll(
-      /^\s*set\s+([A-Za-z_][A-Za-z0-9_.]*)\s*=\s*([^\r\n]+)\s*$/gimu
+      /^\s*set\s+([A-Za-z_][A-Za-z0-9_.]*)\s*(?:=|to)\s*([^\r\n]+)\s*$/gimu
     )
   ].map((match) => `${match[1]}=${match[2]}`);
   let body = normalizeFunctionBody(bodyMatch[2]);
@@ -3721,7 +3686,10 @@ function normalizeFunctionConfig(value) {
   }
   return value
     .map((entry) =>
-      requiredText(entry, "function config").toLowerCase().replace(/\s+/gu, "")
+      requiredText(entry, "function config")
+        .toLowerCase()
+        .replaceAll("'", "")
+        .replace(/\s+/gu, "")
     )
     .sort();
 }

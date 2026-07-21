@@ -480,31 +480,6 @@ export {
   createSqlTenantRbacRepository
 } from "./sql-rbac-repository";
 export {
-  buildFindQueuedOutboundMessageSql,
-  buildMarkOutboundMessageFailedSql,
-  buildMarkOutboundMessageSentSql,
-  createSqlOutboundDispatchRepository
-} from "./sql-outbound-dispatch-repository";
-export {
-  buildListPendingTelegramAttachmentTransfersSql,
-  buildMarkAttachmentTransferFailedSql,
-  buildMarkAttachmentTransferStoredSql,
-  createSqlAttachmentTransferRepository
-} from "./sql-attachment-transfer-repository";
-export {
-  buildFindFileContentAccessSql,
-  createSqlFileAccessRepository
-} from "./sql-file-access-repository";
-export {
-  buildFindClientByExternalHandleSql,
-  buildFindConversationByIdSql,
-  buildFindDeliveryStatusSql,
-  buildFindMessageByIdempotencyKeySql,
-  buildFindOpenConversationByClientSql,
-  buildUpdateConversationRoutingSql,
-  createExternalMessageRepository
-} from "./external-message-repository";
-export {
   buildAuthenticateTenantApiKeySql,
   buildInsertPublicApiAuditLogSql,
   buildInsertTenantApiKeySql,
@@ -569,7 +544,6 @@ export {
   createSqlEmployeeDirectoryRepository,
   hashEmployeeInvitationToken
 } from "./sql-employee-directory-repository";
-export { createTenantWorkspaceRepository } from "./drizzle-tenant-workspace-repository";
 export { createTenantRegistrationRepository } from "./drizzle-tenant-registration-repository";
 export {
   assertTenantScopedRows,
@@ -605,19 +579,6 @@ export type {
   FileContentAccessRecord,
   FindFileContentAccessInput
 } from "./sql-file-access-repository";
-export type {
-  ExternalMessageIngestionPersistenceRows,
-  ExternalOutboundMessagePersistenceRows,
-  RegisterExternalClientPersistenceRows
-} from "./external-message-mapper";
-export {
-  collectExternalMessageIngestionTenantScopedRows,
-  collectExternalOutboundMessageTenantScopedRows,
-  collectRegisterExternalClientTenantScopedRows,
-  mapExternalMessageIngestionToPersistenceRows,
-  mapExternalOutboundMessageToPersistenceRows,
-  mapRegisterExternalClientToPersistenceRows
-} from "./external-message-mapper";
 export type {
   ClaimPendingOutboxInput,
   MarkOutboxFailedInput,
@@ -847,16 +808,6 @@ export type {
   UpdateEmployeeProfilePersistenceInput
 } from "./sql-employee-directory-repository";
 export type { TenantScopedRow } from "./tenant-scope";
-export {
-  collectReplyTenantScopedRows,
-  collectWorkspaceTenantScopedRows,
-  mapReplyToPersistenceRows,
-  mapWorkspaceToPersistenceRows
-} from "./vertical-slice-mapper";
-export type {
-  ReplyPersistenceRows,
-  WorkspacePersistenceRows
-} from "./vertical-slice-mapper";
 export {
   collectTenantRegistrationTenantScopedRows,
   mapTenantRegistrationToPersistenceRows

@@ -34,14 +34,6 @@ export const deploymentType = pgEnum("deployment_type", [
   "saas_isolated",
   "on_prem"
 ]);
-export const conversationType = pgEnum("conversation_type", [
-  "client_direct",
-  "client_group",
-  "internal_direct",
-  "internal_group",
-  "support_case",
-  "intake"
-]);
 export const inboxV2ConversationTopology = pgEnum(
   "inbox_v2_conversation_topology",
   ["direct", "group", "case", "object"]
@@ -54,16 +46,6 @@ export const inboxV2ConversationLifecycle = pgEnum(
   "inbox_v2_conversation_lifecycle",
   ["active", "ended"]
 );
-export const messageDirection = pgEnum("message_direction", [
-  "inbound",
-  "outbound"
-]);
-export const messageStatus = pgEnum("message_status", [
-  "received",
-  "queued",
-  "sent",
-  "failed"
-]);
 export const outboxStatus = pgEnum("outbox_status", [
   "pending",
   "processing",
@@ -1722,107 +1704,6 @@ export const inboxV2ConversationIdentityFences = pgTable(
   ]
 );
 
-export const conversations = pgTable(
-  "conversations",
-  {
-    id: text("id").primaryKey(),
-    tenantId: tenantIdColumn().references(() => tenants.id),
-    type: conversationType("type").notNull(),
-    clientId: text("client_id").references(() => clients.id),
-    currentQueueId: text("current_queue_id").references(() => workQueues.id),
-    assignedEmployeeId: text("assigned_employee_id").references(
-      () => employees.id
-    ),
-    assignedTeamId: text("assigned_team_id").references(() => teams.id),
-    status: text("status").notNull().default("open"),
-    ...timestamps
-  },
-  (table) => [
-    index("conversations_tenant_idx").on(table.tenantId),
-    index("conversations_tenant_queue_idx").on(
-      table.tenantId,
-      table.currentQueueId
-    ),
-    index("conversations_tenant_assigned_employee_idx").on(
-      table.tenantId,
-      table.assignedEmployeeId
-    ),
-    index("conversations_tenant_assigned_team_idx").on(
-      table.tenantId,
-      table.assignedTeamId
-    )
-  ]
-);
-
-export const conversationParticipants = pgTable(
-  "conversation_participants",
-  {
-    tenantId: tenantIdColumn().references(() => tenants.id),
-    conversationId: text("conversation_id")
-      .notNull()
-      .references(() => conversations.id),
-    employeeId: text("employee_id")
-      .notNull()
-      .references(() => employees.id),
-    ...timestamps
-  },
-  (table) => [
-    primaryKey({
-      columns: [table.tenantId, table.conversationId, table.employeeId]
-    }),
-    index("conversation_participants_tenant_idx").on(table.tenantId)
-  ]
-);
-
-export const messages = pgTable(
-  "messages",
-  {
-    id: text("id").primaryKey(),
-    tenantId: tenantIdColumn().references(() => tenants.id),
-    conversationId: text("conversation_id")
-      .notNull()
-      .references(() => conversations.id),
-    direction: messageDirection("direction").notNull(),
-    text: text("text"),
-    status: messageStatus("status").notNull(),
-    idempotencyKey: text("idempotency_key").notNull(),
-    errorCode: text("error_code"),
-    ...timestamps
-  },
-  (table) => [
-    uniqueIndex("messages_tenant_idempotency_unique").on(
-      table.tenantId,
-      table.idempotencyKey
-    ),
-    index("messages_tenant_conversation_idx").on(
-      table.tenantId,
-      table.conversationId
-    )
-  ]
-);
-
-export const messageDeliveryAttempts = pgTable(
-  "message_delivery_attempts",
-  {
-    id: text("id").primaryKey(),
-    tenantId: tenantIdColumn().references(() => tenants.id),
-    messageId: text("message_id")
-      .notNull()
-      .references(() => messages.id),
-    status: text("status").notNull(),
-    providerMessageId: text("provider_message_id"),
-    errorCode: text("error_code"),
-    retryable: boolean("retryable"),
-    ...timestamps
-  },
-  (table) => [
-    index("message_delivery_attempts_tenant_message_idx").on(
-      table.tenantId,
-      table.messageId
-    )
-  ]
-);
-
 export const files = pgTable(
   "files",
   {
@@ -1843,36 +1724,6 @@ export const files = pgTable(
       table.storageKey
     ),
     index("files_tenant_idx").on(table.tenantId)
-  ]
-);
-
-export const messageAttachments = pgTable(
-  "message_attachments",
-  {
-    id: text("id").primaryKey(),
-    tenantId: tenantIdColumn().references(() => tenants.id),
-    messageId: text("message_id")
-      .notNull()
-      .references(() => messages.id),
-    fileId: text("file_id")
-      .notNull()
-      .references(() => files.id),
-    provider: text("provider").notNull(),
-    providerAttachmentId: text("provider_attachment_id"),
-    sourceUrl: text("source_url"),
-    sortOrder: integer("sort_order").notNull().default(0),
-    metadata: jsonb("metadata").notNull().default({}),
-    ...timestamps
-  },
-  (table) => [
-    index("message_attachments_tenant_message_idx").on(
-      table.tenantId,
-      table.messageId
-    ),
-    index("message_attachments_tenant_file_idx").on(
-      table.tenantId,
-      table.fileId
-    )
   ]
 );
 

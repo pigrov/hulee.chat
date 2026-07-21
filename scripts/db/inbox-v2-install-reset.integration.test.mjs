@@ -25,11 +25,25 @@ import {
   digestInboxV2ReviewedDisposition,
   sha256
 } from "./inbox-v2-install-contract.mjs";
+import { verifyInboxV2BaselineCatalog } from "./inbox-v2-baseline-catalog.mjs";
 
 const { Client } = pg;
 const describePostgres =
   process.env.HULEE_DB_INTEGRATION === "1" ? describe : describe.skip;
 const migrationsFolder = resolve("packages/db/drizzle");
+const baselineMigrationCount = 1;
+const removedInboxV1Relations = [
+  "conversations",
+  "conversation_participants",
+  "messages",
+  "message_delivery_attempts",
+  "message_attachments"
+];
+const removedInboxV1Enums = [
+  "conversation_type",
+  "message_direction",
+  "message_status"
+];
 const createdDatabases = [];
 let adminClient;
 let temporaryDirectory;
@@ -144,7 +158,11 @@ describePostgres("Inbox V2 clean install and guarded reset", () => {
       bootstrap
     });
     const firstState = await readBootstrapState(database.url);
-    expect(firstInstall.migrationCount).toBeGreaterThan(30);
+    expect(expectedMigrationContract(migrationsFolder)).toHaveLength(
+      baselineMigrationCount
+    );
+    expect(firstInstall.migrationCount).toBe(baselineMigrationCount);
+    await expectCleanSlateBaseline(database.url);
     expect(firstState).toMatchObject({
       tenantCount: 1,
       streamHeadCount: 1,
@@ -689,6 +707,7 @@ describePostgres("Inbox V2 clean install and guarded reset", () => {
     });
     const afterFirstReset = await readBootstrapState(database.url);
     expect(firstReset.previousStreamEpoch).toBe(firstState.streamEpoch);
+    expect(firstReset.migrationCount).toBe(baselineMigrationCount);
     expect(afterFirstReset.streamEpoch).not.toBe(firstState.streamEpoch);
     expect(afterFirstReset.tenantCount).toBe(1);
     expect(afterFirstReset.streamHeadCount).toBe(1);
@@ -1251,6 +1270,7 @@ describePostgres("Inbox V2 clean install and guarded reset", () => {
     expect(schemaRepairReset.previousStreamEpoch).toBe(
       afterFirstReset.streamEpoch
     );
+    expect(schemaRepairReset.migrationCount).toBe(baselineMigrationCount);
     expect(afterSchemaRepair.streamEpoch).not.toBe(afterFirstReset.streamEpoch);
 
     await expect(
@@ -1301,6 +1321,7 @@ describePostgres("Inbox V2 clean install and guarded reset", () => {
     });
     const repairedState = await readBootstrapState(database.url);
     expect(repairReset.previousStreamEpoch).toBe(afterSchemaRepair.streamEpoch);
+    expect(repairReset.migrationCount).toBe(baselineMigrationCount);
     expect(repairedState.streamEpoch).not.toBe(afterSchemaRepair.streamEpoch);
     expect(repairedState.tenantCount).toBe(1);
     expect(repairedState.projectionCheckpointCount).toBe(1);
@@ -1315,12 +1336,14 @@ describePostgres("Inbox V2 clean install and guarded reset", () => {
       action: "install",
       migrationJournalSha256: firstInstall.migrationJournalSha256
     });
-  }, 300_000);
+    await expectCleanSlateBaseline(database.url);
+  }, 480_000);
 
   it("rejects gate-critical tenant, thread, assignment and sequence schema tampering", async () => {
     const database = await createDisposableDatabase("gate_contract");
     const expectedMigrationCount =
       expectedMigrationContract(migrationsFolder).length;
+    expect(expectedMigrationCount).toBe(baselineMigrationCount);
     const installCurrent = () =>
       installInboxV2Database({
         databaseUrl: database.url,
@@ -1334,6 +1357,7 @@ describePostgres("Inbox V2 clean install and guarded reset", () => {
       action: "install",
       migrationCount: expectedMigrationCount
     });
+    await expectCleanSlateBaseline(database.url);
 
     await withClient(database.url, (client) =>
       client.query(`
@@ -1859,8 +1883,56 @@ describePostgres("Inbox V2 clean install and guarded reset", () => {
       action: "install",
       migrationCount: expectedMigrationCount
     });
-  }, 300_000);
+  }, 420_000);
 });
+
+async function expectCleanSlateBaseline(databaseUrl) {
+  const catalog = await withClient(databaseUrl, async (client) => {
+    const journal = await client.query(
+      "select count(*)::int as migration_count from drizzle.__drizzle_migrations"
+    );
+    const relations = await client.query(
+      `select relation_row.relname as relation_name
+           from pg_catalog.pg_class relation_row
+           join pg_catalog.pg_namespace namespace_row
+             on namespace_row.oid = relation_row.relnamespace
+          where namespace_row.nspname = 'public'
+            and relation_row.relname = any($1::text[])
+          order by relation_row.relname`,
+      [removedInboxV1Relations]
+    );
+    const enums = await client.query(
+      `select type_row.typname as enum_name
+           from pg_catalog.pg_type type_row
+           join pg_catalog.pg_namespace namespace_row
+             on namespace_row.oid = type_row.typnamespace
+          where namespace_row.nspname = 'public'
+            and type_row.typtype = 'e'
+            and type_row.typname = any($1::text[])
+          order by type_row.typname`,
+      [removedInboxV1Enums]
+    );
+    return {
+      migrationCount: journal.rows[0].migration_count,
+      relations: relations.rows.map((row) => row.relation_name),
+      enums: enums.rows.map((row) => row.enum_name)
+    };
+  });
+
+  expect(catalog).toEqual({
+    migrationCount: baselineMigrationCount,
+    relations: [],
+    enums: []
+  });
+  const retainedCatalog = await withClient(databaseUrl, (client) =>
+    verifyInboxV2BaselineCatalog(client)
+  );
+  expect(retainedCatalog).toMatchObject({
+    rowCount: 14619,
+    sha256:
+      "sha256:f64be6d9022c8d5c84f31fd77d7f595848a4a7156e3c656166de75b5c9cb5f48"
+  });
+}
 
 async function createDisposableDatabase(label) {
   const suffix = randomBytes(5).toString("hex");

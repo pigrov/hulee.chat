@@ -38,8 +38,7 @@ export const INBOX_V2_SOURCE_GATE_TASK_GROUPS = Object.freeze([
   taskGroup("INB2-SRC-011", "Authorized source onboarding", [
     "packages/contracts/src/internal-api-v1.test.ts",
     "apps/api/src/source-registry-onboarding.test.ts",
-    "apps/web/src/source-connection-client-mutation-id.server.test.ts",
-    "packages/db/src/schema/inbox-v2-source-onboarding-result-migration.test.ts"
+    "apps/web/src/source-connection-client-mutation-id.server.test.ts"
   ]),
   taskGroup("INB2-SRC-002", "Raw ingress", [
     "packages/contracts/src/inbox-v2/source-raw-ingress.test.ts",
@@ -87,8 +86,7 @@ export const INBOX_V2_SOURCE_GATE_TASK_GROUPS = Object.freeze([
     "apps/worker/src/source-message-reconciliation-plan-verifier.test.ts",
     "packages/db/src/repositories/sql-inbox-v2-source-message-reconciliation-repository.test.ts",
     "packages/db/src/repositories/sql-inbox-v2-source-message-lifecycle-adapter.test.ts",
-    "packages/db/src/schema/inbox-v2-source-message-reconciliation-schema.test.ts",
-    "packages/db/src/schema/inbox-v2-source-message-reconciliation-migration.test.ts"
+    "packages/db/src/schema/inbox-v2-source-message-reconciliation-schema.test.ts"
   ]),
   taskGroup("INB2-SRC-007", "Atomic materialization", [
     "packages/contracts/src/inbox-v2/source-occurrence-materialization.test.ts",
@@ -97,8 +95,7 @@ export const INBOX_V2_SOURCE_GATE_TASK_GROUPS = Object.freeze([
     "packages/db/src/repositories/sql-inbox-v2-atomic-materialization-internal.test.ts",
     "packages/db/src/repositories/sql-inbox-v2-timeline-message-repository.test.ts",
     "packages/db/src/repositories/sql-inbox-v2-authorization-repository.test.ts",
-    "packages/db/src/schema/inbox-v2-source-occurrence-schema.test.ts",
-    "packages/db/src/schema/inbox-v2-atomic-provider-io-closure-migration.test.ts"
+    "packages/db/src/schema/inbox-v2-source-occurrence-schema.test.ts"
   ]),
   taskGroup("INB2-SRC-008", "Replay, DLQ, diagnostics and backpressure", [
     "packages/contracts/src/inbox-v2/source-processing-runtime.test.ts",
@@ -115,7 +112,6 @@ export const INBOX_V2_SOURCE_GATE_TASK_GROUPS = Object.freeze([
     "packages/db/src/repositories/sql-inbox-v2-outbound-transport-repository.test.ts",
     "packages/db/src/repositories/sql-inbox-v2-repository-outbox.test.ts",
     "packages/db/src/schema/inbox-v2-repository-foundation-schema.test.ts",
-    "packages/db/src/schema/inbox-v2-outbox-terminal-payload-migration.test.ts",
     "packages/db/src/index.test.ts"
   ])
 ]);

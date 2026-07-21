@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-
 import { getTableConfig, PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
@@ -16,7 +14,6 @@ import {
   inboxV2SourceProcessingWorkHeads,
   inboxV2SourceReplayRequests
 } from "./inbox-v2/source-processing-runtime";
-import { INBOX_V2_SOURCE_RAW_ADMISSION_INTEGRITY_SQL } from "./inbox-v2/source-raw-ingress";
 import { initialTables } from "./metadata";
 
 const runtimeTables = [
@@ -29,14 +26,6 @@ const runtimeTables = [
   inboxV2SourceAccountPressureHeads,
   inboxV2SourceIngressCursorCheckpoints
 ] as const;
-
-const migration = readFileSync(
-  new URL(
-    "../../drizzle/0048_inbox_v2_source_processing_runtime.sql",
-    import.meta.url
-  ),
-  "utf8"
-).replaceAll("\r\n", "\n");
 
 describe("Inbox V2 source processing runtime schema", () => {
   it("adds eight tenant-scoped runtime tables and preserves the N-1 stage enum", () => {
@@ -476,35 +465,6 @@ describe("Inbox V2 source processing runtime schema", () => {
     );
     expect(ddl).toContain("and work_row.stage <> 'raw_ingest'");
     expect(ddl).toContain("Runtime work requires a pressure head");
-  });
-
-  it("ships additive migration 0048 with the reviewed integrity tail", () => {
-    expect(migration).not.toMatch(/\bDROP\s+(?:TABLE|COLUMN|TYPE)\b/iu);
-    for (const table of runtimeTables) {
-      expect(migration).toContain(
-        `CREATE TABLE "${getTableConfig(table).name}"`
-      );
-    }
-    expect(migration).toContain(
-      "--> statement-breakpoint\n-- INBOX_V2_SOURCE_PROCESSING_RUNTIME_FINALIZED_V1"
-    );
-    expect(migration).toContain(
-      "--> statement-breakpoint\n-- INBOX_V2_SOURCE_RAW_ADMISSION_FINALIZED_V1"
-    );
-    expect(
-      migration.indexOf("INBOX_V2_SOURCE_RAW_ADMISSION_FINALIZED_V1")
-    ).toBeLessThan(
-      migration.indexOf("INBOX_V2_SOURCE_PROCESSING_RUNTIME_FINALIZED_V1")
-    );
-    expect(migration.replace(/\s+/gu, " ")).toContain(
-      INBOX_V2_SOURCE_RAW_ADMISSION_INTEGRITY_SQL.replace(/\s+/gu, " ").trim()
-    );
-    expect(migration.replace(/\s+/gu, " ")).toContain(
-      INBOX_V2_SOURCE_PROCESSING_RUNTIME_INTEGRITY_SQL.replace(
-        /\s+/gu,
-        " "
-      ).trim()
-    );
   });
 });
 

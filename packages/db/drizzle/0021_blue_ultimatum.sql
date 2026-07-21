@@ -1,1 +1,0 @@
-ALTER TABLE "deployment_channel_catalog_overrides" ADD COLUMN "short_description_overrides" jsonb DEFAULT '{}'::jsonb NOT NULL;

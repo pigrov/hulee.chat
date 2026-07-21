@@ -2986,8 +2986,9 @@ dual materialization, backfill, N-1 V1 runtime or soak window is required.
     parse and diff checks passed. Independent final reviews found no remaining
     task blocker.
 
-- [ ] `INB2-DB-011` Replace the unpublished migration history with one V2 baseline.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-CLEAN-002`,
+- [x] `INB2-DB-011` Replace the unpublished migration history with one V2 baseline.
+  - State: `done`; Priority: `P0`; Started: `2026-07-21`; Completed:
+    `2026-07-21`; Owner: `Codex`; Depends on: `INB2-CLEAN-002`,
     `INB2-EPIC-2-GATE`.
   - Acceptance: remove V1-only relations/enums and squash the unpublished
     migration/snapshot chain into one current baseline containing every retained
@@ -2997,7 +2998,15 @@ dual materialization, backfill, N-1 V1 runtime or soak window is required.
     roles and ACLs were not lost.
   - Verification: two fresh installs and two guarded resets, schema/ACL audit,
     bootstrap/idempotency, V2 PostgreSQL repositories and catalog fingerprint
-    comparison pass. Evidence: -
+    comparison pass. Evidence: one SQL migration, journal entry and Drizzle
+    snapshot; exact 14,619-row retained-catalog comparison with zero missing,
+    changed, added or forbidden V1 objects; lifecycle/catalog/install-contract
+    `4/44`,
+    source `79/1230`, guarded install/reset `1/2`, PostgreSQL `34/373` with `6`
+    declared skips, alternate-owner install/idempotency, and full `pnpm check`
+    `363/4131` with all auxiliary gates.
+    Detailed receipt:
+    `docs/product/inbox-v2-db-011-baseline.md`.
 
 - [ ] `INB2-CLEAN-003` Delete residual V1 code and preserve-only tooling.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-CLEAN-002`,
@@ -3402,3 +3411,4 @@ the task state, checkbox and evidence above.
 | 2026-07-20 | `INB2-MSG-005`     | Edit/delete; PG 35/374; source 83/1244; full 381/4222 + all gates          | task commit  | Codex + independent final review  |
 | 2026-07-20 | `INB2-CLEAN-001`   | ADR0016; guard/config 2/33; full unit 382/4235; DB/type/lint/aux gates     | task commit  | Codex + three independent reviews |
 | 2026-07-20 | `INB2-CLEAN-002`   | Runtime detached; remote drain; focused 10/177; full 386/4261 + gates      | task commit  | Codex + independent final reviews |
+| 2026-07-21 | `INB2-DB-011`      | One baseline; owner-alt/catalog 14619/0; reset 1/2; PG 34/373; full gate  | task commit  | Codex + independent final review |

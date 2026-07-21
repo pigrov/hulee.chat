@@ -10,7 +10,7 @@ export const INBOX_V2_OBJECT_STORAGE_RECEIPT_SCHEMA_ID =
 export const INBOX_V2_MIG_001_EVIDENCE_SCHEMA_ID =
   "core:inbox-v2.mig-001-disposition-evidence";
 export const INBOX_V2_DATABASE_LIFECYCLE_SCHEMA_VERSION = "v2";
-export const INBOX_V2_MIGRATION_CONTRACT_VERSION = "inbox-v2-clean-install-v2";
+export const INBOX_V2_MIGRATION_CONTRACT_VERSION = "inbox-v2-baseline-v3";
 
 const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/u;
 const MAX_DISPOSITION_LIFETIME_MS = 24 * 60 * 60 * 1_000;

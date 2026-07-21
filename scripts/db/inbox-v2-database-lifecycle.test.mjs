@@ -9,21 +9,21 @@ import {
 } from "./inbox-v2-database-lifecycle.mjs";
 
 describe("Inbox V2 lifecycle fail-closed evidence", () => {
-  it("exposes the PII-safe DDL risk report and its digest", () => {
+  it("exposes PII-safe lifecycle evidence and its digest", () => {
     const evidence = Object.freeze({
-      schemaId: "core:inbox-v2.expand-ddl-risk-evidence@v2",
+      schemaId: "core:inbox-v2.reset-readiness-evidence@v2",
       databaseRef: `sha256:${"a".repeat(64)}`,
       reportSha256: `sha256:${"b".repeat(64)}`
     });
     const error = new InboxV2DatabaseLifecycleError(
-      "inbox_v2.expand_online_bridge_required",
-      "An online bridge is required.",
+      "inbox_v2.reset_not_ready",
+      "The disposable database is not ready for reset.",
       { evidence }
     );
 
     expect(error).toMatchObject({
       name: "InboxV2DatabaseLifecycleError",
-      code: "inbox_v2.expand_online_bridge_required",
+      code: "inbox_v2.reset_not_ready",
       reportSha256: evidence.reportSha256
     });
     expect(error.evidence).toBe(evidence);

@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { getTableConfig } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
@@ -221,28 +219,6 @@ describe("Inbox V2 source registry persistence schema", () => {
     expect(routeGuard).toContain("new.parent_authority_id");
     expect(routeGuard).toContain("new.parent_authority_revision");
     expect(routeGuard).toContain("new.parent_transition_id");
-  });
-
-  it("preflights the real DB003 identity head and only schema-owned types", () => {
-    const preflight = readFileSync(
-      resolve("scripts/db/inbox-v2-source-registry-preflight.sql"),
-      "utf8"
-    ).toLowerCase();
-    const migration = readFileSync(
-      resolve("packages/db/drizzle/0039_inbox_v2_source_registry.sql"),
-      "utf8"
-    ).toLowerCase();
-
-    expect(preflight).toContain("public.inbox_v2_source_account_identities");
-    expect(preflight).not.toContain(
-      "public.inbox_v2_source_account_identity_heads"
-    );
-    expect(preflight).not.toContain(
-      "public.inbox_v2_source_registry_secret_kind"
-    );
-    expect(migration).not.toContain(
-      'create type "public"."inbox_v2_source_registry_secret_kind"'
-    );
   });
 });
 

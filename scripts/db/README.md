@@ -29,19 +29,18 @@ tenant prerequisite, tenant stream head and projection generation/checkpoint/
 head. Re-running it verifies and preserves the same epoch/revisions; it does not
 write legacy Client/Conversation/Message rows.
 
-The following preserve note is historical DB-008 evidence only. ADR 0016
-superseded the V1 preserve disposition for the current pre-production epoch;
-current databases are recreated and must not use this bridge as an active
-upgrade path. Historically, a populated V1/V2-prefix database could contain
-expand DDL that the normal `db:migrate` runner refused with
-`inbox_v2.expand_online_bridge_required`, and the reviewed install command was:
+ADR 0016 defines the current pre-production database epoch as a clean-slate
+baseline. The checked-in migration directory contains the complete install
+contract for a new database; populated databases from the unpublished V1 era
+are unsupported and must be recreated. The install runner therefore has no V1
+backfill, preserve mode, blocking-DDL compatibility override or reviewed online
+bridge.
 
-```bash
-pnpm db:inbox-v2:install -- --allow-reviewed-online-bridge
-```
-
-The command and its expand-DDL risk evidence remain only for historical DB-008
-reproducibility until `INB2-DB-011` replaces the unpublished migration chain.
+The baseline never hard-codes the source deployment owner. Run migrations as
+the actual database owner with authority to create and harden the four managed
+`hulee_inbox_v2_*` roles. Ordinary schema objects remain owned by that database
+owner; only the explicitly audited security functions are transferred to their
+dedicated no-login owner roles.
 
 The destructive command is deliberately separate:
 

@@ -8,9 +8,9 @@ export default [
       "node_modules/**",
       "dist/**",
       "coverage/**",
+      ".codex-runtime-logs/**",
       "**/.next/**",
-      "pnpm-lock.yaml",
-      "scripts/db/fixtures/inbox-v2/db008-n1-runtime-probe.bundle.cjs"
+      "pnpm-lock.yaml"
     ]
   },
   js.configs.recommended,
