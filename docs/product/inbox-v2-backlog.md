@@ -3416,4 +3416,4 @@ the task state, checkbox and evidence above.
 | 2026-07-20 | `INB2-MSG-005`     | Edit/delete; PG 35/374; source 83/1244; full 381/4222 + all gates          | task commit  | Codex + independent final review  |
 | 2026-07-20 | `INB2-CLEAN-001`   | ADR0016; guard/config 2/33; full unit 382/4235; DB/type/lint/aux gates     | task commit  | Codex + three independent reviews |
 | 2026-07-20 | `INB2-CLEAN-002`   | Runtime detached; remote drain; focused 10/177; full 386/4261 + gates      | task commit  | Codex + independent final reviews |
-| 2026-07-21 | `INB2-DB-011`      | One baseline; owner-alt/catalog 14619/0; reset 1/2; PG 34/373; full gate  | task commit  | Codex + independent final review |
+| 2026-07-21 | `INB2-DB-011`      | One baseline; owner-alt/catalog 14619/0; reset 1/2; PG 34/373; full gate   | task commit  | Codex + independent final review  |

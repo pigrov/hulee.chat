@@ -57,19 +57,19 @@ triggers, ACLs and security definitions.
 The one-time source catalog fixture contains 14,619 normalized rows with digest
 `sha256:f64be6d9022c8d5c84f31fd77d7f595848a4a7156e3c656166de75b5c9cb5f48`:
 
-| Object kind | Rows |
-| --- | ---: |
-| Columns | 9,218 |
+| Object kind |  Rows |
+| ----------- | ----: |
+| Columns     | 9,218 |
 | Constraints | 2,669 |
-| Indexes | 1,220 |
-| Triggers | 600 |
-| Functions | 327 |
-| Types | 261 |
-| Relations | 315 |
-| Roles | 4 |
-| Schemas | 2 |
-| Sequences | 2 |
-| Database | 1 |
+| Indexes     | 1,220 |
+| Triggers    |   600 |
+| Functions   |   327 |
+| Types       |   261 |
+| Relations   |   315 |
+| Roles       |     4 |
+| Schemas     |     2 |
+| Sequences   |     2 |
+| Database    |     1 |
 
 ACLs and owners are part of the normalized definitions for their schema,
 relation, column, routine and database objects. The physical database name,

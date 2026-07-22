@@ -25,16 +25,16 @@ database baseline in `INB2-DB-011`.
 
 ## Production composition boundary
 
-| Surface | CLEAN-002 production behavior | Retained boundary |
-| --- | --- | --- |
-| Web Inbox | Authenticated branded unavailable screen; no V1 Inbox query, reply or routing request | Login/session, tenant brand, RBAC-derived navigation and admin UI |
-| Web V1 file route | HTTP `410` without internal API or object-storage access | V2 signed download-ticket composition |
-| Internal Inbox API | V1 Inbox query/reply/routing/file services are absent from the production factory and return `module.disabled` | Auth, tenant/admin, RBAC, org, integration/source and V2 file-download routes |
-| Public API message surface | Client registration, inbound, outbound and delivery-status commands use a no-authority service and return `module.disabled` | Versioned authentication, request IDs, audit and error envelope |
-| Telegram webhook | Clean-slate handler returns `204` without interpreting or validating provider payload, resolving a connector/secret or persisting a row | Versioned route boundary for a future V2 adapter |
+| Surface                    | CLEAN-002 production behavior                                                                                                                               | Retained boundary                                                                 |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Web Inbox                  | Authenticated branded unavailable screen; no V1 Inbox query, reply or routing request                                                                       | Login/session, tenant brand, RBAC-derived navigation and admin UI                 |
+| Web V1 file route          | HTTP `410` without internal API or object-storage access                                                                                                    | V2 signed download-ticket composition                                             |
+| Internal Inbox API         | V1 Inbox query/reply/routing/file services are absent from the production factory and return `module.disabled`                                              | Auth, tenant/admin, RBAC, org, integration/source and V2 file-download routes     |
+| Public API message surface | Client registration, inbound, outbound and delivery-status commands use a no-authority service and return `module.disabled`                                 | Versioned authentication, request IDs, audit and error envelope                   |
+| Telegram webhook           | Clean-slate handler returns `204` without interpreting or validating provider payload, resolving a connector/secret or persisting a row                     | Versioned route boundary for a future V2 adapter                                  |
 | Integration administration | Production service is composed with `providerIoEnabled: false`; provider validation/auth/webhook/diagnostic activation fails before secret/job/event writes | Catalog/list/read/draft/disable/delete and source/session persistence foundations |
-| Worker | Production runner contains only core security-retention and egress-status housekeeping; every non-core feature fails startup with `module.disabled` | Provider-neutral V2 worker/coordinator code for later explicit activation |
-| Bootstrap | `db:seed:foundation` creates only tenant/auth/RBAC/brand/module/entitlement/event/outbox roots | One-shot clean-database bootstrap |
+| Worker                     | Production runner contains only core security-retention and egress-status housekeeping; every non-core feature fails startup with `module.disabled`         | Provider-neutral V2 worker/coordinator code for later explicit activation         |
+| Bootstrap                  | `db:seed:foundation` creates only tenant/auth/RBAC/brand/module/entitlement/event/outbox roots                                                              | One-shot clean-database bootstrap                                                 |
 
 The production Compose file has no provider worker or VPN gateway and pins
 `HULEE_WORKER_FEATURES: core` literally. Deployment additionally rejects legacy

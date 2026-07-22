@@ -33,15 +33,15 @@ Inbox V1 and remain versioned where their contracts require it:
 
 ## Deleted ownership slices
 
-| Layer | Removed Inbox V1 ownership | Retained boundary |
-| --- | --- | --- |
-| Core | MVP vertical slice, external-channel command service, scalar conversation routing, legacy message/client/conversation ID allocation and permission migration mapping | tenant registration, authorization, Inbox V2 command/domain contracts |
-| Contracts | generic V1 channel adapter and normalized message DTOs, internal Inbox view/reply/routing DTOs, legacy message intent events | public `/v1`, generic internal `/v1`, source/auth/session and Inbox V2 contracts |
-| Database | external message, attachment-transfer, file-access and outbound-dispatch repositories; conversation-routing audit projection | tenant/source/security audit, event/outbox and Inbox V2 repositories |
-| API | external/public V1 command services, internal Inbox query/command routes, legacy file service and Telegram V1 webhook implementation | fail-closed public facade/webhook, generic internal routes and Inbox V2 file download service |
-| Worker | Telegram polling, outbound, attachment-transfer and legacy outbox processors | provider-neutral secret resolver/control outbox and disabled production provider composition |
-| Modules | V1 Telegram normalizer/channel adapter and Public API adapter surface | module manifests, connector settings and Telegram Bot API transport/diagnostics |
-| Web | Inbox API client, reply/routing actions and helpers, queue options, V1 file route and obsolete Inbox layout styles | clean-slate root plus administration, integrations, source/auth and RBAC UI |
+| Layer     | Removed Inbox V1 ownership                                                                                                                                           | Retained boundary                                                                             |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Core      | MVP vertical slice, external-channel command service, scalar conversation routing, legacy message/client/conversation ID allocation and permission migration mapping | tenant registration, authorization, Inbox V2 command/domain contracts                         |
+| Contracts | generic V1 channel adapter and normalized message DTOs, internal Inbox view/reply/routing DTOs, legacy message intent events                                         | public `/v1`, generic internal `/v1`, source/auth/session and Inbox V2 contracts              |
+| Database  | external message, attachment-transfer, file-access and outbound-dispatch repositories; conversation-routing audit projection                                         | tenant/source/security audit, event/outbox and Inbox V2 repositories                          |
+| API       | external/public V1 command services, internal Inbox query/command routes, legacy file service and Telegram V1 webhook implementation                                 | fail-closed public facade/webhook, generic internal routes and Inbox V2 file download service |
+| Worker    | Telegram polling, outbound, attachment-transfer and legacy outbox processors                                                                                         | provider-neutral secret resolver/control outbox and disabled production provider composition  |
+| Modules   | V1 Telegram normalizer/channel adapter and Public API adapter surface                                                                                                | module manifests, connector settings and Telegram Bot API transport/diagnostics               |
+| Web       | Inbox API client, reply/routing actions and helpers, queue options, V1 file route and obsolete Inbox layout styles                                                   | clean-slate root plus administration, integrations, source/auth and RBAC UI                   |
 
 The historical preserve-upgrade, N-1 bundle, reviewed-online-bridge and V1 RBAC
 mapping scripts, fixtures, CI jobs and package commands were already excluded by
