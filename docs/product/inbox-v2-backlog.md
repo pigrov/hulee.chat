@@ -1864,11 +1864,12 @@ future non-chat items without a universal JSON message.
     no-echo reconciliation are implemented. API passed `26/26`; source gate
     passed `80/80` files / `1,218/1,218`; focused DB/source passed `220/220`;
     disposable PostgreSQL passed `34/34` files / `377` tests (`6` skipped) on
-    the single clean baseline. Default Vitest passed `352` files / `4,082` tests
-    (`33` files / `385` tests skipped). Full `pnpm check`, task-scoped format/
-    lint, typecheck, `db:check` and clean-slate guards passed; two independent
-    final reviews returned `READY` with no P0/P1 findings. Detailed evidence and
-    provider-runtime scope are in
+    the single clean baseline; disposable install/reset lifecycle passed `2/2`
+    against its exact `14,619`-row catalog checkpoint. Default Vitest passed
+    `352` files / `4,082` tests (`33` files / `385` tests skipped). Full
+    `pnpm check`, task-scoped format/lint, typecheck, `db:check` and clean-slate
+    guards passed; two independent final reviews returned `READY` with no P0/P1
+    findings. Detailed evidence and provider-runtime scope are in
     `docs/product/inbox-v2-msg-006-reactions-and-receipts.md`.
 
 - [ ] `INB2-MSG-007` Implement provider echo and out-of-band outbound handling.

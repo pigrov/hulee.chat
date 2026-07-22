@@ -57,13 +57,13 @@ reaction.
 Transport states are immutable facts, not one synthetic status column. The
 model records only evidence supplied by the owning provider adapter:
 
-| Fact | Meaning |
-| --- | --- |
-| `accepted` | The provider explicitly accepted responsibility for the Message. |
-| `sent` | The provider reported its send milestone. |
-| `delivered` | The provider reported delivery to the remote endpoint. |
-| `read` | The provider reported a receipt for this exact external Message. |
-| `failed` | The provider returned an explicit failure fact and diagnostic class. |
+| Fact        | Meaning                                                              |
+| ----------- | -------------------------------------------------------------------- |
+| `accepted`  | The provider explicitly accepted responsibility for the Message.     |
+| `sent`      | The provider reported its send milestone.                            |
+| `delivered` | The provider reported delivery to the remote endpoint.               |
+| `read`      | The provider reported a receipt for this exact external Message.     |
+| `failed`    | The provider returned an explicit failure fact and diagnostic class. |
 
 An absent provider fact remains absent. Hulee does not infer `sent` from an
 outbox dequeue, `delivered` from `accepted`, `read` from an employee opening a
@@ -169,3 +169,8 @@ passed, `6` skipped) after installing the single clean baseline. Repository-wide
 `385` tests skipped), together with format, lint, typecheck, DB/schema, i18n,
 encoding, branding, native and clean-slate guards. Two independent final reviews
 reported `READY` with no P0/P1 findings.
+
+The CI-equivalent disposable install/reset lifecycle additionally passed `2/2`
+against the recaptured `14,619`-row clean-baseline catalog checkpoint. Its digest
+changed only because MSG-006 extended two existing invariant functions; catalog
+object counts did not change.

@@ -54,8 +54,13 @@ triggers, ACLs and security definitions.
 
 ## Retained catalog proof
 
-The one-time source catalog fixture contains 14,619 normalized rows with digest
-`sha256:f64be6d9022c8d5c84f31fd77d7f595848a4a7156e3c656166de75b5c9cb5f48`:
+The retained clean-baseline catalog checkpoint contains 14,619 normalized rows
+with digest
+`sha256:e552f4e499dd6f778bf15d277370c2277261c0756568708450fb0db7c73b8a01`.
+It was recaptured from the single-migration baseline at schema-changing revision
+`853eaed42a2bb8256810a9d49c73bc0406a057a7` after the reviewed MSG-006 reaction
+closure extended two existing invariant functions; no relation, column, index,
+constraint, trigger, role or type count changed:
 
 | Object kind |  Rows |
 | ----------- | ----: |

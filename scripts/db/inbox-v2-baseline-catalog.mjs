@@ -105,7 +105,7 @@ export async function verifyInboxV2BaselineCatalog(
     differences.added.length > 0
   ) {
     throw new Error(
-      `Inbox V2 baseline catalog differs from the retained pre-squash catalog: ${JSON.stringify(summarizeDifferences(differences))}`
+      `Inbox V2 baseline catalog differs from the retained clean-baseline catalog checkpoint: ${JSON.stringify(summarizeDifferences(differences))}`
     );
   }
   const digest = sha256(rows);

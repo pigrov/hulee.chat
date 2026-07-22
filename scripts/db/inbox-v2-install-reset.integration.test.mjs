@@ -1930,7 +1930,7 @@ async function expectCleanSlateBaseline(databaseUrl) {
   expect(retainedCatalog).toMatchObject({
     rowCount: 14619,
     sha256:
-      "sha256:f64be6d9022c8d5c84f31fd77d7f595848a4a7156e3c656166de75b5c9cb5f48"
+      "sha256:e552f4e499dd6f778bf15d277370c2277261c0756568708450fb0db7c73b8a01"
   });
 }
 
