@@ -163,7 +163,7 @@ type SourceAccountIdentityRow = {
   updated_at: unknown;
 };
 
-type LoadedAccountIdentity =
+export type InboxV2LoadedSourceAccountIdentity =
   | Readonly<{ state: "missing" }>
   | Readonly<{ state: "provisional" }>
   | Readonly<{ state: "conflicted" }>
@@ -904,15 +904,15 @@ export function buildFindInboxV2SourceConversationAccountIdentitySql(input: {
   `;
 }
 
-async function loadSourceAccountIdentity(
+export async function readInboxV2SourceAccountIdentityInTransaction(
   executor: RawSqlExecutor,
-  plan: InboxV2SourceConversationMaterializationPlan,
+  input: Readonly<{ tenantId: string; sourceAccountId: string }>,
   options: Readonly<{ lock?: boolean }> = {}
-): Promise<LoadedAccountIdentity> {
+): Promise<InboxV2LoadedSourceAccountIdentity> {
   const result = await executor.execute<SourceAccountIdentityRow>(
     buildFindInboxV2SourceConversationAccountIdentitySql({
-      tenantId: plan.source.tenantId,
-      sourceAccountId: plan.source.sourceAccount.id,
+      tenantId: input.tenantId,
+      sourceAccountId: input.sourceAccountId,
       lock: options.lock ?? false
     })
   );
@@ -931,6 +931,51 @@ async function loadSourceAccountIdentity(
     );
   }
 
+  return { state: "verified", identity: mapVerifiedAccountIdentityRow(row) };
+}
+
+export async function readInboxV2SourceAccountIdentityVerifiedSnapshotInTransaction(
+  executor: RawSqlExecutor,
+  input: Readonly<{
+    tenantId: string;
+    sourceAccountId: string;
+    revision: string;
+  }>
+): Promise<Extract<
+  InboxV2SourceAccountIdentity,
+  { state: "verified" }
+> | null> {
+  const result = await executor.execute<SourceAccountIdentityRow>(sql`
+    select tenant_id, source_account_id, source_connection_id, state,
+           identity_declaration, canonical_realm_id,
+           canonical_realm_version, canonicalization_version,
+           canonical_object_kind_id, canonical_scope_kind,
+           canonical_scope_source_connection_id, canonical_external_subject,
+           verified_decision_actor_trusted_service_id,
+           verified_decision_policy_id, verified_decision_policy_version,
+           verified_decision_reason_code_id,
+           verified_decision_verification_evidence_token,
+           verified_decision_decided_at, account_generation,
+           identity_revision as revision, identity_created_at as created_at,
+           verified_at as updated_at
+      from inbox_v2_source_account_identity_verified_snapshots
+     where tenant_id = ${input.tenantId}
+       and source_account_id = ${input.sourceAccountId}
+       and identity_revision = ${BigInt(input.revision)}
+     for share
+  `);
+  if (result.rows.length > 1) {
+    throw new InboxV2PersistenceInvariantError(
+      "Verified SourceAccountIdentity snapshot lookup returned multiple rows."
+    );
+  }
+  const row = result.rows[0];
+  return row === undefined ? null : mapVerifiedAccountIdentityRow(row);
+}
+
+function mapVerifiedAccountIdentityRow(
+  row: SourceAccountIdentityRow
+): Extract<InboxV2SourceAccountIdentity, { state: "verified" }> {
   const sourceConnection = {
     tenantId: String(row.tenant_id),
     kind: "source_connection" as const,
@@ -1013,11 +1058,26 @@ async function loadSourceAccountIdentity(
       "Verified SourceAccountIdentity row parsed to a non-verified state."
     );
   }
-  return { state: "verified", identity };
+  return identity;
+}
+
+async function loadSourceAccountIdentity(
+  executor: RawSqlExecutor,
+  plan: InboxV2SourceConversationMaterializationPlan,
+  options: Readonly<{ lock?: boolean }> = {}
+): Promise<InboxV2LoadedSourceAccountIdentity> {
+  return readInboxV2SourceAccountIdentityInTransaction(
+    executor,
+    {
+      tenantId: plan.source.tenantId,
+      sourceAccountId: plan.source.sourceAccount.id
+    },
+    options
+  );
 }
 
 function classifyAccountIdentity(
-  loaded: LoadedAccountIdentity,
+  loaded: InboxV2LoadedSourceAccountIdentity,
   plan: InboxV2SourceConversationMaterializationPlan
 ): InboxV2SourceConversationResolutionConflictCode | null {
   if (loaded.state === "missing" || loaded.state === "provisional") {

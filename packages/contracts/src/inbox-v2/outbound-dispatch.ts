@@ -345,6 +345,7 @@ export const inboxV2OutboundDispatchAttemptOutcomeSchema = z.discriminatedUnion(
 
 export const inboxV2OutboundDispatchAttemptCompletionSourceSchema = z.enum([
   "provider_result",
+  "provider_observation",
   "lease_expired",
   "preflight_blocked"
 ]);
@@ -479,6 +480,16 @@ export const inboxV2OutboundDispatchAttemptSchema = z
         context,
         ["outcome", "completedAt"],
         "A provider-result holder cannot complete after its durable lease expired."
+      );
+    }
+    if (
+      attempt.completionSource === "provider_observation" &&
+      attempt.outcome.kind !== "accepted"
+    ) {
+      addIssue(
+        context,
+        ["completionSource"],
+        "An exact provider observation may close a pending attempt only as accepted provider truth."
       );
     }
     if (
@@ -1798,6 +1809,20 @@ function addArtifactAssociationCommitIssues(
   const dispatchReference = dispatchReferenceOf(dispatch);
   const attemptReference = attemptReferenceOf(attempt);
   const occurrenceReference = sourceOccurrenceReferenceOf(occurrence);
+  const sameRouteBinding =
+    sameReference(
+      occurrence.bindingContext.sourceThreadBinding,
+      route.sourceThreadBinding
+    ) &&
+    sameReference(occurrence.bindingContext.sourceAccount, route.sourceAccount);
+  const authoritativeProviderWideEcho =
+    occurrence.origin.kind === "provider_echo" &&
+    occurrence.messageKey.scope.kind === "provider_thread" &&
+    occurrence.messageIdentityDeclaration.scopeKind === "provider_thread" &&
+    occurrence.messageIdentityDeclaration.decisionStrength ===
+      "authoritative" &&
+    occurrence.referencePortability.kind === "external_thread" &&
+    occurrence.referencePortability.decisionStrength === "authoritative";
   if (
     artifact.state !== "accepted" ||
     artifact.diagnostic !== null ||
@@ -1834,14 +1859,7 @@ function addArtifactAssociationCommitIssues(
       occurrence.bindingContext.externalThread,
       route.externalThread
     ) ||
-    !sameReference(
-      occurrence.bindingContext.sourceThreadBinding,
-      route.sourceThreadBinding
-    ) ||
-    !sameReference(
-      occurrence.bindingContext.sourceAccount,
-      route.sourceAccount
-    ) ||
+    (!sameRouteBinding && !authoritativeProviderWideEcho) ||
     occurrence.direction !== "outbound" ||
     !sameSourceSurface(
       occurrence.descriptor.adapterContract,

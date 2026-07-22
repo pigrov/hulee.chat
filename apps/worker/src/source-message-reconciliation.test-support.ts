@@ -272,6 +272,11 @@ export function makeMessageReconciliationDescriptor(
     origin?: "webhook" | "poll" | "history" | "provider_echo";
     direction?: "inbound" | "outbound";
     intent?: "message_create" | "echo_handoff" | "source_action";
+    exactOutboundCorrelation?: {
+      providerReferenceKindId: string;
+      correlationToken: string;
+      artifactOrdinal: number;
+    } | null;
     weakEvidence?: boolean;
   } = {}
 ): InboxV2SourceMessageAdapterReconciliationDescriptor {
@@ -390,7 +395,8 @@ export function makeMessageReconciliationDescriptor(
       : input.intent === "echo_handoff"
         ? {
             kind: "echo_handoff" as const,
-            transportRole: "provider_echo" as const
+            transportRole: "provider_echo" as const,
+            exactOutboundCorrelation: input.exactOutboundCorrelation ?? null
           }
         : {
             kind: "message_create" as const,

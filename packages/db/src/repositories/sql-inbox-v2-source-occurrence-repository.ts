@@ -175,6 +175,27 @@ type BindingLockRow = {
   snapshot_created_at: unknown;
   snapshot_updated_at: unknown;
 };
+
+export type InboxV2SourceOccurrenceHistoricalMaterializationFence = Readonly<{
+  bindingRevision: string;
+  accountIdentityRevision: string;
+}>;
+
+type HistoricalMaterializationFenceRow = Readonly<{
+  external_thread_id: unknown;
+  source_account_id: unknown;
+  source_thread_binding_id: unknown;
+  binding_revision: unknown;
+  binding_generation: unknown;
+  account_identity_revision: unknown;
+  capability_revision: unknown;
+  adapter_contract_id: unknown;
+  adapter_contract_version: unknown;
+  adapter_declaration_revision: unknown;
+  adapter_surface_id: unknown;
+  adapter_loaded_by_trusted_service_id: unknown;
+  adapter_loaded_at: unknown;
+}>;
 type ProviderActorLockRow = {
   id: unknown;
   scope_kind: unknown;
@@ -284,168 +305,167 @@ export function createSqlInboxV2SourceOccurrenceRepository(
         return existingBeforeTransaction;
       }
 
-      return runOccurrenceTransaction(
-        transactionExecutor,
-        async (transaction) => {
-          // Keep the same lock order as the database insert guard and binding
-          // transition writers. Reversing head/identity/thread locks would make
-          // an otherwise bounded materialization prone to avoidable deadlocks.
-          const binding = await lockBinding(transaction, commit);
-          if (binding === null) return { kind: "binding_not_found" } as const;
-
-          const identity = await lockAccountIdentity(transaction, commit);
-          if (identity === null) {
-            return {
-              kind: "account_identity_not_found",
-              sourceAccountId: commit.sourceAccountIdentity.sourceAccount.id
-            } as const;
-          }
-          if (identity.state !== "verified") {
-            return {
-              kind: "account_identity_state_conflict",
-              sourceAccountId: commit.sourceAccountIdentity.sourceAccount.id
-            } as const;
-          }
-          if (!accountIdentityMatchesCommit(identity, commit)) {
-            return {
-              kind: "account_identity_snapshot_conflict",
-              sourceAccountId: commit.sourceAccountIdentity.sourceAccount.id
-            } as const;
-          }
-
-          const bindingMismatch = classifyBindingMismatch(
-            binding,
-            commit,
-            identity
-          );
-          if (bindingMismatch !== null)
-            return { kind: bindingMismatch } as const;
-
-          const thread = await lockExternalThread(transaction, commit);
-          if (thread === null)
-            return { kind: "external_thread_not_found" } as const;
-          if (!threadMatchesCommit(thread, commit)) {
-            return { kind: "thread_mapping_conflict" } as const;
-          }
-
-          if (isEventBackedCommit(commit)) {
-            const raw = await lockRawEvent(transaction, commit);
-            if (raw === null) {
-              return {
-                kind: "evidence_not_found",
-                evidenceKind: "raw_inbound_event"
-              } as const;
-            }
-            if (!eventScopeMatches(raw, commit)) {
-              return {
-                kind: "evidence_scope_conflict",
-                evidenceKind: "raw_inbound_event"
-              } as const;
-            }
-
-            const normalizedEvent = await lockNormalizedEvent(
-              transaction,
-              commit
-            );
-            if (normalizedEvent === null) {
-              return {
-                kind: "evidence_not_found",
-                evidenceKind: "normalized_inbound_event"
-              } as const;
-            }
-            if (!eventScopeMatches(normalizedEvent, commit)) {
-              return {
-                kind: "evidence_scope_conflict",
-                evidenceKind: "normalized_inbound_event"
-              } as const;
-            }
-            if (String(normalizedEvent.raw_event_id) !== String(raw.id)) {
-              return {
-                kind: "evidence_pair_conflict",
-                evidenceKind: "normalized_inbound_event"
-              } as const;
-            }
-          } else if (isProviderResponseCommit(commit)) {
-            const outboundMismatch = await validateOutboundProof(
-              transaction,
-              commit
-            );
-            if (outboundMismatch !== null) return outboundMismatch;
-          } else {
-            throw invariantError("Unsupported SourceOccurrence origin branch.");
-          }
-
-          const actorMismatch = await validateProviderActor(
-            transaction,
-            commit
-          );
-          if (actorMismatch !== null) return actorMismatch;
-
-          const persistence = toPersistenceRecord(
-            commit,
-            String(identity.canonical_key_digest_sha256)
-          );
-          const inserted = await transaction.execute<IdRow>(
-            buildInsertInboxV2SourceOccurrenceSql(persistence)
-          );
-          if (inserted.rows.length > 1) {
-            throw invariantError(
-              "SourceOccurrence insert returned more than one row."
-            );
-          }
-          if (inserted.rows.length === 0) {
-            const concurrent = await loadExistingOccurrence(
-              transaction,
-              commit
-            );
-            if (concurrent === null) {
-              throw invariantError(
-                "SourceOccurrence insert conflicted, but the existing aggregate is missing."
-              );
-            }
-            return concurrent;
-          }
-
-          for (const [
-            ordinal,
-            reference
-          ] of commit.occurrence.descriptor.providerReferences.entries()) {
-            await requireSingleInsert(
-              transaction,
-              buildInsertInboxV2SourceOccurrenceProviderReferenceSql({
-                tenantId: commit.tenantId,
-                occurrenceId: commit.occurrence.id,
-                ordinal,
-                kindId: reference.kindId,
-                subject: reference.subject
-              }),
-              "SourceOccurrence provider reference insert"
-            );
-          }
-          for (const [
-            ordinal,
-            providerTimestamp
-          ] of commit.occurrence.providerTimestamps.entries()) {
-            await requireSingleInsert(
-              transaction,
-              buildInsertInboxV2SourceOccurrenceProviderTimestampSql({
-                tenantId: commit.tenantId,
-                occurrenceId: commit.occurrence.id,
-                ordinal,
-                kindId: providerTimestamp.kindId,
-                timestamp: providerTimestamp.timestamp
-              }),
-              "SourceOccurrence provider timestamp insert"
-            );
-          }
-
-          return {
-            kind: "materialized",
-            occurrence: commit.occurrence
-          } as const;
-        }
+      return runOccurrenceTransaction(transactionExecutor, (transaction) =>
+        materializeInboxV2SourceOccurrenceInTransaction(transaction, commit)
       );
     }
+  };
+}
+
+/**
+ * Materializes one occurrence inside a transaction already owned by the
+ * caller. This function never opens or retries a transaction; the surrounding
+ * coordinator owns that boundary. Exact replays are checked before acquiring
+ * the bounded materialization locks, while new writes keep the canonical
+ * binding -> account identity -> external thread -> evidence lock order.
+ */
+export async function materializeInboxV2SourceOccurrenceInTransaction(
+  transaction: RawSqlExecutor,
+  input: InboxV2SourceOccurrenceMaterializationCommit
+): Promise<MaterializeInboxV2SourceOccurrenceResult> {
+  const commit = normalizeMaterializationCommit(input);
+  const existing = await loadExistingOccurrence(transaction, commit);
+  if (existing !== null) return existing;
+
+  // Keep the same lock order as the database insert guard and binding
+  // transition writers. Reversing head/identity/thread locks would make an
+  // otherwise bounded materialization prone to avoidable deadlocks.
+  const binding = isProviderResponseCommit(commit)
+    ? await lockHistoricalBinding(transaction, commit)
+    : await lockBinding(transaction, commit);
+  if (binding === null) return { kind: "binding_not_found" };
+
+  const identity = isProviderResponseCommit(commit)
+    ? await lockHistoricalAccountIdentity(transaction, commit)
+    : await lockAccountIdentity(transaction, commit);
+  if (identity === null) {
+    return {
+      kind: "account_identity_not_found",
+      sourceAccountId: commit.sourceAccountIdentity.sourceAccount.id
+    };
+  }
+  if (identity.state !== "verified") {
+    return {
+      kind: "account_identity_state_conflict",
+      sourceAccountId: commit.sourceAccountIdentity.sourceAccount.id
+    };
+  }
+  if (!accountIdentityMatchesCommit(identity, commit)) {
+    return {
+      kind: "account_identity_snapshot_conflict",
+      sourceAccountId: commit.sourceAccountIdentity.sourceAccount.id
+    };
+  }
+
+  const bindingMismatch = classifyBindingMismatch(binding, commit, identity);
+  if (bindingMismatch !== null) return { kind: bindingMismatch };
+
+  const thread = await lockExternalThread(transaction, commit);
+  if (thread === null) return { kind: "external_thread_not_found" };
+  if (!threadMatchesCommit(thread, commit)) {
+    return { kind: "thread_mapping_conflict" };
+  }
+
+  if (isEventBackedCommit(commit)) {
+    const raw = await lockRawEvent(transaction, commit);
+    if (raw === null) {
+      return {
+        kind: "evidence_not_found",
+        evidenceKind: "raw_inbound_event"
+      };
+    }
+    if (!eventScopeMatches(raw, commit)) {
+      return {
+        kind: "evidence_scope_conflict",
+        evidenceKind: "raw_inbound_event"
+      };
+    }
+
+    const normalizedEvent = await lockNormalizedEvent(transaction, commit);
+    if (normalizedEvent === null) {
+      return {
+        kind: "evidence_not_found",
+        evidenceKind: "normalized_inbound_event"
+      };
+    }
+    if (!eventScopeMatches(normalizedEvent, commit)) {
+      return {
+        kind: "evidence_scope_conflict",
+        evidenceKind: "normalized_inbound_event"
+      };
+    }
+    if (String(normalizedEvent.raw_event_id) !== String(raw.id)) {
+      return {
+        kind: "evidence_pair_conflict",
+        evidenceKind: "normalized_inbound_event"
+      };
+    }
+  } else if (isProviderResponseCommit(commit)) {
+    const outboundMismatch = await validateOutboundProof(transaction, commit);
+    if (outboundMismatch !== null) return outboundMismatch;
+  } else {
+    throw invariantError("Unsupported SourceOccurrence origin branch.");
+  }
+
+  const actorMismatch = await validateProviderActor(transaction, commit);
+  if (actorMismatch !== null) return actorMismatch;
+
+  const persistence = toPersistenceRecord(
+    commit,
+    String(identity.canonical_key_digest_sha256)
+  );
+  const inserted = await transaction.execute<IdRow>(
+    buildInsertInboxV2SourceOccurrenceSql(persistence)
+  );
+  if (inserted.rows.length > 1) {
+    throw invariantError("SourceOccurrence insert returned more than one row.");
+  }
+  if (inserted.rows.length === 0) {
+    const concurrent = await loadExistingOccurrence(transaction, commit);
+    if (concurrent === null) {
+      throw invariantError(
+        "SourceOccurrence insert conflicted, but the existing aggregate is missing."
+      );
+    }
+    return concurrent;
+  }
+
+  for (const [
+    ordinal,
+    reference
+  ] of commit.occurrence.descriptor.providerReferences.entries()) {
+    await requireSingleInsert(
+      transaction,
+      buildInsertInboxV2SourceOccurrenceProviderReferenceSql({
+        tenantId: commit.tenantId,
+        occurrenceId: commit.occurrence.id,
+        ordinal,
+        kindId: reference.kindId,
+        subject: reference.subject
+      }),
+      "SourceOccurrence provider reference insert"
+    );
+  }
+  for (const [
+    ordinal,
+    providerTimestamp
+  ] of commit.occurrence.providerTimestamps.entries()) {
+    await requireSingleInsert(
+      transaction,
+      buildInsertInboxV2SourceOccurrenceProviderTimestampSql({
+        tenantId: commit.tenantId,
+        occurrenceId: commit.occurrence.id,
+        ordinal,
+        kindId: providerTimestamp.kindId,
+        timestamp: providerTimestamp.timestamp
+      }),
+      "SourceOccurrence provider timestamp insert"
+    );
+  }
+
+  return {
+    kind: "materialized",
+    occurrence: commit.occurrence
   };
 }
 
@@ -559,6 +579,93 @@ export function buildLockInboxV2SourceOccurrenceAccountIdentitySql(
     from inbox_v2_source_account_identities
     where tenant_id = ${commit.tenantId}
       and source_account_id = ${commit.sourceAccountIdentity.sourceAccount.id}
+    for share
+  `;
+}
+
+/**
+ * Provider responses can be durably observed before their settlement worker
+ * runs. A later account reauthentication or binding refresh must not rewrite
+ * that observation, so settlement locks the exact immutable route-time
+ * snapshots instead of requiring the mutable heads to remain current.
+ */
+export function buildLockInboxV2ProviderResponseBindingSnapshotSql(
+  commit: ProviderResponseCommit
+): SQL {
+  const binding = commit.bindingMaterialization.currentProjection.binding;
+  return sql`
+    select
+      snapshot.binding_id,
+      snapshot.external_thread_id,
+      snapshot.source_connection_id,
+      snapshot.source_account_id,
+      snapshot.revision as binding_revision,
+      snapshot.binding_generation,
+      snapshot.account_identity_revision,
+      snapshot.account_generation,
+      snapshot.account_identity_state,
+      snapshot.account_canonical_key_digest_sha256,
+      snapshot.capability_contract_id,
+      snapshot.capability_contract_version,
+      snapshot.capability_declaration_revision,
+      snapshot.capability_surface_id,
+      snapshot.capability_loaded_by_trusted_service_id,
+      snapshot.capability_loaded_at,
+      snapshot.capability_revision,
+      snapshot.created_at,
+      snapshot.updated_at,
+      snapshot.binding_id as snapshot_binding_id,
+      snapshot.external_thread_id as snapshot_external_thread_id,
+      snapshot.source_connection_id as snapshot_source_connection_id,
+      snapshot.source_account_id as snapshot_source_account_id,
+      snapshot.revision as snapshot_revision,
+      snapshot.binding_generation as snapshot_binding_generation,
+      snapshot.account_identity_revision as snapshot_account_identity_revision,
+      snapshot.account_generation as snapshot_account_generation,
+      snapshot.account_identity_state as snapshot_account_identity_state,
+      snapshot.account_canonical_key_digest_sha256 as snapshot_account_canonical_key_digest_sha256,
+      snapshot.capability_contract_id as snapshot_capability_contract_id,
+      snapshot.capability_contract_version as snapshot_capability_contract_version,
+      snapshot.capability_declaration_revision as snapshot_capability_declaration_revision,
+      snapshot.capability_surface_id as snapshot_capability_surface_id,
+      snapshot.capability_loaded_by_trusted_service_id as snapshot_capability_loaded_by_trusted_service_id,
+      snapshot.capability_loaded_at as snapshot_capability_loaded_at,
+      snapshot.capability_revision as snapshot_capability_revision,
+      snapshot.created_at as snapshot_created_at,
+      snapshot.updated_at as snapshot_updated_at
+    from inbox_v2_source_thread_binding_snapshots snapshot
+    where snapshot.tenant_id = ${commit.tenantId}
+      and snapshot.binding_id = ${binding.id}
+      and snapshot.revision = ${binding.revision}
+    for share
+  `;
+}
+
+export function buildLockInboxV2ProviderResponseAccountSnapshotSql(
+  commit: ProviderResponseCommit
+): SQL {
+  const identity = commit.sourceAccountIdentity;
+  return sql`
+    select
+      source_account_id,
+      source_connection_id,
+      state,
+      identity_revision as revision,
+      account_generation,
+      canonical_key_digest_sha256,
+      canonical_realm_id,
+      canonical_realm_version,
+      canonicalization_version,
+      canonical_object_kind_id,
+      canonical_scope_kind,
+      canonical_scope_source_connection_id,
+      canonical_external_subject,
+      identity_declaration,
+      verified_at as updated_at
+    from inbox_v2_source_account_identity_verified_snapshots
+    where tenant_id = ${commit.tenantId}
+      and source_account_id = ${identity.sourceAccount.id}
+      and identity_revision = ${identity.revision}
     for share
   `;
 }
@@ -872,6 +979,18 @@ async function lockBinding(
   );
 }
 
+async function lockHistoricalBinding(
+  executor: RawSqlExecutor,
+  commit: ProviderResponseCommit
+): Promise<BindingLockRow | null> {
+  return requireAtMostOneRow(
+    await executor.execute<BindingLockRow>(
+      buildLockInboxV2ProviderResponseBindingSnapshotSql(commit)
+    ),
+    "provider-response SourceThreadBinding snapshot lock"
+  );
+}
+
 async function lockAccountIdentity(
   executor: RawSqlExecutor,
   commit: NormalizedCommit
@@ -881,6 +1000,18 @@ async function lockAccountIdentity(
       buildLockInboxV2SourceOccurrenceAccountIdentitySql(commit)
     ),
     "SourceAccountIdentity lock"
+  );
+}
+
+async function lockHistoricalAccountIdentity(
+  executor: RawSqlExecutor,
+  commit: ProviderResponseCommit
+): Promise<AccountIdentityLockRow | null> {
+  return requireAtMostOneRow(
+    await executor.execute<AccountIdentityLockRow>(
+      buildLockInboxV2ProviderResponseAccountSnapshotSql(commit)
+    ),
+    "provider-response SourceAccountIdentity verified snapshot lock"
   );
 }
 
@@ -961,6 +1092,13 @@ type OutboundProofRow = {
   route_source_thread_binding_id: unknown;
   route_source_connection_id: unknown;
   route_source_account_id: unknown;
+  route_binding_revision: unknown;
+  route_account_generation: unknown;
+  route_binding_generation: unknown;
+  route_remote_access_revision: unknown;
+  route_administrative_revision: unknown;
+  route_capability_revision: unknown;
+  route_descriptor_revision: unknown;
   route_adapter_contract_id: unknown;
   route_adapter_contract_version: unknown;
   route_adapter_declaration_revision: unknown;
@@ -1001,6 +1139,13 @@ async function validateOutboundProof(
       route_row.source_thread_binding_id as route_source_thread_binding_id,
       route_row.source_connection_id as route_source_connection_id,
       route_row.source_account_id as route_source_account_id,
+      route_row.binding_revision as route_binding_revision,
+      route_row.account_generation as route_account_generation,
+      route_row.binding_generation as route_binding_generation,
+      route_row.remote_access_revision as route_remote_access_revision,
+      route_row.administrative_revision as route_administrative_revision,
+      route_row.capability_revision as route_capability_revision,
+      route_row.route_descriptor_revision as route_descriptor_revision,
       route_row.adapter_contract_id as route_adapter_contract_id,
       route_row.adapter_contract_version as route_adapter_contract_version,
       route_row.adapter_declaration_revision as route_adapter_declaration_revision,
@@ -1024,6 +1169,7 @@ async function validateOutboundProof(
   if (row === null) return { kind: "outbound_attempt_not_found" };
 
   const occurrence = commit.occurrence;
+  const binding = commit.bindingMaterialization.currentProjection.binding;
   const adapter = occurrence.messageIdentityDeclaration.adapterContract;
   const matches =
     String(row.attempt_id) === String(attempt.id) &&
@@ -1048,6 +1194,34 @@ async function validateOutboundProof(
       String(route.sourceConnection.id) &&
     String(row.route_source_account_id) ===
       String(occurrence.bindingContext.sourceAccount.id) &&
+    parseDatabaseBigint(
+      row.route_binding_revision,
+      "OutboundRoute.bindingRevision"
+    ) === String(binding.revision) &&
+    parseDatabaseBigint(
+      row.route_account_generation,
+      "OutboundRoute.accountGeneration"
+    ) === String(commit.sourceAccountIdentity.accountGeneration) &&
+    parseDatabaseBigint(
+      row.route_binding_generation,
+      "OutboundRoute.bindingGeneration"
+    ) === String(binding.bindingGeneration) &&
+    parseDatabaseBigint(
+      row.route_remote_access_revision,
+      "OutboundRoute.remoteAccessRevision"
+    ) === String(binding.remoteAccess.revision) &&
+    parseDatabaseBigint(
+      row.route_administrative_revision,
+      "OutboundRoute.administrativeRevision"
+    ) === String(binding.administrative.revision) &&
+    parseDatabaseBigint(
+      row.route_capability_revision,
+      "OutboundRoute.capabilityRevision"
+    ) === String(binding.capabilities.revision) &&
+    parseDatabaseBigint(
+      row.route_descriptor_revision,
+      "OutboundRoute.routeDescriptorRevision"
+    ) === String(binding.routeDescriptor.descriptorRevision) &&
     String(row.route_adapter_contract_id) === String(adapter.contractId) &&
     String(row.route_adapter_contract_version) ===
       String(adapter.contractVersion) &&
@@ -1480,6 +1654,77 @@ export async function readInboxV2SourceOccurrenceInTransaction(
   return aggregate === null
     ? null
     : mapSourceOccurrenceAggregate(aggregate, input.tenantId);
+}
+
+/**
+ * Reads the immutable persistence fence that is intentionally not repeated in
+ * the public SourceOccurrence contract. Settlement uses this historical row,
+ * never the mutable current binding/account head.
+ */
+export async function readInboxV2SourceOccurrenceHistoricalMaterializationFenceInTransaction(
+  executor: RawSqlExecutor,
+  input: Readonly<{ occurrence: InboxV2SourceOccurrence }>
+): Promise<InboxV2SourceOccurrenceHistoricalMaterializationFence | null> {
+  const occurrence = input.occurrence;
+  const rows = await executor.execute<HistoricalMaterializationFenceRow>(sql`
+    select external_thread_id,
+           source_account_id,
+           source_thread_binding_id,
+           binding_revision,
+           binding_generation,
+           account_identity_revision,
+           capability_revision,
+           adapter_contract_id,
+           adapter_contract_version,
+           adapter_declaration_revision,
+           adapter_surface_id,
+           adapter_loaded_by_trusted_service_id,
+           adapter_loaded_at
+      from inbox_v2_source_occurrences
+     where tenant_id = ${occurrence.tenantId}
+       and id = ${occurrence.id}
+  `);
+  const row = rows.rows[0];
+  if (row === undefined) return null;
+  const adapter = occurrence.descriptor.adapterContract;
+  if (
+    String(row.external_thread_id) !==
+      String(occurrence.bindingContext.externalThread.id) ||
+    String(row.source_account_id) !==
+      String(occurrence.bindingContext.sourceAccount.id) ||
+    String(row.source_thread_binding_id) !==
+      String(occurrence.bindingContext.sourceThreadBinding.id) ||
+    parseDatabaseBigint(
+      row.binding_generation,
+      "occurrence binding generation"
+    ) !== occurrence.bindingContext.bindingGeneration ||
+    parseDatabaseBigint(
+      row.capability_revision,
+      "occurrence capability revision"
+    ) !== occurrence.descriptor.capabilityRevision ||
+    String(row.adapter_contract_id) !== String(adapter.contractId) ||
+    String(row.adapter_contract_version) !== String(adapter.contractVersion) ||
+    parseDatabaseBigint(
+      row.adapter_declaration_revision,
+      "occurrence adapter declaration revision"
+    ) !== adapter.declarationRevision ||
+    String(row.adapter_surface_id) !== String(adapter.surfaceId) ||
+    String(row.adapter_loaded_by_trusted_service_id) !==
+      String(adapter.loadedByTrustedServiceId) ||
+    !sameTimestamp(row.adapter_loaded_at, adapter.loadedAt)
+  ) {
+    return null;
+  }
+  return {
+    bindingRevision: parseDatabaseBigint(
+      row.binding_revision,
+      "occurrence binding revision"
+    ),
+    accountIdentityRevision: parseDatabaseBigint(
+      row.account_identity_revision,
+      "occurrence account identity revision"
+    )
+  };
 }
 
 function mapSourceOccurrenceAggregate(

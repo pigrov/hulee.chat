@@ -47,6 +47,10 @@ import type { HuleeDatabase } from "../client";
 import {
   consumeInboxV2AtomicMaterializationSealReceipt,
   deriveInboxV2MessageReactionAuditTargetReference,
+  deriveInboxV2NativeOutboundConversationAuditReference,
+  deriveInboxV2NativeOutboundTransportAuditTargetReference,
+  deriveInboxV2ProviderObservationAuditTargetReference,
+  deriveInboxV2ProviderObservationSourceAccountAuditReference,
   registerInboxV2AtomicSealExecutor,
   revokeInboxV2AtomicAttachmentMaterializationProofs,
   revokeInboxV2AtomicOutboundRerouteProofs,
@@ -56,6 +60,8 @@ import {
   type InboxV2AtomicMessageCreationSealManifest,
   type InboxV2AtomicMessageLifecycleSealManifest,
   type InboxV2AtomicMessageReactionSealManifest,
+  type InboxV2AtomicMessageTransportAssociationSealManifest,
+  type InboxV2AtomicNativeOutboundTransportAssociationSealManifest,
   type InboxV2AtomicMessageMutationSealManifest,
   type InboxV2AtomicStreamEventManifest,
   type InboxV2AtomicTimelineItemCreationSealManifest
@@ -108,6 +114,7 @@ const POST_HEAD_INSERT_TABLES = new Set([
   "inbox_v2_message_transport_links",
   "inbox_v2_messages",
   "inbox_v2_outbound_dispatches",
+  "inbox_v2_outbound_provider_observation_settlements",
   "inbox_v2_outbound_route_consumptions",
   "inbox_v2_source_occurrence_resolution_transitions",
   "inbox_v2_timeline_content_contact_values",
@@ -136,7 +143,86 @@ function exactPostHeadInsertPattern(
   );
 }
 
+function exactPostHeadIdempotentInsertPattern(
+  table: string,
+  columns: readonly string[],
+  returning: string
+): RegExp {
+  const columnList = columns.join(String.raw`\s*,\s*`);
+  return new RegExp(
+    String.raw`^insert\s+into\s+(?:(?:public)\.)?${table}\s*\(\s*${columnList}\s*\)\s+values\s+${POST_HEAD_INSERT_VALUE_ROW}\s+on\s+conflict\s+do\s+nothing\s+returning\s+(?:${returning})\s*$`,
+    "iu"
+  );
+}
+
 const POST_HEAD_EXACT_INSERT_PATTERNS = new Map<string, RegExp>([
+  [
+    "inbox_v2_outbound_provider_observation_settlements",
+    exactPostHeadIdempotentInsertPattern(
+      "inbox_v2_outbound_provider_observation_settlements",
+      [
+        "tenant_id",
+        "observation_id",
+        "artifact_resolution_id",
+        "artifact_id",
+        "dispatch_id",
+        "route_id",
+        "attempt_id",
+        "message_id",
+        "artifact_ordinal",
+        "effective_state",
+        "source_occurrence_id",
+        "source_occurrence_revision",
+        "source_occurrence_resolution_state",
+        "external_thread_id",
+        "external_message_reference_id",
+        "canonical_artifact_reference_link_id",
+        "message_transport_link_id",
+        "transition_kind",
+        "reconciliation_decision_id",
+        "reconciliation_result_state",
+        "settled_by_trusted_service_id",
+        "settled_at",
+        "revision"
+      ],
+      "observation_id\\s+as\\s+id|observation_id"
+    )
+  ],
+  [
+    "inbox_v2_message_transport_links",
+    exactPostHeadIdempotentInsertPattern(
+      "inbox_v2_message_transport_links",
+      [
+        "tenant_id",
+        "id",
+        "message_id",
+        "source_occurrence_id",
+        "external_message_reference_id",
+        "role",
+        "resulting_head_revision",
+        "revision",
+        "linked_at",
+        "recorded_stream_position"
+      ],
+      "id"
+    )
+  ],
+  [
+    "inbox_v2_message_transport_link_heads",
+    exactPostHeadInsertPattern(
+      "inbox_v2_message_transport_link_heads",
+      [
+        "tenant_id",
+        "message_id",
+        "link_count",
+        "latest_link_id",
+        "revision",
+        "last_changed_stream_position",
+        "updated_at"
+      ],
+      "message_id\\s+as\\s+id|message_id"
+    )
+  ],
   [
     "inbox_v2_message_attachment_anchors",
     exactPostHeadInsertPattern(
@@ -574,6 +660,12 @@ const POST_HEAD_UPDATE_PATTERN =
   /^update\s+(?:(?:public)\.)?([a-z][a-z0-9_]*)\b/iu;
 const POST_HEAD_UPDATE_CAS_PREDICATES = new Map<string, readonly RegExp[]>([
   [
+    "inbox_v2_message_transport_link_heads",
+    [
+      /^update\s+(?:(?:public)\.)?inbox_v2_message_transport_link_heads\s+set\s+link_count\s*=\s*\$\d+,\s*latest_link_id\s*=\s*\$\d+,\s*revision\s*=\s*\$\d+,\s*last_changed_stream_position\s*=\s*\$\d+,\s*updated_at\s*=\s*\$\d+\s+where\s+tenant_id\s*=\s*\$\d+\s+and\s+message_id\s*=\s*\$\d+\s+and\s+link_count\s*=\s*\$\d+\s+and\s+latest_link_id\s*=\s*\$\d+\s+and\s+revision\s*=\s*\$\d+\s+returning\s+message_id\s+as\s+id\s*$/iu
+    ]
+  ],
+  [
     "inbox_v2_message_reactions",
     [
       /^update\s+(?:(?:public)\.)?inbox_v2_message_reactions\s+set\s+state_kind\s*=\s*\$\d+,\s*value_kind\s*=\s*\$\d+,\s*unicode_value\s*=\s*\$\d+,\s*provider_reaction_kind_id\s*=\s*\$\d+,\s*provider_canonical_code\s*=\s*\$\d+,\s*cleared_at\s*=\s*\$\d+,\s*external_operation\s*=\s*\$\d+,\s*outbound_route_id\s*=\s*\$\d+,\s*request_transition_id\s*=\s*\$\d+,\s*request_attribution_id\s*=\s*\$\d+,\s*external_outcome\s*=\s*\$\d+,\s*result_token\s*=\s*\$\d+,\s*result_digest_sha256\s*=\s*\$\d+,\s*resolved_at\s*=\s*\$\d+,\s*state_detail\s*=\s*\$\d+::jsonb,\s*state_detail_digest_sha256\s*=\s*\$\d+,\s*revision\s*=\s*\$\d+,\s*last_changed_stream_position\s*=\s*\$\d+,\s*updated_at\s*=\s*\$\d+\s+where\s+tenant_id\s*=\s*\$\d+\s+and\s+id\s*=\s*\$\d+\s+and\s+message_id\s*=\s*\$\d+\s+and\s+semantic_slot_key\s*=\s*\$\d+\s+and\s+revision\s*=\s*\$\d+\s+and\s+state_detail_digest_sha256\s*=\s*\$\d+\s+returning\s+id\s*$/iu
@@ -957,6 +1049,7 @@ export type InboxV2AuthorizedAtomicMaterializationContext = Readonly<{
   tenantId: string;
   commandId: string;
   clientMutationId: string;
+  correlationId: string;
   commandTypeId: string;
   actor: InboxV2AuthorizationActor;
   authorizationEpoch: string;
@@ -1207,6 +1300,12 @@ export type InboxV2AuthorizedAtomicMaterializationSealResult<TResult> =
   }>;
 
 export type InboxV2AuthorizationTransactionExecutor = RawSqlExecutor & {
+  /**
+   * `ambient` means a caller already owns the database transaction and its
+   * whole-unit retry policy. Retrying only the authorization callback after a
+   * PostgreSQL transaction was aborted would hide the original SQLSTATE.
+   */
+  readonly transactionScope?: "owned" | "ambient";
   transaction<TResult>(
     work: (transaction: RawSqlExecutor) => Promise<TResult>,
     config: Readonly<{ isolationLevel: "read committed" }>
@@ -1534,6 +1633,7 @@ async function persistAuthorizedAtomicMaterialization<TPrepared, TResult>(
         tenantId: input.tenantId,
         commandId: input.command.id,
         clientMutationId: input.command.clientMutationId,
+        correlationId: input.records.correlationId,
         commandTypeId: input.command.commandTypeId,
         actor: snapshotInboxV2AuthorizationActor(input.command.actor),
         authorizationEpoch: input.command.authorizationEpoch,
@@ -1620,6 +1720,7 @@ async function persistAuthorizedAtomicMaterialization<TPrepared, TResult>(
         tenantId: input.tenantId,
         commandId: input.command.id,
         clientMutationId: input.command.clientMutationId,
+        correlationId: input.records.correlationId,
         commandTypeId: input.command.commandTypeId,
         actor: snapshotInboxV2AuthorizationActor(input.command.actor),
         authorizationEpoch: input.command.authorizationEpoch,
@@ -1665,6 +1766,18 @@ async function persistAuthorizedAtomicMaterialization<TPrepared, TResult>(
         assertInboxV2AtomicMessageLifecycleSealManifest(input, sealManifest);
       } else if (sealManifest.kind === "message_reaction") {
         assertInboxV2AtomicMessageReactionSealManifest(input, sealManifest);
+      } else if (sealManifest.kind === "message_transport_association") {
+        assertInboxV2AtomicMessageTransportAssociationSealManifest(
+          input,
+          sealManifest
+        );
+      } else if (
+        sealManifest.kind === "native_outbound_transport_association"
+      ) {
+        assertInboxV2AtomicNativeOutboundTransportAssociationSealManifest(
+          input,
+          sealManifest
+        );
       } else if (sealManifest.kind === "message_mutation") {
         assertInboxV2AtomicMessageMutationSealManifest(input, sealManifest);
       } else {
@@ -1945,6 +2058,7 @@ async function persistPrivilegedAuthorizationMutation<TResult>(
       tenantId: input.tenantId,
       commandId: input.command.id,
       clientMutationId: input.command.clientMutationId,
+      correlationId: input.records.correlationId,
       commandTypeId: input.command.commandTypeId,
       actor: snapshotInboxV2AuthorizationActor(input.command.actor),
       authorizationEpoch: input.command.authorizationEpoch,
@@ -6340,6 +6454,18 @@ class AuthorizationMutationAbort extends Error {
   }
 }
 
+/**
+ * Signals that an authorization conflict occurred inside a transaction owned
+ * by a higher-level coordinator. The outer owner must roll the whole database
+ * transaction back before translating the result for its caller.
+ */
+export class InboxV2AmbientAuthorizationMutationRollback extends Error {
+  constructor(readonly result: AuthorizationMutationAbortResult) {
+    super("Inbox V2 ambient authorization mutation requires rollback.");
+    this.name = "InboxV2AmbientAuthorizationMutationRollback";
+  }
+}
+
 export class InboxV2AuthorizationPersistenceInvariantError extends Error {
   constructor(message: string) {
     super(message);
@@ -6353,11 +6479,11 @@ async function runAuthorizationMutationTransaction<TResult>(
     transaction: RawSqlExecutor
   ) => Promise<WithPrivilegedAuthorizationMutationResult<TResult>>
 ): Promise<WithPrivilegedAuthorizationMutationResult<TResult>> {
-  for (
-    let attempt = 1;
-    attempt <= AUTHORIZATION_MUTATION_TRANSACTION_ATTEMPTS;
-    attempt += 1
-  ) {
+  const maximumAttempts =
+    executor.transactionScope === "ambient"
+      ? 1
+      : AUTHORIZATION_MUTATION_TRANSACTION_ATTEMPTS;
+  for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
     try {
       return await executor.transaction(
         work,
@@ -6365,12 +6491,12 @@ async function runAuthorizationMutationTransaction<TResult>(
       );
     } catch (error) {
       if (error instanceof AuthorizationMutationAbort) {
+        if (executor.transactionScope === "ambient") {
+          throw new InboxV2AmbientAuthorizationMutationRollback(error.result);
+        }
         return error.result;
       }
-      if (
-        attempt === AUTHORIZATION_MUTATION_TRANSACTION_ATTEMPTS ||
-        !hasRetryableSqlState(error)
-      ) {
+      if (attempt === maximumAttempts || !hasRetryableSqlState(error)) {
         throw error;
       }
     }
@@ -7786,6 +7912,369 @@ function assertInboxV2AtomicMessageReactionSealManifest(
     (external
       ? sourceDecisions.length !== 1 || sourceFences.length !== 1
       : sourceDecisions.length !== 0 || sourceFences.length !== 0)
+  ) {
+    throw mismatch();
+  }
+}
+
+function assertInboxV2AtomicMessageTransportAssociationSealManifest(
+  input: WithPrivilegedAuthorizationMutationInput,
+  manifest: InboxV2AtomicMessageTransportAssociationSealManifest
+): void {
+  const mismatch = atomicMessageSealManifestMismatch;
+  const change = input.records.changes[0];
+  const state = change?.state;
+  const timeline = change?.timeline;
+  const event = input.records.events[0];
+  const projection = input.records.outboxIntents[0];
+  const audit = input.records.audit;
+  const commandResultReference = input.command.resultReference;
+  const eventAuthorizationDecisionIds =
+    event?.authorizationDecisionRefs.map(({ id }) => id) ?? [];
+  const auditAuthorizationDecisionIds = audit.authorizationDecisionRefs.map(
+    ({ id }) => id
+  );
+  const expectedAuditTarget =
+    deriveInboxV2ProviderObservationAuditTargetReference({
+      tenantId: manifest.tenantId,
+      linkId: manifest.linkId
+    });
+  const sourceAccountIds = [...manifest.sourceAccountIds];
+  const canonicalSourceAccountIds = [...new Set(sourceAccountIds)].sort();
+  const settlementDecisions = audit.authorizationDecisionRefs.filter(
+    (decision) =>
+      decision.permissionId === "core:message.receive_external" &&
+      decision.resourceScopeId === "core:conversation" &&
+      decision.resource.tenantId === manifest.tenantId &&
+      decision.resource.entityTypeId === "core:conversation" &&
+      String(decision.resource.entityId) === String(manifest.conversationId) &&
+      decision.principal.kind === "trusted_service" &&
+      decision.principal.trustedServiceId === manifest.trustedServiceId &&
+      decision.authorizationEpoch === input.command.authorizationEpoch &&
+      decision.outcome === "allowed"
+  );
+  const conversationFences = input.revisions.resources.filter(
+    (resource) =>
+      resource.resourceKind === "conversation" &&
+      String(resource.resourceId) === String(manifest.conversationId) &&
+      resource.advance === "none" &&
+      settlementDecisions.some(
+        (decision) =>
+          String(decision.resourceAccessRevision) ===
+          String(resource.expectedResourceAccessRevision)
+      )
+  );
+  const expectedFacetReferences = sourceAccountIds
+    .map((sourceAccountId) =>
+      deriveInboxV2ProviderObservationSourceAccountAuditReference({
+        tenantId: manifest.tenantId,
+        sourceAccountId
+      })
+    )
+    .sort((left, right) =>
+      String(left.entityId).localeCompare(String(right.entityId))
+    );
+  const auditFacetsMatch =
+    audit.facets.length === expectedFacetReferences.length &&
+    audit.facets.every((facet, index) => {
+      const expected = expectedFacetReferences[index];
+      return (
+        expected !== undefined &&
+        facet.ordinal === index + 1 &&
+        facet.dimension === "resource" &&
+        facet.relation === "affected" &&
+        facet.reference.tenantId === expected.tenantId &&
+        facet.reference.entityTypeId === expected.entityTypeId &&
+        String(facet.reference.entityId) === String(expected.entityId)
+      );
+    });
+  const primaryDecisions = settlementDecisions.filter(
+    (decision) => decision.id === input.command.authorizationDecisionId
+  );
+  if (
+    input.tenantId !== manifest.tenantId ||
+    input.records.correlationId !== manifest.correlationId ||
+    input.command.commandTypeId !==
+      "core:outbound-provider-observation.settle" ||
+    input.command.actor.kind !== "trusted_service" ||
+    input.command.actor.trustedServiceId !== manifest.trustedServiceId ||
+    manifest.authorizationBasis !== "historical_provider_truth" ||
+    input.occurredAt !== manifest.event.occurredAt ||
+    sourceAccountIds.length === 0 ||
+    sourceAccountIds.some(
+      (sourceAccountId, index) =>
+        sourceAccountId !== canonicalSourceAccountIds[index]
+    ) ||
+    input.records.changes.length !== 1 ||
+    input.records.events.length !== 1 ||
+    input.records.outboxIntents.length !== 1 ||
+    change === undefined ||
+    change.entity.tenantId !== manifest.tenantId ||
+    change.entity.entityTypeId !== "core:message-transport-observation" ||
+    String(change.entity.entityId) !== String(manifest.linkId) ||
+    String(change.resultingRevision) !== manifest.linkHeadRevision ||
+    timeline === undefined ||
+    timeline === null ||
+    timeline.conversation.tenantId !== manifest.tenantId ||
+    String(timeline.conversation.id) !== String(manifest.conversationId) ||
+    String(timeline.timelineSequence) !== manifest.timelineSequence ||
+    change.audience !== manifest.audience ||
+    state?.kind !== "upsert" ||
+    state.stateSchemaId !== manifest.stateSchemaId ||
+    state.stateSchemaVersion !== manifest.stateSchemaVersion ||
+    state.stateHash !== manifest.stateHash ||
+    !payloadReferencesMatch(
+      state.payloadReference,
+      manifest.payloadReference
+    ) ||
+    !payloadReferencesMatch(
+      state.domainCommitReference,
+      manifest.domainCommitReference
+    ) ||
+    commandResultReference === null ||
+    !payloadReferencesMatch(
+      commandResultReference,
+      manifest.payloadReference
+    ) ||
+    event === undefined ||
+    event.typeId !== manifest.event.typeId ||
+    event.payloadSchemaId !== manifest.event.payloadSchemaId ||
+    event.payloadSchemaVersion !== manifest.event.payloadSchemaVersion ||
+    event.occurredAt !== manifest.event.occurredAt ||
+    event.recordedAt !== manifest.event.recordedAt ||
+    event.correlationId !== manifest.correlationId ||
+    event.payloadReference === null ||
+    !payloadReferencesMatch(
+      event.payloadReference,
+      manifest.event.payloadReference
+    ) ||
+    event.changeIds.length !== 1 ||
+    String(event.changeIds[0]) !== String(change.id) ||
+    event.subjects.length !== 1 ||
+    event.subjects[0]?.tenantId !== manifest.tenantId ||
+    event.subjects[0]?.entityTypeId !== "core:message" ||
+    String(event.subjects[0]?.entityId) !== String(manifest.messageId) ||
+    event.accessEffect.kind !== "none" ||
+    eventAuthorizationDecisionIds.length !==
+      auditAuthorizationDecisionIds.length ||
+    eventAuthorizationDecisionIds.some(
+      (id, index) => id !== auditAuthorizationDecisionIds[index]
+    ) ||
+    projection === undefined ||
+    projection.typeId !== "core:projection.update" ||
+    projection.handlerId !== "core:inbox-projection" ||
+    projection.effectClass !== "projection" ||
+    String(projection.eventId) !== String(event.id) ||
+    projection.changeIds.length !== 1 ||
+    String(projection.changeIds[0]) !== String(change.id) ||
+    projection.payloadReference === null ||
+    !payloadReferencesMatch(
+      projection.payloadReference,
+      manifest.payloadReference
+    ) ||
+    projection.correlationId !== manifest.correlationId ||
+    audit.actionId !== "core:outbound-provider-observation.settle" ||
+    audit.target.tenantId !== manifest.tenantId ||
+    audit.target.entityTypeId !== "core:message-transport-observation" ||
+    String(audit.target.entityId) !== String(manifest.auditTargetEntityId) ||
+    String(manifest.auditTargetEntityId) !==
+      String(expectedAuditTarget.entityId) ||
+    audit.reasonCodeId !== "core:provider-observation-settled" ||
+    audit.evidenceReference === null ||
+    !payloadReferencesMatch(
+      audit.evidenceReference,
+      manifest.domainCommitReference
+    ) ||
+    audit.correlationId !== manifest.correlationId ||
+    audit.occurredAt !== manifest.event.occurredAt ||
+    audit.recordedAt !== manifest.event.recordedAt ||
+    audit.overrideReasonCodeId !== null ||
+    audit.matchedPermissionIds.length !== 1 ||
+    audit.matchedPermissionIds[0] !== "core:message.receive_external" ||
+    audit.authorizationScopeIds.length !== 1 ||
+    audit.authorizationScopeIds[0] !== "core:conversation" ||
+    !auditFacetsMatch ||
+    settlementDecisions.length !== 1 ||
+    primaryDecisions.length !== 1 ||
+    conversationFences.length !== 1 ||
+    input.revisions.resources.length !== 1 ||
+    input.records.outboxIntents.some(
+      (intent) =>
+        intent.effectClass === "provider_io" ||
+        intent.effectClass === "notification"
+    )
+  ) {
+    throw mismatch();
+  }
+}
+
+function assertInboxV2AtomicNativeOutboundTransportAssociationSealManifest(
+  input: WithPrivilegedAuthorizationMutationInput,
+  manifest: InboxV2AtomicNativeOutboundTransportAssociationSealManifest
+): void {
+  const mismatch = atomicMessageSealManifestMismatch;
+  const change = input.records.changes[0];
+  const state = change?.state;
+  const timeline = change?.timeline;
+  const event = input.records.events[0];
+  const projection = input.records.outboxIntents[0];
+  const audit = input.records.audit;
+  const expectedAuditTarget =
+    deriveInboxV2NativeOutboundTransportAuditTargetReference({
+      tenantId: manifest.tenantId,
+      messageId: manifest.messageId,
+      linkId: manifest.linkId
+    });
+  const expectedConversationFacet =
+    deriveInboxV2NativeOutboundConversationAuditReference({
+      tenantId: manifest.tenantId,
+      conversationId: manifest.conversationId
+    });
+  const decisions = audit.authorizationDecisionRefs.filter(
+    (decision) =>
+      decision.id === input.command.authorizationDecisionId &&
+      decision.tenantId === manifest.tenantId &&
+      decision.authorizationEpoch === input.command.authorizationEpoch &&
+      decision.permissionId === "core:message.receive_external" &&
+      decision.resourceScopeId === "core:conversation" &&
+      decision.resource.tenantId === manifest.tenantId &&
+      decision.resource.entityTypeId === "core:conversation" &&
+      String(decision.resource.entityId) === String(manifest.conversationId) &&
+      decision.principal.kind === "trusted_service" &&
+      decision.principal.trustedServiceId === manifest.trustedServiceId &&
+      decision.outcome === "allowed"
+  );
+  const decision = decisions[0];
+  const fences =
+    decision === undefined
+      ? []
+      : input.revisions.resources.filter(
+          (resource) =>
+            resource.resourceKind === "conversation" &&
+            String(resource.resourceId) === String(manifest.conversationId) &&
+            String(resource.expectedResourceAccessRevision) ===
+              String(decision.resourceAccessRevision) &&
+            resource.advance === "none"
+        );
+  const auditFacet = audit.facets[0];
+  const eventDecisionIds =
+    event?.authorizationDecisionRefs.map(({ id }) => id) ?? [];
+  const auditDecisionIds = audit.authorizationDecisionRefs.map(({ id }) => id);
+  if (
+    input.tenantId !== manifest.tenantId ||
+    input.command.commandTypeId !==
+      "core:message.native_outbound_occurrence.attach" ||
+    input.command.actor.kind !== "trusted_service" ||
+    input.command.actor.trustedServiceId !== manifest.trustedServiceId ||
+    input.occurredAt !== manifest.event.occurredAt ||
+    input.occurredAt !== manifest.event.recordedAt ||
+    input.records.correlationId !== manifest.correlationId ||
+    manifest.role !== "native_outbound" ||
+    manifest.originSourceOccurrenceId === manifest.sourceOccurrenceId ||
+    input.records.changes.length !== 1 ||
+    input.records.events.length !== 1 ||
+    input.records.outboxIntents.length !== 1 ||
+    change === undefined ||
+    change.entity.tenantId !== manifest.tenantId ||
+    change.entity.entityTypeId !== "core:message-transport-observation" ||
+    String(change.entity.entityId) !== String(manifest.linkId) ||
+    String(change.resultingRevision) !== manifest.linkHeadRevision ||
+    timeline === undefined ||
+    timeline === null ||
+    timeline.conversation.tenantId !== manifest.tenantId ||
+    String(timeline.conversation.id) !== String(manifest.conversationId) ||
+    String(timeline.timelineSequence) !== manifest.timelineSequence ||
+    change.audience !== manifest.audience ||
+    state?.kind !== "upsert" ||
+    state.stateSchemaId !== manifest.stateSchemaId ||
+    state.stateSchemaVersion !== manifest.stateSchemaVersion ||
+    state.stateHash !== manifest.stateHash ||
+    !payloadReferencesMatch(
+      state.payloadReference,
+      manifest.payloadReference
+    ) ||
+    !payloadReferencesMatch(
+      state.domainCommitReference,
+      manifest.domainCommitReference
+    ) ||
+    input.command.resultReference === null ||
+    !payloadReferencesMatch(
+      input.command.resultReference,
+      manifest.payloadReference
+    ) ||
+    event === undefined ||
+    event.typeId !== manifest.event.typeId ||
+    event.payloadSchemaId !== manifest.event.payloadSchemaId ||
+    event.payloadSchemaVersion !== manifest.event.payloadSchemaVersion ||
+    event.occurredAt !== manifest.event.occurredAt ||
+    event.recordedAt !== manifest.event.recordedAt ||
+    event.correlationId !== manifest.correlationId ||
+    event.payloadReference === null ||
+    !payloadReferencesMatch(
+      event.payloadReference,
+      manifest.event.payloadReference
+    ) ||
+    event.changeIds.length !== 1 ||
+    String(event.changeIds[0]) !== String(change.id) ||
+    event.subjects.length !== 1 ||
+    event.subjects[0]?.tenantId !== manifest.tenantId ||
+    event.subjects[0]?.entityTypeId !== "core:message" ||
+    String(event.subjects[0]?.entityId) !== String(manifest.messageId) ||
+    event.accessEffect.kind !== "none" ||
+    eventDecisionIds.length !== auditDecisionIds.length ||
+    eventDecisionIds.some((id, index) => id !== auditDecisionIds[index]) ||
+    projection === undefined ||
+    projection.typeId !== "core:projection.update" ||
+    projection.handlerId !== "core:inbox-projection" ||
+    projection.effectClass !== "projection" ||
+    String(projection.eventId) !== String(event.id) ||
+    projection.changeIds.length !== 1 ||
+    String(projection.changeIds[0]) !== String(change.id) ||
+    projection.payloadReference === null ||
+    !payloadReferencesMatch(
+      projection.payloadReference,
+      manifest.payloadReference
+    ) ||
+    projection.correlationId !== manifest.correlationId ||
+    audit.actionId !== "core:message.native_outbound_occurrence.attach" ||
+    audit.target.tenantId !== manifest.tenantId ||
+    audit.target.entityTypeId !== "core:message" ||
+    String(audit.target.entityId) !== String(manifest.auditTargetEntityId) ||
+    String(manifest.auditTargetEntityId) !==
+      String(expectedAuditTarget.entityId) ||
+    audit.reasonCodeId !== "core:native-outbound-occurrence-attached" ||
+    audit.evidenceReference === null ||
+    !payloadReferencesMatch(
+      audit.evidenceReference,
+      manifest.sourceResolutionReference
+    ) ||
+    audit.correlationId !== manifest.correlationId ||
+    audit.occurredAt !== input.occurredAt ||
+    audit.recordedAt !== input.occurredAt ||
+    audit.overrideReasonCodeId !== null ||
+    audit.matchedPermissionIds.length !== 1 ||
+    audit.matchedPermissionIds[0] !== "core:message.receive_external" ||
+    audit.authorizationScopeIds.length !== 1 ||
+    audit.authorizationScopeIds[0] !== "core:conversation" ||
+    audit.facets.length !== 1 ||
+    auditFacet === undefined ||
+    auditFacet.ordinal !== 1 ||
+    auditFacet.dimension !== "resource" ||
+    auditFacet.relation !== "affected" ||
+    auditFacet.reference.tenantId !== manifest.tenantId ||
+    auditFacet.reference.entityTypeId !== "core:conversation" ||
+    String(auditFacet.reference.entityId) !==
+      String(manifest.auditConversationFacetEntityId) ||
+    String(manifest.auditConversationFacetEntityId) !==
+      String(expectedConversationFacet.entityId) ||
+    decisions.length !== 1 ||
+    fences.length !== 1 ||
+    input.revisions.resources.length !== 1 ||
+    input.records.outboxIntents.some(
+      (intent) =>
+        intent.effectClass === "provider_io" ||
+        intent.effectClass === "notification"
+    )
   ) {
     throw mismatch();
   }

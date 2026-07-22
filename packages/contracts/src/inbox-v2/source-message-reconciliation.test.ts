@@ -10,6 +10,7 @@ import {
   INBOX_V2_SOURCE_MESSAGE_RECONCILIATION_SCHEMA_VERSION,
   INBOX_V2_SOURCE_MESSAGE_WEAK_CORRELATION_EVIDENCE_MAX,
   inboxV2SourceMessageAdapterIntentDescriptorSchema,
+  inboxV2SourceMessageExactOutboundCorrelationSchema,
   inboxV2SourceMessageObservationOriginDescriptorSchema,
   inboxV2SourceMessageWeakCorrelationEvidenceListSchema,
   inboxV2SourceMessageWeakCorrelationEvidenceSchema
@@ -73,15 +74,42 @@ describe("Inbox V2 source-message reconciliation contracts", () => {
     expect(
       inboxV2SourceMessageAdapterIntentDescriptorSchema.safeParse({
         kind: "echo_handoff",
-        transportRole: "provider_response"
+        transportRole: "provider_response",
+        exactOutboundCorrelation: null
       }).success
     ).toBe(false);
     expect(
       inboxV2SourceMessageAdapterIntentDescriptorSchema.safeParse({
         kind: "echo_handoff",
-        transportRole: "provider_echo"
+        transportRole: "provider_echo",
+        exactOutboundCorrelation: null
       }).success
     ).toBe(true);
+  });
+
+  it("keeps exact echo correlation provider-owned and target-free", () => {
+    const exact = {
+      providerReferenceKindId: "module:synthetic:client-correlation-token",
+      correlationToken: "provider:idempotency-0001",
+      artifactOrdinal: 2
+    };
+    expect(
+      inboxV2SourceMessageExactOutboundCorrelationSchema.safeParse(exact)
+        .success
+    ).toBe(true);
+    expect(
+      inboxV2SourceMessageAdapterIntentDescriptorSchema.safeParse({
+        kind: "echo_handoff",
+        transportRole: "provider_echo",
+        exactOutboundCorrelation: exact
+      }).success
+    ).toBe(true);
+    expect(
+      inboxV2SourceMessageExactOutboundCorrelationSchema.safeParse({
+        ...exact,
+        messageId: "message:adapter-selected"
+      }).success
+    ).toBe(false);
   });
 
   it("bounds exact provider ordering positions before BigInt comparison", () => {

@@ -1,9 +1,14 @@
 import {
+  calculateInboxV2CanonicalSha256,
   calculateInboxV2MessageContentDigest,
   calculateInboxV2OutboundDispatchContentPlanDigest,
+  deriveInboxV2OutboundDispatchArtifactId,
   deriveInboxV2RouteFailureOutboxFinalization,
   INBOX_V2_MESSAGE_SCHEMA_ID,
   INBOX_V2_MESSAGE_SCHEMA_VERSION,
+  INBOX_V2_MESSAGE_TRANSPORT_ASSOCIATION_COMMIT_SCHEMA_ID,
+  INBOX_V2_MESSAGE_TRANSPORT_OCCURRENCE_LINK_SCHEMA_ID,
+  INBOX_V2_MESSAGE_TRANSPORT_SCHEMA_VERSION,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
   INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_ID,
@@ -12,6 +17,7 @@ import {
   inboxV2EntityRevisionSchema,
   inboxV2MessageCreationCommitSchema,
   inboxV2NamespacedIdSchema,
+  inboxV2OutboundDispatchArtifactSchema,
   inboxV2OutboundDispatchArtifactAssociationCommitSchema,
   inboxV2OutboundDispatchContentPlanSchema,
   inboxV2OutboundDispatchAttemptCommitSchema,
@@ -20,11 +26,14 @@ import {
   inboxV2OutboundDispatchRerouteCommitSchema,
   inboxV2OutboundDispatchRouteFailureCommitSchema,
   inboxV2OutboundDispatchSchema,
+  inboxV2OutboundProviderResponseObservationDescriptorSchema,
   inboxV2OutboundRouteResolutionCommitSchema,
   inboxV2OutboundRouteResolutionInputSchema,
   inboxV2OutboundRouteSchema,
   inboxV2OutboxIntentIdSchema,
+  inboxV2SafeSourceDiagnosticSchema,
   inboxV2Sha256DigestSchema,
+  inboxV2SourceOccurrenceSchema,
   inboxV2TenantIdSchema,
   inboxV2ThreadRoutePolicySchema,
   inboxV2TimelineContentHeadOf,
@@ -32,13 +41,18 @@ import {
   materializeInboxV2OutboundRouteResolutionCommit,
   resolveInboxV2OutboundRoute,
   type InboxV2AuthorizationDecisionReference,
-  type InboxV2OutboundDispatchArtifactAssociationCommit
+  type InboxV2OutboundDispatchArtifactAssociationCommit,
+  type InboxV2OutboundDispatchContentPlan,
+  type InboxV2OutboundProviderObservation,
+  type InboxV2OutboundProviderSettlementCommit
 } from "@hulee/contracts";
 import { sql, type SQL } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createInboxV2ProviderDispatchCoordinator } from "../../../../apps/worker/src/inbox-v2-provider-dispatch-coordinator";
+import { createInboxV2TrustedOutboundProviderObservationMaterializer } from "../../../../apps/worker/src/outbound-provider-observation-materializer";
+import { createInboxV2OutboundProviderSettlementWorker } from "../../../../apps/worker/src/outbound-provider-settlement-worker";
 import {
   fixtureOutboundBindingSnapshot,
   fixtureReference
@@ -54,7 +68,15 @@ import {
   createSqlInboxV2AuthorizedCommandCoordinator,
   type WithInboxV2AuthorizedCommandMutationInput
 } from "./sql-inbox-v2-authorization-repository";
+import {
+  deriveInboxV2ProviderObservationAuditTargetReference,
+  deriveInboxV2ProviderObservationSourceAccountAuditReference
+} from "./sql-inbox-v2-atomic-materialization-internal";
+import { computeInboxV2ExternalThreadKeyDigest } from "./sql-inbox-v2-external-thread-repository";
 import { persistInboxV2OutboundDispatchContentPlanInTransaction } from "./sql-inbox-v2-file-object-repository";
+import { persistInboxV2OutboundProviderObservationInTransaction } from "./sql-inbox-v2-outbound-provider-observation-repository";
+import { createSqlInboxV2OutboundProviderSettlementRuntime } from "./sql-inbox-v2-outbound-provider-settlement-runtime";
+import { enqueueInboxV2OutboundProviderSettlementWorkInTransaction } from "./sql-inbox-v2-outbound-provider-settlement-work-repository";
 import {
   buildCompareAndSwapInboxV2OutboundDispatchSql,
   buildInsertInboxV2OutboundDispatchArtifactSql,
@@ -62,6 +84,7 @@ import {
   buildInsertInboxV2OutboundDispatchReconciliationDecisionSql,
   buildInsertInboxV2OutboundDispatchSql,
   buildInsertInboxV2OutboundRouteSql,
+  computeInboxV2ExternalMessageKeyDigest,
   createSqlInboxV2OutboundTransportRepository,
   persistInboxV2ExplicitRerouteResolutionInTransaction,
   persistInboxV2RouteResolutionInTransaction
@@ -1294,6 +1317,16 @@ describePostgres(
         },
         completedByTrustedServiceId:
           fixture.route.adapterContract.loadedByTrustedServiceId,
+        providerObservationMaterializer:
+          createInboxV2TrustedOutboundProviderObservationMaterializer({
+            trustedServiceId:
+              fixture.route.adapterContract.loadedByTrustedServiceId,
+            namespaceDeriver: {
+              namespaceGeneration: `namespace-generation:${runId}`,
+              deriveNamespaceHmacSha256: ({ canonicalPreimage }) =>
+                createHash("sha256").update(canonicalPreimage).digest("hex")
+            }
+          }),
         expectedHandlerId: providerIntent.handlerId,
         providerDeadlineMs: 30_000
       }).process(providerClaim);
@@ -1875,6 +1908,13 @@ describePostgres(
               )
             );
             expect(inserted.rows).toHaveLength(1);
+            const updated = await transaction.execute(
+              buildCompareAndSwapInboxV2OutboundDispatchSql(
+                fixture.reconciliationCommit.dispatchBefore,
+                fixture.reconciliationCommit.dispatchAfter
+              )
+            );
+            expect(updated.rows).toHaveLength(1);
           });
         });
         const artifactWrite = captureDatabaseWrite(async () => {
@@ -1907,6 +1947,8 @@ describePostgres(
         const persisted = await db.execute<{
           artifact_count: string;
           decision_count: string;
+          dispatch_state: string;
+          retry_authorization_decision_id: string | null;
         }>(sql`
           select
             (
@@ -1926,12 +1968,28 @@ describePostgres(
                  and decision_row.unknown_attempt_id =
                    ${fixture.unknownAttempt.id}
                  and decision_row.result_state = 'retryable_failure'
-            ) as decision_count
+            ) as decision_count,
+            dispatch_row.state as dispatch_state,
+            dispatch_row.retry_authorization_decision_id
+          from inbox_v2_outbound_dispatches dispatch_row
+         where dispatch_row.tenant_id = ${fixture.tenantId}
+           and dispatch_row.id = ${fixture.queuedDispatch.id}
         `);
-        expect(
-          Number(persisted.rows[0]?.artifact_count) +
-            Number(persisted.rows[0]?.decision_count)
-        ).toBe(1);
+        expect(persisted.rows).toHaveLength(1);
+        expect([
+          {
+            artifact_count: "1",
+            decision_count: "0",
+            dispatch_state: "outcome_unknown",
+            retry_authorization_decision_id: null
+          },
+          {
+            artifact_count: "0",
+            decision_count: "1",
+            dispatch_state: "retryable_failure",
+            retry_authorization_decision_id: fixture.reconciliationDecision.id
+          }
+        ]).toContainEqual(persisted.rows[0]);
       } finally {
         releaseBoth.resolve();
         await Promise.all([
@@ -2377,6 +2435,1381 @@ describePostgres(
         ]);
       }
     );
+
+    it("serializes accepted echo truth ahead of non-accepted completion and reconciliation", async () => {
+      const pendingFixture = fixtureFor("provider-echo-completion-fence");
+      const unknownFixture = fixtureFor("provider-echo-reconciliation-fence");
+      tenantIds.push(pendingFixture.tenantId, unknownFixture.tenantId);
+
+      const persistEcho = async (
+        fixture: OutboundFixture,
+        dispatch: OutboundFixture["attemptingDispatch"],
+        attempt: OutboundFixture["pendingAttempt"],
+        occurrenceOverride?: ReturnType<
+          typeof inboxV2SourceOccurrenceSchema.parse
+        >
+      ) => {
+        const occurrence =
+          occurrenceOverride ??
+          fixture.echoAssociation.occurrenceResolution.before;
+        await db.transaction(async (transaction) => {
+          await transaction.execute(
+            sql`set local session_replication_role = replica`
+          );
+          await seedProviderObservation(
+            transaction,
+            fixture,
+            fixture.echoAssociation,
+            occurrence
+          );
+          await transaction.execute(
+            sql`set local session_replication_role = origin`
+          );
+        });
+        await expect(
+          db.execute(
+            buildInsertInboxV2OutboundDispatchArtifactSql(fixture.artifacts[0]!)
+          )
+        ).resolves.toMatchObject({ rows: [{ id: fixture.artifacts[0]!.id }] });
+        const correlationToken =
+          fixture.pendingAttempt.retrySafety.providerCorrelationToken;
+        const correlationReference =
+          occurrence.descriptor.providerReferences[1];
+        if (correlationToken === null || correlationReference === undefined) {
+          throw new Error("Echo fence fixture requires exact correlation.");
+        }
+        const materializer = providerSettlementMaterializer(fixture);
+        const observation = materializer.materializeProviderEcho({
+          dispatch,
+          route: fixture.route,
+          attempt,
+          artifact: fixture.artifacts[0]!,
+          sourceOccurrence: occurrence,
+          exactCorrelation: {
+            providerReferenceKindId: correlationReference.kindId,
+            correlationToken,
+            artifactOrdinal: 1
+          },
+          recordedAt: occurrence.recordedAt
+        });
+        await persistProviderSettlementHandoff(
+          db,
+          materializer,
+          observation,
+          outboundDispatchContentPlanFor(fixture)
+        );
+        return observation;
+      };
+
+      await seedOutboundAnchors(db, pendingFixture);
+      await expect(
+        persistAtomicOutboundProducer(db, pendingFixture)
+      ).resolves.toMatchObject({ kind: "applied" });
+      const pendingRepository = createSqlInboxV2OutboundTransportRepository(db);
+      await expect(
+        pendingRepository.applyAttempt(pendingFixture.openAttemptCommit)
+      ).resolves.toEqual({ kind: "committed" });
+      await persistEcho(
+        pendingFixture,
+        pendingFixture.attemptingDispatch,
+        pendingFixture.pendingAttempt
+      );
+      await expect(
+        pendingRepository.applyAttempt(pendingFixture.completeUnknownCommit)
+      ).resolves.toEqual({ kind: "provider_settlement_pending" });
+
+      await seedOutboundAnchors(db, unknownFixture);
+      await expect(
+        persistAtomicOutboundProducer(db, unknownFixture)
+      ).resolves.toMatchObject({ kind: "applied" });
+      const unknownRepository = createSqlInboxV2OutboundTransportRepository(db);
+      await expect(
+        unknownRepository.applyAttempt(unknownFixture.openAttemptCommit)
+      ).resolves.toEqual({ kind: "committed" });
+      await expect(
+        unknownRepository.applyAttempt(unknownFixture.completeUnknownCommit)
+      ).resolves.toEqual({ kind: "committed" });
+      const lateUnknownEchoOccurrence = inboxV2SourceOccurrenceSchema.parse({
+        ...unknownFixture.echoAssociation.occurrenceResolution.before,
+        recordedAt: OUTBOUND_TEST_TIMES.linkedAt,
+        createdAt: OUTBOUND_TEST_TIMES.linkedAt,
+        updatedAt: OUTBOUND_TEST_TIMES.linkedAt
+      });
+      await persistEcho(
+        unknownFixture,
+        unknownFixture.unknownDispatch,
+        unknownFixture.unknownAttempt,
+        lateUnknownEchoOccurrence
+      );
+      await expect(
+        unknownRepository.reconcile(unknownFixture.reconciliationCommit)
+      ).resolves.toEqual({ kind: "provider_settlement_pending" });
+      await expect(
+        unknownRepository.reconcile(
+          terminalReconciliationCommitFor(unknownFixture)
+        )
+      ).resolves.toEqual({ kind: "provider_settlement_pending" });
+
+      const states = await db.execute<{
+        tenant_id: string;
+        dispatch_state: string;
+        dispatch_revision: string;
+        attempt_outcome: string;
+        attempt_revision: string;
+      }>(sql`
+        select dispatch_row.tenant_id,
+               dispatch_row.state::text as dispatch_state,
+               dispatch_row.revision::text as dispatch_revision,
+               attempt_row.outcome_kind::text as attempt_outcome,
+               attempt_row.revision::text as attempt_revision
+          from inbox_v2_outbound_dispatches dispatch_row
+          join inbox_v2_outbound_dispatch_attempts attempt_row
+            on attempt_row.tenant_id = dispatch_row.tenant_id
+           and attempt_row.dispatch_id = dispatch_row.id
+         where dispatch_row.tenant_id in (
+           ${pendingFixture.tenantId}, ${unknownFixture.tenantId}
+         )
+         order by dispatch_row.tenant_id
+      `);
+      expect(states.rows).toEqual([
+        {
+          tenant_id: pendingFixture.tenantId,
+          dispatch_state: "attempting",
+          dispatch_revision: "2",
+          attempt_outcome: "pending",
+          attempt_revision: "1"
+        },
+        {
+          tenant_id: unknownFixture.tenantId,
+          dispatch_state: "outcome_unknown",
+          dispatch_revision: "3",
+          attempt_outcome: "outcome_unknown",
+          attempt_revision: "2"
+        }
+      ]);
+    });
+
+    it.each([
+      ["all-failed response", "all_failed"],
+      ["descriptor-less accepted sibling", "hybrid_full"]
+    ] as const)(
+      "keeps one provider call when a pending multipart echo beats a %s and later settles against canonical truth",
+      async (_label, resultKind) => {
+        const fixture = multipartFixtureFor(
+          `provider-pending-echo-before-${resultKind}`
+        );
+        tenantIds.push(fixture.tenantId);
+        await seedOutboundAnchors(db, fixture);
+        await seedProviderSettlementAccountIdentity(db, fixture);
+        await expect(
+          persistAtomicOutboundProducer(db, fixture)
+        ).resolves.toMatchObject({ kind: "applied" });
+
+        const providerIntent = authorizedExternalSendInput(
+          fixture
+        ).records.outboxIntents.find(
+          (intent) => intent.typeId === "core:provider.dispatch"
+        );
+        if (providerIntent === undefined) {
+          throw new Error(
+            "Provider permutation fixture has no provider intent."
+          );
+        }
+        const tenantId = inboxV2TenantIdSchema.parse(fixture.tenantId);
+        const workerId = inboxV2NamespacedIdSchema.parse(
+          "core:provider-pending-echo-worker"
+        );
+        const outbox = createSqlInboxV2RepositoryOutbox(db, {
+          tokenSource: (count) =>
+            Array.from(
+              { length: count },
+              (_, index) =>
+                `lease-token:pending-echo-${index}-${runId}-${"e".repeat(32)}`
+            )
+        });
+        const claimed = await outbox.claimAvailable({
+          context: { tenantId },
+          workerId,
+          leaseDurationSeconds: 30,
+          batchSize: 2
+        });
+        if (claimed.outcome !== "claimed") {
+          throw new Error("Provider permutation intent was not claimed.");
+        }
+        const providerClaim = claimed.claims.find(
+          (claim) => claim.work.intentId === providerIntent.id
+        );
+        if (providerClaim === undefined || providerClaim.work.lease === null) {
+          throw new Error("Provider permutation claim has no exact lease.");
+        }
+        const providerLease = providerClaim.work.lease;
+        const pendingAttempt = inboxV2OutboundDispatchAttemptSchema.parse({
+          ...fixture.pendingAttempt,
+          openedAt: providerLease.claimedAt,
+          leaseExpiresAt: providerLease.expiresAt
+        });
+        const attemptingDispatch = inboxV2OutboundDispatchSchema.parse({
+          ...fixture.attemptingDispatch,
+          updatedAt: pendingAttempt.openedAt
+        });
+        const openCommit = inboxV2OutboundDispatchAttemptCommitSchema.parse({
+          ...fixture.openAttemptCommit,
+          attempt: pendingAttempt,
+          dispatchAfter: attemptingDispatch
+        });
+        if (openCommit.kind !== "open_attempt") {
+          throw new Error(
+            "Provider permutation did not build an open attempt."
+          );
+        }
+
+        const materializer = providerSettlementMaterializer(fixture);
+        const contentPlan = outboundDispatchContentPlanFor(fixture);
+        let echoObservation: InboxV2OutboundProviderObservation | undefined;
+        let adapterCallCount = 0;
+        const retryableDiagnostic = inboxV2SafeSourceDiagnosticSchema.parse({
+          codeId: "core:provider-permutation-temporary-failure",
+          retryable: true,
+          correlationToken: `provider:all-failed-${fixture.suffix}`,
+          safeOperatorHintId: null
+        });
+        const coordinator = createInboxV2ProviderDispatchCoordinator({
+          outbox,
+          transport: createSqlInboxV2OutboundTransportRepository(db),
+          planner: {
+            plan: () => ({
+              kind: "open_attempt" as const,
+              commit: openCommit,
+              request: { text: "pending echo before all-failed response" }
+            })
+          },
+          adapter: {
+            dispatch: async () => {
+              adapterCallCount += 1;
+              const echoArtifact = inboxV2OutboundDispatchArtifactSchema.parse({
+                ...fixture.artifacts[0]!,
+                id: deriveInboxV2OutboundDispatchArtifactId({
+                  tenantId: fixture.tenantId,
+                  dispatch: pendingAttempt.dispatch,
+                  route: pendingAttempt.route,
+                  attempt: {
+                    tenantId: fixture.tenantId,
+                    kind: "outbound_dispatch_attempt",
+                    id: pendingAttempt.id
+                  },
+                  ordinal: 1
+                }),
+                state: "accepted",
+                diagnostic: null,
+                createdAt: pendingAttempt.openedAt
+              });
+              await expect(
+                db.execute(
+                  buildInsertInboxV2OutboundDispatchArtifactSql(echoArtifact)
+                )
+              ).resolves.toMatchObject({ rows: [{ id: echoArtifact.id }] });
+
+              const occurredAt = new Date().toISOString();
+              const baseOccurrence = providerEchoOccurrenceForArtifact(
+                fixture,
+                echoArtifact.ordinal
+              );
+              const occurrence = inboxV2SourceOccurrenceSchema.parse({
+                ...baseOccurrence,
+                observedAt: occurredAt,
+                recordedAt: occurredAt,
+                createdAt: occurredAt,
+                updatedAt: occurredAt
+              });
+              await db.transaction(async (transaction) => {
+                await transaction.execute(
+                  sql`set local session_replication_role = replica`
+                );
+                await seedProviderObservation(
+                  transaction,
+                  fixture,
+                  fixture.echoAssociation,
+                  occurrence
+                );
+                await transaction.execute(
+                  sql`set local session_replication_role = origin`
+                );
+              });
+              const correlationToken =
+                pendingAttempt.retrySafety.providerCorrelationToken;
+              const correlationReference =
+                occurrence.descriptor.providerReferences.find(
+                  (reference) => reference.subject === correlationToken
+                );
+              if (
+                correlationToken === null ||
+                correlationReference === undefined
+              ) {
+                throw new Error(
+                  "Provider permutation echo lost exact correlation evidence."
+                );
+              }
+              echoObservation = materializer.materializeProviderEcho({
+                dispatch: attemptingDispatch,
+                route: fixture.route,
+                attempt: pendingAttempt,
+                artifact: echoArtifact,
+                sourceOccurrence: occurrence,
+                exactCorrelation: {
+                  providerReferenceKindId: correlationReference.kindId,
+                  correlationToken,
+                  artifactOrdinal: echoArtifact.ordinal
+                },
+                recordedAt: occurrence.recordedAt
+              });
+              await persistProviderSettlementHandoff(
+                db,
+                materializer,
+                echoObservation,
+                contentPlan
+              );
+              const handoff = await db.execute<{
+                artifact_ordinal: unknown;
+                artifact_id: string;
+                dispatch_id: string;
+                route_id: string;
+                attempt_id: string;
+                message_id: string;
+                content_plan_id: string;
+                content_plan_digest_sha256: string;
+                effective_state: string;
+                work_state: string;
+              }>(sql`
+              select observation_row.artifact_ordinal,
+                     observation_row.artifact_id,
+                     observation_row.dispatch_id,
+                     observation_row.route_id,
+                     observation_row.attempt_id,
+                     observation_row.message_id,
+                     observation_row.content_plan_id,
+                     observation_row.content_plan_digest_sha256,
+                     observation_row.effective_state::text as effective_state,
+                     work_row.state::text as work_state
+                from inbox_v2_outbound_provider_observations observation_row
+                join inbox_v2_outbound_provider_settlement_work_items work_row
+                  on work_row.tenant_id = observation_row.tenant_id
+                 and work_row.observation_id = observation_row.id
+               where observation_row.tenant_id = ${fixture.tenantId}
+                 and observation_row.id = ${echoObservation.id}
+            `);
+              const handoffRow = handoff.rows[0];
+              if (
+                handoff.rows.length !== 1 ||
+                Number(handoffRow?.artifact_ordinal) !== 1 ||
+                handoffRow?.artifact_id !== echoArtifact.id ||
+                handoffRow?.dispatch_id !== attemptingDispatch.id ||
+                handoffRow?.route_id !== fixture.route.id ||
+                handoffRow?.attempt_id !== pendingAttempt.id ||
+                handoffRow?.message_id !== attemptingDispatch.message.id ||
+                handoffRow?.content_plan_id !== contentPlan.id ||
+                handoffRow?.content_plan_digest_sha256 !==
+                  contentPlan.planDigestSha256 ||
+                handoffRow?.effective_state !== "accepted" ||
+                handoffRow?.work_state !== "pending"
+              ) {
+                throw new Error(
+                  `Provider handoff diverged: ${JSON.stringify(handoff.rows)}`
+                );
+              }
+              const retryAt = new Date(Date.now() + 60_000).toISOString();
+              if (resultKind === "all_failed") {
+                return {
+                  artifacts: contentPlan.artifacts.map((artifact) => ({
+                    artifactOrdinal: artifact.ordinal,
+                    outcome: "failed" as const,
+                    retryAt,
+                    diagnostic: retryableDiagnostic
+                  }))
+                };
+              }
+              return {
+                artifacts: [
+                  {
+                    artifactOrdinal: 1,
+                    outcome: "failed" as const,
+                    retryAt,
+                    diagnostic: retryableDiagnostic
+                  },
+                  {
+                    artifactOrdinal: 2,
+                    outcome: "accepted" as const,
+                    providerAcknowledgementToken: null,
+                    providerResponseObservation: null
+                  }
+                ]
+              };
+            }
+          },
+          completedByTrustedServiceId:
+            fixture.route.adapterContract.loadedByTrustedServiceId,
+          providerObservationMaterializer: materializer,
+          expectedHandlerId: providerIntent.handlerId,
+          providerDeadlineMs: 30_000
+        });
+
+        const providerResult = await coordinator.process(providerClaim);
+        if (providerResult.outcome !== "finalized") {
+          throw new Error(
+            `Provider permutation failed: ${JSON.stringify(providerResult)}`
+          );
+        }
+        expect(providerResult).toMatchObject({
+          outcome: "finalized",
+          source: "provider_result"
+        });
+        expect(adapterCallCount).toBe(1);
+        if (echoObservation === undefined) {
+          throw new Error("Provider permutation did not persist its echo.");
+        }
+
+        const completedHead = await db.execute<
+          Record<string, string | null>
+        >(sql`
+        select dispatch_row.state::text as dispatch_state,
+               dispatch_row.revision::text as dispatch_revision,
+               attempt_row.outcome_kind::text as attempt_outcome,
+               attempt_row.revision::text as attempt_revision,
+               attempt_row.opened_at::text as opened_at,
+               attempt_row.completed_at::text as completed_at,
+               attempt_row.diagnostic_code_id,
+               attempt_row.unknown_required_action
+          from inbox_v2_outbound_dispatches dispatch_row
+          join inbox_v2_outbound_dispatch_attempts attempt_row
+            on attempt_row.tenant_id = dispatch_row.tenant_id
+           and attempt_row.id = dispatch_row.last_attempt_id
+         where dispatch_row.tenant_id = ${fixture.tenantId}
+           and dispatch_row.id = ${fixture.queuedDispatch.id}
+      `);
+        expect(completedHead.rows[0]).toMatchObject({
+          dispatch_state:
+            resultKind === "all_failed" ? "outcome_unknown" : "accepted",
+          dispatch_revision: "3",
+          attempt_outcome:
+            resultKind === "all_failed" ? "outcome_unknown" : "accepted",
+          attempt_revision: "2",
+          diagnostic_code_id:
+            resultKind === "all_failed"
+              ? "core:provider-artifact-outcomes-mixed"
+              : null,
+          unknown_required_action:
+            resultKind === "all_failed"
+              ? "operator_duplicate_risk_decision_required"
+              : null
+        });
+        expect(completedHead.rows[0]?.opened_at).not.toBe(
+          completedHead.rows[0]?.completed_at
+        );
+
+        const settlementWorker = createInboxV2OutboundProviderSettlementWorker({
+          database: db,
+          tokenSource: () => `settlement-lease:${"s".repeat(40)}`,
+          authorizer: {
+            authorizeExactCommit: async ({ commit }) => ({
+              kind: "authorized" as const,
+              authority: authorizedProviderSettlementInput(fixture, commit)
+            })
+          }
+        });
+        await expect(
+          settlementWorker.processBatch({
+            tenantId: fixture.tenantId,
+            workerId: "core:provider-pending-echo-settlement-worker",
+            limit: 1,
+            leaseDurationMs: 30_000
+          })
+        ).resolves.toEqual([
+          {
+            kind: "settled",
+            observationId: echoObservation.id,
+            replay: false
+          }
+        ]);
+
+        const retained = await db.execute<Record<string, string>>(sql`
+        select dispatch_row.state::text as dispatch_state,
+               dispatch_row.revision::text as dispatch_revision,
+               attempt_row.outcome_kind::text as attempt_outcome,
+               attempt_row.revision::text as attempt_revision,
+               work.state::text as settlement_work_state
+          from inbox_v2_outbound_dispatches dispatch_row
+          join inbox_v2_outbound_dispatch_attempts attempt_row
+            on attempt_row.tenant_id = dispatch_row.tenant_id
+           and attempt_row.id = dispatch_row.last_attempt_id
+          join inbox_v2_outbound_provider_settlement_work_items work
+            on work.tenant_id = dispatch_row.tenant_id
+           and work.observation_id = ${echoObservation.id}
+         where dispatch_row.tenant_id = ${fixture.tenantId}
+           and dispatch_row.id = ${fixture.queuedDispatch.id}
+      `);
+        expect(retained.rows[0]).toEqual({
+          dispatch_state:
+            resultKind === "all_failed" ? "outcome_unknown" : "accepted",
+          dispatch_revision: "3",
+          attempt_outcome:
+            resultKind === "all_failed" ? "outcome_unknown" : "accepted",
+          attempt_revision: "2",
+          settlement_work_state: "settled"
+        });
+
+        await expect(coordinator.process(providerClaim)).resolves.toMatchObject(
+          {
+            outcome: "load_rejected"
+          }
+        );
+        expect(adapterCallCount).toBe(1);
+      },
+      30_000
+    );
+
+    it("plans one accepted multipart provider response from historical route truth after lease reclaim and current binding/account drift", async () => {
+      const fixture = multipartFixtureFor(
+        "provider-settlement-response-history"
+      );
+      tenantIds.push(fixture.tenantId);
+      await seedOutboundAnchors(db, fixture);
+      await seedProviderSettlementAccountIdentity(db, fixture);
+      const repository = createSqlInboxV2OutboundTransportRepository(db);
+      await expect(
+        persistAtomicOutboundProducer(db, fixture)
+      ).resolves.toMatchObject({ kind: "applied" });
+      await expect(
+        repository.applyAttempt(fixture.openAttemptCommit)
+      ).resolves.toEqual({ kind: "committed" });
+      const acceptedCommit = inboxV2OutboundDispatchAttemptCommitSchema.parse({
+        ...fixture.completeUnknownCommit,
+        attemptAfter: fixture.acceptedAttempt,
+        completionSource: "provider_result",
+        dispatchAfter: fixture.acceptedDispatch
+      });
+      await expect(repository.applyAttempt(acceptedCommit)).resolves.toEqual({
+        kind: "committed"
+      });
+      await expect(
+        db.execute(
+          buildInsertInboxV2OutboundDispatchArtifactSql(fixture.artifacts[0]!)
+        )
+      ).resolves.toMatchObject({ rows: [{ id: fixture.artifacts[0]!.id }] });
+
+      const materializer = providerSettlementMaterializer(fixture);
+      const observation = materializer.materializeProviderResponse({
+        dispatch: fixture.acceptedDispatch,
+        route: fixture.route,
+        attempt: fixture.acceptedAttempt,
+        artifact: fixture.artifacts[0]!,
+        descriptor: providerResponseDescriptorFor(fixture, 1),
+        recordedAt: OUTBOUND_TEST_TIMES.linkedAt
+      });
+      await persistProviderSettlementHandoff(
+        db,
+        materializer,
+        observation,
+        outboundDispatchContentPlanFor(fixture)
+      );
+
+      const runtimeA = createSqlInboxV2OutboundProviderSettlementRuntime(db, {
+        tokenSource: () => `settlement-lease:${"a".repeat(40)}`
+      });
+      const claimA = (
+        await runtimeA.work.claim({
+          tenantId: fixture.tenantId,
+          workerId: "core:provider-settlement-worker-a",
+          limit: 1,
+          leaseDurationMs: 30_000
+        })
+      )[0];
+      if (claimA === undefined) {
+        throw new Error(
+          "Provider response settlement worker A did not claim work."
+        );
+      }
+      await expireProviderSettlementLease(db, fixture.tenantId, observation.id);
+      const runtimeB = createSqlInboxV2OutboundProviderSettlementRuntime(db, {
+        tokenSource: () => `settlement-lease:${"b".repeat(40)}`
+      });
+      const claimB = (
+        await runtimeB.work.claim({
+          tenantId: fixture.tenantId,
+          workerId: "core:provider-settlement-worker-b",
+          limit: 1,
+          leaseDurationMs: 30_000
+        })
+      )[0];
+      if (claimB === undefined) {
+        throw new Error(
+          "Provider response settlement worker B did not reclaim work."
+        );
+      }
+      expect(claimA).toMatchObject({ leaseRevision: "1", attemptCount: "1" });
+      expect(claimB).toMatchObject({ leaseRevision: "2", attemptCount: "2" });
+      await expect(
+        runtimeA.planner.loadAndPlanExactCommit({ claim: claimA })
+      ).resolves.toEqual({ kind: "lease_conflict" });
+
+      await driftProviderSettlementCurrentHeads(db, fixture);
+      const planned = await runtimeB.planner.loadAndPlanExactCommit({
+        claim: claimB
+      });
+      if (planned.kind !== "planned") {
+        throw new Error(
+          `Expected a planned provider response, got ${JSON.stringify(planned)}.`
+        );
+      }
+      expect(planned).toMatchObject({
+        kind: "planned",
+        commit: {
+          observation: { id: observation.id },
+          artifactCoverage: {
+            contentPlan: { artifacts: [{ ordinal: 1 }, { ordinal: 2 }] },
+            resolutions: [{ effectiveArtifact: { ordinal: 1 } }]
+          },
+          occurrenceMaterialization: { kind: "provider_response" },
+          transition: {
+            kind: "already_accepted",
+            dispatch: { id: fixture.acceptedDispatch.id, revision: "3" },
+            attempt: { id: fixture.acceptedAttempt.id, revision: "2" }
+          }
+        }
+      });
+      expect(planned.commit.artifactCoverage.resolutions).toHaveLength(1);
+      expect(planned.commit.settledAt > observation.recordedAt).toBe(true);
+    });
+
+    it("plans a pending echo against the accepted descendant and its occurrence-time binding after current heads drift", async () => {
+      const fixture = multipartFixtureFor("provider-settlement-echo-history");
+      tenantIds.push(fixture.tenantId);
+      await seedOutboundAnchors(db, fixture);
+      await seedProviderSettlementAccountIdentity(db, fixture);
+      const repository = createSqlInboxV2OutboundTransportRepository(db);
+      await expect(
+        persistAtomicOutboundProducer(db, fixture)
+      ).resolves.toMatchObject({ kind: "applied" });
+      await expect(
+        repository.applyAttempt(fixture.openAttemptCommit)
+      ).resolves.toEqual({ kind: "committed" });
+      await expect(
+        db.execute(
+          buildInsertInboxV2OutboundDispatchArtifactSql(fixture.artifacts[0]!)
+        )
+      ).resolves.toMatchObject({ rows: [{ id: fixture.artifacts[0]!.id }] });
+      await db.transaction(async (transaction) => {
+        await transaction.execute(
+          sql`set local session_replication_role = replica`
+        );
+        await seedProviderObservation(
+          transaction,
+          fixture,
+          fixture.echoAssociation
+        );
+        await transaction.execute(
+          sql`set local session_replication_role = origin`
+        );
+      });
+
+      const correlationToken =
+        fixture.pendingAttempt.retrySafety.providerCorrelationToken;
+      const correlationReference =
+        fixture.echoAssociation.occurrenceResolution.before.descriptor
+          .providerReferences[1];
+      if (correlationToken === null || correlationReference === undefined) {
+        throw new Error(
+          "Provider echo fixture has no exact correlation proof."
+        );
+      }
+      const materializer = providerSettlementMaterializer(fixture);
+      const observation = materializer.materializeProviderEcho({
+        dispatch: fixture.attemptingDispatch,
+        route: fixture.route,
+        attempt: fixture.pendingAttempt,
+        artifact: fixture.artifacts[0]!,
+        sourceOccurrence: fixture.echoAssociation.occurrenceResolution.before,
+        exactCorrelation: {
+          providerReferenceKindId: correlationReference.kindId,
+          correlationToken,
+          artifactOrdinal: 1
+        },
+        recordedAt:
+          fixture.echoAssociation.occurrenceResolution.before.recordedAt
+      });
+      await persistProviderSettlementHandoff(
+        db,
+        materializer,
+        observation,
+        outboundDispatchContentPlanFor(fixture)
+      );
+
+      const acceptedCommit = inboxV2OutboundDispatchAttemptCommitSchema.parse({
+        ...fixture.completeUnknownCommit,
+        attemptAfter: fixture.acceptedAttempt,
+        completionSource: "provider_result",
+        dispatchAfter: fixture.acceptedDispatch
+      });
+      await expect(repository.applyAttempt(acceptedCommit)).resolves.toEqual({
+        kind: "committed"
+      });
+      await driftProviderSettlementCurrentHeads(db, fixture);
+
+      const runtime = createSqlInboxV2OutboundProviderSettlementRuntime(db, {
+        tokenSource: () => `settlement-lease:${"e".repeat(40)}`
+      });
+      const claim = (
+        await runtime.work.claim({
+          tenantId: fixture.tenantId,
+          workerId: "core:provider-settlement-echo-worker",
+          limit: 1,
+          leaseDurationMs: 30_000
+        })
+      )[0];
+      if (claim === undefined) {
+        throw new Error("Provider echo settlement work was not claimed.");
+      }
+      const planned = await runtime.planner.loadAndPlanExactCommit({ claim });
+      expect(planned).toMatchObject({
+        kind: "planned",
+        commit: {
+          observation: { id: observation.id },
+          artifactCoverage: {
+            contentPlan: { artifacts: [{ ordinal: 1 }, { ordinal: 2 }] },
+            resolutions: [{ effectiveArtifact: { ordinal: 1 } }]
+          },
+          occurrenceMaterialization: {
+            kind: "provider_echo",
+            persistedSourceOccurrence: {
+              id: observation.sourceOccurrence.id,
+              revision: "1"
+            }
+          },
+          transition: {
+            kind: "already_accepted",
+            dispatch: { id: fixture.acceptedDispatch.id, revision: "3" },
+            attempt: { id: fixture.acceptedAttempt.id, revision: "2" }
+          }
+        }
+      });
+      if (planned.kind !== "planned") {
+        throw new Error(
+          `Expected a planned provider echo, got ${planned.kind}.`
+        );
+      }
+      expect(planned.commit.artifactCoverage.resolutions).toHaveLength(1);
+      expect(planned.commit.settledAt > observation.recordedAt).toBe(true);
+    });
+
+    it("settles a response-before-echo through the production worker into one existing reference and a distinct provider-echo link", async () => {
+      const fixture = multipartFixtureFor(
+        "provider-settlement-response-before-echo"
+      );
+      tenantIds.push(fixture.tenantId);
+      await seedOutboundAnchors(db, fixture);
+      await seedProviderSettlementAccountIdentity(db, fixture);
+      await expect(
+        persistAtomicOutboundProducer(db, fixture)
+      ).resolves.toMatchObject({ kind: "applied" });
+      const repository = createSqlInboxV2OutboundTransportRepository(db);
+      await expect(
+        repository.applyAttempt(fixture.openAttemptCommit)
+      ).resolves.toEqual({ kind: "committed" });
+      const acceptedCommit = inboxV2OutboundDispatchAttemptCommitSchema.parse({
+        ...fixture.completeUnknownCommit,
+        attemptAfter: fixture.acceptedAttempt,
+        completionSource: "provider_result",
+        dispatchAfter: fixture.acceptedDispatch
+      });
+      await expect(repository.applyAttempt(acceptedCommit)).resolves.toEqual({
+        kind: "committed"
+      });
+      for (const artifact of fixture.artifacts) {
+        await expect(
+          db.execute(buildInsertInboxV2OutboundDispatchArtifactSql(artifact))
+        ).resolves.toMatchObject({ rows: [{ id: artifact.id }] });
+      }
+
+      await db.transaction(async (transaction) => {
+        await transaction.execute(
+          sql`set local session_replication_role = replica`
+        );
+        await seedProviderObservation(
+          transaction,
+          fixture,
+          fixture.responseAssociation
+        );
+        await transaction.execute(
+          sql`set local session_replication_role = origin`
+        );
+      });
+      await expect(
+        repository.associateArtifact(fixture.responseAssociation)
+      ).resolves.toEqual({ kind: "committed" });
+      const existingReference =
+        fixture.responseAssociation.occurrenceResolution.resolvedReference;
+      if (existingReference === null) {
+        throw new Error("Response association must create one reference.");
+      }
+
+      const responseOccurrence =
+        fixture.responseAssociation.occurrenceResolution.before;
+      const echoOccurrence = inboxV2SourceOccurrenceSchema.parse({
+        ...fixture.echoAssociation.occurrenceResolution.before,
+        messageKey: responseOccurrence.messageKey,
+        messageIdentityDeclaration:
+          responseOccurrence.messageIdentityDeclaration,
+        recordedAt: OUTBOUND_TEST_TIMES.linkedAt,
+        createdAt: OUTBOUND_TEST_TIMES.linkedAt,
+        updatedAt: OUTBOUND_TEST_TIMES.linkedAt
+      });
+      await db.transaction(async (transaction) => {
+        await transaction.execute(
+          sql`set local session_replication_role = replica`
+        );
+        await seedProviderObservation(
+          transaction,
+          fixture,
+          fixture.echoAssociation,
+          echoOccurrence
+        );
+        await transaction.execute(
+          sql`set local session_replication_role = origin`
+        );
+      });
+      const correlationToken =
+        fixture.pendingAttempt.retrySafety.providerCorrelationToken;
+      const correlationReference =
+        echoOccurrence.descriptor.providerReferences[1];
+      if (correlationToken === null || correlationReference === undefined) {
+        throw new Error("Echo settlement requires exact correlation evidence.");
+      }
+      const materializer = providerSettlementMaterializer(fixture);
+      const observation = materializer.materializeProviderEcho({
+        dispatch: fixture.acceptedDispatch,
+        route: fixture.route,
+        attempt: fixture.acceptedAttempt,
+        artifact: fixture.artifacts[0]!,
+        sourceOccurrence: echoOccurrence,
+        exactCorrelation: {
+          providerReferenceKindId: correlationReference.kindId,
+          correlationToken,
+          artifactOrdinal: 1
+        },
+        recordedAt: echoOccurrence.recordedAt
+      });
+      await persistProviderSettlementHandoff(
+        db,
+        materializer,
+        observation,
+        outboundDispatchContentPlanFor(fixture),
+        { candidateExternalMessageReferenceId: existingReference.id }
+      );
+
+      const worker = createInboxV2OutboundProviderSettlementWorker({
+        database: db,
+        tokenSource: () => `settlement-lease:${"p".repeat(40)}`,
+        authorizer: {
+          authorizeExactCommit: async ({ commit }) => ({
+            kind: "authorized" as const,
+            authority: authorizedProviderSettlementInput(fixture, commit)
+          })
+        }
+      });
+      const workerResults = await worker.processBatch({
+        tenantId: fixture.tenantId,
+        workerId: "core:provider-settlement-production-worker",
+        limit: 1,
+        leaseDurationMs: 30_000
+      });
+      if (workerResults[0]?.kind !== "settled") {
+        const failure = await db.execute<{
+          state: string;
+          last_error_code: string | null;
+        }>(sql`
+          select state::text as state, last_error_code
+            from inbox_v2_outbound_provider_settlement_work_items
+           where tenant_id = ${fixture.tenantId}
+             and observation_id = ${observation.id}
+        `);
+        throw new Error(
+          `Production provider settlement failed: ${JSON.stringify({
+            workerResults,
+            work: failure.rows
+          })}`
+        );
+      }
+      expect(workerResults).toEqual([
+        {
+          kind: "settled",
+          observationId: observation.id,
+          replay: false
+        }
+      ]);
+
+      const persisted = await db.execute<
+        Record<string, string | boolean | null>
+      >(
+        sql`
+          select
+            occurrence.resolution_state::text as occurrence_state,
+            occurrence.revision::text as occurrence_revision,
+            occurrence.resolved_external_message_reference_id as occurrence_reference_id,
+            work.state::text as work_state,
+            (select count(*)::text
+               from inbox_v2_outbound_provider_observation_settlements settled
+              where settled.tenant_id = ${fixture.tenantId}
+                and settled.observation_id = ${observation.id}) as settlement_count,
+            (select count(*)::text
+               from inbox_v2_external_message_references reference_row
+              where reference_row.tenant_id = ${fixture.tenantId}
+                and reference_row.message_key_digest_sha256 =
+                  ${computeInboxV2ExternalMessageKeyDigest(
+                    responseOccurrence.messageKey
+                  )}) as exact_reference_count,
+            (select count(*)::text
+               from inbox_v2_outbound_dispatch_artifact_reference_links link_row
+              where link_row.tenant_id = ${fixture.tenantId}
+                and link_row.dispatch_id = ${fixture.acceptedDispatch.id}) as artifact_link_count,
+            (select count(*)::text
+               from inbox_v2_message_transport_links transport_link
+              where transport_link.tenant_id = ${fixture.tenantId}
+                and transport_link.message_id = ${fixture.acceptedDispatch.message.id}
+                and transport_link.role = 'provider_echo') as provider_echo_link_count,
+            observation_row.counts_as_customer_inbound,
+            observation_row.creates_unread,
+            observation_row.creates_work_item,
+            observation_row.requires_provider_io,
+            observation_row.notification_eligible,
+            (select count(*)::text
+               from inbox_v2_outbox_intents intent
+              where intent.tenant_id = ${fixture.tenantId}
+                and intent.effect_class = 'provider_io') as provider_io_count,
+            (select count(*)::text
+               from inbox_v2_outbox_intents intent
+              where intent.tenant_id = ${fixture.tenantId}
+                and intent.effect_class = 'notification') as notification_count
+          from inbox_v2_source_occurrences occurrence
+          join inbox_v2_outbound_provider_settlement_work_items work
+            on work.tenant_id = occurrence.tenant_id
+           and work.observation_id = ${observation.id}
+          join inbox_v2_outbound_provider_observations observation_row
+            on observation_row.tenant_id = work.tenant_id
+           and observation_row.id = work.observation_id
+         where occurrence.tenant_id = ${fixture.tenantId}
+           and occurrence.id = ${echoOccurrence.id}
+        `
+      );
+      expect(persisted.rows[0]).toMatchObject({
+        occurrence_state: "resolved",
+        occurrence_revision: "2",
+        occurrence_reference_id: existingReference.id,
+        work_state: "settled",
+        settlement_count: "1",
+        exact_reference_count: "1",
+        artifact_link_count: "2",
+        provider_echo_link_count: "1",
+        counts_as_customer_inbound: false,
+        creates_unread: false,
+        creates_work_item: false,
+        requires_provider_io: false,
+        notification_eligible: false,
+        provider_io_count: "1",
+        notification_count: "0"
+      });
+    }, 20_000);
+
+    it("materializes a delayed outcome-unknown provider response against the accepted head created by two multipart echoes", async () => {
+      const fixture = multipartFixtureFor(
+        "provider-settlement-delayed-response-after-echoes"
+      );
+      tenantIds.push(fixture.tenantId);
+      await seedOutboundAnchors(db, fixture);
+      await seedProviderSettlementAccountIdentity(db, fixture);
+      await expect(
+        persistAtomicOutboundProducer(db, fixture)
+      ).resolves.toMatchObject({ kind: "applied" });
+      const repository = createSqlInboxV2OutboundTransportRepository(db);
+      await expect(
+        repository.applyAttempt(fixture.openAttemptCommit)
+      ).resolves.toEqual({ kind: "committed" });
+      await expect(
+        repository.applyAttempt(fixture.completeUnknownCommit)
+      ).resolves.toEqual({ kind: "committed" });
+      for (const artifact of fixture.artifacts) {
+        await expect(
+          db.execute(buildInsertInboxV2OutboundDispatchArtifactSql(artifact))
+        ).resolves.toMatchObject({ rows: [{ id: artifact.id }] });
+      }
+
+      const materializer = providerSettlementMaterializer(fixture);
+      const contentPlan = outboundDispatchContentPlanFor(fixture);
+      const firstEchoOccurrence = providerEchoOccurrenceForArtifact(fixture, 1);
+      const delayedResponse = materializer.materializeProviderResponse({
+        dispatch: fixture.unknownDispatch,
+        route: fixture.route,
+        attempt: fixture.unknownAttempt,
+        artifact: fixture.artifacts[0]!,
+        descriptor:
+          inboxV2OutboundProviderResponseObservationDescriptorSchema.parse({
+            artifactOrdinal: 1,
+            canonicalExternalSubject:
+              firstEchoOccurrence.messageKey.canonicalExternalSubject,
+            messageIdentityDeclaration:
+              firstEchoOccurrence.messageIdentityDeclaration,
+            occurrenceDescriptor: firstEchoOccurrence.descriptor,
+            providerTimestamps: firstEchoOccurrence.providerTimestamps,
+            referencePortability: firstEchoOccurrence.referencePortability,
+            observedAt: firstEchoOccurrence.observedAt
+          }),
+        recordedAt: OUTBOUND_TEST_TIMES.linkedAt
+      });
+      await persistProviderSettlementHandoff(
+        db,
+        materializer,
+        delayedResponse,
+        contentPlan
+      );
+      await deferProviderSettlementWork(
+        db,
+        fixture.tenantId,
+        delayedResponse.id
+      );
+
+      const correlationToken =
+        fixture.unknownAttempt.retrySafety.providerCorrelationToken;
+      if (correlationToken === null) {
+        throw new Error("Multipart echo fixture requires exact correlation.");
+      }
+      const echoObservations: InboxV2OutboundProviderObservation[] = [];
+      for (const artifact of fixture.artifacts) {
+        const occurrence =
+          artifact.ordinal === 1
+            ? firstEchoOccurrence
+            : providerEchoOccurrenceForArtifact(fixture, artifact.ordinal);
+        await db.transaction(async (transaction) => {
+          await transaction.execute(
+            sql`set local session_replication_role = replica`
+          );
+          await seedProviderObservation(
+            transaction,
+            fixture,
+            fixture.echoAssociation,
+            occurrence
+          );
+          await transaction.execute(
+            sql`set local session_replication_role = origin`
+          );
+        });
+        const correlationReference =
+          occurrence.descriptor.providerReferences.find(
+            (providerReference) =>
+              providerReference.subject === correlationToken
+          );
+        if (correlationReference === undefined) {
+          throw new Error("Multipart echo occurrence lost its exact token.");
+        }
+        const observation = materializer.materializeProviderEcho({
+          dispatch: fixture.unknownDispatch,
+          route: fixture.route,
+          attempt: fixture.unknownAttempt,
+          artifact,
+          sourceOccurrence: occurrence,
+          exactCorrelation: {
+            providerReferenceKindId: correlationReference.kindId,
+            correlationToken,
+            artifactOrdinal: artifact.ordinal
+          },
+          recordedAt: occurrence.recordedAt
+        });
+        echoObservations.push(observation);
+        await persistProviderSettlementHandoff(
+          db,
+          materializer,
+          observation,
+          contentPlan
+        );
+      }
+
+      const planningProbe = createSqlInboxV2OutboundProviderSettlementRuntime(
+        db,
+        { tokenSource: () => `settlement-lease:${"q".repeat(40)}` }
+      );
+      const probeClaim = (
+        await planningProbe.work.claim({
+          tenantId: fixture.tenantId,
+          workerId: "core:provider-settlement-echo-planning-probe",
+          limit: 1,
+          leaseDurationMs: 30_000
+        })
+      )[0];
+      if (probeClaim === undefined) {
+        throw new Error("Multipart echo planning probe did not claim work.");
+      }
+      await expect(
+        planningProbe.planner.loadAndPlanExactCommit({ claim: probeClaim })
+      ).resolves.toMatchObject({ kind: "planned" });
+      await expireProviderSettlementLease(
+        db,
+        fixture.tenantId,
+        probeClaim.observationId
+      );
+
+      let leaseOrdinal = 0;
+      const worker = createInboxV2OutboundProviderSettlementWorker({
+        database: db,
+        tokenSource: () =>
+          `settlement-lease:${"e".repeat(36)}${String(++leaseOrdinal).padStart(
+            4,
+            "0"
+          )}`,
+        authorizer: {
+          authorizeExactCommit: async ({ commit }) => ({
+            kind: "authorized" as const,
+            authority: authorizedProviderSettlementInput(fixture, commit)
+          })
+        }
+      });
+      for (const _observation of echoObservations) {
+        const result = await worker.processBatch({
+          tenantId: fixture.tenantId,
+          workerId: "core:provider-settlement-echo-first-worker",
+          limit: 1,
+          leaseDurationMs: 30_000
+        });
+        expect(result).toMatchObject([{ kind: "settled", replay: false }]);
+      }
+
+      await makeProviderSettlementRetryAvailable(
+        db,
+        fixture.tenantId,
+        delayedResponse.id
+      );
+      const delayedResponseResult = await worker.processBatch({
+        tenantId: fixture.tenantId,
+        workerId: "core:provider-settlement-delayed-response-worker",
+        limit: 1,
+        leaseDurationMs: 30_000
+      });
+      expect(delayedResponseResult).toEqual([
+        {
+          kind: "settled",
+          observationId: delayedResponse.id,
+          replay: false
+        }
+      ]);
+
+      const closure = await db.execute<Record<string, string>>(sql`
+        select
+          dispatch_row.state::text as dispatch_state,
+          dispatch_row.revision::text as dispatch_revision,
+          attempt_row.outcome_kind::text as attempt_outcome,
+          attempt_row.revision::text as attempt_revision,
+          (select count(*)::text
+             from inbox_v2_outbound_provider_observation_settlements settlement
+            where settlement.tenant_id = ${fixture.tenantId})
+            as settlement_count,
+          (select count(*)::text
+             from inbox_v2_outbound_dispatch_artifact_resolutions resolution
+            where resolution.tenant_id = ${fixture.tenantId}
+              and resolution.dispatch_id = ${fixture.unknownDispatch.id})
+            as resolution_count,
+          (select count(*)::text
+             from inbox_v2_message_transport_links transport_link
+            where transport_link.tenant_id = ${fixture.tenantId}
+              and transport_link.message_id = ${fixture.unknownDispatch.message.id})
+            as transport_link_count,
+          (select count(*)::text
+             from inbox_v2_message_transport_links transport_link
+            where transport_link.tenant_id = ${fixture.tenantId}
+              and transport_link.message_id = ${fixture.unknownDispatch.message.id}
+              and transport_link.role = 'provider_response')
+            as provider_response_link_count,
+          (select count(*)::text
+             from inbox_v2_source_occurrences occurrence
+            where occurrence.tenant_id = ${fixture.tenantId}
+              and occurrence.id = ${delayedResponse.sourceOccurrence.id}
+              and occurrence.resolution_state = 'resolved')
+            as delayed_response_occurrence_count
+        from inbox_v2_outbound_dispatches dispatch_row
+        join inbox_v2_outbound_dispatch_attempts attempt_row
+          on attempt_row.tenant_id = dispatch_row.tenant_id
+         and attempt_row.id = dispatch_row.last_attempt_id
+       where dispatch_row.tenant_id = ${fixture.tenantId}
+         and dispatch_row.id = ${fixture.unknownDispatch.id}
+      `);
+      expect(closure.rows[0]).toEqual({
+        dispatch_state: "accepted",
+        dispatch_revision: "4",
+        attempt_outcome: "outcome_unknown",
+        attempt_revision: "2",
+        settlement_count: "3",
+        resolution_count: "2",
+        transport_link_count: "3",
+        provider_response_link_count: "1",
+        delayed_response_occurrence_count: "1"
+      });
+    }, 30_000);
+
+    it("replans one stale concurrent multipart settlement after a typed transport-head conflict and completes full coverage", async () => {
+      const fixture = multipartFixtureFor(
+        "provider-settlement-concurrent-multipart"
+      );
+      tenantIds.push(fixture.tenantId);
+      await seedOutboundAnchors(db, fixture);
+      await seedProviderSettlementAccountIdentity(db, fixture);
+      await expect(
+        persistAtomicOutboundProducer(db, fixture)
+      ).resolves.toMatchObject({ kind: "applied" });
+      const repository = createSqlInboxV2OutboundTransportRepository(db);
+      await expect(
+        repository.applyAttempt(fixture.openAttemptCommit)
+      ).resolves.toEqual({ kind: "committed" });
+      for (const artifact of fixture.artifacts) {
+        await expect(
+          db.execute(buildInsertInboxV2OutboundDispatchArtifactSql(artifact))
+        ).resolves.toMatchObject({ rows: [{ id: artifact.id }] });
+      }
+
+      const materializer = providerSettlementMaterializer(fixture);
+      const contentPlan = outboundDispatchContentPlanFor(fixture);
+      const observations = fixture.artifacts.map((artifact) =>
+        materializer.materializeProviderResponse({
+          dispatch: fixture.attemptingDispatch,
+          route: fixture.route,
+          attempt: fixture.pendingAttempt,
+          artifact,
+          descriptor: providerResponseDescriptorFor(fixture, artifact.ordinal),
+          recordedAt: OUTBOUND_TEST_TIMES.linkedAt
+        })
+      );
+      expect(observations).toHaveLength(2);
+      for (const observation of observations) {
+        await persistProviderSettlementHandoff(
+          db,
+          materializer,
+          observation,
+          contentPlan
+        );
+      }
+
+      let authorizationCount = 0;
+      let releaseAuthorizationBarrier!: () => void;
+      const authorizationBarrier = new Promise<void>((resolve) => {
+        releaseAuthorizationBarrier = resolve;
+      });
+      let leaseTokenOrdinal = 0;
+      const worker = createInboxV2OutboundProviderSettlementWorker({
+        database: db,
+        tokenSource: () =>
+          `settlement-lease:${"m".repeat(36)}${String(
+            ++leaseTokenOrdinal
+          ).padStart(4, "0")}`,
+        retryAt: () => new Date(Date.now() + 60_000).toISOString(),
+        authorizer: {
+          authorizeExactCommit: async ({ commit }) => {
+            authorizationCount += 1;
+            if (authorizationCount === observations.length) {
+              releaseAuthorizationBarrier();
+            }
+            await authorizationBarrier;
+            return {
+              kind: "authorized" as const,
+              authority: authorizedProviderSettlementInput(fixture, commit)
+            };
+          }
+        }
+      });
+      const firstPass = await worker.processBatch({
+        tenantId: fixture.tenantId,
+        workerId: "core:provider-settlement-concurrent-worker",
+        limit: 2,
+        leaseDurationMs: 30_000
+      });
+      expect(firstPass.map((result) => result.kind).sort()).toEqual([
+        "retry_scheduled",
+        "settled"
+      ]);
+      expect(authorizationCount).toBe(2);
+      const retry = firstPass.find(
+        (result) => result.kind === "retry_scheduled"
+      );
+      if (retry === undefined) {
+        throw new Error("One stale multipart settlement must be retried.");
+      }
+      await makeProviderSettlementRetryAvailable(
+        db,
+        fixture.tenantId,
+        retry.observationId
+      );
+
+      const secondPass = await worker.processBatch({
+        tenantId: fixture.tenantId,
+        workerId: "core:provider-settlement-replan-worker",
+        limit: 2,
+        leaseDurationMs: 30_000
+      });
+      expect(secondPass).toEqual([
+        {
+          kind: "settled",
+          observationId: retry.observationId,
+          replay: false
+        }
+      ]);
+
+      const closure = await db.execute<Record<string, string>>(sql`
+        select
+          dispatch_row.state::text as dispatch_state,
+          dispatch_row.revision::text as dispatch_revision,
+          attempt_row.outcome_kind::text as attempt_outcome,
+          attempt_row.revision::text as attempt_revision,
+          (select count(*)::text
+             from inbox_v2_outbound_dispatch_artifact_resolutions resolution
+            where resolution.tenant_id = ${fixture.tenantId}
+              and resolution.dispatch_id = ${fixture.attemptingDispatch.id})
+            as resolution_count,
+          (select count(*)::text
+             from inbox_v2_outbound_provider_observation_settlements settlement
+            where settlement.tenant_id = ${fixture.tenantId})
+            as settlement_count,
+          (select count(*)::text
+             from inbox_v2_outbound_provider_settlement_work_items work
+            where work.tenant_id = ${fixture.tenantId}
+              and work.state = 'settled') as settled_work_count,
+          (select count(*)::text
+             from inbox_v2_outbound_dispatch_artifact_reference_links link_row
+            where link_row.tenant_id = ${fixture.tenantId}
+              and link_row.dispatch_id = ${fixture.attemptingDispatch.id})
+            as artifact_link_count,
+          (select count(*)::text
+             from inbox_v2_message_transport_links transport_link
+            where transport_link.tenant_id = ${fixture.tenantId}
+              and transport_link.message_id = ${fixture.attemptingDispatch.message.id})
+            as transport_link_count,
+          head.link_count::text as transport_head_link_count,
+          head.revision::text as transport_head_revision
+        from inbox_v2_outbound_dispatches dispatch_row
+        join inbox_v2_outbound_dispatch_attempts attempt_row
+          on attempt_row.tenant_id = dispatch_row.tenant_id
+         and attempt_row.id = dispatch_row.last_attempt_id
+        join inbox_v2_message_transport_link_heads head
+          on head.tenant_id = dispatch_row.tenant_id
+         and head.message_id = dispatch_row.message_id
+       where dispatch_row.tenant_id = ${fixture.tenantId}
+         and dispatch_row.id = ${fixture.attemptingDispatch.id}
+      `);
+      expect(closure.rows[0]).toEqual({
+        dispatch_state: "accepted",
+        dispatch_revision: "3",
+        attempt_outcome: "accepted",
+        attempt_revision: "2",
+        resolution_count: "2",
+        settlement_count: "2",
+        settled_work_count: "2",
+        artifact_link_count: "2",
+        transport_link_count: "2",
+        transport_head_link_count: "2",
+        transport_head_revision: "2"
+      });
+    }, 30_000);
 
     it("keeps tenant boundaries and real foreign keys fail closed", async () => {
       const fixture = fixtureFor("tenant-fk");
@@ -3002,9 +4435,109 @@ function fixtureFor(
   );
 }
 
+function multipartFixtureFor(label: string): OutboundFixture {
+  const suffix = `${label}-${runId}`;
+  const rawFixture = createOutboundTransportContractFixture({
+    tenantId: `tenant:db003-outbound-${suffix}`,
+    suffix
+  });
+  const rawCandidate = rawFixture.routeInput.candidates.soleEligibleCandidate;
+  if (rawCandidate === null) {
+    throw new Error(
+      "Provider settlement fixture requires one route candidate."
+    );
+  }
+  const bindingFence = {
+    ...rawCandidate.bindingFence,
+    accountGeneration: inboxV2EntityRevisionSchema.parse("2")
+  };
+  const contentKindId = "core:multipart";
+  const candidate = {
+    ...rawCandidate,
+    contentKindId,
+    bindingFence,
+    conversationAuthorization: {
+      ...rawCandidate.conversationAuthorization,
+      target: {
+        ...rawCandidate.conversationAuthorization.target,
+        contentKindId,
+        bindingFence
+      }
+    },
+    sourceAccountAuthorization: {
+      ...rawCandidate.sourceAccountAuthorization,
+      target: {
+        ...rawCandidate.sourceAccountAuthorization.target,
+        contentKindId,
+        bindingFence
+      }
+    }
+  };
+  return canonicalOutboundFixture(
+    {
+      ...rawFixture,
+      routeInput: {
+        ...rawFixture.routeInput,
+        contentKindId,
+        routePolicy: {
+          ...rawFixture.routeInput.routePolicy,
+          contentKindId
+        },
+        candidates: {
+          ...rawFixture.routeInput.candidates,
+          contentKindId,
+          soleEligibleCandidate: candidate
+        }
+      },
+      routePolicy: {
+        ...rawFixture.routePolicy,
+        contentKindId
+      },
+      route: {
+        ...rawFixture.route,
+        contentKindId,
+        bindingFence
+      },
+      bindingHeadSnapshot: {
+        ...rawFixture.bindingHeadSnapshot,
+        fence: bindingFence
+      }
+    } as unknown as RawOutboundFixture,
+    "ready",
+    2
+  );
+}
+
+function terminalReconciliationCommitFor(fixture: OutboundFixture) {
+  if (fixture.unknownAttempt.outcome.kind !== "outcome_unknown") {
+    throw new Error("Terminal reconciliation requires an unknown attempt.");
+  }
+  return inboxV2OutboundDispatchReconciliationCommitSchema.parse({
+    tenantId: fixture.tenantId,
+    decision: {
+      ...fixture.reconciliationDecision,
+      id: `outbound_dispatch_reconciliation_decision:terminal-${fixture.suffix}`,
+      result: {
+        state: "terminal_failure",
+        diagnostic: fixture.unknownAttempt.outcome.diagnostic,
+        evidenceToken: `evidence:terminal-${fixture.suffix}`
+      }
+    },
+    dispatchBefore: fixture.unknownDispatch,
+    dispatchAfter: {
+      ...fixture.unknownDispatch,
+      state: "terminal_failure",
+      retryAuthorization: null,
+      revision: "4",
+      updatedAt: OUTBOUND_TEST_TIMES.reconciledAt
+    }
+  });
+}
+
 function canonicalOutboundFixture(
   fixture: RawOutboundFixture,
-  runtimeHealthState: OutboundRuntimeHealthState = "ready"
+  runtimeHealthState: OutboundRuntimeHealthState = "ready",
+  contentArtifactCount = 1
 ) {
   const operationId = "core:message.send" as const;
   const requiredPermissionId = "core:message.reply_external" as const;
@@ -3092,10 +4625,16 @@ function canonicalOutboundFixture(
     result: routeResult,
     route
   });
-  const messageCreationCommit = canonicalMessageCreationCommit(fixture, route);
+  const messageCreationCommit = canonicalMessageCreationCommit(
+    fixture,
+    route,
+    null,
+    contentArtifactCount
+  );
   const openAttemptCommit = inboxV2OutboundDispatchAttemptCommitSchema.parse({
     ...fixture.openAttemptCommit,
-    routeSnapshot: route
+    routeSnapshot: route,
+    bindingHeadSnapshot: fixture.bindingHeadSnapshot
   });
   const reconciliationDecision = {
     ...fixture.reconciliationDecision,
@@ -3566,7 +5105,8 @@ function canonicalMessageCreationCommit(
     priorActivityAt: string;
     committedAt: string;
     authorParticipantId?: string;
-  }> | null = null
+  }> | null = null,
+  contentArtifactCount = 1
 ) {
   const { references: refs, tenantId } = fixture;
   const createdAt = OUTBOUND_TEST_TIMES.loadedAt;
@@ -3606,15 +5146,19 @@ function canonicalMessageCreationCommit(
     createdAt,
     updatedAt: createdAt
   };
-  const contentBlocks = [
-    {
-      blockKey: "body-1",
-      kind: "text",
-      role: "body",
-      text: "Outbound transport integration message",
+  const contentBlocks = Array.from(
+    { length: contentArtifactCount },
+    (_, index) => ({
+      blockKey: `body-${index + 1}`,
+      kind: "text" as const,
+      role: "body" as const,
+      text:
+        contentArtifactCount === 1
+          ? "Outbound transport integration message"
+          : `Outbound transport integration message ${index + 1}`,
       language: "en"
-    }
-  ] as const;
+    })
+  );
   const content = inboxV2TimelineContentSchema.parse({
     tenantId,
     id: `timeline_content:outbound-${fixture.suffix}`,
@@ -5019,7 +6563,7 @@ function outboundDispatchContentPlanFor(fixture: OutboundFixture) {
   ) {
     throw new Error("Outbound integration fixture requires available content.");
   }
-  const blocks = commit.content.state.blocks.map((block) => {
+  const blocks = commit.content.state.blocks.map((block, index) => {
     if (block.kind === "unsupported_source_content") {
       throw new Error("Unsupported source content cannot be sent outbound.");
     }
@@ -5036,7 +6580,7 @@ function outboundDispatchContentPlanFor(fixture: OutboundFixture) {
       blockKey: block.blockKey,
       blockKind: block.kind,
       exactFileObjectPin: null,
-      artifactOrdinal: 1
+      artifactOrdinal: index + 1
     };
   });
   const base = {
@@ -5073,15 +6617,13 @@ function outboundDispatchContentPlanFor(fixture: OutboundFixture) {
     capabilityRevision: route.bindingFence.capabilityRevision,
     adapterContract: route.adapterContract,
     blocks,
-    artifacts: [
-      {
-        ordinal: 1,
-        grouping: "single" as const,
-        capabilityId: "core:message-text-send" as const,
-        operationId: route.operationId,
-        blockKeys: blocks.map((block) => block.blockKey)
-      }
-    ],
+    artifacts: blocks.map((block, index) => ({
+      ordinal: index + 1,
+      grouping: blocks.length === 1 ? ("single" as const) : ("split" as const),
+      capabilityId: "core:message-text-send" as const,
+      operationId: route.operationId,
+      blockKeys: [block.blockKey]
+    })),
     createdAt: dispatch.createdAt,
     revision: "1" as const
   };
@@ -5089,6 +6631,601 @@ function outboundDispatchContentPlanFor(fixture: OutboundFixture) {
     ...base,
     planDigestSha256: calculateInboxV2OutboundDispatchContentPlanDigest(base)
   });
+}
+
+function providerSettlementMaterializer(fixture: OutboundFixture) {
+  return createInboxV2TrustedOutboundProviderObservationMaterializer({
+    trustedServiceId: fixture.route.adapterContract.loadedByTrustedServiceId,
+    namespaceDeriver: {
+      namespaceGeneration: `namespace-generation:${fixture.suffix}`,
+      deriveNamespaceHmacSha256: ({ canonicalPreimage }) =>
+        createHash("sha256").update(canonicalPreimage).digest("hex")
+    }
+  });
+}
+
+function providerResponseDescriptorFor(
+  fixture: OutboundFixture,
+  artifactOrdinal: number
+) {
+  return inboxV2OutboundProviderResponseObservationDescriptorSchema.parse({
+    artifactOrdinal,
+    canonicalExternalSubject: `ProviderMessage:${fixture.suffix}:${artifactOrdinal}`,
+    messageIdentityDeclaration: {
+      adapterContract: fixture.route.adapterContract,
+      identityKind: "message",
+      realmId: "module:synthetic-source:message-realm",
+      realmVersion: "v1",
+      canonicalizationVersion: "v1",
+      objectKindId: "module:synthetic-source:chat-message",
+      scopeKind: "provider_thread",
+      decisionStrength: "authoritative"
+    },
+    occurrenceDescriptor: {
+      adapterContract: fixture.route.adapterContract,
+      descriptorSchemaId:
+        "module:synthetic-source:provider-response-observation",
+      descriptorVersion: "v1",
+      capabilityRevision: fixture.route.bindingFence.capabilityRevision,
+      providerReferences: [
+        {
+          kindId: "module:synthetic-source:message-id",
+          subject: `ProviderMessage:${fixture.suffix}:${artifactOrdinal}`
+        }
+      ],
+      descriptorDigestSha256: "c".repeat(64)
+    },
+    providerTimestamps: [
+      {
+        kindId: "module:synthetic-source:sent-at",
+        timestamp: OUTBOUND_TEST_TIMES.artifactAt
+      }
+    ],
+    referencePortability: {
+      kind: "external_thread",
+      adapterContract: fixture.route.adapterContract,
+      decisionStrength: "authoritative"
+    },
+    observedAt: OUTBOUND_TEST_TIMES.artifactAt
+  });
+}
+
+function providerEchoOccurrenceForArtifact(
+  fixture: OutboundFixture,
+  artifactOrdinal: number
+) {
+  const base = fixture.echoAssociation.occurrenceResolution.before;
+  if (base.origin.kind !== "provider_echo") {
+    throw new Error("Provider echo fixture has the wrong occurrence origin.");
+  }
+  if (base.resolution.state !== "pending") {
+    throw new Error("Provider echo fixture must remain pending.");
+  }
+  const suffix = `${fixture.suffix}:artifact-${artifactOrdinal}`;
+  const firstProviderReference = base.descriptor.providerReferences[0];
+  if (firstProviderReference === undefined) {
+    throw new Error("Provider echo fixture has no provider message reference.");
+  }
+  return inboxV2SourceOccurrenceSchema.parse({
+    ...base,
+    id: `${base.id}:artifact-${artifactOrdinal}`,
+    messageKey: {
+      ...base.messageKey,
+      canonicalExternalSubject: `${base.messageKey.canonicalExternalSubject}:artifact-${artifactOrdinal}`
+    },
+    origin: {
+      ...base.origin,
+      rawInboundEvent: {
+        ...base.origin.rawInboundEvent,
+        id: `${base.origin.rawInboundEvent.id}:artifact-${artifactOrdinal}`
+      },
+      normalizedInboundEvent: {
+        ...base.origin.normalizedInboundEvent,
+        id: `${base.origin.normalizedInboundEvent.id}:artifact-${artifactOrdinal}`
+      }
+    },
+    descriptor: {
+      ...base.descriptor,
+      providerReferences: [
+        { ...firstProviderReference, subject: suffix },
+        ...base.descriptor.providerReferences.slice(1)
+      ]
+    },
+    resolution: {
+      ...base.resolution,
+      diagnostic: {
+        ...base.resolution.diagnostic,
+        correlationToken: `correlation:${suffix}`
+      }
+    },
+    recordedAt: OUTBOUND_TEST_TIMES.linkedAt,
+    createdAt: OUTBOUND_TEST_TIMES.linkedAt,
+    updatedAt: OUTBOUND_TEST_TIMES.linkedAt
+  });
+}
+
+async function persistProviderSettlementHandoff(
+  db: HuleeDatabase,
+  materializer: ReturnType<
+    typeof createInboxV2TrustedOutboundProviderObservationMaterializer
+  >,
+  observation: InboxV2OutboundProviderObservation,
+  contentPlan: InboxV2OutboundDispatchContentPlan,
+  candidateOverride: Readonly<{
+    candidateExternalMessageReferenceId?: string;
+    candidateTransportLinkId?: string;
+  }> = {}
+): Promise<void> {
+  await db.transaction(async (transaction) => {
+    const rawTransaction = transaction as unknown as Parameters<
+      typeof persistInboxV2OutboundProviderObservationInTransaction
+    >[0];
+    const persisted =
+      await persistInboxV2OutboundProviderObservationInTransaction(
+        rawTransaction,
+        { observation, contentPlan }
+      );
+    if (persisted.kind === "conflict") {
+      throw new Error("Provider observation handoff conflicted.");
+    }
+    const enqueued =
+      await enqueueInboxV2OutboundProviderSettlementWorkInTransaction(
+        rawTransaction,
+        {
+          ...materializer.materializeSettlementWork(observation),
+          ...candidateOverride
+        }
+      );
+    if (enqueued.kind === "conflict") {
+      throw new Error("Provider settlement work handoff conflicted.");
+    }
+  });
+}
+
+async function expireProviderSettlementLease(
+  db: HuleeDatabase,
+  tenantId: string,
+  observationId: string
+): Promise<void> {
+  await db.transaction(async (transaction) => {
+    await transaction.execute(
+      sql`set local session_replication_role = replica`
+    );
+    await transaction.execute(sql`
+      update inbox_v2_outbound_provider_settlement_work_items
+         set lease_expires_at = lease_claimed_at + interval '1 millisecond',
+             updated_at = clock_timestamp()
+       where tenant_id = ${tenantId}
+         and observation_id = ${observationId}
+         and state = 'leased'
+    `);
+    await transaction.execute(sql`set local session_replication_role = origin`);
+  });
+  await new Promise<void>((resolve) => setTimeout(resolve, 5));
+}
+
+async function makeProviderSettlementRetryAvailable(
+  db: HuleeDatabase,
+  tenantId: string,
+  observationId: string
+): Promise<void> {
+  await db.transaction(async (transaction) => {
+    await transaction.execute(
+      sql`set local session_replication_role = replica`
+    );
+    const updated = await transaction.execute<{ observation_id: unknown }>(sql`
+      update inbox_v2_outbound_provider_settlement_work_items
+         set available_at = clock_timestamp() - interval '1 millisecond',
+             updated_at = clock_timestamp()
+       where tenant_id = ${tenantId}
+         and observation_id = ${observationId}
+         and state = 'pending'
+       returning observation_id
+    `);
+    if (updated.rows.length !== 1) {
+      throw new Error("Provider settlement retry was not pending.");
+    }
+    await transaction.execute(sql`set local session_replication_role = origin`);
+  });
+}
+
+async function deferProviderSettlementWork(
+  db: HuleeDatabase,
+  tenantId: string,
+  observationId: string
+): Promise<void> {
+  await db.transaction(async (transaction) => {
+    await transaction.execute(
+      sql`set local session_replication_role = replica`
+    );
+    const updated = await transaction.execute<{ observation_id: unknown }>(sql`
+      update inbox_v2_outbound_provider_settlement_work_items
+         set available_at = clock_timestamp() + interval '1 hour',
+             updated_at = clock_timestamp()
+       where tenant_id = ${tenantId}
+         and observation_id = ${observationId}
+         and state = 'pending'
+       returning observation_id
+    `);
+    if (updated.rows.length !== 1) {
+      throw new Error("Provider settlement work was not pending for deferral.");
+    }
+    await transaction.execute(sql`set local session_replication_role = origin`);
+  });
+}
+
+async function seedProviderSettlementAccountIdentity(
+  db: HuleeDatabase,
+  fixture: OutboundFixture
+): Promise<void> {
+  const adapter = fixture.route.adapterContract;
+  const declaration = {
+    adapterContract: adapter,
+    identityKind: "source_account",
+    realmId: "module:synthetic-source:account-realm",
+    realmVersion: "v1",
+    canonicalizationVersion: "v1",
+    objectKindId: "module:synthetic-source:user-account",
+    scopeKind: "source_connection",
+    decisionStrength: "authoritative"
+  } as const;
+  const canonicalSubject = `ProviderAccount:${fixture.suffix}`;
+  const transitionId = `source_account_identity_transition:settlement-${fixture.suffix}`;
+  const evidenceToken = `identity-evidence:settlement-${fixture.suffix}`;
+  await db.transaction(async (transaction) => {
+    await transaction.execute(
+      sql`set local session_replication_role = replica`
+    );
+    await transaction.execute(sql`
+      insert into inbox_v2_source_account_identities (
+        tenant_id, source_account_id, source_connection_id, state,
+        identity_declaration, declaration_contract_id,
+        declaration_contract_version, declaration_revision,
+        declaration_surface_id, declaration_loaded_by_trusted_service_id,
+        declaration_loaded_at, declaration_realm_id,
+        declaration_realm_version, declaration_canonicalization_version,
+        declaration_object_kind_id, declaration_scope_kind,
+        canonical_realm_id, canonical_realm_version,
+        canonicalization_version, canonical_object_kind_id,
+        canonical_scope_kind, canonical_scope_source_connection_id,
+        canonical_scope_owner_key, canonical_external_subject,
+        verified_decision_actor_trusted_service_id,
+        verified_decision_policy_id, verified_decision_policy_version,
+        verified_decision_reason_code_id,
+        verified_decision_verification_evidence_token,
+        verified_decision_decided_at, account_generation, revision,
+        created_at, updated_at
+      ) values (
+        ${fixture.tenantId}, ${fixture.references.sourceAccount.id},
+        ${fixture.references.sourceConnection.id}, 'verified',
+        ${JSON.stringify(declaration)}::jsonb, ${adapter.contractId},
+        ${adapter.contractVersion}, ${BigInt(adapter.declarationRevision)},
+        ${adapter.surfaceId}, ${adapter.loadedByTrustedServiceId},
+        ${adapter.loadedAt}, ${declaration.realmId}, ${declaration.realmVersion},
+        ${declaration.canonicalizationVersion}, ${declaration.objectKindId},
+        'source_connection', ${declaration.realmId}, ${declaration.realmVersion},
+        ${declaration.canonicalizationVersion}, ${declaration.objectKindId},
+        'source_connection', ${fixture.references.sourceConnection.id},
+        ${fixture.references.sourceConnection.id}, ${canonicalSubject},
+        ${adapter.loadedByTrustedServiceId},
+        'core:provider-account-verification', 'v1', 'core:account-verified',
+        ${evidenceToken}, ${OUTBOUND_TEST_TIMES.loadedAt}, 2, 2,
+        ${OUTBOUND_TEST_TIMES.loadedAt}, ${OUTBOUND_TEST_TIMES.loadedAt}
+      )
+    `);
+    await transaction.execute(sql`
+      insert into inbox_v2_source_account_identity_verified_snapshots (
+        tenant_id, source_account_id, source_connection_id, transition_id,
+        identity_revision, account_generation, state, identity_declaration,
+        declaration_contract_id, declaration_contract_version,
+        declaration_revision, declaration_surface_id,
+        declaration_loaded_by_trusted_service_id, declaration_loaded_at,
+        declaration_realm_id, declaration_realm_version,
+        declaration_canonicalization_version, declaration_object_kind_id,
+        declaration_scope_kind, canonical_realm_id, canonical_realm_version,
+        canonicalization_version, canonical_object_kind_id,
+        canonical_scope_kind, canonical_scope_source_connection_id,
+        canonical_scope_owner_key, canonical_external_subject,
+        verified_decision_actor_trusted_service_id,
+        verified_decision_policy_id, verified_decision_policy_version,
+        verified_decision_reason_code_id,
+        verified_decision_verification_evidence_token,
+        verified_decision_decided_at, identity_created_at, verified_at
+      ) values (
+        ${fixture.tenantId}, ${fixture.references.sourceAccount.id},
+        ${fixture.references.sourceConnection.id}, ${transitionId}, 2, 2,
+        'verified', ${JSON.stringify(declaration)}::jsonb,
+        ${adapter.contractId}, ${adapter.contractVersion},
+        ${BigInt(adapter.declarationRevision)}, ${adapter.surfaceId},
+        ${adapter.loadedByTrustedServiceId}, ${adapter.loadedAt},
+        ${declaration.realmId}, ${declaration.realmVersion},
+        ${declaration.canonicalizationVersion}, ${declaration.objectKindId},
+        'source_connection', ${declaration.realmId}, ${declaration.realmVersion},
+        ${declaration.canonicalizationVersion}, ${declaration.objectKindId},
+        'source_connection', ${fixture.references.sourceConnection.id},
+        ${fixture.references.sourceConnection.id}, ${canonicalSubject},
+        ${adapter.loadedByTrustedServiceId},
+        'core:provider-account-verification', 'v1', 'core:account-verified',
+        ${evidenceToken}, ${OUTBOUND_TEST_TIMES.loadedAt},
+        ${OUTBOUND_TEST_TIMES.loadedAt}, ${OUTBOUND_TEST_TIMES.loadedAt}
+      )
+    `);
+    await transaction.execute(sql`
+      update inbox_v2_source_thread_binding_heads binding_head
+         set account_canonical_key_digest_sha256 = identity_snapshot.canonical_key_digest_sha256
+        from inbox_v2_source_account_identity_verified_snapshots identity_snapshot
+       where binding_head.tenant_id = ${fixture.tenantId}
+         and binding_head.binding_id = ${fixture.references.binding.id}
+         and identity_snapshot.tenant_id = binding_head.tenant_id
+         and identity_snapshot.source_account_id = binding_head.source_account_id
+         and identity_snapshot.identity_revision = binding_head.account_identity_revision
+         and identity_snapshot.account_generation = binding_head.account_generation
+    `);
+    await transaction.execute(sql`
+      update inbox_v2_source_thread_binding_snapshots binding_snapshot
+         set account_canonical_key_digest_sha256 = identity_snapshot.canonical_key_digest_sha256
+        from inbox_v2_source_account_identity_verified_snapshots identity_snapshot
+       where binding_snapshot.tenant_id = ${fixture.tenantId}
+         and binding_snapshot.binding_id = ${fixture.references.binding.id}
+         and identity_snapshot.tenant_id = binding_snapshot.tenant_id
+         and identity_snapshot.source_account_id = binding_snapshot.source_account_id
+         and identity_snapshot.identity_revision = binding_snapshot.account_identity_revision
+         and identity_snapshot.account_generation = binding_snapshot.account_generation
+    `);
+    await transaction.execute(sql`set local session_replication_role = origin`);
+  });
+}
+
+async function driftProviderSettlementCurrentHeads(
+  db: HuleeDatabase,
+  fixture: OutboundFixture
+): Promise<void> {
+  await db.transaction(async (transaction) => {
+    await transaction.execute(
+      sql`set local session_replication_role = replica`
+    );
+    await transaction.execute(sql`
+      update inbox_v2_source_account_identities
+         set account_generation = 3,
+             revision = 3,
+             verified_decision_decided_at = ${OUTBOUND_TEST_TIMES.linkedAt},
+             updated_at = ${OUTBOUND_TEST_TIMES.linkedAt}
+       where tenant_id = ${fixture.tenantId}
+         and source_account_id = ${fixture.references.sourceAccount.id}
+    `);
+    await transaction.execute(sql`
+      update inbox_v2_source_thread_binding_heads
+         set account_identity_revision = 3,
+             account_generation = 3,
+             binding_generation = 2,
+             administrative_state = 'disabled',
+             administrative_revision = 2,
+             revision = 2,
+             updated_at = ${OUTBOUND_TEST_TIMES.linkedAt}
+       where tenant_id = ${fixture.tenantId}
+         and binding_id = ${fixture.references.binding.id}
+    `);
+    await transaction.execute(sql`set local session_replication_role = origin`);
+  });
+}
+
+function authorizedProviderSettlementInput(
+  fixture: OutboundFixture,
+  commit: InboxV2OutboundProviderSettlementCommit
+): WithInboxV2AuthorizedCommandMutationInput {
+  const base = authorizedExternalSendInput(fixture);
+  const association = commit.messageTransportAssociation;
+  const occurredAt = commit.settledAt;
+  const trustedServiceId = commit.settledByTrustedServiceId;
+  const observationToken = sha256(commit.observation.id).slice(7, 19);
+  const token = `provider-settlement-${fixture.suffix}-${observationToken}`;
+  const commandId = `command:${token}`;
+  const clientMutationId = `mutation:${token}`;
+  const mutationId = `authorization-mutation:${token}`;
+  const streamCommitId = `commit:${token}`;
+  const correlationId = `correlation:${token}`;
+  const changeId = `change:${token}`;
+  const eventId = `event:${token}`;
+  const projectionIntentId = `outbox-intent:${token}`;
+  const decisionId = `authorization-decision:${token}`;
+  const conversation = association.message.conversation;
+  const baseConversationResource = base.revisions.resources.find(
+    (resource) =>
+      resource.resourceKind === "conversation" &&
+      String(resource.resourceId) === String(conversation.id)
+  );
+  const baseConversationDecision =
+    base.records.audit.authorizationDecisionRefs.find(
+      (decision) =>
+        decision.resourceScopeId === "core:conversation" &&
+        String(decision.resource.entityId) === String(conversation.id)
+    );
+  if (
+    baseConversationResource === undefined ||
+    baseConversationDecision === undefined
+  ) {
+    throw new Error(
+      "Provider settlement authorization requires the Conversation fence."
+    );
+  }
+  const payloadReference = {
+    tenantId: fixture.tenantId,
+    recordId: association.link.id,
+    schemaId: INBOX_V2_MESSAGE_TRANSPORT_OCCURRENCE_LINK_SCHEMA_ID,
+    schemaVersion: INBOX_V2_MESSAGE_TRANSPORT_SCHEMA_VERSION,
+    digest: calculateInboxV2CanonicalSha256(association.link)
+  };
+  const domainCommitReference = {
+    tenantId: fixture.tenantId,
+    recordId: association.link.id,
+    schemaId: INBOX_V2_MESSAGE_TRANSPORT_ASSOCIATION_COMMIT_SCHEMA_ID,
+    schemaVersion: INBOX_V2_MESSAGE_TRANSPORT_SCHEMA_VERSION,
+    digest: calculateInboxV2CanonicalSha256(association)
+  };
+  const decision: InboxV2AuthorizationDecisionReference =
+    inboxV2AuthorizationDecisionReferenceSchema.parse({
+      ...baseConversationDecision,
+      id: decisionId,
+      principal: { kind: "trusted_service", trustedServiceId },
+      permissionId: "core:message.receive_external",
+      resourceScopeId: "core:conversation",
+      resource: {
+        tenantId: fixture.tenantId,
+        entityTypeId: "core:conversation",
+        entityId: conversation.id
+      },
+      resourceAccessRevision:
+        baseConversationResource.expectedResourceAccessRevision,
+      decisionHash: sha256(`${token}:authorization-decision`),
+      decidedAt: occurredAt,
+      notAfter: new Date(Date.now() + 60 * 60 * 1_000).toISOString()
+    });
+  const change = {
+    id: changeId,
+    ordinal: 1,
+    entity: {
+      tenantId: fixture.tenantId,
+      entityTypeId: "core:message-transport-observation",
+      entityId: association.link.id
+    },
+    resultingRevision: association.linkHeadAfter.revision,
+    timeline: {
+      conversation,
+      timelineSequence: association.timelineItem.timelineSequence
+    },
+    audience: association.timelineItem.visibility,
+    state: {
+      kind: "upsert" as const,
+      stateSchemaId: payloadReference.schemaId,
+      stateSchemaVersion: payloadReference.schemaVersion,
+      stateHash: payloadReference.digest,
+      payloadReference,
+      domainCommitReference
+    }
+  };
+  const event = {
+    id: eventId,
+    typeId: "core:message.changed" as const,
+    payloadSchemaId: domainCommitReference.schemaId,
+    payloadSchemaVersion: domainCommitReference.schemaVersion,
+    ordinal: "1",
+    changeIds: [changeId],
+    subjects: [
+      {
+        tenantId: fixture.tenantId,
+        entityTypeId: "core:message",
+        entityId: association.message.id
+      }
+    ],
+    payloadReference: domainCommitReference,
+    correlationId,
+    commandIds: [commandId],
+    clientMutationIds: [clientMutationId],
+    authorizationDecisionRefs: [decision],
+    accessEffect: { kind: "none" as const },
+    occurredAt,
+    recordedAt: occurredAt,
+    eventHash: sha256(`${token}:message-event`)
+  };
+  const auditTarget = deriveInboxV2ProviderObservationAuditTargetReference({
+    tenantId: fixture.tenantId,
+    linkId: association.link.id
+  });
+  const sourceAccountFacet =
+    deriveInboxV2ProviderObservationSourceAccountAuditReference({
+      tenantId: fixture.tenantId,
+      sourceAccountId:
+        association.sourceOccurrence.bindingContext.sourceAccount.id
+    });
+  return {
+    tenantId: fixture.tenantId,
+    command: {
+      id: commandId,
+      requestId: `request:${token}`,
+      clientMutationId,
+      commandTypeId: "core:outbound-provider-observation.settle",
+      requestHash: sha256(`${token}:request`),
+      actor: { kind: "trusted_service", trustedServiceId },
+      authorizationDecisionId: decision.id,
+      authorizationEpoch: decision.authorizationEpoch,
+      authorizedAt: occurredAt,
+      publicResultCode: "core:provider-observation-settled",
+      resultReference: payloadReference,
+      sensitiveResultReference: null
+    },
+    revisions: {
+      expectedTenantRbacRevision: base.revisions.expectedTenantRbacRevision,
+      expectedSharedAccessRevision: base.revisions.expectedSharedAccessRevision,
+      advanceTenantRbac: false,
+      advanceSharedAccess: false,
+      employees: [],
+      resources: [
+        {
+          ...baseConversationResource,
+          expectedResourceAccessRevision: decision.resourceAccessRevision,
+          advance: "none"
+        }
+      ]
+    },
+    records: {
+      mutationId,
+      relationKind: null,
+      streamCommitId,
+      expectedStreamEpoch: base.records.expectedStreamEpoch,
+      audienceImpact: { kind: "none" },
+      commitHash: sha256(`${token}:stream-commit`),
+      correlationId,
+      changes: [change],
+      events: [event],
+      outboxIntents: [
+        {
+          id: projectionIntentId,
+          ordinal: 1,
+          typeId: "core:projection.update",
+          handlerId: "core:inbox-projection",
+          effectClass: "projection",
+          eventId,
+          changeIds: [changeId],
+          payloadReference,
+          consumerDedupeKey: sha256(`${token}:projection-dedupe`),
+          correlationId,
+          availableAt: occurredAt,
+          intentHash: sha256(`${token}:projection-intent`)
+        }
+      ],
+      audit: {
+        id: `authorization-audit:${token}`,
+        actionId: "core:outbound-provider-observation.settle",
+        target: auditTarget,
+        reasonCodeId: "core:provider-observation-settled",
+        matchedPermissionIds: [decision.permissionId],
+        grantSourceIds: [auditTarget.entityId],
+        authorizationScopeIds: [decision.resourceScopeId],
+        overrideReasonCodeId: null,
+        policyVersion: "v1",
+        evidenceReference: domainCommitReference,
+        authorizationDecisionRefs: [decision],
+        correlationId,
+        outcome: "succeeded",
+        revisionDeltaHash: computeInboxV2LeafHashDigest([]),
+        previousAuditHash: null,
+        auditHash: sha256(`${token}:audit`),
+        occurredAt,
+        recordedAt: occurredAt,
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString(),
+        facets: [
+          {
+            ordinal: 1,
+            dimension: "resource",
+            reference: sourceAccountFacet,
+            relation: "affected",
+            facetHash: sha256(`${token}:audit-facet`)
+          }
+        ]
+      }
+    },
+    occurredAt
+  } as unknown as WithInboxV2AuthorizedCommandMutationInput;
 }
 
 async function insertCoherentDuplicateProjectionAndRecheckDomainClosure(
@@ -5203,6 +7340,15 @@ async function seedOutboundAnchors(
     scopeKind: "source_account",
     decisionStrength: "safe_default"
   });
+  const externalThreadMapping =
+    fixture.messageCreationCommit.externalThreadMapping;
+  if (externalThreadMapping === null) {
+    throw new Error("Outbound fixture requires an ExternalThread mapping.");
+  }
+  const externalThreadKey = externalThreadMapping.thread.key;
+  const externalThreadKeyRegistryId = `external_thread_key:${computeInboxV2ExternalThreadKeyDigest(
+    externalThreadKey
+  )}`;
 
   await db.transaction(async (transaction) => {
     await transaction.execute(
@@ -5289,6 +7435,25 @@ async function seedOutboundAnchors(
       )
     `);
     await transaction.execute(sql`
+      insert into inbox_v2_external_thread_key_registry (
+        tenant_id, id, entry_kind, realm_id, realm_version,
+        canonicalization_version, scope_kind,
+        scope_source_account_id, scope_owner_key, object_kind_id,
+        canonical_external_subject, canonical_thread_id,
+        canonical_conversation_id, revision, created_at, updated_at
+      ) values (
+        ${fixture.tenantId}, ${externalThreadKeyRegistryId}, 'canonical',
+        ${externalThreadKey.realm.realmId},
+        ${externalThreadKey.realm.realmVersion},
+        ${externalThreadKey.realm.canonicalizationVersion},
+        'source_account', ${refs.sourceAccount.id},
+        ${refs.sourceAccount.id}, ${externalThreadKey.objectKindId},
+        ${externalThreadKey.canonicalExternalSubject},
+        ${refs.externalThread.id}, ${refs.conversation.id}, 1,
+        ${OUTBOUND_TEST_TIMES.loadedAt}, ${OUTBOUND_TEST_TIMES.loadedAt}
+      )
+    `);
+    await transaction.execute(sql`
       insert into inbox_v2_external_threads (
         tenant_id, id, key_registry_id, key_registry_entry_kind,
         realm_id, realm_version, canonicalization_version, scope_kind,
@@ -5298,7 +7463,7 @@ async function seedOutboundAnchors(
         created_at, updated_at
       ) values (
         ${fixture.tenantId}, ${refs.externalThread.id},
-        ${`external_thread_key:outbound-${label}`}, 'canonical',
+        ${externalThreadKeyRegistryId}, 'canonical',
         'module:synthetic:thread-realm', 'v1', 'v1', 'source_account',
         ${refs.sourceAccount.id}, ${refs.sourceAccount.id},
         'module:synthetic:group-thread', ${`ProviderGroup:${label}`},
@@ -5316,6 +7481,75 @@ async function seedOutboundAnchors(
         ${refs.sourceConnection.id}, ${refs.sourceAccount.id},
         ${OUTBOUND_TEST_TIMES.loadedAt}
       )
+    `);
+    await transaction.execute(sql`
+      insert into inbox_v2_source_thread_binding_evidence_sets (
+        tenant_id, id, binding_id, external_thread_id,
+        source_connection_id, source_account_id, reference_count,
+        ordered_reference_digest_sha256, created_at
+      ) values
+        (
+          ${fixture.tenantId},
+          ${`source_thread_binding_evidence_set:account-${label}`},
+          ${refs.binding.id}, ${refs.externalThread.id},
+          ${refs.sourceConnection.id}, ${refs.sourceAccount.id}, 1,
+          ${"4".repeat(64)}, ${OUTBOUND_TEST_TIMES.loadedAt}
+        ),
+        (
+          ${fixture.tenantId},
+          ${`source_thread_binding_evidence_set:remote-${label}`},
+          ${refs.binding.id}, ${refs.externalThread.id},
+          ${refs.sourceConnection.id}, ${refs.sourceAccount.id}, 1,
+          ${"5".repeat(64)}, ${OUTBOUND_TEST_TIMES.loadedAt}
+        ),
+        (
+          ${fixture.tenantId},
+          ${`source_thread_binding_evidence_set:provider-${label}`},
+          ${refs.binding.id}, ${refs.externalThread.id},
+          ${refs.sourceConnection.id}, ${refs.sourceAccount.id}, 1,
+          ${"6".repeat(64)}, ${OUTBOUND_TEST_TIMES.loadedAt}
+        ),
+        (
+          ${fixture.tenantId},
+          ${`source_thread_binding_evidence_set:capability-${label}`},
+          ${refs.binding.id}, ${refs.externalThread.id},
+          ${refs.sourceConnection.id}, ${refs.sourceAccount.id}, 1,
+          ${"7".repeat(64)}, ${OUTBOUND_TEST_TIMES.loadedAt}
+        )
+    `);
+    await transaction.execute(sql`
+      insert into inbox_v2_source_thread_binding_evidence_references (
+        tenant_id, evidence_set_id, binding_id, source_connection_id,
+        source_account_id, ordinal, kind, raw_inbound_event_id
+      ) values
+        (
+          ${fixture.tenantId},
+          ${`source_thread_binding_evidence_set:account-${label}`},
+          ${refs.binding.id}, ${refs.sourceConnection.id},
+          ${refs.sourceAccount.id}, 0, 'raw_inbound_event',
+          ${`raw_inbound_event:binding-account-${label}`}
+        ),
+        (
+          ${fixture.tenantId},
+          ${`source_thread_binding_evidence_set:remote-${label}`},
+          ${refs.binding.id}, ${refs.sourceConnection.id},
+          ${refs.sourceAccount.id}, 0, 'raw_inbound_event',
+          ${`raw_inbound_event:binding-remote-${label}`}
+        ),
+        (
+          ${fixture.tenantId},
+          ${`source_thread_binding_evidence_set:provider-${label}`},
+          ${refs.binding.id}, ${refs.sourceConnection.id},
+          ${refs.sourceAccount.id}, 0, 'raw_inbound_event',
+          ${`raw_inbound_event:binding-provider-${label}`}
+        ),
+        (
+          ${fixture.tenantId},
+          ${`source_thread_binding_evidence_set:capability-${label}`},
+          ${refs.binding.id}, ${refs.sourceConnection.id},
+          ${refs.sourceAccount.id}, 0, 'raw_inbound_event',
+          ${`raw_inbound_event:binding-capability-${label}`}
+        )
     `);
     await transaction.execute(sql`
       insert into inbox_v2_source_thread_binding_heads (
@@ -5350,7 +7584,9 @@ async function seedOutboundAnchors(
         revision, created_at, updated_at
       ) values (
         ${fixture.tenantId}, ${refs.binding.id}, ${refs.externalThread.id},
-        ${refs.sourceConnection.id}, ${refs.sourceAccount.id}, 1, 1, 'verified',
+        ${refs.sourceConnection.id}, ${refs.sourceAccount.id},
+        ${BigInt(fixture.route.bindingFence.accountGeneration)},
+        ${BigInt(fixture.route.bindingFence.accountGeneration)}, 'verified',
         ${"a".repeat(64)}, 'core:source-runtime',
         ${OUTBOUND_TEST_TIMES.loadedAt},
         ${`source_thread_binding_evidence_set:account-${label}`}, 1,
@@ -5392,6 +7628,18 @@ async function seedOutboundAnchors(
       from inbox_v2_source_thread_binding_heads head_row
       where head_row.tenant_id = ${fixture.tenantId}
         and head_row.binding_id = ${refs.binding.id}
+    `);
+    await transaction.execute(sql`
+      insert into inbox_v2_source_thread_binding_remote_access_episodes (
+        tenant_id, id, binding_id, state, started_at, ended_at,
+        start_evidence_set_id, end_evidence_set_id, revision, updated_at
+      ) values (
+        ${fixture.tenantId},
+        ${`source_thread_binding_remote_access_episode:${label}`},
+        ${refs.binding.id}, 'active', ${OUTBOUND_TEST_TIMES.loadedAt}, null,
+        ${`source_thread_binding_evidence_set:remote-${label}`}, null, 1,
+        ${OUTBOUND_TEST_TIMES.loadedAt}
+      )
     `);
     await transaction.execute(sql`
       insert into inbox_v2_source_thread_binding_capability_entries (
@@ -5652,9 +7900,10 @@ async function seedAssociationOccurrences(
 async function seedProviderObservation(
   executor: { execute(query: SQL): Promise<unknown> },
   fixture: OutboundFixture,
-  commit: InboxV2OutboundDispatchArtifactAssociationCommit
+  commit: InboxV2OutboundDispatchArtifactAssociationCommit,
+  occurrenceOverride?: ReturnType<typeof inboxV2SourceOccurrenceSchema.parse>
 ): Promise<void> {
-  const occurrence = commit.occurrenceResolution.before;
+  const occurrence = occurrenceOverride ?? commit.occurrenceResolution.before;
   const origin = occurrence.origin;
   if (occurrence.resolution.state !== "pending") {
     throw new Error("Association seed requires a pending source occurrence.");
@@ -5670,7 +7919,8 @@ async function seedProviderObservation(
         ${origin.rawInboundEvent.id}, ${fixture.tenantId},
         ${fixture.references.sourceConnection.id},
         ${fixture.references.sourceAccount.id},
-        ${`raw:${fixture.suffix}:echo`}, ${occurrence.recordedAt},
+        ${`raw:${fixture.suffix}:echo:${origin.rawInboundEvent.id}`},
+        ${occurrence.recordedAt},
         '{}'::jsonb, '{}'::jsonb, 'processed', ${occurrence.recordedAt},
         ${occurrence.recordedAt}
       )
@@ -5686,7 +7936,8 @@ async function seedProviderObservation(
         ${origin.rawInboundEvent.id}, ${fixture.references.sourceConnection.id},
         ${fixture.references.sourceAccount.id}, 'messenger', 'synthetic',
         'message', 'outbound', 'private', 'v1', '{}'::jsonb, '{}'::jsonb,
-        ${`normalized:${fixture.suffix}:echo`}, 'processed',
+        ${`normalized:${fixture.suffix}:echo:${origin.normalizedInboundEvent.id}`},
+        'processed',
         ${occurrence.recordedAt}, ${occurrence.recordedAt}
       )
     `);
@@ -5737,7 +7988,10 @@ async function seedProviderObservation(
       ${fixture.references.externalThread.id}, 1,
       ${fixture.references.sourceConnection.id},
       ${fixture.references.sourceAccount.id}, ${fixture.references.binding.id},
-      1, 1, 1, 1, ${"a".repeat(64)}, ${messageKey.realm.realmId},
+      1, ${BigInt(occurrence.bindingContext.bindingGeneration)},
+      ${BigInt(fixture.route.bindingFence.accountGeneration)},
+      ${BigInt(fixture.route.bindingFence.accountGeneration)},
+      ${"a".repeat(64)}, ${messageKey.realm.realmId},
       ${messageKey.realm.realmVersion},
       ${messageKey.realm.canonicalizationVersion}, ${messageKey.scope.kind},
       ${scopeAccountId}, ${scopeBindingId}, ${messageKey.objectKindId},

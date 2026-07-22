@@ -1,4 +1,5 @@
 import {
+  calculateInboxV2CanonicalSha256,
   calculateInboxV2OutboxLeaseTokenHash,
   createInboxV2MixedProviderArtifactOutcomeDiagnostic,
   deriveInboxV2OutboundDispatchArtifactId,
@@ -12,12 +13,15 @@ import {
   inboxV2OutboundDispatchArtifactAssociationCommitSchema,
   inboxV2OutboundDispatchArtifactSchema,
   inboxV2OutboundDispatchAttemptCommitSchema,
+  inboxV2OutboundDispatchAttemptSchema,
+  inboxV2OutboundProviderObservationSchema,
   inboxV2OutboundDispatchIdSchema,
   inboxV2OutboundDispatchReconciliationCommitSchema,
   inboxV2OutboundDispatchRerouteCommitSchema,
   inboxV2OutboundDispatchRouteFailureCommitSchema,
   inboxV2OutboundDispatchSchema,
   inboxV2MessageIdSchema,
+  inboxV2MessageTransportOccurrenceLinkIdSchema,
   inboxV2MessageReactionCommitSchema,
   inboxV2OutboundMultiSendOperationSchema,
   inboxV2OutboundRouteResolutionCommitSchema,
@@ -28,6 +32,7 @@ import {
   inboxV2OutboxWorkStateSchema,
   inboxV2PayloadReferenceSchema,
   inboxV2RepositoryTenantContextSchema,
+  inboxV2SourceOccurrenceResolutionCommitSchema,
   inboxV2ThreadRoutePolicySchema,
   inboxV2TenantIdSchema,
   inboxV2TimestampSchema,
@@ -39,6 +44,8 @@ import {
   type InboxV2OutboundDispatchArtifactAssociationCommit,
   type InboxV2OutboundDispatchAttempt,
   type InboxV2OutboundDispatchAttemptCommit,
+  type InboxV2OutboundProviderObservation,
+  type InboxV2OutboundProviderSettlementCommit,
   type InboxV2OutboundDispatchId,
   type InboxV2OutboundDispatchReconciliationCommit,
   type InboxV2OutboundDispatchReconciliationDecision,
@@ -71,6 +78,14 @@ import {
 } from "./sql-inbox-v2-authorization-repository";
 import { InboxV2PersistenceInvariantError } from "./sql-inbox-v2-conversation-repository";
 import { loadInboxV2OutboundDispatchContentPlan } from "./sql-inbox-v2-file-object-repository";
+import {
+  persistInboxV2OutboundProviderCorrelationAnchorInTransaction,
+  persistInboxV2OutboundProviderObservationSetInTransaction
+} from "./sql-inbox-v2-outbound-provider-observation-repository";
+import {
+  enqueueInboxV2OutboundProviderSettlementWorkInTransaction,
+  type InboxV2OutboundProviderSettlementWorkEnqueueInput
+} from "./sql-inbox-v2-outbound-provider-settlement-work-repository";
 import {
   buildFinalizeInboxV2OutboxSql,
   buildInsertInboxV2OutboxOutcomeSql
@@ -161,6 +176,22 @@ class ProviderResultArtifactRollbackError extends Error {
   }
 }
 
+class ProviderResultObservationRollbackError extends Error {
+  constructor(readonly result: ApplyInboxV2ProviderResultFencedResult) {
+    super(`Rollback provider result observations: ${result.kind}`);
+    this.name = "ProviderResultObservationRollbackError";
+  }
+}
+
+class ProviderCorrelationAnchorRollbackError extends Error {
+  readonly result = { kind: "provider_correlation_conflict" } as const;
+
+  constructor() {
+    super("Rollback conflicting provider correlation anchor.");
+    this.name = "ProviderCorrelationAnchorRollbackError";
+  }
+}
+
 export type CreateInboxV2OutboundDispatchResult =
   | Readonly<{
       kind: "committed" | "already_exists";
@@ -177,7 +208,14 @@ export type CreateInboxV2OutboundDispatchResult =
     }>;
 
 export type ApplyInboxV2DispatchAttemptResult =
-  | Readonly<{ kind: "committed" | "already_applied" }>
+  | Readonly<{
+      kind: "committed";
+      canonicalOutcome?: CompleteAttemptCommit;
+    }>
+  | Readonly<{
+      kind: "already_applied";
+      canonicalOutcome?: CompleteAttemptCommit;
+    }>
   | Readonly<{
       kind:
         | "dispatch_not_found"
@@ -189,7 +227,10 @@ export type ApplyInboxV2DispatchAttemptResult =
         | "attempt_number_conflict"
         | "claim_token_conflict"
         | "attempt_state_conflict"
-        | "artifact_retry_unsafe";
+        | "artifact_retry_unsafe"
+        | "provider_settlement_pending"
+        | "provider_settlement_repair_required"
+        | "provider_correlation_conflict";
     }>;
 
 export type ApplyInboxV2ReconciliationResult =
@@ -201,7 +242,22 @@ export type ApplyInboxV2ReconciliationResult =
         | "unknown_attempt_not_found"
         | "decision_conflict"
         | "attempt_already_reconciled"
-        | "artifact_retry_unsafe";
+        | "artifact_retry_unsafe"
+        | "provider_settlement_pending"
+        | "provider_settlement_repair_required";
+    }>;
+
+export type ApplyInboxV2OutboundProviderSettlementTransitionResult =
+  | ApplyInboxV2DispatchAttemptResult
+  | ApplyInboxV2ReconciliationResult;
+
+export type LockAndValidateInboxV2OutboundDispatchAttemptResult =
+  | Readonly<{ kind: "matched" }>
+  | Readonly<{
+      kind:
+        | "dispatch_not_found"
+        | "attempt_state_conflict"
+        | "dispatch_state_conflict";
     }>;
 
 export type InboxV2ProviderIoOutboxLeaseFence = Readonly<
@@ -240,7 +296,12 @@ export type ApplyInboxV2FencedDispatchAttemptResult =
 
 export type ApplyInboxV2ProviderResultFencedResult =
   | ApplyInboxV2FencedDispatchAttemptResult
-  | Readonly<{ kind: "dispatch_artifact_set_conflict" }>;
+  | Readonly<{
+      kind:
+        | "dispatch_artifact_set_conflict"
+        | "dispatch_provider_observation_set_conflict"
+        | "dispatch_provider_settlement_work_conflict";
+    }>;
 
 export type ApplyInboxV2FencedReconciliationResult =
   | ApplyInboxV2ReconciliationResult
@@ -279,6 +340,15 @@ export type AssociateInboxV2DispatchArtifactResult =
         | "occurrence_revision_conflict"
         | "external_reference_conflict"
         | "association_conflict";
+    }>;
+
+export type ResolveInboxV2SourceOccurrenceResult =
+  | Readonly<{ kind: "committed" | "already_exists" }>
+  | Readonly<{
+      kind:
+        | "occurrence_not_found"
+        | "occurrence_revision_conflict"
+        | "external_reference_conflict";
     }>;
 
 export type CreateInboxV2MultiSendResult =
@@ -358,6 +428,8 @@ export type InboxV2OutboundTransportRepository = Readonly<{
         { kind: "complete_attempt" }
       >;
       artifacts: readonly InboxV2OutboundDispatchArtifact[];
+      observations: readonly InboxV2OutboundProviderObservation[];
+      settlementWork?: readonly InboxV2OutboundProviderSettlementWorkEnqueueInput[];
     }>
   ): Promise<ApplyInboxV2ProviderResultFencedResult>;
   applyRouteFailure(
@@ -675,11 +747,20 @@ export function createSqlInboxV2OutboundTransportRepository(
 
     async applyAttempt(input) {
       const commit = inboxV2OutboundDispatchAttemptCommitSchema.parse(input);
-      return runTransportTransaction(transactionExecutor, (transaction) =>
-        commit.kind === "open_attempt"
-          ? openAttemptInTransaction(transaction, commit)
-          : completeAttemptInTransaction(transaction, commit)
-      );
+      try {
+        return await runTransportTransaction(
+          transactionExecutor,
+          (transaction) =>
+            commit.kind === "open_attempt"
+              ? openAttemptInTransaction(transaction, commit)
+              : completeAttemptInTransaction(transaction, commit)
+        );
+      } catch (error) {
+        if (error instanceof ProviderCorrelationAnchorRollbackError) {
+          return error.result;
+        }
+        throw error;
+      }
     },
 
     async applyAttemptFenced(input) {
@@ -688,44 +769,51 @@ export function createSqlInboxV2OutboundTransportRepository(
       );
       const outboxLease = parseProviderIoOutboxLeaseFence(input.outboxLease);
       assertProviderIoFenceTenant(outboxLease, commit.tenantId);
-      return runTransportTransaction(
-        transactionExecutor,
-        async (transaction) => {
-          const fenced = await lockAndValidateProviderIoOutboxLease(
-            transaction,
-            outboxLease,
-            commit.dispatchBefore.id
-          );
-          if (fenced.kind !== "fenced") return fenced;
-          if (!providerAttemptTimeFenceMatches(commit, fenced)) {
-            return { kind: "outbox_attempt_lease_conflict" } as const;
-          }
-          if (commit.kind === "open_attempt") {
-            const contentPlan = await loadInboxV2OutboundDispatchContentPlan(
+      try {
+        return await runTransportTransaction(
+          transactionExecutor,
+          async (transaction) => {
+            const fenced = await lockAndValidateProviderIoOutboxLease(
               transaction,
-              {
-                tenantId: commit.tenantId,
-                dispatchId: commit.dispatchBefore.id
-              }
+              outboxLease,
+              commit.dispatchBefore.id
             );
-            if (contentPlan === null) {
-              return {
-                kind: "outbox_dispatch_content_plan_not_found"
-              } as const;
+            if (fenced.kind !== "fenced") return fenced;
+            if (!providerAttemptTimeFenceMatches(commit, fenced)) {
+              return { kind: "outbox_attempt_lease_conflict" } as const;
             }
-            if (!contentPlanMatchesOpenAttempt(contentPlan, commit)) {
-              return {
-                kind: "outbox_dispatch_content_plan_conflict"
-              } as const;
+            if (commit.kind === "open_attempt") {
+              const contentPlan = await loadInboxV2OutboundDispatchContentPlan(
+                transaction,
+                {
+                  tenantId: commit.tenantId,
+                  dispatchId: commit.dispatchBefore.id
+                }
+              );
+              if (contentPlan === null) {
+                return {
+                  kind: "outbox_dispatch_content_plan_not_found"
+                } as const;
+              }
+              if (!contentPlanMatchesOpenAttempt(contentPlan, commit)) {
+                return {
+                  kind: "outbox_dispatch_content_plan_conflict"
+                } as const;
+              }
+              return openAttemptInTransaction(transaction, commit, {
+                contentPlan,
+                databaseNow: fenced.databaseNow
+              });
             }
-            return openAttemptInTransaction(transaction, commit, {
-              contentPlan,
-              databaseNow: fenced.databaseNow
-            });
+            return completeAttemptInTransaction(transaction, commit);
           }
-          return completeAttemptInTransaction(transaction, commit);
+        );
+      } catch (error) {
+        if (error instanceof ProviderCorrelationAnchorRollbackError) {
+          return error.result;
         }
-      );
+        throw error;
+      }
     },
 
     async applyProviderResultFenced(input) {
@@ -740,6 +828,10 @@ export function createSqlInboxV2OutboundTransportRepository(
       const artifacts = input.artifacts.map((artifact) =>
         inboxV2OutboundDispatchArtifactSchema.parse(artifact)
       );
+      const observations = input.observations.map((observation) =>
+        inboxV2OutboundProviderObservationSchema.parse(observation)
+      );
+      const settlementWork = input.settlementWork ?? [];
       const outboxLease = parseProviderIoOutboxLeaseFence(input.outboxLease);
       assertProviderIoFenceTenant(outboxLease, commit.tenantId);
       try {
@@ -774,6 +866,15 @@ export function createSqlInboxV2OutboundTransportRepository(
                 artifacts,
                 contentPlan,
                 commit
+              ) ||
+              !providerObservationSetMatchesCompletion(
+                observations,
+                artifacts,
+                commit
+              ) ||
+              !providerSettlementWorkSetMatchesObservations(
+                settlementWork,
+                observations
               )
             ) {
               return {
@@ -783,12 +884,18 @@ export function createSqlInboxV2OutboundTransportRepository(
             return persistProviderResultArtifactsAndCompletion(
               transaction,
               commit,
-              artifacts
+              artifacts,
+              observations,
+              settlementWork,
+              contentPlan
             );
           }
         );
       } catch (error) {
-        if (error instanceof ProviderResultArtifactRollbackError) {
+        if (
+          error instanceof ProviderResultArtifactRollbackError ||
+          error instanceof ProviderResultObservationRollbackError
+        ) {
           return error.result;
         }
         throw error;
@@ -869,7 +976,11 @@ export function createSqlInboxV2OutboundTransportRepository(
       try {
         return await runTransportTransaction(
           transactionExecutor,
-          (transaction) => associateArtifactInTransaction(transaction, commit)
+          (transaction) =>
+            associateInboxV2OutboundDispatchArtifactInTransaction(
+              transaction,
+              commit
+            )
         );
       } catch (error) {
         if (error instanceof ArtifactAssociationRollbackError) {
@@ -2862,6 +2973,36 @@ async function lockDispatch(
   return result.rows[0] ?? null;
 }
 
+/**
+ * Locks one exact dispatch/attempt pair in the canonical transport order and
+ * validates both complete persisted snapshots after both locks are held.
+ * Callers that continue after a state conflict still retain both row locks;
+ * this is required by provider-result convergence when an exact echo won.
+ */
+export async function lockAndValidateInboxV2OutboundDispatchAttemptInTransaction(
+  transaction: RawSqlExecutor,
+  input: Readonly<{
+    dispatch: InboxV2OutboundDispatch;
+    attempt: InboxV2OutboundDispatchAttempt;
+  }>
+): Promise<LockAndValidateInboxV2OutboundDispatchAttemptResult> {
+  const dispatchRow = await lockDispatch(transaction, input.dispatch);
+  if (dispatchRow === null) return { kind: "dispatch_not_found" };
+
+  // Lock the exact attempt even when the dispatch snapshot has drifted. A
+  // synchronous provider response must establish dispatch -> attempt locks
+  // before inspecting artifacts while preserving echo-first convergence.
+  const attemptRow = await lockAttempt(transaction, input.attempt);
+  if (attemptRow === null) return { kind: "attempt_state_conflict" };
+  if (!existingDispatchMatches(dispatchRow, input.dispatch)) {
+    return { kind: "dispatch_state_conflict" };
+  }
+  if (!existingAttemptMatches(attemptRow, input.attempt)) {
+    return { kind: "attempt_state_conflict" };
+  }
+  return { kind: "matched" };
+}
+
 function existingDispatchMatches(
   row: ExistingDispatchRow,
   dispatch: InboxV2OutboundDispatch
@@ -3197,7 +3338,10 @@ function providerArtifactSetMatchesCompletion(
   ) {
     return false;
   }
-  const completedAt = commit.attemptAfter.outcome.completedAt;
+  // Artifact identity is allocated when the fenced provider attempt is opened.
+  // Completion can happen later, so tying immutable artifact creation to the
+  // result timestamp makes the coordinator's real output fail this preflight.
+  const artifactCreatedAt = commit.attemptBefore.openedAt;
   const ordered = [...artifacts].sort(
     (left, right) => left.ordinal - right.ordinal
   );
@@ -3224,7 +3368,7 @@ function providerArtifactSetMatchesCompletion(
         String(artifact.dispatch.id) !== String(commit.dispatchBefore.id) ||
         String(artifact.route.id) !== String(commit.dispatchBefore.route.id) ||
         String(artifact.attempt.id) !== String(commit.attemptBefore.id) ||
-        artifact.createdAt !== completedAt ||
+        artifact.createdAt !== artifactCreatedAt ||
         artifact.revision !== "1"
       );
     })
@@ -3279,6 +3423,79 @@ function providerArtifactSetMatchesCompletion(
   );
 }
 
+function providerObservationSetMatchesCompletion(
+  observations: readonly InboxV2OutboundProviderObservation[],
+  artifacts: readonly InboxV2OutboundDispatchArtifact[],
+  commit: CompleteAttemptCommit
+): boolean {
+  if (
+    commit.attemptAfter.outcome.kind === "pending" ||
+    new Set(observations.map((observation) => observation.id)).size !==
+      observations.length ||
+    new Set(observations.map((observation) => observation.artifact.ordinal))
+      .size !== observations.length
+  ) {
+    return false;
+  }
+  const completedAt = commit.attemptAfter.outcome.completedAt;
+  const artifactByOrdinal = new Map(
+    artifacts.map((artifact) => [artifact.ordinal, artifact] as const)
+  );
+  return observations.every((observation) => {
+    const artifact = artifactByOrdinal.get(observation.artifact.ordinal);
+    return (
+      artifact !== undefined &&
+      artifact.state === "accepted" &&
+      observation.evidence.kind === "provider_response_attempt" &&
+      observation.recordedAt === completedAt &&
+      observation.observedByTrustedServiceId ===
+        commit.completedByTrustedServiceId &&
+      calculateInboxV2CanonicalSha256(observation.artifact) ===
+        calculateInboxV2CanonicalSha256(artifact) &&
+      calculateInboxV2CanonicalSha256(observation.dispatch) ===
+        calculateInboxV2CanonicalSha256(commit.dispatchBefore) &&
+      calculateInboxV2CanonicalSha256(observation.attempt) ===
+        calculateInboxV2CanonicalSha256(commit.attemptBefore) &&
+      String(observation.route.id) === String(commit.attemptBefore.route.id) &&
+      String(observation.sourceOccurrence.origin.kind) ===
+        "provider_response" &&
+      String(observation.evidence.outboundDispatchAttempt.id) ===
+        String(commit.attemptBefore.id)
+    );
+  });
+}
+
+function providerSettlementWorkSetMatchesObservations(
+  workItems: readonly InboxV2OutboundProviderSettlementWorkEnqueueInput[],
+  observations: readonly InboxV2OutboundProviderObservation[]
+): boolean {
+  if (
+    workItems.length !== observations.length ||
+    new Set(workItems.map((workItem) => workItem.observation.id)).size !==
+      workItems.length ||
+    new Set(workItems.map((workItem) => workItem.candidateTransportLinkId))
+      .size !== workItems.length
+  ) {
+    return false;
+  }
+  const observationById = new Map(
+    observations.map((observation) => [observation.id, observation] as const)
+  );
+  return workItems.every((workItem) => {
+    const observation = observationById.get(workItem.observation.id);
+    return (
+      observation !== undefined &&
+      inboxV2ExternalMessageReferenceIdSchema.safeParse(
+        workItem.candidateExternalMessageReferenceId
+      ).success &&
+      inboxV2MessageTransportOccurrenceLinkIdSchema.safeParse(
+        workItem.candidateTransportLinkId
+      ).success &&
+      sameJson(workItem.observation, observation)
+    );
+  });
+}
+
 function providerRouteFailureTimeFenceMatches(
   commit: InboxV2OutboundDispatchRouteFailureCommit,
   fence: ValidatedProviderIoOutboxLease
@@ -3327,19 +3544,279 @@ type ArtifactRetrySafetyRow = {
   retry_safe: unknown;
 };
 
+type ProviderSettlementFenceRow = {
+  observation_id: unknown;
+  work_observation_id: unknown;
+  work_state: unknown;
+  settlement_observation_id: unknown;
+};
+
+type AcceptedProviderTruthCoverageRow = {
+  artifact_ordinal: unknown;
+  artifact_id: unknown;
+  observation_id: unknown;
+  work_observation_id: unknown;
+  work_state: unknown;
+  settlement_observation_id: unknown;
+};
+
+type AcceptedProviderTruthCoverage = Readonly<{
+  complete: boolean;
+  artifactIdsByOrdinal: ReadonlyMap<number, ReadonlySet<string>>;
+  settledArtifactIdsByOrdinal: ReadonlyMap<number, ReadonlySet<string>>;
+  pendingArtifactIdsByOrdinal: ReadonlyMap<number, ReadonlySet<string>>;
+  deadArtifactIdsByOrdinal: ReadonlyMap<number, ReadonlySet<string>>;
+}>;
+
+type ProviderSettlementFenceState = "clear" | "pending" | "repair_required";
+
+export function buildCheckInboxV2UnsettledAcceptedProviderObservationSql(input: {
+  tenantId: InboxV2TenantId;
+  dispatchId: InboxV2OutboundDispatchId;
+  attemptId: InboxV2OutboundDispatchAttempt["id"];
+  excludeObservationId?: string;
+}): SQL {
+  return sql`
+    select observation_row.id as observation_id,
+           work_row.observation_id as work_observation_id,
+           work_row.state as work_state,
+           settlement_row.observation_id as settlement_observation_id
+      from inbox_v2_outbound_provider_observations observation_row
+      left join inbox_v2_outbound_provider_settlement_work_items work_row
+        on work_row.tenant_id = observation_row.tenant_id
+       and work_row.observation_id = observation_row.id
+      left join inbox_v2_outbound_provider_observation_settlements
+        settlement_row
+        on settlement_row.tenant_id = observation_row.tenant_id
+       and settlement_row.observation_id = observation_row.id
+     where observation_row.tenant_id = ${input.tenantId}
+       and observation_row.dispatch_id = ${input.dispatchId}
+       and observation_row.attempt_id = ${input.attemptId}
+       and observation_row.effective_state = 'accepted'
+       and (${
+         input.excludeObservationId ?? null
+       }::text is null or observation_row.id <>
+         ${input.excludeObservationId ?? null})
+     order by observation_row.id
+  `;
+}
+
+async function inspectAcceptedProviderObservationSettlementFence(
+  transaction: RawSqlExecutor,
+  input: Parameters<
+    typeof buildCheckInboxV2UnsettledAcceptedProviderObservationSql
+  >[0]
+): Promise<ProviderSettlementFenceState> {
+  const result = await transaction.execute<ProviderSettlementFenceRow>(
+    buildCheckInboxV2UnsettledAcceptedProviderObservationSql(input)
+  );
+
+  let state: ProviderSettlementFenceState = "clear";
+  const seenObservationIds = new Set<string>();
+  for (const row of result.rows) {
+    if (typeof row.observation_id !== "string") {
+      throw invariantError(
+        "Provider observation settlement fence returned an invalid observation id."
+      );
+    }
+    if (seenObservationIds.has(row.observation_id)) {
+      throw invariantError(
+        "Provider observation settlement fence returned duplicate observation state."
+      );
+    }
+    seenObservationIds.add(row.observation_id);
+
+    if (row.settlement_observation_id !== null) {
+      if (row.settlement_observation_id !== row.observation_id) {
+        throw invariantError(
+          "Provider observation settlement fence returned an incoherent settlement."
+        );
+      }
+      continue;
+    }
+    if (row.work_observation_id !== row.observation_id) {
+      throw invariantError(
+        "Accepted provider observation is missing its settlement work item."
+      );
+    }
+    if (row.work_state === "pending" || row.work_state === "leased") {
+      if (state === "clear") state = "pending";
+      continue;
+    }
+    if (row.work_state === "dead") {
+      state = "repair_required";
+      continue;
+    }
+    throw invariantError(
+      "Unsettled provider observation has an incoherent settlement work state."
+    );
+  }
+  return state;
+}
+
+/**
+ * Reads accepted provider truth only after the caller owns the canonical
+ * dispatch -> attempt -> artifact UPDATE locks. Observation rows are immutable
+ * and work rows cannot reach settlement while their worker is blocked on the
+ * dispatch lock, so an MVCC read avoids a work -> dispatch lock inversion.
+ */
+async function lockAcceptedProviderTruthCoverage(
+  transaction: RawSqlExecutor,
+  input: Readonly<{
+    commit: CompleteAttemptCommit;
+    contentPlan: InboxV2OutboundDispatchContentPlan;
+  }>
+): Promise<AcceptedProviderTruthCoverage> {
+  const result =
+    await transaction.execute<AcceptedProviderTruthCoverageRow>(sql`
+    select observation_row.artifact_ordinal,
+           observation_row.artifact_id,
+           observation_row.id as observation_id,
+           work_row.observation_id as work_observation_id,
+           work_row.state::text as work_state,
+           settlement_row.observation_id as settlement_observation_id
+      from inbox_v2_outbound_provider_observations observation_row
+      left join inbox_v2_outbound_provider_settlement_work_items work_row
+        on work_row.tenant_id = observation_row.tenant_id
+       and work_row.observation_id = observation_row.id
+      left join inbox_v2_outbound_provider_observation_settlements
+        settlement_row
+        on settlement_row.tenant_id = observation_row.tenant_id
+       and settlement_row.observation_id = observation_row.id
+     where observation_row.tenant_id = ${input.commit.tenantId}
+       and observation_row.dispatch_id = ${input.commit.dispatchBefore.id}
+       and observation_row.route_id = ${input.commit.dispatchBefore.route.id}
+       and observation_row.attempt_id = ${input.commit.attemptBefore.id}
+       and observation_row.message_id = ${input.commit.dispatchBefore.message.id}
+       and observation_row.content_plan_id = ${input.contentPlan.id}
+       and observation_row.content_plan_digest_sha256 =
+         ${input.contentPlan.planDigestSha256}
+       and observation_row.effective_state = 'accepted'
+     order by observation_row.artifact_ordinal, observation_row.id
+  `);
+  const mutable = new Map<number, Set<string>>();
+  const settled = new Map<number, Set<string>>();
+  const pending = new Map<number, Set<string>>();
+  const dead = new Map<number, Set<string>>();
+  const expectedArtifactIdsByOrdinal = new Map(
+    input.contentPlan.artifacts.map((artifact) => [
+      artifact.ordinal,
+      deriveInboxV2OutboundDispatchArtifactId({
+        tenantId: input.commit.tenantId,
+        dispatch: input.commit.attemptBefore.dispatch,
+        route: input.commit.attemptBefore.route,
+        attempt: {
+          tenantId: input.commit.tenantId,
+          kind: "outbound_dispatch_attempt",
+          id: input.commit.attemptBefore.id
+        },
+        ordinal: artifact.ordinal
+      })
+    ])
+  );
+  for (const row of result.rows) {
+    const ordinal = Number(row.artifact_ordinal);
+    const artifactId = String(row.artifact_id);
+    const observationId = String(row.observation_id);
+    const isSettled = row.settlement_observation_id === observationId;
+    if (
+      !Number.isSafeInteger(ordinal) ||
+      ordinal < 1 ||
+      typeof row.artifact_id !== "string" ||
+      typeof row.observation_id !== "string"
+    ) {
+      throw invariantError(
+        "Accepted provider truth coverage returned an invalid identity."
+      );
+    }
+    if (expectedArtifactIdsByOrdinal.get(ordinal) !== artifactId) {
+      throw invariantError(
+        "Accepted provider truth coverage does not match the exact content plan artifact."
+      );
+    }
+    if (row.work_observation_id !== observationId) {
+      throw invariantError(
+        "Accepted provider truth coverage is missing its exact settlement work item."
+      );
+    }
+    if (
+      row.settlement_observation_id !== null &&
+      row.settlement_observation_id !== observationId
+    ) {
+      throw invariantError(
+        "Accepted provider truth coverage returned an incoherent settlement identity."
+      );
+    }
+    if (
+      row.work_state !== "pending" &&
+      row.work_state !== "leased" &&
+      row.work_state !== "settled" &&
+      row.work_state !== "dead"
+    ) {
+      throw invariantError(
+        "Accepted provider truth coverage returned an invalid work state."
+      );
+    }
+    if (
+      (row.work_state === "settled" && !isSettled) ||
+      (row.work_state === "dead" && isSettled)
+    ) {
+      throw invariantError(
+        "Accepted provider truth coverage returned an incoherent settlement."
+      );
+    }
+    const artifactIds = mutable.get(ordinal) ?? new Set<string>();
+    artifactIds.add(artifactId);
+    mutable.set(ordinal, artifactIds);
+    const disposition = isSettled
+      ? settled
+      : row.work_state === "dead"
+        ? dead
+        : pending;
+    const dispositionArtifactIds =
+      disposition.get(ordinal) ?? new Set<string>();
+    dispositionArtifactIds.add(artifactId);
+    disposition.set(ordinal, dispositionArtifactIds);
+  }
+  const artifactIdsByOrdinal = new Map<number, ReadonlySet<string>>(mutable);
+  const complete =
+    expectedArtifactIdsByOrdinal.size > 0 &&
+    [...expectedArtifactIdsByOrdinal].every(
+      ([ordinal, expectedArtifactId]) =>
+        artifactIdsByOrdinal.get(ordinal)?.has(expectedArtifactId) === true
+    );
+  return {
+    complete,
+    artifactIdsByOrdinal,
+    settledArtifactIdsByOrdinal: new Map(settled),
+    pendingArtifactIdsByOrdinal: new Map(pending),
+    deadArtifactIdsByOrdinal: new Map(dead)
+  };
+}
+
 export function buildCheckInboxV2ArtifactRetrySafetySql(input: {
   tenantId: InboxV2TenantId;
   dispatchId: InboxV2OutboundDispatchId;
   attemptId: InboxV2OutboundDispatchAttempt["id"];
 }): SQL {
   return sql`
-    select not exists (
-      select 1
-        from inbox_v2_outbound_dispatch_artifacts artifact
-       where artifact.tenant_id = ${input.tenantId}
-         and artifact.dispatch_id = ${input.dispatchId}
-         and artifact.attempt_id = ${input.attemptId}
-         and artifact.state = 'accepted'
+    select not (
+      exists (
+        select 1
+          from inbox_v2_outbound_dispatch_artifacts artifact
+         where artifact.tenant_id = ${input.tenantId}
+           and artifact.dispatch_id = ${input.dispatchId}
+           and artifact.attempt_id = ${input.attemptId}
+           and artifact.state = 'accepted'
+      )
+      or exists (
+        select 1
+          from inbox_v2_outbound_dispatch_artifact_resolutions resolution
+         where resolution.tenant_id = ${input.tenantId}
+           and resolution.dispatch_id = ${input.dispatchId}
+           and resolution.attempt_id = ${input.attemptId}
+           and resolution.effective_state = 'accepted'
+      )
     ) as retry_safe
   `;
 }
@@ -3423,6 +3900,26 @@ async function openAttemptInTransaction(
   }
   if (
     commit.priorAttempt !== null &&
+    !(await lockAndValidateRetryPriorAttempt(transaction, commit.priorAttempt))
+  ) {
+    return { kind: "attempt_state_conflict" };
+  }
+  if (commit.priorAttempt !== null) {
+    const providerSettlementFence =
+      await inspectAcceptedProviderObservationSettlementFence(transaction, {
+        tenantId: commit.tenantId,
+        dispatchId: commit.dispatchBefore.id,
+        attemptId: commit.priorAttempt.id
+      });
+    if (providerSettlementFence === "pending") {
+      return { kind: "provider_settlement_pending" };
+    }
+    if (providerSettlementFence === "repair_required") {
+      return { kind: "provider_settlement_repair_required" };
+    }
+  }
+  if (
+    commit.priorAttempt !== null &&
     !(await retryIsSafeForAttempt(transaction, {
       tenantId: commit.tenantId,
       dispatchId: commit.dispatchBefore.id,
@@ -3445,6 +3942,15 @@ async function openAttemptInTransaction(
     }
   }
 
+  const correlationAnchor =
+    await persistInboxV2OutboundProviderCorrelationAnchorInTransaction(
+      transaction,
+      commit
+    );
+  if (correlationAnchor.kind === "conflict") {
+    throw new ProviderCorrelationAnchorRollbackError();
+  }
+
   const dispatchUpdate = await transaction.execute<IdRow>(
     buildCompareAndSwapInboxV2OutboundDispatchSql(
       commit.dispatchBefore,
@@ -3457,6 +3963,14 @@ async function openAttemptInTransaction(
     );
   }
   return { kind: "committed" };
+}
+
+async function lockAndValidateRetryPriorAttempt(
+  transaction: RawSqlExecutor,
+  priorAttempt: InboxV2OutboundDispatchAttempt
+): Promise<boolean> {
+  const row = await lockAttempt(transaction, priorAttempt);
+  return row !== null && existingAttemptMatches(row, priorAttempt);
 }
 
 type ProviderOpenCapabilityAuthorityRow = {
@@ -3745,7 +4259,11 @@ export function buildInsertInboxV2OutboundDispatchAttemptSql(
 
 async function completeAttemptInTransaction(
   transaction: RawSqlExecutor,
-  commit: CompleteAttemptCommit
+  commit: CompleteAttemptCommit,
+  options: Readonly<{
+    settlementObservationId?: string;
+    allowIntegratedProviderTruthNonAcceptedCompletion?: boolean;
+  }> = {}
 ): Promise<ApplyInboxV2DispatchAttemptResult> {
   const dispatchRow = await lockDispatch(transaction, commit.dispatchBefore);
   if (dispatchRow === null) return { kind: "dispatch_not_found" };
@@ -3763,6 +4281,25 @@ async function completeAttemptInTransaction(
       return { kind: "already_applied" };
     }
     return { kind: "dispatch_state_conflict" };
+  }
+
+  if (commit.attemptAfter.outcome.kind !== "accepted") {
+    const providerSettlementFence =
+      await inspectAcceptedProviderObservationSettlementFence(transaction, {
+        tenantId: commit.tenantId,
+        dispatchId: commit.dispatchBefore.id,
+        attemptId: commit.attemptBefore.id,
+        excludeObservationId: options.settlementObservationId
+      });
+    if (
+      providerSettlementFence === "pending" &&
+      options.allowIntegratedProviderTruthNonAcceptedCompletion !== true
+    ) {
+      return { kind: "provider_settlement_pending" };
+    }
+    if (providerSettlementFence === "repair_required") {
+      return { kind: "provider_settlement_repair_required" };
+    }
   }
 
   const attemptUpdate = await transaction.execute<IdRow>(
@@ -3939,6 +4476,32 @@ function existingAttemptMatches(
 ): boolean {
   const outcome = attemptOutcomeColumns(attempt);
   return (
+    existingAttemptStableFactsMatch(row, attempt) &&
+    String(row.outcome_kind) === attempt.outcome.kind &&
+    nullableString(row.completion_source) ===
+      nullableString(attempt.completionSource) &&
+    sameNullableTimestamp(row.completed_at, outcome.completedAt) &&
+    sameNullableTimestamp(row.retry_at, outcome.retryAt) &&
+    nullableString(row.provider_acknowledgement_token) ===
+      nullableString(outcome.providerAcknowledgementToken) &&
+    nullableString(row.diagnostic_code_id) ===
+      nullableString(outcome.diagnosticCodeId) &&
+    nullableBoolean(row.diagnostic_retryable) === outcome.diagnosticRetryable &&
+    nullableString(row.diagnostic_correlation_token) ===
+      nullableString(outcome.diagnosticCorrelationToken) &&
+    nullableString(row.diagnostic_safe_operator_hint_id) ===
+      nullableString(outcome.diagnosticSafeOperatorHintId) &&
+    nullableString(row.unknown_required_action) ===
+      nullableString(outcome.unknownRequiredAction) &&
+    BigInt(String(row.revision)) === BigInt(attempt.revision)
+  );
+}
+
+function existingAttemptStableFactsMatch(
+  row: AttemptRow,
+  attempt: InboxV2OutboundDispatchAttempt
+): boolean {
+  return (
     String(row.id) === String(attempt.id) &&
     String(row.dispatch_id) === String(attempt.dispatch.id) &&
     String(row.route_id) === String(attempt.route.id) &&
@@ -3962,24 +4525,7 @@ function existingAttemptMatches(
     Boolean(row.automatic_retry_allowed) ===
       attempt.retrySafety.automaticRetryAllowed &&
     sameTimestamp(row.lease_expires_at, attempt.leaseExpiresAt) &&
-    sameTimestamp(row.opened_at, attempt.openedAt) &&
-    String(row.outcome_kind) === attempt.outcome.kind &&
-    nullableString(row.completion_source) ===
-      nullableString(attempt.completionSource) &&
-    sameNullableTimestamp(row.completed_at, outcome.completedAt) &&
-    sameNullableTimestamp(row.retry_at, outcome.retryAt) &&
-    nullableString(row.provider_acknowledgement_token) ===
-      nullableString(outcome.providerAcknowledgementToken) &&
-    nullableString(row.diagnostic_code_id) ===
-      nullableString(outcome.diagnosticCodeId) &&
-    nullableBoolean(row.diagnostic_retryable) === outcome.diagnosticRetryable &&
-    nullableString(row.diagnostic_correlation_token) ===
-      nullableString(outcome.diagnosticCorrelationToken) &&
-    nullableString(row.diagnostic_safe_operator_hint_id) ===
-      nullableString(outcome.diagnosticSafeOperatorHintId) &&
-    nullableString(row.unknown_required_action) ===
-      nullableString(outcome.unknownRequiredAction) &&
-    BigInt(String(row.revision)) === BigInt(attempt.revision)
+    sameTimestamp(row.opened_at, attempt.openedAt)
   );
 }
 
@@ -4284,6 +4830,20 @@ async function reconcileInTransaction(
   if (!existingAttemptMatches(attemptRow, commit.decision.unknownAttempt)) {
     return { kind: "unknown_attempt_not_found" };
   }
+  if (commit.decision.result.state !== "accepted") {
+    const providerSettlementFence =
+      await inspectAcceptedProviderObservationSettlementFence(transaction, {
+        tenantId: commit.tenantId,
+        dispatchId: commit.dispatchBefore.id,
+        attemptId: commit.decision.unknownAttempt.id
+      });
+    if (providerSettlementFence === "pending") {
+      return { kind: "provider_settlement_pending" };
+    }
+    if (providerSettlementFence === "repair_required") {
+      return { kind: "provider_settlement_repair_required" };
+    }
+  }
   if (
     commit.decision.result.state === "retryable_failure" &&
     !(await retryIsSafeForAttempt(transaction, {
@@ -4347,6 +4907,53 @@ async function reconcileInTransaction(
     throw invariantError(
       "Dispatch changed after its row lock while reconciling an attempt."
     );
+  }
+  return { kind: "committed" };
+}
+
+/**
+ * Applies only the aggregate portion of an already validated provider
+ * observation settlement. The caller owns the surrounding authorized atomic
+ * transaction; no provider I/O or nested transaction is permitted here.
+ */
+export async function applyInboxV2OutboundProviderSettlementTransitionInTransaction(
+  transaction: RawSqlExecutor,
+  commit: InboxV2OutboundProviderSettlementCommit
+): Promise<ApplyInboxV2OutboundProviderSettlementTransitionResult> {
+  const transition = commit.transition;
+  if (transition.kind === "complete_pending_attempt") {
+    if (transition.attemptCommit.kind !== "complete_attempt") {
+      throw unsupported(
+        "Provider settlement completion requires a complete-attempt commit."
+      );
+    }
+    return completeAttemptInTransaction(transaction, transition.attemptCommit, {
+      settlementObservationId: commit.observation.id
+    });
+  }
+  if (transition.kind === "reconcile_outcome_unknown") {
+    return reconcileInTransaction(transaction, transition.reconciliationCommit);
+  }
+
+  const expectedDispatch =
+    transition.kind === "already_accepted" ||
+    transition.kind === "retain_dispatch_state"
+      ? transition.dispatch
+      : commit.observation.dispatch;
+  const expectedAttempt =
+    transition.kind === "already_accepted" ||
+    transition.kind === "retain_dispatch_state"
+      ? transition.attempt
+      : commit.observation.attempt;
+  const dispatchRow = await lockDispatch(transaction, expectedDispatch);
+  if (dispatchRow === null) return { kind: "dispatch_not_found" };
+  const attemptRow = await lockAttempt(transaction, expectedAttempt);
+  if (attemptRow === null) return { kind: "attempt_state_conflict" };
+  if (
+    !existingDispatchMatches(dispatchRow, expectedDispatch) ||
+    !existingAttemptMatches(attemptRow, expectedAttempt)
+  ) {
+    return { kind: "dispatch_state_conflict" };
   }
   return { kind: "committed" };
 }
@@ -4563,8 +5170,26 @@ function existingReconciliationMatches(
 async function persistProviderResultArtifactsAndCompletion(
   transaction: RawSqlExecutor,
   commit: CompleteAttemptCommit,
-  artifacts: readonly InboxV2OutboundDispatchArtifact[]
+  artifacts: readonly InboxV2OutboundDispatchArtifact[],
+  observations: readonly InboxV2OutboundProviderObservation[],
+  settlementWork: readonly InboxV2OutboundProviderSettlementWorkEnqueueInput[],
+  contentPlan: InboxV2OutboundDispatchContentPlan
 ): Promise<ApplyInboxV2ProviderResultFencedResult> {
+  const transportLock =
+    await lockAndValidateInboxV2OutboundDispatchAttemptInTransaction(
+      transaction,
+      {
+        dispatch: commit.dispatchBefore,
+        attempt: commit.attemptBefore
+      }
+    );
+  if (
+    transportLock.kind === "dispatch_not_found" ||
+    (transportLock.kind === "attempt_state_conflict" &&
+      commit.dispatchBefore.state === "attempting")
+  ) {
+    return transportLock;
+  }
   const existing = await transaction.execute<ArtifactRow>(sql`
     select id, dispatch_id, route_id, attempt_id, message_id, ordinal,
            state, diagnostic_code_id, diagnostic_retryable,
@@ -4580,31 +5205,65 @@ async function persistProviderResultArtifactsAndCompletion(
   const ordered = [...artifacts].sort(
     (left, right) => left.ordinal - right.ordinal
   );
-  const hasExactExistingSet =
-    existing.rows.length === ordered.length &&
-    existing.rows.every((row, index) => {
-      const artifact = ordered[index];
-      return artifact !== undefined && artifactRowMatches(row, artifact);
-    });
-  if (existing.rows.length > 0 && !hasExactExistingSet) {
+  const artifactByOrdinal = new Map(
+    ordered.map((artifact) => [artifact.ordinal, artifact] as const)
+  );
+  const existingByOrdinal = new Map(
+    existing.rows.map((row) => [Number(row.ordinal), row] as const)
+  );
+  if (
+    existingByOrdinal.size !== existing.rows.length ||
+    artifactByOrdinal.size !== ordered.length
+  ) {
     return { kind: "dispatch_artifact_set_conflict" };
   }
 
-  const completion = await completeAttemptInTransaction(transaction, commit);
+  const acceptedCoverage = await lockAcceptedProviderTruthCoverage(
+    transaction,
+    { commit, contentPlan }
+  );
+  const canonicalEchoCompletion =
+    transportLock.kind === "dispatch_state_conflict"
+      ? await providerObservationAlreadyAcceptedSameAttempt(transaction, commit)
+      : null;
   if (
-    completion.kind !== "committed" &&
-    completion.kind !== "already_applied"
+    transportLock.kind === "dispatch_state_conflict" &&
+    canonicalEchoCompletion === null &&
+    !acceptedCoverage.complete &&
+    !(await providerResultCompletionAlreadyAppliedSameAttempt(
+      transaction,
+      commit
+    ))
   ) {
-    return completion;
+    return { kind: "dispatch_state_conflict" };
   }
-  if (completion.kind === "already_applied") {
-    return hasExactExistingSet
-      ? completion
-      : { kind: "dispatch_artifact_set_conflict" };
+  for (const row of existing.rows) {
+    const artifact = artifactByOrdinal.get(Number(row.ordinal));
+    if (artifact === undefined) {
+      return { kind: "dispatch_artifact_set_conflict" };
+    }
+    const hasAcceptedTruth =
+      acceptedCoverage.artifactIdsByOrdinal
+        .get(artifact.ordinal)
+        ?.has(String(row.id)) === true;
+    if (artifactRowMatches(row, artifact)) continue;
+    if (
+      hasAcceptedTruth &&
+      artifactRowAcceptedTruthDominatesIncoming(row, artifact)
+    ) {
+      continue;
+    }
+    if (
+      hasAcceptedTruth &&
+      artifactRowUnknownCanBackAcceptedObservation(row, artifact)
+    ) {
+      continue;
+    }
+    return { kind: "dispatch_artifact_set_conflict" };
   }
-  if (hasExactExistingSet) return completion;
 
   for (const artifact of ordered) {
+    if (existingByOrdinal.has(artifact.ordinal)) continue;
     const result = await appendArtifactInTransaction(transaction, artifact);
     if (result.kind !== "committed" && result.kind !== "already_exists") {
       throw new ProviderResultArtifactRollbackError({
@@ -4612,7 +5271,425 @@ async function persistProviderResultArtifactsAndCompletion(
       });
     }
   }
+
+  const canonicalObservations = observations.map((observation) => {
+    const row = existingByOrdinal.get(observation.artifact.ordinal);
+    if (row === undefined || artifactRowMatches(row, observation.artifact)) {
+      return observation;
+    }
+    const hasAcceptedTruth =
+      acceptedCoverage.artifactIdsByOrdinal
+        .get(observation.artifact.ordinal)
+        ?.has(String(row.id)) === true;
+    if (
+      !hasAcceptedTruth ||
+      !artifactRowUnknownCanBackAcceptedObservation(row, observation.artifact)
+    ) {
+      throw new ProviderResultObservationRollbackError({
+        kind: "dispatch_provider_observation_set_conflict"
+      });
+    }
+    return inboxV2OutboundProviderObservationSchema.parse({
+      ...observation,
+      artifact: mapPersistedArtifactRow(row, observation.artifact)
+    });
+  });
+  const canonicalObservationById = new Map(
+    canonicalObservations.map((observation) => [observation.id, observation])
+  );
+  const canonicalSettlementWork = settlementWork.map((workItem) => {
+    const observation = canonicalObservationById.get(workItem.observation.id);
+    if (observation === undefined) {
+      throw new ProviderResultObservationRollbackError({
+        kind: "dispatch_provider_settlement_work_conflict"
+      });
+    }
+    return { ...workItem, observation };
+  });
+  await persistProviderResultObservationTruth(
+    transaction,
+    canonicalObservations,
+    canonicalSettlementWork,
+    contentPlan
+  );
+
+  const integratedAcceptedTruth = mergeIntegratedAcceptedProviderTruth({
+    existing: acceptedCoverage,
+    artifacts: ordered,
+    observations: canonicalObservations,
+    contentPlan,
+    commit
+  });
+
+  const allArtifactsWereAlreadyPresent =
+    existing.rows.length === ordered.length;
+  if (acceptedProviderTruthRequiresRepair(acceptedCoverage)) {
+    return { kind: "provider_settlement_repair_required" };
+  }
+  if (canonicalEchoCompletion !== null) {
+    if (!allArtifactsWereAlreadyPresent) {
+      throw new ProviderResultArtifactRollbackError({
+        kind: "dispatch_artifact_set_conflict"
+      });
+    }
+    return {
+      kind: "already_applied",
+      canonicalOutcome: canonicalEchoCompletion
+    };
+  }
+
+  // Stronger provider truth always wins over a weaker aggregate outcome. This
+  // proof includes both truth that predated the provider result and accepted
+  // response observations/artifacts persisted immediately above. A partial
+  // accepted vector has one exact safe aggregate: mixed outcome-unknown with
+  // an operator duplicate-risk decision. We may cross a pending settlement
+  // fence only for that recomputed aggregate; ordinary nonaccepted commits stay
+  // fenced and complete accepted coverage remains settlement-owned.
+  if (commit.attemptAfter.outcome.kind !== "accepted") {
+    if (integratedAcceptedTruth.complete) {
+      if (integratedAcceptedTruth.settlementBackedComplete) {
+        return { kind: "provider_settlement_pending" };
+      }
+      // Hybrid full acceptance (for example echo A plus a descriptor-less
+      // accepted provider artifact B) has no future settlement capable of
+      // completing the bare accepted ordinal. The exact locked vector proves
+      // P -> A directly; the provider acknowledgement remains deliberately
+      // absent because no single aggregate acknowledgement was observed.
+      const canonicalAcceptedCommit =
+        buildCanonicalEffectiveAcceptedProviderCompletion(commit);
+      if (canonicalAcceptedCommit === null) {
+        return { kind: "provider_settlement_pending" };
+      }
+      const canonicalAcceptedCompletion = await completeAttemptInTransaction(
+        transaction,
+        canonicalAcceptedCommit
+      );
+      return canonicalAcceptedCompletion.kind === "committed" ||
+        canonicalAcceptedCompletion.kind === "already_applied"
+        ? {
+            ...canonicalAcceptedCompletion,
+            canonicalOutcome: canonicalAcceptedCommit
+          }
+        : canonicalAcceptedCompletion;
+    }
+    if (!integratedAcceptedTruth.hasAny) {
+      const completion = await completeAttemptInTransaction(
+        transaction,
+        commit
+      );
+      if (
+        completion.kind === "already_applied" &&
+        !allArtifactsWereAlreadyPresent
+      ) {
+        throw new ProviderResultArtifactRollbackError({
+          kind: "dispatch_artifact_set_conflict"
+        });
+      }
+      return completion;
+    }
+    const canonicalCommit = buildCanonicalEffectiveProviderCompletion(
+      commit,
+      ordered,
+      integratedAcceptedTruth
+    );
+    if (canonicalCommit === null) {
+      return { kind: "provider_settlement_pending" };
+    }
+    const canonicalCompletion = await completeAttemptInTransaction(
+      transaction,
+      canonicalCommit,
+      { allowIntegratedProviderTruthNonAcceptedCompletion: true }
+    );
+    return canonicalCompletion.kind === "committed" ||
+      canonicalCompletion.kind === "already_applied"
+      ? { ...canonicalCompletion, canonicalOutcome: canonicalCommit }
+      : canonicalCompletion;
+  }
+  const completion = await completeAttemptInTransaction(transaction, commit);
+  if (
+    completion.kind === "already_applied" &&
+    !allArtifactsWereAlreadyPresent
+  ) {
+    throw new ProviderResultArtifactRollbackError({
+      kind: "dispatch_artifact_set_conflict"
+    });
+  }
   return completion;
+}
+
+type IntegratedAcceptedProviderTruth = Readonly<{
+  complete: boolean;
+  hasAny: boolean;
+  settlementBackedComplete: boolean;
+  artifactIdsByOrdinal: ReadonlyMap<number, ReadonlySet<string>>;
+}>;
+
+function mergeIntegratedAcceptedProviderTruth(
+  input: Readonly<{
+    existing: AcceptedProviderTruthCoverage;
+    artifacts: readonly InboxV2OutboundDispatchArtifact[];
+    observations: readonly InboxV2OutboundProviderObservation[];
+    contentPlan: InboxV2OutboundDispatchContentPlan;
+    commit: CompleteAttemptCommit;
+  }>
+): IntegratedAcceptedProviderTruth {
+  const mutable = new Map<number, Set<string>>(
+    [...input.existing.artifactIdsByOrdinal].map(([ordinal, artifactIds]) => [
+      ordinal,
+      new Set(artifactIds)
+    ])
+  );
+  const settlementBacked = new Map<number, Set<string>>(
+    [...input.existing.artifactIdsByOrdinal].map(([ordinal, artifactIds]) => [
+      ordinal,
+      new Set(artifactIds)
+    ])
+  );
+  const addArtifact = (ordinal: number, artifactId: string): void => {
+    const artifactIds = mutable.get(ordinal) ?? new Set<string>();
+    artifactIds.add(artifactId);
+    mutable.set(ordinal, artifactIds);
+  };
+
+  for (const artifact of input.artifacts) {
+    if (artifact.state === "accepted") {
+      addArtifact(artifact.ordinal, String(artifact.id));
+    }
+  }
+  // Every canonical observation passed the provider-result preflight, was
+  // persisted together with an exact work item, and represents effective
+  // accepted truth even when its immutable backing artifact is unknown.
+  for (const observation of input.observations) {
+    addArtifact(observation.artifact.ordinal, String(observation.artifact.id));
+    const artifactIds =
+      settlementBacked.get(observation.artifact.ordinal) ?? new Set<string>();
+    artifactIds.add(String(observation.artifact.id));
+    settlementBacked.set(observation.artifact.ordinal, artifactIds);
+  }
+
+  const expectedArtifactIdsByOrdinal = new Map(
+    input.contentPlan.artifacts.map((artifact) => [
+      artifact.ordinal,
+      deriveInboxV2OutboundDispatchArtifactId({
+        tenantId: input.commit.tenantId,
+        dispatch: input.commit.attemptBefore.dispatch,
+        route: input.commit.attemptBefore.route,
+        attempt: {
+          tenantId: input.commit.tenantId,
+          kind: "outbound_dispatch_attempt",
+          id: input.commit.attemptBefore.id
+        },
+        ordinal: artifact.ordinal
+      })
+    ])
+  );
+  const artifactIdsByOrdinal = new Map<number, ReadonlySet<string>>(mutable);
+  const coverage = [...expectedArtifactIdsByOrdinal].map(
+    ([ordinal, expectedArtifactId]) =>
+      artifactIdsByOrdinal.get(ordinal)?.has(expectedArtifactId) === true
+  );
+  const settlementCoverage = [...expectedArtifactIdsByOrdinal].map(
+    ([ordinal, expectedArtifactId]) =>
+      settlementBacked.get(ordinal)?.has(expectedArtifactId) === true
+  );
+  return {
+    complete: coverage.length > 0 && coverage.every(Boolean),
+    hasAny: coverage.some(Boolean),
+    settlementBackedComplete:
+      settlementCoverage.length > 0 && settlementCoverage.every(Boolean),
+    artifactIdsByOrdinal
+  };
+}
+
+function acceptedProviderTruthRequiresRepair(
+  coverage: AcceptedProviderTruthCoverage
+): boolean {
+  // Severity is global and monotonic: one dead observation must not be hidden
+  // by a settled sibling for the same artifact.
+  return [...coverage.deadArtifactIdsByOrdinal.values()].some(
+    (artifactIds) => artifactIds.size > 0
+  );
+}
+
+function buildCanonicalEffectiveAcceptedProviderCompletion(
+  commit: CompleteAttemptCommit
+): CompleteAttemptCommit | null {
+  if (commit.attemptAfter.outcome.kind === "pending") return null;
+  const canonical = inboxV2OutboundDispatchAttemptCommitSchema.parse({
+    ...commit,
+    completionSource: "provider_result",
+    attemptAfter: {
+      ...commit.attemptAfter,
+      outcome: {
+        kind: "accepted",
+        completedAt: commit.attemptAfter.outcome.completedAt,
+        providerAcknowledgementToken: null
+      },
+      completionSource: "provider_result"
+    },
+    dispatchAfter: {
+      ...commit.dispatchAfter,
+      state: "accepted"
+    }
+  });
+  return canonical.kind === "complete_attempt" ? canonical : null;
+}
+
+function buildCanonicalEffectiveProviderCompletion(
+  commit: CompleteAttemptCommit,
+  artifacts: readonly InboxV2OutboundDispatchArtifact[],
+  coverage: Pick<AcceptedProviderTruthCoverage, "artifactIdsByOrdinal">
+): CompleteAttemptCommit | null {
+  if (commit.attemptAfter.outcome.kind === "pending") return null;
+  const effectiveStates = artifacts.map((artifact) =>
+    coverage.artifactIdsByOrdinal
+      .get(artifact.ordinal)
+      ?.has(String(artifact.id)) === true
+      ? ("accepted" as const)
+      : artifact.state
+  );
+  if (effectiveStates.every((state) => state === "accepted")) return null;
+  const canonical = inboxV2OutboundDispatchAttemptCommitSchema.parse({
+    ...commit,
+    attemptAfter: {
+      ...commit.attemptAfter,
+      outcome: {
+        kind: "outcome_unknown",
+        completedAt: commit.attemptAfter.outcome.completedAt,
+        diagnostic: createInboxV2MixedProviderArtifactOutcomeDiagnostic(
+          commit.attemptBefore.claimToken
+        ),
+        requiredAction: "operator_duplicate_risk_decision_required"
+      }
+    },
+    dispatchAfter: {
+      ...commit.dispatchAfter,
+      state: "outcome_unknown"
+    }
+  });
+  return canonical.kind === "complete_attempt" ? canonical : null;
+}
+
+async function persistProviderResultObservationTruth(
+  transaction: RawSqlExecutor,
+  observations: readonly InboxV2OutboundProviderObservation[],
+  settlementWork: readonly InboxV2OutboundProviderSettlementWorkEnqueueInput[],
+  contentPlan: InboxV2OutboundDispatchContentPlan
+): Promise<void> {
+  const observationResult =
+    await persistInboxV2OutboundProviderObservationSetInTransaction(
+      transaction,
+      { observations, contentPlan }
+    );
+  if (observationResult.kind === "conflict") {
+    throw new ProviderResultObservationRollbackError({
+      kind: "dispatch_provider_observation_set_conflict"
+    });
+  }
+  for (const workItem of settlementWork) {
+    const workResult =
+      await enqueueInboxV2OutboundProviderSettlementWorkInTransaction(
+        transaction,
+        workItem
+      );
+    if (workResult.kind === "conflict") {
+      throw new ProviderResultObservationRollbackError({
+        kind: "dispatch_provider_settlement_work_conflict"
+      });
+    }
+  }
+}
+
+async function providerObservationAlreadyAcceptedSameAttempt(
+  transaction: RawSqlExecutor,
+  commit: CompleteAttemptCommit
+): Promise<CompleteAttemptCommit | null> {
+  const dispatch = await lockDispatch(transaction, commit.dispatchAfter);
+  const attempt = await lockAttempt(transaction, commit.attemptAfter);
+  if (dispatch === null || attempt === null) return null;
+  if (
+    String(dispatch.id) === String(commit.dispatchAfter.id) &&
+    String(dispatch.message_id) === String(commit.dispatchAfter.message.id) &&
+    String(dispatch.route_id) === String(commit.dispatchAfter.route.id) &&
+    nullableString(dispatch.multi_send_operation_id) ===
+      nullableString(commit.dispatchAfter.multiSendOperation?.id ?? null) &&
+    String(dispatch.state) === "accepted" &&
+    Number(dispatch.attempt_count) === commit.dispatchAfter.attemptCount &&
+    nullableString(dispatch.active_attempt_id) === null &&
+    nullableString(dispatch.last_attempt_id) ===
+      nullableString(commit.dispatchAfter.lastAttempt?.id ?? null) &&
+    existingAttemptStableFactsMatch(attempt, commit.attemptAfter) &&
+    String(attempt.outcome_kind) === "accepted" &&
+    String(attempt.completion_source) === "provider_observation" &&
+    BigInt(String(attempt.revision)) === BigInt(commit.attemptAfter.revision)
+  ) {
+    const canonicalAttempt = inboxV2OutboundDispatchAttemptSchema.parse({
+      ...commit.attemptAfter,
+      outcome: {
+        kind: "accepted",
+        completedAt: parseDatabaseTimestamp(
+          attempt.completed_at,
+          "echo-completed attempt completedAt"
+        ),
+        providerAcknowledgementToken: nullableString(
+          attempt.provider_acknowledgement_token
+        )
+      },
+      completionSource: "provider_observation",
+      revision: String(attempt.revision)
+    });
+    const canonicalDispatch = inboxV2OutboundDispatchSchema.parse({
+      ...commit.dispatchAfter,
+      state: "accepted",
+      attemptCount: Number(dispatch.attempt_count),
+      activeAttempt: null,
+      lastAttempt: {
+        tenantId: commit.tenantId,
+        kind: "outbound_dispatch_attempt",
+        id: String(dispatch.last_attempt_id)
+      },
+      retryAuthorization:
+        dispatch.retry_authorization_decision_id === null ||
+        dispatch.retry_authorization_decision_id === undefined
+          ? null
+          : {
+              tenantId: commit.tenantId,
+              kind: "outbound_dispatch_reconciliation_decision",
+              id: String(dispatch.retry_authorization_decision_id)
+            },
+      revision: String(dispatch.revision),
+      createdAt: parseDatabaseTimestamp(
+        dispatch.created_at,
+        "echo-completed dispatch createdAt"
+      ),
+      updatedAt: parseDatabaseTimestamp(
+        dispatch.updated_at,
+        "echo-completed dispatch updatedAt"
+      )
+    });
+    const canonicalCommit = inboxV2OutboundDispatchAttemptCommitSchema.parse({
+      ...commit,
+      attemptAfter: canonicalAttempt,
+      completionSource: "provider_observation",
+      dispatchAfter: canonicalDispatch
+    });
+    return canonicalCommit.kind === "complete_attempt" ? canonicalCommit : null;
+  }
+  return null;
+}
+
+async function providerResultCompletionAlreadyAppliedSameAttempt(
+  transaction: RawSqlExecutor,
+  commit: CompleteAttemptCommit
+): Promise<boolean> {
+  const dispatch = await lockDispatch(transaction, commit.dispatchAfter);
+  const attempt = await lockAttempt(transaction, commit.attemptAfter);
+  return (
+    dispatch !== null &&
+    attempt !== null &&
+    existingDispatchMatches(dispatch, commit.dispatchAfter) &&
+    existingAttemptMatches(attempt, commit.attemptAfter)
+  );
 }
 
 async function appendArtifactInTransaction(
@@ -4720,7 +5797,71 @@ function artifactRowMatches(
   );
 }
 
-async function associateArtifactInTransaction(
+function artifactRowStableIdentityMatches(
+  row: ArtifactRow,
+  artifact: InboxV2OutboundDispatchArtifact
+): boolean {
+  return (
+    String(row.id) === String(artifact.id) &&
+    String(row.dispatch_id) === String(artifact.dispatch.id) &&
+    String(row.route_id) === String(artifact.route.id) &&
+    String(row.attempt_id) === String(artifact.attempt.id) &&
+    Number(row.ordinal) === artifact.ordinal &&
+    BigInt(String(row.revision)) === BigInt(artifact.revision)
+  );
+}
+
+function artifactRowAcceptedTruthDominatesIncoming(
+  row: ArtifactRow,
+  artifact: InboxV2OutboundDispatchArtifact
+): boolean {
+  return (
+    artifact.state !== "accepted" &&
+    (String(row.state) === "accepted" ||
+      String(row.state) === "outcome_unknown") &&
+    artifactRowStableIdentityMatches(row, artifact)
+  );
+}
+
+function artifactRowUnknownCanBackAcceptedObservation(
+  row: ArtifactRow,
+  artifact: InboxV2OutboundDispatchArtifact
+): boolean {
+  return (
+    artifact.state === "accepted" &&
+    String(row.state) === "outcome_unknown" &&
+    artifactRowStableIdentityMatches(row, artifact)
+  );
+}
+
+function mapPersistedArtifactRow(
+  row: ArtifactRow,
+  identity: InboxV2OutboundDispatchArtifact
+): InboxV2OutboundDispatchArtifact {
+  const diagnostic =
+    row.diagnostic_code_id === null || row.diagnostic_code_id === undefined
+      ? null
+      : {
+          codeId: String(row.diagnostic_code_id),
+          retryable: nullableBoolean(row.diagnostic_retryable),
+          correlationToken: String(row.diagnostic_correlation_token),
+          safeOperatorHintId: nullableString(
+            row.diagnostic_safe_operator_hint_id
+          )
+        };
+  return inboxV2OutboundDispatchArtifactSchema.parse({
+    ...identity,
+    state: String(row.state),
+    diagnostic,
+    createdAt: parseDatabaseTimestamp(
+      row.created_at,
+      "provider result canonical artifact createdAt"
+    ),
+    revision: String(row.revision)
+  });
+}
+
+export async function associateInboxV2OutboundDispatchArtifactInTransaction(
   transaction: RawSqlExecutor,
   commit: InboxV2OutboundDispatchArtifactAssociationCommit
 ): Promise<AssociateInboxV2DispatchArtifactResult> {
@@ -4740,20 +5881,62 @@ async function associateArtifactInTransaction(
     return { kind: "artifact_chain_conflict" };
   }
 
-  const resolution = commit.occurrenceResolution;
+  const resolutionResult = await resolveInboxV2SourceOccurrenceInTransaction(
+    transaction,
+    commit.occurrenceResolution
+  );
+  if (
+    resolutionResult.kind !== "committed" &&
+    resolutionResult.kind !== "already_exists"
+  ) {
+    return resolutionResult;
+  }
+
+  if (resolutionResult.kind === "already_exists") {
+    const link = await loadArtifactReferenceLink(transaction, commit);
+    const result: AssociateInboxV2DispatchArtifactResult =
+      link !== null && artifactReferenceLinkMatches(link, commit)
+        ? { kind: "already_exists" }
+        : { kind: "association_conflict" };
+    return result;
+  }
+
+  const linkInsert = await transaction.execute<IdRow>(
+    buildInsertInboxV2OutboundDispatchArtifactReferenceLinkSql(commit)
+  );
+  if (linkInsert.rows.length !== 1) {
+    const link = await loadArtifactReferenceLink(transaction, commit);
+    const result: AssociateInboxV2DispatchArtifactResult =
+      link !== null && artifactReferenceLinkMatches(link, commit)
+        ? { kind: "already_exists" }
+        : { kind: "association_conflict" };
+    throw new ArtifactAssociationRollbackError(result);
+  }
+  return { kind: "committed" };
+}
+
+/**
+ * Resolves one exact SourceOccurrence inside a caller-owned transaction. This
+ * is the provider-neutral half of artifact association and is also used when a
+ * later echo reuses the artifact's first canonical reference link.
+ */
+export async function resolveInboxV2SourceOccurrenceInTransaction(
+  transaction: RawSqlExecutor,
+  input: InboxV2SourceOccurrenceResolutionCommit
+): Promise<ResolveInboxV2SourceOccurrenceResult> {
+  const resolution = inboxV2SourceOccurrenceResolutionCommitSchema.parse(input);
   if (
     resolution.after.resolution.state !== "resolved" ||
     resolution.resolvedReference === null
   ) {
     throw unsupported(
-      "Artifact association requires a resolved occurrence and exact external reference."
+      "SourceOccurrence resolution requires one exact resolved external reference."
     );
   }
   const externalReference = resolution.resolvedReference;
   const keyDigest = computeInboxV2ExternalMessageKeyDigest(
     externalReference.key
   );
-
   const occurrenceRow = await lockOccurrenceResolution(transaction, resolution);
   if (occurrenceRow === null) return { kind: "occurrence_not_found" };
   const occurrenceAlreadyResolved = occurrenceResolutionRowMatchesAfter(
@@ -4770,6 +5953,11 @@ async function associateArtifactInTransaction(
   const referenceInsert = await transaction.execute<IdRow>(
     buildInsertInboxV2ExternalMessageReferenceSql(externalReference, keyDigest)
   );
+  if (referenceInsert.rows.length > 1) {
+    throw invariantError(
+      "ExternalMessageReference insert returned more than one row."
+    );
+  }
   if (referenceInsert.rows.length === 0) {
     const existingReference = await loadExternalMessageReference(transaction, {
       tenantId: externalReference.tenantId,
@@ -4787,18 +5975,7 @@ async function associateArtifactInTransaction(
       return { kind: "external_reference_conflict" };
     }
   }
-
-  if (occurrenceAlreadyResolved) {
-    const link = await loadArtifactReferenceLink(transaction, commit);
-    const result: AssociateInboxV2DispatchArtifactResult =
-      link !== null && artifactReferenceLinkMatches(link, commit)
-        ? { kind: "already_exists" }
-        : { kind: "association_conflict" };
-    if (referenceInsert.rows.length === 1 && result.kind !== "already_exists") {
-      throw new ArtifactAssociationRollbackError(result);
-    }
-    return result;
-  }
+  if (occurrenceAlreadyResolved) return { kind: "already_exists" };
 
   const transitionId =
     deriveInboxV2SourceOccurrenceResolutionTransitionId(resolution);
@@ -4837,18 +6014,6 @@ async function associateArtifactInTransaction(
     throw invariantError(
       "SourceOccurrence changed after its row lock during resolution."
     );
-  }
-
-  const linkInsert = await transaction.execute<IdRow>(
-    buildInsertInboxV2OutboundDispatchArtifactReferenceLinkSql(commit)
-  );
-  if (linkInsert.rows.length !== 1) {
-    const link = await loadArtifactReferenceLink(transaction, commit);
-    const result: AssociateInboxV2DispatchArtifactResult =
-      link !== null && artifactReferenceLinkMatches(link, commit)
-        ? { kind: "already_exists" }
-        : { kind: "association_conflict" };
-    throw new ArtifactAssociationRollbackError(result);
   }
   return { kind: "committed" };
 }

@@ -37,6 +37,34 @@ export {
   persistInboxV2ReactionRouteInTransaction,
   persistInboxV2RouteResolutionInTransaction
 } from "./repositories/sql-inbox-v2-outbound-transport-repository";
+export { createSqlInboxV2OutboundProviderEchoCallbacks } from "./repositories/sql-inbox-v2-outbound-provider-echo-repository";
+export type {
+  CreateSqlInboxV2OutboundProviderEchoCallbacksOptions,
+  InboxV2OutboundProviderEchoObservationMaterializer,
+  InboxV2OutboundProviderEchoTarget
+} from "./repositories/sql-inbox-v2-outbound-provider-echo-repository";
+export { createSqlInboxV2OutboundProviderSettlementRuntime } from "./repositories/sql-inbox-v2-outbound-provider-settlement-runtime";
+export type {
+  InboxV2OutboundProviderSettlementCommandResult,
+  InboxV2OutboundProviderSettlementService
+} from "./repositories/sql-inbox-v2-outbound-provider-settlement-repository";
+export type {
+  InboxV2OutboundProviderSettlementPlanResult,
+  InboxV2OutboundProviderSettlementPlanner
+} from "./repositories/sql-inbox-v2-outbound-provider-settlement-planner";
+export type { InboxV2OutboundProviderSettlementRuntime } from "./repositories/sql-inbox-v2-outbound-provider-settlement-runtime";
+export type {
+  InboxV2OutboundProviderSettlementWorkClaim,
+  InboxV2OutboundProviderSettlementWorkFinalizeInput,
+  InboxV2OutboundProviderSettlementWorkFinalizeResult,
+  InboxV2OutboundProviderSettlementWorkRepository
+} from "./repositories/sql-inbox-v2-outbound-provider-settlement-work-repository";
+export { createSqlInboxV2NativeOutboundReconciliationRuntime } from "./repositories/sql-inbox-v2-native-outbound-persistence";
+export type {
+  CreateSqlInboxV2NativeOutboundReconciliationRuntimeOptions,
+  InboxV2NativeOutboundAuthorizationPort,
+  InboxV2NativeOutboundAuthorizationRequest
+} from "./repositories/sql-inbox-v2-native-outbound-persistence";
 export type {
   ApplyInboxV2FencedDispatchAttemptResult,
   ApplyInboxV2FencedReconciliationResult,
@@ -49,20 +77,26 @@ export type {
 } from "./repositories/sql-inbox-v2-outbound-transport-repository";
 export {
   InboxV2TimelineMessagePersistenceInvariantError,
+  prepareInboxV2MessageTransportAssociation,
   prepareInboxV2MessageReactionCommand,
   prepareInboxV2MessageCreation,
+  sealInboxV2PreparedMessageTransportAssociation,
   sealInboxV2PreparedMessageReactionCommand,
   sealInboxV2PreparedMessageCreation
 } from "./repositories/sql-inbox-v2-timeline-message-repository";
 export type {
   InboxV2MessageCreationCommit,
   InboxV2MessageReactionCommit,
+  InboxV2MessageTransportAssociationCommit,
+  InboxV2PreparedMessageTransportAssociationCapability,
   InboxV2PreparedMessageReactionCommandCapability,
   InboxV2PreparedMessageCreationCapability,
   PrepareInboxV2MessageReactionCommandResult,
+  PrepareInboxV2MessageTransportAssociationResult,
   PrepareInboxV2MessageCreationInput,
   PrepareInboxV2MessageCreationResult,
   SealInboxV2PreparedMessageReactionCommandResult,
+  SealInboxV2PreparedMessageTransportAssociationResult,
   SealInboxV2PreparedMessageCreationResult
 } from "./repositories/sql-inbox-v2-timeline-message-repository";
 export {
@@ -652,17 +686,20 @@ export type {
 } from "./repositories/sql-inbox-v2-source-message-lifecycle-adapter";
 export {
   composeInboxV2SourceMessageActionCallbacks,
+  composeInboxV2SourceMessageReconciliationCallbacks,
   createInboxV2SourceMessageEffectCallbacks
 } from "./repositories/sql-inbox-v2-source-message-effect-adapter";
 export type {
   ComposeInboxV2SourceMessageActionCallbacksInput,
+  ComposeInboxV2SourceMessageReconciliationCallbacksInput,
   CreateInboxV2SourceMessageEffectCallbacksOptions,
   InboxV2DeferredMessageEffectSourceAction,
   InboxV2SourceMessageEffectAdvancePlan,
   InboxV2SourceMessageEffectAdvancePlanResult,
   InboxV2SourceMessageEffectAdvancePlanner,
   InboxV2SourceMessageEffectClosure,
-  InboxV2SourceMessageActionCallbacks
+  InboxV2SourceMessageActionCallbacks,
+  InboxV2SourceMessageCanonicalCallbacks
 } from "./repositories/sql-inbox-v2-source-message-effect-adapter";
 export * from "./repositories/sql-inbox-v2-source-processing-runtime-repository";
 export * from "./schema/inbox-v2/membership-privilege-boundary";

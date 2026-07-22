@@ -701,6 +701,41 @@ export function buildFindInboxV2ConversationParticipantBySubjectSql(
   `;
 }
 
+/** Transaction-local source author lookup for DB-owned Message planners. */
+export async function readInboxV2ConversationParticipantBySourceIdentityInTransaction(
+  executor: RawSqlExecutor,
+  input: Readonly<{
+    tenantId: InboxV2TenantId;
+    conversationId: InboxV2ConversationId;
+    sourceExternalIdentityId: string;
+  }>
+): Promise<InboxV2ConversationParticipant | null> {
+  const result = await executor.execute<ParticipantRow>(sql`
+    select
+      tenant_id,
+      id,
+      conversation_id,
+      subject_kind,
+      subject_employee_id,
+      subject_source_external_identity_id,
+      subject_client_contact_id,
+      subject_bot_identity_id,
+      subject_system_actor_id,
+      subject_legacy_provenance_id,
+      revision,
+      created_at,
+      updated_at
+    from inbox_v2_conversation_participants
+    where tenant_id = ${input.tenantId}
+      and conversation_id = ${input.conversationId}
+      and subject_kind = 'source_external_identity'
+      and subject_source_external_identity_id =
+          ${input.sourceExternalIdentityId}
+    for share
+  `);
+  return mapSingleParticipantResult(result, input.tenantId);
+}
+
 export function buildLockInboxV2ConversationMembershipHeadSql(input: {
   tenantId: InboxV2TenantId;
   conversationId: InboxV2ConversationId;

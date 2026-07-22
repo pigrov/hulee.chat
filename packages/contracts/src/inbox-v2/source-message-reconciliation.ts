@@ -9,6 +9,7 @@ import {
   inboxV2ExternalMessageIdentityDeclarationSchema,
   inboxV2ExternalMessageKeySchema,
   inboxV2ExternalReferencePortabilitySchema,
+  inboxV2ProviderReferenceKindIdSchema,
   inboxV2ProviderTimestampSchema,
   inboxV2SourceOccurrenceDescriptorSchema,
   inboxV2SourceOccurrenceProviderActorSchema,
@@ -108,6 +109,18 @@ export const inboxV2SourceMessageObservationOriginDescriptorSchema = z
   })
   .strict();
 
+/**
+ * Exact provider-owned echo marker. It is lookup evidence only: adapters do
+ * not select a canonical Message, SourceOccurrence or external-reference ID.
+ */
+export const inboxV2SourceMessageExactOutboundCorrelationSchema = z
+  .object({
+    providerReferenceKindId: inboxV2ProviderReferenceKindIdSchema,
+    correlationToken: inboxV2RoutingTokenSchema,
+    artifactOrdinal: z.number().int().min(1).max(64)
+  })
+  .strict();
+
 export const inboxV2SourceMessageAdapterIntentDescriptorSchema =
   z.discriminatedUnion("kind", [
     z
@@ -127,7 +140,9 @@ export const inboxV2SourceMessageAdapterIntentDescriptorSchema =
     z
       .object({
         kind: z.literal("echo_handoff"),
-        transportRole: z.literal("provider_echo")
+        transportRole: z.literal("provider_echo"),
+        exactOutboundCorrelation:
+          inboxV2SourceMessageExactOutboundCorrelationSchema.nullable()
       })
       .strict()
   ]);
@@ -200,6 +215,20 @@ export const inboxV2SourceMessageReconciliationRequestSchema = z
         "An occurrence cannot be observed after its persisted normalized-event boundary."
       );
     }
+    if (
+      descriptor.intent.kind === "echo_handoff" &&
+      descriptor.intent.exactOutboundCorrelation !== null &&
+      !hasExactOutboundCorrelationReference(
+        descriptor.occurrence.descriptor.providerReferences,
+        descriptor.intent.exactOutboundCorrelation
+      )
+    ) {
+      addIssue(
+        context,
+        ["descriptor", "intent", "exactOutboundCorrelation"],
+        "Exact outbound echo correlation must be present in the bounded occurrence provider references."
+      );
+    }
   });
 
 const messageCreateIntentSchema = z
@@ -224,6 +253,8 @@ const echoHandoffIntentSchema = z
   .object({
     kind: z.literal("echo_handoff"),
     transportRole: z.literal("provider_echo"),
+    exactOutboundCorrelation:
+      inboxV2SourceMessageExactOutboundCorrelationSchema.nullable(),
     candidateTransportLinkId: inboxV2MessageTransportOccurrenceLinkIdSchema
   })
   .strict();
@@ -295,6 +326,9 @@ export type InboxV2SourceMessageWeakCorrelationEvidence = z.infer<
 >;
 export type InboxV2SourceMessageObservationOriginDescriptor = z.infer<
   typeof inboxV2SourceMessageObservationOriginDescriptorSchema
+>;
+export type InboxV2SourceMessageExactOutboundCorrelation = z.infer<
+  typeof inboxV2SourceMessageExactOutboundCorrelationSchema
 >;
 export type InboxV2SourceMessageAdapterIntentDescriptor = z.infer<
   typeof inboxV2SourceMessageAdapterIntentDescriptorSchema
@@ -414,7 +448,12 @@ function addPlanIntentIssues(
     if (
       intent.transportRole !== originKind ||
       direction !== "outbound" ||
-      plan.sourceOccurrence.providerActor !== null
+      plan.sourceOccurrence.providerActor !== null ||
+      (intent.exactOutboundCorrelation !== null &&
+        !hasExactOutboundCorrelationReference(
+          plan.sourceOccurrence.descriptor.providerReferences,
+          intent.exactOutboundCorrelation
+        ))
     ) {
       addIssue(
         context,
@@ -438,6 +477,20 @@ function addPlanIntentIssues(
       "Source action must retain one unresolved exact-key event occurrence and its deterministic action candidate."
     );
   }
+}
+
+function hasExactOutboundCorrelationReference(
+  references: readonly Readonly<{ kindId: string; subject: string }>[],
+  correlation: Readonly<{
+    providerReferenceKindId: string;
+    correlationToken: string;
+  }>
+): boolean {
+  return references.some(
+    (reference) =>
+      reference.kindId === correlation.providerReferenceKindId &&
+      reference.subject === correlation.correlationToken
+  );
 }
 
 function sameValue(left: unknown, right: unknown): boolean {

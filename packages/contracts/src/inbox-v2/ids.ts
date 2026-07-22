@@ -88,6 +88,8 @@ const inboxV2KnownEntityKinds = [
   "outbound_dispatch_reconciliation_decision",
   "outbound_dispatch_artifact",
   "outbound_dispatch_artifact_reference_link",
+  "outbound_dispatch_artifact_resolution",
+  "outbound_provider_observation",
   "outbound_multi_send_operation",
   "file",
   "file_version",
@@ -308,6 +310,14 @@ export type InboxV2OutboundDispatchArtifactId = Brand<
 export type InboxV2OutboundDispatchArtifactReferenceLinkId = Brand<
   string,
   "InboxV2OutboundDispatchArtifactReferenceLinkId"
+>;
+export type InboxV2OutboundDispatchArtifactResolutionId = Brand<
+  string,
+  "InboxV2OutboundDispatchArtifactResolutionId"
+>;
+export type InboxV2OutboundProviderObservationId = Brand<
+  string,
+  "InboxV2OutboundProviderObservationId"
 >;
 export type InboxV2OutboundMultiSendOperationId = Brand<
   string,
@@ -661,6 +671,14 @@ export const inboxV2OutboundDispatchArtifactIdSchema =
 export const inboxV2OutboundDispatchArtifactReferenceLinkIdSchema =
   createInboxV2IdSchema<InboxV2OutboundDispatchArtifactReferenceLinkId>(
     "outbound_dispatch_artifact_reference_link"
+  );
+export const inboxV2OutboundDispatchArtifactResolutionIdSchema =
+  createInboxV2IdSchema<InboxV2OutboundDispatchArtifactResolutionId>(
+    "outbound_dispatch_artifact_resolution"
+  );
+export const inboxV2OutboundProviderObservationIdSchema =
+  createInboxV2IdSchema<InboxV2OutboundProviderObservationId>(
+    "outbound_provider_observation"
   );
 export const inboxV2OutboundMultiSendOperationIdSchema =
   createInboxV2IdSchema<InboxV2OutboundMultiSendOperationId>(
@@ -1017,6 +1035,16 @@ export const inboxV2OutboundDispatchArtifactReferenceLinkReferenceSchema =
     "outbound_dispatch_artifact_reference_link",
     inboxV2OutboundDispatchArtifactReferenceLinkIdSchema
   );
+export const inboxV2OutboundDispatchArtifactResolutionReferenceSchema =
+  createInboxV2TenantScopedReferenceSchema(
+    "outbound_dispatch_artifact_resolution",
+    inboxV2OutboundDispatchArtifactResolutionIdSchema
+  );
+export const inboxV2OutboundProviderObservationReferenceSchema =
+  createInboxV2TenantScopedReferenceSchema(
+    "outbound_provider_observation",
+    inboxV2OutboundProviderObservationIdSchema
+  );
 export const inboxV2OutboundMultiSendOperationReferenceSchema =
   createInboxV2TenantScopedReferenceSchema(
     "outbound_multi_send_operation",
@@ -1282,6 +1310,12 @@ export type InboxV2OutboundDispatchArtifactReference = z.infer<
 >;
 export type InboxV2OutboundDispatchArtifactReferenceLinkReference = z.infer<
   typeof inboxV2OutboundDispatchArtifactReferenceLinkReferenceSchema
+>;
+export type InboxV2OutboundDispatchArtifactResolutionReference = z.infer<
+  typeof inboxV2OutboundDispatchArtifactResolutionReferenceSchema
+>;
+export type InboxV2OutboundProviderObservationReference = z.infer<
+  typeof inboxV2OutboundProviderObservationReferenceSchema
 >;
 export type InboxV2OutboundMultiSendOperationReference = z.infer<
   typeof inboxV2OutboundMultiSendOperationReferenceSchema

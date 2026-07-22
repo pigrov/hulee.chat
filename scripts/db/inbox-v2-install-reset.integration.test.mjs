@@ -1928,9 +1928,9 @@ async function expectCleanSlateBaseline(databaseUrl) {
     verifyInboxV2BaselineCatalog(client)
   );
   expect(retainedCatalog).toMatchObject({
-    rowCount: 14619,
+    rowCount: 14955,
     sha256:
-      "sha256:e552f4e499dd6f778bf15d277370c2277261c0756568708450fb0db7c73b8a01"
+      "sha256:467f31ce6438c8928374d89fd0d68ab596e86937e5526c64208807a4c705054a"
   });
 }
 

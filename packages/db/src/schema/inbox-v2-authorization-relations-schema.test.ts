@@ -2,6 +2,7 @@ import { getTableConfig, PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
 import {
+  INBOX_V2_AUTH_DOMAIN_PROVIDER_IO_CLOSURE_SQL,
   INBOX_V2_AUTHORIZATION_RELATIONS_INTEGRITY_SQL,
   inboxV2AudienceImpactKind,
   inboxV2AuthorizationAuditEvents,
@@ -34,6 +35,7 @@ import {
   inboxV2TenantStreamHeads
 } from "./inbox-v2/authorization-relations";
 import { inboxV2ParticipantMembershipTransitions } from "./inbox-v2/participant-membership";
+import { INBOX_V2_REPOSITORY_FOUNDATION_INTEGRITY_SQL } from "./inbox-v2/repository-foundation";
 import {
   inboxV2WorkItemRelationTransitions,
   inboxV2WorkItemTransitions
@@ -47,6 +49,17 @@ import {
   teams,
   workQueues
 } from "./tables";
+
+function extractZeroArgumentFunctionSql(source: string, functionName: string) {
+  const signature = `create or replace function public.${functionName}()`;
+  const start = source.indexOf(signature);
+  const terminator = "$function$;";
+  const end = source.indexOf(terminator, start);
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThanOrEqual(start);
+  return source.slice(start, end + terminator.length);
+}
 
 const authorizationTables = [
   inboxV2AuthorizationTenantHeads,
@@ -618,6 +631,19 @@ describe("Inbox V2 authorization relation schema", () => {
 
   it("installs immutable, +1 CAS and deferred atomic-closure guards", () => {
     const invariantSql = INBOX_V2_AUTHORIZATION_RELATIONS_INTEGRITY_SQL;
+    for (const sharedFunctionName of [
+      "inbox_v2_auth_reject_immutable",
+      "inbox_v2_auth_stream_head_guard"
+    ]) {
+      expect(
+        extractZeroArgumentFunctionSql(invariantSql, sharedFunctionName)
+      ).toBe(
+        extractZeroArgumentFunctionSql(
+          INBOX_V2_REPOSITORY_FOUNDATION_INTEGRITY_SQL,
+          sharedFunctionName
+        )
+      );
+    }
     const functionCount =
       invariantSql.match(/create or replace function public\./g)?.length ?? 0;
     const searchPathCount =
@@ -628,6 +654,33 @@ describe("Inbox V2 authorization relation schema", () => {
     expect(invariantSql.match(/chr\(10\)/g)).toHaveLength(8);
     expect(invariantSql).not.toMatch(/E'\\+n'/);
     expect(invariantSql).toContain("inbox_v2_auth_reject_immutable");
+    const immutableGuard = invariantSql.match(
+      /create or replace function public\.inbox_v2_auth_reject_immutable\(\)[\s\S]*?as \$function\$([\s\S]*?)\$function\$;/u
+    )?.[1];
+    expect(immutableGuard).toContain(
+      "current_user = 'hulee_inbox_v2_retention_owner'"
+    );
+    expect(immutableGuard).toContain("'hulee.inbox_v2_retention_prune', true");
+    expect(immutableGuard).toContain("'inbox_v2_tenant_stream_changes'");
+    expect(immutableGuard).toContain("'inbox_v2_domain_events'");
+    expect(immutableGuard).toContain("'inbox_v2_outbox_intents'");
+    const streamHeadGuard = invariantSql.match(
+      /create or replace function public\.inbox_v2_auth_stream_head_guard\(\)[\s\S]*?as \$function\$([\s\S]*?)\$function\$;/u
+    )?.[1];
+    expect(streamHeadGuard).toContain(
+      "current_user = 'hulee_inbox_v2_retention_owner'"
+    );
+    expect(streamHeadGuard).toContain("'hulee.inbox_v2_retention_prune', true");
+    expect(streamHeadGuard).toContain(
+      "new.min_retained_position > old.min_retained_position"
+    );
+    expect(streamHeadGuard).toContain(
+      "new.min_retained_position = old.min_retained_position"
+    );
+    expect(streamHeadGuard).toContain("new.last_position = old.last_position");
+    expect(streamHeadGuard).toContain(
+      "new.min_retained_position <= new.last_position"
+    );
     expect(invariantSql).toContain("authorization_version_cas_conflict");
     expect(invariantSql).toContain("authorization_version_time_regression");
     expect(invariantSql).toContain("authorization_relation_identity_morph");
@@ -675,8 +728,8 @@ describe("Inbox V2 authorization relation schema", () => {
       /\((?:[a-z_]+\.)?[a-z_]+(?:->'[^']+')+\s*-\s*array\[/;
     expect(invariantSql.match(groupedJsonbSubtraction)).toHaveLength(8);
     expect(invariantSql).not.toMatch(ungroupedJsonbSubtraction);
-    expect(invariantSql).toContain(
-      "new.last_position <> old.last_position + 1"
+    expect(streamHeadGuard).toContain(
+      "new.last_position = old.last_position + 1"
     );
     expect(invariantSql).toContain(
       "authorization_role_permission_manifest_incomplete"
@@ -787,6 +840,24 @@ describe("Inbox V2 authorization relation schema", () => {
     expect(invariantSql).toContain("version_row.work_item_cycle >= 0");
     expect(invariantSql).not.toMatch(/\b(?:from|join|update) inbox_v2_/u);
     expect(invariantSql).not.toMatch(/execute function inbox_v2_/u);
+  });
+
+  it("closes native outbound occurrence attachment as one projection-only mutation", () => {
+    const closureSql = INBOX_V2_AUTH_DOMAIN_PROVIDER_IO_CLOSURE_SQL;
+    expect(closureSql).toContain(
+      "'core:message.native_outbound_occurrence.attach'"
+    );
+    expect(closureSql).toContain(
+      "inbox_v2.domain_mutation_native_outbound_attach_cardinality_invalid"
+    );
+    expect(closureSql).toContain("'core:message-transport-observation'");
+    expect(closureSql).toContain(
+      "projection_intent.handler_id = 'core:inbox-projection'"
+    );
+    expect(closureSql).toContain("attribution_row.app_actor_kind is null");
+    expect(closureSql).toContain("v_message_change_count <> 0");
+    expect(closureSql).toContain("v_source_change_count <> 0");
+    expect(closureSql).toContain("v_source_materialization_count <> 0");
   });
 });
 

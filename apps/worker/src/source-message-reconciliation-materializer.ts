@@ -396,6 +396,7 @@ function buildPlanIntent(input: {
     return {
       kind: "echo_handoff",
       transportRole: descriptorIntent.transportRole,
+      exactOutboundCorrelation: descriptorIntent.exactOutboundCorrelation,
       candidateTransportLinkId:
         inboxV2MessageTransportOccurrenceLinkIdSchema.parse(
           `message_transport_occurrence_link:${derive(

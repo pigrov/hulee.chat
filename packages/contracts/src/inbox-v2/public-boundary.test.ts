@@ -439,6 +439,30 @@ describe("Inbox V2 public contract boundary", () => {
     expect(
       publicContracts.inboxV2OutboundDispatchArtifactAssociationCommitSchema
     ).toBeDefined();
+    expect(
+      publicContracts.inboxV2OutboundProviderResponseObservationDescriptorSchema
+    ).toBeDefined();
+    expect(
+      publicContracts.inboxV2OutboundProviderObservationSchema
+    ).toBeDefined();
+    expect(
+      publicContracts.inboxV2OutboundDispatchArtifactResolutionSchema
+    ).toBeDefined();
+    expect(
+      publicContracts.inboxV2OutboundProviderArtifactResolutionDispositionSchema
+    ).toBeDefined();
+    expect(
+      publicContracts.inboxV2OutboundProviderSettlementCommitSchema
+    ).toBeDefined();
+    expect(
+      publicContracts.deriveInboxV2OutboundProviderObservationId
+    ).toBeTypeOf("function");
+    expect(
+      publicContracts.calculateInboxV2OutboundProviderSourceOccurrenceDetailDigest
+    ).toBeTypeOf("function");
+    expect(
+      publicContracts.inboxV2SourceMessageExactOutboundCorrelationSchema
+    ).toBeDefined();
     expect(publicContracts.inboxV2ThreadRoutePolicySchema).toBeDefined();
     expect(
       publicContracts.inboxV2ConversationRouteAuthorizationDecisionSchema
@@ -491,6 +515,12 @@ describe("Inbox V2 public contract boundary", () => {
     ).toBeDefined();
     expect(
       publicContracts.inboxV2OutboundDispatchContentPlanIdSchema
+    ).toBeDefined();
+    expect(
+      publicContracts.inboxV2OutboundProviderObservationIdSchema
+    ).toBeDefined();
+    expect(
+      publicContracts.inboxV2OutboundDispatchArtifactResolutionIdSchema
     ).toBeDefined();
     expect(publicContracts.inboxV2StaffNoteIdSchema).toBeDefined();
     expect(publicContracts.inboxV2StaffNoteRevisionIdSchema).toBeDefined();

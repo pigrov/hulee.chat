@@ -7,9 +7,11 @@ import { describe, expect, it, vi } from "vitest";
 import { fixtureT3 } from "../../../contracts/src/inbox-v2/timeline-message-fixtures.type-fixture";
 import {
   composeInboxV2SourceMessageActionCallbacks,
+  composeInboxV2SourceMessageReconciliationCallbacks,
   createInboxV2SourceMessageEffectCallbacks,
   type InboxV2DeferredMessageEffectSourceAction,
   type InboxV2SourceMessageActionCallbacks,
+  type InboxV2SourceMessageCanonicalCallbacks,
   type InboxV2SourceMessageEffectAdvancePlanner
 } from "./sql-inbox-v2-source-message-effect-adapter";
 import type { InboxV2DeferredMessageSourceActionCommit } from "./sql-inbox-v2-source-message-reconciliation-repository";
@@ -36,6 +38,68 @@ const transaction = {
 } as unknown as RawSqlExecutor;
 
 describe("Inbox V2 source Message reaction/transport adapter", () => {
+  it("composes the complete reconciliation callback surface on one ambient transaction", async () => {
+    const canonicalCalls: Array<{
+      kind: "create" | "attach";
+      transaction: RawSqlExecutor;
+      input: unknown;
+    }> = [];
+    const canonical = {
+      async createMessage(receivedTransaction, input) {
+        canonicalCalls.push({
+          kind: "create",
+          transaction: receivedTransaction,
+          input
+        });
+        return {
+          kind: "conflict" as const,
+          code: "source.message_reconciliation.callback_conflict" as const
+        };
+      },
+      async attachOccurrence(receivedTransaction, input) {
+        canonicalCalls.push({
+          kind: "attach",
+          transaction: receivedTransaction,
+          input
+        });
+        return {
+          kind: "conflict" as const,
+          code: "source.message_reconciliation.callback_conflict" as const
+        };
+      }
+    } satisfies InboxV2SourceMessageCanonicalCallbacks;
+    const lifecycle = recordingCallbacks();
+    const messageEffect = recordingCallbacks();
+    const callbacks = composeInboxV2SourceMessageReconciliationCallbacks({
+      canonical,
+      lifecycle: lifecycle.callbacks,
+      messageEffect: messageEffect.callbacks
+    });
+    const createInput = Object.freeze({}) as Parameters<
+      typeof callbacks.createMessage
+    >[1];
+    const attachInput = Object.freeze({}) as Parameters<
+      typeof callbacks.attachOccurrence
+    >[1];
+
+    await callbacks.createMessage(transaction, createInput);
+    await callbacks.attachOccurrence(transaction, attachInput);
+    const action = reactionAction("set", "1", "👍");
+    const target = makeDeferredMessageEffectTarget(action);
+    await callbacks.applySourceAction(transaction, {
+      plan: { intent: { kind: "source_action", deferredAction: action } },
+      targetExternalMessageReference: target
+    } as Parameters<typeof callbacks.applySourceAction>[1]);
+
+    expect(canonicalCalls).toEqual([
+      { kind: "create", transaction, input: createInput },
+      { kind: "attach", transaction, input: attachInput }
+    ]);
+    expect(messageEffect.appliedKinds).toEqual(["reaction"]);
+    expect(lifecycle.appliedKinds).toEqual([]);
+    expect(Object.isFrozen(callbacks)).toBe(true);
+  });
+
   it("composes one exhaustive apply/drain callback for all five source-action kinds", async () => {
     const actions = [
       makePendingDeferredAction(

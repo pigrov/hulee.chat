@@ -271,7 +271,51 @@ describe("Inbox V2 SourceOccurrence foundation schema", () => {
     );
   });
 
-  it("guards current fences, actor scope and direct mutation in database SQL", () => {
+  it("allows only the exact atomic provider-response pending-to-resolved initial commit", () => {
+    const deferredChildren = functionSql(
+      INBOX_V2_SOURCE_OCCURRENCE_INTEGRITY_SQL,
+      "inbox_v2_source_occurrence_deferred_children"
+    );
+
+    expect(deferredChildren).toContain(
+      "new_row->>'origin_kind' = 'provider_response'"
+    );
+    expect(deferredChildren).toContain(
+      "new_row->>'resolution_state' = 'pending'"
+    );
+    expect(deferredChildren).toContain("(new_row->>'revision')::bigint = 1");
+    expect(deferredChildren).toContain(
+      "occurrence_row.resolution_state = 'resolved'"
+    );
+    expect(deferredChildren).toContain("occurrence_row.revision = 2");
+    expect(deferredChildren).toContain(
+      "and 1 = (\n                select count(*)"
+    );
+    expect(deferredChildren).toContain(
+      "from public.inbox_v2_source_occurrence_resolution_transitions"
+    );
+    expect(deferredChildren).toContain("transition_row.expected_revision = 1");
+    expect(deferredChildren).toContain("transition_row.resulting_revision = 2");
+    expect(deferredChildren).toContain("transition_row.from_state = 'pending'");
+    expect(deferredChildren).toContain("transition_row.to_state = 'resolved'");
+    expect(deferredChildren).toContain(
+      "transition_row.changed_at = occurrence_row.updated_at"
+    );
+    expect(deferredChildren).toContain(
+      "join public.inbox_v2_external_message_references reference_row"
+    );
+    expect(deferredChildren).toContain(
+      "from public.inbox_v2_source_occurrence_resolution_candidates"
+    );
+    expect(deferredChildren).toContain(
+      "perform public.inbox_v2_assert_source_occurrence_children("
+    );
+    expect(deferredChildren).not.toContain(
+      "occurrence_row.resolution_state = 'conflicted'"
+    );
+  });
+
+  it("guards current and historical fences, actor scope and direct mutation in database SQL", () => {
     const invariantSql = INBOX_V2_SOURCE_OCCURRENCE_INTEGRITY_SQL;
     expect(invariantSql.match(/create or replace function/g)).toHaveLength(5);
     expect(
@@ -294,23 +338,30 @@ describe("Inbox V2 SourceOccurrence foundation schema", () => {
     expect(guard).toContain("new.revision <> 1");
     expect(guard).toContain("binding_fence_conflict");
     expect(guard).toContain("account_identity_fence_conflict");
+    expect(guard).toContain("account_snapshot_fence_conflict");
+    expect(guard).toContain(
+      "from public.inbox_v2_source_account_identity_verified_snapshots"
+    );
     expect(guard).toContain("source_occurrence_event_pair_mismatch");
     expect(guard).toContain(
       "source_occurrence_provider_response_chain_mismatch"
     );
     expect(guard).toContain("dispatch_row.last_attempt_id = attempt_row.id");
     expect(guard).toContain(
-      "route_row.account_generation = head_row.account_generation"
+      "route_row.binding_revision = snapshot_row.revision"
     );
     expect(guard).toContain(
-      "route_row.binding_generation = head_row.binding_generation"
+      "route_row.account_generation = snapshot_row.account_generation"
     );
     expect(guard).toContain(
-      "route_row.remote_access_revision = head_row.remote_access_revision"
+      "route_row.binding_generation = snapshot_row.binding_generation"
+    );
+    expect(guard).toContain(
+      "route_row.remote_access_revision = snapshot_row.remote_access_revision"
     );
     expect(guard).toContain("route_row.administrative_revision =");
     expect(guard).toContain(
-      "route_row.capability_revision = head_row.capability_revision"
+      "route_row.capability_revision = snapshot_row.capability_revision"
     );
     expect(guard).toContain("route_row.route_descriptor_revision =");
     expect(guard).toContain("route_row.created_at <= attempt_row.opened_at");

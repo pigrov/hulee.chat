@@ -4809,10 +4809,23 @@ language plpgsql
 set search_path = pg_catalog, public, pg_temp
 as $function$
 begin
-  if tg_op = 'DELETE' and not exists (
-    select 1 from public.tenants tenant_row where tenant_row.id = old.tenant_id
-  ) then
-    return old;
+  if tg_op = 'DELETE' then
+    if not exists (
+      select 1 from public.tenants tenant_row where tenant_row.id = old.tenant_id
+    ) then
+      return old;
+    end if;
+    if current_user = 'hulee_inbox_v2_retention_owner'
+       and pg_catalog.current_setting(
+         'hulee.inbox_v2_retention_prune', true
+       ) = 'enabled'
+       and tg_table_name in (
+         'inbox_v2_tenant_stream_changes',
+         'inbox_v2_domain_events',
+         'inbox_v2_outbox_intents'
+       ) then
+      return old;
+    end if;
   end if;
   raise exception using
     errcode = '23514',
@@ -5810,10 +5823,22 @@ begin
   elsif new.tenant_id is distinct from old.tenant_id
      or new.stream_epoch is distinct from old.stream_epoch
      or new.created_at is distinct from old.created_at
-     or new.last_position <> old.last_position + 1
-     or new.min_retained_position <> old.min_retained_position
      or new.revision <> old.revision + 1
-     or new.updated_at < old.updated_at then
+     or new.updated_at < old.updated_at
+     or not (
+       (
+         new.last_position = old.last_position + 1
+         and new.min_retained_position = old.min_retained_position
+       ) or (
+         new.last_position = old.last_position
+         and new.min_retained_position > old.min_retained_position
+         and new.min_retained_position <= new.last_position
+         and current_user = 'hulee_inbox_v2_retention_owner'
+         and pg_catalog.current_setting(
+           'hulee.inbox_v2_retention_prune', true
+         ) = 'enabled'
+       )
+     ) then
     raise exception using errcode = '40001',
       message = 'inbox_v2.tenant_stream_head_cas_conflict';
   end if;
@@ -8278,6 +8303,7 @@ declare
   v_message_row_count integer;
   v_source_change_count integer;
   v_source_materialization_count integer;
+  v_native_transport_count integer;
   v_change_ids jsonb;
   v_event_ids jsonb;
   v_outbox_ids jsonb;
@@ -9791,6 +9817,193 @@ begin
        ) then
       raise exception using errcode = '23514',
         message = 'inbox_v2.domain_mutation_message_cardinality_invalid';
+    end if;
+  end if;
+
+  if v_command.command_type_id =
+     'core:message.native_outbound_occurrence.attach' then
+    select count(*)::integer into v_native_transport_count
+      from public.inbox_v2_tenant_stream_changes transport_change
+      join public.inbox_v2_message_transport_links link_row
+        on link_row.tenant_id = transport_change.tenant_id
+       and link_row.id = transport_change.entity_id
+       and link_row.resulting_head_revision =
+           transport_change.resulting_revision
+       and link_row.revision = 1
+       and link_row.linked_at = new.committed_at
+       and link_row.recorded_stream_position = v_stream.position
+      join public.inbox_v2_message_transport_link_heads link_head
+        on link_head.tenant_id = link_row.tenant_id
+       and link_head.message_id = link_row.message_id
+       and link_head.latest_link_id = link_row.id
+       and link_head.revision = link_row.resulting_head_revision
+       and link_head.link_count = link_head.revision
+       and link_head.last_changed_stream_position = v_stream.position
+       and link_head.updated_at = new.committed_at
+      join public.inbox_v2_source_occurrences occurrence_row
+        on occurrence_row.tenant_id = link_row.tenant_id
+       and occurrence_row.id = link_row.source_occurrence_id
+       and occurrence_row.direction = 'outbound'
+       and occurrence_row.origin_kind not in (
+         'provider_echo', 'provider_response'
+       )
+       and occurrence_row.provider_actor_kind =
+           'source_external_identity'
+       and occurrence_row.resolution_state = 'resolved'
+       and occurrence_row.resolved_external_message_reference_id =
+           link_row.external_message_reference_id
+       and occurrence_row.updated_at = new.committed_at
+      join public.inbox_v2_source_occurrence_resolution_transitions
+        transition_row
+        on transition_row.tenant_id = occurrence_row.tenant_id
+       and transition_row.source_occurrence_id = occurrence_row.id
+       and transition_row.resulting_revision = occurrence_row.revision
+       and transition_row.to_state = 'resolved'
+       and transition_row.resolved_external_message_reference_id =
+           link_row.external_message_reference_id
+       and transition_row.changed_at = new.committed_at
+      join public.inbox_v2_external_message_references reference_row
+        on reference_row.tenant_id = link_row.tenant_id
+       and reference_row.id = link_row.external_message_reference_id
+       and reference_row.message_id = link_row.message_id
+      join public.inbox_v2_messages message_row
+        on message_row.tenant_id = link_row.tenant_id
+       and message_row.id = link_row.message_id
+       and message_row.conversation_id = reference_row.conversation_id
+       and message_row.timeline_item_id = reference_row.timeline_item_id
+       and message_row.origin_kind = 'source_originated'
+       and message_row.origin_source_direction = 'outbound'
+       and message_row.origin_outbound_route_id is null
+       and message_row.origin_source_occurrence_id <> occurrence_row.id
+      join public.inbox_v2_action_attributions attribution_row
+        on attribution_row.tenant_id = message_row.tenant_id
+       and attribution_row.id = message_row.creation_attribution_id
+       and attribution_row.source_occurrence_id =
+           message_row.origin_source_occurrence_id
+       and attribution_row.app_actor_kind is null
+       and attribution_row.app_actor_employee_id is null
+       and attribution_row.app_authorization_epoch is null
+       and attribution_row.app_trusted_service_id is null
+       and attribution_row.automation_kind is null
+      join public.inbox_v2_source_occurrences origin_occurrence
+        on origin_occurrence.tenant_id = message_row.tenant_id
+       and origin_occurrence.id = message_row.origin_source_occurrence_id
+       and origin_occurrence.direction = 'outbound'
+       and origin_occurrence.provider_actor_kind =
+           'source_external_identity'
+       and origin_occurrence.provider_actor_source_external_identity_id =
+           occurrence_row.provider_actor_source_external_identity_id
+      join public.inbox_v2_conversation_participants author_row
+        on author_row.tenant_id = message_row.tenant_id
+       and author_row.id = message_row.author_participant_id
+       and author_row.conversation_id = message_row.conversation_id
+       and author_row.subject_kind = 'source_external_identity'
+       and author_row.subject_source_external_identity_id =
+           occurrence_row.provider_actor_source_external_identity_id
+     where transport_change.tenant_id = new.tenant_id
+       and transport_change.stream_commit_id = new.stream_commit_id
+       and transport_change.mutation_id = new.mutation_id
+       and transport_change.stream_position = v_stream.position
+       and transport_change.entity_type_id =
+           'core:message-transport-observation'
+       and transport_change.state_kind = 'upsert'
+       and transport_change.state_schema_id =
+           'core:inbox-v2.message-transport-occurrence-link'
+       and transport_change.state_schema_version = 'v1'
+       and transport_change.payload_reference->>'tenantId' =
+           transport_change.tenant_id
+       and transport_change.payload_reference->>'recordId' = link_row.id
+       and transport_change.payload_reference->>'schemaId' =
+           transport_change.state_schema_id
+       and transport_change.payload_reference->>'schemaVersion' =
+           transport_change.state_schema_version
+       and transport_change.state_hash =
+           transport_change.payload_reference->>'digest'
+       and transport_change.domain_commit_reference->>'tenantId' =
+           transport_change.tenant_id
+       and transport_change.domain_commit_reference->>'recordId' = link_row.id
+       and transport_change.domain_commit_reference->>'schemaId' =
+           'core:inbox-v2.message-transport-association-commit'
+       and transport_change.domain_commit_reference->>'schemaVersion' = 'v1'
+       and v_command.result_reference = transport_change.payload_reference
+       and link_row.role = 'native_outbound'
+       and (
+         select count(*)
+           from public.inbox_v2_domain_events transport_event
+          where transport_event.tenant_id = transport_change.tenant_id
+            and transport_event.stream_commit_id =
+                transport_change.stream_commit_id
+            and transport_event.mutation_id = transport_change.mutation_id
+            and transport_event.stream_position = v_stream.position
+            and transport_event.type_id = 'core:message.changed'
+            and transport_event.payload_schema_id =
+                'core:inbox-v2.message-transport-association-commit'
+            and transport_event.payload_schema_version = 'v1'
+            and transport_event.payload_reference =
+                transport_change.domain_commit_reference
+            and transport_event.change_ids =
+                jsonb_build_array(transport_change.id)
+            and transport_event.subjects = jsonb_build_array(
+              jsonb_build_object(
+                'tenantId', message_row.tenant_id,
+                'entityTypeId', 'core:message',
+                'entityId', message_row.id
+              )
+            )
+            and transport_event.access_effect = 'none'
+            and transport_event.occurred_at = new.committed_at
+            and transport_event.recorded_at = new.committed_at
+       ) = 1
+       and (
+         select count(*)
+           from public.inbox_v2_outbox_intents projection_intent
+          where projection_intent.tenant_id = transport_change.tenant_id
+            and projection_intent.stream_commit_id =
+                transport_change.stream_commit_id
+            and projection_intent.mutation_id = transport_change.mutation_id
+            and projection_intent.stream_position = v_stream.position
+            and projection_intent.effect_class = 'projection'
+            and projection_intent.type_id = 'core:projection.update'
+            and projection_intent.handler_id = 'core:inbox-projection'
+            and projection_intent.change_ids =
+                jsonb_build_array(transport_change.id)
+            and projection_intent.payload_reference =
+                transport_change.payload_reference
+       ) = 1;
+
+    select count(*)::integer into v_message_change_count
+      from public.inbox_v2_tenant_stream_changes message_change
+     where message_change.tenant_id = new.tenant_id
+       and message_change.stream_commit_id = new.stream_commit_id
+       and message_change.mutation_id = new.mutation_id
+       and message_change.stream_position = v_stream.position
+       and message_change.entity_type_id = 'core:message';
+    select count(*)::integer into v_source_change_count
+      from public.inbox_v2_tenant_stream_changes occurrence_change
+     where occurrence_change.tenant_id = new.tenant_id
+       and occurrence_change.stream_commit_id = new.stream_commit_id
+       and occurrence_change.mutation_id = new.mutation_id
+       and occurrence_change.stream_position = v_stream.position
+       and occurrence_change.entity_type_id = 'core:source-occurrence';
+    select count(*)::integer into v_source_materialization_count
+      from public.inbox_v2_atomic_source_resolution_materializations
+        source_materialization
+     where source_materialization.tenant_id = new.tenant_id
+       and source_materialization.stream_commit_id = new.stream_commit_id
+       and source_materialization.mutation_id = new.mutation_id
+       and source_materialization.stream_position = v_stream.position;
+
+    if v_native_transport_count <> 1
+       or v_message_change_count <> 0
+       or v_source_change_count <> 0
+       or v_source_materialization_count <> 0
+       or v_change_count <> 1
+       or v_event_count <> 1
+       or v_outbox_count <> 1
+       or v_projection_count <> 1 then
+      raise exception using errcode = '23514',
+        message =
+          'inbox_v2.domain_mutation_native_outbound_attach_cardinality_invalid';
     end if;
   end if;
 

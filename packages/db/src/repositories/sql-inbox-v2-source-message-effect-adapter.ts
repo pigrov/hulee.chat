@@ -123,12 +123,23 @@ export type InboxV2SourceMessageActionCallbacks = Pick<
   "applySourceAction" | "drainDeferredActions"
 >;
 
+export type InboxV2SourceMessageCanonicalCallbacks = Pick<
+  InboxV2SourceMessageReconciliationCallbacks,
+  "createMessage" | "attachOccurrence" | "resolveProviderEcho"
+>;
+
 type MessageEffectCallbacks = InboxV2SourceMessageActionCallbacks;
 
 export type ComposeInboxV2SourceMessageActionCallbacksInput = Readonly<{
   lifecycle: InboxV2SourceMessageActionCallbacks;
   messageEffect: InboxV2SourceMessageActionCallbacks;
 }>;
+
+export type ComposeInboxV2SourceMessageReconciliationCallbacksInput =
+  ComposeInboxV2SourceMessageActionCallbacksInput &
+    Readonly<{
+      canonical: InboxV2SourceMessageCanonicalCallbacks;
+    }>;
 
 type OrderingHeadRow = Readonly<{
   tenant_id: unknown;
@@ -350,6 +361,50 @@ export function composeInboxV2SourceMessageActionCallbacks(
           results: results as InboxV2SourceMessageActionResult[]
         }
       };
+    }
+  });
+}
+
+/**
+ * Completes the production SRC-006 callback surface without weakening its
+ * ambient-transaction boundary. Canonical Message creation/attachment remains
+ * owned by the caller-supplied provider-neutral adapter; lifecycle and Message
+ * effects retain the exhaustive routers above. Every callback receives the
+ * exact transaction opened by the reconciliation repository.
+ */
+export function composeInboxV2SourceMessageReconciliationCallbacks(
+  input: ComposeInboxV2SourceMessageReconciliationCallbacksInput
+): InboxV2SourceMessageReconciliationCallbacks {
+  const actions = composeInboxV2SourceMessageActionCallbacks(input);
+  return Object.freeze({
+    createMessage(transaction, callbackInput) {
+      return input.canonical.createMessage(transaction, callbackInput);
+    },
+    attachOccurrence(transaction, callbackInput) {
+      return input.canonical.attachOccurrence(transaction, callbackInput);
+    },
+    ...(input.canonical.resolveProviderEcho === undefined
+      ? {}
+      : {
+          resolveProviderEcho(
+            transaction: RawSqlExecutor,
+            callbackInput: Parameters<
+              NonNullable<
+                InboxV2SourceMessageReconciliationCallbacks["resolveProviderEcho"]
+              >
+            >[1]
+          ) {
+            return input.canonical.resolveProviderEcho!(
+              transaction,
+              callbackInput
+            );
+          }
+        }),
+    applySourceAction(transaction, callbackInput) {
+      return actions.applySourceAction(transaction, callbackInput);
+    },
+    drainDeferredActions(transaction, callbackInput) {
+      return actions.drainDeferredActions(transaction, callbackInput);
     }
   });
 }

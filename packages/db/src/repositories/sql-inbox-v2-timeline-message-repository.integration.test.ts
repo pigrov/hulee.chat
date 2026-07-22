@@ -3,6 +3,9 @@ import {
   INBOX_V2_CONVERSATION_SYSTEM_EVENT_PAYLOAD_SCHEMA_VERSION,
   INBOX_V2_MESSAGE_SCHEMA_ID,
   INBOX_V2_MESSAGE_SCHEMA_VERSION,
+  INBOX_V2_MESSAGE_TRANSPORT_ASSOCIATION_COMMIT_SCHEMA_ID,
+  INBOX_V2_MESSAGE_TRANSPORT_OCCURRENCE_LINK_SCHEMA_ID,
+  INBOX_V2_MESSAGE_TRANSPORT_SCHEMA_VERSION,
   INBOX_V2_EXTERNAL_MESSAGE_SCHEMA_VERSION,
   INBOX_V2_SOURCE_OCCURRENCE_RESOLUTION_COMMIT_SCHEMA_ID,
   INBOX_V2_SOURCE_OCCURRENCE_SCHEMA_ID,
@@ -25,6 +28,8 @@ import {
   inboxV2ConversationParticipantSchema,
   inboxV2EntityRevisionSchema,
   inboxV2EmployeeIdSchema,
+  inboxV2IdentityClaimPolicyIdSchema,
+  inboxV2IdentityClaimReasonIdSchema,
   inboxV2MessageCreationCommitSchema,
   inboxV2MessageIdSchema,
   inboxV2MessageMutationCommitSchema,
@@ -42,8 +47,12 @@ import {
   inboxV2Sha256DigestSchema,
   inboxV2SourceIdentityObjectKindIdSchema,
   inboxV2SourceIdentityRealmIdSchema,
+  inboxV2SourceIdentityClaimIdSchema,
+  inboxV2SourceIdentityClaimTransitionIdSchema,
+  inboxV2SourceIdentityClaimVersionSchema,
   inboxV2SourceAccountIdSchema,
   inboxV2SourceOccurrenceMaterializationCommitSchema,
+  inboxV2SourceOccurrenceSchema,
   inboxV2SourceOccurrenceResolutionCommitSchema,
   inboxV2SourceThreadBindingSchema,
   inboxV2StaffNoteCreationCommitSchema,
@@ -64,6 +73,8 @@ import {
   type InboxV2Message,
   type InboxV2MessageCreationCommit,
   type InboxV2MessageReactionCommit,
+  type InboxV2SourceIdentityClaim,
+  type InboxV2SourceOccurrenceResolutionCommit,
   type InboxV2TimelineContent,
   type InboxV2TimelineItem,
   type InboxV2SystemEventTimelineCreationCommit
@@ -123,6 +134,10 @@ import {
   type ReserveInboxV2AttachmentMaterializationInput
 } from "./sql-inbox-v2-file-object-repository";
 import {
+  deriveInboxV2NativeOutboundConversationAuditReference,
+  deriveInboxV2NativeOutboundTransportAuditTargetReference
+} from "./sql-inbox-v2-atomic-materialization-internal";
+import {
   computeInboxV2LeafHashDigest,
   computeInboxV2TenantStreamManifestDigest,
   createSqlInboxV2AuthorizedCommandCoordinator,
@@ -138,6 +153,8 @@ import {
   deriveInboxV2SourceOccurrenceResolutionTransitionId
 } from "./sql-inbox-v2-outbound-transport-repository";
 import { createSqlInboxV2SourceExternalIdentityRepository } from "./sql-inbox-v2-source-external-identity-repository";
+import { createSqlInboxV2SourceIdentityClaimRepository } from "./sql-inbox-v2-source-identity-claim-repository";
+import { loadInboxV2NativeOutboundEmployeeClaimAtOccurrenceInTransaction } from "./sql-inbox-v2-native-outbound-persistence";
 import {
   createSqlInboxV2SourceAttachmentReservationAuthorizationPreparer,
   createSqlInboxV2SourceAttachmentReservationCommandPort
@@ -175,9 +192,12 @@ import {
   computeInboxV2TimelineMessageCommitDigest,
   createSqlInboxV2TimelineMessageRepository,
   prepareInboxV2MessageCreation,
-  sealInboxV2PreparedMessageCreation
+  prepareInboxV2NativeOutboundTransportAssociation,
+  sealInboxV2PreparedMessageCreation,
+  sealInboxV2PreparedNativeOutboundTransportAssociation
 } from "./sql-inbox-v2-timeline-message-repository";
 import type {
+  InboxV2MessageTransportAssociationCommit,
   InboxV2MessageTransportFactCommit,
   InboxV2TimelineMessageTransactionExecutor
 } from "./sql-inbox-v2-timeline-message-repository";
@@ -571,6 +591,252 @@ describePostgres(
         }
       ]);
       acceptedAtomicSource = { creation, authorized, context };
+    });
+
+    it("creates one source-authored native outbound Message and atomically attaches one exact duplicate occurrence", async () => {
+      const suffix = "atomic-native-outbound-attach";
+      const baseCreation = sourceOutboundCreationCommit(suffix);
+      const context = await seedExternalCreationAnchors(
+        db,
+        baseCreation,
+        suffix
+      );
+      const operator = await seedProviderResultOperator(
+        db,
+        baseCreation,
+        suffix
+      );
+      const historicalEmployeeClaim =
+        await proveNativeOutboundClaimOccurrenceLocking({
+          db,
+          creation: baseCreation,
+          operator,
+          suffix
+        });
+      const creation = nativeOutboundCreationWithClaimAtOccurrence(
+        baseCreation,
+        historicalEmployeeClaim
+      );
+      const duplicate = nativeOutboundDuplicateFixture({
+        creation,
+        suffix: `${suffix}-duplicate`
+      });
+      await seedAdditionalSourceCreationOccurrence({
+        db,
+        creation: duplicate.seedCreation,
+        context,
+        suffix: `${suffix}-duplicate`
+      });
+
+      const requestedStreamEpoch = `stream-epoch:${suffix}-${runId}`;
+      await db.transaction(async (transaction) => {
+        await transaction.execute(
+          sql`set local session_replication_role = replica`
+        );
+        await transaction.execute(sql`
+          insert into inbox_v2_tenant_stream_heads (
+            tenant_id, stream_epoch, last_position, min_retained_position,
+            revision, created_at, updated_at
+          ) values (
+            ${tenantId}, ${requestedStreamEpoch}, 1, 0, 1,
+            ${creation.timelineAllocation.conversationBefore.createdAt},
+            ${creation.timelineAllocation.conversationBefore.createdAt}
+          )
+          on conflict (tenant_id) do nothing
+        `);
+        await transaction.execute(
+          sql`set local session_replication_role = origin`
+        );
+      });
+      const streamBefore = await db.execute<{
+        last_position: string;
+        stream_epoch: string;
+      }>(sql`
+        select last_position::text as last_position, stream_epoch
+          from inbox_v2_tenant_stream_heads
+         where tenant_id = ${tenantId}
+      `);
+      const previousStreamPosition = streamBefore.rows[0]?.last_position;
+      const streamEpoch = streamBefore.rows[0]?.stream_epoch;
+      if (previousStreamPosition === undefined || streamEpoch === undefined) {
+        throw new Error("Native outbound fixture requires a tenant stream.");
+      }
+
+      const creationAuthorized = authorizedSourceMaterializationFixture({
+        creation,
+        operator,
+        streamEpoch,
+        suffix
+      });
+      await db.execute(sql`
+        insert into inbox_v2_auth_resource_heads (
+          tenant_id, id, resource_kind, conversation_id,
+          resource_access_revision, structural_relation_revision,
+          collaborator_set_revision, revision, created_at, updated_at
+        ) values (
+          ${tenantId}, ${creationAuthorized.resourceHeadId}, 'conversation',
+          ${creation.message.conversation.id}, 1, 1, 1, 1,
+          ${creation.timelineAllocation.committedAt},
+          ${creation.timelineAllocation.committedAt}
+        )
+      `);
+
+      const coordinator = createSqlInboxV2AuthorizedCommandCoordinator(db);
+      const createMessage = () =>
+        coordinator.withAuthorizedAtomicMaterialization(
+          creationAuthorized.input,
+          async (authorizedContext) => {
+            const prepared = await prepareInboxV2MessageCreation(
+              authorizedContext,
+              { commit: creation }
+            );
+            if (prepared.kind !== "ready") {
+              throw new Error(
+                `Native outbound Message preparation failed: ${prepared.kind}`
+              );
+            }
+            return prepared.capability;
+          },
+          async (authorizedContext, capability) => {
+            const sealed = await sealInboxV2PreparedMessageCreation(
+              authorizedContext,
+              { capability }
+            );
+            return {
+              result: { messageId: sealed.message.id },
+              receipt: sealed.receipt
+            };
+          }
+        );
+      const created = await createMessage();
+      expect(created).toMatchObject({
+        kind: "applied",
+        result: { messageId: creation.message.id },
+        status: {
+          streamPosition: String(BigInt(previousStreamPosition) + 1n)
+        }
+      });
+      if (created.kind !== "applied") {
+        throw new Error(
+          `Native outbound Message was not applied: ${created.kind}`
+        );
+      }
+      await expect(createMessage()).resolves.toMatchObject({
+        kind: "already_applied",
+        status: { streamPosition: created.status.streamPosition }
+      });
+
+      const association = nativeOutboundAssociationCommit({
+        creation,
+        duplicate,
+        occurrenceBinding: context.bindingProjection.binding
+      });
+      const attachAuthorized = authorizedNativeOutboundAssociationFixture({
+        association,
+        sourceResolutionCommit: duplicate.resolution,
+        resourceHeadId: creationAuthorized.resourceHeadId,
+        streamEpoch,
+        suffix: `${suffix}-duplicate`
+      });
+      const attachOccurrence = () =>
+        coordinator.withAuthorizedAtomicMaterialization(
+          attachAuthorized.input,
+          async (authorizedContext) => {
+            const prepared =
+              await prepareInboxV2NativeOutboundTransportAssociation(
+                authorizedContext,
+                {
+                  commit: association,
+                  sourceResolutionCommit: duplicate.resolution
+                }
+              );
+            if (prepared.kind !== "ready") {
+              throw new Error(
+                `Native outbound association preparation failed: ${prepared.kind}`
+              );
+            }
+            return prepared.capability;
+          },
+          async (authorizedContext, capability) => {
+            const sealed =
+              await sealInboxV2PreparedNativeOutboundTransportAssociation(
+                authorizedContext,
+                { capability }
+              );
+            return {
+              result: { linkId: association.link.id },
+              receipt: sealed.receipt
+            };
+          }
+        );
+      const attached = await attachOccurrence();
+      expect(attached).toMatchObject({
+        kind: "applied",
+        result: { linkId: association.link.id },
+        status: {
+          streamPosition: String(BigInt(created.status.streamPosition) + 1n)
+        }
+      });
+      if (attached.kind !== "applied") {
+        throw new Error(
+          `Native outbound occurrence was not attached: ${attached.kind}`
+        );
+      }
+      const committedState = await loadAtomicNativeOutboundAssociationState(
+        db,
+        {
+          creation,
+          association,
+          duplicate,
+          authorized: attachAuthorized
+        }
+      );
+      expect(committedState).toEqual({
+        commands: "1",
+        stream_commits: "1",
+        stream_position: attached.status.streamPosition,
+        changes: "1",
+        transport_changes: "1",
+        source_changes: "0",
+        other_changes: "0",
+        events: "1",
+        source_events: "0",
+        outbox_intents: "1",
+        outbox_work: "1",
+        source_projections: "0",
+        provider_io: "0",
+        notifications: "0",
+        outbound_dispatches: "0",
+        messages: "1",
+        message_claim_id: historicalEmployeeClaim.id,
+        message_claim_version: historicalEmployeeClaim.claimVersion,
+        message_claim_employee_id:
+          historicalEmployeeClaim.target.kind === "employee"
+            ? historicalEmployeeClaim.target.employee.id
+            : null,
+        resolution_transitions: "1",
+        source_resolution_materializations: "0",
+        transport_links: "1",
+        link_count: "2",
+        link_head_revision: "2",
+        latest_link_id: association.link.id,
+        occurrence_state: "resolved",
+        occurrence_revision: duplicate.resolution.resultingRevision,
+        occurrence_reference_id: creation.externalMessageReference?.id ?? null
+      });
+
+      await expect(attachOccurrence()).resolves.toMatchObject({
+        kind: "already_applied",
+        status: { streamPosition: attached.status.streamPosition }
+      });
+      expect(
+        await loadAtomicNativeOutboundAssociationState(db, {
+          creation,
+          association,
+          duplicate,
+          authorized: attachAuthorized
+        })
+      ).toEqual(committedState);
     });
 
     const runAttachmentTerminalAcceptance = async () => {
@@ -1513,6 +1779,20 @@ describePostgres(
         streamEpoch: accepted.authorized.streamEpoch
       });
       const coordinator = createSqlInboxV2AuthorizedCommandCoordinator(db);
+      const streamHeadBefore = await db.execute<{ last_position: string }>(sql`
+        select last_position::text as last_position
+          from inbox_v2_tenant_stream_heads
+         where tenant_id = ${tenantId}
+           and stream_epoch = ${accepted.authorized.streamEpoch}
+      `);
+      const streamPositionBefore = streamHeadBefore.rows[0]?.last_position;
+      if (streamPositionBefore === undefined) {
+        throw new Error("System TimelineItem stream head is missing.");
+      }
+      const committedStreamPosition = String(BigInt(streamPositionBefore) + 1n);
+      const duplicateStreamPosition = String(
+        BigInt(committedStreamPosition) + 1n
+      );
       let failAfterSeal = true;
       const materialize = () =>
         coordinator.withAuthorizedAtomicMaterialization(
@@ -1558,7 +1838,7 @@ describePostgres(
       ).toEqual({
         commands: "0",
         stream_commits: "0",
-        stream_position: "2",
+        stream_position: streamPositionBefore,
         changes: "0",
         events: "0",
         outbox_intents: "0",
@@ -1577,7 +1857,7 @@ describePostgres(
         result: {
           timelineItemId: fixture.commit.timelineAllocation.items[0]!.id
         },
-        status: { streamPosition: "3" }
+        status: { streamPosition: committedStreamPosition }
       });
       const committedState = await loadAtomicSystemTimelineState(
         db,
@@ -1587,7 +1867,7 @@ describePostgres(
       expect(committedState).toEqual({
         commands: "1",
         stream_commits: "1",
-        stream_position: "3",
+        stream_position: committedStreamPosition,
         changes: "1",
         events: "1",
         outbox_intents: "1",
@@ -1627,7 +1907,7 @@ describePostgres(
               'system_event', ${fixture.commit.source.event.id},
               'workforce_metadata', 'non_activity', 'core:system-metadata',
               ${fixture.commit.source.occurredAt},
-              ${fixture.commit.source.recordedAt}, 1, 4,
+              ${fixture.commit.source.recordedAt}, 1, ${duplicateStreamPosition},
               ${fixture.commit.timelineAllocation.committedAt},
               ${fixture.commit.timelineAllocation.committedAt}
             )
@@ -1663,7 +1943,7 @@ describePostgres(
         )
       ).resolves.toMatchObject({
         kind: "already_applied",
-        status: { streamPosition: "3" }
+        status: { streamPosition: committedStreamPosition }
       });
       expect(
         await loadAtomicSystemTimelineState(db, fixture, authorized)
@@ -3049,11 +3329,7 @@ describePostgres(
     it("atomically serializes a delivery/receipt token race across conversations and replays the winner's original position", async () => {
       const deliveryCreation = sourceOutboundCreationCommit("fact-delivery");
       const receiptCreation = sourceOutboundCreationCommit("fact-receipt");
-      const deliveryContext = await seedExternalCreationAnchors(
-        db,
-        deliveryCreation,
-        "fact-delivery"
-      );
+      await seedExternalCreationAnchors(db, deliveryCreation, "fact-delivery");
       await seedExternalCreationAnchors(db, receiptCreation, "fact-receipt");
       const repository = createSqlInboxV2TimelineMessageRepository(db);
       expect(
@@ -3150,48 +3426,6 @@ describePostgres(
         missingReactions: null,
         missingFacts: null,
         missingLifecycle: null
-      });
-
-      const echoCommit = await seedProviderEchoAssociation({
-        db,
-        creation: deliveryCreation,
-        context: deliveryContext,
-        suffix: "fact-delivery"
-      });
-      expect(
-        await repository.associateTransportOccurrence({
-          commit: echoCommit,
-          streamPosition: position("301")
-        })
-      ).toMatchObject({
-        kind: "appended",
-        envelope: { streamPosition: "301" }
-      });
-      expect(
-        await repository.associateTransportOccurrence({
-          commit: echoCommit,
-          streamPosition: position("997")
-        })
-      ).toMatchObject({
-        kind: "already_applied",
-        envelope: { streamPosition: "301" }
-      });
-      const linksAfterEcho = await repository.listMessageTransportLinks({
-        tenantId,
-        messageId: deliveryCreation.message.id,
-        snapshotToken: null,
-        cursor: null,
-        limit: 10
-      });
-      expect(linksAfterEcho?.links).toHaveLength(2);
-      expect(linksAfterEcho?.links.map(({ link }) => link.role)).toEqual([
-        "native_outbound",
-        "provider_echo"
-      ]);
-      expect(linksAfterEcho?.head?.head).toMatchObject({
-        linkCount: "2",
-        latestLink: echoCommit.linkHeadAfter.latestLink,
-        revision: "2"
       });
 
       const sharedToken = `transport:db005-race-${runId}`;
@@ -6894,6 +7128,732 @@ function sourceOutboundCreationCommit(
     originTransportLink,
     originTransportLinkHead
   });
+}
+
+function nativeOutboundCreationWithClaimAtOccurrence(
+  creation: InboxV2MessageCreationCommit,
+  claim: InboxV2SourceIdentityClaim
+): InboxV2MessageCreationCommit {
+  if (
+    creation.message.origin.kind !== "source_originated" ||
+    claim.target.kind !== "employee"
+  ) {
+    throw new Error(
+      "Native outbound claim snapshot requires a source Message and Employee claim."
+    );
+  }
+  return inboxV2MessageCreationCommitSchema.parse({
+    ...creation,
+    message: {
+      ...creation.message,
+      origin: {
+        ...creation.message.origin,
+        claimAtOccurrence: {
+          claim: {
+            tenantId,
+            kind: "source_identity_claim",
+            id: claim.id
+          },
+          claimVersion: claim.claimVersion,
+          resolvedEmployee: claim.target.employee
+        }
+      }
+    },
+    claimAtOccurrenceSnapshot: claim
+  });
+}
+
+async function proveNativeOutboundClaimOccurrenceLocking(input: {
+  db: HuleeDatabase;
+  creation: InboxV2MessageCreationCommit;
+  operator: ReturnType<typeof fixtureParticipant>;
+  suffix: string;
+}): Promise<InboxV2SourceIdentityClaim> {
+  const occurrence = requireSourceOccurrence(input.creation);
+  const actor = occurrence.providerActor;
+  if (
+    actor?.kind !== "source_external_identity" ||
+    input.operator.subject.kind !== "employee" ||
+    occurrence.origin.kind === "provider_echo" ||
+    occurrence.origin.kind === "provider_response"
+  ) {
+    throw new Error(
+      "Native outbound claim lock fixture requires event-backed source and Employee target."
+    );
+  }
+  const reviewerId = inboxV2EmployeeIdSchema.parse(
+    `employee:db005-native-reviewer-${input.suffix}-${runId}`
+  );
+  await input.db.execute(sql`
+    insert into employees (
+      id, tenant_id, email, display_name, profile, created_at, updated_at
+    ) values (
+      ${reviewerId}, ${tenantId},
+      ${`native-reviewer-${input.suffix}-${runId}@example.test`},
+      'DB005 native outbound claim reviewer', '{}'::jsonb,
+      ${fixtureT0}, ${fixtureT0}
+    )
+  `);
+  const claimId = inboxV2SourceIdentityClaimIdSchema.parse(
+    `source_identity_claim:db005-native-${input.suffix}-${runId}`
+  );
+  const claimRepository = createSqlInboxV2SourceIdentityClaimRepository(
+    input.db
+  );
+  const claimInput = {
+    tenantId,
+    sourceExternalIdentityId: actor.sourceExternalIdentity.id,
+    transitionId: inboxV2SourceIdentityClaimTransitionIdSchema.parse(
+      `source_identity_claim_transition:db005-native-claim-${input.suffix}-${runId}`
+    ),
+    expectedVersion: null,
+    operation: {
+      kind: "claim_employee" as const,
+      claimId,
+      employeeId: inboxV2EmployeeIdSchema.parse(
+        input.operator.subject.employee.id
+      ),
+      confidence: "verified" as const,
+      evidenceReferences: [
+        {
+          kind: "raw_inbound_event" as const,
+          reference: occurrence.origin.rawInboundEvent
+        }
+      ]
+    },
+    decision: {
+      kind: "manual" as const,
+      actorEmployee: {
+        tenantId,
+        kind: "employee" as const,
+        id: reviewerId
+      },
+      reviewState: "approved" as const
+    },
+    policyId: inboxV2IdentityClaimPolicyIdSchema.parse(
+      "core:verified-source-identity"
+    ),
+    policyVersion: "v1",
+    reasonCodeId: inboxV2IdentityClaimReasonIdSchema.parse(
+      "core:operator-reviewed"
+    ),
+    occurredAt: occurrence.observedAt
+  };
+  const emptyRace = await raceNativeOutboundClaimLookupAgainstMutation({
+    db: input.db,
+    tenantId,
+    sourceExternalIdentityId: actor.sourceExternalIdentity.id,
+    observedAt: occurrence.observedAt,
+    mutate: () => claimRepository.applyTransition(claimInput)
+  });
+  expect(emptyRace.snapshot).toBeNull();
+  expect(emptyRace.mutation).toMatchObject({
+    kind: "applied",
+    transition: { resultingVersion: "1" }
+  });
+
+  const revokeInput = {
+    tenantId,
+    sourceExternalIdentityId: actor.sourceExternalIdentity.id,
+    transitionId: inboxV2SourceIdentityClaimTransitionIdSchema.parse(
+      `source_identity_claim_transition:db005-native-revoke-${input.suffix}-${runId}`
+    ),
+    expectedVersion: inboxV2SourceIdentityClaimVersionSchema.parse("1"),
+    operation: { kind: "revoke" as const },
+    decision: claimInput.decision,
+    policyId: claimInput.policyId,
+    policyVersion: claimInput.policyVersion,
+    reasonCodeId: claimInput.reasonCodeId,
+    occurredAt: fixtureT3
+  };
+  const revokeRace = await raceNativeOutboundClaimLookupAgainstMutation({
+    db: input.db,
+    tenantId,
+    sourceExternalIdentityId: actor.sourceExternalIdentity.id,
+    observedAt: occurrence.observedAt,
+    mutate: () => claimRepository.applyTransition(revokeInput)
+  });
+  expect(revokeRace.snapshot).toMatchObject({
+    id: claimId,
+    status: "active",
+    target: {
+      kind: "employee",
+      employee: { id: input.operator.subject.employee.id }
+    }
+  });
+  expect(revokeRace.mutation).toMatchObject({
+    kind: "applied",
+    transition: { resultingVersion: "2" }
+  });
+
+  const historical = await input.db.transaction((transaction) =>
+    loadInboxV2NativeOutboundEmployeeClaimAtOccurrenceInTransaction(
+      transaction as unknown as RawSqlExecutor,
+      {
+        tenantId,
+        sourceExternalIdentityId: actor.sourceExternalIdentity.id,
+        observedAt: occurrence.observedAt
+      }
+    )
+  );
+  if (historical === null || historical.target.kind !== "employee") {
+    throw new Error(
+      "Revoked-after-occurrence claim did not remain historically attributable."
+    );
+  }
+  expect(historical).toMatchObject({
+    id: claimId,
+    status: "revoked",
+    revocation: { revokedAt: fixtureT3 },
+    target: { employee: { id: input.operator.subject.employee.id } }
+  });
+  return historical;
+}
+
+async function raceNativeOutboundClaimLookupAgainstMutation<TResult>(input: {
+  db: HuleeDatabase;
+  tenantId: typeof tenantId;
+  sourceExternalIdentityId: InboxV2SourceIdentityClaim["sourceExternalIdentity"]["id"];
+  observedAt: string;
+  mutate: () => Promise<TResult>;
+}): Promise<
+  Readonly<{ snapshot: InboxV2SourceIdentityClaim | null; mutation: TResult }>
+> {
+  let signalLocked!: () => void;
+  const locked = new Promise<void>((resolve) => {
+    signalLocked = resolve;
+  });
+  let releaseLookup!: () => void;
+  const release = new Promise<void>((resolve) => {
+    releaseLookup = resolve;
+  });
+  const lookup = input.db.transaction(async (transaction) => {
+    const snapshot =
+      await loadInboxV2NativeOutboundEmployeeClaimAtOccurrenceInTransaction(
+        transaction as unknown as RawSqlExecutor,
+        {
+          tenantId: input.tenantId,
+          sourceExternalIdentityId: input.sourceExternalIdentityId,
+          observedAt: input.observedAt
+        }
+      );
+    signalLocked();
+    await release;
+    return snapshot;
+  });
+  await locked;
+  let mutationSettled = false;
+  const mutation = input.mutate().then((result) => {
+    mutationSettled = true;
+    return result;
+  });
+  await new Promise<void>((resolve) => setTimeout(resolve, 100));
+  expect(mutationSettled).toBe(false);
+  releaseLookup();
+  const [snapshot, mutationResult] = await Promise.all([lookup, mutation]);
+  return { snapshot, mutation: mutationResult };
+}
+
+type NativeOutboundDuplicateFixture = Readonly<{
+  seedCreation: InboxV2MessageCreationCommit;
+  resolution: InboxV2SourceOccurrenceResolutionCommit;
+}>;
+
+function nativeOutboundDuplicateFixture(input: {
+  creation: InboxV2MessageCreationCommit;
+  suffix: string;
+}): NativeOutboundDuplicateFixture {
+  const raw = sourceOutboundCreationCommit(input.suffix);
+  const originOccurrence = requireSourceOccurrence(input.creation);
+  const rawResolution = raw.sourceResolutionCommit;
+  const targetReference = input.creation.externalMessageReference;
+  if (
+    rawResolution === null ||
+    targetReference === null ||
+    input.creation.externalThreadMapping === null ||
+    originOccurrence.providerActor?.kind !== "source_external_identity" ||
+    rawResolution.before.origin.kind === "provider_echo" ||
+    rawResolution.before.origin.kind === "provider_response"
+  ) {
+    throw new Error(
+      "Native outbound duplicate fixture requires event-backed source identity evidence."
+    );
+  }
+  const before = inboxV2SourceOccurrenceSchema.parse({
+    ...rawResolution.before,
+    messageKey: originOccurrence.messageKey,
+    messageIdentityDeclaration: originOccurrence.messageIdentityDeclaration,
+    bindingContext: originOccurrence.bindingContext,
+    origin: {
+      ...rawResolution.before.origin,
+      sourceAccount: originOccurrence.bindingContext.sourceAccount
+    },
+    providerActor: originOccurrence.providerActor,
+    direction: "outbound"
+  });
+  const after = inboxV2SourceOccurrenceSchema.parse({
+    ...before,
+    resolution: {
+      state: "resolved",
+      externalMessageReference: {
+        tenantId,
+        kind: "external_message_reference",
+        id: targetReference.id
+      }
+    },
+    revision: String(BigInt(before.revision) + 1n),
+    updatedAt: rawResolution.changedAt
+  });
+  const resolution = inboxV2SourceOccurrenceResolutionCommitSchema.parse({
+    ...rawResolution,
+    expectedRevision: before.revision,
+    resultingRevision: after.revision,
+    resolver: {
+      ...rawResolution.resolver,
+      resolutionToken: `resolution:db005-native-duplicate-${input.suffix}-${runId}`
+    },
+    before,
+    after,
+    resolvedReference: targetReference
+  });
+  return {
+    seedCreation: {
+      ...raw,
+      sourceOccurrence: after,
+      sourceResolutionCommit: resolution,
+      externalThreadMapping: input.creation.externalThreadMapping
+    } as InboxV2MessageCreationCommit,
+    resolution
+  };
+}
+
+function nativeOutboundAssociationCommit(input: {
+  creation: InboxV2MessageCreationCommit;
+  duplicate: NativeOutboundDuplicateFixture;
+  occurrenceBinding: Awaited<
+    ReturnType<typeof seedExternalCreationAnchors>
+  >["bindingProjection"]["binding"];
+}): InboxV2MessageTransportAssociationCommit {
+  const originOccurrence = requireSourceOccurrence(input.creation);
+  const targetReference = input.creation.externalMessageReference;
+  const externalThreadMapping = input.creation.externalThreadMapping;
+  const timelineItem = input.creation.timelineAllocation.items[0];
+  const linkHeadBefore = input.creation.originTransportLinkHead;
+  const rawLink = input.duplicate.seedCreation.originTransportLink;
+  if (
+    targetReference === null ||
+    externalThreadMapping === null ||
+    timelineItem === undefined ||
+    linkHeadBefore === null ||
+    rawLink === null
+  ) {
+    throw new Error(
+      "Native outbound association fixture requires a complete source transport graph."
+    );
+  }
+  const occurrence = input.duplicate.resolution.after;
+  const linkedAt = input.duplicate.resolution.changedAt;
+  const link = {
+    ...rawLink,
+    message: targetReference.message,
+    sourceOccurrence: {
+      tenantId,
+      kind: "source_occurrence" as const,
+      id: occurrence.id
+    },
+    externalMessageReference: {
+      tenantId,
+      kind: "external_message_reference" as const,
+      id: targetReference.id
+    },
+    role: "native_outbound" as const,
+    revision: "1" as const,
+    linkedAt
+  };
+  return inboxV2MessageTransportAssociationCommitSchema.parse({
+    tenantId,
+    message: input.creation.message,
+    timelineItem,
+    linkHeadBefore,
+    sourceOccurrence: occurrence,
+    externalMessageReference: targetReference,
+    externalThreadMapping,
+    occurrenceBinding: input.occurrenceBinding,
+    messageOriginProof: {
+      kind: "source_originated",
+      originOccurrence
+    },
+    link,
+    linkHeadAfter: {
+      ...linkHeadBefore,
+      linkCount: String(BigInt(linkHeadBefore.linkCount) + 1n),
+      latestLink: {
+        tenantId,
+        kind: "message_transport_occurrence_link",
+        id: link.id
+      },
+      revision: String(BigInt(linkHeadBefore.revision) + 1n),
+      updatedAt: linkedAt
+    },
+    committedAt: linkedAt
+  });
+}
+
+function authorizedNativeOutboundAssociationFixture(input: {
+  association: InboxV2MessageTransportAssociationCommit;
+  sourceResolutionCommit: InboxV2SourceOccurrenceResolutionCommit;
+  resourceHeadId: string;
+  streamEpoch: string;
+  suffix: string;
+}) {
+  const association = input.association;
+  const occurredAt = association.committedAt;
+  const actor = association.sourceOccurrence.providerActor;
+  if (
+    actor?.kind !== "source_external_identity" ||
+    association.messageOriginProof.kind !== "source_originated"
+  ) {
+    throw new Error(
+      "Native outbound authorization fixture requires source-authored evidence."
+    );
+  }
+  const trustedServiceId =
+    association.sourceOccurrence.descriptor.adapterContract
+      .loadedByTrustedServiceId;
+  const token = `${input.suffix}-${runId}`;
+  const commandId = `command:atomic-native-outbound-${token}`;
+  const clientMutationId = `mutation:atomic-native-outbound-${token}`;
+  const mutationId = `authorization-mutation:atomic-native-outbound-${token}`;
+  const streamCommitId = `commit:atomic-native-outbound-${token}`;
+  const correlationId = `correlation:atomic-native-outbound-${token}`;
+  const changeId = `change:atomic-native-outbound-${token}`;
+  const eventId = `event:atomic-native-outbound-${token}`;
+  const projectionIntentId = `outbox-intent:atomic-native-outbound-${token}`;
+  const authorizationEpoch = `authorization:atomic-native-outbound-${token}`;
+  const decisionId = `authorization-decision:atomic-native-outbound-${token}`;
+  const conversation = association.message.conversation;
+  const payloadReference = {
+    tenantId,
+    recordId: association.link.id,
+    schemaId: INBOX_V2_MESSAGE_TRANSPORT_OCCURRENCE_LINK_SCHEMA_ID,
+    schemaVersion: INBOX_V2_MESSAGE_TRANSPORT_SCHEMA_VERSION,
+    digest: atomicSourcePayloadDigest(association.link)
+  };
+  const domainCommitReference = {
+    tenantId,
+    recordId: association.link.id,
+    schemaId: INBOX_V2_MESSAGE_TRANSPORT_ASSOCIATION_COMMIT_SCHEMA_ID,
+    schemaVersion: INBOX_V2_MESSAGE_TRANSPORT_SCHEMA_VERSION,
+    digest: atomicSourcePayloadDigest(association)
+  };
+  const sourceResolutionReference = {
+    tenantId,
+    recordId: deriveInboxV2SourceOccurrenceResolutionTransitionId(
+      input.sourceResolutionCommit
+    ),
+    schemaId: INBOX_V2_SOURCE_OCCURRENCE_RESOLUTION_COMMIT_SCHEMA_ID,
+    schemaVersion: INBOX_V2_EXTERNAL_MESSAGE_SCHEMA_VERSION,
+    digest: atomicSourcePayloadDigest(input.sourceResolutionCommit)
+  };
+  const auditTarget = deriveInboxV2NativeOutboundTransportAuditTargetReference({
+    tenantId,
+    messageId: association.message.id,
+    linkId: association.link.id
+  });
+  const conversationFacet =
+    deriveInboxV2NativeOutboundConversationAuditReference({
+      tenantId,
+      conversationId: conversation.id
+    });
+  const decision = {
+    tenantId,
+    id: decisionId,
+    authorizationEpoch,
+    principal: {
+      kind: "trusted_service" as const,
+      trustedServiceId
+    },
+    permissionId: "core:message.receive_external",
+    resourceScopeId: "core:conversation",
+    resource: {
+      tenantId,
+      entityTypeId: "core:conversation",
+      entityId: conversation.id
+    },
+    resourceAccessRevision: "1",
+    decisionRevision: "1",
+    decisionHash: atomicSourceSha256(`${token}:authorization-decision`),
+    outcome: "allowed" as const,
+    decidedAt: occurredAt,
+    notAfter: new Date(Date.now() + 60 * 60 * 1_000).toISOString()
+  };
+  const change = {
+    id: changeId,
+    ordinal: 1,
+    entity: {
+      tenantId,
+      entityTypeId: "core:message-transport-observation",
+      entityId: association.link.id
+    },
+    resultingRevision: association.linkHeadAfter.revision,
+    timeline: {
+      conversation,
+      timelineSequence: association.timelineItem.timelineSequence
+    },
+    audience: "conversation_external" as const,
+    state: {
+      kind: "upsert" as const,
+      stateSchemaId: payloadReference.schemaId,
+      stateSchemaVersion: payloadReference.schemaVersion,
+      stateHash: payloadReference.digest,
+      payloadReference,
+      domainCommitReference
+    }
+  };
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
+  return {
+    commandId,
+    streamCommitId,
+    input: {
+      tenantId,
+      command: {
+        id: commandId,
+        requestId: `request:atomic-native-outbound-${token}`,
+        clientMutationId,
+        commandTypeId: "core:message.native_outbound_occurrence.attach",
+        requestHash: atomicSourceSha256(`${token}:request`),
+        actor: { kind: "trusted_service", trustedServiceId },
+        authorizationDecisionId: decisionId,
+        authorizationEpoch,
+        authorizedAt: occurredAt,
+        publicResultCode: "core:message.native_outbound_occurrence.attached",
+        resultReference: payloadReference,
+        sensitiveResultReference: null
+      },
+      revisions: {
+        expectedTenantRbacRevision: "1",
+        expectedSharedAccessRevision: "1",
+        advanceTenantRbac: false,
+        advanceSharedAccess: false,
+        employees: [],
+        resources: [
+          {
+            resourceKind: "conversation",
+            resourceId: conversation.id,
+            resourceHeadId: input.resourceHeadId,
+            expectedResourceAccessRevision: "1",
+            advance: "none"
+          }
+        ]
+      },
+      records: {
+        mutationId,
+        relationKind: null,
+        streamCommitId,
+        expectedStreamEpoch: input.streamEpoch,
+        audienceImpact: { kind: "none" },
+        commitHash: atomicSourceSha256(`${token}:stream-commit`),
+        correlationId,
+        changes: [change],
+        events: [
+          {
+            id: eventId,
+            typeId: "core:message.changed",
+            payloadSchemaId: domainCommitReference.schemaId,
+            payloadSchemaVersion: domainCommitReference.schemaVersion,
+            ordinal: "1",
+            changeIds: [changeId],
+            subjects: [
+              {
+                tenantId,
+                entityTypeId: "core:message",
+                entityId: association.message.id
+              }
+            ],
+            payloadReference: domainCommitReference,
+            correlationId,
+            commandIds: [commandId],
+            clientMutationIds: [clientMutationId],
+            authorizationDecisionRefs: [decision],
+            accessEffect: { kind: "none" },
+            occurredAt,
+            recordedAt: occurredAt,
+            eventHash: atomicSourceSha256(`${token}:message-event`)
+          }
+        ],
+        outboxIntents: [
+          {
+            id: projectionIntentId,
+            ordinal: 1,
+            typeId: "core:projection.update",
+            handlerId: "core:inbox-projection",
+            effectClass: "projection",
+            eventId,
+            changeIds: [changeId],
+            payloadReference,
+            consumerDedupeKey: atomicSourceSha256(`${token}:projection-dedupe`),
+            correlationId,
+            availableAt: occurredAt,
+            intentHash: atomicSourceSha256(`${token}:projection-intent`)
+          }
+        ],
+        audit: {
+          id: `authorization-audit:atomic-native-outbound-${token}`,
+          actionId: "core:message.native_outbound_occurrence.attach",
+          target: auditTarget,
+          reasonCodeId: "core:native-outbound-occurrence-attached",
+          matchedPermissionIds: [decision.permissionId],
+          grantSourceIds: [auditTarget.entityId],
+          authorizationScopeIds: [decision.resourceScopeId],
+          overrideReasonCodeId: null,
+          policyVersion: "v1",
+          evidenceReference: sourceResolutionReference,
+          authorizationDecisionRefs: [decision],
+          correlationId,
+          outcome: "succeeded",
+          revisionDeltaHash: computeInboxV2LeafHashDigest([]),
+          previousAuditHash: null,
+          auditHash: atomicSourceSha256(`${token}:audit`),
+          occurredAt,
+          recordedAt: occurredAt,
+          expiresAt,
+          facets: [
+            {
+              ordinal: 1,
+              dimension: "resource",
+              reference: conversationFacet,
+              relation: "affected",
+              facetHash: atomicSourceSha256(`${token}:audit-facet`)
+            }
+          ]
+        }
+      },
+      occurredAt
+    } as unknown as WithInboxV2AuthorizedCommandMutationInput
+  };
+}
+
+async function loadAtomicNativeOutboundAssociationState(
+  db: HuleeDatabase,
+  input: Readonly<{
+    creation: InboxV2MessageCreationCommit;
+    association: InboxV2MessageTransportAssociationCommit;
+    duplicate: NativeOutboundDuplicateFixture;
+    authorized: ReturnType<typeof authorizedNativeOutboundAssociationFixture>;
+  }>
+) {
+  const result = await db.execute<Record<string, string | null>>(sql`
+    select
+      (select count(*)::text from inbox_v2_auth_command_records
+        where tenant_id = ${tenantId} and id = ${input.authorized.commandId})
+        as commands,
+      (select count(*)::text from inbox_v2_tenant_stream_commits
+        where tenant_id = ${tenantId}
+          and id = ${input.authorized.streamCommitId}) as stream_commits,
+      (select last_position::text from inbox_v2_tenant_stream_heads
+        where tenant_id = ${tenantId}) as stream_position,
+      (select count(*)::text from inbox_v2_tenant_stream_changes
+        where tenant_id = ${tenantId}
+          and stream_commit_id = ${input.authorized.streamCommitId}) as changes,
+      (select count(*)::text from inbox_v2_tenant_stream_changes
+        where tenant_id = ${tenantId}
+          and stream_commit_id = ${input.authorized.streamCommitId}
+          and entity_type_id = 'core:message-transport-observation')
+        as transport_changes,
+      (select count(*)::text from inbox_v2_tenant_stream_changes
+        where tenant_id = ${tenantId}
+          and stream_commit_id = ${input.authorized.streamCommitId}
+          and entity_type_id = 'core:source-occurrence') as source_changes,
+      (select count(*)::text from inbox_v2_tenant_stream_changes
+        where tenant_id = ${tenantId}
+          and stream_commit_id = ${input.authorized.streamCommitId}
+          and entity_type_id <> 'core:message-transport-observation')
+        as other_changes,
+      (select count(*)::text from inbox_v2_domain_events
+        where tenant_id = ${tenantId}
+          and stream_commit_id = ${input.authorized.streamCommitId}) as events,
+      (select count(*)::text from inbox_v2_domain_events
+        where tenant_id = ${tenantId}
+          and stream_commit_id = ${input.authorized.streamCommitId}
+          and type_id = 'core:source-occurrence.changed') as source_events,
+      (select count(*)::text from inbox_v2_outbox_intents
+        where tenant_id = ${tenantId}
+          and stream_commit_id = ${input.authorized.streamCommitId})
+        as outbox_intents,
+      (select count(*)::text
+         from inbox_v2_outbox_work_items work_item
+         join inbox_v2_outbox_intents intent
+           on intent.tenant_id = work_item.tenant_id
+          and intent.id = work_item.intent_id
+        where work_item.tenant_id = ${tenantId}
+          and intent.stream_commit_id = ${input.authorized.streamCommitId})
+        as outbox_work,
+      (select count(*)::text from inbox_v2_outbox_intents
+        where tenant_id = ${tenantId}
+          and stream_commit_id = ${input.authorized.streamCommitId}
+          and handler_id = 'core:source-occurrence-projection')
+        as source_projections,
+      (select count(*)::text from inbox_v2_outbox_intents
+        where tenant_id = ${tenantId}
+          and stream_commit_id = ${input.authorized.streamCommitId}
+          and effect_class = 'provider_io') as provider_io,
+      (select count(*)::text from inbox_v2_outbox_intents
+        where tenant_id = ${tenantId}
+          and stream_commit_id = ${input.authorized.streamCommitId}
+          and effect_class = 'notification') as notifications,
+      (select count(*)::text from inbox_v2_outbound_dispatches
+        where tenant_id = ${tenantId}
+          and message_id = ${input.creation.message.id}) as outbound_dispatches,
+      (select count(*)::text from inbox_v2_messages
+        where tenant_id = ${tenantId}
+          and id = ${input.creation.message.id}) as messages,
+      (select claim_at_occurrence_id from inbox_v2_messages
+        where tenant_id = ${tenantId}
+          and id = ${input.creation.message.id}) as message_claim_id,
+      (select claim_at_occurrence_version::text from inbox_v2_messages
+        where tenant_id = ${tenantId}
+          and id = ${input.creation.message.id}) as message_claim_version,
+      (select claim_resolved_employee_id from inbox_v2_messages
+        where tenant_id = ${tenantId}
+          and id = ${input.creation.message.id})
+        as message_claim_employee_id,
+      (select count(*)::text
+         from inbox_v2_source_occurrence_resolution_transitions
+        where tenant_id = ${tenantId}
+          and source_occurrence_id = ${input.association.sourceOccurrence.id})
+        as resolution_transitions,
+      (select count(*)::text
+         from inbox_v2_atomic_source_resolution_materializations
+        where tenant_id = ${tenantId}
+          and source_occurrence_id = ${input.association.sourceOccurrence.id})
+        as source_resolution_materializations,
+      (select count(*)::text from inbox_v2_message_transport_links
+        where tenant_id = ${tenantId}
+          and id = ${input.association.link.id}) as transport_links,
+      (select link_count::text from inbox_v2_message_transport_link_heads
+        where tenant_id = ${tenantId}
+          and message_id = ${input.creation.message.id}) as link_count,
+      (select revision::text from inbox_v2_message_transport_link_heads
+        where tenant_id = ${tenantId}
+          and message_id = ${input.creation.message.id}) as link_head_revision,
+      (select latest_link_id from inbox_v2_message_transport_link_heads
+        where tenant_id = ${tenantId}
+          and message_id = ${input.creation.message.id}) as latest_link_id,
+      (select resolution_state::text from inbox_v2_source_occurrences
+        where tenant_id = ${tenantId}
+          and id = ${input.association.sourceOccurrence.id})
+        as occurrence_state,
+      (select revision::text from inbox_v2_source_occurrences
+        where tenant_id = ${tenantId}
+          and id = ${input.association.sourceOccurrence.id})
+        as occurrence_revision,
+      (select resolved_external_message_reference_id
+         from inbox_v2_source_occurrences
+        where tenant_id = ${tenantId}
+          and id = ${input.association.sourceOccurrence.id})
+        as occurrence_reference_id
+  `);
+  return result.rows[0]!;
 }
 
 function rebaseMessageCreationCommit(
@@ -11978,160 +12938,6 @@ async function seedCrossAccountBinding(input: {
     sourceConnection: input.sourceConnection,
     bindingContext
   };
-}
-
-async function seedProviderEchoAssociation(input: {
-  db: HuleeDatabase;
-  creation: InboxV2MessageCreationCommit;
-  context: Awaited<ReturnType<typeof seedExternalCreationAnchors>>;
-  suffix: string;
-}) {
-  const originOccurrence = requireSourceOccurrence(input.creation);
-  const externalMessageReference = input.creation.externalMessageReference;
-  const externalThreadMapping = requireExternalThreadMapping(input.creation);
-  const linkHeadBefore = input.creation.originTransportLinkHead;
-  if (externalMessageReference === null || linkHeadBefore === null) {
-    throw new Error("Provider echo requires the original transport graph.");
-  }
-  const rawEcho = fixtureOccurrence({
-    origin: "provider_echo",
-    direction: "outbound",
-    occurrenceId: "source_occurrence:provider-echo-1"
-  });
-  const echoResolution = namespaceFixture(
-    fixtureOccurrenceResolutionCommit(rawEcho),
-    input.suffix
-  );
-  const echoOccurrence = {
-    ...echoResolution.after,
-    resolution: {
-      state: "resolved" as const,
-      externalMessageReference: {
-        tenantId,
-        kind: "external_message_reference" as const,
-        id: externalMessageReference.id
-      }
-    }
-  };
-  const resolution = inboxV2SourceOccurrenceResolutionCommitSchema.parse({
-    ...echoResolution,
-    resolver: {
-      ...echoResolution.resolver,
-      resolutionToken: `resolution:db005-provider-echo-${input.suffix}-${runId}`
-    },
-    after: echoOccurrence,
-    resolvedReference: externalMessageReference
-  });
-  if (
-    echoOccurrence.origin.kind !== "provider_echo" ||
-    echoResolution.before.origin.kind !== "provider_echo"
-  ) {
-    throw new Error("Expected provider-echo occurrence evidence.");
-  }
-  const echoOrigin = echoOccurrence.origin;
-  await input.db.transaction(async (transaction) => {
-    await insertRawInboundEvent(transaction, {
-      id: echoOrigin.rawInboundEvent.id,
-      sourceConnectionId: input.context.sourceConnection.id,
-      sourceAccountId: echoOccurrence.bindingContext.sourceAccount.id,
-      idempotencyKey: `db005-echo-raw-${input.suffix}-${runId}`,
-      observedAt: echoOccurrence.recordedAt
-    });
-    await transaction.execute(sql`
-      insert into normalized_inbound_events (
-        id, tenant_id, raw_event_id, source_connection_id,
-        source_account_id, source_type, source_name, event_type,
-        direction, visibility, payload_version, normalized_payload,
-        reply_capability, idempotency_key, processing_status,
-        created_at, updated_at
-      ) values (
-        ${echoOrigin.normalizedInboundEvent.id}, ${tenantId},
-        ${echoOrigin.rawInboundEvent.id},
-        ${input.context.sourceConnection.id},
-        ${echoOccurrence.bindingContext.sourceAccount.id}, 'messenger',
-        'synthetic', 'message', 'outbound', 'private', 'v1', '{}'::jsonb,
-        '{}'::jsonb, ${`db005-echo-normalized-${input.suffix}-${runId}`},
-        'processed', ${echoOccurrence.recordedAt},
-        ${echoOccurrence.recordedAt}
-      )
-    `);
-  });
-  const materialization =
-    inboxV2SourceOccurrenceMaterializationCommitSchema.parse({
-      tenantId,
-      occurrence: echoResolution.before,
-      bindingMaterialization: {
-        kind: "existing",
-        currentProjection: input.context.bindingProjection,
-        creationAuthority: null
-      },
-      externalThreadMapping,
-      sourceAccountIdentity: input.context.sourceAccountIdentity,
-      outboundDispatchAttempt: null,
-      outboundDispatch: null,
-      outboundRoute: null,
-      authority: {
-        kind: "trusted_service",
-        trustedServiceId:
-          echoOccurrence.descriptor.adapterContract.loadedByTrustedServiceId,
-        authorizationToken: `materialize:db005-echo-${input.suffix}-${runId}`,
-        authorizedAt: echoOccurrence.createdAt
-      },
-      materializedAt: echoOccurrence.createdAt
-    });
-  expect(
-    await createSqlInboxV2SourceOccurrenceRepository(input.db).materialize(
-      materialization
-    )
-  ).toMatchObject({ kind: "materialized" });
-  await input.db.transaction(async (transaction) => {
-    expect(
-      (
-        await transaction.execute(
-          buildInsertInboxV2SourceOccurrenceResolutionTransitionSql(resolution)
-        )
-      ).rows
-    ).toHaveLength(1);
-    expect(
-      (
-        await transaction.execute(
-          buildCompareAndSwapInboxV2SourceOccurrenceResolutionSql(resolution)
-        )
-      ).rows
-    ).toHaveLength(1);
-  });
-
-  const link = namespaceFixture(
-    fixtureTransportLink(rawEcho, "provider_echo"),
-    input.suffix
-  );
-  return inboxV2MessageTransportAssociationCommitSchema.parse({
-    tenantId,
-    message: input.creation.message,
-    timelineItem: input.creation.timelineAllocation.items[0],
-    linkHeadBefore,
-    sourceOccurrence: echoOccurrence,
-    externalMessageReference,
-    externalThreadMapping,
-    occurrenceBinding: input.context.bindingProjection.binding,
-    messageOriginProof: {
-      kind: "source_originated",
-      originOccurrence
-    },
-    link,
-    linkHeadAfter: {
-      ...linkHeadBefore,
-      linkCount: "2",
-      latestLink: {
-        tenantId,
-        kind: "message_transport_occurrence_link",
-        id: link.id
-      },
-      revision: "2",
-      updatedAt: echoOccurrence.recordedAt
-    },
-    committedAt: echoOccurrence.recordedAt
-  });
 }
 
 async function seedAdditionalProviderSemanticOccurrence(input: {

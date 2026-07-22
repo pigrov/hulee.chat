@@ -96,6 +96,34 @@ describe("@hulee/db public export surface", () => {
     }
   });
 
+  it("exports only production-composed MSG-007 runtimes", () => {
+    expect(
+      publicDatabase.createSqlInboxV2OutboundProviderEchoCallbacks
+    ).toBeTypeOf("function");
+    expect(
+      publicDatabase.createSqlInboxV2OutboundProviderSettlementRuntime
+    ).toBeTypeOf("function");
+    expect(
+      publicDatabase.createSqlInboxV2NativeOutboundReconciliationRuntime
+    ).toBeTypeOf("function");
+
+    for (const rawName of [
+      "persistInboxV2OutboundProviderObservationInTransaction",
+      "persistInboxV2OutboundProviderObservationSetInTransaction",
+      "persistInboxV2OutboundProviderCorrelationAnchorInTransaction",
+      "enqueueInboxV2OutboundProviderSettlementWorkInTransaction",
+      "createSqlInboxV2OutboundProviderSettlementWorkRepository",
+      "createSqlInboxV2OutboundProviderSettlementPlanner",
+      "createSqlInboxV2OutboundProviderSettlementService",
+      "createTestOnlySqlInboxV2OutboundProviderEchoCallbacks",
+      "createInboxV2NativeOutboundCanonicalCallbacks",
+      "createSqlInboxV2NativeOutboundCanonicalPersistence",
+      "createSqlInboxV2NativeOutboundProductionPlanner"
+    ]) {
+      expect(publicDatabase).not.toHaveProperty(rawName);
+    }
+  });
+
   it("keeps the server-only materialization subpath explicitly curated", () => {
     expect(Object.keys(internalAttachmentMaterialization).sort()).toEqual([
       "INBOX_V2_ATTACHMENT_MATERIALIZATION_COMPLETION_RESULT_CODE",

@@ -1,5 +1,5 @@
 {
-  "id": "0f7419a7-7059-44f0-ab87-5cd06a7b1c75",
+  "id": "a25b1f69-ab9e-4204-9b26-bf8cc8bcf776",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -35559,6 +35559,259 @@
       },
       "isRLSEnabled": false
     },
+    "public.inbox_v2_outbound_dispatch_artifact_resolutions": {
+      "name": "inbox_v2_outbound_dispatch_artifact_resolutions",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "artifact_id": {
+          "name": "artifact_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "dispatch_id": {
+          "name": "dispatch_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "route_id": {
+          "name": "route_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "attempt_id": {
+          "name": "attempt_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "message_id": {
+          "name": "message_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "artifact_ordinal": {
+          "name": "artifact_ordinal",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "from_state": {
+          "name": "from_state",
+          "type": "inbox_v2_outbound_dispatch_artifact_state",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "effective_state": {
+          "name": "effective_state",
+          "type": "inbox_v2_outbound_dispatch_artifact_state",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'accepted'"
+        },
+        "observation_id": {
+          "name": "observation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "observation_source_occurrence_id": {
+          "name": "observation_source_occurrence_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "resolved_by_trusted_service_id": {
+          "name": "resolved_by_trusted_service_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "resolved_at": {
+          "name": "resolved_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revision": {
+          "name": "revision",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "1"
+        }
+      },
+      "indexes": {
+        "inbox_v2_outbound_dispatch_artifact_resolutions_attempt_idx": {
+          "name": "inbox_v2_outbound_dispatch_artifact_resolutions_attempt_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "dispatch_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "attempt_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "artifact_ordinal",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "inbox_v2_outbound_dispatch_artifact_resolutions_tenant_fk": {
+          "name": "inbox_v2_outbound_dispatch_artifact_resolutions_tenant_fk",
+          "tableFrom": "inbox_v2_outbound_dispatch_artifact_resolutions",
+          "tableTo": "tenants",
+          "columnsFrom": ["tenant_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "inbox_v2_outbound_dispatch_artifact_resolutions_artifact_fk": {
+          "name": "inbox_v2_outbound_dispatch_artifact_resolutions_artifact_fk",
+          "tableFrom": "inbox_v2_outbound_dispatch_artifact_resolutions",
+          "tableTo": "inbox_v2_outbound_dispatch_artifacts",
+          "columnsFrom": [
+            "tenant_id",
+            "artifact_id",
+            "dispatch_id",
+            "route_id",
+            "attempt_id",
+            "message_id",
+            "artifact_ordinal",
+            "from_state"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id",
+            "dispatch_id",
+            "route_id",
+            "attempt_id",
+            "message_id",
+            "ordinal",
+            "state"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "inbox_v2_outbound_dispatch_artifact_resolutions_observation_fk": {
+          "name": "inbox_v2_outbound_dispatch_artifact_resolutions_observation_fk",
+          "tableFrom": "inbox_v2_outbound_dispatch_artifact_resolutions",
+          "tableTo": "inbox_v2_outbound_provider_observations",
+          "columnsFrom": [
+            "tenant_id",
+            "observation_id",
+            "artifact_id",
+            "dispatch_id",
+            "route_id",
+            "attempt_id",
+            "message_id",
+            "artifact_ordinal",
+            "effective_state",
+            "observation_source_occurrence_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id",
+            "artifact_id",
+            "dispatch_id",
+            "route_id",
+            "attempt_id",
+            "message_id",
+            "artifact_ordinal",
+            "effective_state",
+            "source_occurrence_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "inbox_v2_outbound_dispatch_artifact_resolutions_pk": {
+          "name": "inbox_v2_outbound_dispatch_artifact_resolutions_pk",
+          "columns": ["tenant_id", "id"]
+        }
+      },
+      "uniqueConstraints": {
+        "inbox_v2_outbound_dispatch_artifact_resolutions_artifact_unique": {
+          "name": "inbox_v2_outbound_dispatch_artifact_resolutions_artifact_unique",
+          "nullsNotDistinct": false,
+          "columns": ["tenant_id", "artifact_id"]
+        },
+        "inbox_v2_outbound_dispatch_artifact_resolutions_target_unique": {
+          "name": "inbox_v2_outbound_dispatch_artifact_resolutions_target_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id",
+            "artifact_id",
+            "dispatch_id",
+            "route_id",
+            "attempt_id",
+            "message_id",
+            "effective_state"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "inbox_v2_outbound_dispatch_artifact_resolutions_id_check": {
+          "name": "inbox_v2_outbound_dispatch_artifact_resolutions_id_check",
+          "value": "coalesce((char_length(\"inbox_v2_outbound_dispatch_artifact_resolutions\".\"id\") <= 256\n    and \"inbox_v2_outbound_dispatch_artifact_resolutions\".\"id\" ~ '^outbound_dispatch_artifact_resolution:[A-Za-z0-9][A-Za-z0-9._~:-]{0,199}$'), false)"
+        },
+        "inbox_v2_outbound_dispatch_artifact_resolutions_state_check": {
+          "name": "inbox_v2_outbound_dispatch_artifact_resolutions_state_check",
+          "value": "\"inbox_v2_outbound_dispatch_artifact_resolutions\".\"artifact_ordinal\" between 1 and 64\n        and \"inbox_v2_outbound_dispatch_artifact_resolutions\".\"from_state\" in ('accepted', 'outcome_unknown')\n        and \"inbox_v2_outbound_dispatch_artifact_resolutions\".\"effective_state\" = 'accepted'"
+        },
+        "inbox_v2_outbound_dispatch_artifact_resolutions_immutable_check": {
+          "name": "inbox_v2_outbound_dispatch_artifact_resolutions_immutable_check",
+          "value": "coalesce((char_length(\"inbox_v2_outbound_dispatch_artifact_resolutions\".\"resolved_by_trusted_service_id\") <= 256 and (\n    (\n      \"inbox_v2_outbound_dispatch_artifact_resolutions\".\"resolved_by_trusted_service_id\" ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_artifact_resolutions\".\"resolved_by_trusted_service_id\", ':', 2)) <= 160\n    ) or (\n      \"inbox_v2_outbound_dispatch_artifact_resolutions\".\"resolved_by_trusted_service_id\" ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_artifact_resolutions\".\"resolved_by_trusted_service_id\", ':', 2)) <= 80\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_artifact_resolutions\".\"resolved_by_trusted_service_id\", ':', 3)) <= 160\n      and split_part(\"inbox_v2_outbound_dispatch_artifact_resolutions\".\"resolved_by_trusted_service_id\", ':', 2) not in (\n        'core', 'hulee', 'module', 'platform', 'system'\n      )\n    )\n  )), false)\n        and isfinite(\"inbox_v2_outbound_dispatch_artifact_resolutions\".\"resolved_at\")\n        and \"inbox_v2_outbound_dispatch_artifact_resolutions\".\"revision\" = 1"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.inbox_v2_outbound_dispatch_artifacts": {
       "name": "inbox_v2_outbound_dispatch_artifacts",
       "schema": "",
@@ -35739,6 +35992,20 @@
             "route_id",
             "attempt_id",
             "message_id"
+          ]
+        },
+        "inbox_v2_outbound_dispatch_artifacts_resolution_target_unique": {
+          "name": "inbox_v2_outbound_dispatch_artifacts_resolution_target_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id",
+            "dispatch_id",
+            "route_id",
+            "attempt_id",
+            "message_id",
+            "ordinal",
+            "state"
           ]
         }
       },
@@ -36131,7 +36398,7 @@
         },
         "inbox_v2_outbound_dispatch_attempts_outcome_check": {
           "name": "inbox_v2_outbound_dispatch_attempts_outcome_check",
-          "value": "((\n      \"inbox_v2_outbound_dispatch_attempts\".\"outcome_kind\" = 'pending'\n      and \"inbox_v2_outbound_dispatch_attempts\".\"completion_source\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"completed_at\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"retry_at\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"provider_acknowledgement_token\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_retryable\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_correlation_token\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"unknown_required_action\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"revision\" = 1\n    ) or (\n      \"inbox_v2_outbound_dispatch_attempts\".\"outcome_kind\" = 'accepted'\n      and \"inbox_v2_outbound_dispatch_attempts\".\"completion_source\" = 'provider_result'\n      and isfinite(\"inbox_v2_outbound_dispatch_attempts\".\"completed_at\")\n      and \"inbox_v2_outbound_dispatch_attempts\".\"completed_at\" between \"inbox_v2_outbound_dispatch_attempts\".\"opened_at\" and \"inbox_v2_outbound_dispatch_attempts\".\"lease_expires_at\"\n      and \"inbox_v2_outbound_dispatch_attempts\".\"retry_at\" is null\n      and (\"inbox_v2_outbound_dispatch_attempts\".\"provider_acknowledgement_token\" is null\n        or coalesce((char_length(\"inbox_v2_outbound_dispatch_attempts\".\"provider_acknowledgement_token\") between 8 and 256\n    and \"inbox_v2_outbound_dispatch_attempts\".\"provider_acknowledgement_token\" ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'), false))\n      and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_retryable\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_correlation_token\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"unknown_required_action\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"revision\" = 2\n    ) or (\n      \"inbox_v2_outbound_dispatch_attempts\".\"outcome_kind\" = 'retryable_failure'\n      and \"inbox_v2_outbound_dispatch_attempts\".\"completion_source\" in ('provider_result', 'preflight_blocked')\n      and isfinite(\"inbox_v2_outbound_dispatch_attempts\".\"completed_at\")\n      and \"inbox_v2_outbound_dispatch_attempts\".\"completed_at\" between \"inbox_v2_outbound_dispatch_attempts\".\"opened_at\" and \"inbox_v2_outbound_dispatch_attempts\".\"lease_expires_at\"\n      and isfinite(\"inbox_v2_outbound_dispatch_attempts\".\"retry_at\")\n      and \"inbox_v2_outbound_dispatch_attempts\".\"retry_at\" >= \"inbox_v2_outbound_dispatch_attempts\".\"completed_at\"\n      and \"inbox_v2_outbound_dispatch_attempts\".\"provider_acknowledgement_token\" is null\n      and coalesce((char_length(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\") <= 256 and (\n    (\n      \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\" ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\", ':', 2)) <= 160\n    ) or (\n      \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\" ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\", ':', 2)) <= 80\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\", ':', 3)) <= 160\n      and split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\", ':', 2) not in (\n        'core', 'hulee', 'module', 'platform', 'system'\n      )\n    )\n  )), false)\n    and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_retryable\" is not null\n    and coalesce((char_length(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_correlation_token\") between 8 and 256\n    and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_correlation_token\" ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'), false)\n    and (\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\" is null\n      or coalesce((char_length(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\") <= 256 and (\n    (\n      \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\" ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\", ':', 2)) <= 160\n    ) or (\n      \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\" ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\", ':', 2)) <= 80\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\", ':', 3)) <= 160\n      and split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\", ':', 2) not in (\n        'core', 'hulee', 'module', 'platform', 'system'\n      )\n    )\n  )), false))\n      and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_retryable\"\n      and \"inbox_v2_outbound_dispatch_attempts\".\"unknown_required_action\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"revision\" = 2\n    ) or (\n      \"inbox_v2_outbound_dispatch_attempts\".\"outcome_kind\" = 'terminal_failure'\n      and \"inbox_v2_outbound_dispatch_attempts\".\"completion_source\" in ('provider_result', 'preflight_blocked')\n      and isfinite(\"inbox_v2_outbound_dispatch_attempts\".\"completed_at\")\n      and \"inbox_v2_outbound_dispatch_attempts\".\"completed_at\" between \"inbox_v2_outbound_dispatch_attempts\".\"opened_at\" and \"inbox_v2_outbound_dispatch_attempts\".\"lease_expires_at\"\n      and \"inbox_v2_outbound_dispatch_attempts\".\"retry_at\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"provider_acknowledgement_token\" is null\n      and coalesce((char_length(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\") <= 256 and (\n    (\n      \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\" ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\", ':', 2)) <= 160\n    ) or (\n      \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\" ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\", ':', 2)) <= 80\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\", ':', 3)) <= 160\n      and split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\", ':', 2) not in (\n        'core', 'hulee', 'module', 'platform', 'system'\n      )\n    )\n  )), false)\n    and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_retryable\" is not null\n    and coalesce((char_length(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_correlation_token\") between 8 and 256\n    and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_correlation_token\" ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'), false)\n    and (\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\" is null\n      or coalesce((char_length(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\") <= 256 and (\n    (\n      \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\" ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\", ':', 2)) <= 160\n    ) or (\n      \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\" ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\", ':', 2)) <= 80\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\", ':', 3)) <= 160\n      and split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\", ':', 2) not in (\n        'core', 'hulee', 'module', 'platform', 'system'\n      )\n    )\n  )), false))\n      and not \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_retryable\"\n      and \"inbox_v2_outbound_dispatch_attempts\".\"unknown_required_action\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"revision\" = 2\n    ) or (\n      \"inbox_v2_outbound_dispatch_attempts\".\"outcome_kind\" = 'outcome_unknown'\n      and \"inbox_v2_outbound_dispatch_attempts\".\"completion_source\" in ('provider_result', 'lease_expired')\n      and isfinite(\"inbox_v2_outbound_dispatch_attempts\".\"completed_at\")\n      and \"inbox_v2_outbound_dispatch_attempts\".\"completed_at\" >= \"inbox_v2_outbound_dispatch_attempts\".\"opened_at\"\n      and (\n        (\"inbox_v2_outbound_dispatch_attempts\".\"completion_source\" = 'provider_result'\n          and \"inbox_v2_outbound_dispatch_attempts\".\"completed_at\" <= \"inbox_v2_outbound_dispatch_attempts\".\"lease_expires_at\")\n        or (\"inbox_v2_outbound_dispatch_attempts\".\"completion_source\" = 'lease_expired'\n          and \"inbox_v2_outbound_dispatch_attempts\".\"completed_at\" >= \"inbox_v2_outbound_dispatch_attempts\".\"lease_expires_at\")\n      )\n      and \"inbox_v2_outbound_dispatch_attempts\".\"retry_at\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"provider_acknowledgement_token\" is null\n      and coalesce((char_length(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\") <= 256 and (\n    (\n      \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\" ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\", ':', 2)) <= 160\n    ) or (\n      \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\" ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\", ':', 2)) <= 80\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\", ':', 3)) <= 160\n      and split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\", ':', 2) not in (\n        'core', 'hulee', 'module', 'platform', 'system'\n      )\n    )\n  )), false)\n    and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_retryable\" is not null\n    and coalesce((char_length(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_correlation_token\") between 8 and 256\n    and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_correlation_token\" ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'), false)\n    and (\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\" is null\n      or coalesce((char_length(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\") <= 256 and (\n    (\n      \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\" ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\", ':', 2)) <= 160\n    ) or (\n      \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\" ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\", ':', 2)) <= 80\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\", ':', 3)) <= 160\n      and split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\", ':', 2) not in (\n        'core', 'hulee', 'module', 'platform', 'system'\n      )\n    )\n  )), false))\n      and (\n        (\"inbox_v2_outbound_dispatch_attempts\".\"automatic_retry_allowed\"\n          and \"inbox_v2_outbound_dispatch_attempts\".\"unknown_required_action\" = 'automated_reconciliation_required')\n        or (not \"inbox_v2_outbound_dispatch_attempts\".\"automatic_retry_allowed\"\n          and \"inbox_v2_outbound_dispatch_attempts\".\"unknown_required_action\" = 'operator_duplicate_risk_decision_required')\n      )\n      and \"inbox_v2_outbound_dispatch_attempts\".\"revision\" = 2\n    )) is true"
+          "value": "((\n      \"inbox_v2_outbound_dispatch_attempts\".\"outcome_kind\" = 'pending'\n      and \"inbox_v2_outbound_dispatch_attempts\".\"completion_source\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"completed_at\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"retry_at\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"provider_acknowledgement_token\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_retryable\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_correlation_token\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"unknown_required_action\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"revision\" = 1\n    ) or (\n      \"inbox_v2_outbound_dispatch_attempts\".\"outcome_kind\" = 'accepted'\n      and \"inbox_v2_outbound_dispatch_attempts\".\"completion_source\" in ('provider_result', 'provider_observation')\n      and isfinite(\"inbox_v2_outbound_dispatch_attempts\".\"completed_at\")\n      and \"inbox_v2_outbound_dispatch_attempts\".\"completed_at\" >= \"inbox_v2_outbound_dispatch_attempts\".\"opened_at\"\n      and (\"inbox_v2_outbound_dispatch_attempts\".\"completion_source\" = 'provider_observation'\n        or \"inbox_v2_outbound_dispatch_attempts\".\"completed_at\" <= \"inbox_v2_outbound_dispatch_attempts\".\"lease_expires_at\")\n      and \"inbox_v2_outbound_dispatch_attempts\".\"retry_at\" is null\n      and (\"inbox_v2_outbound_dispatch_attempts\".\"provider_acknowledgement_token\" is null\n        or coalesce((char_length(\"inbox_v2_outbound_dispatch_attempts\".\"provider_acknowledgement_token\") between 8 and 256\n    and \"inbox_v2_outbound_dispatch_attempts\".\"provider_acknowledgement_token\" ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'), false))\n      and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_retryable\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_correlation_token\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"unknown_required_action\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"revision\" = 2\n    ) or (\n      \"inbox_v2_outbound_dispatch_attempts\".\"outcome_kind\" = 'retryable_failure'\n      and \"inbox_v2_outbound_dispatch_attempts\".\"completion_source\" in ('provider_result', 'preflight_blocked')\n      and isfinite(\"inbox_v2_outbound_dispatch_attempts\".\"completed_at\")\n      and \"inbox_v2_outbound_dispatch_attempts\".\"completed_at\" between \"inbox_v2_outbound_dispatch_attempts\".\"opened_at\" and \"inbox_v2_outbound_dispatch_attempts\".\"lease_expires_at\"\n      and isfinite(\"inbox_v2_outbound_dispatch_attempts\".\"retry_at\")\n      and \"inbox_v2_outbound_dispatch_attempts\".\"retry_at\" >= \"inbox_v2_outbound_dispatch_attempts\".\"completed_at\"\n      and \"inbox_v2_outbound_dispatch_attempts\".\"provider_acknowledgement_token\" is null\n      and coalesce((char_length(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\") <= 256 and (\n    (\n      \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\" ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\", ':', 2)) <= 160\n    ) or (\n      \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\" ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\", ':', 2)) <= 80\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\", ':', 3)) <= 160\n      and split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\", ':', 2) not in (\n        'core', 'hulee', 'module', 'platform', 'system'\n      )\n    )\n  )), false)\n    and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_retryable\" is not null\n    and coalesce((char_length(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_correlation_token\") between 8 and 256\n    and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_correlation_token\" ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'), false)\n    and (\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\" is null\n      or coalesce((char_length(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\") <= 256 and (\n    (\n      \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\" ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\", ':', 2)) <= 160\n    ) or (\n      \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\" ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\", ':', 2)) <= 80\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\", ':', 3)) <= 160\n      and split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\", ':', 2) not in (\n        'core', 'hulee', 'module', 'platform', 'system'\n      )\n    )\n  )), false))\n      and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_retryable\"\n      and \"inbox_v2_outbound_dispatch_attempts\".\"unknown_required_action\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"revision\" = 2\n    ) or (\n      \"inbox_v2_outbound_dispatch_attempts\".\"outcome_kind\" = 'terminal_failure'\n      and \"inbox_v2_outbound_dispatch_attempts\".\"completion_source\" in ('provider_result', 'preflight_blocked')\n      and isfinite(\"inbox_v2_outbound_dispatch_attempts\".\"completed_at\")\n      and \"inbox_v2_outbound_dispatch_attempts\".\"completed_at\" between \"inbox_v2_outbound_dispatch_attempts\".\"opened_at\" and \"inbox_v2_outbound_dispatch_attempts\".\"lease_expires_at\"\n      and \"inbox_v2_outbound_dispatch_attempts\".\"retry_at\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"provider_acknowledgement_token\" is null\n      and coalesce((char_length(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\") <= 256 and (\n    (\n      \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\" ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\", ':', 2)) <= 160\n    ) or (\n      \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\" ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\", ':', 2)) <= 80\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\", ':', 3)) <= 160\n      and split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\", ':', 2) not in (\n        'core', 'hulee', 'module', 'platform', 'system'\n      )\n    )\n  )), false)\n    and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_retryable\" is not null\n    and coalesce((char_length(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_correlation_token\") between 8 and 256\n    and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_correlation_token\" ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'), false)\n    and (\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\" is null\n      or coalesce((char_length(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\") <= 256 and (\n    (\n      \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\" ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\", ':', 2)) <= 160\n    ) or (\n      \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\" ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\", ':', 2)) <= 80\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\", ':', 3)) <= 160\n      and split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\", ':', 2) not in (\n        'core', 'hulee', 'module', 'platform', 'system'\n      )\n    )\n  )), false))\n      and not \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_retryable\"\n      and \"inbox_v2_outbound_dispatch_attempts\".\"unknown_required_action\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"revision\" = 2\n    ) or (\n      \"inbox_v2_outbound_dispatch_attempts\".\"outcome_kind\" = 'outcome_unknown'\n      and \"inbox_v2_outbound_dispatch_attempts\".\"completion_source\" in ('provider_result', 'lease_expired')\n      and isfinite(\"inbox_v2_outbound_dispatch_attempts\".\"completed_at\")\n      and \"inbox_v2_outbound_dispatch_attempts\".\"completed_at\" >= \"inbox_v2_outbound_dispatch_attempts\".\"opened_at\"\n      and (\n        (\"inbox_v2_outbound_dispatch_attempts\".\"completion_source\" = 'provider_result'\n          and \"inbox_v2_outbound_dispatch_attempts\".\"completed_at\" <= \"inbox_v2_outbound_dispatch_attempts\".\"lease_expires_at\")\n        or (\"inbox_v2_outbound_dispatch_attempts\".\"completion_source\" = 'lease_expired'\n          and \"inbox_v2_outbound_dispatch_attempts\".\"completed_at\" >= \"inbox_v2_outbound_dispatch_attempts\".\"lease_expires_at\")\n      )\n      and \"inbox_v2_outbound_dispatch_attempts\".\"retry_at\" is null\n      and \"inbox_v2_outbound_dispatch_attempts\".\"provider_acknowledgement_token\" is null\n      and coalesce((char_length(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\") <= 256 and (\n    (\n      \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\" ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\", ':', 2)) <= 160\n    ) or (\n      \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\" ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\", ':', 2)) <= 80\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\", ':', 3)) <= 160\n      and split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\", ':', 2) not in (\n        'core', 'hulee', 'module', 'platform', 'system'\n      )\n    )\n  )), false)\n    and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_retryable\" is not null\n    and coalesce((char_length(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_correlation_token\") between 8 and 256\n    and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_correlation_token\" ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'), false)\n    and (\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\" is null\n      or coalesce((char_length(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\") <= 256 and (\n    (\n      \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\" ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\", ':', 2)) <= 160\n    ) or (\n      \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\" ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\", ':', 2)) <= 80\n      and char_length(split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\", ':', 3)) <= 160\n      and split_part(\"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_safe_operator_hint_id\", ':', 2) not in (\n        'core', 'hulee', 'module', 'platform', 'system'\n      )\n    )\n  )), false))\n      and (\n        (\"inbox_v2_outbound_dispatch_attempts\".\"automatic_retry_allowed\"\n          and \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\" <>\n            'core:provider-artifact-outcomes-mixed'\n          and \"inbox_v2_outbound_dispatch_attempts\".\"unknown_required_action\" = 'automated_reconciliation_required')\n        or ((not \"inbox_v2_outbound_dispatch_attempts\".\"automatic_retry_allowed\"\n            or \"inbox_v2_outbound_dispatch_attempts\".\"diagnostic_code_id\" =\n              'core:provider-artifact-outcomes-mixed')\n          and \"inbox_v2_outbound_dispatch_attempts\".\"unknown_required_action\" = 'operator_duplicate_risk_decision_required')\n      )\n      and \"inbox_v2_outbound_dispatch_attempts\".\"revision\" = 2\n    )) is true"
         }
       },
       "isRLSEnabled": false
@@ -37335,6 +37602,1566 @@
         "inbox_v2_outbound_multi_send_operations_values_check": {
           "name": "inbox_v2_outbound_multi_send_operations_values_check",
           "value": "coalesce((char_length(\"inbox_v2_outbound_multi_send_operations\".\"mutation_token\") between 8 and 256\n    and \"inbox_v2_outbound_multi_send_operations\".\"mutation_token\" ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'), false)\n        and coalesce((char_length(\"inbox_v2_outbound_multi_send_operations\".\"idempotency_token\") between 8 and 256\n    and \"inbox_v2_outbound_multi_send_operations\".\"idempotency_token\" ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'), false)\n        and coalesce((char_length(\"inbox_v2_outbound_multi_send_operations\".\"correlation_token\") between 8 and 256\n    and \"inbox_v2_outbound_multi_send_operations\".\"correlation_token\" ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'), false)\n        and \"inbox_v2_outbound_multi_send_operations\".\"child_count\" between 2 and 100\n        and coalesce(\"inbox_v2_outbound_multi_send_operations\".\"children_digest_sha256\" ~ '^[a-f0-9]{64}$', false)\n        and \"inbox_v2_outbound_multi_send_operations\".\"revision\" = 1\n        and isfinite(\"inbox_v2_outbound_multi_send_operations\".\"created_at\")"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.inbox_v2_outbound_provider_correlation_anchors": {
+      "name": "inbox_v2_outbound_provider_correlation_anchors",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "adapter_contract_id": {
+          "name": "adapter_contract_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "adapter_contract_version": {
+          "name": "adapter_contract_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "adapter_declaration_revision": {
+          "name": "adapter_declaration_revision",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "adapter_surface_id": {
+          "name": "adapter_surface_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "correlation_token": {
+          "name": "correlation_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "dispatch_id": {
+          "name": "dispatch_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "route_id": {
+          "name": "route_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "message_id": {
+          "name": "message_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "first_attempt_id": {
+          "name": "first_attempt_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "external_thread_id": {
+          "name": "external_thread_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_connection_id": {
+          "name": "source_connection_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_account_id": {
+          "name": "source_account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_thread_binding_id": {
+          "name": "source_thread_binding_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "binding_generation": {
+          "name": "binding_generation",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "retry_safety_mechanism": {
+          "name": "retry_safety_mechanism",
+          "type": "inbox_v2_outbound_retry_safety_mechanism",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "declared_by_trusted_service_id": {
+          "name": "declared_by_trusted_service_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revision": {
+          "name": "revision",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "1"
+        }
+      },
+      "indexes": {
+        "inbox_v2_outbound_provider_correlation_anchors_dispatch_idx": {
+          "name": "inbox_v2_outbound_provider_correlation_anchors_dispatch_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "dispatch_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "first_attempt_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "inbox_v2_outbound_provider_correlation_anchors_tenant_fk": {
+          "name": "inbox_v2_outbound_provider_correlation_anchors_tenant_fk",
+          "tableFrom": "inbox_v2_outbound_provider_correlation_anchors",
+          "tableTo": "tenants",
+          "columnsFrom": ["tenant_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "inbox_v2_outbound_provider_correlation_anchors_dispatch_fk": {
+          "name": "inbox_v2_outbound_provider_correlation_anchors_dispatch_fk",
+          "tableFrom": "inbox_v2_outbound_provider_correlation_anchors",
+          "tableTo": "inbox_v2_outbound_dispatches",
+          "columnsFrom": ["tenant_id", "dispatch_id", "route_id", "message_id"],
+          "columnsTo": ["tenant_id", "id", "route_id", "message_id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "inbox_v2_outbound_provider_correlation_anchors_attempt_fk": {
+          "name": "inbox_v2_outbound_provider_correlation_anchors_attempt_fk",
+          "tableFrom": "inbox_v2_outbound_provider_correlation_anchors",
+          "tableTo": "inbox_v2_outbound_dispatch_attempts",
+          "columnsFrom": [
+            "tenant_id",
+            "first_attempt_id",
+            "dispatch_id",
+            "route_id",
+            "message_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id",
+            "dispatch_id",
+            "route_id",
+            "message_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "inbox_v2_outbound_provider_correlation_anchors_binding_fk": {
+          "name": "inbox_v2_outbound_provider_correlation_anchors_binding_fk",
+          "tableFrom": "inbox_v2_outbound_provider_correlation_anchors",
+          "tableTo": "inbox_v2_source_thread_bindings",
+          "columnsFrom": [
+            "tenant_id",
+            "source_thread_binding_id",
+            "external_thread_id",
+            "source_connection_id",
+            "source_account_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id",
+            "external_thread_id",
+            "source_connection_id",
+            "source_account_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "inbox_v2_outbound_provider_correlation_anchors_pk": {
+          "name": "inbox_v2_outbound_provider_correlation_anchors_pk",
+          "columns": [
+            "tenant_id",
+            "adapter_contract_id",
+            "adapter_contract_version",
+            "adapter_declaration_revision",
+            "adapter_surface_id",
+            "correlation_token"
+          ]
+        }
+      },
+      "uniqueConstraints": {
+        "inbox_v2_outbound_provider_correlation_anchors_dispatch_unique": {
+          "name": "inbox_v2_outbound_provider_correlation_anchors_dispatch_unique",
+          "nullsNotDistinct": false,
+          "columns": ["tenant_id", "dispatch_id"]
+        },
+        "inbox_v2_outbound_provider_correlation_anchors_target_unique": {
+          "name": "inbox_v2_outbound_provider_correlation_anchors_target_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "adapter_contract_id",
+            "adapter_contract_version",
+            "adapter_declaration_revision",
+            "adapter_surface_id",
+            "correlation_token",
+            "dispatch_id",
+            "route_id",
+            "message_id",
+            "first_attempt_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "inbox_v2_outbound_provider_correlation_anchors_value_check": {
+          "name": "inbox_v2_outbound_provider_correlation_anchors_value_check",
+          "value": "coalesce((char_length(\"inbox_v2_outbound_provider_correlation_anchors\".\"adapter_contract_id\") <= 256 and (\n    (\n      \"inbox_v2_outbound_provider_correlation_anchors\".\"adapter_contract_id\" ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_provider_correlation_anchors\".\"adapter_contract_id\", ':', 2)) <= 160\n    ) or (\n      \"inbox_v2_outbound_provider_correlation_anchors\".\"adapter_contract_id\" ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_provider_correlation_anchors\".\"adapter_contract_id\", ':', 2)) <= 80\n      and char_length(split_part(\"inbox_v2_outbound_provider_correlation_anchors\".\"adapter_contract_id\", ':', 3)) <= 160\n      and split_part(\"inbox_v2_outbound_provider_correlation_anchors\".\"adapter_contract_id\", ':', 2) not in (\n        'core', 'hulee', 'module', 'platform', 'system'\n      )\n    )\n  )), false)\n        and coalesce(\"inbox_v2_outbound_provider_correlation_anchors\".\"adapter_contract_version\" ~ '^v[1-9][0-9]*$', false)\n        and \"inbox_v2_outbound_provider_correlation_anchors\".\"adapter_declaration_revision\" >= 1\n        and coalesce((char_length(\"inbox_v2_outbound_provider_correlation_anchors\".\"adapter_surface_id\") <= 256 and (\n    (\n      \"inbox_v2_outbound_provider_correlation_anchors\".\"adapter_surface_id\" ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_provider_correlation_anchors\".\"adapter_surface_id\", ':', 2)) <= 160\n    ) or (\n      \"inbox_v2_outbound_provider_correlation_anchors\".\"adapter_surface_id\" ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_provider_correlation_anchors\".\"adapter_surface_id\", ':', 2)) <= 80\n      and char_length(split_part(\"inbox_v2_outbound_provider_correlation_anchors\".\"adapter_surface_id\", ':', 3)) <= 160\n      and split_part(\"inbox_v2_outbound_provider_correlation_anchors\".\"adapter_surface_id\", ':', 2) not in (\n        'core', 'hulee', 'module', 'platform', 'system'\n      )\n    )\n  )), false)\n        and coalesce((char_length(\"inbox_v2_outbound_provider_correlation_anchors\".\"correlation_token\") between 8 and 256\n    and \"inbox_v2_outbound_provider_correlation_anchors\".\"correlation_token\" ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'), false)\n        and \"inbox_v2_outbound_provider_correlation_anchors\".\"binding_generation\" >= 1\n        and \"inbox_v2_outbound_provider_correlation_anchors\".\"retry_safety_mechanism\" <> 'unsafe_or_unknown'\n        and coalesce((char_length(\"inbox_v2_outbound_provider_correlation_anchors\".\"declared_by_trusted_service_id\") <= 256 and (\n    (\n      \"inbox_v2_outbound_provider_correlation_anchors\".\"declared_by_trusted_service_id\" ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_provider_correlation_anchors\".\"declared_by_trusted_service_id\", ':', 2)) <= 160\n    ) or (\n      \"inbox_v2_outbound_provider_correlation_anchors\".\"declared_by_trusted_service_id\" ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_provider_correlation_anchors\".\"declared_by_trusted_service_id\", ':', 2)) <= 80\n      and char_length(split_part(\"inbox_v2_outbound_provider_correlation_anchors\".\"declared_by_trusted_service_id\", ':', 3)) <= 160\n      and split_part(\"inbox_v2_outbound_provider_correlation_anchors\".\"declared_by_trusted_service_id\", ':', 2) not in (\n        'core', 'hulee', 'module', 'platform', 'system'\n      )\n    )\n  )), false)\n        and isfinite(\"inbox_v2_outbound_provider_correlation_anchors\".\"created_at\")\n        and \"inbox_v2_outbound_provider_correlation_anchors\".\"revision\" = 1"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.inbox_v2_outbound_provider_observation_settlements": {
+      "name": "inbox_v2_outbound_provider_observation_settlements",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "observation_id": {
+          "name": "observation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "artifact_resolution_id": {
+          "name": "artifact_resolution_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "artifact_id": {
+          "name": "artifact_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "dispatch_id": {
+          "name": "dispatch_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "route_id": {
+          "name": "route_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "attempt_id": {
+          "name": "attempt_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "message_id": {
+          "name": "message_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "artifact_ordinal": {
+          "name": "artifact_ordinal",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "effective_state": {
+          "name": "effective_state",
+          "type": "inbox_v2_outbound_dispatch_artifact_state",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'accepted'"
+        },
+        "source_occurrence_id": {
+          "name": "source_occurrence_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_occurrence_revision": {
+          "name": "source_occurrence_revision",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_occurrence_resolution_state": {
+          "name": "source_occurrence_resolution_state",
+          "type": "inbox_v2_source_occurrence_resolution_state",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'resolved'"
+        },
+        "external_thread_id": {
+          "name": "external_thread_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "external_message_reference_id": {
+          "name": "external_message_reference_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "canonical_artifact_reference_link_id": {
+          "name": "canonical_artifact_reference_link_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "message_transport_link_id": {
+          "name": "message_transport_link_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "transition_kind": {
+          "name": "transition_kind",
+          "type": "inbox_v2_outbound_provider_settlement_transition_kind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reconciliation_decision_id": {
+          "name": "reconciliation_decision_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reconciliation_result_state": {
+          "name": "reconciliation_result_state",
+          "type": "inbox_v2_outbound_dispatch_reconciliation_result",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "settled_by_trusted_service_id": {
+          "name": "settled_by_trusted_service_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "settled_at": {
+          "name": "settled_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revision": {
+          "name": "revision",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "1"
+        }
+      },
+      "indexes": {
+        "inbox_v2_outbound_provider_observation_settlements_artifact_idx": {
+          "name": "inbox_v2_outbound_provider_observation_settlements_artifact_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "artifact_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "settled_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "observation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "inbox_v2_outbound_provider_observation_settlements_decision_idx": {
+          "name": "inbox_v2_outbound_provider_observation_settlements_decision_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "reconciliation_decision_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "observation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "inbox_v2_outbound_provider_observation_settlements_observation_fk": {
+          "name": "inbox_v2_outbound_provider_observation_settlements_observation_fk",
+          "tableFrom": "inbox_v2_outbound_provider_observation_settlements",
+          "tableTo": "inbox_v2_outbound_provider_observations",
+          "columnsFrom": [
+            "tenant_id",
+            "observation_id",
+            "artifact_id",
+            "dispatch_id",
+            "route_id",
+            "attempt_id",
+            "message_id",
+            "artifact_ordinal",
+            "effective_state",
+            "source_occurrence_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id",
+            "artifact_id",
+            "dispatch_id",
+            "route_id",
+            "attempt_id",
+            "message_id",
+            "artifact_ordinal",
+            "effective_state",
+            "source_occurrence_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "inbox_v2_outbound_provider_observation_settlements_resolution_fk": {
+          "name": "inbox_v2_outbound_provider_observation_settlements_resolution_fk",
+          "tableFrom": "inbox_v2_outbound_provider_observation_settlements",
+          "tableTo": "inbox_v2_outbound_dispatch_artifact_resolutions",
+          "columnsFrom": [
+            "tenant_id",
+            "artifact_resolution_id",
+            "artifact_id",
+            "dispatch_id",
+            "route_id",
+            "attempt_id",
+            "message_id",
+            "effective_state"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id",
+            "artifact_id",
+            "dispatch_id",
+            "route_id",
+            "attempt_id",
+            "message_id",
+            "effective_state"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "inbox_v2_outbound_provider_observation_settlements_occurrence_fk": {
+          "name": "inbox_v2_outbound_provider_observation_settlements_occurrence_fk",
+          "tableFrom": "inbox_v2_outbound_provider_observation_settlements",
+          "tableTo": "inbox_v2_source_occurrences",
+          "columnsFrom": [
+            "tenant_id",
+            "source_occurrence_id",
+            "source_occurrence_revision",
+            "source_occurrence_resolution_state",
+            "external_message_reference_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id",
+            "revision",
+            "resolution_state",
+            "resolved_external_message_reference_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "inbox_v2_outbound_provider_observation_settlements_reference_fk": {
+          "name": "inbox_v2_outbound_provider_observation_settlements_reference_fk",
+          "tableFrom": "inbox_v2_outbound_provider_observation_settlements",
+          "tableTo": "inbox_v2_external_message_references",
+          "columnsFrom": [
+            "tenant_id",
+            "external_message_reference_id",
+            "external_thread_id",
+            "message_id"
+          ],
+          "columnsTo": ["tenant_id", "id", "external_thread_id", "message_id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "inbox_v2_outbound_provider_observation_settlements_artifact_link_fk": {
+          "name": "inbox_v2_outbound_provider_observation_settlements_artifact_link_fk",
+          "tableFrom": "inbox_v2_outbound_provider_observation_settlements",
+          "tableTo": "inbox_v2_outbound_dispatch_artifact_reference_links",
+          "columnsFrom": ["tenant_id", "canonical_artifact_reference_link_id"],
+          "columnsTo": ["tenant_id", "id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "inbox_v2_outbound_provider_observation_settlements_transport_link_fk": {
+          "name": "inbox_v2_outbound_provider_observation_settlements_transport_link_fk",
+          "tableFrom": "inbox_v2_outbound_provider_observation_settlements",
+          "tableTo": "inbox_v2_message_transport_links",
+          "columnsFrom": [
+            "tenant_id",
+            "message_transport_link_id",
+            "message_id"
+          ],
+          "columnsTo": ["tenant_id", "id", "message_id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "inbox_v2_outbound_provider_observation_settlements_decision_fk": {
+          "name": "inbox_v2_outbound_provider_observation_settlements_decision_fk",
+          "tableFrom": "inbox_v2_outbound_provider_observation_settlements",
+          "tableTo": "inbox_v2_outbound_dispatch_reconciliation_decisions",
+          "columnsFrom": [
+            "tenant_id",
+            "reconciliation_decision_id",
+            "dispatch_id",
+            "route_id",
+            "attempt_id",
+            "reconciliation_result_state"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id",
+            "dispatch_id",
+            "route_id",
+            "unknown_attempt_id",
+            "result_state"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "inbox_v2_outbound_provider_observation_settlements_pk": {
+          "name": "inbox_v2_outbound_provider_observation_settlements_pk",
+          "columns": ["tenant_id", "observation_id"]
+        }
+      },
+      "uniqueConstraints": {
+        "inbox_v2_outbound_provider_observation_settlements_occurrence_unique": {
+          "name": "inbox_v2_outbound_provider_observation_settlements_occurrence_unique",
+          "nullsNotDistinct": false,
+          "columns": ["tenant_id", "source_occurrence_id"]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "inbox_v2_outbound_provider_observation_settlements_state_check": {
+          "name": "inbox_v2_outbound_provider_observation_settlements_state_check",
+          "value": "\"inbox_v2_outbound_provider_observation_settlements\".\"artifact_ordinal\" between 1 and 64\n        and \"inbox_v2_outbound_provider_observation_settlements\".\"effective_state\" = 'accepted'\n        and \"inbox_v2_outbound_provider_observation_settlements\".\"source_occurrence_revision\" >= 2\n        and \"inbox_v2_outbound_provider_observation_settlements\".\"source_occurrence_resolution_state\" = 'resolved'\n        and (\n          (\"inbox_v2_outbound_provider_observation_settlements\".\"transition_kind\" = 'reconcile_outcome_unknown'\n            and \"inbox_v2_outbound_provider_observation_settlements\".\"reconciliation_decision_id\" is not null\n            and \"inbox_v2_outbound_provider_observation_settlements\".\"reconciliation_result_state\" = 'accepted')\n          or (\"inbox_v2_outbound_provider_observation_settlements\".\"transition_kind\" <> 'reconcile_outcome_unknown'\n            and \"inbox_v2_outbound_provider_observation_settlements\".\"reconciliation_decision_id\" is null\n            and \"inbox_v2_outbound_provider_observation_settlements\".\"reconciliation_result_state\" is null)\n        )"
+        },
+        "inbox_v2_outbound_provider_observation_settlements_immutable_check": {
+          "name": "inbox_v2_outbound_provider_observation_settlements_immutable_check",
+          "value": "coalesce((char_length(\"inbox_v2_outbound_provider_observation_settlements\".\"settled_by_trusted_service_id\") <= 256 and (\n    (\n      \"inbox_v2_outbound_provider_observation_settlements\".\"settled_by_trusted_service_id\" ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_provider_observation_settlements\".\"settled_by_trusted_service_id\", ':', 2)) <= 160\n    ) or (\n      \"inbox_v2_outbound_provider_observation_settlements\".\"settled_by_trusted_service_id\" ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_provider_observation_settlements\".\"settled_by_trusted_service_id\", ':', 2)) <= 80\n      and char_length(split_part(\"inbox_v2_outbound_provider_observation_settlements\".\"settled_by_trusted_service_id\", ':', 3)) <= 160\n      and split_part(\"inbox_v2_outbound_provider_observation_settlements\".\"settled_by_trusted_service_id\", ':', 2) not in (\n        'core', 'hulee', 'module', 'platform', 'system'\n      )\n    )\n  )), false)\n        and isfinite(\"inbox_v2_outbound_provider_observation_settlements\".\"settled_at\")\n        and \"inbox_v2_outbound_provider_observation_settlements\".\"revision\" = 1"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.inbox_v2_outbound_provider_observations": {
+      "name": "inbox_v2_outbound_provider_observations",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "artifact_id": {
+          "name": "artifact_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "dispatch_id": {
+          "name": "dispatch_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "route_id": {
+          "name": "route_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "attempt_id": {
+          "name": "attempt_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "message_id": {
+          "name": "message_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "artifact_ordinal": {
+          "name": "artifact_ordinal",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "artifact_state": {
+          "name": "artifact_state",
+          "type": "inbox_v2_outbound_dispatch_artifact_state",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "effective_state": {
+          "name": "effective_state",
+          "type": "inbox_v2_outbound_dispatch_artifact_state",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'accepted'"
+        },
+        "content_plan_id": {
+          "name": "content_plan_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "content_plan_digest_sha256": {
+          "name": "content_plan_digest_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "planned_artifact_count": {
+          "name": "planned_artifact_count",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "artifact_plan_id": {
+          "name": "artifact_plan_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "artifact_plan_hash_sha256": {
+          "name": "artifact_plan_hash_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "external_thread_id": {
+          "name": "external_thread_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "route_source_connection_id": {
+          "name": "route_source_connection_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "route_source_account_id": {
+          "name": "route_source_account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "route_source_thread_binding_id": {
+          "name": "route_source_thread_binding_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "route_binding_generation": {
+          "name": "route_binding_generation",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_connection_id": {
+          "name": "source_connection_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_account_id": {
+          "name": "source_account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_thread_binding_id": {
+          "name": "source_thread_binding_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_binding_generation": {
+          "name": "source_binding_generation",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_message_scope_kind": {
+          "name": "source_message_scope_kind",
+          "type": "inbox_v2_source_occurrence_message_scope_kind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_message_decision_strength": {
+          "name": "source_message_decision_strength",
+          "type": "inbox_v2_source_occurrence_decision_strength",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "adapter_contract_id": {
+          "name": "adapter_contract_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "adapter_contract_version": {
+          "name": "adapter_contract_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "adapter_declaration_revision": {
+          "name": "adapter_declaration_revision",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "adapter_surface_id": {
+          "name": "adapter_surface_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "correlation_anchor_first_attempt_id": {
+          "name": "correlation_anchor_first_attempt_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source_occurrence_id": {
+          "name": "source_occurrence_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_occurrence_detail": {
+          "name": "source_occurrence_detail",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_occurrence_detail_digest_sha256": {
+          "name": "source_occurrence_detail_digest_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "observation_detail": {
+          "name": "observation_detail",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "observation_detail_digest_sha256": {
+          "name": "observation_detail_digest_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "evidence_kind": {
+          "name": "evidence_kind",
+          "type": "inbox_v2_outbound_artifact_association_evidence_kind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_reference_kind_id": {
+          "name": "provider_reference_kind_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "correlation_token": {
+          "name": "correlation_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "counts_as_customer_inbound": {
+          "name": "counts_as_customer_inbound",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "creates_unread": {
+          "name": "creates_unread",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "creates_work_item": {
+          "name": "creates_work_item",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "requires_provider_io": {
+          "name": "requires_provider_io",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "creates_outbound_dispatch": {
+          "name": "creates_outbound_dispatch",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "notification_eligible": {
+          "name": "notification_eligible",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "observed_by_trusted_service_id": {
+          "name": "observed_by_trusted_service_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "recorded_at": {
+          "name": "recorded_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revision": {
+          "name": "revision",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "1"
+        }
+      },
+      "indexes": {
+        "inbox_v2_outbound_provider_observations_dispatch_idx": {
+          "name": "inbox_v2_outbound_provider_observations_dispatch_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "dispatch_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "attempt_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "artifact_ordinal",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "inbox_v2_outbound_provider_observations_occurrence_idx": {
+          "name": "inbox_v2_outbound_provider_observations_occurrence_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source_occurrence_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "recorded_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "inbox_v2_outbound_provider_observations_tenant_fk": {
+          "name": "inbox_v2_outbound_provider_observations_tenant_fk",
+          "tableFrom": "inbox_v2_outbound_provider_observations",
+          "tableTo": "tenants",
+          "columnsFrom": ["tenant_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "inbox_v2_outbound_provider_observations_dispatch_fk": {
+          "name": "inbox_v2_outbound_provider_observations_dispatch_fk",
+          "tableFrom": "inbox_v2_outbound_provider_observations",
+          "tableTo": "inbox_v2_outbound_dispatches",
+          "columnsFrom": ["tenant_id", "dispatch_id", "route_id", "message_id"],
+          "columnsTo": ["tenant_id", "id", "route_id", "message_id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "inbox_v2_outbound_provider_observations_attempt_fk": {
+          "name": "inbox_v2_outbound_provider_observations_attempt_fk",
+          "tableFrom": "inbox_v2_outbound_provider_observations",
+          "tableTo": "inbox_v2_outbound_dispatch_attempts",
+          "columnsFrom": [
+            "tenant_id",
+            "attempt_id",
+            "dispatch_id",
+            "route_id",
+            "message_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id",
+            "dispatch_id",
+            "route_id",
+            "message_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "inbox_v2_outbound_provider_observations_artifact_fk": {
+          "name": "inbox_v2_outbound_provider_observations_artifact_fk",
+          "tableFrom": "inbox_v2_outbound_provider_observations",
+          "tableTo": "inbox_v2_outbound_dispatch_artifacts",
+          "columnsFrom": [
+            "tenant_id",
+            "artifact_id",
+            "dispatch_id",
+            "route_id",
+            "attempt_id",
+            "message_id",
+            "artifact_ordinal",
+            "artifact_state"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id",
+            "dispatch_id",
+            "route_id",
+            "attempt_id",
+            "message_id",
+            "ordinal",
+            "state"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "inbox_v2_outbound_provider_observations_content_plan_fk": {
+          "name": "inbox_v2_outbound_provider_observations_content_plan_fk",
+          "tableFrom": "inbox_v2_outbound_provider_observations",
+          "tableTo": "inbox_v2_file_outbound_dispatch_plans",
+          "columnsFrom": ["tenant_id", "content_plan_id", "dispatch_id"],
+          "columnsTo": ["tenant_id", "id", "dispatch_id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "inbox_v2_outbound_provider_observations_artifact_plan_fk": {
+          "name": "inbox_v2_outbound_provider_observations_artifact_plan_fk",
+          "tableFrom": "inbox_v2_outbound_provider_observations",
+          "tableTo": "inbox_v2_file_outbound_artifact_plans",
+          "columnsFrom": [
+            "tenant_id",
+            "content_plan_id",
+            "artifact_plan_id",
+            "artifact_ordinal"
+          ],
+          "columnsTo": ["tenant_id", "content_plan_id", "id", "ordinal"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "inbox_v2_outbound_provider_observations_route_binding_fk": {
+          "name": "inbox_v2_outbound_provider_observations_route_binding_fk",
+          "tableFrom": "inbox_v2_outbound_provider_observations",
+          "tableTo": "inbox_v2_source_thread_bindings",
+          "columnsFrom": [
+            "tenant_id",
+            "route_source_thread_binding_id",
+            "external_thread_id",
+            "route_source_connection_id",
+            "route_source_account_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id",
+            "external_thread_id",
+            "source_connection_id",
+            "source_account_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "inbox_v2_outbound_provider_observations_source_binding_fk": {
+          "name": "inbox_v2_outbound_provider_observations_source_binding_fk",
+          "tableFrom": "inbox_v2_outbound_provider_observations",
+          "tableTo": "inbox_v2_source_thread_bindings",
+          "columnsFrom": [
+            "tenant_id",
+            "source_thread_binding_id",
+            "external_thread_id",
+            "source_connection_id",
+            "source_account_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id",
+            "external_thread_id",
+            "source_connection_id",
+            "source_account_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "inbox_v2_outbound_provider_observations_correlation_anchor_fk": {
+          "name": "inbox_v2_outbound_provider_observations_correlation_anchor_fk",
+          "tableFrom": "inbox_v2_outbound_provider_observations",
+          "tableTo": "inbox_v2_outbound_provider_correlation_anchors",
+          "columnsFrom": [
+            "tenant_id",
+            "adapter_contract_id",
+            "adapter_contract_version",
+            "adapter_declaration_revision",
+            "adapter_surface_id",
+            "correlation_token",
+            "dispatch_id",
+            "route_id",
+            "message_id",
+            "correlation_anchor_first_attempt_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "adapter_contract_id",
+            "adapter_contract_version",
+            "adapter_declaration_revision",
+            "adapter_surface_id",
+            "correlation_token",
+            "dispatch_id",
+            "route_id",
+            "message_id",
+            "first_attempt_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "inbox_v2_outbound_provider_observations_pk": {
+          "name": "inbox_v2_outbound_provider_observations_pk",
+          "columns": ["tenant_id", "id"]
+        }
+      },
+      "uniqueConstraints": {
+        "inbox_v2_outbound_provider_observations_replay_unique": {
+          "name": "inbox_v2_outbound_provider_observations_replay_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "artifact_id",
+            "source_occurrence_id",
+            "evidence_kind",
+            "source_occurrence_detail_digest_sha256"
+          ]
+        },
+        "inbox_v2_outbound_provider_observations_target_unique": {
+          "name": "inbox_v2_outbound_provider_observations_target_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id",
+            "artifact_id",
+            "dispatch_id",
+            "route_id",
+            "attempt_id",
+            "message_id",
+            "artifact_ordinal",
+            "effective_state",
+            "source_occurrence_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "inbox_v2_outbound_provider_observations_id_check": {
+          "name": "inbox_v2_outbound_provider_observations_id_check",
+          "value": "coalesce((char_length(\"inbox_v2_outbound_provider_observations\".\"id\") <= 256\n    and \"inbox_v2_outbound_provider_observations\".\"id\" ~ '^outbound_provider_observation:[A-Za-z0-9][A-Za-z0-9._~:-]{0,199}$'), false)"
+        },
+        "inbox_v2_outbound_provider_observations_artifact_check": {
+          "name": "inbox_v2_outbound_provider_observations_artifact_check",
+          "value": "\"inbox_v2_outbound_provider_observations\".\"artifact_ordinal\" between 1 and 64\n        and \"inbox_v2_outbound_provider_observations\".\"planned_artifact_count\" between 1 and 64\n        and \"inbox_v2_outbound_provider_observations\".\"artifact_ordinal\" <= \"inbox_v2_outbound_provider_observations\".\"planned_artifact_count\"\n        and \"inbox_v2_outbound_provider_observations\".\"artifact_state\" in ('accepted', 'outcome_unknown')\n        and \"inbox_v2_outbound_provider_observations\".\"effective_state\" = 'accepted'\n        and coalesce(\"inbox_v2_outbound_provider_observations\".\"content_plan_digest_sha256\" ~ '^[a-f0-9]{64}$', false)\n        and coalesce(\"inbox_v2_outbound_provider_observations\".\"artifact_plan_hash_sha256\" ~ '^[a-f0-9]{64}$', false)"
+        },
+        "inbox_v2_outbound_provider_observations_surface_check": {
+          "name": "inbox_v2_outbound_provider_observations_surface_check",
+          "value": "coalesce((char_length(\"inbox_v2_outbound_provider_observations\".\"adapter_contract_id\") <= 256 and (\n    (\n      \"inbox_v2_outbound_provider_observations\".\"adapter_contract_id\" ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_provider_observations\".\"adapter_contract_id\", ':', 2)) <= 160\n    ) or (\n      \"inbox_v2_outbound_provider_observations\".\"adapter_contract_id\" ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_provider_observations\".\"adapter_contract_id\", ':', 2)) <= 80\n      and char_length(split_part(\"inbox_v2_outbound_provider_observations\".\"adapter_contract_id\", ':', 3)) <= 160\n      and split_part(\"inbox_v2_outbound_provider_observations\".\"adapter_contract_id\", ':', 2) not in (\n        'core', 'hulee', 'module', 'platform', 'system'\n      )\n    )\n  )), false)\n        and coalesce(\"inbox_v2_outbound_provider_observations\".\"adapter_contract_version\" ~ '^v[1-9][0-9]*$', false)\n        and \"inbox_v2_outbound_provider_observations\".\"adapter_declaration_revision\" >= 1\n        and coalesce((char_length(\"inbox_v2_outbound_provider_observations\".\"adapter_surface_id\") <= 256 and (\n    (\n      \"inbox_v2_outbound_provider_observations\".\"adapter_surface_id\" ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_provider_observations\".\"adapter_surface_id\", ':', 2)) <= 160\n    ) or (\n      \"inbox_v2_outbound_provider_observations\".\"adapter_surface_id\" ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_provider_observations\".\"adapter_surface_id\", ':', 2)) <= 80\n      and char_length(split_part(\"inbox_v2_outbound_provider_observations\".\"adapter_surface_id\", ':', 3)) <= 160\n      and split_part(\"inbox_v2_outbound_provider_observations\".\"adapter_surface_id\", ':', 2) not in (\n        'core', 'hulee', 'module', 'platform', 'system'\n      )\n    )\n  )), false)\n        and \"inbox_v2_outbound_provider_observations\".\"route_binding_generation\" >= 1\n        and \"inbox_v2_outbound_provider_observations\".\"source_binding_generation\" >= 1\n        and (\n          (\"inbox_v2_outbound_provider_observations\".\"route_source_connection_id\" = \"inbox_v2_outbound_provider_observations\".\"source_connection_id\"\n            and \"inbox_v2_outbound_provider_observations\".\"route_source_account_id\" = \"inbox_v2_outbound_provider_observations\".\"source_account_id\"\n            and \"inbox_v2_outbound_provider_observations\".\"route_source_thread_binding_id\" = \"inbox_v2_outbound_provider_observations\".\"source_thread_binding_id\"\n            and \"inbox_v2_outbound_provider_observations\".\"route_binding_generation\" = \"inbox_v2_outbound_provider_observations\".\"source_binding_generation\")\n          or (\"inbox_v2_outbound_provider_observations\".\"evidence_kind\" = 'provider_echo_correlation'\n            and \"inbox_v2_outbound_provider_observations\".\"source_message_scope_kind\" = 'provider_thread'\n            and \"inbox_v2_outbound_provider_observations\".\"source_message_decision_strength\" = 'authoritative')\n        )"
+        },
+        "inbox_v2_outbound_provider_observations_detail_check": {
+          "name": "inbox_v2_outbound_provider_observations_detail_check",
+          "value": "coalesce((jsonb_typeof(\"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\") = 'object'\n    and octet_length(\"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\"::text) between 2 and 65536), false)\n        and coalesce(\"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail_digest_sha256\" ~ '^sha256:[a-f0-9]{64}$', false)\n        and (\"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\" #>> '{tenantId}') = \"inbox_v2_outbound_provider_observations\".\"tenant_id\"\n        and (\"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\" #>> '{id}') = \"inbox_v2_outbound_provider_observations\".\"source_occurrence_id\"\n        and (\"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\" #>>\n          '{bindingContext,externalThread,id}') = \"inbox_v2_outbound_provider_observations\".\"external_thread_id\"\n        and (\"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\" #>>\n          '{bindingContext,sourceAccount,id}') = \"inbox_v2_outbound_provider_observations\".\"source_account_id\"\n        and (\"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\" #>>\n          '{bindingContext,sourceThreadBinding,id}') = \"inbox_v2_outbound_provider_observations\".\"source_thread_binding_id\"\n        and (\"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\" #>>\n          '{bindingContext,bindingGeneration}') = \"inbox_v2_outbound_provider_observations\".\"source_binding_generation\"::text\n        and (\"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\" #>>\n          '{messageIdentityDeclaration,scopeKind}') = \"inbox_v2_outbound_provider_observations\".\"source_message_scope_kind\"::text\n        and (\"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\" #>>\n          '{messageIdentityDeclaration,decisionStrength}') =\n          \"inbox_v2_outbound_provider_observations\".\"source_message_decision_strength\"::text\n        and (\"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\" #>>\n          '{descriptor,adapterContract,contractId}') = \"inbox_v2_outbound_provider_observations\".\"adapter_contract_id\"\n        and (\"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\" #>>\n          '{descriptor,adapterContract,contractVersion}') =\n          \"inbox_v2_outbound_provider_observations\".\"adapter_contract_version\"\n        and (\"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\" #>>\n          '{descriptor,adapterContract,declarationRevision}') =\n          \"inbox_v2_outbound_provider_observations\".\"adapter_declaration_revision\"::text\n        and (\"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\" #>>\n          '{descriptor,adapterContract,surfaceId}') = \"inbox_v2_outbound_provider_observations\".\"adapter_surface_id\"\n        and (\"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\" #>> '{direction}') = 'outbound'\n        and (\"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\" -> 'providerActor') = 'null'::jsonb\n        and (\"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\" #>> '{resolution,state}') = 'pending'\n        and (\"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\" #>> '{revision}') = '1'\n        and (\"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\" #>> '{recordedAt}')::timestamptz =\n          \"inbox_v2_outbound_provider_observations\".\"recorded_at\"\n        and (\"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\" #>> '{createdAt}')::timestamptz =\n          \"inbox_v2_outbound_provider_observations\".\"recorded_at\"\n        and (\"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\" #>> '{updatedAt}')::timestamptz =\n          \"inbox_v2_outbound_provider_observations\".\"recorded_at\""
+        },
+        "inbox_v2_outbound_provider_observations_snapshot_check": {
+          "name": "inbox_v2_outbound_provider_observations_snapshot_check",
+          "value": "coalesce((jsonb_typeof(\"inbox_v2_outbound_provider_observations\".\"observation_detail\") = 'object'\n    and octet_length(\"inbox_v2_outbound_provider_observations\".\"observation_detail\"::text) between 2 and 262144), false)\n        and coalesce(\"inbox_v2_outbound_provider_observations\".\"observation_detail_digest_sha256\" ~ '^sha256:[a-f0-9]{64}$', false)\n        and (\"inbox_v2_outbound_provider_observations\".\"observation_detail\" #>> '{tenantId}') = \"inbox_v2_outbound_provider_observations\".\"tenant_id\"\n        and (\"inbox_v2_outbound_provider_observations\".\"observation_detail\" #>> '{id}') = \"inbox_v2_outbound_provider_observations\".\"id\"\n        and (\"inbox_v2_outbound_provider_observations\".\"observation_detail\" #>> '{artifact,id}') = \"inbox_v2_outbound_provider_observations\".\"artifact_id\"\n        and (\"inbox_v2_outbound_provider_observations\".\"observation_detail\" #>> '{artifact,ordinal}') =\n          \"inbox_v2_outbound_provider_observations\".\"artifact_ordinal\"::text\n        and (\"inbox_v2_outbound_provider_observations\".\"observation_detail\" #>> '{artifact,state}') =\n          \"inbox_v2_outbound_provider_observations\".\"artifact_state\"::text\n        and (\"inbox_v2_outbound_provider_observations\".\"observation_detail\" #>> '{dispatch,id}') = \"inbox_v2_outbound_provider_observations\".\"dispatch_id\"\n        and (\"inbox_v2_outbound_provider_observations\".\"observation_detail\" #>> '{route,id}') = \"inbox_v2_outbound_provider_observations\".\"route_id\"\n        and (\"inbox_v2_outbound_provider_observations\".\"observation_detail\" #>> '{attempt,id}') = \"inbox_v2_outbound_provider_observations\".\"attempt_id\"\n        and (\"inbox_v2_outbound_provider_observations\".\"observation_detail\" #>> '{dispatch,message,id}') =\n          \"inbox_v2_outbound_provider_observations\".\"message_id\"\n        and (\"inbox_v2_outbound_provider_observations\".\"observation_detail\" -> 'sourceOccurrence') =\n          \"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\"\n        and (\"inbox_v2_outbound_provider_observations\".\"observation_detail\" #>> '{evidence,kind}') =\n          \"inbox_v2_outbound_provider_observations\".\"evidence_kind\"::text\n        and (\"inbox_v2_outbound_provider_observations\".\"observation_detail\" #>> '{observedByTrustedServiceId}') =\n          \"inbox_v2_outbound_provider_observations\".\"observed_by_trusted_service_id\"\n        and (\"inbox_v2_outbound_provider_observations\".\"observation_detail\" #>> '{recordedAt}')::timestamptz =\n          \"inbox_v2_outbound_provider_observations\".\"recorded_at\"\n        and (\"inbox_v2_outbound_provider_observations\".\"observation_detail\" #>> '{revision}') = '1'"
+        },
+        "inbox_v2_outbound_provider_observations_evidence_check": {
+          "name": "inbox_v2_outbound_provider_observations_evidence_check",
+          "value": "(\n          \"inbox_v2_outbound_provider_observations\".\"evidence_kind\" = 'provider_response_attempt'\n          and \"inbox_v2_outbound_provider_observations\".\"provider_reference_kind_id\" is null\n          and \"inbox_v2_outbound_provider_observations\".\"correlation_token\" is null\n          and \"inbox_v2_outbound_provider_observations\".\"correlation_anchor_first_attempt_id\" is null\n          and (\"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\" #>> '{origin,kind}') =\n            'provider_response'\n          and (\"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\" #>>\n            '{origin,outboundDispatchAttempt,id}') = \"inbox_v2_outbound_provider_observations\".\"attempt_id\"\n          and \"inbox_v2_outbound_provider_observations\".\"route_source_connection_id\" = \"inbox_v2_outbound_provider_observations\".\"source_connection_id\"\n          and \"inbox_v2_outbound_provider_observations\".\"route_source_account_id\" = \"inbox_v2_outbound_provider_observations\".\"source_account_id\"\n          and \"inbox_v2_outbound_provider_observations\".\"route_source_thread_binding_id\" = \"inbox_v2_outbound_provider_observations\".\"source_thread_binding_id\"\n          and \"inbox_v2_outbound_provider_observations\".\"route_binding_generation\" = \"inbox_v2_outbound_provider_observations\".\"source_binding_generation\"\n        ) or (\n          \"inbox_v2_outbound_provider_observations\".\"evidence_kind\" = 'provider_echo_correlation'\n          and coalesce((char_length(\"inbox_v2_outbound_provider_observations\".\"provider_reference_kind_id\") <= 256 and (\n    (\n      \"inbox_v2_outbound_provider_observations\".\"provider_reference_kind_id\" ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_provider_observations\".\"provider_reference_kind_id\", ':', 2)) <= 160\n    ) or (\n      \"inbox_v2_outbound_provider_observations\".\"provider_reference_kind_id\" ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_provider_observations\".\"provider_reference_kind_id\", ':', 2)) <= 80\n      and char_length(split_part(\"inbox_v2_outbound_provider_observations\".\"provider_reference_kind_id\", ':', 3)) <= 160\n      and split_part(\"inbox_v2_outbound_provider_observations\".\"provider_reference_kind_id\", ':', 2) not in (\n        'core', 'hulee', 'module', 'platform', 'system'\n      )\n    )\n  )), false)\n          and coalesce((char_length(\"inbox_v2_outbound_provider_observations\".\"correlation_token\") between 8 and 256\n    and \"inbox_v2_outbound_provider_observations\".\"correlation_token\" ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'), false)\n          and \"inbox_v2_outbound_provider_observations\".\"correlation_anchor_first_attempt_id\" is not null\n          and (\"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\" #>> '{origin,kind}') =\n            'provider_echo'\n          and \"inbox_v2_outbound_provider_observations\".\"source_occurrence_detail\" @>\n            jsonb_build_object(\n              'descriptor', jsonb_build_object(\n                'providerReferences', jsonb_build_array(\n                  jsonb_build_object(\n                    'kindId', \"inbox_v2_outbound_provider_observations\".\"provider_reference_kind_id\",\n                    'subject', \"inbox_v2_outbound_provider_observations\".\"correlation_token\"\n                  )\n                )\n              )\n            )\n        )"
+        },
+        "inbox_v2_outbound_provider_observations_effect_check": {
+          "name": "inbox_v2_outbound_provider_observations_effect_check",
+          "value": "not \"inbox_v2_outbound_provider_observations\".\"counts_as_customer_inbound\"\n        and not \"inbox_v2_outbound_provider_observations\".\"creates_unread\"\n        and not \"inbox_v2_outbound_provider_observations\".\"creates_work_item\"\n        and not \"inbox_v2_outbound_provider_observations\".\"requires_provider_io\"\n        and not \"inbox_v2_outbound_provider_observations\".\"creates_outbound_dispatch\"\n        and not \"inbox_v2_outbound_provider_observations\".\"notification_eligible\""
+        },
+        "inbox_v2_outbound_provider_observations_immutable_check": {
+          "name": "inbox_v2_outbound_provider_observations_immutable_check",
+          "value": "coalesce((char_length(\"inbox_v2_outbound_provider_observations\".\"observed_by_trusted_service_id\") <= 256 and (\n    (\n      \"inbox_v2_outbound_provider_observations\".\"observed_by_trusted_service_id\" ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_provider_observations\".\"observed_by_trusted_service_id\", ':', 2)) <= 160\n    ) or (\n      \"inbox_v2_outbound_provider_observations\".\"observed_by_trusted_service_id\" ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_provider_observations\".\"observed_by_trusted_service_id\", ':', 2)) <= 80\n      and char_length(split_part(\"inbox_v2_outbound_provider_observations\".\"observed_by_trusted_service_id\", ':', 3)) <= 160\n      and split_part(\"inbox_v2_outbound_provider_observations\".\"observed_by_trusted_service_id\", ':', 2) not in (\n        'core', 'hulee', 'module', 'platform', 'system'\n      )\n    )\n  )), false)\n        and isfinite(\"inbox_v2_outbound_provider_observations\".\"recorded_at\")\n        and \"inbox_v2_outbound_provider_observations\".\"revision\" = 1"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.inbox_v2_outbound_provider_settlement_work_items": {
+      "name": "inbox_v2_outbound_provider_settlement_work_items",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "observation_id": {
+          "name": "observation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "candidate_external_message_reference_id": {
+          "name": "candidate_external_message_reference_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "candidate_transport_link_id": {
+          "name": "candidate_transport_link_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "trusted_service_id": {
+          "name": "trusted_service_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "state": {
+          "name": "state",
+          "type": "inbox_v2_outbound_provider_settlement_work_state",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "attempt_count": {
+          "name": "attempt_count",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "0"
+        },
+        "available_at": {
+          "name": "available_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lease_owner_id": {
+          "name": "lease_owner_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lease_token_hash": {
+          "name": "lease_token_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lease_revision": {
+          "name": "lease_revision",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lease_claimed_at": {
+          "name": "lease_claimed_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lease_expires_at": {
+          "name": "lease_expires_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_finalized_lease_owner_id": {
+          "name": "last_finalized_lease_owner_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_finalized_lease_token_hash": {
+          "name": "last_finalized_lease_token_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_finalized_lease_revision": {
+          "name": "last_finalized_lease_revision",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_finalized_result_hash": {
+          "name": "last_finalized_result_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_finalized_at": {
+          "name": "last_finalized_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_error_code": {
+          "name": "last_error_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "terminal_at": {
+          "name": "terminal_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revision": {
+          "name": "revision",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "1"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "inbox_v2_outbound_provider_settlement_work_items_lease_uidx": {
+          "name": "inbox_v2_outbound_provider_settlement_work_items_lease_uidx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "lease_token_hash",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"inbox_v2_outbound_provider_settlement_work_items\".\"lease_token_hash\" is not null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "inbox_v2_outbound_provider_settlement_work_items_due_idx": {
+          "name": "inbox_v2_outbound_provider_settlement_work_items_due_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "available_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "observation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"inbox_v2_outbound_provider_settlement_work_items\".\"state\" = 'pending'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "inbox_v2_outbound_provider_settlement_work_items_reclaim_idx": {
+          "name": "inbox_v2_outbound_provider_settlement_work_items_reclaim_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "lease_expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "observation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"inbox_v2_outbound_provider_settlement_work_items\".\"state\" = 'leased'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "inbox_v2_outbound_provider_settlement_work_items_service_idx": {
+          "name": "inbox_v2_outbound_provider_settlement_work_items_service_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "trusted_service_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "state",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "observation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "inbox_v2_outbound_provider_settlement_work_items_observation_fk": {
+          "name": "inbox_v2_outbound_provider_settlement_work_items_observation_fk",
+          "tableFrom": "inbox_v2_outbound_provider_settlement_work_items",
+          "tableTo": "inbox_v2_outbound_provider_observations",
+          "columnsFrom": ["tenant_id", "observation_id"],
+          "columnsTo": ["tenant_id", "id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "inbox_v2_outbound_provider_settlement_work_items_pk": {
+          "name": "inbox_v2_outbound_provider_settlement_work_items_pk",
+          "columns": ["tenant_id", "observation_id"]
+        }
+      },
+      "uniqueConstraints": {
+        "inbox_v2_outbound_provider_settlement_work_items_link_uk": {
+          "name": "inbox_v2_outbound_provider_settlement_work_items_link_uk",
+          "nullsNotDistinct": false,
+          "columns": ["tenant_id", "candidate_transport_link_id"]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "inbox_v2_outbound_provider_settlement_work_items_values_check": {
+          "name": "inbox_v2_outbound_provider_settlement_work_items_values_check",
+          "value": "coalesce((char_length(\"inbox_v2_outbound_provider_settlement_work_items\".\"candidate_external_message_reference_id\") <= 256\n    and \"inbox_v2_outbound_provider_settlement_work_items\".\"candidate_external_message_reference_id\" ~ '^external_message_reference:[A-Za-z0-9][A-Za-z0-9._~:-]{0,199}$'), false)\n        and coalesce((char_length(\"inbox_v2_outbound_provider_settlement_work_items\".\"candidate_transport_link_id\") <= 256\n    and \"inbox_v2_outbound_provider_settlement_work_items\".\"candidate_transport_link_id\" ~ '^message_transport_occurrence_link:[A-Za-z0-9][A-Za-z0-9._~:-]{0,199}$'), false)\n        and coalesce((char_length(\"inbox_v2_outbound_provider_settlement_work_items\".\"trusted_service_id\") <= 256 and (\n    (\n      \"inbox_v2_outbound_provider_settlement_work_items\".\"trusted_service_id\" ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_provider_settlement_work_items\".\"trusted_service_id\", ':', 2)) <= 160\n    ) or (\n      \"inbox_v2_outbound_provider_settlement_work_items\".\"trusted_service_id\" ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'\n      and char_length(split_part(\"inbox_v2_outbound_provider_settlement_work_items\".\"trusted_service_id\", ':', 2)) <= 80\n      and char_length(split_part(\"inbox_v2_outbound_provider_settlement_work_items\".\"trusted_service_id\", ':', 3)) <= 160\n      and split_part(\"inbox_v2_outbound_provider_settlement_work_items\".\"trusted_service_id\", ':', 2) not in (\n        'core', 'hulee', 'module', 'platform', 'system'\n      )\n    )\n  )), false)\n        and \"inbox_v2_outbound_provider_settlement_work_items\".\"attempt_count\" >= 0\n        and \"inbox_v2_outbound_provider_settlement_work_items\".\"revision\" >= 1\n        and (\"inbox_v2_outbound_provider_settlement_work_items\".\"lease_owner_id\" is null\n          or char_length(\"inbox_v2_outbound_provider_settlement_work_items\".\"lease_owner_id\") between 1 and 256)\n        and (\"inbox_v2_outbound_provider_settlement_work_items\".\"lease_token_hash\" is null\n          or coalesce(\"inbox_v2_outbound_provider_settlement_work_items\".\"lease_token_hash\" ~ '^sha256:[a-f0-9]{64}$', false))\n        and (\"inbox_v2_outbound_provider_settlement_work_items\".\"lease_revision\" is null or \"inbox_v2_outbound_provider_settlement_work_items\".\"lease_revision\" >= 1)\n        and (\"inbox_v2_outbound_provider_settlement_work_items\".\"last_finalized_lease_owner_id\" is null\n          or char_length(\"inbox_v2_outbound_provider_settlement_work_items\".\"last_finalized_lease_owner_id\") between 1 and 256)\n        and (\"inbox_v2_outbound_provider_settlement_work_items\".\"last_finalized_lease_token_hash\" is null\n          or coalesce(\"inbox_v2_outbound_provider_settlement_work_items\".\"last_finalized_lease_token_hash\" ~ '^sha256:[a-f0-9]{64}$', false))\n        and (\"inbox_v2_outbound_provider_settlement_work_items\".\"last_finalized_lease_revision\" is null\n          or \"inbox_v2_outbound_provider_settlement_work_items\".\"last_finalized_lease_revision\" >= 1)\n        and (\"inbox_v2_outbound_provider_settlement_work_items\".\"last_finalized_result_hash\" is null\n          or coalesce(\"inbox_v2_outbound_provider_settlement_work_items\".\"last_finalized_result_hash\" ~ '^sha256:[a-f0-9]{64}$', false))\n        and (\"inbox_v2_outbound_provider_settlement_work_items\".\"last_error_code\" is null\n          or char_length(\"inbox_v2_outbound_provider_settlement_work_items\".\"last_error_code\") between 3 and 256)"
+        },
+        "inbox_v2_outbound_provider_settlement_work_items_lease_check": {
+          "name": "inbox_v2_outbound_provider_settlement_work_items_lease_check",
+          "value": "(\n          \"inbox_v2_outbound_provider_settlement_work_items\".\"lease_owner_id\" is null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"lease_token_hash\" is null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"lease_revision\" is null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"lease_claimed_at\" is null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"lease_expires_at\" is null\n        ) or (\n          \"inbox_v2_outbound_provider_settlement_work_items\".\"lease_owner_id\" is not null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"lease_token_hash\" is not null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"lease_revision\" is not null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"lease_claimed_at\" is not null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"lease_expires_at\" is not null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"lease_expires_at\" > \"inbox_v2_outbound_provider_settlement_work_items\".\"lease_claimed_at\"\n        )"
+        },
+        "inbox_v2_outbound_provider_settlement_work_items_replay_check": {
+          "name": "inbox_v2_outbound_provider_settlement_work_items_replay_check",
+          "value": "(\n          \"inbox_v2_outbound_provider_settlement_work_items\".\"last_finalized_lease_owner_id\" is null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"last_finalized_lease_token_hash\" is null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"last_finalized_lease_revision\" is null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"last_finalized_result_hash\" is null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"last_finalized_at\" is null\n        ) or (\n          \"inbox_v2_outbound_provider_settlement_work_items\".\"last_finalized_lease_owner_id\" is not null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"last_finalized_lease_token_hash\" is not null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"last_finalized_lease_revision\" is not null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"last_finalized_result_hash\" is not null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"last_finalized_at\" is not null\n        )"
+        },
+        "inbox_v2_outbound_provider_settlement_work_items_state_check": {
+          "name": "inbox_v2_outbound_provider_settlement_work_items_state_check",
+          "value": "(\n          \"inbox_v2_outbound_provider_settlement_work_items\".\"state\" = 'pending'\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"available_at\" is not null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"lease_owner_id\" is null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"terminal_at\" is null\n        ) or (\n          \"inbox_v2_outbound_provider_settlement_work_items\".\"state\" = 'leased'\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"available_at\" is not null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"lease_owner_id\" is not null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"terminal_at\" is null\n        ) or (\n          \"inbox_v2_outbound_provider_settlement_work_items\".\"state\" = 'settled'\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"available_at\" is null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"lease_owner_id\" is null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"last_finalized_at\" is not null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"last_error_code\" is null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"terminal_at\" = \"inbox_v2_outbound_provider_settlement_work_items\".\"last_finalized_at\"\n        ) or (\n          \"inbox_v2_outbound_provider_settlement_work_items\".\"state\" = 'dead'\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"available_at\" is null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"lease_owner_id\" is null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"last_finalized_at\" is not null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"last_error_code\" is not null\n          and \"inbox_v2_outbound_provider_settlement_work_items\".\"terminal_at\" = \"inbox_v2_outbound_provider_settlement_work_items\".\"last_finalized_at\"\n        )"
+        },
+        "inbox_v2_outbound_provider_settlement_work_items_times_check": {
+          "name": "inbox_v2_outbound_provider_settlement_work_items_times_check",
+          "value": "isfinite(\"inbox_v2_outbound_provider_settlement_work_items\".\"created_at\")\n        and isfinite(\"inbox_v2_outbound_provider_settlement_work_items\".\"updated_at\")\n        and \"inbox_v2_outbound_provider_settlement_work_items\".\"updated_at\" >= \"inbox_v2_outbound_provider_settlement_work_items\".\"created_at\"\n        and (\"inbox_v2_outbound_provider_settlement_work_items\".\"lease_claimed_at\" is null\n          or isfinite(\"inbox_v2_outbound_provider_settlement_work_items\".\"lease_claimed_at\"))\n        and (\"inbox_v2_outbound_provider_settlement_work_items\".\"lease_expires_at\" is null\n          or isfinite(\"inbox_v2_outbound_provider_settlement_work_items\".\"lease_expires_at\"))\n        and (\"inbox_v2_outbound_provider_settlement_work_items\".\"last_finalized_at\" is null\n          or isfinite(\"inbox_v2_outbound_provider_settlement_work_items\".\"last_finalized_at\"))\n        and (\"inbox_v2_outbound_provider_settlement_work_items\".\"terminal_at\" is null or isfinite(\"inbox_v2_outbound_provider_settlement_work_items\".\"terminal_at\"))"
         }
       },
       "isRLSEnabled": false
@@ -74853,7 +76680,12 @@
     "public.inbox_v2_outbound_dispatch_attempt_completion_source": {
       "name": "inbox_v2_outbound_dispatch_attempt_completion_source",
       "schema": "public",
-      "values": ["provider_result", "lease_expired", "preflight_blocked"]
+      "values": [
+        "provider_result",
+        "provider_observation",
+        "lease_expired",
+        "preflight_blocked"
+      ]
     },
     "public.inbox_v2_outbound_dispatch_attempt_outcome": {
       "name": "inbox_v2_outbound_dispatch_attempt_outcome",
@@ -74900,6 +76732,21 @@
         "automated_reconciliation_required",
         "operator_duplicate_risk_decision_required"
       ]
+    },
+    "public.inbox_v2_outbound_provider_settlement_transition_kind": {
+      "name": "inbox_v2_outbound_provider_settlement_transition_kind",
+      "schema": "public",
+      "values": [
+        "retain_dispatch_state",
+        "complete_pending_attempt",
+        "reconcile_outcome_unknown",
+        "already_accepted"
+      ]
+    },
+    "public.inbox_v2_outbound_provider_settlement_work_state": {
+      "name": "inbox_v2_outbound_provider_settlement_work_state",
+      "schema": "public",
+      "values": ["pending", "leased", "settled", "dead"]
     },
     "public.inbox_v2_outbound_retry_safety_mechanism": {
       "name": "inbox_v2_outbound_retry_safety_mechanism",

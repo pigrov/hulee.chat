@@ -3,10 +3,16 @@ import { describe, expect, it } from "vitest";
 
 import { inboxV2ExternalThreads } from "./inbox-v2/external-thread";
 import {
+  inboxV2FileOutboundArtifactPlans,
+  inboxV2FileOutboundDispatchPlans
+} from "./inbox-v2/file-object";
+import {
   INBOX_V2_OUTBOUND_TRANSPORT_INTEGRITY_SQL,
   inboxV2ExternalMessageReferences,
   inboxV2OutboundDispatchArtifactReferenceLinks,
+  inboxV2OutboundDispatchArtifactResolutions,
   inboxV2OutboundDispatchArtifacts,
+  inboxV2OutboundDispatchAttemptCompletionSource,
   inboxV2OutboundDispatchAttempts,
   inboxV2OutboundDispatchReconciliationDecisions,
   inboxV2OutboundDispatchReconciliationPermissions,
@@ -14,6 +20,11 @@ import {
   inboxV2OutboundDispatches,
   inboxV2OutboundMultiSendChildren,
   inboxV2OutboundMultiSendOperations,
+  inboxV2OutboundProviderCorrelationAnchors,
+  inboxV2OutboundProviderObservations,
+  inboxV2OutboundProviderObservationSettlements,
+  inboxV2OutboundProviderSettlementWorkItems,
+  inboxV2OutboundProviderSettlementWorkState,
   inboxV2OutboundRoutes,
   inboxV2SourceOccurrenceResolutionCandidates,
   inboxV2SourceOccurrenceResolutionTransitions,
@@ -22,6 +33,7 @@ import {
   inboxV2ThreadRoutePolicyVersions
 } from "./inbox-v2/outbound-transport";
 import {
+  inboxV2MessageTransportOccurrenceLinks,
   inboxV2Messages,
   inboxV2TimelineItems
 } from "./inbox-v2/timeline-message";
@@ -44,12 +56,17 @@ describe("Inbox V2 outbound transport schema", () => {
       "inbox_v2_outbound_multi_send_operations",
       "inbox_v2_outbound_dispatches",
       "inbox_v2_outbound_dispatch_attempts",
+      "inbox_v2_outbound_provider_correlation_anchors",
       "inbox_v2_outbound_dispatch_reconciliation_decisions",
       "inbox_v2_outbound_dispatch_reconciliation_permissions",
       "inbox_v2_outbound_dispatch_artifacts",
       "inbox_v2_source_occurrence_resolution_transitions",
       "inbox_v2_source_occurrence_resolution_candidates",
       "inbox_v2_outbound_dispatch_artifact_reference_links",
+      "inbox_v2_outbound_provider_observations",
+      "inbox_v2_outbound_dispatch_artifact_resolutions",
+      "inbox_v2_outbound_provider_observation_settlements",
+      "inbox_v2_outbound_provider_settlement_work_items",
       "inbox_v2_outbound_multi_send_children"
     ]);
 
@@ -392,6 +409,32 @@ describe("Inbox V2 outbound transport schema", () => {
     ).toEqual(["tenant_id", "decision_id", "permission_id"]);
   });
 
+  it("forces mixed provider artifact outcomes to operator reconciliation even when retries are automatic", () => {
+    const outcome = checkSql(
+      inboxV2OutboundDispatchAttempts,
+      "inbox_v2_outbound_dispatch_attempts_outcome_check"
+    ).replace(/\s+/gu, " ");
+
+    expect(outcome).toMatch(
+      /automatic_retry_allowed" and .*diagnostic_code_id" <> 'core:provider-artifact-outcomes-mixed' and .*unknown_required_action" = 'automated_reconciliation_required'/u
+    );
+    expect(outcome).toMatch(
+      /not .*automatic_retry_allowed" or .*diagnostic_code_id" = 'core:provider-artifact-outcomes-mixed'\) and .*unknown_required_action" = 'operator_duplicate_risk_decision_required'/u
+    );
+    expect(outcome).not.toMatch(
+      /or \(not .*automatic_retry_allowed" and .*unknown_required_action" = 'operator_duplicate_risk_decision_required'\)/u
+    );
+  });
+
+  it("keeps the raw provider observation guard parenthesis-balanced", () => {
+    expectSqlParenthesesBalanced(
+      functionSql(
+        INBOX_V2_OUTBOUND_TRANSPORT_INTEGRITY_SQL,
+        "inbox_v2_outbound_provider_observation_guard_insert"
+      )
+    );
+  });
+
   it("pins artifacts and resolution evidence to exact accepted chains", () => {
     expectForeignKey(
       inboxV2OutboundDispatchArtifacts,
@@ -464,6 +507,225 @@ describe("Inbox V2 outbound transport schema", () => {
     ]);
   });
 
+  it("persists replay-safe provider observation and effective artifact settlement", () => {
+    expect(inboxV2OutboundDispatchAttemptCompletionSource.enumValues).toContain(
+      "provider_observation"
+    );
+    expect(
+      primaryKeyColumns(inboxV2OutboundProviderCorrelationAnchors)
+    ).toEqual([
+      [
+        "tenant_id",
+        "adapter_contract_id",
+        "adapter_contract_version",
+        "adapter_declaration_revision",
+        "adapter_surface_id",
+        "correlation_token"
+      ]
+    ]);
+    expect(
+      uniqueColumns(
+        inboxV2OutboundProviderCorrelationAnchors,
+        "inbox_v2_outbound_provider_correlation_anchors_dispatch_unique"
+      )
+    ).toEqual(["tenant_id", "dispatch_id"]);
+    expectForeignKey(
+      inboxV2OutboundProviderCorrelationAnchors,
+      "inbox_v2_outbound_provider_correlation_anchors_attempt_fk",
+      inboxV2OutboundDispatchAttempts,
+      [
+        "tenant_id",
+        "first_attempt_id",
+        "dispatch_id",
+        "route_id",
+        "message_id"
+      ],
+      ["tenant_id", "id", "dispatch_id", "route_id", "message_id"]
+    );
+
+    expectForeignKey(
+      inboxV2OutboundProviderObservations,
+      "inbox_v2_outbound_provider_observations_artifact_fk",
+      inboxV2OutboundDispatchArtifacts,
+      [
+        "tenant_id",
+        "artifact_id",
+        "dispatch_id",
+        "route_id",
+        "attempt_id",
+        "message_id",
+        "artifact_ordinal",
+        "artifact_state"
+      ],
+      [
+        "tenant_id",
+        "id",
+        "dispatch_id",
+        "route_id",
+        "attempt_id",
+        "message_id",
+        "ordinal",
+        "state"
+      ]
+    );
+    expectForeignKey(
+      inboxV2OutboundProviderObservations,
+      "inbox_v2_outbound_provider_observations_content_plan_fk",
+      inboxV2FileOutboundDispatchPlans,
+      ["tenant_id", "content_plan_id", "dispatch_id"],
+      ["tenant_id", "id", "dispatch_id"]
+    );
+    expectForeignKey(
+      inboxV2OutboundProviderObservations,
+      "inbox_v2_outbound_provider_observations_artifact_plan_fk",
+      inboxV2FileOutboundArtifactPlans,
+      ["tenant_id", "content_plan_id", "artifact_plan_id", "artifact_ordinal"],
+      ["tenant_id", "content_plan_id", "id", "ordinal"]
+    );
+    expect(
+      getTableConfig(inboxV2OutboundProviderObservations).foreignKeys.some(
+        (foreignKey) =>
+          foreignKey.reference().foreignTable === inboxV2SourceOccurrences
+      )
+    ).toBe(false);
+    expect(
+      uniqueColumns(
+        inboxV2OutboundProviderObservations,
+        "inbox_v2_outbound_provider_observations_replay_unique"
+      )
+    ).toEqual([
+      "tenant_id",
+      "artifact_id",
+      "source_occurrence_id",
+      "evidence_kind",
+      "source_occurrence_detail_digest_sha256"
+    ]);
+    expect(jsonColumnNames(inboxV2OutboundProviderObservations)).toEqual([
+      "source_occurrence_detail",
+      "observation_detail"
+    ]);
+    const observationSnapshotCheck = checkSql(
+      inboxV2OutboundProviderObservations,
+      "inbox_v2_outbound_provider_observations_snapshot_check"
+    );
+    expect(observationSnapshotCheck).toContain("262144");
+    expect(observationSnapshotCheck).toContain(
+      "observation_detail_digest_sha256"
+    );
+    expect(observationSnapshotCheck).toContain("sourceOccurrence");
+    expect(observationSnapshotCheck).toContain("observedByTrustedServiceId");
+
+    expectForeignKey(
+      inboxV2OutboundDispatchArtifactResolutions,
+      "inbox_v2_outbound_dispatch_artifact_resolutions_observation_fk",
+      inboxV2OutboundProviderObservations,
+      [
+        "tenant_id",
+        "observation_id",
+        "artifact_id",
+        "dispatch_id",
+        "route_id",
+        "attempt_id",
+        "message_id",
+        "artifact_ordinal",
+        "effective_state",
+        "observation_source_occurrence_id"
+      ],
+      [
+        "tenant_id",
+        "id",
+        "artifact_id",
+        "dispatch_id",
+        "route_id",
+        "attempt_id",
+        "message_id",
+        "artifact_ordinal",
+        "effective_state",
+        "source_occurrence_id"
+      ]
+    );
+    expect(
+      uniqueColumns(
+        inboxV2OutboundDispatchArtifactResolutions,
+        "inbox_v2_outbound_dispatch_artifact_resolutions_artifact_unique"
+      )
+    ).toEqual(["tenant_id", "artifact_id"]);
+
+    expectForeignKey(
+      inboxV2OutboundProviderObservationSettlements,
+      "inbox_v2_outbound_provider_observation_settlements_occurrence_fk",
+      inboxV2SourceOccurrences,
+      [
+        "tenant_id",
+        "source_occurrence_id",
+        "source_occurrence_revision",
+        "source_occurrence_resolution_state",
+        "external_message_reference_id"
+      ],
+      [
+        "tenant_id",
+        "id",
+        "revision",
+        "resolution_state",
+        "resolved_external_message_reference_id"
+      ]
+    );
+    expectForeignKey(
+      inboxV2OutboundProviderObservationSettlements,
+      "inbox_v2_outbound_provider_observation_settlements_transport_link_fk",
+      inboxV2MessageTransportOccurrenceLinks,
+      ["tenant_id", "message_transport_link_id", "message_id"],
+      ["tenant_id", "id", "message_id"]
+    );
+    expect(
+      uniqueColumns(
+        inboxV2OutboundProviderObservationSettlements,
+        "inbox_v2_outbound_provider_observation_settlements_occurrence_unique"
+      )
+    ).toEqual(["tenant_id", "source_occurrence_id"]);
+    expect(
+      getTableConfig(
+        inboxV2OutboundProviderObservationSettlements
+      ).uniqueConstraints.some((constraint) =>
+        constraint.columns.some(
+          (column) => column.name === "canonical_artifact_reference_link_id"
+        )
+      )
+    ).toBe(false);
+
+    expect(inboxV2OutboundProviderSettlementWorkState.enumValues).toEqual([
+      "pending",
+      "leased",
+      "settled",
+      "dead"
+    ]);
+    expectForeignKey(
+      inboxV2OutboundProviderSettlementWorkItems,
+      "inbox_v2_outbound_provider_settlement_work_items_observation_fk",
+      inboxV2OutboundProviderObservations,
+      ["tenant_id", "observation_id"],
+      ["tenant_id", "id"]
+    );
+    expect(
+      uniqueColumns(
+        inboxV2OutboundProviderSettlementWorkItems,
+        "inbox_v2_outbound_provider_settlement_work_items_link_uk"
+      )
+    ).toEqual(["tenant_id", "candidate_transport_link_id"]);
+    expect(
+      indexColumns(
+        inboxV2OutboundProviderSettlementWorkItems,
+        "inbox_v2_outbound_provider_settlement_work_items_due_idx"
+      )
+    ).toEqual(["tenant_id", "available_at", "observation_id"]);
+    expect(
+      checkSql(
+        inboxV2OutboundProviderSettlementWorkItems,
+        "inbox_v2_outbound_provider_settlement_work_items_state_check"
+      )
+    ).toContain("terminal_at");
+  });
+
   it("keeps JSONB limited to bounded contract snapshots", () => {
     expect(jsonColumnNames(inboxV2ExternalMessageReferences)).toEqual([
       "identity_declaration"
@@ -483,6 +745,10 @@ describe("Inbox V2 outbound transport schema", () => {
     expect(
       jsonColumnNames(inboxV2OutboundDispatchReconciliationDecisions)
     ).toEqual(["operator_authorization_snapshot"]);
+    expect(jsonColumnNames(inboxV2OutboundProviderObservations)).toEqual([
+      "source_occurrence_detail",
+      "observation_detail"
+    ]);
   });
 
   it("keeps every CHECK constraint row-local and free of subqueries", () => {
@@ -498,6 +764,10 @@ describe("Inbox V2 outbound transport schema", () => {
 
   it("installs immutable, CAS and deferred bounded-coherence SQL", () => {
     const invariantSql = INBOX_V2_OUTBOUND_TRANSPORT_INTEGRITY_SQL;
+    expect(invariantSql).not.toContain(
+      "inbox_v2_timeline_items_immutable_trigger"
+    );
+    expect(invariantSql).not.toContain("inbox_v2_messages_immutable_trigger");
     expect(invariantSql).toContain(
       "alter table public.inbox_v2_source_occurrences"
     );
@@ -576,9 +846,226 @@ describe("Inbox V2 outbound transport schema", () => {
     expect(invariantSql).toContain(
       "create or replace function public.inbox_v2_outbound_artifact_link_guard_insert()"
     );
+    expect(invariantSql).toContain(
+      "create or replace function public.inbox_v2_outbound_correlation_anchor_guard_insert()"
+    );
+    expect(invariantSql).toContain(
+      "create or replace function public.inbox_v2_outbound_provider_observation_guard_insert()"
+    );
+    const providerTransportLineage = functionSql(
+      invariantSql,
+      "inbox_v2_outbound_provider_transport_lineage"
+    );
+    for (const immutableProjectionFence of [
+      "observation_dispatch #> '{message}' = jsonb_build_object(",
+      "observation_dispatch #> '{multiSendOperation}' = case",
+      "observation_attempt #>> '{claimToken}' = checked_attempt.claim_token",
+      "observation_attempt #> '{retrySafety,adapterContract}' =",
+      "observation_attempt #>> '{retrySafety,providerCorrelationToken}'",
+      "(observation_attempt #>> '{leaseExpiresAt}')::timestamptz =",
+      "(observation_attempt #>> '{openedAt}')::timestamptz ="
+    ]) {
+      expect(providerTransportLineage).toContain(immutableProjectionFence);
+    }
+    for (const mutableProjectionFence of [
+      "observation_outcome -",
+      "checked_attempt.provider_acknowledgement_token",
+      "checked_attempt.diagnostic_correlation_token",
+      "checked_attempt.unknown_required_action::text",
+      "observation_attempt #>> '{completionSource}'",
+      "observation_dispatch #> '{activeAttempt}' = case",
+      "observation_dispatch #> '{retryAuthorization}' = case",
+      "(observation_dispatch #>> '{updatedAt}')::timestamptz ="
+    ]) {
+      expect(providerTransportLineage).toContain(mutableProjectionFence);
+    }
+    for (const acceptedLineage of [
+      "return 'exact_head';",
+      "return 'pending_to_outcome_unknown';",
+      "return 'pending_to_accepted';",
+      "return 'outcome_unknown_to_accepted';",
+      "return 'pending_to_outcome_unknown_to_accepted';"
+    ]) {
+      expect(providerTransportLineage).toContain(acceptedLineage);
+    }
+    expect(providerTransportLineage).toContain(
+      "checked_attempt.revision =\n       (observation_attempt #>> '{revision}')::bigint + 1"
+    );
+    expect(providerTransportLineage).toContain(
+      "checked_dispatch.revision =\n       (observation_dispatch #>> '{revision}')::bigint + 2"
+    );
+    expect(providerTransportLineage).toContain("return 'invalid';");
+
+    const providerObservationGuard = functionSql(
+      invariantSql,
+      "inbox_v2_outbound_provider_observation_guard_insert"
+    );
+    expect(providerObservationGuard).toContain(
+      "new.observation_detail, dispatch_row, attempt_row"
+    );
+    expect(providerObservationGuard).toContain(
+      "lineage_row.transport_lineage in (\n        'exact_head',\n        'pending_to_outcome_unknown',\n        'pending_to_accepted'\n      )"
+    );
+    expect(providerObservationGuard).not.toContain(
+      "lineage_row.transport_lineage in (\n        'exact_head',\n        'outcome_unknown_to_accepted'"
+    );
+    expect(providerObservationGuard).toContain(
+      "accepted_decision_row.decided_at = dispatch_row.updated_at"
+    );
+    for (const forgedDetailFence of [
+      "new.observation_detail #>> '{sourceOccurrenceDetailDigestSha256}' =",
+      "new.observation_detail #> '{effectDisposition}' =",
+      "new.observation_detail #> '{artifact,dispatch}' = jsonb_build_object(",
+      "new.observation_detail #> '{artifact,diagnostic}' = case",
+      "(new.observation_detail #>> '{artifact,createdAt}')::timestamptz =",
+      "new.observation_detail #> '{route,externalThread}' =",
+      "new.observation_detail #> '{route,sourceConnection}' =",
+      "new.observation_detail #> '{route,sourceAccount}' =",
+      "new.observation_detail #> '{route,sourceThreadBinding}' =",
+      "new.observation_detail #> '{route,bindingFence}' =",
+      "new.observation_detail #> '{route,adapterContract}' =",
+      "new.observation_detail #> '{route,conversationAuthorization}' =",
+      "new.observation_detail #> '{route,sourceAccountAuthorization}' =",
+      "new.observation_detail #> '{route,referenceContext}' =",
+      "new.observation_detail #> '{route,runtimeObservationAtResolution}' =",
+      "new.observation_detail #> '{route,selection,intent}' =",
+      "new.observation_detail #> '{evidence}' = jsonb_build_object("
+    ]) {
+      expect(providerObservationGuard).toContain(forgedDetailFence);
+    }
+    const settlementGuard = functionSql(
+      invariantSql,
+      "inbox_v2_outbound_provider_settlement_guard_insert"
+    );
+    expect(settlementGuard).toContain("coverage_complete");
+    expect(settlementGuard).toContain("retain_dispatch_state");
+    expect(settlementGuard).toContain("provider_observation");
+    expect(settlementGuard).toContain("reconcile_outcome_unknown");
+    expect(settlementGuard).toContain("canonical_artifact_reference_link_id");
+    expect(settlementGuard).toContain(
+      "observation_transport_lineage <> 'pending_to_accepted'"
+    );
+    expect(settlementGuard).toContain(
+      "'outcome_unknown_to_accepted',\n         'pending_to_outcome_unknown_to_accepted'"
+    );
+    expect(settlementGuard).toContain(
+      "current_attempt_completion_source <> 'provider_observation'"
+    );
+    expect(settlementGuard).toContain("not accepted_reconciliation_proven");
+    expect(settlementGuard).toContain(
+      "accepted_decision_row.decided_at = dispatch_row.updated_at"
+    );
+    expect(settlementGuard).toContain(
+      "decision_row.decided_at = new.settled_at"
+    );
+    expect(invariantSql).toContain(
+      "before update or delete on public.inbox_v2_outbound_provider_observations"
+    );
+    const settlementWorkGuard = functionSql(
+      invariantSql,
+      "inbox_v2_outbound_provider_settlement_work_guard"
+    );
+    expect(settlementWorkGuard).toContain("for share of observation_row");
+    expect(settlementWorkGuard).toContain("clock_timestamp()");
+    expect(settlementWorkGuard).toContain("last_finalized_result_hash");
+    expect(settlementWorkGuard).toContain(
+      "inbox_v2_outbound_provider_observation_settlements"
+    );
+    const observationWorkClosure = functionSql(
+      invariantSql,
+      "inbox_v2_assert_outbound_provider_observation_work"
+    );
+    expect(observationWorkClosure).toContain(
+      "join public.inbox_v2_outbound_provider_settlement_work_items work_row"
+    );
+    expect(observationWorkClosure).toContain(
+      "work_row.trusted_service_id =\n       observation_row.observed_by_trusted_service_id"
+    );
+    expect(observationWorkClosure).toContain(
+      "work_row.created_at = observation_row.recorded_at"
+    );
+    expect(observationWorkClosure).toContain("coherent_work_count <> 1");
+    expect(observationWorkClosure).toContain(
+      "inbox_v2.outbound_provider_observation_work_required"
+    );
+    expect(invariantSql).toContain(
+      "create constraint trigger inbox_v2_outbound_provider_observations_work_constraint"
+    );
+    expect(invariantSql).toContain(
+      "create constraint trigger inbox_v2_outbound_provider_settlement_work_observation_constraint"
+    );
+    expect(invariantSql).toContain(
+      "execute function public.inbox_v2_outbound_provider_observation_work_deferred()"
+    );
+    expect(invariantSql).toContain(
+      "create trigger inbox_v2_outbound_provider_settlement_work_guard_trigger"
+    );
     expect(invariantSql).toContain("deferrable initially deferred");
     expect(invariantSql).not.toMatch(/\b(?:from|join) inbox_v2_/);
     expect(invariantSql).not.toMatch(/execute function inbox_v2_/);
+  });
+
+  it("fails closed when provider observation JSON could forge persisted transport projections", () => {
+    const invariantSql = INBOX_V2_OUTBOUND_TRANSPORT_INTEGRITY_SQL;
+    const lineage = functionSql(
+      invariantSql,
+      "inbox_v2_outbound_provider_transport_lineage"
+    );
+    const observationGuard = functionSql(
+      invariantSql,
+      "inbox_v2_outbound_provider_observation_guard_insert"
+    );
+
+    expect(lineage).toContain("observation_dispatch - array[");
+    expect(lineage).toContain("observation_attempt - array[");
+    expect(lineage).toContain(
+      "checked_dispatch.revision =\n       (observation_dispatch #>> '{revision}')::bigint + 2"
+    );
+    expect(observationGuard).toContain(
+      "(new.observation_detail #> '{artifact}') - array["
+    );
+    expect(observationGuard).toContain(
+      "(new.observation_detail #> '{route}') - array["
+    );
+    expect(observationGuard).toContain(
+      "'accountGeneration', route_row.account_generation::text"
+    );
+    expect(observationGuard).toContain(
+      "new.observation_detail #> '{route,conversationAuthorization}' =\n        route_row.conversation_authorization_snapshot"
+    );
+    expect(observationGuard).toContain(
+      "new.observation_detail #> '{route,sourceAccountAuthorization}' =\n        route_row.source_account_authorization_snapshot"
+    );
+    expect(observationGuard).not.toContain(
+      "lineage_row.transport_lineage in (\n        'exact_head',\n        'outcome_unknown_to_accepted'"
+    );
+  });
+
+  it("rejects settlement lineage mismatches and orphan provider observations", () => {
+    const invariantSql = INBOX_V2_OUTBOUND_TRANSPORT_INTEGRITY_SQL;
+    const settlementGuard = functionSql(
+      invariantSql,
+      "inbox_v2_outbound_provider_settlement_guard_insert"
+    );
+    const workClosure = functionSql(
+      invariantSql,
+      "inbox_v2_assert_outbound_provider_observation_work"
+    );
+
+    expect(settlementGuard).toContain(
+      "observation_transport_lineage <> 'pending_to_accepted'"
+    );
+    expect(settlementGuard).toContain(
+      "observation_transport_lineage not in (\n         'outcome_unknown_to_accepted',\n         'pending_to_outcome_unknown_to_accepted'"
+    );
+    expect(settlementGuard).toContain("not accepted_reconciliation_proven");
+    expect(workClosure).toContain("coherent_work_count <> 1");
+    expect(invariantSql).toContain(
+      "create constraint trigger inbox_v2_outbound_provider_observations_work_constraint"
+    );
+    expect(invariantSql).toContain(
+      "deferrable initially deferred for each row"
+    );
   });
 
   it("keeps every explicit access index tenant-leading", () => {
@@ -601,12 +1088,17 @@ const transportTables = [
   inboxV2OutboundMultiSendOperations,
   inboxV2OutboundDispatches,
   inboxV2OutboundDispatchAttempts,
+  inboxV2OutboundProviderCorrelationAnchors,
   inboxV2OutboundDispatchReconciliationDecisions,
   inboxV2OutboundDispatchReconciliationPermissions,
   inboxV2OutboundDispatchArtifacts,
   inboxV2SourceOccurrenceResolutionTransitions,
   inboxV2SourceOccurrenceResolutionCandidates,
   inboxV2OutboundDispatchArtifactReferenceLinks,
+  inboxV2OutboundProviderObservations,
+  inboxV2OutboundDispatchArtifactResolutions,
+  inboxV2OutboundProviderObservationSettlements,
+  inboxV2OutboundProviderSettlementWorkItems,
   inboxV2OutboundMultiSendChildren
 ] as const;
 
@@ -710,4 +1202,61 @@ function functionSql(source: string, name: string): string {
   );
   if (!match) throw new Error(`Missing invariant function: ${name}`);
   return match[0];
+}
+
+function expectSqlParenthesesBalanced(source: string): void {
+  let depth = 0;
+  let quote: "'" | '"' | null = null;
+  let lineComment = false;
+  let blockComment = false;
+
+  for (let index = 0; index < source.length; index += 1) {
+    const current = source[index];
+    const next = source[index + 1];
+
+    if (lineComment) {
+      if (current === "\n") lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      if (current === "*" && next === "/") {
+        blockComment = false;
+        index += 1;
+      }
+      continue;
+    }
+    if (quote !== null) {
+      if (current === quote) {
+        if (next === quote) {
+          index += 1;
+        } else {
+          quote = null;
+        }
+      }
+      continue;
+    }
+    if (current === "-" && next === "-") {
+      lineComment = true;
+      index += 1;
+      continue;
+    }
+    if (current === "/" && next === "*") {
+      blockComment = true;
+      index += 1;
+      continue;
+    }
+    if (current === "'" || current === '"') {
+      quote = current;
+      continue;
+    }
+    if (current === "(") depth += 1;
+    if (current === ")") {
+      depth -= 1;
+      expect(depth).toBeGreaterThanOrEqual(0);
+    }
+  }
+
+  expect(quote).toBeNull();
+  expect(blockComment).toBe(false);
+  expect(depth).toBe(0);
 }

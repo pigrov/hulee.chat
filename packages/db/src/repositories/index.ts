@@ -16,20 +16,32 @@ export { persistInboxV2OutboundDispatchContentPlanInTransaction } from "./sql-in
 export type { PersistInboxV2OutboundDispatchContentPlanResult } from "./sql-inbox-v2-file-object-repository";
 export {
   InboxV2TimelineMessagePersistenceInvariantError,
+  prepareInboxV2MessageTransportAssociation,
   prepareInboxV2MessageReactionCommand,
   prepareInboxV2MessageCreation,
+  sealInboxV2PreparedMessageTransportAssociation,
   sealInboxV2PreparedMessageReactionCommand,
   sealInboxV2PreparedMessageCreation
 } from "./sql-inbox-v2-timeline-message-repository";
+export { createSqlInboxV2NativeOutboundReconciliationRuntime } from "./sql-inbox-v2-native-outbound-persistence";
+export type {
+  CreateSqlInboxV2NativeOutboundReconciliationRuntimeOptions,
+  InboxV2NativeOutboundAuthorizationPort,
+  InboxV2NativeOutboundAuthorizationRequest
+} from "./sql-inbox-v2-native-outbound-persistence";
 export type {
   InboxV2MessageCreationCommit,
   InboxV2MessageReactionCommit,
+  InboxV2MessageTransportAssociationCommit,
   InboxV2PreparedMessageCreationCapability,
+  InboxV2PreparedMessageTransportAssociationCapability,
   InboxV2PreparedMessageReactionCommandCapability,
+  PrepareInboxV2MessageTransportAssociationResult,
   PrepareInboxV2MessageReactionCommandResult,
   PrepareInboxV2MessageCreationInput,
   PrepareInboxV2MessageCreationResult,
   SealInboxV2PreparedMessageReactionCommandResult,
+  SealInboxV2PreparedMessageTransportAssociationResult,
   SealInboxV2PreparedMessageCreationResult
 } from "./sql-inbox-v2-timeline-message-repository";
 export { createSqlInboxV2MessageReactionAtomicCoordinator } from "./sql-inbox-v2-message-reaction-command-coordinator";

@@ -169,6 +169,145 @@ export type InboxV2AtomicMessageReactionSealManifest = Readonly<{
 }>;
 
 /**
+ * Canonical closure for one provider echo/response association with an
+ * existing outbound Message. The append advances only the independent
+ * transport-link head; it never rewrites the Message or requests provider I/O.
+ */
+export type InboxV2AtomicMessageTransportAssociationSealManifest = Readonly<{
+  kind: "message_transport_association";
+  tenantId: string;
+  correlationId: string;
+  conversationId: string;
+  messageId: string;
+  timelineItemId: string;
+  timelineItemRevision: string;
+  timelineSequence: string;
+  linkId: string;
+  linkRevision: string;
+  linkHeadRevision: string;
+  sourceOccurrenceId: string;
+  externalMessageReferenceId: string;
+  role: "provider_echo" | "provider_response";
+  authorizationBasis: "historical_provider_truth";
+  trustedServiceId: string;
+  auditTargetEntityId: string;
+  sourceAccountIds: readonly string[];
+  audience: "internal_participants" | "conversation_external";
+  stateSchemaId: string;
+  stateSchemaVersion: string;
+  stateHash: string;
+  payloadReference: InboxV2PayloadReference;
+  domainCommitReference: InboxV2PayloadReference;
+  event: InboxV2AtomicStreamEventManifest;
+}>;
+
+/**
+ * Canonical closure for an additional provider-native outbound occurrence
+ * attached to an existing source-authored outbound Message. This is separate
+ * from provider response/echo settlement: it resolves no dispatch artifact
+ * and can publish only the transport projection.
+ */
+export type InboxV2AtomicNativeOutboundTransportAssociationSealManifest =
+  Readonly<{
+    kind: "native_outbound_transport_association";
+    tenantId: string;
+    correlationId: string;
+    conversationId: string;
+    messageId: string;
+    authorParticipantId: string;
+    sourceExternalIdentityId: string;
+    originSourceOccurrenceId: string;
+    sourceOccurrenceId: string;
+    sourceOccurrenceRevision: string;
+    resolutionTransitionId: string;
+    externalMessageReferenceId: string;
+    timelineItemId: string;
+    timelineItemRevision: string;
+    timelineSequence: string;
+    linkId: string;
+    linkRevision: string;
+    linkHeadRevision: string;
+    role: "native_outbound";
+    trustedServiceId: string;
+    auditTargetEntityId: string;
+    auditConversationFacetEntityId: string;
+    audience: "internal_participants" | "conversation_external";
+    stateSchemaId: string;
+    stateSchemaVersion: string;
+    stateHash: string;
+    payloadReference: InboxV2PayloadReference;
+    domainCommitReference: InboxV2PayloadReference;
+    sourceResolutionReference: InboxV2PayloadReference;
+    event: InboxV2AtomicStreamEventManifest;
+  }>;
+
+export function deriveInboxV2ProviderObservationAuditTargetReference(input: {
+  tenantId: string;
+  linkId: string;
+}): InboxV2InternalEntityReference {
+  const digest = calculateInboxV2CanonicalSha256({
+    domain: "core:inbox-v2.provider-observation-audit-target@v1",
+    tenantId: input.tenantId,
+    linkId: input.linkId
+  });
+  return inboxV2InternalEntityReferenceSchema.parse({
+    tenantId: input.tenantId,
+    entityTypeId: "core:message-transport-observation",
+    entityId: `internal-ref:${digest.slice("sha256:".length)}`
+  });
+}
+
+export function deriveInboxV2ProviderObservationSourceAccountAuditReference(input: {
+  tenantId: string;
+  sourceAccountId: string;
+}): InboxV2InternalEntityReference {
+  const digest = calculateInboxV2CanonicalSha256({
+    domain: "core:inbox-v2.provider-observation-source-account-audit-facet@v1",
+    tenantId: input.tenantId,
+    sourceAccountId: input.sourceAccountId
+  });
+  return inboxV2InternalEntityReferenceSchema.parse({
+    tenantId: input.tenantId,
+    entityTypeId: "core:source-account",
+    entityId: `internal-ref:${digest.slice("sha256:".length)}`
+  });
+}
+
+export function deriveInboxV2NativeOutboundTransportAuditTargetReference(input: {
+  tenantId: string;
+  messageId: string;
+  linkId: string;
+}): InboxV2InternalEntityReference {
+  const digest = calculateInboxV2CanonicalSha256({
+    domain: "core:inbox-v2.native-outbound-transport-audit-target@v1",
+    tenantId: input.tenantId,
+    messageId: input.messageId,
+    linkId: input.linkId
+  });
+  return inboxV2InternalEntityReferenceSchema.parse({
+    tenantId: input.tenantId,
+    entityTypeId: "core:message",
+    entityId: `internal-ref:${digest.slice("sha256:".length)}`
+  });
+}
+
+export function deriveInboxV2NativeOutboundConversationAuditReference(input: {
+  tenantId: string;
+  conversationId: string;
+}): InboxV2InternalEntityReference {
+  const digest = calculateInboxV2CanonicalSha256({
+    domain: "core:inbox-v2.native-outbound-conversation-audit-facet@v1",
+    tenantId: input.tenantId,
+    conversationId: input.conversationId
+  });
+  return inboxV2InternalEntityReferenceSchema.parse({
+    tenantId: input.tenantId,
+    entityTypeId: "core:conversation",
+    entityId: `internal-ref:${digest.slice("sha256:".length)}`
+  });
+}
+
+/**
  * Audit references intentionally use opaque internal IDs. Derive that opaque
  * ID from the exact TimelineItem instead of accepting an arbitrary sibling
  * target from the command materialization input.
@@ -260,6 +399,8 @@ export type InboxV2AtomicMaterializationSealManifest =
   | InboxV2AtomicMessageCreationSealManifest
   | InboxV2AtomicMessageLifecycleSealManifest
   | InboxV2AtomicMessageReactionSealManifest
+  | InboxV2AtomicMessageTransportAssociationSealManifest
+  | InboxV2AtomicNativeOutboundTransportAssociationSealManifest
   | InboxV2AtomicMessageMutationSealManifest
   | InboxV2AtomicTimelineItemCreationSealManifest;
 
@@ -646,6 +787,8 @@ function recursivelyFrozenManifest(
     (manifest.kind !== "message_creation" &&
       manifest.kind !== "message_lifecycle" &&
       manifest.kind !== "message_reaction" &&
+      manifest.kind !== "message_transport_association" &&
+      manifest.kind !== "native_outbound_transport_association" &&
       manifest.kind !== "message_mutation" &&
       manifest.kind !== "timeline_item_creation")
   ) {

@@ -3,11 +3,14 @@ import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 import {
   calculateInboxV2OutboundDispatchContentPlanDigest,
+  calculateInboxV2OutboundProviderSourceOccurrenceDetailDigest,
   calculateInboxV2OutboxLeaseTokenHash,
   createInboxV2MixedProviderArtifactOutcomeDiagnostic,
   deriveInboxV2OutboundDispatchArtifactId,
+  deriveInboxV2OutboundProviderObservationId,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
+  INBOX_V2_OUTBOUND_PROVIDER_OBSERVATION_EFFECT_DISPOSITION,
   inboxV2AuthorizationDecisionReferenceSchema,
   inboxV2EntityRevisionSchema,
   inboxV2OutboxIntentSchema,
@@ -17,9 +20,11 @@ import {
   inboxV2OutboundDispatchArtifactSchema,
   inboxV2OutboundDispatchAttemptSchema,
   inboxV2OutboundDispatchAttemptCommitSchema,
+  inboxV2OutboundDispatchReconciliationCommitSchema,
   inboxV2OutboundDispatchRerouteCommitSchema,
   inboxV2OutboundDispatchRouteFailureCommitSchema,
   inboxV2OutboundDispatchSchema,
+  inboxV2OutboundProviderObservationSchema,
   materializeInboxV2OutboundRouteResolutionCommit,
   resolveInboxV2OutboundRoute,
   type InboxV2AuthorizationDecisionReference,
@@ -31,6 +36,7 @@ import {
   buildCompareAndSwapInboxV2OutboundDispatchSql,
   buildCompareAndSwapInboxV2SourceOccurrenceResolutionSql,
   buildCheckInboxV2ArtifactRetrySafetySql,
+  buildCheckInboxV2UnsettledAcceptedProviderObservationSql,
   buildFindInboxV2ExternalMessageReferenceSql,
   buildFindInboxV2OutboundDispatchSql,
   buildInsertInboxV2ExternalMessageReferenceSql,
@@ -47,6 +53,7 @@ import {
   buildValidateInboxV2ProviderOpenContentPlanSql,
   computeInboxV2ExternalMessageKeyDigest,
   createSqlInboxV2OutboundTransportRepository,
+  lockAndValidateInboxV2OutboundDispatchAttemptInTransaction,
   persistInboxV2ExplicitRerouteResolutionInTransaction,
   persistInboxV2RouteResolutionInTransaction,
   type InboxV2OutboundTransportTransactionExecutor
@@ -121,6 +128,133 @@ function safeRetryOpenAttempt() {
   });
   if (commit.kind !== "open_attempt") throw new Error("Expected open attempt");
   return commit;
+}
+
+function unsafeOpenAttempt() {
+  const attempt = inboxV2OutboundDispatchAttemptSchema.parse({
+    ...fixture.pendingAttempt,
+    retrySafety: {
+      ...fixture.pendingAttempt.retrySafety,
+      mechanism: "unsafe_or_unknown",
+      providerCorrelationToken: null,
+      automaticRetryAllowed: false
+    }
+  });
+  const commit = inboxV2OutboundDispatchAttemptCommitSchema.parse({
+    ...fixture.openAttemptCommit,
+    attempt
+  });
+  if (commit.kind !== "open_attempt") throw new Error("Expected open attempt");
+  return commit;
+}
+
+function terminalProviderResultCommit() {
+  if (fixture.unknownAttempt.outcome.kind !== "outcome_unknown") {
+    throw new Error("Expected unknown attempt fixture");
+  }
+  const attemptAfter = inboxV2OutboundDispatchAttemptSchema.parse({
+    ...fixture.pendingAttempt,
+    outcome: {
+      kind: "terminal_failure",
+      completedAt: OUTBOUND_TEST_TIMES.acceptedAt,
+      diagnostic: fixture.unknownAttempt.outcome.diagnostic
+    },
+    completionSource: "provider_result",
+    revision: "2"
+  });
+  const dispatchAfter = inboxV2OutboundDispatchSchema.parse({
+    ...fixture.attemptingDispatch,
+    state: "terminal_failure",
+    activeAttempt: null,
+    revision: "3",
+    updatedAt: OUTBOUND_TEST_TIMES.acceptedAt
+  });
+  const commit = inboxV2OutboundDispatchAttemptCommitSchema.parse({
+    kind: "complete_attempt",
+    tenantId: fixture.tenantId,
+    dispatchBefore: fixture.attemptingDispatch,
+    attemptBefore: fixture.pendingAttempt,
+    attemptAfter,
+    completionSource: "provider_result",
+    completedByTrustedServiceId: "core:source-runtime",
+    dispatchAfter
+  });
+  if (commit.kind !== "complete_attempt") {
+    throw new Error("Expected complete attempt");
+  }
+  return commit;
+}
+
+function retryableProviderResultCommit() {
+  if (fixture.reconciliationDecision.result.state !== "retryable_failure") {
+    throw new Error("Expected retryable reconciliation fixture");
+  }
+  const attemptAfter = inboxV2OutboundDispatchAttemptSchema.parse({
+    ...fixture.pendingAttempt,
+    outcome: {
+      kind: "retryable_failure",
+      completedAt: OUTBOUND_TEST_TIMES.acceptedAt,
+      retryAt: OUTBOUND_TEST_TIMES.retryAt,
+      diagnostic: fixture.reconciliationDecision.result.diagnostic
+    },
+    completionSource: "provider_result",
+    revision: "2"
+  });
+  const dispatchAfter = inboxV2OutboundDispatchSchema.parse({
+    ...fixture.attemptingDispatch,
+    state: "retryable_failure",
+    activeAttempt: null,
+    revision: "3",
+    updatedAt: OUTBOUND_TEST_TIMES.acceptedAt
+  });
+  const commit = inboxV2OutboundDispatchAttemptCommitSchema.parse({
+    kind: "complete_attempt",
+    tenantId: fixture.tenantId,
+    dispatchBefore: fixture.attemptingDispatch,
+    attemptBefore: fixture.pendingAttempt,
+    attemptAfter,
+    completionSource: "provider_result",
+    completedByTrustedServiceId: "core:source-runtime",
+    dispatchAfter
+  });
+  if (commit.kind !== "complete_attempt") {
+    throw new Error("Expected complete attempt");
+  }
+  return commit;
+}
+
+function reconciliationCommitFor(state: "accepted" | "terminal_failure") {
+  if (fixture.unknownAttempt.outcome.kind !== "outcome_unknown") {
+    throw new Error("Expected unknown attempt fixture");
+  }
+  const result =
+    state === "accepted"
+      ? {
+          state,
+          providerAcknowledgementToken: "provider:accepted-reconciliation",
+          evidenceToken: "evidence:accepted-reconciliation"
+        }
+      : {
+          state,
+          diagnostic: fixture.unknownAttempt.outcome.diagnostic,
+          evidenceToken: "evidence:terminal-reconciliation"
+        };
+  return inboxV2OutboundDispatchReconciliationCommitSchema.parse({
+    tenantId: fixture.tenantId,
+    decision: {
+      ...fixture.reconciliationDecision,
+      id: `outbound_dispatch_reconciliation_decision:${state}-fence`,
+      result
+    },
+    dispatchBefore: fixture.unknownDispatch,
+    dispatchAfter: {
+      ...fixture.unknownDispatch,
+      state,
+      retryAuthorization: null,
+      revision: "4",
+      updatedAt: OUTBOUND_TEST_TIMES.reconciledAt
+    }
+  });
 }
 
 describe("SQL Inbox V2 outbound transport repository", () => {
@@ -719,7 +853,7 @@ describe("SQL Inbox V2 outbound transport repository", () => {
     ]);
   });
 
-  it("durably opens the attempt and advances the dispatch CAS before provider I/O", async () => {
+  it("durably anchors an idempotent attempt before dispatch CAS and provider I/O", async () => {
     const attemptInsert = renderQuery(
       buildInsertInboxV2OutboundDispatchAttemptSql(fixture.pendingAttempt)
     );
@@ -748,13 +882,69 @@ describe("SQL Inbox V2 outbound transport repository", () => {
       [{ id: fixture.route.id }],
       [bindingFenceRow(fixture)],
       [{ id: fixture.pendingAttempt.id }],
+      [{ id: fixture.pendingAttempt.id }],
       [{ id: fixture.queuedDispatch.id }]
     ]);
     await expect(
       createSqlInboxV2OutboundTransportRepository(executor).applyAttempt(
         fixture.openAttemptCommit
       )
-    ).resolves.toEqual({ kind: "committed" });
+    ).resolves.toMatchObject({ kind: "committed" });
+    expect(executor.statementKinds()).toEqual([
+      "lock_dispatch",
+      "lock_route",
+      "lock_binding_fence",
+      "insert_attempt",
+      "insert_correlation_anchor",
+      "cas_dispatch"
+    ]);
+    expect(executor.statementKinds().indexOf("insert_attempt")).toBeLessThan(
+      executor.statementKinds().indexOf("insert_correlation_anchor")
+    );
+    expect(
+      executor.statementKinds().indexOf("insert_correlation_anchor")
+    ).toBeLessThan(executor.statementKinds().indexOf("cas_dispatch"));
+    const anchorInsert = executor.queries.find(
+      ({ sql }) => classifyStatement(sql) === "insert_correlation_anchor"
+    );
+    expect(anchorInsert).toBeDefined();
+    expect(normalizeSql(anchorInsert!.sql)).toContain("on conflict do nothing");
+    expect(anchorInsert!.params).toEqual(
+      expect.arrayContaining([
+        fixture.tenantId,
+        fixture.route.adapterContract.contractId,
+        fixture.route.adapterContract.contractVersion,
+        BigInt(fixture.route.adapterContract.declarationRevision),
+        fixture.route.adapterContract.surfaceId,
+        fixture.pendingAttempt.retrySafety.providerCorrelationToken,
+        fixture.queuedDispatch.id,
+        fixture.route.id,
+        fixture.queuedDispatch.message.id,
+        fixture.pendingAttempt.id,
+        fixture.route.externalThread.id,
+        fixture.route.sourceConnection.id,
+        fixture.route.sourceAccount.id,
+        fixture.route.sourceThreadBinding.id,
+        BigInt(fixture.route.bindingFence.bindingGeneration),
+        fixture.pendingAttempt.retrySafety.mechanism,
+        fixture.pendingAttempt.retrySafety.declaredByTrustedServiceId
+      ])
+    );
+  });
+
+  it("does not create a correlation anchor for a non-idempotent attempt", async () => {
+    const commit = unsafeOpenAttempt();
+    const executor = new QueueOutboundExecutor([
+      [dispatchRow(fixture.queuedDispatch)],
+      [{ id: fixture.route.id }],
+      [bindingFenceRow(fixture)],
+      [{ id: commit.attempt.id }],
+      [{ id: commit.dispatchBefore.id }]
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(executor).applyAttempt(commit)
+    ).resolves.toMatchObject({ kind: "committed" });
     expect(executor.statementKinds()).toEqual([
       "lock_dispatch",
       "lock_route",
@@ -762,9 +952,79 @@ describe("SQL Inbox V2 outbound transport repository", () => {
       "insert_attempt",
       "cas_dispatch"
     ]);
-    expect(executor.statementKinds().indexOf("insert_attempt")).toBeLessThan(
-      executor.statementKinds().indexOf("cas_dispatch")
+    expect(executor.statementKinds()).not.toContain(
+      "insert_correlation_anchor"
     );
+    expect(commit.attempt.retrySafety).toMatchObject({
+      mechanism: "unsafe_or_unknown",
+      providerCorrelationToken: null,
+      automaticRetryAllowed: false
+    });
+  });
+
+  it("accepts an exact durable attempt and correlation-anchor replay", async () => {
+    const commit = fixture.openAttemptCommit;
+    if (commit.kind !== "open_attempt")
+      throw new Error("Expected open attempt");
+    const executor = new QueueOutboundExecutor([
+      [dispatchRow(commit.dispatchBefore)],
+      [{ id: commit.routeSnapshot.id }],
+      [bindingFenceRow(fixture)],
+      [],
+      [attemptRow(commit.attempt)],
+      [],
+      [providerCorrelationAnchorRow(commit)],
+      [{ id: commit.dispatchBefore.id }]
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(executor).applyAttempt(commit)
+    ).resolves.toEqual({ kind: "committed" });
+    expect(executor.statementKinds()).toEqual([
+      "lock_dispatch",
+      "lock_route",
+      "lock_binding_fence",
+      "insert_attempt",
+      "lock_attempt",
+      "insert_correlation_anchor",
+      "load_correlation_anchor",
+      "cas_dispatch"
+    ]);
+  });
+
+  it("rolls back a cross-dispatch provider-token conflict before dispatch CAS", async () => {
+    const commit = fixture.openAttemptCommit;
+    if (commit.kind !== "open_attempt")
+      throw new Error("Expected open attempt");
+    const executor = new QueueOutboundExecutor([
+      [dispatchRow(commit.dispatchBefore)],
+      [{ id: commit.routeSnapshot.id }],
+      [bindingFenceRow(fixture)],
+      [{ id: commit.attempt.id }],
+      [],
+      [
+        providerCorrelationAnchorRow(commit, {
+          dispatch_id: "outbound_dispatch:other-provider-token-owner",
+          route_id: "outbound_route:other-provider-token-owner",
+          message_id: "message:other-provider-token-owner",
+          first_attempt_id: "outbound_dispatch_attempt:other-token-owner"
+        })
+      ]
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(executor).applyAttempt(commit)
+    ).resolves.toEqual({ kind: "provider_correlation_conflict" });
+    expect(executor.statementKinds()).toEqual([
+      "lock_dispatch",
+      "lock_route",
+      "lock_binding_fence",
+      "insert_attempt",
+      "insert_correlation_anchor",
+      "load_correlation_anchor"
+    ]);
+    expect(executor.statementKinds()).not.toContain("cas_dispatch");
+    expect(executor.transactionFailureCount).toBe(1);
   });
 
   it("allows a retry open only when the prior attempt has no accepted artifact", async () => {
@@ -779,12 +1039,21 @@ describe("SQL Inbox V2 outbound transport repository", () => {
     expect(normalizeSql(safetyQuery.sql)).toContain(
       "artifact.state = 'accepted'"
     );
+    expect(normalizeSql(safetyQuery.sql)).toContain(
+      "from inbox_v2_outbound_dispatch_artifact_resolutions resolution"
+    );
+    expect(normalizeSql(safetyQuery.sql)).toContain(
+      "resolution.effective_state = 'accepted'"
+    );
 
     const executor = new QueueOutboundExecutor([
       [dispatchRow(fixture.reconciledDispatch)],
       [{ id: fixture.route.id }],
       [bindingFenceRow(fixture)],
+      [attemptRow(fixture.unknownAttempt)],
+      [],
       [{ retry_safe: true }],
+      [{ id: commit.attempt.id }],
       [{ id: commit.attempt.id }],
       [{ id: commit.dispatchBefore.id }]
     ]);
@@ -795,8 +1064,11 @@ describe("SQL Inbox V2 outbound transport repository", () => {
       "lock_dispatch",
       "lock_route",
       "lock_binding_fence",
+      "lock_attempt",
+      "check_provider_settlement_fence",
       "check_artifact_retry_safety",
       "insert_attempt",
+      "insert_correlation_anchor",
       "cas_dispatch"
     ]);
   });
@@ -807,6 +1079,8 @@ describe("SQL Inbox V2 outbound transport repository", () => {
       [dispatchRow(fixture.reconciledDispatch)],
       [{ id: fixture.route.id }],
       [bindingFenceRow(fixture)],
+      [attemptRow(fixture.unknownAttempt)],
+      [],
       [{ retry_safe: false }]
     ]);
     await expect(
@@ -816,10 +1090,136 @@ describe("SQL Inbox V2 outbound transport repository", () => {
       "lock_dispatch",
       "lock_route",
       "lock_binding_fence",
+      "lock_attempt",
+      "check_provider_settlement_fence",
       "check_artifact_retry_safety"
     ]);
     expect(executor.statementKinds()).not.toContain("insert_attempt");
   });
+
+  it("inspects accepted observations without additional row locks and fences retry open until settlement", async () => {
+    const commit = safeRetryOpenAttempt();
+    const fenceQuery = renderQuery(
+      buildCheckInboxV2UnsettledAcceptedProviderObservationSql({
+        tenantId: commit.tenantId,
+        dispatchId: commit.dispatchBefore.id,
+        attemptId: commit.priorAttempt!.id
+      })
+    );
+    const normalizedFenceSql = normalizeSql(fenceQuery.sql);
+    expect(normalizedFenceSql).toContain(
+      "left join inbox_v2_outbound_provider_settlement_work_items"
+    );
+    expect(normalizedFenceSql).toContain(
+      "left join inbox_v2_outbound_provider_observation_settlements"
+    );
+    expect(normalizedFenceSql).toContain(
+      "observation_row.effective_state = 'accepted'"
+    );
+    expect(normalizedFenceSql).not.toContain("for update");
+    expect(normalizedFenceSql).not.toContain("for share");
+
+    const observationId = "outbound_provider_observation:pending-retry-fence";
+    const executor = new QueueOutboundExecutor([
+      [dispatchRow(fixture.reconciledDispatch)],
+      [{ id: fixture.route.id }],
+      [bindingFenceRow(fixture)],
+      [attemptRow(fixture.unknownAttempt)],
+      [
+        {
+          observation_id: observationId,
+          work_observation_id: observationId,
+          work_state: "pending",
+          settlement_observation_id: null
+        }
+      ]
+    ]);
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(executor).applyAttempt(commit)
+    ).resolves.toEqual({ kind: "provider_settlement_pending" });
+    expect(executor.statementKinds()).toEqual([
+      "lock_dispatch",
+      "lock_route",
+      "lock_binding_fence",
+      "lock_attempt",
+      "check_provider_settlement_fence"
+    ]);
+    expect(executor.statementKinds()).not.toContain("insert_attempt");
+  });
+
+  it("distinguishes dead settlement work and rejects orphaned accepted observations", async () => {
+    const observationId = "outbound_provider_observation:dead-completion-fence";
+    const deadExecutor = new QueueOutboundExecutor([
+      [dispatchRow(fixture.attemptingDispatch)],
+      [attemptRow(fixture.pendingAttempt)],
+      [
+        {
+          observation_id: observationId,
+          work_observation_id: observationId,
+          work_state: "dead",
+          settlement_observation_id: null
+        }
+      ]
+    ]);
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(deadExecutor).applyAttempt(
+        fixture.completeUnknownCommit
+      )
+    ).resolves.toEqual({ kind: "provider_settlement_repair_required" });
+    expect(deadExecutor.statementKinds()).not.toContain("cas_attempt");
+
+    const orphanExecutor = new QueueOutboundExecutor([
+      [dispatchRow(fixture.attemptingDispatch)],
+      [attemptRow(fixture.pendingAttempt)],
+      [
+        {
+          observation_id: observationId,
+          work_observation_id: null,
+          work_state: null,
+          settlement_observation_id: null
+        }
+      ]
+    ]);
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(orphanExecutor).applyAttempt(
+        fixture.completeUnknownCommit
+      )
+    ).rejects.toThrow(
+      "Accepted provider observation is missing its settlement work item."
+    );
+    expect(orphanExecutor.transactionFailureCount).toBe(1);
+  });
+
+  it.each([
+    ["outcome_unknown", () => fixture.completeUnknownCommit],
+    ["retryable_failure", retryableProviderResultCommit],
+    ["terminal_failure", terminalProviderResultCommit]
+  ] as const)(
+    "fences %s attempt completion while accepted provider truth is unsettled",
+    async (_outcome, commitFactory) => {
+      const observationId =
+        "outbound_provider_observation:pending-completion-fence";
+      const executor = new QueueOutboundExecutor([
+        [dispatchRow(fixture.attemptingDispatch)],
+        [attemptRow(fixture.pendingAttempt)],
+        [
+          {
+            observation_id: observationId,
+            work_observation_id: observationId,
+            work_state: "leased",
+            settlement_observation_id: null
+          }
+        ]
+      ]);
+      await expect(
+        createSqlInboxV2OutboundTransportRepository(executor).applyAttempt(
+          commitFactory()
+        )
+      ).resolves.toEqual({ kind: "provider_settlement_pending" });
+      expect(executor.statementKinds()).not.toContain("cas_attempt");
+      expect(executor.statementKinds()).not.toContain("cas_dispatch");
+    }
+  );
 
   it("rejects a forged same-id route snapshot before opening a provider attempt", async () => {
     const commit = fixture.openAttemptCommit;
@@ -930,6 +1330,7 @@ describe("SQL Inbox V2 outbound transport repository", () => {
       [bindingFenceRow(fixture)],
       [{ artifact_ordinal: 1 }],
       [{ id: fixture.pendingAttempt.id }],
+      [{ id: fixture.pendingAttempt.id }],
       [{ id: fixture.queuedDispatch.id }]
     ]);
 
@@ -947,6 +1348,7 @@ describe("SQL Inbox V2 outbound transport repository", () => {
       "lock_binding_fence",
       "validate_provider_capabilities",
       "insert_attempt",
+      "insert_correlation_anchor",
       "cas_dispatch"
     ]);
   });
@@ -971,6 +1373,7 @@ describe("SQL Inbox V2 outbound transport repository", () => {
       [{ id: fixture.route.id }],
       [bindingFenceRow(fixture, commit.bindingHeadSnapshot)],
       [{ artifact_ordinal: 1 }],
+      [{ id: fixture.pendingAttempt.id }],
       [{ id: fixture.pendingAttempt.id }],
       [{ id: fixture.queuedDispatch.id }]
     ]);
@@ -1195,6 +1598,27 @@ describe("SQL Inbox V2 outbound transport repository", () => {
     }
   );
 
+  it("locks an exact dispatch and attempt in canonical order before reporting snapshot drift", async () => {
+    const executor = new QueueOutboundExecutor([
+      [dispatchRow(fixture.acceptedDispatch)],
+      [attemptRow(fixture.acceptedAttempt)]
+    ]);
+
+    await expect(
+      lockAndValidateInboxV2OutboundDispatchAttemptInTransaction(executor, {
+        dispatch: fixture.attemptingDispatch,
+        attempt: fixture.pendingAttempt
+      })
+    ).resolves.toEqual({ kind: "dispatch_state_conflict" });
+    expect(executor.statementKinds()).toEqual([
+      "lock_dispatch",
+      "lock_attempt"
+    ]);
+    expect(
+      executor.queries.every(({ sql }) => sql.includes("for update"))
+    ).toBe(true);
+  });
+
   it("atomically persists the exact provider artifact set with attempt completion", async () => {
     const commit = acceptedProviderResultCommit();
     const artifact = acceptedProviderResultArtifact();
@@ -1205,12 +1629,15 @@ describe("SQL Inbox V2 outbound transport repository", () => {
         })
       ],
       [providerIoContentPlanRow()],
+      [dispatchRow(fixture.attemptingDispatch)],
+      [attemptRow(fixture.pendingAttempt)],
       [],
+      [],
+      [{ id: artifact.id }],
       [dispatchRow(fixture.attemptingDispatch)],
       [attemptRow(fixture.pendingAttempt)],
       [{ id: fixture.pendingAttempt.id }],
-      [{ id: fixture.attemptingDispatch.id }],
-      [{ id: artifact.id }]
+      [{ id: fixture.attemptingDispatch.id }]
     ]);
 
     await expect(
@@ -1220,19 +1647,29 @@ describe("SQL Inbox V2 outbound transport repository", () => {
         outboxLease: providerIoOutboxLeaseFence,
         contentPlanDigestSha256: providerIoContentPlan.planDigestSha256,
         commit,
-        artifacts: [artifact]
+        artifacts: [artifact],
+        observations: []
       })
     ).resolves.toEqual({ kind: "committed" });
     expect(executor.statementKinds()).toEqual([
       "lock_provider_io_outbox",
       "load_dispatch_content_plan",
+      "lock_dispatch",
+      "lock_attempt",
       "lock_artifact_set",
+      "check_accepted_provider_truth_coverage",
+      "insert_artifact",
       "lock_dispatch",
       "lock_attempt",
       "cas_attempt",
-      "cas_dispatch",
-      "insert_artifact"
+      "cas_dispatch"
     ]);
+    const coverageQuery = executor.queries.find(
+      ({ sql }) =>
+        classifyStatement(sql) === "check_accepted_provider_truth_coverage"
+    );
+    expect(coverageQuery).toBeDefined();
+    expect(normalizeSql(coverageQuery!.sql)).not.toMatch(/for (update|share)/u);
   });
 
   it("accepts only the reconciliation-only aggregate diagnostic for mixed artifact outcomes", async () => {
@@ -1244,13 +1681,17 @@ describe("SQL Inbox V2 outbound transport repository", () => {
         })
       ],
       providerIoContentPlanRows(mixed.contentPlan),
-      [],
       [dispatchRow(fixture.attemptingDispatch)],
       [attemptRow(fixture.pendingAttempt)],
-      [{ id: fixture.pendingAttempt.id }],
-      [{ id: fixture.attemptingDispatch.id }],
+      [],
+      [],
       [{ id: mixed.artifacts[0]!.id }],
-      [{ id: mixed.artifacts[1]!.id }]
+      [{ id: mixed.artifacts[1]!.id }],
+      [dispatchRow(fixture.attemptingDispatch)],
+      [attemptRow(fixture.pendingAttempt)],
+      [],
+      [{ id: fixture.pendingAttempt.id }],
+      [{ id: fixture.attemptingDispatch.id }]
     ]);
 
     await expect(
@@ -1260,9 +1701,10 @@ describe("SQL Inbox V2 outbound transport repository", () => {
         outboxLease: providerIoOutboxLeaseFence,
         contentPlanDigestSha256: mixed.contentPlan.planDigestSha256,
         commit: mixed.commit,
-        artifacts: mixed.artifacts
+        artifacts: mixed.artifacts,
+        observations: []
       })
-    ).resolves.toEqual({ kind: "committed" });
+    ).resolves.toMatchObject({ kind: "committed" });
 
     const retryableArtifactDiagnostic = mixed.artifacts[1]!.diagnostic!;
     const unsafeAggregate = inboxV2OutboundDispatchAttemptCommitSchema.parse({
@@ -1294,13 +1736,455 @@ describe("SQL Inbox V2 outbound transport repository", () => {
         outboxLease: providerIoOutboxLeaseFence,
         contentPlanDigestSha256: mixed.contentPlan.planDigestSha256,
         commit: unsafeAggregate,
-        artifacts: mixed.artifacts
+        artifacts: mixed.artifacts,
+        observations: []
       })
     ).resolves.toEqual({ kind: "outbox_dispatch_content_plan_conflict" });
     expect(rejectedExecutor.statementKinds()).toEqual([
       "lock_provider_io_outbox",
       "load_dispatch_content_plan"
     ]);
+  });
+
+  it("commits canonical mixed truth while its integrated accepted observation is pending settlement", async () => {
+    const mixed = mixedProviderResultFixture();
+    const observation = providerResponseObservationFor(
+      mixed.commit,
+      mixed.artifacts[0]!
+    );
+    const executor = new QueueOutboundExecutor([
+      [
+        providerIoOutboxLeaseRow({
+          databaseNow: OUTBOUND_TEST_TIMES.acceptedAt
+        })
+      ],
+      providerIoContentPlanRows(mixed.contentPlan),
+      [dispatchRow(fixture.attemptingDispatch)],
+      [attemptRow(fixture.pendingAttempt)],
+      [],
+      [],
+      [{ id: mixed.artifacts[0]!.id }],
+      [{ id: mixed.artifacts[1]!.id }],
+      [{ id: observation.id }],
+      [{ observation_id: observation.id }],
+      [dispatchRow(fixture.attemptingDispatch)],
+      [attemptRow(fixture.pendingAttempt)],
+      [
+        {
+          observation_id: observation.id,
+          work_observation_id: observation.id,
+          work_state: "pending",
+          settlement_observation_id: null
+        }
+      ],
+      [{ id: fixture.pendingAttempt.id }],
+      [{ id: fixture.attemptingDispatch.id }]
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(
+        executor
+      ).applyProviderResultFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        contentPlanDigestSha256: mixed.contentPlan.planDigestSha256,
+        commit: mixed.commit,
+        artifacts: mixed.artifacts,
+        observations: [observation],
+        settlementWork: [providerSettlementWork(observation)]
+      })
+    ).resolves.toMatchObject({
+      kind: "committed",
+      canonicalOutcome: {
+        attemptAfter: {
+          outcome: {
+            kind: "outcome_unknown",
+            diagnostic: { codeId: "core:provider-artifact-outcomes-mixed" },
+            requiredAction: "operator_duplicate_risk_decision_required"
+          }
+        },
+        dispatchAfter: { state: "outcome_unknown" }
+      }
+    });
+    expect(executor.statementKinds()).toEqual([
+      "lock_provider_io_outbox",
+      "load_dispatch_content_plan",
+      "lock_dispatch",
+      "lock_attempt",
+      "lock_artifact_set",
+      "check_accepted_provider_truth_coverage",
+      "insert_artifact",
+      "insert_artifact",
+      "insert_provider_observation",
+      "insert_provider_settlement_work",
+      "lock_dispatch",
+      "lock_attempt",
+      "check_provider_settlement_fence",
+      "cas_attempt",
+      "cas_dispatch"
+    ]);
+  });
+
+  it.each(["accepted", "outcome_unknown"] as const)(
+    "lets effective accepted truth dominate an incoming nonaccepted %s artifact with canonical mixed CAS",
+    async (persistedState) => {
+      const mixed = mixedProviderResultFixture();
+      const diagnostic = mixed.commit.attemptAfter.outcome;
+      if (diagnostic.kind !== "outcome_unknown") {
+        throw new Error("Mixed fixture must produce outcome unknown.");
+      }
+      const incomingFirst = inboxV2OutboundDispatchArtifactSchema.parse({
+        ...mixed.artifacts[0]!,
+        state: "outcome_unknown",
+        diagnostic: diagnostic.diagnostic
+      });
+      const artifacts = [incomingFirst, mixed.artifacts[1]!] as const;
+      const persistedFirst = {
+        ...artifactRow(incomingFirst),
+        state: persistedState,
+        diagnostic_code_id:
+          persistedState === "accepted"
+            ? null
+            : incomingFirst.diagnostic!.codeId,
+        diagnostic_retryable:
+          persistedState === "accepted"
+            ? null
+            : incomingFirst.diagnostic!.retryable,
+        diagnostic_correlation_token:
+          persistedState === "accepted"
+            ? null
+            : incomingFirst.diagnostic!.correlationToken,
+        diagnostic_safe_operator_hint_id:
+          persistedState === "accepted"
+            ? null
+            : incomingFirst.diagnostic!.safeOperatorHintId
+      };
+      const acceptedObservationId =
+        "outbound_provider_observation:accepted-dominance-unit";
+      const executor = new QueueOutboundExecutor([
+        [
+          providerIoOutboxLeaseRow({
+            databaseNow: OUTBOUND_TEST_TIMES.acceptedAt
+          })
+        ],
+        providerIoContentPlanRows(mixed.contentPlan),
+        [dispatchRow(fixture.attemptingDispatch)],
+        [attemptRow(fixture.pendingAttempt)],
+        [persistedFirst],
+        [
+          {
+            artifact_ordinal: 1,
+            artifact_id: incomingFirst.id,
+            observation_id: acceptedObservationId,
+            work_observation_id: acceptedObservationId,
+            work_state: "pending",
+            settlement_observation_id: null
+          }
+        ],
+        [{ id: mixed.artifacts[1]!.id }],
+        [dispatchRow(fixture.attemptingDispatch)],
+        [attemptRow(fixture.pendingAttempt)],
+        [
+          {
+            observation_id: acceptedObservationId,
+            work_observation_id: acceptedObservationId,
+            work_state: "pending",
+            settlement_observation_id: null
+          }
+        ],
+        [{ id: fixture.pendingAttempt.id }],
+        [{ id: fixture.attemptingDispatch.id }]
+      ]);
+
+      await expect(
+        createSqlInboxV2OutboundTransportRepository(
+          executor
+        ).applyProviderResultFenced({
+          outboxLease: providerIoOutboxLeaseFence,
+          contentPlanDigestSha256: mixed.contentPlan.planDigestSha256,
+          commit: mixed.commit,
+          artifacts,
+          observations: []
+        })
+      ).resolves.toMatchObject({
+        kind: "committed",
+        canonicalOutcome: {
+          attemptAfter: {
+            outcome: {
+              kind: "outcome_unknown",
+              diagnostic: { codeId: "core:provider-artifact-outcomes-mixed" },
+              requiredAction: "operator_duplicate_risk_decision_required"
+            }
+          },
+          dispatchAfter: { state: "outcome_unknown" }
+        }
+      });
+      expect(executor.statementKinds()).toContain("cas_attempt");
+      expect(executor.statementKinds()).toContain("cas_dispatch");
+    }
+  );
+
+  it("completes hybrid full acceptance from a pending echo plus a descriptor-less accepted provider artifact", async () => {
+    const mixed = mixedProviderResultFixture();
+    const retryableDiagnostic = mixed.artifacts[1]!.diagnostic!;
+    const providerArtifacts = [
+      inboxV2OutboundDispatchArtifactSchema.parse({
+        ...mixed.artifacts[0]!,
+        state: "failed",
+        diagnostic: retryableDiagnostic
+      }),
+      inboxV2OutboundDispatchArtifactSchema.parse({
+        ...mixed.artifacts[1]!,
+        state: "accepted",
+        diagnostic: null
+      })
+    ] as const;
+    const acceptedObservationId =
+      "outbound_provider_observation:hybrid-full-echo-unit";
+    const executor = new QueueOutboundExecutor([
+      [
+        providerIoOutboxLeaseRow({
+          databaseNow: OUTBOUND_TEST_TIMES.acceptedAt
+        })
+      ],
+      providerIoContentPlanRows(mixed.contentPlan),
+      [dispatchRow(fixture.attemptingDispatch)],
+      [attemptRow(fixture.pendingAttempt)],
+      [artifactRow(mixed.artifacts[0]!)],
+      [
+        {
+          artifact_ordinal: 1,
+          artifact_id: mixed.artifacts[0]!.id,
+          observation_id: acceptedObservationId,
+          work_observation_id: acceptedObservationId,
+          work_state: "pending",
+          settlement_observation_id: null
+        }
+      ],
+      [{ id: providerArtifacts[1]!.id }],
+      [dispatchRow(fixture.attemptingDispatch)],
+      [attemptRow(fixture.pendingAttempt)],
+      [{ id: fixture.pendingAttempt.id }],
+      [{ id: fixture.attemptingDispatch.id }]
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(
+        executor
+      ).applyProviderResultFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        contentPlanDigestSha256: mixed.contentPlan.planDigestSha256,
+        commit: mixed.commit,
+        artifacts: providerArtifacts,
+        observations: []
+      })
+    ).resolves.toMatchObject({
+      kind: "committed",
+      canonicalOutcome: {
+        completionSource: "provider_result",
+        attemptAfter: {
+          outcome: {
+            kind: "accepted",
+            providerAcknowledgementToken: null
+          }
+        },
+        dispatchAfter: { state: "accepted" }
+      }
+    });
+    expect(executor.statementKinds()).not.toContain(
+      "check_provider_settlement_fence"
+    );
+    expect(executor.statementKinds()).toContain("cas_attempt");
+    expect(executor.statementKinds()).toContain("cas_dispatch");
+  });
+
+  it("fails closed when accepted coverage has no exact settlement work item", async () => {
+    const mixed = mixedProviderResultFixture();
+    const acceptedObservationId =
+      "outbound_provider_observation:orphaned-coverage-unit";
+    const executor = new QueueOutboundExecutor([
+      [
+        providerIoOutboxLeaseRow({
+          databaseNow: OUTBOUND_TEST_TIMES.acceptedAt
+        })
+      ],
+      providerIoContentPlanRows(mixed.contentPlan),
+      [dispatchRow(fixture.attemptingDispatch)],
+      [attemptRow(fixture.pendingAttempt)],
+      [artifactRow(mixed.artifacts[0]!)],
+      [
+        {
+          artifact_ordinal: 1,
+          artifact_id: mixed.artifacts[0]!.id,
+          observation_id: acceptedObservationId,
+          work_observation_id: null,
+          work_state: null,
+          settlement_observation_id: null
+        }
+      ]
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(
+        executor
+      ).applyProviderResultFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        contentPlanDigestSha256: mixed.contentPlan.planDigestSha256,
+        commit: mixed.commit,
+        artifacts: mixed.artifacts,
+        observations: []
+      })
+    ).rejects.toThrow("missing its exact settlement work item");
+    expect(executor.statementKinds()).not.toContain("insert_artifact");
+    expect(executor.statementKinds()).not.toContain("cas_attempt");
+  });
+
+  it("recomputes a settled accepted-plus-failed canonical vector as mixed outcome unknown", async () => {
+    const mixed = mixedProviderResultFixture();
+    const retryableDiagnostic = mixed.artifacts[1]!.diagnostic!;
+    const failedArtifacts = mixed.artifacts.map((artifact) =>
+      inboxV2OutboundDispatchArtifactSchema.parse({
+        ...artifact,
+        state: "failed",
+        diagnostic: retryableDiagnostic
+      })
+    );
+    const allFailed = inboxV2OutboundDispatchAttemptCommitSchema.parse({
+      ...mixed.commit,
+      attemptAfter: {
+        ...mixed.commit.attemptAfter,
+        outcome: {
+          kind: "retryable_failure",
+          completedAt: OUTBOUND_TEST_TIMES.acceptedAt,
+          retryAt: OUTBOUND_TEST_TIMES.retryAt,
+          diagnostic: retryableDiagnostic
+        }
+      },
+      dispatchAfter: {
+        ...mixed.commit.dispatchAfter,
+        state: "retryable_failure"
+      }
+    });
+    if (allFailed.kind !== "complete_attempt") {
+      throw new Error("Expected all-failed completion.");
+    }
+    const acceptedObservationId =
+      "outbound_provider_observation:settled-dominance-unit";
+    const executor = new QueueOutboundExecutor([
+      [
+        providerIoOutboxLeaseRow({
+          databaseNow: OUTBOUND_TEST_TIMES.acceptedAt
+        })
+      ],
+      providerIoContentPlanRows(mixed.contentPlan),
+      [dispatchRow(fixture.attemptingDispatch)],
+      [attemptRow(fixture.pendingAttempt)],
+      [artifactRow(mixed.artifacts[0]!)],
+      [
+        {
+          artifact_ordinal: 1,
+          artifact_id: mixed.artifacts[0]!.id,
+          observation_id: acceptedObservationId,
+          work_observation_id: acceptedObservationId,
+          work_state: "leased",
+          settlement_observation_id: acceptedObservationId
+        }
+      ],
+      [{ id: failedArtifacts[1]!.id }],
+      [dispatchRow(fixture.attemptingDispatch)],
+      [attemptRow(fixture.pendingAttempt)],
+      [
+        {
+          observation_id: acceptedObservationId,
+          work_observation_id: acceptedObservationId,
+          work_state: "leased",
+          settlement_observation_id: acceptedObservationId
+        }
+      ],
+      [{ id: fixture.pendingAttempt.id }],
+      [{ id: fixture.attemptingDispatch.id }]
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(
+        executor
+      ).applyProviderResultFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        contentPlanDigestSha256: mixed.contentPlan.planDigestSha256,
+        commit: allFailed,
+        artifacts: failedArtifacts,
+        observations: []
+      })
+    ).resolves.toMatchObject({
+      kind: "committed",
+      canonicalOutcome: {
+        attemptAfter: {
+          outcome: {
+            kind: "outcome_unknown",
+            diagnostic: { codeId: "core:provider-artifact-outcomes-mixed" },
+            requiredAction: "operator_duplicate_risk_decision_required"
+          }
+        },
+        dispatchAfter: { state: "outcome_unknown" }
+      }
+    });
+  });
+
+  it("keeps dead severity above a settled sibling for the same accepted artifact", async () => {
+    const mixed = mixedProviderResultFixture();
+    const incomingFirst = inboxV2OutboundDispatchArtifactSchema.parse({
+      ...mixed.artifacts[0]!,
+      state: "outcome_unknown",
+      diagnostic:
+        mixed.commit.attemptAfter.outcome.kind === "outcome_unknown"
+          ? mixed.commit.attemptAfter.outcome.diagnostic
+          : null
+    });
+    const acceptedObservationId =
+      "outbound_provider_observation:dead-dominance-unit";
+    const executor = new QueueOutboundExecutor([
+      [
+        providerIoOutboxLeaseRow({
+          databaseNow: OUTBOUND_TEST_TIMES.acceptedAt
+        })
+      ],
+      providerIoContentPlanRows(mixed.contentPlan),
+      [dispatchRow(fixture.attemptingDispatch)],
+      [attemptRow(fixture.pendingAttempt)],
+      [artifactRow(incomingFirst)],
+      [
+        {
+          artifact_ordinal: 1,
+          artifact_id: incomingFirst.id,
+          observation_id: `${acceptedObservationId}:settled-sibling`,
+          work_observation_id: `${acceptedObservationId}:settled-sibling`,
+          work_state: "settled",
+          settlement_observation_id: `${acceptedObservationId}:settled-sibling`
+        },
+        {
+          artifact_ordinal: 1,
+          artifact_id: incomingFirst.id,
+          observation_id: acceptedObservationId,
+          work_observation_id: acceptedObservationId,
+          work_state: "dead",
+          settlement_observation_id: null
+        }
+      ],
+      [{ id: mixed.artifacts[1]!.id }]
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(
+        executor
+      ).applyProviderResultFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        contentPlanDigestSha256: mixed.contentPlan.planDigestSha256,
+        commit: mixed.commit,
+        artifacts: [incomingFirst, mixed.artifacts[1]!],
+        observations: []
+      })
+    ).resolves.toEqual({ kind: "provider_settlement_repair_required" });
+    expect(executor.statementKinds()).not.toContain("cas_attempt");
+    expect(executor.statementKinds()).not.toContain("cas_dispatch");
   });
 
   it("replays an exact completed provider artifact set without another insert", async () => {
@@ -1314,7 +2198,14 @@ describe("SQL Inbox V2 outbound transport repository", () => {
         })
       ],
       [providerIoContentPlanRow(contentPlan)],
+      [dispatchRow(fixture.acceptedDispatch)],
+      [attemptRow(fixture.acceptedAttempt)],
       [artifactRow(artifact)],
+      [],
+      [dispatchRow(fixture.acceptedDispatch)],
+      [attemptRow(fixture.acceptedAttempt)],
+      [dispatchRow(fixture.acceptedDispatch)],
+      [attemptRow(fixture.acceptedAttempt)],
       [dispatchRow(fixture.acceptedDispatch)],
       [attemptRow(fixture.acceptedAttempt)]
     ]);
@@ -1326,10 +2217,236 @@ describe("SQL Inbox V2 outbound transport repository", () => {
         outboxLease: providerIoOutboxLeaseFence,
         contentPlanDigestSha256: contentPlan.planDigestSha256,
         commit,
-        artifacts: [artifact]
+        artifacts: [artifact],
+        observations: []
       })
     ).resolves.toEqual({ kind: "already_applied" });
     expect(executor.statementKinds()).not.toContain("insert_artifact");
+  });
+
+  it("merges a compatible echo-first artifact subset before completing the provider response", async () => {
+    const mixed = mixedProviderResultFixture();
+    const firstArtifact = mixed.artifacts[0];
+    const secondArtifact = mixed.artifacts[1];
+    const executor = new QueueOutboundExecutor([
+      [
+        providerIoOutboxLeaseRow({
+          databaseNow: OUTBOUND_TEST_TIMES.acceptedAt
+        })
+      ],
+      providerIoContentPlanRows(mixed.contentPlan),
+      [dispatchRow(fixture.attemptingDispatch)],
+      [attemptRow(fixture.pendingAttempt)],
+      [artifactRow(firstArtifact)],
+      [],
+      [{ id: secondArtifact.id }],
+      [dispatchRow(fixture.attemptingDispatch)],
+      [attemptRow(fixture.pendingAttempt)],
+      [],
+      [{ id: fixture.pendingAttempt.id }],
+      [{ id: fixture.attemptingDispatch.id }]
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(
+        executor
+      ).applyProviderResultFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        contentPlanDigestSha256: mixed.contentPlan.planDigestSha256,
+        commit: mixed.commit,
+        artifacts: mixed.artifacts,
+        observations: []
+      })
+    ).resolves.toMatchObject({ kind: "committed" });
+    expect(executor.statementKinds()).toEqual([
+      "lock_provider_io_outbox",
+      "load_dispatch_content_plan",
+      "lock_dispatch",
+      "lock_attempt",
+      "lock_artifact_set",
+      "check_accepted_provider_truth_coverage",
+      "insert_artifact",
+      "lock_dispatch",
+      "lock_attempt",
+      "check_provider_settlement_fence",
+      "cas_attempt",
+      "cas_dispatch"
+    ]);
+  });
+
+  it("appends a late provider response after an exact echo completion without rewriting canonical heads", async () => {
+    const commit = acceptedProviderResultCommit();
+    const artifact = acceptedProviderResultArtifact();
+    const observation = acceptedProviderResponseObservation();
+    const echoAcceptedDispatchRow = {
+      ...dispatchRow(fixture.acceptedDispatch),
+      updated_at: new Date(OUTBOUND_TEST_TIMES.artifactAt)
+    };
+    const echoAcceptedAttemptRow = {
+      ...attemptRow(fixture.acceptedAttempt),
+      completion_source: "provider_observation",
+      completed_at: new Date(OUTBOUND_TEST_TIMES.artifactAt),
+      provider_acknowledgement_token: null
+    };
+    const executor = new QueueOutboundExecutor([
+      [
+        providerIoOutboxLeaseRow({
+          databaseNow: OUTBOUND_TEST_TIMES.acceptedAt
+        })
+      ],
+      [providerIoContentPlanRow()],
+      [echoAcceptedDispatchRow],
+      [echoAcceptedAttemptRow],
+      [artifactRow(artifact)],
+      [],
+      [echoAcceptedDispatchRow],
+      [echoAcceptedAttemptRow],
+      [{ id: observation.id }],
+      [{ observation_id: observation.id }]
+    ]);
+
+    expect(observation.id).not.toBe(acceptedEchoObservationId());
+    expect(observation.evidence.kind).toBe("provider_response_attempt");
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(
+        executor
+      ).applyProviderResultFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        contentPlanDigestSha256: providerIoContentPlan.planDigestSha256,
+        commit,
+        artifacts: [artifact],
+        observations: [observation],
+        settlementWork: [providerSettlementWork(observation)]
+      })
+    ).resolves.toMatchObject({
+      kind: "already_applied",
+      canonicalOutcome: {
+        kind: "complete_attempt",
+        completionSource: "provider_observation",
+        attemptAfter: {
+          outcome: {
+            kind: "accepted",
+            completedAt: OUTBOUND_TEST_TIMES.artifactAt,
+            providerAcknowledgementToken: null
+          }
+        },
+        dispatchAfter: { updatedAt: OUTBOUND_TEST_TIMES.artifactAt }
+      }
+    });
+    expect(executor.statementKinds()).toEqual([
+      "lock_provider_io_outbox",
+      "load_dispatch_content_plan",
+      "lock_dispatch",
+      "lock_attempt",
+      "lock_artifact_set",
+      "check_accepted_provider_truth_coverage",
+      "lock_dispatch",
+      "lock_attempt",
+      "insert_provider_observation",
+      "insert_provider_settlement_work"
+    ]);
+    expect(executor.statementKinds()).not.toContain("cas_attempt");
+    expect(executor.statementKinds()).not.toContain("cas_dispatch");
+    expect(executor.statementKinds()).not.toContain("insert_artifact");
+    const observationInsert = executor.queries.find(
+      ({ sql }) => classifyStatement(sql) === "insert_provider_observation"
+    );
+    expect(observationInsert?.params).toEqual(
+      expect.arrayContaining([
+        observation.id,
+        observation.sourceOccurrence.id,
+        "provider_response_attempt"
+      ])
+    );
+  });
+
+  it("keeps a non-exact late provider artifact in conflict", async () => {
+    const commit = acceptedProviderResultCommit();
+    const artifact = acceptedProviderResultArtifact();
+    const executor = new QueueOutboundExecutor([
+      [
+        providerIoOutboxLeaseRow({
+          databaseNow: OUTBOUND_TEST_TIMES.acceptedAt
+        })
+      ],
+      [providerIoContentPlanRow()],
+      [dispatchRow(fixture.attemptingDispatch)],
+      [attemptRow(fixture.pendingAttempt)],
+      [{ ...artifactRow(artifact), id: `${artifact.id}:other-result` }],
+      []
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(
+        executor
+      ).applyProviderResultFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        contentPlanDigestSha256: providerIoContentPlan.planDigestSha256,
+        commit,
+        artifacts: [artifact],
+        observations: [acceptedProviderResponseObservation()],
+        settlementWork: [
+          providerSettlementWork(acceptedProviderResponseObservation())
+        ]
+      })
+    ).resolves.toEqual({ kind: "dispatch_artifact_set_conflict" });
+    expect(executor.statementKinds()).toEqual([
+      "lock_provider_io_outbox",
+      "load_dispatch_content_plan",
+      "lock_dispatch",
+      "lock_attempt",
+      "lock_artifact_set",
+      "check_accepted_provider_truth_coverage"
+    ]);
+    expect(executor.statementKinds()).not.toContain(
+      "insert_provider_observation"
+    );
+  });
+
+  it("keeps a non-exact late provider completion result in conflict", async () => {
+    const commit = acceptedProviderResultCommit();
+    const artifact = acceptedProviderResultArtifact();
+    const nonExactResult = {
+      ...attemptRow(fixture.acceptedAttempt),
+      completion_source: "provider_observation",
+      outcome_kind: "terminal_failure"
+    };
+    const executor = new QueueOutboundExecutor([
+      [
+        providerIoOutboxLeaseRow({
+          databaseNow: OUTBOUND_TEST_TIMES.acceptedAt
+        })
+      ],
+      [providerIoContentPlanRow()],
+      [dispatchRow(fixture.acceptedDispatch)],
+      [nonExactResult],
+      [artifactRow(artifact)],
+      [],
+      [dispatchRow(fixture.acceptedDispatch)],
+      [nonExactResult],
+      [dispatchRow(fixture.acceptedDispatch)],
+      [nonExactResult]
+    ]);
+
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(
+        executor
+      ).applyProviderResultFenced({
+        outboxLease: providerIoOutboxLeaseFence,
+        contentPlanDigestSha256: providerIoContentPlan.planDigestSha256,
+        commit,
+        artifacts: [artifact],
+        observations: [acceptedProviderResponseObservation()],
+        settlementWork: [
+          providerSettlementWork(acceptedProviderResponseObservation())
+        ]
+      })
+    ).resolves.toEqual({ kind: "dispatch_state_conflict" });
+    expect(executor.statementKinds()).not.toContain("cas_attempt");
+    expect(executor.statementKinds()).not.toContain("cas_dispatch");
+    expect(executor.statementKinds()).not.toContain(
+      "insert_provider_observation"
+    );
   });
 
   it("rejects incomplete provider artifact coverage before attempt mutation", async () => {
@@ -1348,7 +2465,8 @@ describe("SQL Inbox V2 outbound transport repository", () => {
         outboxLease: providerIoOutboxLeaseFence,
         contentPlanDigestSha256: providerIoContentPlan.planDigestSha256,
         commit: acceptedProviderResultCommit(),
-        artifacts: []
+        artifacts: [],
+        observations: []
       })
     ).resolves.toEqual({ kind: "outbox_dispatch_content_plan_conflict" });
     expect(executor.statementKinds()).toEqual([
@@ -1647,6 +2765,7 @@ describe("SQL Inbox V2 outbound transport repository", () => {
     const executor = new QueueOutboundExecutor([
       [dispatchRow(fixture.attemptingDispatch)],
       [attemptRow(fixture.pendingAttempt)],
+      [],
       [{ id: fixture.pendingAttempt.id }],
       [{ id: fixture.attemptingDispatch.id }]
     ]);
@@ -1658,6 +2777,7 @@ describe("SQL Inbox V2 outbound transport repository", () => {
     expect(executor.statementKinds()).toEqual([
       "lock_dispatch",
       "lock_attempt",
+      "check_provider_settlement_fence",
       "cas_attempt",
       "cas_dispatch"
     ]);
@@ -1686,6 +2806,7 @@ describe("SQL Inbox V2 outbound transport repository", () => {
     const executor = new QueueOutboundExecutor([
       [dispatchRow(fixture.unknownDispatch)],
       [attemptRow(fixture.unknownAttempt)],
+      [],
       [{ retry_safe: true }],
       [{ id: fixture.reconciliationDecision.id }],
       [{ id: fixture.unknownDispatch.id }]
@@ -1697,6 +2818,7 @@ describe("SQL Inbox V2 outbound transport repository", () => {
     expect(executor.statementKinds()).toEqual([
       "lock_dispatch",
       "lock_attempt",
+      "check_provider_settlement_fence",
       "check_artifact_retry_safety",
       "insert_reconciliation",
       "cas_dispatch"
@@ -1714,6 +2836,7 @@ describe("SQL Inbox V2 outbound transport repository", () => {
     const executor = new QueueOutboundExecutor([
       [dispatchRow(fixture.unknownDispatch)],
       [attemptRow(fixture.unknownAttempt)],
+      [],
       [{ retry_safe: false }]
     ]);
     await expect(
@@ -1724,10 +2847,63 @@ describe("SQL Inbox V2 outbound transport repository", () => {
     expect(executor.statementKinds()).toEqual([
       "lock_dispatch",
       "lock_attempt",
+      "check_provider_settlement_fence",
       "check_artifact_retry_safety"
     ]);
     expect(executor.statementKinds()).not.toContain("insert_reconciliation");
     expect(executor.statementKinds()).not.toContain("cas_dispatch");
+  });
+
+  it.each([
+    ["retryable_failure", () => fixture.reconciliationCommit],
+    ["terminal_failure", () => reconciliationCommitFor("terminal_failure")]
+  ] as const)(
+    "fences %s reconciliation while accepted provider truth is unsettled",
+    async (_state, commitFactory) => {
+      const observationId =
+        "outbound_provider_observation:pending-reconciliation-fence";
+      const executor = new QueueOutboundExecutor([
+        [dispatchRow(fixture.unknownDispatch)],
+        [attemptRow(fixture.unknownAttempt)],
+        [
+          {
+            observation_id: observationId,
+            work_observation_id: observationId,
+            work_state: "pending",
+            settlement_observation_id: null
+          }
+        ]
+      ]);
+      await expect(
+        createSqlInboxV2OutboundTransportRepository(executor).reconcile(
+          commitFactory()
+        )
+      ).resolves.toEqual({ kind: "provider_settlement_pending" });
+      expect(executor.statementKinds()).not.toContain("insert_reconciliation");
+      expect(executor.statementKinds()).not.toContain("cas_dispatch");
+    }
+  );
+
+  it("allows accepted reconciliation to converge without waiting on its own provider settlement", async () => {
+    const commit = reconciliationCommitFor("accepted");
+    const executor = new QueueOutboundExecutor([
+      [dispatchRow(fixture.unknownDispatch)],
+      [attemptRow(fixture.unknownAttempt)],
+      [{ id: commit.decision.id }],
+      [{ id: fixture.unknownDispatch.id }]
+    ]);
+    await expect(
+      createSqlInboxV2OutboundTransportRepository(executor).reconcile(commit)
+    ).resolves.toEqual({ kind: "committed" });
+    expect(executor.statementKinds()).toEqual([
+      "lock_dispatch",
+      "lock_attempt",
+      "insert_reconciliation",
+      "cas_dispatch"
+    ]);
+    expect(executor.statementKinds()).not.toContain(
+      "check_provider_settlement_fence"
+    );
   });
 
   it("rejects a reconciliation timestamp ahead of the fenced DB clock", async () => {
@@ -2774,6 +3950,7 @@ class QueueOutboundExecutor implements InboxV2OutboundTransportTransactionExecut
   readonly transactionConfigs: Array<
     Readonly<{ isolationLevel: "read committed" | "repeatable read" }>
   > = [];
+  transactionFailureCount = 0;
   private responseIndex = 0;
 
   constructor(
@@ -2787,7 +3964,12 @@ class QueueOutboundExecutor implements InboxV2OutboundTransportTransactionExecut
     }>
   ): Promise<TResult> {
     this.transactionConfigs.push(config);
-    return work(this);
+    try {
+      return await work(this);
+    } catch (error) {
+      this.transactionFailureCount += 1;
+      throw error;
+    }
   }
 
   async execute<Row extends Record<string, unknown>>(query: SQL) {
@@ -2828,6 +4010,16 @@ function classifyStatement(sql: string): string {
     )
   )
     return "validate_provider_capabilities";
+  if (
+    statement.startsWith("insert into inbox_v2_outbound_provider_observations")
+  )
+    return "insert_provider_observation";
+  if (
+    statement.startsWith(
+      "insert into inbox_v2_outbound_provider_settlement_work_items"
+    )
+  )
+    return "insert_provider_settlement_work";
   if (statement.includes("from inbox_v2_file_outbound_dispatch_plans"))
     return "load_dispatch_content_plan";
   if (statement.includes("pg_advisory_xact_lock"))
@@ -2881,6 +4073,17 @@ function classifyStatement(sql: string): string {
   if (statement.startsWith("insert into inbox_v2_outbound_dispatch_attempts"))
     return "insert_attempt";
   if (
+    statement.startsWith(
+      "insert into inbox_v2_outbound_provider_correlation_anchors"
+    )
+  )
+    return "insert_correlation_anchor";
+  if (
+    statement.includes("from inbox_v2_outbound_provider_correlation_anchors") &&
+    statement.startsWith("select")
+  )
+    return "load_correlation_anchor";
+  if (
     statement.includes("from inbox_v2_outbound_dispatch_attempts") &&
     statement.startsWith("select")
   )
@@ -2898,6 +4101,32 @@ function classifyStatement(sql: string): string {
   if (statement.startsWith("insert into inbox_v2_outbound_dispatch_artifacts"))
     return "insert_artifact";
   if (
+    statement.includes(
+      "from inbox_v2_outbound_provider_observations observation_row"
+    ) &&
+    statement.includes(
+      "join inbox_v2_outbound_provider_settlement_work_items work_row"
+    ) &&
+    statement.includes("observation_row.content_plan_id") &&
+    statement.includes("observation_row.effective_state = 'accepted'")
+  )
+    return "check_accepted_provider_truth_coverage";
+  if (
+    statement.includes("from inbox_v2_outbound_provider_observations") &&
+    statement.includes(
+      "left join inbox_v2_outbound_provider_settlement_work_items"
+    ) &&
+    statement.includes(
+      "left join inbox_v2_outbound_provider_observation_settlements"
+    )
+  )
+    return "check_provider_settlement_fence";
+  if (
+    statement.includes("from inbox_v2_outbound_provider_observations") &&
+    statement.startsWith("select")
+  )
+    return "load_provider_observation";
+  if (
     statement.includes("from inbox_v2_outbound_dispatch_artifacts") &&
     statement.includes("as retry_safe")
   )
@@ -2908,6 +4137,12 @@ function classifyStatement(sql: string): string {
     statement.includes("for update")
   )
     return "lock_artifact_set";
+  if (
+    statement.includes("from inbox_v2_outbound_dispatch_artifacts") &&
+    statement.includes("order by case when id") &&
+    statement.startsWith("select")
+  )
+    return "load_artifact";
   if (statement.startsWith("insert into public.inbox_v2_outbox_outcomes"))
     return "insert_outbox_outcome";
   if (statement.startsWith("update public.inbox_v2_outbox_work_items"))
@@ -3008,8 +4243,94 @@ function acceptedProviderResultArtifact() {
     ordinal: 1,
     state: "accepted",
     diagnostic: null,
-    createdAt: OUTBOUND_TEST_TIMES.acceptedAt,
+    createdAt: fixture.pendingAttempt.openedAt,
     revision: "1"
+  });
+}
+
+function acceptedProviderResponseObservation() {
+  const commit = acceptedProviderResultCommit();
+  const artifact = acceptedProviderResultArtifact();
+  return providerResponseObservationFor(commit, artifact);
+}
+
+function providerResponseObservationFor(
+  commit: Extract<
+    ReturnType<typeof inboxV2OutboundDispatchAttemptCommitSchema.parse>,
+    { kind: "complete_attempt" }
+  >,
+  artifact: ReturnType<typeof inboxV2OutboundDispatchArtifactSchema.parse>
+) {
+  const completedAt =
+    commit.attemptAfter.outcome.kind === "pending"
+      ? OUTBOUND_TEST_TIMES.acceptedAt
+      : commit.attemptAfter.outcome.completedAt;
+  const sourceOccurrence = {
+    ...fixture.responseAssociation.occurrenceResolution.before,
+    id: `${fixture.responseAssociation.occurrenceResolution.before.id}:artifact-${artifact.ordinal}`,
+    recordedAt: completedAt,
+    createdAt: completedAt,
+    updatedAt: completedAt
+  };
+  return inboxV2OutboundProviderObservationSchema.parse({
+    tenantId: fixture.tenantId,
+    id: deriveInboxV2OutboundProviderObservationId({
+      tenantId: fixture.tenantId,
+      attempt: artifact.attempt,
+      artifactOrdinal: artifact.ordinal,
+      sourceOccurrence: {
+        tenantId: fixture.tenantId,
+        kind: "source_occurrence",
+        id: sourceOccurrence.id
+      },
+      evidenceKind: "provider_response_attempt"
+    }),
+    artifact,
+    dispatch: commit.dispatchBefore,
+    route: fixture.route,
+    attempt: commit.attemptBefore,
+    sourceOccurrence,
+    sourceOccurrenceDetailDigestSha256:
+      calculateInboxV2OutboundProviderSourceOccurrenceDetailDigest(
+        sourceOccurrence
+      ),
+    evidence: {
+      kind: "provider_response_attempt",
+      artifactOrdinal: artifact.ordinal,
+      outboundDispatchAttempt: artifact.attempt
+    },
+    effectDisposition:
+      INBOX_V2_OUTBOUND_PROVIDER_OBSERVATION_EFFECT_DISPOSITION,
+    observedByTrustedServiceId: commit.completedByTrustedServiceId,
+    recordedAt: completedAt,
+    revision: "1"
+  });
+}
+
+function providerSettlementWork(
+  observation: ReturnType<typeof acceptedProviderResponseObservation>
+) {
+  return {
+    observation,
+    candidateExternalMessageReferenceId:
+      "external_message_reference:provider-response-candidate",
+    candidateTransportLinkId:
+      "message_transport_occurrence_link:provider-response-candidate"
+  } as const;
+}
+
+function acceptedEchoObservationId() {
+  const occurrence = fixture.echoAssociation.occurrenceResolution.before;
+  return deriveInboxV2OutboundProviderObservationId({
+    tenantId: fixture.tenantId,
+    attempt: fixture.references.attempt,
+    artifactOrdinal: 1,
+    sourceOccurrence: {
+      tenantId: fixture.tenantId,
+      kind: "source_occurrence",
+      id: occurrence.id
+    },
+    evidenceKind: "provider_echo_correlation"
   });
 }
 
@@ -3110,7 +4431,7 @@ function mixedProviderResultFixture() {
       ordinal: 1,
       state: "accepted",
       diagnostic: null,
-      createdAt: OUTBOUND_TEST_TIMES.acceptedAt,
+      createdAt: fixture.pendingAttempt.openedAt,
       revision: "1"
     }),
     inboxV2OutboundDispatchArtifactSchema.parse({
@@ -3136,7 +4457,7 @@ function mixedProviderResultFixture() {
       ordinal: 2,
       state: "failed",
       diagnostic: retryableDiagnostic,
-      createdAt: OUTBOUND_TEST_TIMES.acceptedAt,
+      createdAt: fixture.pendingAttempt.openedAt,
       revision: "1"
     })
   ] as const;
@@ -3512,6 +4833,41 @@ function attemptRow(attempt: typeof fixture.pendingAttempt) {
     unknown_required_action:
       outcome.kind === "outcome_unknown" ? outcome.requiredAction : null,
     revision: attempt.revision
+  };
+}
+
+function providerCorrelationAnchorRow(
+  commit: Extract<
+    ReturnType<typeof inboxV2OutboundDispatchAttemptCommitSchema.parse>,
+    { kind: "open_attempt" }
+  >,
+  overrides: Readonly<Record<string, unknown>> = {}
+) {
+  const adapter = commit.routeSnapshot.adapterContract;
+  const retrySafety = commit.attempt.retrySafety;
+  if (retrySafety.providerCorrelationToken === null) {
+    throw new Error("Correlation anchor fixture requires an exact token");
+  }
+  return {
+    adapter_contract_id: adapter.contractId,
+    adapter_contract_version: adapter.contractVersion,
+    adapter_declaration_revision: adapter.declarationRevision,
+    adapter_surface_id: adapter.surfaceId,
+    correlation_token: retrySafety.providerCorrelationToken,
+    dispatch_id: commit.dispatchBefore.id,
+    route_id: commit.routeSnapshot.id,
+    message_id: commit.dispatchBefore.message.id,
+    first_attempt_id: commit.attempt.id,
+    external_thread_id: commit.routeSnapshot.externalThread.id,
+    source_connection_id: commit.routeSnapshot.sourceConnection.id,
+    source_account_id: commit.routeSnapshot.sourceAccount.id,
+    source_thread_binding_id: commit.routeSnapshot.sourceThreadBinding.id,
+    binding_generation: commit.routeSnapshot.bindingFence.bindingGeneration,
+    retry_safety_mechanism: retrySafety.mechanism,
+    declared_by_trusted_service_id: retrySafety.declaredByTrustedServiceId,
+    created_at: commit.attempt.openedAt,
+    revision: "1",
+    ...overrides
   };
 }
 

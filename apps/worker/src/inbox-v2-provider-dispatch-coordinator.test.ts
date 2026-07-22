@@ -1,4 +1,5 @@
 import {
+  calculateInboxV2CanonicalSha256,
   calculateInboxV2OutboundDispatchContentPlanDigest,
   calculateInboxV2OutboxLeaseTokenHash,
   deriveInboxV2OutboundDispatchArtifactId,
@@ -12,6 +13,7 @@ import {
   inboxV2OutboundDispatchAttemptCommitSchema,
   inboxV2OutboundDispatchAttemptSchema,
   inboxV2OutboundDispatchContentPlanSchema,
+  inboxV2OutboundProviderResponseObservationDescriptorSchema,
   inboxV2OutboundDispatchRouteFailureCommitSchema,
   inboxV2OutboundDispatchSchema,
   inboxV2RoutingTrustedServiceIdSchema,
@@ -24,6 +26,7 @@ import {
   type InboxV2OutboundDispatchAttemptCommit
 } from "@hulee/contracts";
 import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 
 import {
   createOutboundTransportContractFixture,
@@ -38,6 +41,7 @@ import {
   type InboxV2ProviderDispatchPlan,
   type InboxV2ProviderDispatchTransportPort
 } from "./inbox-v2-provider-dispatch-coordinator";
+import { createInboxV2TrustedOutboundProviderObservationMaterializer } from "./outbound-provider-observation-materializer";
 
 const fixture = createOutboundTransportContractFixture({
   suffix: "worker-coordinator"
@@ -51,6 +55,15 @@ const workerId = inboxV2OutboxWorkerIdSchema.parse(
 const trustedServiceId = inboxV2RoutingTrustedServiceIdSchema.parse(
   "core:source-runtime"
 );
+const providerObservationMaterializer =
+  createInboxV2TrustedOutboundProviderObservationMaterializer({
+    trustedServiceId,
+    namespaceDeriver: {
+      namespaceGeneration: "namespace-generation:worker-provider-observation",
+      deriveNamespaceHmacSha256: ({ canonicalPreimage }) =>
+        createHash("sha256").update(canonicalPreimage).digest("hex")
+    }
+  });
 const leaseToken = inboxV2OutboxLeaseTokenSchema.parse(
   `lease-token:worker-coordinator-${"t".repeat(40)}`
 );
@@ -331,6 +344,48 @@ function captionMediaSplitContentPlanFor(
   });
 }
 
+function providerResponseObservationDescriptor(artifactOrdinal = 1) {
+  return inboxV2OutboundProviderResponseObservationDescriptorSchema.parse({
+    artifactOrdinal,
+    canonicalExternalSubject: `ProviderMessage:${artifactOrdinal}`,
+    messageIdentityDeclaration: {
+      adapterContract: fixture.route.adapterContract,
+      identityKind: "message" as const,
+      realmId: "module:synthetic-source:message-realm",
+      realmVersion: "v1",
+      canonicalizationVersion: "v1",
+      objectKindId: "module:synthetic-source:chat-message",
+      scopeKind: "provider_thread" as const,
+      decisionStrength: "authoritative" as const
+    },
+    occurrenceDescriptor: {
+      adapterContract: fixture.route.adapterContract,
+      descriptorSchemaId: "module:synthetic-source:provider-response",
+      descriptorVersion: "v1",
+      capabilityRevision: "1",
+      providerReferences: [
+        {
+          kindId: "module:synthetic-source:message-id",
+          subject: `ProviderMessage:${artifactOrdinal}`
+        }
+      ],
+      descriptorDigestSha256: "c".repeat(64)
+    },
+    providerTimestamps: [
+      {
+        kindId: "module:synthetic-source:sent-at",
+        timestamp: OUTBOUND_TEST_TIMES.artifactAt
+      }
+    ],
+    referencePortability: {
+      kind: "external_thread" as const,
+      adapterContract: fixture.route.adapterContract,
+      decisionStrength: "authoritative" as const
+    },
+    observedAt: OUTBOUND_TEST_TIMES.artifactAt
+  });
+}
+
 function createHarness(input: {
   dispatch: InboxV2OutboundDispatch;
   contentPlan?: InboxV2OutboundDispatchContentPlan | null;
@@ -442,6 +497,7 @@ function createHarness(input: {
     planner,
     adapter,
     completedByTrustedServiceId: trustedServiceId,
+    providerObservationMaterializer,
     expectedHandlerId: handlerId,
     providerDeadlineMs: 30_000,
     clock:
@@ -571,6 +627,138 @@ describe("Inbox V2 provider dispatch coordinator", () => {
         })
       })
     );
+  });
+
+  it("finalizes a late provider response from the canonical echo-won database outcome", async () => {
+    const canonicalEchoOutcome = requireCompleteCommit(
+      inboxV2OutboundDispatchAttemptCommitSchema.parse({
+        kind: "complete_attempt",
+        tenantId: fixture.tenantId,
+        dispatchBefore: openAttemptCommit.dispatchAfter,
+        attemptBefore: openAttemptCommit.attempt,
+        attemptAfter: {
+          ...fixture.acceptedAttempt,
+          outcome: {
+            kind: "accepted",
+            completedAt: OUTBOUND_TEST_TIMES.artifactAt,
+            providerAcknowledgementToken: null
+          },
+          completionSource: "provider_observation"
+        },
+        completionSource: "provider_observation",
+        completedByTrustedServiceId: trustedServiceId,
+        dispatchAfter: {
+          ...fixture.acceptedDispatch,
+          updatedAt: OUTBOUND_TEST_TIMES.artifactAt
+        }
+      })
+    );
+    const harness = createHarness({
+      dispatch: fixture.queuedDispatch,
+      plan: {
+        kind: "open_attempt",
+        commit: openAttemptCommit,
+        request: { text: "echo-won-late-response" }
+      },
+      attemptResults: [
+        { kind: "committed" },
+        { kind: "already_applied", canonicalOutcome: canonicalEchoOutcome }
+      ]
+    });
+
+    await expect(harness.coordinator.process(claim())).resolves.toMatchObject({
+      outcome: "finalized",
+      source: "provider_result"
+    });
+    const lateResponseCommit =
+      harness.applyProviderResultFenced.mock.calls[0]?.[0].commit;
+    if (lateResponseCommit === undefined) {
+      throw new Error("Late provider response commit was not persisted.");
+    }
+    const instruction = harness.finalize.mock.calls[0]?.[0].instruction;
+    expect(instruction).toMatchObject({
+      kind: "processed",
+      resultHash: calculateInboxV2CanonicalSha256({
+        domain: "core:inbox-v2.provider-dispatch-outbox-outcome",
+        hashVersion: "v1",
+        intentId: intent.id,
+        durableOutcome: canonicalEchoOutcome
+      })
+    });
+    expect(instruction?.resultHash).not.toBe(
+      calculateInboxV2CanonicalSha256({
+        domain: "core:inbox-v2.provider-dispatch-outbox-outcome",
+        hashVersion: "v1",
+        intentId: intent.id,
+        durableOutcome: lateResponseCommit
+      })
+    );
+  });
+
+  it("materializes exact provider response identity before the accepted result transaction", async () => {
+    const harness = createHarness({
+      dispatch: fixture.queuedDispatch,
+      plan: {
+        kind: "open_attempt",
+        commit: openAttemptCommit,
+        request: { text: "provider-response" }
+      },
+      adapterResult: {
+        artifacts: [
+          {
+            artifactOrdinal: 1,
+            outcome: "accepted",
+            providerAcknowledgementToken: "provider:worker-response-ack",
+            providerResponseObservation: providerResponseObservationDescriptor()
+          }
+        ]
+      }
+    });
+
+    await expect(harness.coordinator.process(claim())).resolves.toMatchObject({
+      outcome: "finalized",
+      source: "provider_result"
+    });
+    const persisted = harness.applyProviderResultFenced.mock.calls[0]?.[0];
+    expect(persisted?.observations).toHaveLength(1);
+    expect(persisted?.observations[0]).toMatchObject({
+      tenantId: fixture.tenantId,
+      dispatch: { id: fixture.queuedDispatch.id, state: "attempting" },
+      attempt: {
+        id: openAttemptCommit.attempt.id,
+        outcome: { kind: "pending" }
+      },
+      artifact: { ordinal: 1, state: "accepted" },
+      sourceOccurrence: {
+        direction: "outbound",
+        providerActor: null,
+        origin: { kind: "provider_response" },
+        resolution: { state: "pending" }
+      },
+      evidence: {
+        kind: "provider_response_attempt",
+        artifactOrdinal: 1
+      },
+      effectDisposition: {
+        countsAsCustomerInbound: false,
+        createsUnread: false,
+        createsWorkItem: false,
+        requiresProviderIo: false,
+        createsOutboundDispatch: false,
+        notificationEligible: false
+      }
+    });
+    expect(persisted?.settlementWork).toHaveLength(1);
+    expect(persisted?.settlementWork[0]).toMatchObject({
+      observation: { id: persisted?.observations[0]?.id },
+      candidateExternalMessageReferenceId: expect.stringMatching(
+        /^external_message_reference:/u
+      ),
+      candidateTransportLinkId: expect.stringMatching(
+        /^message_transport_occurrence_link:/u
+      )
+    });
+    expect(harness.dispatch).toHaveBeenCalledTimes(1);
   });
 
   it("dispatches a media-only plan with one immutable File/Object pin and reconstructs the same canonical artifact reference", async () => {
@@ -1700,6 +1888,7 @@ describe("Inbox V2 provider dispatch coordinator", () => {
       planner: harness.planner,
       adapter: { dispatch: harness.dispatch },
       completedByTrustedServiceId: trustedServiceId,
+      providerObservationMaterializer,
       expectedHandlerId: inboxV2NamespacedIdSchema.parse(
         "core:different-provider-worker"
       ),

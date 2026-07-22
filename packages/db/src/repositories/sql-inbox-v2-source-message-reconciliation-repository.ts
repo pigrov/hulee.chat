@@ -25,6 +25,7 @@ import { sql, type SQL } from "drizzle-orm";
 
 import type { HuleeDatabase } from "../client";
 import { buildInboxV2AdvisoryXactLockSql } from "./sql-inbox-v2-advisory-lock";
+import { InboxV2AmbientAuthorizationMutationRollback } from "./sql-inbox-v2-authorization-repository";
 import { InboxV2PersistenceInvariantError } from "./sql-inbox-v2-conversation-repository";
 import {
   computeInboxV2ExternalMessageKeyDigest,
@@ -80,6 +81,24 @@ export type InboxV2SourceMessageReconciliationCallbackResult<TResult> =
       kind: "conflict";
       code: InboxV2SourceMessageReconciliationConflictCode;
     }>;
+
+/**
+ * Callback implementations throw this after any transaction-local write that
+ * cannot be completed. The reconciliation owner converts it to a typed
+ * conflict only after its outer transaction has rolled back.
+ */
+export class InboxV2SourceMessageCallbackRollback extends Error {
+  constructor(
+    readonly code: InboxV2SourceMessageReconciliationConflictCode = "source.message_reconciliation.callback_conflict"
+  ) {
+    super("Inbox V2 source Message callback requires rollback.");
+    this.name = "InboxV2SourceMessageCallbackRollback";
+  }
+}
+
+export type InboxV2SourceMessageEchoCorrelationResult =
+  | Readonly<{ kind: "pending" }>
+  | InboxV2SourceMessageReconciliationCallbackResult<InboxV2SourceMessageCanonicalResult>;
 
 export type InboxV2SourceMessageReconciliationResult =
   | (InboxV2SourceMessageCanonicalResult &
@@ -207,6 +226,16 @@ export type InboxV2SourceMessageReconciliationCallbacks = Readonly<{
   ): Promise<
     InboxV2SourceMessageReconciliationCallbackResult<InboxV2SourceMessageCanonicalResult>
   >;
+  /**
+   * Optional exact-correlation bridge for an echo that arrived before its
+   * provider response/reference. Implementations may use only durable outbound
+   * route/attempt evidence and must stay inside this ambient transaction.
+   * Absence preserves the SRC-006 pending handoff behavior.
+   */
+  resolveProviderEcho?(
+    transaction: RawSqlExecutor,
+    input: Readonly<{ plan: ExtractPlan<"echo_handoff"> }>
+  ): Promise<InboxV2SourceMessageEchoCorrelationResult>;
   /**
    * Induces and terminally commits one exact-key lifecycle/source action using
    * the transaction-local persistence helpers; returning an in-memory action
@@ -634,33 +663,56 @@ async function reconcileInTransaction(
 
   if (plan.intent.kind === "echo_handoff") {
     const echoPlan = plan as ExtractPlan<"echo_handoff">;
-    if (decision.kind === "missing") {
-      return {
-        kind: "echo_handoff_pending",
-        messageKey: plan.messageKey,
-        candidateExternalMessageReferenceId:
-          plan.candidateExternalMessageReferenceId,
-        retainedOccurrence: persistedOccurrence
-      };
+    if (callbacks.resolveProviderEcho !== undefined) {
+      const correlated = await invokeReconciliationCallback(
+        () =>
+          callbacks.resolveProviderEcho!(transaction, {
+            plan: echoPlan
+          }),
+        persistedOccurrence
+      );
+      if (correlated.kind !== "pending") {
+        if (correlated.kind === "conflict") {
+          throw new ReconciliationCallbackRollback(
+            conflict(correlated.code, persistedOccurrence)
+          );
+        }
+        if (
+          decision.kind === "found" &&
+          correlated.result.externalMessageReference.id !==
+            decision.reference.id
+        ) {
+          throw new ReconciliationCallbackRollback(
+            conflict(
+              "source.message_reconciliation.callback_conflict",
+              persistedOccurrence
+            )
+          );
+        }
+        return finalizeCanonicalCallback(
+          transaction,
+          plan,
+          correlated,
+          "echo_handoff",
+          correlated.result.externalMessageReference,
+          "echo_handoff",
+          dependencies
+        );
+      }
     }
-    const callback = await invokeReconciliationCallback(
-      () =>
-        callbacks.attachOccurrence(transaction, {
-          plan: echoPlan,
-          targetExternalMessageReference: decision.reference,
-          reason: "echo_handoff"
-        }),
-      persistedOccurrence
-    );
-    return finalizeCanonicalCallback(
-      transaction,
-      plan,
-      callback,
-      "echo_handoff",
-      decision.reference,
-      "echo_handoff",
-      dependencies
-    );
+    // An exact provider echo is never a generic occurrence attachment. Even
+    // when a provider response already created the ExternalMessageReference,
+    // the echo must first materialize its immutable observation and durable
+    // settlement work through resolveProviderEcho. Production correlation
+    // deliberately returns pending until the separately authorized settlement
+    // closes occurrence, artifact and MessageTransportLink atomically.
+    return {
+      kind: "echo_handoff_pending",
+      messageKey: plan.messageKey,
+      candidateExternalMessageReferenceId:
+        plan.candidateExternalMessageReferenceId,
+      retainedOccurrence: persistedOccurrence
+    };
   }
 
   const actionPlan = plan as ExtractPlan<"source_action">;
@@ -3222,6 +3274,19 @@ async function invokeReconciliationCallback<TResult>(
   try {
     return await callback();
   } catch (error) {
+    if (error instanceof InboxV2SourceMessageCallbackRollback) {
+      throw new ReconciliationCallbackRollback(
+        conflict(error.code, retainedOccurrence)
+      );
+    }
+    if (error instanceof InboxV2AmbientAuthorizationMutationRollback) {
+      throw new ReconciliationCallbackRollback(
+        conflict(
+          "source.message_reconciliation.callback_conflict",
+          retainedOccurrence
+        )
+      );
+    }
     if (error instanceof DeferredActionCommitRollback) {
       throw new ReconciliationCallbackRollback(
         conflict(

@@ -20,6 +20,12 @@ import {
 import { employees, sourceAccounts, tenants } from "../tables";
 import { inboxV2ExternalThreads } from "./external-thread";
 import {
+  inboxV2FileOutboundArtifactPlans,
+  inboxV2FileOutboundDispatchPlans
+} from "./file-object";
+import {
+  inboxV2SourceOccurrenceDecisionStrength,
+  inboxV2SourceOccurrenceMessageScopeKind,
   inboxV2SourceOccurrenceResolutionState,
   inboxV2SourceOccurrences
 } from "./source-occurrence";
@@ -27,7 +33,10 @@ import {
   inboxV2SourceThreadBindingSnapshots,
   inboxV2SourceThreadBindings
 } from "./source-thread-binding";
-import { inboxV2Messages } from "./timeline-message";
+import {
+  inboxV2Messages,
+  inboxV2MessageTransportOccurrenceLinks
+} from "./timeline-message";
 
 export const inboxV2ExternalMessageScopeKind = pgEnum(
   "inbox_v2_external_message_scope_kind",
@@ -97,7 +106,12 @@ export const inboxV2OutboundDispatchAttemptOutcome = pgEnum(
 
 export const inboxV2OutboundDispatchAttemptCompletionSource = pgEnum(
   "inbox_v2_outbound_dispatch_attempt_completion_source",
-  ["provider_result", "lease_expired", "preflight_blocked"]
+  [
+    "provider_result",
+    "provider_observation",
+    "lease_expired",
+    "preflight_blocked"
+  ]
 );
 
 export const inboxV2OutboundDispatchUnknownRequiredAction = pgEnum(
@@ -126,6 +140,21 @@ export const inboxV2OutboundDispatchArtifactState = pgEnum(
 export const inboxV2OutboundArtifactAssociationEvidenceKind = pgEnum(
   "inbox_v2_outbound_artifact_association_evidence_kind",
   ["provider_response_attempt", "provider_echo_correlation"]
+);
+
+export const inboxV2OutboundProviderSettlementTransitionKind = pgEnum(
+  "inbox_v2_outbound_provider_settlement_transition_kind",
+  [
+    "retain_dispatch_state",
+    "complete_pending_attempt",
+    "reconcile_outcome_unknown",
+    "already_accepted"
+  ]
+);
+
+export const inboxV2OutboundProviderSettlementWorkState = pgEnum(
+  "inbox_v2_outbound_provider_settlement_work_state",
+  ["pending", "leased", "settled", "dead"]
 );
 
 export const inboxV2ExternalMessageReferences = pgTable(
@@ -1429,6 +1458,150 @@ export const inboxV2OutboundDispatchAttempts = pgTable(
   ]
 );
 
+/**
+ * Immutable provider/client correlation ownership established by the first
+ * durable attempt before provider I/O. Retries may reuse the token only for
+ * this exact dispatch and route; another dispatch cannot claim it.
+ */
+export const inboxV2OutboundProviderCorrelationAnchors = pgTable(
+  "inbox_v2_outbound_provider_correlation_anchors",
+  {
+    tenantId: text("tenant_id").notNull(),
+    adapterContractId: text("adapter_contract_id").notNull(),
+    adapterContractVersion: text("adapter_contract_version").notNull(),
+    adapterDeclarationRevision: bigint("adapter_declaration_revision", {
+      mode: "bigint"
+    }).notNull(),
+    adapterSurfaceId: text("adapter_surface_id").notNull(),
+    correlationToken: text("correlation_token").notNull(),
+    dispatchId: text("dispatch_id").notNull(),
+    routeId: text("route_id").notNull(),
+    messageId: text("message_id").notNull(),
+    firstAttemptId: text("first_attempt_id").notNull(),
+    externalThreadId: text("external_thread_id").notNull(),
+    sourceConnectionId: text("source_connection_id").notNull(),
+    sourceAccountId: text("source_account_id").notNull(),
+    sourceThreadBindingId: text("source_thread_binding_id").notNull(),
+    bindingGeneration: bigint("binding_generation", {
+      mode: "bigint"
+    }).notNull(),
+    retrySafetyMechanism: inboxV2OutboundRetrySafetyMechanism(
+      "retry_safety_mechanism"
+    ).notNull(),
+    declaredByTrustedServiceId: text(
+      "declared_by_trusted_service_id"
+    ).notNull(),
+    createdAt: timestamp("created_at", {
+      withTimezone: true,
+      precision: 3
+    }).notNull(),
+    revision: bigint("revision", { mode: "bigint" })
+      .notNull()
+      .default(sql`1`)
+  },
+  (table) => [
+    primaryKey({
+      name: "inbox_v2_outbound_provider_correlation_anchors_pk",
+      columns: [
+        table.tenantId,
+        table.adapterContractId,
+        table.adapterContractVersion,
+        table.adapterDeclarationRevision,
+        table.adapterSurfaceId,
+        table.correlationToken
+      ]
+    }),
+    foreignKey({
+      name: "inbox_v2_outbound_provider_correlation_anchors_tenant_fk",
+      columns: [table.tenantId],
+      foreignColumns: [tenants.id]
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inbox_v2_outbound_provider_correlation_anchors_dispatch_fk",
+      columns: [
+        table.tenantId,
+        table.dispatchId,
+        table.routeId,
+        table.messageId
+      ],
+      foreignColumns: [
+        inboxV2OutboundDispatches.tenantId,
+        inboxV2OutboundDispatches.id,
+        inboxV2OutboundDispatches.routeId,
+        inboxV2OutboundDispatches.messageId
+      ]
+    }),
+    foreignKey({
+      name: "inbox_v2_outbound_provider_correlation_anchors_attempt_fk",
+      columns: [
+        table.tenantId,
+        table.firstAttemptId,
+        table.dispatchId,
+        table.routeId,
+        table.messageId
+      ],
+      foreignColumns: [
+        inboxV2OutboundDispatchAttempts.tenantId,
+        inboxV2OutboundDispatchAttempts.id,
+        inboxV2OutboundDispatchAttempts.dispatchId,
+        inboxV2OutboundDispatchAttempts.routeId,
+        inboxV2OutboundDispatchAttempts.messageId
+      ]
+    }),
+    foreignKey({
+      name: "inbox_v2_outbound_provider_correlation_anchors_binding_fk",
+      columns: [
+        table.tenantId,
+        table.sourceThreadBindingId,
+        table.externalThreadId,
+        table.sourceConnectionId,
+        table.sourceAccountId
+      ],
+      foreignColumns: [
+        inboxV2SourceThreadBindings.tenantId,
+        inboxV2SourceThreadBindings.id,
+        inboxV2SourceThreadBindings.externalThreadId,
+        inboxV2SourceThreadBindings.sourceConnectionId,
+        inboxV2SourceThreadBindings.sourceAccountId
+      ]
+    }),
+    unique("inbox_v2_outbound_provider_correlation_anchors_dispatch_unique").on(
+      table.tenantId,
+      table.dispatchId
+    ),
+    unique("inbox_v2_outbound_provider_correlation_anchors_target_unique").on(
+      table.tenantId,
+      table.adapterContractId,
+      table.adapterContractVersion,
+      table.adapterDeclarationRevision,
+      table.adapterSurfaceId,
+      table.correlationToken,
+      table.dispatchId,
+      table.routeId,
+      table.messageId,
+      table.firstAttemptId
+    ),
+    check(
+      "inbox_v2_outbound_provider_correlation_anchors_value_check",
+      sql`${catalogIdSql(table.adapterContractId)}
+        and ${versionTokenSql(table.adapterContractVersion)}
+        and ${table.adapterDeclarationRevision} >= 1
+        and ${catalogIdSql(table.adapterSurfaceId)}
+        and ${routingTokenSql(table.correlationToken)}
+        and ${table.bindingGeneration} >= 1
+        and ${table.retrySafetyMechanism} <> 'unsafe_or_unknown'
+        and ${catalogIdSql(table.declaredByTrustedServiceId)}
+        and isfinite(${table.createdAt})
+        and ${table.revision} = 1`
+    ),
+    index("inbox_v2_outbound_provider_correlation_anchors_dispatch_idx").on(
+      table.tenantId,
+      table.dispatchId,
+      table.firstAttemptId
+    )
+  ]
+);
+
 export const inboxV2OutboundDispatchReconciliationDecisions = pgTable(
   "inbox_v2_outbound_dispatch_reconciliation_decisions",
   {
@@ -1723,6 +1896,16 @@ export const inboxV2OutboundDispatchArtifacts = pgTable(
       table.routeId,
       table.attemptId,
       table.messageId
+    ),
+    unique("inbox_v2_outbound_dispatch_artifacts_resolution_target_unique").on(
+      table.tenantId,
+      table.id,
+      table.dispatchId,
+      table.routeId,
+      table.attemptId,
+      table.messageId,
+      table.ordinal,
+      table.state
     ),
     check(
       "inbox_v2_outbound_dispatch_artifacts_id_check",
@@ -2096,6 +2279,989 @@ export const inboxV2OutboundDispatchArtifactReferenceLinks = pgTable(
       table.tenantId,
       table.correlationToken,
       table.id
+    )
+  ]
+);
+
+/**
+ * Immutable provider response/echo fact. A synchronous provider response may
+ * be recorded in the fenced provider-result transaction before its
+ * SourceOccurrence row is materialized, so the bounded occurrence snapshot is
+ * retained here and the FK is deliberately deferred to settlement.
+ */
+export const inboxV2OutboundProviderObservations = pgTable(
+  "inbox_v2_outbound_provider_observations",
+  {
+    tenantId: text("tenant_id").notNull(),
+    id: text("id").notNull(),
+    artifactId: text("artifact_id").notNull(),
+    dispatchId: text("dispatch_id").notNull(),
+    routeId: text("route_id").notNull(),
+    attemptId: text("attempt_id").notNull(),
+    messageId: text("message_id").notNull(),
+    artifactOrdinal: smallint("artifact_ordinal").notNull(),
+    artifactState:
+      inboxV2OutboundDispatchArtifactState("artifact_state").notNull(),
+    effectiveState: inboxV2OutboundDispatchArtifactState("effective_state")
+      .notNull()
+      .default("accepted"),
+    contentPlanId: text("content_plan_id").notNull(),
+    contentPlanDigestSha256: text("content_plan_digest_sha256").notNull(),
+    plannedArtifactCount: smallint("planned_artifact_count").notNull(),
+    artifactPlanId: text("artifact_plan_id").notNull(),
+    artifactPlanHashSha256: text("artifact_plan_hash_sha256").notNull(),
+    externalThreadId: text("external_thread_id").notNull(),
+    routeSourceConnectionId: text("route_source_connection_id").notNull(),
+    routeSourceAccountId: text("route_source_account_id").notNull(),
+    routeSourceThreadBindingId: text(
+      "route_source_thread_binding_id"
+    ).notNull(),
+    routeBindingGeneration: bigint("route_binding_generation", {
+      mode: "bigint"
+    }).notNull(),
+    sourceConnectionId: text("source_connection_id").notNull(),
+    sourceAccountId: text("source_account_id").notNull(),
+    sourceThreadBindingId: text("source_thread_binding_id").notNull(),
+    sourceBindingGeneration: bigint("source_binding_generation", {
+      mode: "bigint"
+    }).notNull(),
+    sourceMessageScopeKind: inboxV2SourceOccurrenceMessageScopeKind(
+      "source_message_scope_kind"
+    ).notNull(),
+    sourceMessageDecisionStrength: inboxV2SourceOccurrenceDecisionStrength(
+      "source_message_decision_strength"
+    ).notNull(),
+    adapterContractId: text("adapter_contract_id").notNull(),
+    adapterContractVersion: text("adapter_contract_version").notNull(),
+    adapterDeclarationRevision: bigint("adapter_declaration_revision", {
+      mode: "bigint"
+    }).notNull(),
+    adapterSurfaceId: text("adapter_surface_id").notNull(),
+    correlationAnchorFirstAttemptId: text(
+      "correlation_anchor_first_attempt_id"
+    ),
+    sourceOccurrenceId: text("source_occurrence_id").notNull(),
+    sourceOccurrenceDetail: jsonb("source_occurrence_detail")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    sourceOccurrenceDetailDigestSha256: text(
+      "source_occurrence_detail_digest_sha256"
+    ).notNull(),
+    observationDetail: jsonb("observation_detail")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    observationDetailDigestSha256: text(
+      "observation_detail_digest_sha256"
+    ).notNull(),
+    evidenceKind:
+      inboxV2OutboundArtifactAssociationEvidenceKind("evidence_kind").notNull(),
+    providerReferenceKindId: text("provider_reference_kind_id"),
+    correlationToken: text("correlation_token"),
+    countsAsCustomerInbound: boolean("counts_as_customer_inbound")
+      .notNull()
+      .default(false),
+    createsUnread: boolean("creates_unread").notNull().default(false),
+    createsWorkItem: boolean("creates_work_item").notNull().default(false),
+    requiresProviderIo: boolean("requires_provider_io")
+      .notNull()
+      .default(false),
+    createsOutboundDispatch: boolean("creates_outbound_dispatch")
+      .notNull()
+      .default(false),
+    notificationEligible: boolean("notification_eligible")
+      .notNull()
+      .default(false),
+    observedByTrustedServiceId: text(
+      "observed_by_trusted_service_id"
+    ).notNull(),
+    recordedAt: timestamp("recorded_at", {
+      withTimezone: true,
+      precision: 3
+    }).notNull(),
+    revision: bigint("revision", { mode: "bigint" })
+      .notNull()
+      .default(sql`1`)
+  },
+  (table) => [
+    primaryKey({
+      name: "inbox_v2_outbound_provider_observations_pk",
+      columns: [table.tenantId, table.id]
+    }),
+    foreignKey({
+      name: "inbox_v2_outbound_provider_observations_tenant_fk",
+      columns: [table.tenantId],
+      foreignColumns: [tenants.id]
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inbox_v2_outbound_provider_observations_dispatch_fk",
+      columns: [
+        table.tenantId,
+        table.dispatchId,
+        table.routeId,
+        table.messageId
+      ],
+      foreignColumns: [
+        inboxV2OutboundDispatches.tenantId,
+        inboxV2OutboundDispatches.id,
+        inboxV2OutboundDispatches.routeId,
+        inboxV2OutboundDispatches.messageId
+      ]
+    }),
+    foreignKey({
+      name: "inbox_v2_outbound_provider_observations_attempt_fk",
+      columns: [
+        table.tenantId,
+        table.attemptId,
+        table.dispatchId,
+        table.routeId,
+        table.messageId
+      ],
+      foreignColumns: [
+        inboxV2OutboundDispatchAttempts.tenantId,
+        inboxV2OutboundDispatchAttempts.id,
+        inboxV2OutboundDispatchAttempts.dispatchId,
+        inboxV2OutboundDispatchAttempts.routeId,
+        inboxV2OutboundDispatchAttempts.messageId
+      ]
+    }),
+    foreignKey({
+      name: "inbox_v2_outbound_provider_observations_artifact_fk",
+      columns: [
+        table.tenantId,
+        table.artifactId,
+        table.dispatchId,
+        table.routeId,
+        table.attemptId,
+        table.messageId,
+        table.artifactOrdinal,
+        table.artifactState
+      ],
+      foreignColumns: [
+        inboxV2OutboundDispatchArtifacts.tenantId,
+        inboxV2OutboundDispatchArtifacts.id,
+        inboxV2OutboundDispatchArtifacts.dispatchId,
+        inboxV2OutboundDispatchArtifacts.routeId,
+        inboxV2OutboundDispatchArtifacts.attemptId,
+        inboxV2OutboundDispatchArtifacts.messageId,
+        inboxV2OutboundDispatchArtifacts.ordinal,
+        inboxV2OutboundDispatchArtifacts.state
+      ]
+    }),
+    foreignKey({
+      name: "inbox_v2_outbound_provider_observations_content_plan_fk",
+      columns: [table.tenantId, table.contentPlanId, table.dispatchId],
+      foreignColumns: [
+        inboxV2FileOutboundDispatchPlans.tenantId,
+        inboxV2FileOutboundDispatchPlans.id,
+        inboxV2FileOutboundDispatchPlans.dispatchId
+      ]
+    }),
+    foreignKey({
+      name: "inbox_v2_outbound_provider_observations_artifact_plan_fk",
+      columns: [
+        table.tenantId,
+        table.contentPlanId,
+        table.artifactPlanId,
+        table.artifactOrdinal
+      ],
+      foreignColumns: [
+        inboxV2FileOutboundArtifactPlans.tenantId,
+        inboxV2FileOutboundArtifactPlans.contentPlanId,
+        inboxV2FileOutboundArtifactPlans.id,
+        inboxV2FileOutboundArtifactPlans.ordinal
+      ]
+    }),
+    foreignKey({
+      name: "inbox_v2_outbound_provider_observations_route_binding_fk",
+      columns: [
+        table.tenantId,
+        table.routeSourceThreadBindingId,
+        table.externalThreadId,
+        table.routeSourceConnectionId,
+        table.routeSourceAccountId
+      ],
+      foreignColumns: [
+        inboxV2SourceThreadBindings.tenantId,
+        inboxV2SourceThreadBindings.id,
+        inboxV2SourceThreadBindings.externalThreadId,
+        inboxV2SourceThreadBindings.sourceConnectionId,
+        inboxV2SourceThreadBindings.sourceAccountId
+      ]
+    }),
+    foreignKey({
+      name: "inbox_v2_outbound_provider_observations_source_binding_fk",
+      columns: [
+        table.tenantId,
+        table.sourceThreadBindingId,
+        table.externalThreadId,
+        table.sourceConnectionId,
+        table.sourceAccountId
+      ],
+      foreignColumns: [
+        inboxV2SourceThreadBindings.tenantId,
+        inboxV2SourceThreadBindings.id,
+        inboxV2SourceThreadBindings.externalThreadId,
+        inboxV2SourceThreadBindings.sourceConnectionId,
+        inboxV2SourceThreadBindings.sourceAccountId
+      ]
+    }),
+    foreignKey({
+      name: "inbox_v2_outbound_provider_observations_correlation_anchor_fk",
+      columns: [
+        table.tenantId,
+        table.adapterContractId,
+        table.adapterContractVersion,
+        table.adapterDeclarationRevision,
+        table.adapterSurfaceId,
+        table.correlationToken,
+        table.dispatchId,
+        table.routeId,
+        table.messageId,
+        table.correlationAnchorFirstAttemptId
+      ],
+      foreignColumns: [
+        inboxV2OutboundProviderCorrelationAnchors.tenantId,
+        inboxV2OutboundProviderCorrelationAnchors.adapterContractId,
+        inboxV2OutboundProviderCorrelationAnchors.adapterContractVersion,
+        inboxV2OutboundProviderCorrelationAnchors.adapterDeclarationRevision,
+        inboxV2OutboundProviderCorrelationAnchors.adapterSurfaceId,
+        inboxV2OutboundProviderCorrelationAnchors.correlationToken,
+        inboxV2OutboundProviderCorrelationAnchors.dispatchId,
+        inboxV2OutboundProviderCorrelationAnchors.routeId,
+        inboxV2OutboundProviderCorrelationAnchors.messageId,
+        inboxV2OutboundProviderCorrelationAnchors.firstAttemptId
+      ]
+    }),
+    unique("inbox_v2_outbound_provider_observations_replay_unique").on(
+      table.tenantId,
+      table.artifactId,
+      table.sourceOccurrenceId,
+      table.evidenceKind,
+      table.sourceOccurrenceDetailDigestSha256
+    ),
+    unique("inbox_v2_outbound_provider_observations_target_unique").on(
+      table.tenantId,
+      table.id,
+      table.artifactId,
+      table.dispatchId,
+      table.routeId,
+      table.attemptId,
+      table.messageId,
+      table.artifactOrdinal,
+      table.effectiveState,
+      table.sourceOccurrenceId
+    ),
+    check(
+      "inbox_v2_outbound_provider_observations_id_check",
+      idSql(table.id, "outbound_provider_observation")
+    ),
+    check(
+      "inbox_v2_outbound_provider_observations_artifact_check",
+      sql`${table.artifactOrdinal} between 1 and 64
+        and ${table.plannedArtifactCount} between 1 and 64
+        and ${table.artifactOrdinal} <= ${table.plannedArtifactCount}
+        and ${table.artifactState} in ('accepted', 'outcome_unknown')
+        and ${table.effectiveState} = 'accepted'
+        and ${sha256DigestSql(table.contentPlanDigestSha256)}
+        and ${sha256DigestSql(table.artifactPlanHashSha256)}`
+    ),
+    check(
+      "inbox_v2_outbound_provider_observations_surface_check",
+      sql`${catalogIdSql(table.adapterContractId)}
+        and ${versionTokenSql(table.adapterContractVersion)}
+        and ${table.adapterDeclarationRevision} >= 1
+        and ${catalogIdSql(table.adapterSurfaceId)}
+        and ${table.routeBindingGeneration} >= 1
+        and ${table.sourceBindingGeneration} >= 1
+        and (
+          (${table.routeSourceConnectionId} = ${table.sourceConnectionId}
+            and ${table.routeSourceAccountId} = ${table.sourceAccountId}
+            and ${table.routeSourceThreadBindingId} = ${table.sourceThreadBindingId}
+            and ${table.routeBindingGeneration} = ${table.sourceBindingGeneration})
+          or (${table.evidenceKind} = 'provider_echo_correlation'
+            and ${table.sourceMessageScopeKind} = 'provider_thread'
+            and ${table.sourceMessageDecisionStrength} = 'authoritative')
+        )`
+    ),
+    check(
+      "inbox_v2_outbound_provider_observations_detail_check",
+      sql`${boundedJsonObjectSql(table.sourceOccurrenceDetail, 65_536)}
+        and ${sha256PrefixedSql(table.sourceOccurrenceDetailDigestSha256)}
+        and (${table.sourceOccurrenceDetail} #>> '{tenantId}') = ${table.tenantId}
+        and (${table.sourceOccurrenceDetail} #>> '{id}') = ${table.sourceOccurrenceId}
+        and (${table.sourceOccurrenceDetail} #>>
+          '{bindingContext,externalThread,id}') = ${table.externalThreadId}
+        and (${table.sourceOccurrenceDetail} #>>
+          '{bindingContext,sourceAccount,id}') = ${table.sourceAccountId}
+        and (${table.sourceOccurrenceDetail} #>>
+          '{bindingContext,sourceThreadBinding,id}') = ${table.sourceThreadBindingId}
+        and (${table.sourceOccurrenceDetail} #>>
+          '{bindingContext,bindingGeneration}') = ${table.sourceBindingGeneration}::text
+        and (${table.sourceOccurrenceDetail} #>>
+          '{messageIdentityDeclaration,scopeKind}') = ${table.sourceMessageScopeKind}::text
+        and (${table.sourceOccurrenceDetail} #>>
+          '{messageIdentityDeclaration,decisionStrength}') =
+          ${table.sourceMessageDecisionStrength}::text
+        and (${table.sourceOccurrenceDetail} #>>
+          '{descriptor,adapterContract,contractId}') = ${table.adapterContractId}
+        and (${table.sourceOccurrenceDetail} #>>
+          '{descriptor,adapterContract,contractVersion}') =
+          ${table.adapterContractVersion}
+        and (${table.sourceOccurrenceDetail} #>>
+          '{descriptor,adapterContract,declarationRevision}') =
+          ${table.adapterDeclarationRevision}::text
+        and (${table.sourceOccurrenceDetail} #>>
+          '{descriptor,adapterContract,surfaceId}') = ${table.adapterSurfaceId}
+        and (${table.sourceOccurrenceDetail} #>> '{direction}') = 'outbound'
+        and (${table.sourceOccurrenceDetail} -> 'providerActor') = 'null'::jsonb
+        and (${table.sourceOccurrenceDetail} #>> '{resolution,state}') = 'pending'
+        and (${table.sourceOccurrenceDetail} #>> '{revision}') = '1'
+        and (${table.sourceOccurrenceDetail} #>> '{recordedAt}')::timestamptz =
+          ${table.recordedAt}
+        and (${table.sourceOccurrenceDetail} #>> '{createdAt}')::timestamptz =
+          ${table.recordedAt}
+        and (${table.sourceOccurrenceDetail} #>> '{updatedAt}')::timestamptz =
+          ${table.recordedAt}`
+    ),
+    check(
+      "inbox_v2_outbound_provider_observations_snapshot_check",
+      sql`${boundedJsonObjectSql(table.observationDetail, 262_144)}
+        and ${sha256PrefixedSql(table.observationDetailDigestSha256)}
+        and (${table.observationDetail} #>> '{tenantId}') = ${table.tenantId}
+        and (${table.observationDetail} #>> '{id}') = ${table.id}
+        and (${table.observationDetail} #>> '{artifact,id}') = ${table.artifactId}
+        and (${table.observationDetail} #>> '{artifact,ordinal}') =
+          ${table.artifactOrdinal}::text
+        and (${table.observationDetail} #>> '{artifact,state}') =
+          ${table.artifactState}::text
+        and (${table.observationDetail} #>> '{dispatch,id}') = ${table.dispatchId}
+        and (${table.observationDetail} #>> '{route,id}') = ${table.routeId}
+        and (${table.observationDetail} #>> '{attempt,id}') = ${table.attemptId}
+        and (${table.observationDetail} #>> '{dispatch,message,id}') =
+          ${table.messageId}
+        and (${table.observationDetail} -> 'sourceOccurrence') =
+          ${table.sourceOccurrenceDetail}
+        and (${table.observationDetail} #>> '{evidence,kind}') =
+          ${table.evidenceKind}::text
+        and (${table.observationDetail} #>> '{observedByTrustedServiceId}') =
+          ${table.observedByTrustedServiceId}
+        and (${table.observationDetail} #>> '{recordedAt}')::timestamptz =
+          ${table.recordedAt}
+        and (${table.observationDetail} #>> '{revision}') = '1'`
+    ),
+    check(
+      "inbox_v2_outbound_provider_observations_evidence_check",
+      sql`(
+          ${table.evidenceKind} = 'provider_response_attempt'
+          and ${table.providerReferenceKindId} is null
+          and ${table.correlationToken} is null
+          and ${table.correlationAnchorFirstAttemptId} is null
+          and (${table.sourceOccurrenceDetail} #>> '{origin,kind}') =
+            'provider_response'
+          and (${table.sourceOccurrenceDetail} #>>
+            '{origin,outboundDispatchAttempt,id}') = ${table.attemptId}
+          and ${table.routeSourceConnectionId} = ${table.sourceConnectionId}
+          and ${table.routeSourceAccountId} = ${table.sourceAccountId}
+          and ${table.routeSourceThreadBindingId} = ${table.sourceThreadBindingId}
+          and ${table.routeBindingGeneration} = ${table.sourceBindingGeneration}
+        ) or (
+          ${table.evidenceKind} = 'provider_echo_correlation'
+          and ${catalogIdSql(table.providerReferenceKindId)}
+          and ${routingTokenSql(table.correlationToken)}
+          and ${table.correlationAnchorFirstAttemptId} is not null
+          and (${table.sourceOccurrenceDetail} #>> '{origin,kind}') =
+            'provider_echo'
+          and ${table.sourceOccurrenceDetail} @>
+            jsonb_build_object(
+              'descriptor', jsonb_build_object(
+                'providerReferences', jsonb_build_array(
+                  jsonb_build_object(
+                    'kindId', ${table.providerReferenceKindId},
+                    'subject', ${table.correlationToken}
+                  )
+                )
+              )
+            )
+        )`
+    ),
+    check(
+      "inbox_v2_outbound_provider_observations_effect_check",
+      sql`not ${table.countsAsCustomerInbound}
+        and not ${table.createsUnread}
+        and not ${table.createsWorkItem}
+        and not ${table.requiresProviderIo}
+        and not ${table.createsOutboundDispatch}
+        and not ${table.notificationEligible}`
+    ),
+    check(
+      "inbox_v2_outbound_provider_observations_immutable_check",
+      sql`${catalogIdSql(table.observedByTrustedServiceId)}
+        and isfinite(${table.recordedAt})
+        and ${table.revision} = 1`
+    ),
+    index("inbox_v2_outbound_provider_observations_dispatch_idx").on(
+      table.tenantId,
+      table.dispatchId,
+      table.attemptId,
+      table.artifactOrdinal,
+      table.id
+    ),
+    index("inbox_v2_outbound_provider_observations_occurrence_idx").on(
+      table.tenantId,
+      table.sourceOccurrenceId,
+      table.recordedAt,
+      table.id
+    )
+  ]
+);
+
+/**
+ * One append-only effective accepted result for one immutable artifact fact.
+ * An outcome_unknown artifact is never rewritten; its accepted result is
+ * backed by the exact observation and accepted reconciliation decision.
+ */
+export const inboxV2OutboundDispatchArtifactResolutions = pgTable(
+  "inbox_v2_outbound_dispatch_artifact_resolutions",
+  {
+    tenantId: text("tenant_id").notNull(),
+    id: text("id").notNull(),
+    artifactId: text("artifact_id").notNull(),
+    dispatchId: text("dispatch_id").notNull(),
+    routeId: text("route_id").notNull(),
+    attemptId: text("attempt_id").notNull(),
+    messageId: text("message_id").notNull(),
+    artifactOrdinal: smallint("artifact_ordinal").notNull(),
+    fromState: inboxV2OutboundDispatchArtifactState("from_state").notNull(),
+    effectiveState: inboxV2OutboundDispatchArtifactState("effective_state")
+      .notNull()
+      .default("accepted"),
+    observationId: text("observation_id").notNull(),
+    observationSourceOccurrenceId: text(
+      "observation_source_occurrence_id"
+    ).notNull(),
+    resolvedByTrustedServiceId: text(
+      "resolved_by_trusted_service_id"
+    ).notNull(),
+    resolvedAt: timestamp("resolved_at", {
+      withTimezone: true,
+      precision: 3
+    }).notNull(),
+    revision: bigint("revision", { mode: "bigint" })
+      .notNull()
+      .default(sql`1`)
+  },
+  (table) => [
+    primaryKey({
+      name: "inbox_v2_outbound_dispatch_artifact_resolutions_pk",
+      columns: [table.tenantId, table.id]
+    }),
+    foreignKey({
+      name: "inbox_v2_outbound_dispatch_artifact_resolutions_tenant_fk",
+      columns: [table.tenantId],
+      foreignColumns: [tenants.id]
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "inbox_v2_outbound_dispatch_artifact_resolutions_artifact_fk",
+      columns: [
+        table.tenantId,
+        table.artifactId,
+        table.dispatchId,
+        table.routeId,
+        table.attemptId,
+        table.messageId,
+        table.artifactOrdinal,
+        table.fromState
+      ],
+      foreignColumns: [
+        inboxV2OutboundDispatchArtifacts.tenantId,
+        inboxV2OutboundDispatchArtifacts.id,
+        inboxV2OutboundDispatchArtifacts.dispatchId,
+        inboxV2OutboundDispatchArtifacts.routeId,
+        inboxV2OutboundDispatchArtifacts.attemptId,
+        inboxV2OutboundDispatchArtifacts.messageId,
+        inboxV2OutboundDispatchArtifacts.ordinal,
+        inboxV2OutboundDispatchArtifacts.state
+      ]
+    }),
+    foreignKey({
+      name: "inbox_v2_outbound_dispatch_artifact_resolutions_observation_fk",
+      columns: [
+        table.tenantId,
+        table.observationId,
+        table.artifactId,
+        table.dispatchId,
+        table.routeId,
+        table.attemptId,
+        table.messageId,
+        table.artifactOrdinal,
+        table.effectiveState,
+        table.observationSourceOccurrenceId
+      ],
+      foreignColumns: [
+        inboxV2OutboundProviderObservations.tenantId,
+        inboxV2OutboundProviderObservations.id,
+        inboxV2OutboundProviderObservations.artifactId,
+        inboxV2OutboundProviderObservations.dispatchId,
+        inboxV2OutboundProviderObservations.routeId,
+        inboxV2OutboundProviderObservations.attemptId,
+        inboxV2OutboundProviderObservations.messageId,
+        inboxV2OutboundProviderObservations.artifactOrdinal,
+        inboxV2OutboundProviderObservations.effectiveState,
+        inboxV2OutboundProviderObservations.sourceOccurrenceId
+      ]
+    }),
+    unique(
+      "inbox_v2_outbound_dispatch_artifact_resolutions_artifact_unique"
+    ).on(table.tenantId, table.artifactId),
+    unique("inbox_v2_outbound_dispatch_artifact_resolutions_target_unique").on(
+      table.tenantId,
+      table.id,
+      table.artifactId,
+      table.dispatchId,
+      table.routeId,
+      table.attemptId,
+      table.messageId,
+      table.effectiveState
+    ),
+    check(
+      "inbox_v2_outbound_dispatch_artifact_resolutions_id_check",
+      idSql(table.id, "outbound_dispatch_artifact_resolution")
+    ),
+    check(
+      "inbox_v2_outbound_dispatch_artifact_resolutions_state_check",
+      sql`${table.artifactOrdinal} between 1 and 64
+        and ${table.fromState} in ('accepted', 'outcome_unknown')
+        and ${table.effectiveState} = 'accepted'`
+    ),
+    check(
+      "inbox_v2_outbound_dispatch_artifact_resolutions_immutable_check",
+      sql`${catalogIdSql(table.resolvedByTrustedServiceId)}
+        and isfinite(${table.resolvedAt})
+        and ${table.revision} = 1`
+    ),
+    index("inbox_v2_outbound_dispatch_artifact_resolutions_attempt_idx").on(
+      table.tenantId,
+      table.dispatchId,
+      table.attemptId,
+      table.artifactOrdinal,
+      table.id
+    )
+  ]
+);
+
+/**
+ * Per-observation atomic settlement proof. Several response/echo occurrences
+ * may reuse the first canonical artifact/reference link and one effective
+ * artifact resolution, while each keeps its own SourceOccurrence and Message
+ * transport link.
+ */
+export const inboxV2OutboundProviderObservationSettlements = pgTable(
+  "inbox_v2_outbound_provider_observation_settlements",
+  {
+    tenantId: text("tenant_id").notNull(),
+    observationId: text("observation_id").notNull(),
+    artifactResolutionId: text("artifact_resolution_id").notNull(),
+    artifactId: text("artifact_id").notNull(),
+    dispatchId: text("dispatch_id").notNull(),
+    routeId: text("route_id").notNull(),
+    attemptId: text("attempt_id").notNull(),
+    messageId: text("message_id").notNull(),
+    artifactOrdinal: smallint("artifact_ordinal").notNull(),
+    effectiveState: inboxV2OutboundDispatchArtifactState("effective_state")
+      .notNull()
+      .default("accepted"),
+    sourceOccurrenceId: text("source_occurrence_id").notNull(),
+    sourceOccurrenceRevision: bigint("source_occurrence_revision", {
+      mode: "bigint"
+    }).notNull(),
+    sourceOccurrenceResolutionState: inboxV2SourceOccurrenceResolutionState(
+      "source_occurrence_resolution_state"
+    )
+      .notNull()
+      .default("resolved"),
+    externalThreadId: text("external_thread_id").notNull(),
+    externalMessageReferenceId: text("external_message_reference_id").notNull(),
+    canonicalArtifactReferenceLinkId: text(
+      "canonical_artifact_reference_link_id"
+    ).notNull(),
+    messageTransportLinkId: text("message_transport_link_id").notNull(),
+    transitionKind:
+      inboxV2OutboundProviderSettlementTransitionKind(
+        "transition_kind"
+      ).notNull(),
+    reconciliationDecisionId: text("reconciliation_decision_id"),
+    reconciliationResultState: inboxV2OutboundDispatchReconciliationResult(
+      "reconciliation_result_state"
+    ),
+    settledByTrustedServiceId: text("settled_by_trusted_service_id").notNull(),
+    settledAt: timestamp("settled_at", {
+      withTimezone: true,
+      precision: 3
+    }).notNull(),
+    revision: bigint("revision", { mode: "bigint" })
+      .notNull()
+      .default(sql`1`)
+  },
+  (table) => [
+    primaryKey({
+      name: "inbox_v2_outbound_provider_observation_settlements_pk",
+      columns: [table.tenantId, table.observationId]
+    }),
+    foreignKey({
+      name: "inbox_v2_outbound_provider_observation_settlements_observation_fk",
+      columns: [
+        table.tenantId,
+        table.observationId,
+        table.artifactId,
+        table.dispatchId,
+        table.routeId,
+        table.attemptId,
+        table.messageId,
+        table.artifactOrdinal,
+        table.effectiveState,
+        table.sourceOccurrenceId
+      ],
+      foreignColumns: [
+        inboxV2OutboundProviderObservations.tenantId,
+        inboxV2OutboundProviderObservations.id,
+        inboxV2OutboundProviderObservations.artifactId,
+        inboxV2OutboundProviderObservations.dispatchId,
+        inboxV2OutboundProviderObservations.routeId,
+        inboxV2OutboundProviderObservations.attemptId,
+        inboxV2OutboundProviderObservations.messageId,
+        inboxV2OutboundProviderObservations.artifactOrdinal,
+        inboxV2OutboundProviderObservations.effectiveState,
+        inboxV2OutboundProviderObservations.sourceOccurrenceId
+      ]
+    }),
+    foreignKey({
+      name: "inbox_v2_outbound_provider_observation_settlements_resolution_fk",
+      columns: [
+        table.tenantId,
+        table.artifactResolutionId,
+        table.artifactId,
+        table.dispatchId,
+        table.routeId,
+        table.attemptId,
+        table.messageId,
+        table.effectiveState
+      ],
+      foreignColumns: [
+        inboxV2OutboundDispatchArtifactResolutions.tenantId,
+        inboxV2OutboundDispatchArtifactResolutions.id,
+        inboxV2OutboundDispatchArtifactResolutions.artifactId,
+        inboxV2OutboundDispatchArtifactResolutions.dispatchId,
+        inboxV2OutboundDispatchArtifactResolutions.routeId,
+        inboxV2OutboundDispatchArtifactResolutions.attemptId,
+        inboxV2OutboundDispatchArtifactResolutions.messageId,
+        inboxV2OutboundDispatchArtifactResolutions.effectiveState
+      ]
+    }),
+    foreignKey({
+      name: "inbox_v2_outbound_provider_observation_settlements_occurrence_fk",
+      columns: [
+        table.tenantId,
+        table.sourceOccurrenceId,
+        table.sourceOccurrenceRevision,
+        table.sourceOccurrenceResolutionState,
+        table.externalMessageReferenceId
+      ],
+      foreignColumns: [
+        inboxV2SourceOccurrences.tenantId,
+        inboxV2SourceOccurrences.id,
+        inboxV2SourceOccurrences.revision,
+        inboxV2SourceOccurrences.resolutionState,
+        inboxV2SourceOccurrences.resolvedExternalMessageReferenceId
+      ]
+    }),
+    foreignKey({
+      name: "inbox_v2_outbound_provider_observation_settlements_reference_fk",
+      columns: [
+        table.tenantId,
+        table.externalMessageReferenceId,
+        table.externalThreadId,
+        table.messageId
+      ],
+      foreignColumns: [
+        inboxV2ExternalMessageReferences.tenantId,
+        inboxV2ExternalMessageReferences.id,
+        inboxV2ExternalMessageReferences.externalThreadId,
+        inboxV2ExternalMessageReferences.messageId
+      ]
+    }),
+    foreignKey({
+      name: "inbox_v2_outbound_provider_observation_settlements_artifact_link_fk",
+      columns: [table.tenantId, table.canonicalArtifactReferenceLinkId],
+      foreignColumns: [
+        inboxV2OutboundDispatchArtifactReferenceLinks.tenantId,
+        inboxV2OutboundDispatchArtifactReferenceLinks.id
+      ]
+    }),
+    foreignKey({
+      name: "inbox_v2_outbound_provider_observation_settlements_transport_link_fk",
+      columns: [table.tenantId, table.messageTransportLinkId, table.messageId],
+      foreignColumns: [
+        inboxV2MessageTransportOccurrenceLinks.tenantId,
+        inboxV2MessageTransportOccurrenceLinks.id,
+        inboxV2MessageTransportOccurrenceLinks.messageId
+      ]
+    }),
+    foreignKey({
+      name: "inbox_v2_outbound_provider_observation_settlements_decision_fk",
+      columns: [
+        table.tenantId,
+        table.reconciliationDecisionId,
+        table.dispatchId,
+        table.routeId,
+        table.attemptId,
+        table.reconciliationResultState
+      ],
+      foreignColumns: [
+        inboxV2OutboundDispatchReconciliationDecisions.tenantId,
+        inboxV2OutboundDispatchReconciliationDecisions.id,
+        inboxV2OutboundDispatchReconciliationDecisions.dispatchId,
+        inboxV2OutboundDispatchReconciliationDecisions.routeId,
+        inboxV2OutboundDispatchReconciliationDecisions.unknownAttemptId,
+        inboxV2OutboundDispatchReconciliationDecisions.resultState
+      ]
+    }),
+    unique(
+      "inbox_v2_outbound_provider_observation_settlements_occurrence_unique"
+    ).on(table.tenantId, table.sourceOccurrenceId),
+    check(
+      "inbox_v2_outbound_provider_observation_settlements_state_check",
+      sql`${table.artifactOrdinal} between 1 and 64
+        and ${table.effectiveState} = 'accepted'
+        and ${table.sourceOccurrenceRevision} >= 2
+        and ${table.sourceOccurrenceResolutionState} = 'resolved'
+        and (
+          (${table.transitionKind} = 'reconcile_outcome_unknown'
+            and ${table.reconciliationDecisionId} is not null
+            and ${table.reconciliationResultState} = 'accepted')
+          or (${table.transitionKind} <> 'reconcile_outcome_unknown'
+            and ${table.reconciliationDecisionId} is null
+            and ${table.reconciliationResultState} is null)
+        )`
+    ),
+    check(
+      "inbox_v2_outbound_provider_observation_settlements_immutable_check",
+      sql`${catalogIdSql(table.settledByTrustedServiceId)}
+        and isfinite(${table.settledAt})
+        and ${table.revision} = 1`
+    ),
+    index("inbox_v2_outbound_provider_observation_settlements_artifact_idx").on(
+      table.tenantId,
+      table.artifactId,
+      table.settledAt,
+      table.observationId
+    ),
+    index("inbox_v2_outbound_provider_observation_settlements_decision_idx").on(
+      table.tenantId,
+      table.reconciliationDecisionId,
+      table.observationId
+    )
+  ]
+);
+
+/**
+ * Durable execution handoff for an immutable provider observation. The two
+ * candidate IDs are derived before enqueue because they do not exist until the
+ * authorized settlement creates the canonical reference and transport link.
+ * Lease tokens are stored only as hashes and every completion keeps a replay
+ * fence for the worker result that moved the item.
+ */
+export const inboxV2OutboundProviderSettlementWorkItems = pgTable(
+  "inbox_v2_outbound_provider_settlement_work_items",
+  {
+    tenantId: text("tenant_id").notNull(),
+    observationId: text("observation_id").notNull(),
+    candidateExternalMessageReferenceId: text(
+      "candidate_external_message_reference_id"
+    ).notNull(),
+    candidateTransportLinkId: text("candidate_transport_link_id").notNull(),
+    trustedServiceId: text("trusted_service_id").notNull(),
+    state: inboxV2OutboundProviderSettlementWorkState("state")
+      .notNull()
+      .default("pending"),
+    attemptCount: bigint("attempt_count", { mode: "bigint" })
+      .notNull()
+      .default(sql`0`),
+    availableAt: timestamp("available_at", {
+      withTimezone: true,
+      precision: 3
+    }),
+    leaseOwnerId: text("lease_owner_id"),
+    leaseTokenHash: text("lease_token_hash"),
+    leaseRevision: bigint("lease_revision", { mode: "bigint" }),
+    leaseClaimedAt: timestamp("lease_claimed_at", {
+      withTimezone: true,
+      precision: 3
+    }),
+    leaseExpiresAt: timestamp("lease_expires_at", {
+      withTimezone: true,
+      precision: 3
+    }),
+    lastFinalizedLeaseOwnerId: text("last_finalized_lease_owner_id"),
+    lastFinalizedLeaseTokenHash: text("last_finalized_lease_token_hash"),
+    lastFinalizedLeaseRevision: bigint("last_finalized_lease_revision", {
+      mode: "bigint"
+    }),
+    lastFinalizedResultHash: text("last_finalized_result_hash"),
+    lastFinalizedAt: timestamp("last_finalized_at", {
+      withTimezone: true,
+      precision: 3
+    }),
+    lastErrorCode: text("last_error_code"),
+    terminalAt: timestamp("terminal_at", {
+      withTimezone: true,
+      precision: 3
+    }),
+    revision: bigint("revision", { mode: "bigint" })
+      .notNull()
+      .default(sql`1`),
+    createdAt: timestamp("created_at", {
+      withTimezone: true,
+      precision: 3
+    }).notNull(),
+    updatedAt: timestamp("updated_at", {
+      withTimezone: true,
+      precision: 3
+    }).notNull()
+  },
+  (table) => [
+    primaryKey({
+      name: "inbox_v2_outbound_provider_settlement_work_items_pk",
+      columns: [table.tenantId, table.observationId]
+    }),
+    foreignKey({
+      name: "inbox_v2_outbound_provider_settlement_work_items_observation_fk",
+      columns: [table.tenantId, table.observationId],
+      foreignColumns: [
+        inboxV2OutboundProviderObservations.tenantId,
+        inboxV2OutboundProviderObservations.id
+      ]
+    }).onDelete("cascade"),
+    unique("inbox_v2_outbound_provider_settlement_work_items_link_uk").on(
+      table.tenantId,
+      table.candidateTransportLinkId
+    ),
+    uniqueIndex("inbox_v2_outbound_provider_settlement_work_items_lease_uidx")
+      .on(table.tenantId, table.leaseTokenHash)
+      .where(sql`${table.leaseTokenHash} is not null`),
+    check(
+      "inbox_v2_outbound_provider_settlement_work_items_values_check",
+      sql`${idSql(
+        table.candidateExternalMessageReferenceId,
+        "external_message_reference"
+      )}
+        and ${idSql(
+          table.candidateTransportLinkId,
+          "message_transport_occurrence_link"
+        )}
+        and ${catalogIdSql(table.trustedServiceId)}
+        and ${table.attemptCount} >= 0
+        and ${table.revision} >= 1
+        and (${table.leaseOwnerId} is null
+          or char_length(${table.leaseOwnerId}) between 1 and 256)
+        and (${table.leaseTokenHash} is null
+          or ${sha256PrefixedSql(table.leaseTokenHash)})
+        and (${table.leaseRevision} is null or ${table.leaseRevision} >= 1)
+        and (${table.lastFinalizedLeaseOwnerId} is null
+          or char_length(${table.lastFinalizedLeaseOwnerId}) between 1 and 256)
+        and (${table.lastFinalizedLeaseTokenHash} is null
+          or ${sha256PrefixedSql(table.lastFinalizedLeaseTokenHash)})
+        and (${table.lastFinalizedLeaseRevision} is null
+          or ${table.lastFinalizedLeaseRevision} >= 1)
+        and (${table.lastFinalizedResultHash} is null
+          or ${sha256PrefixedSql(table.lastFinalizedResultHash)})
+        and (${table.lastErrorCode} is null
+          or char_length(${table.lastErrorCode}) between 3 and 256)`
+    ),
+    check(
+      "inbox_v2_outbound_provider_settlement_work_items_lease_check",
+      sql`(
+          ${table.leaseOwnerId} is null
+          and ${table.leaseTokenHash} is null
+          and ${table.leaseRevision} is null
+          and ${table.leaseClaimedAt} is null
+          and ${table.leaseExpiresAt} is null
+        ) or (
+          ${table.leaseOwnerId} is not null
+          and ${table.leaseTokenHash} is not null
+          and ${table.leaseRevision} is not null
+          and ${table.leaseClaimedAt} is not null
+          and ${table.leaseExpiresAt} is not null
+          and ${table.leaseExpiresAt} > ${table.leaseClaimedAt}
+        )`
+    ),
+    check(
+      "inbox_v2_outbound_provider_settlement_work_items_replay_check",
+      sql`(
+          ${table.lastFinalizedLeaseOwnerId} is null
+          and ${table.lastFinalizedLeaseTokenHash} is null
+          and ${table.lastFinalizedLeaseRevision} is null
+          and ${table.lastFinalizedResultHash} is null
+          and ${table.lastFinalizedAt} is null
+        ) or (
+          ${table.lastFinalizedLeaseOwnerId} is not null
+          and ${table.lastFinalizedLeaseTokenHash} is not null
+          and ${table.lastFinalizedLeaseRevision} is not null
+          and ${table.lastFinalizedResultHash} is not null
+          and ${table.lastFinalizedAt} is not null
+        )`
+    ),
+    check(
+      "inbox_v2_outbound_provider_settlement_work_items_state_check",
+      sql`(
+          ${table.state} = 'pending'
+          and ${table.availableAt} is not null
+          and ${table.leaseOwnerId} is null
+          and ${table.terminalAt} is null
+        ) or (
+          ${table.state} = 'leased'
+          and ${table.availableAt} is not null
+          and ${table.leaseOwnerId} is not null
+          and ${table.terminalAt} is null
+        ) or (
+          ${table.state} = 'settled'
+          and ${table.availableAt} is null
+          and ${table.leaseOwnerId} is null
+          and ${table.lastFinalizedAt} is not null
+          and ${table.lastErrorCode} is null
+          and ${table.terminalAt} = ${table.lastFinalizedAt}
+        ) or (
+          ${table.state} = 'dead'
+          and ${table.availableAt} is null
+          and ${table.leaseOwnerId} is null
+          and ${table.lastFinalizedAt} is not null
+          and ${table.lastErrorCode} is not null
+          and ${table.terminalAt} = ${table.lastFinalizedAt}
+        )`
+    ),
+    check(
+      "inbox_v2_outbound_provider_settlement_work_items_times_check",
+      sql`isfinite(${table.createdAt})
+        and isfinite(${table.updatedAt})
+        and ${table.updatedAt} >= ${table.createdAt}
+        and (${table.leaseClaimedAt} is null
+          or isfinite(${table.leaseClaimedAt}))
+        and (${table.leaseExpiresAt} is null
+          or isfinite(${table.leaseExpiresAt}))
+        and (${table.lastFinalizedAt} is null
+          or isfinite(${table.lastFinalizedAt}))
+        and (${table.terminalAt} is null or isfinite(${table.terminalAt}))`
+    ),
+    index("inbox_v2_outbound_provider_settlement_work_items_due_idx")
+      .on(table.tenantId, table.availableAt, table.observationId)
+      .where(sql`${table.state} = 'pending'`),
+    index("inbox_v2_outbound_provider_settlement_work_items_reclaim_idx")
+      .on(table.tenantId, table.leaseExpiresAt, table.observationId)
+      .where(sql`${table.state} = 'leased'`),
+    index("inbox_v2_outbound_provider_settlement_work_items_service_idx").on(
+      table.tenantId,
+      table.trustedServiceId,
+      table.state,
+      table.observationId
     )
   ]
 );
@@ -3948,6 +5114,1340 @@ begin
 end;
 $function$;
 
+create or replace function public.inbox_v2_outbound_correlation_anchor_guard_insert()
+returns trigger
+language plpgsql
+set search_path = pg_catalog, public, pg_temp
+as $function$
+begin
+  perform 1
+    from public.inbox_v2_outbound_dispatch_attempts attempt_row
+    join public.inbox_v2_outbound_dispatches dispatch_row
+      on dispatch_row.tenant_id = attempt_row.tenant_id
+     and dispatch_row.id = attempt_row.dispatch_id
+     and dispatch_row.route_id = attempt_row.route_id
+     and dispatch_row.message_id = attempt_row.message_id
+    join public.inbox_v2_outbound_routes route_row
+      on route_row.tenant_id = attempt_row.tenant_id
+     and route_row.id = attempt_row.route_id
+   where attempt_row.tenant_id = new.tenant_id
+     and attempt_row.id = new.first_attempt_id
+     and attempt_row.dispatch_id = new.dispatch_id
+     and attempt_row.route_id = new.route_id
+     and attempt_row.message_id = new.message_id
+     and attempt_row.attempt_number = 1
+     and attempt_row.retry_safety_mechanism = new.retry_safety_mechanism
+     and attempt_row.retry_safety_mechanism <> 'unsafe_or_unknown'
+     and attempt_row.provider_correlation_token = new.correlation_token
+     and attempt_row.retry_safety_declared_by_trusted_service_id =
+       new.declared_by_trusted_service_id
+     and attempt_row.retry_safety_adapter_contract_snapshot #>>
+       '{contractId}' = new.adapter_contract_id
+     and attempt_row.retry_safety_adapter_contract_snapshot #>>
+       '{contractVersion}' = new.adapter_contract_version
+     and attempt_row.retry_safety_adapter_contract_snapshot #>>
+       '{declarationRevision}' = new.adapter_declaration_revision::text
+     and attempt_row.retry_safety_adapter_contract_snapshot #>>
+       '{surfaceId}' = new.adapter_surface_id
+     and route_row.external_thread_id = new.external_thread_id
+     and route_row.source_connection_id = new.source_connection_id
+     and route_row.source_account_id = new.source_account_id
+     and route_row.source_thread_binding_id = new.source_thread_binding_id
+     and route_row.binding_generation = new.binding_generation
+     and route_row.adapter_contract_id = new.adapter_contract_id
+     and route_row.adapter_contract_version = new.adapter_contract_version
+     and route_row.adapter_declaration_revision =
+       new.adapter_declaration_revision
+     and route_row.adapter_surface_id = new.adapter_surface_id
+     and route_row.adapter_loaded_by_trusted_service_id =
+       new.declared_by_trusted_service_id
+     and new.created_at = attempt_row.opened_at
+   for share of attempt_row, dispatch_row, route_row;
+
+  if not found then
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.outbound_correlation_anchor_invalid';
+  end if;
+
+  return new;
+end;
+$function$;
+
+create or replace function public.inbox_v2_outbound_provider_transport_lineage(
+  checked_observation_detail jsonb,
+  checked_dispatch public.inbox_v2_outbound_dispatches,
+  checked_attempt public.inbox_v2_outbound_dispatch_attempts
+)
+returns text
+language plpgsql
+immutable
+set search_path = pg_catalog, public, pg_temp
+as $function$
+declare
+  observation_dispatch jsonb := checked_observation_detail #> '{dispatch}';
+  observation_attempt jsonb := checked_observation_detail #> '{attempt}';
+  observation_outcome jsonb := checked_observation_detail #> '{attempt,outcome}';
+  stable_projection_matches boolean := false;
+  current_attempt_projection_matches boolean := false;
+  current_dispatch_projection_matches boolean := false;
+  observation_is_pending_head boolean := false;
+  observation_is_unknown_head boolean := false;
+begin
+  stable_projection_matches := (
+    observation_dispatch ?& array[
+      'tenantId', 'id', 'message', 'route', 'multiSendOperation', 'state',
+      'attemptCount', 'activeAttempt', 'lastAttempt', 'retryAuthorization',
+      'revision', 'createdAt', 'updatedAt'
+    ]
+    and observation_dispatch - array[
+      'tenantId', 'id', 'message', 'route', 'multiSendOperation', 'state',
+      'attemptCount', 'activeAttempt', 'lastAttempt', 'retryAuthorization',
+      'revision', 'createdAt', 'updatedAt'
+    ] = '{}'::jsonb
+    and observation_attempt ?& array[
+      'tenantId', 'id', 'dispatch', 'route', 'attemptNumber', 'claimToken',
+      'retrySafety', 'leaseExpiresAt', 'openedAt', 'outcome',
+      'completionSource', 'revision'
+    ]
+    and observation_attempt - array[
+      'tenantId', 'id', 'dispatch', 'route', 'attemptNumber', 'claimToken',
+      'retrySafety', 'leaseExpiresAt', 'openedAt', 'outcome',
+      'completionSource', 'revision'
+    ] = '{}'::jsonb
+    and (observation_attempt #> '{retrySafety}') ?& array[
+      'adapterContract', 'declaredByTrustedServiceId', 'declarationToken',
+      'declaredAt', 'mechanism', 'providerCorrelationToken',
+      'automaticRetryAllowed'
+    ]
+    and (observation_attempt #> '{retrySafety}') - array[
+      'adapterContract', 'declaredByTrustedServiceId', 'declarationToken',
+      'declaredAt', 'mechanism', 'providerCorrelationToken',
+      'automaticRetryAllowed'
+    ] = '{}'::jsonb
+    and observation_dispatch #>> '{tenantId}' = checked_dispatch.tenant_id
+    and observation_dispatch #>> '{id}' = checked_dispatch.id
+    and observation_dispatch #> '{message}' = jsonb_build_object(
+      'tenantId', checked_dispatch.tenant_id,
+      'kind', 'message',
+      'id', checked_dispatch.message_id
+    )
+    and observation_dispatch #> '{route}' = jsonb_build_object(
+      'tenantId', checked_dispatch.tenant_id,
+      'kind', 'outbound_route',
+      'id', checked_dispatch.route_id
+    )
+    and observation_dispatch #> '{multiSendOperation}' = case
+      when checked_dispatch.multi_send_operation_id is null then 'null'::jsonb
+      else jsonb_build_object(
+        'tenantId', checked_dispatch.tenant_id,
+        'kind', 'outbound_multi_send_operation',
+        'id', checked_dispatch.multi_send_operation_id
+      )
+    end
+    and (observation_dispatch #>> '{createdAt}')::timestamptz =
+      checked_dispatch.created_at
+    and observation_attempt #>> '{tenantId}' = checked_attempt.tenant_id
+    and observation_attempt #>> '{id}' = checked_attempt.id
+    and observation_attempt #> '{dispatch}' = jsonb_build_object(
+      'tenantId', checked_attempt.tenant_id,
+      'kind', 'outbound_dispatch',
+      'id', checked_attempt.dispatch_id
+    )
+    and observation_attempt #> '{route}' = jsonb_build_object(
+      'tenantId', checked_attempt.tenant_id,
+      'kind', 'outbound_route',
+      'id', checked_attempt.route_id
+    )
+    and (observation_attempt #>> '{attemptNumber}')::integer =
+      checked_attempt.attempt_number
+    and observation_attempt #>> '{claimToken}' = checked_attempt.claim_token
+    and observation_attempt #> '{retrySafety,adapterContract}' =
+      checked_attempt.retry_safety_adapter_contract_snapshot
+    and observation_attempt #>> '{retrySafety,declaredByTrustedServiceId}' =
+      checked_attempt.retry_safety_declared_by_trusted_service_id
+    and observation_attempt #>> '{retrySafety,declarationToken}' =
+      checked_attempt.retry_safety_declaration_token
+    and (observation_attempt #>> '{retrySafety,declaredAt}')::timestamptz =
+      checked_attempt.retry_safety_declared_at
+    and observation_attempt #>> '{retrySafety,mechanism}' =
+      checked_attempt.retry_safety_mechanism::text
+    and observation_attempt #>> '{retrySafety,providerCorrelationToken}'
+      is not distinct from checked_attempt.provider_correlation_token
+    and (observation_attempt #>>
+      '{retrySafety,automaticRetryAllowed}')::boolean =
+      checked_attempt.automatic_retry_allowed
+    and (observation_attempt #>> '{leaseExpiresAt}')::timestamptz =
+      checked_attempt.lease_expires_at
+    and (observation_attempt #>> '{openedAt}')::timestamptz =
+      checked_attempt.opened_at
+  ) is true;
+
+  if not stable_projection_matches then
+    return 'invalid';
+  end if;
+
+  current_attempt_projection_matches := (
+    case checked_attempt.outcome_kind::text
+      when 'pending' then observation_outcome = '{"kind":"pending"}'::jsonb
+      when 'accepted' then
+        jsonb_typeof(observation_outcome) = 'object'
+        and observation_outcome ?&
+          array['kind', 'completedAt', 'providerAcknowledgementToken']
+        and observation_outcome -
+          array['kind', 'completedAt', 'providerAcknowledgementToken'] =
+          '{}'::jsonb
+        and observation_outcome #>> '{kind}' = 'accepted'
+        and (observation_outcome #>> '{completedAt}')::timestamptz =
+          checked_attempt.completed_at
+        and observation_outcome #>> '{providerAcknowledgementToken}'
+          is not distinct from checked_attempt.provider_acknowledgement_token
+      when 'retryable_failure' then
+        jsonb_typeof(observation_outcome) = 'object'
+        and observation_outcome ?&
+          array['kind', 'completedAt', 'retryAt', 'diagnostic']
+        and observation_outcome -
+          array['kind', 'completedAt', 'retryAt', 'diagnostic'] = '{}'::jsonb
+        and observation_outcome #>> '{kind}' = 'retryable_failure'
+        and (observation_outcome #>> '{completedAt}')::timestamptz =
+          checked_attempt.completed_at
+        and (observation_outcome #>> '{retryAt}')::timestamptz =
+          checked_attempt.retry_at
+        and observation_outcome #> '{diagnostic}' = jsonb_build_object(
+          'codeId', checked_attempt.diagnostic_code_id,
+          'retryable', checked_attempt.diagnostic_retryable,
+          'correlationToken', checked_attempt.diagnostic_correlation_token,
+          'safeOperatorHintId', checked_attempt.diagnostic_safe_operator_hint_id
+        )
+      when 'terminal_failure' then
+        jsonb_typeof(observation_outcome) = 'object'
+        and observation_outcome ?& array['kind', 'completedAt', 'diagnostic']
+        and observation_outcome - array['kind', 'completedAt', 'diagnostic'] =
+          '{}'::jsonb
+        and observation_outcome #>> '{kind}' = 'terminal_failure'
+        and (observation_outcome #>> '{completedAt}')::timestamptz =
+          checked_attempt.completed_at
+        and observation_outcome #> '{diagnostic}' = jsonb_build_object(
+          'codeId', checked_attempt.diagnostic_code_id,
+          'retryable', checked_attempt.diagnostic_retryable,
+          'correlationToken', checked_attempt.diagnostic_correlation_token,
+          'safeOperatorHintId', checked_attempt.diagnostic_safe_operator_hint_id
+        )
+      when 'outcome_unknown' then
+        jsonb_typeof(observation_outcome) = 'object'
+        and observation_outcome ?&
+          array['kind', 'completedAt', 'diagnostic', 'requiredAction']
+        and observation_outcome -
+          array['kind', 'completedAt', 'diagnostic', 'requiredAction'] =
+          '{}'::jsonb
+        and observation_outcome #>> '{kind}' = 'outcome_unknown'
+        and (observation_outcome #>> '{completedAt}')::timestamptz =
+          checked_attempt.completed_at
+        and observation_outcome #> '{diagnostic}' = jsonb_build_object(
+          'codeId', checked_attempt.diagnostic_code_id,
+          'retryable', checked_attempt.diagnostic_retryable,
+          'correlationToken', checked_attempt.diagnostic_correlation_token,
+          'safeOperatorHintId', checked_attempt.diagnostic_safe_operator_hint_id
+        )
+        and observation_outcome #>> '{requiredAction}' =
+          checked_attempt.unknown_required_action::text
+      else false
+    end
+    and observation_attempt ? 'completionSource'
+    and observation_attempt #>> '{completionSource}'
+      is not distinct from checked_attempt.completion_source::text
+    and (observation_attempt #>> '{revision}')::bigint =
+      checked_attempt.revision
+  ) is true;
+
+  current_dispatch_projection_matches := (
+    observation_dispatch #>> '{state}' = checked_dispatch.state::text
+    and (observation_dispatch #>> '{attemptCount}')::integer =
+      checked_dispatch.attempt_count
+    and observation_dispatch #> '{activeAttempt}' = case
+      when checked_dispatch.active_attempt_id is null then 'null'::jsonb
+      else jsonb_build_object(
+        'tenantId', checked_dispatch.tenant_id,
+        'kind', 'outbound_dispatch_attempt',
+        'id', checked_dispatch.active_attempt_id
+      )
+    end
+    and observation_dispatch #> '{lastAttempt}' = case
+      when checked_dispatch.last_attempt_id is null then 'null'::jsonb
+      else jsonb_build_object(
+        'tenantId', checked_dispatch.tenant_id,
+        'kind', 'outbound_dispatch_attempt',
+        'id', checked_dispatch.last_attempt_id
+      )
+    end
+    and observation_dispatch #> '{retryAuthorization}' = case
+      when checked_dispatch.retry_authorization_decision_id is null then
+        'null'::jsonb
+      else jsonb_build_object(
+        'tenantId', checked_dispatch.tenant_id,
+        'kind', 'outbound_dispatch_reconciliation_decision',
+        'id', checked_dispatch.retry_authorization_decision_id
+      )
+    end
+    and (observation_dispatch #>> '{revision}')::bigint =
+      checked_dispatch.revision
+    and (observation_dispatch #>> '{updatedAt}')::timestamptz =
+      checked_dispatch.updated_at
+  ) is true;
+
+  if current_attempt_projection_matches
+     and current_dispatch_projection_matches
+     and checked_dispatch.attempt_count = checked_attempt.attempt_number
+     and checked_dispatch.last_attempt_id = checked_attempt.id
+     and checked_dispatch.retry_authorization_decision_id is null
+     and (
+       (checked_dispatch.state = 'attempting'
+         and checked_attempt.outcome_kind = 'pending'
+         and checked_dispatch.active_attempt_id = checked_attempt.id)
+       or (checked_dispatch.state = 'outcome_unknown'
+         and checked_attempt.outcome_kind = 'outcome_unknown'
+         and checked_dispatch.active_attempt_id is null)
+       or (checked_dispatch.state = 'accepted'
+         and checked_attempt.outcome_kind in ('accepted', 'outcome_unknown')
+         and checked_dispatch.active_attempt_id is null)
+     ) then
+    return 'exact_head';
+  end if;
+
+  observation_is_pending_head := (
+    observation_dispatch #>> '{state}' = 'attempting'
+    and (observation_dispatch #>> '{attemptCount}')::integer =
+      checked_attempt.attempt_number
+    and observation_dispatch #> '{activeAttempt}' = jsonb_build_object(
+      'tenantId', checked_attempt.tenant_id,
+      'kind', 'outbound_dispatch_attempt',
+      'id', checked_attempt.id
+    )
+    and observation_dispatch #> '{lastAttempt}' = jsonb_build_object(
+      'tenantId', checked_attempt.tenant_id,
+      'kind', 'outbound_dispatch_attempt',
+      'id', checked_attempt.id
+    )
+    and observation_dispatch #> '{retryAuthorization}' = 'null'::jsonb
+    and (observation_dispatch #>> '{updatedAt}')::timestamptz =
+      checked_attempt.opened_at
+    and observation_outcome = '{"kind":"pending"}'::jsonb
+    and observation_attempt #> '{completionSource}' = 'null'::jsonb
+    and (observation_attempt #>> '{revision}')::bigint = 1
+  ) is true;
+
+  if observation_is_pending_head
+     and checked_dispatch.attempt_count = checked_attempt.attempt_number
+     and checked_dispatch.active_attempt_id is null
+     and checked_dispatch.last_attempt_id = checked_attempt.id
+     and checked_dispatch.retry_authorization_decision_id is null
+     and (checked_attempt.revision =
+       (observation_attempt #>> '{revision}')::bigint + 1)
+     and (checked_dispatch.revision =
+       (observation_dispatch #>> '{revision}')::bigint + 1)
+     and checked_dispatch.updated_at = checked_attempt.completed_at then
+    if checked_dispatch.state = 'outcome_unknown'
+       and checked_attempt.outcome_kind = 'outcome_unknown'
+       and checked_attempt.completion_source in ('provider_result', 'lease_expired')
+       then
+      return 'pending_to_outcome_unknown';
+    end if;
+    if checked_dispatch.state = 'accepted'
+       and checked_attempt.outcome_kind = 'accepted'
+       and checked_attempt.completion_source in
+         ('provider_result', 'provider_observation') then
+      return 'pending_to_accepted';
+    end if;
+  end if;
+
+  observation_is_unknown_head := (
+    observation_dispatch #>> '{state}' = 'outcome_unknown'
+    and (observation_dispatch #>> '{attemptCount}')::integer =
+      checked_attempt.attempt_number
+    and observation_dispatch #> '{activeAttempt}' = 'null'::jsonb
+    and observation_dispatch #> '{lastAttempt}' = jsonb_build_object(
+      'tenantId', checked_attempt.tenant_id,
+      'kind', 'outbound_dispatch_attempt',
+      'id', checked_attempt.id
+    )
+    and observation_dispatch #> '{retryAuthorization}' = 'null'::jsonb
+    and current_attempt_projection_matches
+    and checked_attempt.outcome_kind = 'outcome_unknown'
+    and (observation_dispatch #>> '{updatedAt}')::timestamptz =
+      checked_attempt.completed_at
+  ) is true;
+
+  if observation_is_unknown_head
+     and checked_dispatch.state = 'accepted'
+     and checked_dispatch.attempt_count = checked_attempt.attempt_number
+     and checked_dispatch.active_attempt_id is null
+     and checked_dispatch.last_attempt_id = checked_attempt.id
+     and checked_dispatch.retry_authorization_decision_id is null
+     and checked_dispatch.revision =
+       (observation_dispatch #>> '{revision}')::bigint + 1
+     and checked_dispatch.updated_at >= checked_attempt.completed_at then
+    return 'outcome_unknown_to_accepted';
+  end if;
+
+  if observation_is_pending_head
+     and checked_dispatch.state = 'accepted'
+     and checked_attempt.outcome_kind = 'outcome_unknown'
+     and checked_attempt.completion_source in ('provider_result', 'lease_expired')
+     and checked_dispatch.attempt_count = checked_attempt.attempt_number
+     and checked_dispatch.active_attempt_id is null
+     and checked_dispatch.last_attempt_id = checked_attempt.id
+     and checked_dispatch.retry_authorization_decision_id is null
+     and checked_attempt.revision =
+       (observation_attempt #>> '{revision}')::bigint + 1
+     and checked_dispatch.revision =
+       (observation_dispatch #>> '{revision}')::bigint + 2
+     and checked_dispatch.updated_at >= checked_attempt.completed_at then
+    return 'pending_to_outcome_unknown_to_accepted';
+  end if;
+
+  return 'invalid';
+end;
+$function$;
+
+create or replace function public.inbox_v2_outbound_provider_observation_guard_insert()
+returns trigger
+language plpgsql
+set search_path = pg_catalog, public, pg_temp
+as $function$
+begin
+  perform 1
+    from public.inbox_v2_outbound_dispatch_artifacts artifact_row
+    join public.inbox_v2_outbound_dispatch_attempts attempt_row
+      on attempt_row.tenant_id = artifact_row.tenant_id
+     and attempt_row.id = artifact_row.attempt_id
+     and attempt_row.dispatch_id = artifact_row.dispatch_id
+     and attempt_row.route_id = artifact_row.route_id
+     and attempt_row.message_id = artifact_row.message_id
+    join public.inbox_v2_outbound_dispatches dispatch_row
+      on dispatch_row.tenant_id = artifact_row.tenant_id
+     and dispatch_row.id = artifact_row.dispatch_id
+     and dispatch_row.route_id = artifact_row.route_id
+     and dispatch_row.message_id = artifact_row.message_id
+    join public.inbox_v2_outbound_routes route_row
+      on route_row.tenant_id = artifact_row.tenant_id
+     and route_row.id = artifact_row.route_id
+    join public.inbox_v2_file_outbound_dispatch_plans content_plan_row
+      on content_plan_row.tenant_id = artifact_row.tenant_id
+     and content_plan_row.id = new.content_plan_id
+     and content_plan_row.dispatch_id = artifact_row.dispatch_id
+    join public.inbox_v2_file_outbound_artifact_plans artifact_plan_row
+      on artifact_plan_row.tenant_id = content_plan_row.tenant_id
+     and artifact_plan_row.content_plan_id = content_plan_row.id
+     and artifact_plan_row.id = new.artifact_plan_id
+     and artifact_plan_row.ordinal = artifact_row.ordinal
+     and artifact_plan_row.dispatch_id = artifact_row.dispatch_id
+    cross join lateral (
+      select public.inbox_v2_outbound_provider_transport_lineage(
+        new.observation_detail, dispatch_row, attempt_row
+      ) as transport_lineage
+    ) lineage_row
+   where artifact_row.tenant_id = new.tenant_id
+      and artifact_row.id = new.artifact_id
+     and artifact_row.dispatch_id = new.dispatch_id
+     and artifact_row.route_id = new.route_id
+     and artifact_row.attempt_id = new.attempt_id
+     and artifact_row.message_id = new.message_id
+     and artifact_row.ordinal = new.artifact_ordinal
+     and artifact_row.state = new.artifact_state
+     and content_plan_row.message_id = new.message_id
+     and content_plan_row.route_id = new.route_id
+     and content_plan_row.plan_digest_sha256 =
+       new.content_plan_digest_sha256
+     and content_plan_row.artifact_count = new.planned_artifact_count
+      and artifact_plan_row.artifact_plan_hash_sha256 =
+        new.artifact_plan_hash_sha256
+      and new.observation_detail ?& array[
+        'tenantId', 'id', 'artifact', 'dispatch', 'route', 'attempt',
+        'sourceOccurrence', 'sourceOccurrenceDetailDigestSha256', 'evidence',
+        'effectDisposition', 'observedByTrustedServiceId', 'recordedAt',
+        'revision'
+      ]
+      and new.observation_detail - array[
+        'tenantId', 'id', 'artifact', 'dispatch', 'route', 'attempt',
+        'sourceOccurrence', 'sourceOccurrenceDetailDigestSha256', 'evidence',
+        'effectDisposition', 'observedByTrustedServiceId', 'recordedAt',
+        'revision'
+      ] = '{}'::jsonb
+      and new.observation_detail #>> '{tenantId}' = new.tenant_id
+      and new.observation_detail #>> '{id}' = new.id
+      and new.observation_detail #>> '{revision}' = new.revision::text
+      and new.observation_detail #>> '{observedByTrustedServiceId}' =
+        new.observed_by_trusted_service_id
+      and (new.observation_detail #>> '{recordedAt}')::timestamptz =
+        new.recorded_at
+      and new.observation_detail #> '{sourceOccurrence}' =
+        new.source_occurrence_detail
+      and new.observation_detail #>> '{sourceOccurrenceDetailDigestSha256}' =
+        new.source_occurrence_detail_digest_sha256
+      and new.observation_detail #> '{effectDisposition}' =
+        jsonb_build_object(
+          'countsAsCustomerInbound', new.counts_as_customer_inbound,
+          'createsUnread', new.creates_unread,
+          'createsWorkItem', new.creates_work_item,
+          'requiresProviderIo', new.requires_provider_io,
+          'createsOutboundDispatch', new.creates_outbound_dispatch,
+          'notificationEligible', new.notification_eligible
+        )
+      and (new.observation_detail #> '{artifact}') ?& array[
+        'tenantId', 'id', 'dispatch', 'route', 'attempt', 'ordinal', 'state',
+        'diagnostic', 'createdAt', 'revision'
+      ]
+      and (new.observation_detail #> '{artifact}') - array[
+        'tenantId', 'id', 'dispatch', 'route', 'attempt', 'ordinal', 'state',
+        'diagnostic', 'createdAt', 'revision'
+      ] = '{}'::jsonb
+      and new.observation_detail #>> '{artifact,tenantId}' =
+        artifact_row.tenant_id
+      and new.observation_detail #>> '{artifact,id}' = artifact_row.id
+      and new.observation_detail #> '{artifact,dispatch}' = jsonb_build_object(
+        'tenantId', artifact_row.tenant_id,
+        'kind', 'outbound_dispatch',
+        'id', artifact_row.dispatch_id
+      )
+      and new.observation_detail #> '{artifact,route}' = jsonb_build_object(
+        'tenantId', artifact_row.tenant_id,
+        'kind', 'outbound_route',
+        'id', artifact_row.route_id
+      )
+      and new.observation_detail #> '{artifact,attempt}' = jsonb_build_object(
+        'tenantId', artifact_row.tenant_id,
+        'kind', 'outbound_dispatch_attempt',
+        'id', artifact_row.attempt_id
+      )
+      and (new.observation_detail #>> '{artifact,ordinal}')::integer =
+        artifact_row.ordinal
+      and new.observation_detail #>> '{artifact,state}' = artifact_row.state::text
+      and new.observation_detail #> '{artifact,diagnostic}' = case
+        when artifact_row.state = 'accepted' then 'null'::jsonb
+        else jsonb_build_object(
+          'codeId', artifact_row.diagnostic_code_id,
+          'retryable', artifact_row.diagnostic_retryable,
+          'correlationToken', artifact_row.diagnostic_correlation_token,
+          'safeOperatorHintId', artifact_row.diagnostic_safe_operator_hint_id
+        )
+      end
+      and (new.observation_detail #>> '{artifact,createdAt}')::timestamptz =
+        artifact_row.created_at
+      and (new.observation_detail #>> '{artifact,revision}')::bigint =
+        artifact_row.revision
+      and (new.observation_detail #> '{route}') ?& array[
+        'tenantId', 'id', 'principal', 'conversation', 'externalThread',
+        'sourceThreadBinding', 'sourceAccount', 'sourceConnection',
+        'operationId', 'contentKindId', 'authorizationEpoch',
+        'requiredConversationPermissionId', 'bindingFence', 'adapterContract',
+        'routeDescriptor', 'routePolicy', 'routePolicyRevision',
+        'conversationAuthorization', 'sourceAccountAuthorization',
+        'referenceContext', 'runtimeObservationAtResolution', 'selection',
+        'mutationToken', 'idempotencyToken', 'correlationToken', 'revision',
+        'createdAt'
+      ]
+      and (new.observation_detail #> '{route}') - array[
+        'tenantId', 'id', 'principal', 'conversation', 'externalThread',
+        'sourceThreadBinding', 'sourceAccount', 'sourceConnection',
+        'operationId', 'contentKindId', 'authorizationEpoch',
+        'requiredConversationPermissionId', 'bindingFence', 'adapterContract',
+        'routeDescriptor', 'routePolicy', 'routePolicyRevision',
+        'conversationAuthorization', 'sourceAccountAuthorization',
+        'referenceContext', 'runtimeObservationAtResolution', 'selection',
+        'mutationToken', 'idempotencyToken', 'correlationToken', 'revision',
+        'createdAt'
+      ] = '{}'::jsonb
+      and new.observation_detail #>> '{route,tenantId}' = route_row.tenant_id
+      and new.observation_detail #>> '{route,id}' = route_row.id
+      and new.observation_detail #> '{route,principal}' = case
+        when route_row.principal_kind = 'employee' then jsonb_build_object(
+          'kind', 'employee',
+          'employee', jsonb_build_object(
+            'tenantId', route_row.tenant_id,
+            'kind', 'employee',
+            'id', route_row.principal_employee_id
+          )
+        )
+        else jsonb_build_object(
+          'kind', 'trusted_service',
+          'trustedServiceId', route_row.principal_trusted_service_id
+        )
+      end
+      and new.observation_detail #> '{route,conversation}' =
+        jsonb_build_object(
+          'tenantId', route_row.tenant_id,
+          'kind', 'conversation',
+          'id', route_row.conversation_id
+        )
+      and new.observation_detail #> '{route,externalThread}' =
+        jsonb_build_object(
+          'tenantId', route_row.tenant_id,
+          'kind', 'external_thread',
+          'id', route_row.external_thread_id
+        )
+      and new.observation_detail #> '{route,sourceConnection}' =
+        jsonb_build_object(
+          'tenantId', route_row.tenant_id,
+          'kind', 'source_connection',
+          'id', route_row.source_connection_id
+        )
+      and new.observation_detail #> '{route,sourceAccount}' =
+        jsonb_build_object(
+          'tenantId', route_row.tenant_id,
+          'kind', 'source_account',
+          'id', route_row.source_account_id
+        )
+      and new.observation_detail #> '{route,sourceThreadBinding}' =
+        jsonb_build_object(
+          'tenantId', route_row.tenant_id,
+          'kind', 'source_thread_binding',
+          'id', route_row.source_thread_binding_id
+        )
+      and new.observation_detail #>> '{route,operationId}' = route_row.operation_id
+      and new.observation_detail #> '{route,contentKindId}' = case
+        when route_row.content_kind_id is null then 'null'::jsonb
+        else to_jsonb(route_row.content_kind_id)
+      end
+      and new.observation_detail #>> '{route,authorizationEpoch}' =
+        route_row.authorization_epoch
+      and new.observation_detail #>>
+        '{route,requiredConversationPermissionId}' =
+        route_row.required_conversation_permission_id
+      and new.observation_detail #> '{route,bindingFence}' =
+        jsonb_build_object(
+          'accountGeneration', route_row.account_generation::text,
+          'bindingGeneration', route_row.binding_generation::text,
+          'remoteAccessRevision', route_row.remote_access_revision::text,
+          'administrativeRevision', route_row.administrative_revision::text,
+          'capabilityRevision', route_row.capability_revision::text,
+          'routeDescriptorRevision', route_row.route_descriptor_revision::text
+        )
+      and new.observation_detail #> '{route,adapterContract}' =
+        route_row.adapter_contract_snapshot
+      and new.observation_detail #> '{route,routeDescriptor}' =
+        route_row.route_descriptor_snapshot
+      and new.observation_detail #> '{route,routePolicy}' = jsonb_build_object(
+        'tenantId', route_row.tenant_id,
+        'kind', 'thread_route_policy',
+        'id', route_row.route_policy_id
+      )
+      and (new.observation_detail #>> '{route,routePolicyRevision}')::bigint =
+        route_row.route_policy_revision
+      and new.observation_detail #> '{route,conversationAuthorization}' =
+        route_row.conversation_authorization_snapshot
+      and new.observation_detail #> '{route,sourceAccountAuthorization}' =
+        route_row.source_account_authorization_snapshot
+      and new.observation_detail #> '{route,referenceContext}' =
+        route_row.reference_context_snapshot
+      and new.observation_detail #> '{route,runtimeObservationAtResolution}' =
+        route_row.runtime_observation_snapshot
+      and new.observation_detail #> '{route,selection,intent}' =
+        route_row.selection_intent_snapshot
+      and (new.observation_detail #> '{route,selection}') ?& array[
+        'intent', 'reason', 'candidateSnapshotToken',
+        'candidateSnapshotNotAfter', 'fallbackPolicyOrdinal', 'selectedAt'
+      ]
+      and (new.observation_detail #> '{route,selection}') - array[
+        'intent', 'reason', 'candidateSnapshotToken',
+        'candidateSnapshotNotAfter', 'fallbackPolicyOrdinal', 'selectedAt'
+      ] = '{}'::jsonb
+      and new.observation_detail #>> '{route,selection,reason}' =
+        route_row.selection_reason::text
+      and new.observation_detail #>>
+        '{route,selection,candidateSnapshotToken}' =
+        route_row.candidate_snapshot_token
+      and (new.observation_detail #>>
+        '{route,selection,candidateSnapshotNotAfter}')::timestamptz =
+        route_row.candidate_snapshot_not_after
+      and new.observation_detail #> '{route,selection,fallbackPolicyOrdinal}' =
+        case
+          when route_row.fallback_policy_ordinal is null then 'null'::jsonb
+          else to_jsonb(route_row.fallback_policy_ordinal)
+        end
+      and (new.observation_detail #>>
+        '{route,selection,selectedAt}')::timestamptz = route_row.selected_at
+      and new.observation_detail #>> '{route,mutationToken}' =
+        route_row.mutation_token
+      and new.observation_detail #>> '{route,idempotencyToken}' =
+        route_row.idempotency_token
+      and new.observation_detail #>> '{route,correlationToken}' =
+        route_row.correlation_token
+      and (new.observation_detail #>> '{route,revision}')::bigint =
+        route_row.revision
+      and (new.observation_detail #>> '{route,createdAt}')::timestamptz =
+        route_row.created_at
+      and (new.observation_detail #>> '{evidence,artifactOrdinal}')::integer =
+        new.artifact_ordinal
+      and (
+        (new.evidence_kind = 'provider_response_attempt'
+          and new.observation_detail #> '{evidence}' = jsonb_build_object(
+            'kind', 'provider_response_attempt',
+            'artifactOrdinal', new.artifact_ordinal,
+            'outboundDispatchAttempt', jsonb_build_object(
+              'tenantId', new.tenant_id,
+              'kind', 'outbound_dispatch_attempt',
+              'id', new.attempt_id
+            )))
+        or (new.evidence_kind = 'provider_echo_correlation'
+          and new.observation_detail #> '{evidence}' = jsonb_build_object(
+            'kind', 'provider_echo_correlation',
+            'artifactOrdinal', new.artifact_ordinal,
+            'providerReferenceKindId', new.provider_reference_kind_id,
+            'correlationToken', new.correlation_token
+          ))
+      )
+      and route_row.external_thread_id = new.external_thread_id
+     and route_row.source_connection_id = new.route_source_connection_id
+     and route_row.source_account_id = new.route_source_account_id
+     and route_row.source_thread_binding_id =
+       new.route_source_thread_binding_id
+     and route_row.binding_generation = new.route_binding_generation
+     and route_row.adapter_contract_id = new.adapter_contract_id
+     and route_row.adapter_contract_version = new.adapter_contract_version
+     and route_row.adapter_declaration_revision =
+       new.adapter_declaration_revision
+     and route_row.adapter_surface_id = new.adapter_surface_id
+     and route_row.adapter_loaded_by_trusted_service_id =
+       new.observed_by_trusted_service_id
+     and new.source_occurrence_detail #>>
+       '{messageIdentityDeclaration,adapterContract,loadedByTrustedServiceId}' =
+       new.observed_by_trusted_service_id
+      and (new.source_occurrence_detail #>>
+        '{messageIdentityDeclaration,adapterContract,loadedAt}')::timestamptz =
+        route_row.adapter_loaded_at
+      and lineage_row.transport_lineage in (
+        'exact_head',
+        'pending_to_outcome_unknown',
+        'pending_to_accepted'
+      )
+      and (
+        dispatch_row.state <> 'accepted'
+        or attempt_row.outcome_kind <> 'outcome_unknown'
+        or exists (
+          select 1
+            from public.inbox_v2_outbound_dispatch_reconciliation_decisions
+              accepted_decision_row
+           where accepted_decision_row.tenant_id = dispatch_row.tenant_id
+             and accepted_decision_row.dispatch_id = dispatch_row.id
+             and accepted_decision_row.route_id = dispatch_row.route_id
+             and accepted_decision_row.unknown_attempt_id = attempt_row.id
+             and accepted_decision_row.result_state = 'accepted'
+             and accepted_decision_row.decided_by_kind = 'trusted_service'
+             and accepted_decision_row.decided_at = dispatch_row.updated_at
+        )
+      )
+     and artifact_row.created_at >= attempt_row.opened_at
+     and content_plan_row.created_at >= dispatch_row.created_at
+     and (new.source_occurrence_detail #>> '{observedAt}')::timestamptz >=
+       attempt_row.opened_at
+     and (new.source_occurrence_detail #>> '{observedAt}')::timestamptz <=
+       new.recorded_at
+     and artifact_row.created_at <= new.recorded_at
+     and content_plan_row.created_at <= new.recorded_at
+     and dispatch_row.updated_at <= new.recorded_at
+   for share of artifact_row, attempt_row, dispatch_row, route_row,
+     content_plan_row, artifact_plan_row;
+
+  if not found then
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.outbound_provider_observation_invalid';
+  end if;
+
+  return new;
+end;
+$function$;
+
+create or replace function public.inbox_v2_outbound_artifact_resolution_guard_insert()
+returns trigger
+language plpgsql
+set search_path = pg_catalog, public, pg_temp
+as $function$
+begin
+  perform 1
+    from public.inbox_v2_outbound_provider_observations observation_row
+    join public.inbox_v2_outbound_dispatch_artifacts artifact_row
+      on artifact_row.tenant_id = observation_row.tenant_id
+     and artifact_row.id = observation_row.artifact_id
+     and artifact_row.dispatch_id = observation_row.dispatch_id
+     and artifact_row.route_id = observation_row.route_id
+     and artifact_row.attempt_id = observation_row.attempt_id
+     and artifact_row.message_id = observation_row.message_id
+     and artifact_row.ordinal = observation_row.artifact_ordinal
+     and artifact_row.state = observation_row.artifact_state
+   where observation_row.tenant_id = new.tenant_id
+     and observation_row.id = new.observation_id
+     and observation_row.artifact_id = new.artifact_id
+     and observation_row.dispatch_id = new.dispatch_id
+     and observation_row.route_id = new.route_id
+     and observation_row.attempt_id = new.attempt_id
+     and observation_row.message_id = new.message_id
+     and observation_row.artifact_ordinal = new.artifact_ordinal
+     and observation_row.artifact_state = new.from_state
+     and observation_row.effective_state = new.effective_state
+     and observation_row.source_occurrence_id =
+       new.observation_source_occurrence_id
+     and observation_row.observed_by_trusted_service_id =
+       new.resolved_by_trusted_service_id
+     and observation_row.recorded_at <= new.resolved_at
+     and artifact_row.created_at <= new.resolved_at
+   for share of observation_row, artifact_row;
+
+  if not found then
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.outbound_artifact_resolution_invalid';
+  end if;
+
+  return new;
+end;
+$function$;
+
+create or replace function public.inbox_v2_outbound_provider_settlement_guard_insert()
+returns trigger
+language plpgsql
+set search_path = pg_catalog, public, pg_temp
+as $function$
+declare
+  coverage_complete boolean := false;
+  current_attempt_outcome public.inbox_v2_outbound_dispatch_attempt_outcome;
+  current_attempt_completion_source
+    public.inbox_v2_outbound_dispatch_attempt_completion_source;
+  current_attempt_completed_at timestamptz;
+  current_dispatch_state public.inbox_v2_outbound_dispatch_state;
+  current_dispatch_updated_at timestamptz;
+  observation_transport_lineage text := 'invalid';
+  accepted_reconciliation_proven boolean := false;
+begin
+  perform 1
+    from public.inbox_v2_outbound_provider_observations observation_row
+    join public.inbox_v2_outbound_dispatch_artifact_resolutions resolution_row
+      on resolution_row.tenant_id = observation_row.tenant_id
+     and resolution_row.id = new.artifact_resolution_id
+     and resolution_row.artifact_id = observation_row.artifact_id
+     and resolution_row.dispatch_id = observation_row.dispatch_id
+     and resolution_row.route_id = observation_row.route_id
+     and resolution_row.attempt_id = observation_row.attempt_id
+     and resolution_row.message_id = observation_row.message_id
+     and resolution_row.artifact_ordinal = observation_row.artifact_ordinal
+     and resolution_row.effective_state = observation_row.effective_state
+    join public.inbox_v2_source_occurrences occurrence_row
+      on occurrence_row.tenant_id = observation_row.tenant_id
+     and occurrence_row.id = observation_row.source_occurrence_id
+     and occurrence_row.revision = new.source_occurrence_revision
+     and occurrence_row.resolution_state = 'resolved'
+     and occurrence_row.resolved_external_message_reference_id =
+       new.external_message_reference_id
+    join public.inbox_v2_source_occurrence_resolution_transitions transition_row
+      on transition_row.tenant_id = occurrence_row.tenant_id
+     and transition_row.source_occurrence_id = occurrence_row.id
+     and transition_row.resulting_revision = occurrence_row.revision
+     and transition_row.to_state = 'resolved'
+     and transition_row.resolved_external_message_reference_id =
+       new.external_message_reference_id
+    join public.inbox_v2_external_message_references reference_row
+      on reference_row.tenant_id = occurrence_row.tenant_id
+     and reference_row.id = new.external_message_reference_id
+     and reference_row.external_thread_id = new.external_thread_id
+     and reference_row.message_id = observation_row.message_id
+    join public.inbox_v2_outbound_dispatch_artifact_reference_links artifact_link_row
+      on artifact_link_row.tenant_id = observation_row.tenant_id
+     and artifact_link_row.id = new.canonical_artifact_reference_link_id
+     and artifact_link_row.artifact_id = observation_row.artifact_id
+     and artifact_link_row.dispatch_id = observation_row.dispatch_id
+     and artifact_link_row.route_id = observation_row.route_id
+     and artifact_link_row.attempt_id = observation_row.attempt_id
+     and artifact_link_row.message_id = observation_row.message_id
+     and artifact_link_row.external_thread_id = new.external_thread_id
+     and artifact_link_row.external_message_reference_id = reference_row.id
+    join public.inbox_v2_message_transport_links transport_link_row
+      on transport_link_row.tenant_id = observation_row.tenant_id
+     and transport_link_row.id = new.message_transport_link_id
+     and transport_link_row.message_id = observation_row.message_id
+     and transport_link_row.source_occurrence_id = occurrence_row.id
+     and transport_link_row.external_message_reference_id = reference_row.id
+    join public.inbox_v2_outbound_dispatch_attempts attempt_row
+      on attempt_row.tenant_id = observation_row.tenant_id
+     and attempt_row.id = observation_row.attempt_id
+     and attempt_row.dispatch_id = observation_row.dispatch_id
+     and attempt_row.route_id = observation_row.route_id
+     and attempt_row.message_id = observation_row.message_id
+    join public.inbox_v2_outbound_dispatches dispatch_row
+      on dispatch_row.tenant_id = attempt_row.tenant_id
+     and dispatch_row.id = attempt_row.dispatch_id
+     and dispatch_row.route_id = attempt_row.route_id
+     and dispatch_row.message_id = attempt_row.message_id
+    join public.inbox_v2_outbound_routes route_row
+      on route_row.tenant_id = attempt_row.tenant_id
+     and route_row.id = attempt_row.route_id
+   where observation_row.tenant_id = new.tenant_id
+     and observation_row.id = new.observation_id
+     and observation_row.artifact_id = new.artifact_id
+     and observation_row.dispatch_id = new.dispatch_id
+     and observation_row.route_id = new.route_id
+     and observation_row.attempt_id = new.attempt_id
+     and observation_row.message_id = new.message_id
+     and observation_row.artifact_ordinal = new.artifact_ordinal
+     and observation_row.effective_state = new.effective_state
+     and observation_row.source_occurrence_id = new.source_occurrence_id
+     and resolution_row.resolved_by_trusted_service_id =
+       new.settled_by_trusted_service_id
+     and resolution_row.resolved_at <= new.settled_at
+     and observation_row.observed_by_trusted_service_id =
+       new.settled_by_trusted_service_id
+     and observation_row.recorded_at <= new.settled_at
+     and occurrence_row.external_thread_id = observation_row.external_thread_id
+     and occurrence_row.source_connection_id = observation_row.source_connection_id
+     and occurrence_row.source_account_id = observation_row.source_account_id
+     and occurrence_row.source_thread_binding_id =
+       observation_row.source_thread_binding_id
+     and occurrence_row.binding_generation =
+       observation_row.source_binding_generation
+     and occurrence_row.message_scope_kind =
+       observation_row.source_message_scope_kind
+     and occurrence_row.message_decision_strength =
+       observation_row.source_message_decision_strength
+     and occurrence_row.adapter_contract_id = observation_row.adapter_contract_id
+     and occurrence_row.adapter_contract_version =
+       observation_row.adapter_contract_version
+     and occurrence_row.adapter_declaration_revision =
+       observation_row.adapter_declaration_revision
+     and occurrence_row.adapter_surface_id = observation_row.adapter_surface_id
+     and occurrence_row.adapter_loaded_by_trusted_service_id =
+       observation_row.observed_by_trusted_service_id
+     and occurrence_row.direction = 'outbound'
+     and occurrence_row.provider_actor_kind is null
+     and occurrence_row.created_at = observation_row.recorded_at
+     and occurrence_row.recorded_at = observation_row.recorded_at
+     and occurrence_row.updated_at = new.settled_at
+     and transition_row.resolver_trusted_service_id =
+       new.settled_by_trusted_service_id
+     and transition_row.changed_at = new.settled_at
+     and artifact_link_row.linked_at <= new.settled_at
+     and transport_link_row.linked_at = new.settled_at
+     and transport_link_row.role = case observation_row.evidence_kind
+       when 'provider_response_attempt' then
+         'provider_response'::public.inbox_v2_message_transport_link_role
+       when 'provider_echo_correlation' then
+         'provider_echo'::public.inbox_v2_message_transport_link_role
+     end
+     and route_row.adapter_loaded_by_trusted_service_id =
+       new.settled_by_trusted_service_id
+     and (
+       (observation_row.evidence_kind = 'provider_response_attempt'
+         and occurrence_row.origin_kind = 'provider_response'
+         and occurrence_row.outbound_dispatch_attempt_id = attempt_row.id)
+       or (observation_row.evidence_kind = 'provider_echo_correlation'
+         and occurrence_row.origin_kind = 'provider_echo')
+     )
+   for share of observation_row, resolution_row, occurrence_row,
+     transition_row, reference_row, artifact_link_row, transport_link_row,
+     attempt_row, dispatch_row, route_row;
+
+  if not found then
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.outbound_provider_settlement_chain_invalid';
+  end if;
+
+  select
+    not exists (
+      select 1
+        from public.inbox_v2_file_outbound_artifact_plans plan_artifact_row
+       where plan_artifact_row.tenant_id = observation_row.tenant_id
+         and plan_artifact_row.content_plan_id = observation_row.content_plan_id
+         and not exists (
+           select 1
+             from public.inbox_v2_outbound_dispatch_artifact_resolutions
+               coverage_resolution_row
+             join public.inbox_v2_outbound_provider_observations
+               coverage_observation_row
+               on coverage_observation_row.tenant_id =
+                    coverage_resolution_row.tenant_id
+              and coverage_observation_row.id =
+                    coverage_resolution_row.observation_id
+            where coverage_resolution_row.tenant_id = observation_row.tenant_id
+              and coverage_resolution_row.dispatch_id =
+                    observation_row.dispatch_id
+              and coverage_resolution_row.route_id = observation_row.route_id
+              and coverage_resolution_row.attempt_id =
+                    observation_row.attempt_id
+              and coverage_resolution_row.message_id =
+                    observation_row.message_id
+              and coverage_resolution_row.artifact_ordinal =
+                    plan_artifact_row.ordinal
+              and coverage_resolution_row.effective_state = 'accepted'
+              and coverage_resolution_row.resolved_at <= new.settled_at
+              and coverage_observation_row.content_plan_id =
+                    observation_row.content_plan_id
+         )
+    )
+    and (
+      select count(*)
+        from public.inbox_v2_file_outbound_artifact_plans plan_artifact_row
+       where plan_artifact_row.tenant_id = observation_row.tenant_id
+         and plan_artifact_row.content_plan_id = observation_row.content_plan_id
+    ) = observation_row.planned_artifact_count,
+    attempt_row.outcome_kind,
+    attempt_row.completion_source,
+    attempt_row.completed_at,
+    dispatch_row.state,
+    dispatch_row.updated_at,
+    public.inbox_v2_outbound_provider_transport_lineage(
+      observation_row.observation_detail, dispatch_row, attempt_row
+    ),
+    exists (
+      select 1
+        from public.inbox_v2_outbound_dispatch_reconciliation_decisions
+          accepted_decision_row
+       where accepted_decision_row.tenant_id = observation_row.tenant_id
+         and accepted_decision_row.dispatch_id = observation_row.dispatch_id
+         and accepted_decision_row.route_id = observation_row.route_id
+         and accepted_decision_row.unknown_attempt_id = observation_row.attempt_id
+         and accepted_decision_row.result_state = 'accepted'
+         and accepted_decision_row.decided_by_kind = 'trusted_service'
+         and accepted_decision_row.decided_at = dispatch_row.updated_at
+    )
+    into coverage_complete, current_attempt_outcome,
+      current_attempt_completion_source, current_attempt_completed_at,
+      current_dispatch_state, current_dispatch_updated_at,
+      observation_transport_lineage, accepted_reconciliation_proven
+    from public.inbox_v2_outbound_provider_observations observation_row
+    join public.inbox_v2_outbound_dispatch_attempts attempt_row
+      on attempt_row.tenant_id = observation_row.tenant_id
+     and attempt_row.id = observation_row.attempt_id
+    join public.inbox_v2_outbound_dispatches dispatch_row
+      on dispatch_row.tenant_id = observation_row.tenant_id
+     and dispatch_row.id = observation_row.dispatch_id
+   where observation_row.tenant_id = new.tenant_id
+     and observation_row.id = new.observation_id;
+
+  if new.transition_kind = 'retain_dispatch_state' then
+    if coverage_complete
+       or observation_transport_lineage not in (
+         'exact_head', 'pending_to_outcome_unknown'
+       )
+       or (current_dispatch_state = 'accepted'
+         and current_attempt_outcome = 'outcome_unknown'
+         and not accepted_reconciliation_proven) then
+      raise exception using errcode = '23514',
+        message = 'inbox_v2.outbound_provider_partial_settlement_invalid';
+    end if;
+  elsif new.transition_kind = 'complete_pending_attempt' then
+    if not coverage_complete
+       or observation_transport_lineage <> 'pending_to_accepted'
+       or current_attempt_outcome <> 'accepted'
+       or current_attempt_completion_source <> 'provider_observation'
+       or current_attempt_completed_at <> new.settled_at
+       or current_dispatch_state <> 'accepted'
+       or current_dispatch_updated_at <> new.settled_at then
+      raise exception using errcode = '23514',
+        message = 'inbox_v2.outbound_provider_completion_invalid';
+    end if;
+  elsif new.transition_kind = 'reconcile_outcome_unknown' then
+    if not coverage_complete
+       or observation_transport_lineage not in (
+         'outcome_unknown_to_accepted',
+         'pending_to_outcome_unknown_to_accepted'
+       )
+       or current_attempt_outcome <> 'outcome_unknown'
+       or current_dispatch_state <> 'accepted'
+       or current_dispatch_updated_at <> new.settled_at
+       or not accepted_reconciliation_proven
+       or not exists (
+         select 1
+           from public.inbox_v2_outbound_dispatch_reconciliation_decisions
+             decision_row
+          where decision_row.tenant_id = new.tenant_id
+            and decision_row.id = new.reconciliation_decision_id
+            and decision_row.dispatch_id = new.dispatch_id
+            and decision_row.route_id = new.route_id
+            and decision_row.unknown_attempt_id = new.attempt_id
+            and decision_row.result_state = 'accepted'
+            and decision_row.decided_by_kind = 'trusted_service'
+            and decision_row.decided_by_trusted_service_id =
+              new.settled_by_trusted_service_id
+            and decision_row.decided_at = new.settled_at
+       ) then
+      raise exception using errcode = '23514',
+        message = 'inbox_v2.outbound_provider_reconciliation_invalid';
+    end if;
+  elsif new.transition_kind = 'already_accepted' then
+    if current_dispatch_state <> 'accepted'
+       or observation_transport_lineage not in (
+         'exact_head',
+         'pending_to_accepted',
+         'outcome_unknown_to_accepted',
+         'pending_to_outcome_unknown_to_accepted'
+       )
+       or (current_attempt_outcome = 'outcome_unknown'
+         and not accepted_reconciliation_proven)
+       or current_dispatch_updated_at > new.settled_at then
+      raise exception using errcode = '23514',
+        message = 'inbox_v2.outbound_provider_already_accepted_invalid';
+    end if;
+  else
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.outbound_provider_transition_invalid';
+  end if;
+
+  return new;
+end;
+$function$;
+
+create or replace function public.inbox_v2_assert_outbound_provider_observation_work(
+  checked_tenant_id text,
+  checked_observation_id text
+)
+returns void
+language plpgsql
+set search_path = pg_catalog, public, pg_temp
+as $function$
+declare
+  coherent_work_count bigint := 0;
+begin
+  if not exists (
+    select 1
+      from public.tenants tenant_row
+     where tenant_row.id = checked_tenant_id
+  ) then
+    return;
+  end if;
+
+  if not exists (
+    select 1
+      from public.inbox_v2_outbound_provider_observations observation_row
+     where observation_row.tenant_id = checked_tenant_id
+       and observation_row.id = checked_observation_id
+  ) then
+    return;
+  end if;
+
+  select count(*)
+    into coherent_work_count
+    from public.inbox_v2_outbound_provider_observations observation_row
+    join public.inbox_v2_outbound_provider_settlement_work_items work_row
+      on work_row.tenant_id = observation_row.tenant_id
+     and work_row.observation_id = observation_row.id
+     and work_row.trusted_service_id =
+       observation_row.observed_by_trusted_service_id
+     and work_row.created_at = observation_row.recorded_at
+   where observation_row.tenant_id = checked_tenant_id
+     and observation_row.id = checked_observation_id;
+
+  if coherent_work_count <> 1 then
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.outbound_provider_observation_work_required';
+  end if;
+end;
+$function$;
+
+create or replace function public.inbox_v2_outbound_provider_observation_work_deferred()
+returns trigger
+language plpgsql
+set search_path = pg_catalog, public, pg_temp
+as $function$
+declare
+  old_row jsonb := to_jsonb(old);
+  new_row jsonb := to_jsonb(new);
+begin
+  if tg_op <> 'INSERT' then
+    perform public.inbox_v2_assert_outbound_provider_observation_work(
+      old_row->>'tenant_id',
+      case when tg_table_name = 'inbox_v2_outbound_provider_observations'
+        then old_row->>'id' else old_row->>'observation_id' end
+    );
+  end if;
+  if tg_op <> 'DELETE' then
+    perform public.inbox_v2_assert_outbound_provider_observation_work(
+      new_row->>'tenant_id',
+      case when tg_table_name = 'inbox_v2_outbound_provider_observations'
+        then new_row->>'id' else new_row->>'observation_id' end
+    );
+  end if;
+  return null;
+end;
+$function$;
+
+create or replace function public.inbox_v2_outbound_provider_settlement_work_guard()
+returns trigger
+language plpgsql
+set search_path = pg_catalog, public, pg_temp
+as $function$
+begin
+  if tg_op = 'DELETE' then
+    if not exists (
+      select 1 from public.tenants tenant_row
+       where tenant_row.id = old.tenant_id
+    ) then
+      return old;
+    end if;
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.outbound_provider_settlement_work_delete_forbidden';
+  end if;
+
+  if tg_op = 'INSERT' then
+    perform 1
+      from public.inbox_v2_outbound_provider_observations observation_row
+     where observation_row.tenant_id = new.tenant_id
+       and observation_row.id = new.observation_id
+       and observation_row.observed_by_trusted_service_id =
+         new.trusted_service_id
+       and observation_row.recorded_at = new.created_at
+       and new.state = 'pending'
+       and new.attempt_count = 0
+       and new.available_at = new.created_at
+       and new.created_at = new.updated_at
+       and new.revision = 1
+       and row(
+         new.lease_owner_id, new.lease_token_hash, new.lease_revision,
+         new.lease_claimed_at, new.lease_expires_at,
+         new.last_finalized_lease_owner_id,
+         new.last_finalized_lease_token_hash,
+         new.last_finalized_lease_revision,
+         new.last_finalized_result_hash, new.last_finalized_at,
+         new.last_error_code, new.terminal_at
+       ) is not distinct from row(
+         null, null, null, null, null, null, null, null, null, null,
+         null, null
+       )
+     for share of observation_row;
+
+    if not found then
+      raise exception using errcode = '23514',
+        message = 'inbox_v2.outbound_provider_settlement_work_initial_invalid';
+    end if;
+    return new;
+  end if;
+
+  if row(
+       new.tenant_id, new.observation_id,
+       new.candidate_external_message_reference_id,
+       new.candidate_transport_link_id, new.trusted_service_id,
+       new.created_at
+     ) is distinct from row(
+       old.tenant_id, old.observation_id,
+       old.candidate_external_message_reference_id,
+       old.candidate_transport_link_id, old.trusted_service_id,
+       old.created_at
+     )
+     or new.revision <> old.revision + 1
+     or new.updated_at < old.updated_at
+     or new.attempt_count < old.attempt_count then
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.outbound_provider_settlement_work_fence_invalid';
+  end if;
+
+  if old.state in ('settled', 'dead') then
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.outbound_provider_settlement_work_terminal';
+  end if;
+
+  if old.state = 'pending' then
+    if new.state <> 'leased'
+       or old.available_at > clock_timestamp()
+       or new.available_at is distinct from old.available_at
+       or new.attempt_count <> old.attempt_count + 1
+       or new.lease_revision <> new.attempt_count
+       or new.lease_claimed_at <> new.updated_at
+       or new.lease_expires_at <= new.lease_claimed_at
+       or row(
+         new.last_finalized_lease_owner_id,
+         new.last_finalized_lease_token_hash,
+         new.last_finalized_lease_revision,
+         new.last_finalized_result_hash, new.last_finalized_at,
+         new.last_error_code, new.terminal_at
+       ) is distinct from row(
+         old.last_finalized_lease_owner_id,
+         old.last_finalized_lease_token_hash,
+         old.last_finalized_lease_revision,
+         old.last_finalized_result_hash, old.last_finalized_at,
+         old.last_error_code, old.terminal_at
+       ) then
+      raise exception using errcode = '23514',
+        message = 'inbox_v2.outbound_provider_settlement_work_claim_invalid';
+    end if;
+    return new;
+  end if;
+
+  if new.state = 'leased' then
+    if old.lease_expires_at > clock_timestamp()
+       or new.available_at is distinct from old.available_at
+       or new.attempt_count <> old.attempt_count + 1
+       or new.lease_revision <> new.attempt_count
+       or new.lease_claimed_at <> new.updated_at
+       or new.lease_expires_at <= new.lease_claimed_at
+       or row(
+         new.last_finalized_lease_owner_id,
+         new.last_finalized_lease_token_hash,
+         new.last_finalized_lease_revision,
+         new.last_finalized_result_hash, new.last_finalized_at,
+         new.last_error_code, new.terminal_at
+       ) is distinct from row(
+         old.last_finalized_lease_owner_id,
+         old.last_finalized_lease_token_hash,
+         old.last_finalized_lease_revision,
+         old.last_finalized_result_hash, old.last_finalized_at,
+         old.last_error_code, old.terminal_at
+       ) then
+      raise exception using errcode = '23514',
+        message = 'inbox_v2.outbound_provider_settlement_work_reclaim_invalid';
+    end if;
+    return new;
+  end if;
+
+  if old.lease_expires_at <= new.updated_at
+     or new.attempt_count <> old.attempt_count
+     or new.lease_owner_id is not null
+     or new.lease_token_hash is not null
+     or new.lease_revision is not null
+     or new.lease_claimed_at is not null
+     or new.lease_expires_at is not null
+     or new.last_finalized_lease_owner_id <> old.lease_owner_id
+     or new.last_finalized_lease_token_hash <> old.lease_token_hash
+     or new.last_finalized_lease_revision <> old.lease_revision
+     or new.last_finalized_result_hash is null
+     or new.last_finalized_at <> new.updated_at then
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.outbound_provider_settlement_work_completion_fence_invalid';
+  end if;
+
+  if new.state = 'pending' then
+    if new.available_at <= new.updated_at
+       or new.last_error_code is null
+       or new.terminal_at is not null then
+      raise exception using errcode = '23514',
+        message = 'inbox_v2.outbound_provider_settlement_work_retry_invalid';
+    end if;
+  elsif new.state = 'settled' then
+    if new.available_at is not null
+       or new.last_error_code is not null
+       or new.terminal_at <> new.updated_at
+       or not exists (
+         select 1
+           from public.inbox_v2_outbound_provider_observation_settlements
+             settlement_row
+          where settlement_row.tenant_id = new.tenant_id
+            and settlement_row.observation_id = new.observation_id
+            and settlement_row.settled_by_trusted_service_id =
+              new.trusted_service_id
+            and settlement_row.settled_at <= new.updated_at
+       ) then
+      raise exception using errcode = '23514',
+        message = 'inbox_v2.outbound_provider_settlement_work_settled_invalid';
+    end if;
+  elsif new.state = 'dead' then
+    if new.available_at is not null
+       or new.last_error_code is null
+       or new.terminal_at <> new.updated_at then
+      raise exception using errcode = '23514',
+        message = 'inbox_v2.outbound_provider_settlement_work_dead_invalid';
+    end if;
+  else
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.outbound_provider_settlement_work_transition_invalid';
+  end if;
+
+  return new;
+end;
+$function$;
+
 create or replace function public.inbox_v2_outbound_artifact_link_guard_insert()
 returns trigger
 language plpgsql
@@ -3984,24 +6484,53 @@ begin
      and reference_row.id = occurrence_row.resolved_external_message_reference_id
      and reference_row.external_thread_id = route_row.external_thread_id
      and reference_row.message_id = artifact_row.message_id
+    left join public.inbox_v2_outbound_dispatch_artifact_resolutions
+      resolution_row
+      on resolution_row.tenant_id = artifact_row.tenant_id
+     and resolution_row.artifact_id = artifact_row.id
+     and resolution_row.dispatch_id = artifact_row.dispatch_id
+     and resolution_row.route_id = artifact_row.route_id
+     and resolution_row.attempt_id = artifact_row.attempt_id
+     and resolution_row.message_id = artifact_row.message_id
+     and resolution_row.artifact_ordinal = artifact_row.ordinal
+     and resolution_row.effective_state = 'accepted'
    where artifact_row.tenant_id = new.tenant_id
      and artifact_row.id = new.artifact_id
      and artifact_row.dispatch_id = new.dispatch_id
      and artifact_row.route_id = new.route_id
      and artifact_row.attempt_id = new.attempt_id
      and artifact_row.message_id = new.message_id
-     and artifact_row.state = 'accepted'
+     and (
+       artifact_row.state = 'accepted'
+       or (artifact_row.state = 'outcome_unknown'
+         and resolution_row.id is not null)
+     )
      and route_row.external_thread_id = new.external_thread_id
-     and route_row.source_thread_binding_id = occurrence_row.source_thread_binding_id
-     and route_row.source_connection_id = occurrence_row.source_connection_id
-     and route_row.source_account_id = occurrence_row.source_account_id
+     and (
+       (
+         route_row.source_thread_binding_id =
+           occurrence_row.source_thread_binding_id
+         and route_row.source_connection_id = occurrence_row.source_connection_id
+         and route_row.source_account_id = occurrence_row.source_account_id
+         and route_row.binding_generation = occurrence_row.binding_generation
+       )
+       or (
+         new.evidence_kind = 'provider_echo_correlation'
+         and occurrence_row.origin_kind = 'provider_echo'
+         and occurrence_row.message_scope_kind = 'provider_thread'
+         and occurrence_row.message_decision_strength = 'authoritative'
+         and reference_row.scope_kind = 'provider_thread'
+       )
+     )
      and route_row.adapter_contract_id = occurrence_row.adapter_contract_id
      and route_row.adapter_contract_version = occurrence_row.adapter_contract_version
      and route_row.adapter_surface_id = occurrence_row.adapter_surface_id
      and transition_row.resolver_trusted_service_id =
         new.linked_by_trusted_service_id
      and artifact_row.created_at >= attempt_row.opened_at
-     and new.linked_at >= artifact_row.created_at
+     and new.linked_at >= coalesce(
+       resolution_row.resolved_at, artifact_row.created_at
+     )
      and new.linked_at >= occurrence_row.updated_at
      and new.linked_at >= reference_row.created_at
      and (
@@ -4034,14 +6563,6 @@ begin
   return new;
 end;
 $function$;
-
-create trigger inbox_v2_timeline_items_immutable_trigger
-before update or delete on public.inbox_v2_timeline_items
-for each row execute function public.inbox_v2_outbound_transport_reject_immutable();
-
-create trigger inbox_v2_messages_immutable_trigger
-before update or delete on public.inbox_v2_messages
-for each row execute function public.inbox_v2_outbound_transport_reject_immutable();
 
 create trigger inbox_v2_external_message_references_immutable_trigger
 before update or delete on public.inbox_v2_external_message_references
@@ -4111,6 +6632,14 @@ create trigger inbox_v2_outbound_dispatch_attempts_delete_guard_trigger
 before delete on public.inbox_v2_outbound_dispatch_attempts
 for each row execute function public.inbox_v2_outbound_transport_reject_immutable();
 
+create trigger inbox_v2_outbound_correlation_anchors_insert_guard_trigger
+before insert on public.inbox_v2_outbound_provider_correlation_anchors
+for each row execute function public.inbox_v2_outbound_correlation_anchor_guard_insert();
+
+create trigger inbox_v2_outbound_correlation_anchors_immutable_trigger
+before update or delete on public.inbox_v2_outbound_provider_correlation_anchors
+for each row execute function public.inbox_v2_outbound_transport_reject_immutable();
+
 create trigger inbox_v2_outbound_reconciliation_decisions_immutable_trigger
 before update or delete on public.inbox_v2_outbound_dispatch_reconciliation_decisions
 for each row execute function public.inbox_v2_outbound_transport_reject_immutable();
@@ -4122,6 +6651,46 @@ for each row execute function public.inbox_v2_outbound_transport_reject_immutabl
 create trigger inbox_v2_outbound_dispatch_artifacts_immutable_trigger
 before update or delete on public.inbox_v2_outbound_dispatch_artifacts
 for each row execute function public.inbox_v2_outbound_transport_reject_immutable();
+
+create trigger inbox_v2_outbound_provider_observations_insert_guard_trigger
+before insert on public.inbox_v2_outbound_provider_observations
+for each row execute function public.inbox_v2_outbound_provider_observation_guard_insert();
+
+create trigger inbox_v2_outbound_provider_observations_immutable_trigger
+before update or delete on public.inbox_v2_outbound_provider_observations
+for each row execute function public.inbox_v2_outbound_transport_reject_immutable();
+
+create trigger inbox_v2_outbound_artifact_resolutions_insert_guard_trigger
+before insert on public.inbox_v2_outbound_dispatch_artifact_resolutions
+for each row execute function public.inbox_v2_outbound_artifact_resolution_guard_insert();
+
+create trigger inbox_v2_outbound_artifact_resolutions_immutable_trigger
+before update or delete on public.inbox_v2_outbound_dispatch_artifact_resolutions
+for each row execute function public.inbox_v2_outbound_transport_reject_immutable();
+
+create trigger inbox_v2_outbound_provider_settlements_insert_guard_trigger
+before insert on public.inbox_v2_outbound_provider_observation_settlements
+for each row execute function public.inbox_v2_outbound_provider_settlement_guard_insert();
+
+create trigger inbox_v2_outbound_provider_settlements_immutable_trigger
+before update or delete on public.inbox_v2_outbound_provider_observation_settlements
+for each row execute function public.inbox_v2_outbound_transport_reject_immutable();
+
+create trigger inbox_v2_outbound_provider_settlement_work_guard_trigger
+before insert or update or delete
+on public.inbox_v2_outbound_provider_settlement_work_items
+for each row execute function public.inbox_v2_outbound_provider_settlement_work_guard();
+
+create constraint trigger inbox_v2_outbound_provider_observations_work_constraint
+after insert or update or delete on public.inbox_v2_outbound_provider_observations
+deferrable initially deferred for each row
+execute function public.inbox_v2_outbound_provider_observation_work_deferred();
+
+create constraint trigger inbox_v2_outbound_provider_settlement_work_observation_constraint
+after insert or update or delete
+on public.inbox_v2_outbound_provider_settlement_work_items
+deferrable initially deferred for each row
+execute function public.inbox_v2_outbound_provider_observation_work_deferred();
 
 create trigger inbox_v2_source_occurrence_resolution_transitions_insert_guard_trigger
 before insert on public.inbox_v2_source_occurrence_resolution_transitions
@@ -4269,6 +6838,10 @@ function authorizationEpochSql(column: SQLWrapper) {
 
 function sha256DigestSql(column: SQLWrapper) {
   return sql`coalesce(${column} ~ '^[a-f0-9]{64}$', false)`;
+}
+
+function sha256PrefixedSql(column: SQLWrapper) {
+  return sql`coalesce(${column} ~ '^sha256:[a-f0-9]{64}$', false)`;
 }
 
 function boundedJsonObjectSql(column: SQLWrapper, maximumBytes: number) {
@@ -4657,9 +7230,11 @@ function attemptOutcomeSql(table: Record<string, SQLWrapper>) {
       and ${table.revision} = 1
     ) or (
       ${table.outcomeKind} = 'accepted'
-      and ${table.completionSource} = 'provider_result'
+      and ${table.completionSource} in ('provider_result', 'provider_observation')
       and isfinite(${table.completedAt})
-      and ${table.completedAt} between ${table.openedAt} and ${table.leaseExpiresAt}
+      and ${table.completedAt} >= ${table.openedAt}
+      and (${table.completionSource} = 'provider_observation'
+        or ${table.completedAt} <= ${table.leaseExpiresAt})
       and ${table.retryAt} is null
       and (${table.providerAcknowledgementToken} is null
         or ${routingTokenSql(table.providerAcknowledgementToken)})
@@ -4708,8 +7283,12 @@ function attemptOutcomeSql(table: Record<string, SQLWrapper>) {
       and ${safeDiagnostic}
       and (
         (${table.automaticRetryAllowed}
+          and ${table.diagnosticCodeId} <>
+            'core:provider-artifact-outcomes-mixed'
           and ${table.unknownRequiredAction} = 'automated_reconciliation_required')
-        or (not ${table.automaticRetryAllowed}
+        or ((not ${table.automaticRetryAllowed}
+            or ${table.diagnosticCodeId} =
+              'core:provider-artifact-outcomes-mixed')
           and ${table.unknownRequiredAction} = 'operator_duplicate_risk_decision_required')
       )
       and ${table.revision} = 2

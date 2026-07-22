@@ -1398,6 +1398,39 @@ async function loadProjectionAtRevision(
   );
 }
 
+/** Immutable route-time binding projection used by delayed provider responses. */
+export async function readInboxV2SourceThreadBindingProjectionAtRevisionInTransaction(
+  executor: RawSqlExecutor,
+  input: Readonly<{
+    tenantId: string;
+    bindingId: string;
+    revision: string;
+  }>
+): Promise<InboxV2SourceThreadBindingCurrentProjection | null> {
+  const loaded = await loadProjectionAtRevision(executor, input);
+  return loaded?.projection ?? null;
+}
+
+export async function readInboxV2SourceThreadBindingMaterializationSnapshotAtRevisionInTransaction(
+  executor: RawSqlExecutor,
+  input: Readonly<{
+    tenantId: string;
+    bindingId: string;
+    revision: string;
+  }>
+): Promise<Readonly<{
+  projection: InboxV2SourceThreadBindingCurrentProjection;
+  accountIdentityRevision: string;
+}> | null> {
+  const loaded = await loadProjectionAtRevision(executor, input);
+  return loaded === null
+    ? null
+    : {
+        projection: loaded.projection,
+        accountIdentityRevision: loaded.persistence.accountIdentityRevision
+      };
+}
+
 async function loadProjectionQuery(
   executor: RawSqlExecutor,
   query: SQL

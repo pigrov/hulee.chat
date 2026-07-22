@@ -11,6 +11,7 @@ import {
   inboxV2OutboundDispatchContentPlanSchema,
   inboxV2OutboundDispatchArtifactSchema,
   inboxV2OutboundDispatchAttemptCommitSchema,
+  inboxV2OutboundProviderResponseObservationDescriptorSchema,
   inboxV2OutboundDispatchRouteFailureCommitSchema,
   inboxV2OutboundDispatchReconciliationCommitSchema,
   inboxV2OutboundDispatchSchema,
@@ -26,11 +27,19 @@ import {
   type InboxV2OutboundDispatchArtifact,
   type InboxV2OutboundDispatchContentPlan,
   type InboxV2OutboundDispatchAttemptCommit,
+  type InboxV2OutboundProviderObservation,
+  type InboxV2OutboundProviderResponseObservationDescriptor,
   type InboxV2OutboundDispatchRouteFailureCommit,
   type InboxV2OutboundDispatchReconciliationCommit,
   type InboxV2OutboundRoute,
   type InboxV2SafeSourceDiagnostic
 } from "@hulee/contracts";
+
+import {
+  isInboxV2TrustedOutboundProviderObservationMaterializer,
+  type InboxV2OutboundProviderSettlementWorkMaterialization,
+  type InboxV2TrustedOutboundProviderObservationMaterializer
+} from "./outbound-provider-observation-materializer";
 
 type OpenAttemptCommit = Extract<
   InboxV2OutboundDispatchAttemptCommit,
@@ -91,7 +100,14 @@ export type InboxV2ProviderDispatchLoadResult =
   | InboxV2ProviderDispatchLoadRejected;
 
 export type InboxV2ProviderDispatchFencedMutationResult =
-  | Readonly<{ kind: "committed" | "already_applied" }>
+  | Readonly<{
+      kind: "committed";
+      canonicalOutcome?: CompleteAttemptCommit;
+    }>
+  | Readonly<{
+      kind: "already_applied";
+      canonicalOutcome?: CompleteAttemptCommit;
+    }>
   | Readonly<{
       kind:
         | "outbox_not_found"
@@ -111,12 +127,17 @@ export type InboxV2ProviderDispatchFencedMutationResult =
         | "claim_token_conflict"
         | "attempt_state_conflict"
         | "artifact_retry_unsafe"
+        | "provider_settlement_pending"
+        | "provider_settlement_repair_required"
+        | "provider_correlation_conflict"
         | "unknown_attempt_not_found"
         | "decision_conflict"
         | "attempt_already_reconciled"
         | "outbox_dispatch_content_plan_not_found"
         | "outbox_dispatch_content_plan_conflict"
-        | "dispatch_artifact_set_conflict";
+        | "dispatch_artifact_set_conflict"
+        | "dispatch_provider_observation_set_conflict"
+        | "dispatch_provider_settlement_work_conflict";
     }>;
 
 type FencedMutationRejectionKind = Exclude<
@@ -143,6 +164,8 @@ export type InboxV2ProviderDispatchTransportPort = Readonly<{
     contentPlanDigestSha256: InboxV2OutboundDispatchContentPlan["planDigestSha256"];
     commit: CompleteAttemptCommit;
     artifacts: readonly InboxV2OutboundDispatchArtifact[];
+    observations: readonly InboxV2OutboundProviderObservation[];
+    settlementWork: readonly InboxV2OutboundProviderSettlementWorkMaterialization[];
   }): Promise<InboxV2ProviderDispatchFencedMutationResult>;
   applyRouteFailureFenced(input: {
     outboxLease: InboxV2ProviderDispatchLeaseFence;
@@ -164,6 +187,11 @@ export type InboxV2ProviderDispatchArtifactAdapterResult =
        * deterministic artifact through the append-only association flow.
        */
       providerAcknowledgementToken: string | null;
+      /**
+       * Exact provider-native message identity, when the provider returned it.
+       * It deliberately contains no canonical tenant/Message/occurrence IDs.
+       */
+      providerResponseObservation?: InboxV2OutboundProviderResponseObservationDescriptor | null;
     }>
   | Readonly<{
       artifactOrdinal: number;
@@ -296,6 +324,7 @@ export type InboxV2ProviderDispatchCoordinatorOptions<TRequest = unknown> =
     planner: InboxV2ProviderDispatchPlanner<TRequest>;
     adapter: InboxV2ProviderDispatchAdapterPort<TRequest>;
     completedByTrustedServiceId: CompleteAttemptCommit["completedByTrustedServiceId"];
+    providerObservationMaterializer: InboxV2TrustedOutboundProviderObservationMaterializer;
     expectedHandlerId: InboxV2OutboxIntent["handlerId"];
     providerDeadlineMs: number;
     clock?: InboxV2ProviderDispatchClock;
@@ -507,13 +536,16 @@ export function createInboxV2ProviderDispatchCoordinator<TRequest = unknown>(
         providerRun,
         completedAt,
         options.completedByTrustedServiceId,
-        loaded.contentPlan
+        loaded.contentPlan,
+        options.providerObservationMaterializer
       );
       const completed = await options.transport.applyProviderResultFenced({
         outboxLease: fence,
         contentPlanDigestSha256: loaded.contentPlan.planDigestSha256,
         commit: providerCompletion.commit,
-        artifacts: providerCompletion.artifacts
+        artifacts: providerCompletion.artifacts,
+        observations: providerCompletion.observations,
+        settlementWork: providerCompletion.settlementWork
       });
       return finishMutation(
         options.outbox,
@@ -534,6 +566,13 @@ function assertOptions<TRequest>(
     !Number.isSafeInteger(options.providerDeadlineMs) ||
     options.providerDeadlineMs < 1 ||
     options.providerDeadlineMs > 300_000
+  ) {
+    throw coordinatorError("provider_dispatch.invalid_options");
+  }
+  if (
+    !isInboxV2TrustedOutboundProviderObservationMaterializer(
+      options.providerObservationMaterializer
+    )
   ) {
     throw coordinatorError("provider_dispatch.invalid_options");
   }
@@ -864,6 +903,12 @@ function parseAdapterArtifactResult(
         "artifactOrdinal",
         "outcome",
         "providerAcknowledgementToken"
+      ]) &&
+      !isStrictRecord(input, [
+        "artifactOrdinal",
+        "outcome",
+        "providerAcknowledgementToken",
+        "providerResponseObservation"
       ])
     ) {
       throw new TypeError("invalid accepted artifact result");
@@ -874,7 +919,14 @@ function parseAdapterArtifactResult(
       providerAcknowledgementToken:
         input.providerAcknowledgementToken === null
           ? null
-          : inboxV2RoutingTokenSchema.parse(input.providerAcknowledgementToken)
+          : inboxV2RoutingTokenSchema.parse(input.providerAcknowledgementToken),
+      providerResponseObservation:
+        input.providerResponseObservation === undefined ||
+        input.providerResponseObservation === null
+          ? null
+          : inboxV2OutboundProviderResponseObservationDescriptorSchema.parse(
+              input.providerResponseObservation
+            )
     };
   }
   const diagnostic = inboxV2SafeSourceDiagnosticSchema.parse(input.diagnostic);
@@ -929,10 +981,13 @@ function buildProviderCompletion(
   run: ProviderRun,
   completedAt: string,
   completedByTrustedServiceId: CompleteAttemptCommit["completedByTrustedServiceId"],
-  contentPlan: InboxV2OutboundDispatchContentPlan
+  contentPlan: InboxV2OutboundDispatchContentPlan,
+  observationMaterializer: InboxV2TrustedOutboundProviderObservationMaterializer
 ): Readonly<{
   commit: CompleteAttemptCommit;
   artifacts: readonly InboxV2OutboundDispatchArtifact[];
+  observations: readonly InboxV2OutboundProviderObservation[];
+  settlementWork: readonly InboxV2OutboundProviderSettlementWorkMaterialization[];
 }> {
   const leaseExpired =
     Date.parse(completedAt) >= Date.parse(open.attempt.leaseExpiresAt);
@@ -1002,11 +1057,56 @@ function buildProviderCompletion(
             ? "failed"
             : "outcome_unknown",
       diagnostic: result.outcome === "accepted" ? null : result.diagnostic,
-      createdAt: completedAt,
+      // Artifact identity must converge when an exact provider echo wins the
+      // race with the synchronous provider response. Observation time remains
+      // on the distinct response/echo fact; the immutable attempt artifact is
+      // anchored to the durable pre-I/O attempt boundary.
+      createdAt: open.attempt.openedAt,
       revision: "1"
     })
   );
-  return { commit: parsed, artifacts };
+  const acceptedResults =
+    effectiveRun.kind === "provider_result"
+      ? effectiveRun.result.artifacts.filter(
+          (
+            result
+          ): result is Extract<
+            InboxV2ProviderDispatchArtifactAdapterResult,
+            { outcome: "accepted" }
+          > => result.outcome === "accepted"
+        )
+      : [];
+  const artifactByOrdinal = new Map(
+    artifacts.map((artifact) => [artifact.ordinal, artifact] as const)
+  );
+  const observations = acceptedResults.flatMap((result) => {
+    const descriptor = result.providerResponseObservation;
+    if (descriptor === undefined || descriptor === null) return [];
+    if (descriptor.artifactOrdinal !== result.artifactOrdinal) {
+      throw coordinatorError("provider_dispatch.invalid_plan");
+    }
+    const artifact = artifactByOrdinal.get(result.artifactOrdinal);
+    if (artifact === undefined) {
+      throw coordinatorError("provider_dispatch.invalid_plan");
+    }
+    return [
+      observationMaterializer.materializeProviderResponse({
+        // A provider observation records the durable transport head that was
+        // actually fenced before provider I/O. The completion CAS is a local
+        // consequence and may be deferred behind stronger echo evidence.
+        dispatch: parsed.dispatchBefore,
+        route: open.routeSnapshot,
+        attempt: parsed.attemptBefore,
+        artifact,
+        descriptor,
+        recordedAt: completedAt
+      })
+    ];
+  });
+  const settlementWork = observations.map((observation) =>
+    observationMaterializer.materializeSettlementWork(observation)
+  );
+  return { commit: parsed, artifacts, observations, settlementWork };
 }
 
 function providerArtifactResults(
@@ -1157,7 +1257,8 @@ async function finishMutation(
       reason: mutation.kind
     };
   }
-  const instruction = deriveFinalization(fence.intentId, durableOutcome);
+  const canonicalOutcome = mutation.canonicalOutcome ?? durableOutcome;
+  const instruction = deriveFinalization(fence.intentId, canonicalOutcome);
   return finalize(outbox, fence, instruction, source);
 }
 

@@ -467,12 +467,24 @@ export const initialTables = [
   { name: "inbox_v2_outbound_dispatches", scope: "tenant", requiresTenantId: true },
   // prettier-ignore
   { name: "inbox_v2_outbound_dispatch_attempts", scope: "tenant", requiresTenantId: true },
+  // MSG-007 provider correlation, immutable observations and settlement work
+  // are all owned by the tenant whose outbound route produced the facts.
+  // prettier-ignore
+  { name: "inbox_v2_outbound_provider_correlation_anchors", scope: "tenant", requiresTenantId: true },
   // prettier-ignore
   { name: "inbox_v2_outbound_dispatch_reconciliation_decisions", scope: "tenant", requiresTenantId: true },
   // prettier-ignore
   { name: "inbox_v2_outbound_dispatch_reconciliation_permissions", scope: "tenant", requiresTenantId: true },
   // prettier-ignore
   { name: "inbox_v2_outbound_dispatch_artifacts", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_outbound_provider_observations", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_outbound_dispatch_artifact_resolutions", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_outbound_provider_observation_settlements", scope: "tenant", requiresTenantId: true },
+  // prettier-ignore
+  { name: "inbox_v2_outbound_provider_settlement_work_items", scope: "tenant", requiresTenantId: true },
   // prettier-ignore
   { name: "inbox_v2_source_occurrence_resolution_transitions", scope: "tenant", requiresTenantId: true },
   // prettier-ignore

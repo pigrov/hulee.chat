@@ -782,6 +782,7 @@ declare
   head_row public.inbox_v2_source_thread_binding_heads%rowtype;
   snapshot_row public.inbox_v2_source_thread_binding_snapshots%rowtype;
   account_identity_row public.inbox_v2_source_account_identities%rowtype;
+  account_snapshot_row public.inbox_v2_source_account_identity_verified_snapshots%rowtype;
   thread_identity_declaration jsonb;
   actor_scope_kind public.inbox_v2_source_identity_scope_kind;
   actor_scope_source_connection_id text;
@@ -805,16 +806,18 @@ begin
       message = 'inbox_v2.source_occurrence_initial_resolution_invalid';
   end if;
 
-  select * into head_row
-    from public.inbox_v2_source_thread_binding_heads candidate_row
-   where candidate_row.tenant_id = new.tenant_id
-     and candidate_row.binding_id = new.source_thread_binding_id
-   for share;
+  if new.origin_kind <> 'provider_response' then
+    select * into head_row
+      from public.inbox_v2_source_thread_binding_heads candidate_row
+     where candidate_row.tenant_id = new.tenant_id
+       and candidate_row.binding_id = new.source_thread_binding_id
+     for share;
 
-  if not found then
-    raise exception using
-      errcode = '23514',
-      message = 'inbox_v2.source_occurrence_binding_head_missing';
+    if not found then
+      raise exception using
+        errcode = '23514',
+        message = 'inbox_v2.source_occurrence_binding_head_missing';
+    end if;
   end if;
 
   select * into snapshot_row
@@ -825,18 +828,23 @@ begin
    for share;
 
   if not found
-     or head_row.revision <> new.binding_revision
-     or head_row.external_thread_id <> new.external_thread_id
-     or head_row.source_connection_id <> new.source_connection_id
-     or head_row.source_account_id <> new.source_account_id
-     or head_row.binding_generation <> new.binding_generation
-     or head_row.capability_revision <> new.capability_revision
-     or head_row.account_identity_revision <> new.account_identity_revision
-     or head_row.account_generation <> new.account_generation
-     or head_row.account_canonical_key_digest_sha256 <>
-        new.account_canonical_key_digest_sha256
-     or head_row.created_at > new.recorded_at
-     or head_row.updated_at > new.recorded_at
+     or (
+       new.origin_kind <> 'provider_response'
+       and (
+         head_row.revision <> new.binding_revision
+         or head_row.external_thread_id <> new.external_thread_id
+         or head_row.source_connection_id <> new.source_connection_id
+         or head_row.source_account_id <> new.source_account_id
+         or head_row.binding_generation <> new.binding_generation
+         or head_row.capability_revision <> new.capability_revision
+         or head_row.account_identity_revision <> new.account_identity_revision
+         or head_row.account_generation <> new.account_generation
+         or head_row.account_canonical_key_digest_sha256 <>
+            new.account_canonical_key_digest_sha256
+         or head_row.created_at > new.recorded_at
+         or head_row.updated_at > new.recorded_at
+       )
+     )
      or snapshot_row.external_thread_id <> new.external_thread_id
      or snapshot_row.source_connection_id <> new.source_connection_id
      or snapshot_row.source_account_id <> new.source_account_id
@@ -856,29 +864,56 @@ begin
       message = 'inbox_v2.source_occurrence_binding_fence_conflict';
   end if;
 
-  select * into account_identity_row
-    from public.inbox_v2_source_account_identities candidate_row
-   where candidate_row.tenant_id = new.tenant_id
-     and candidate_row.source_account_id = new.source_account_id
-   for share;
+  if new.origin_kind = 'provider_response' then
+    select * into account_snapshot_row
+      from public.inbox_v2_source_account_identity_verified_snapshots candidate_row
+     where candidate_row.tenant_id = new.tenant_id
+       and candidate_row.source_account_id = new.source_account_id
+       and candidate_row.identity_revision = new.account_identity_revision
+     for share;
 
-  if not found
-     or account_identity_row.source_connection_id <> new.source_connection_id
-     or account_identity_row.state <> 'verified'
-     or account_identity_row.revision <> new.account_identity_revision
-     or account_identity_row.account_generation <> new.account_generation
-     or account_identity_row.canonical_key_digest_sha256 <>
-        new.account_canonical_key_digest_sha256
-     or account_identity_row.declaration_contract_id <>
-        new.adapter_contract_id
-     or account_identity_row.declaration_contract_version <>
-        new.adapter_contract_version
-     or account_identity_row.declaration_surface_id <>
-        new.adapter_surface_id
-     or account_identity_row.updated_at > new.recorded_at then
-    raise exception using
-      errcode = '40001',
-      message = 'inbox_v2.source_occurrence_account_identity_fence_conflict';
+    if not found
+       or account_snapshot_row.source_connection_id <> new.source_connection_id
+       or account_snapshot_row.state <> 'verified'
+       or account_snapshot_row.account_generation <> new.account_generation
+       or account_snapshot_row.canonical_key_digest_sha256 <>
+          new.account_canonical_key_digest_sha256
+       or account_snapshot_row.declaration_contract_id <>
+          new.adapter_contract_id
+       or account_snapshot_row.declaration_contract_version <>
+          new.adapter_contract_version
+       or account_snapshot_row.declaration_surface_id <>
+          new.adapter_surface_id
+       or account_snapshot_row.verified_at > new.recorded_at then
+      raise exception using
+        errcode = '40001',
+        message = 'inbox_v2.source_occurrence_account_snapshot_fence_conflict';
+    end if;
+  else
+    select * into account_identity_row
+      from public.inbox_v2_source_account_identities candidate_row
+     where candidate_row.tenant_id = new.tenant_id
+       and candidate_row.source_account_id = new.source_account_id
+     for share;
+
+    if not found
+       or account_identity_row.source_connection_id <> new.source_connection_id
+       or account_identity_row.state <> 'verified'
+       or account_identity_row.revision <> new.account_identity_revision
+       or account_identity_row.account_generation <> new.account_generation
+       or account_identity_row.canonical_key_digest_sha256 <>
+          new.account_canonical_key_digest_sha256
+       or account_identity_row.declaration_contract_id <>
+          new.adapter_contract_id
+       or account_identity_row.declaration_contract_version <>
+          new.adapter_contract_version
+       or account_identity_row.declaration_surface_id <>
+          new.adapter_surface_id
+       or account_identity_row.updated_at > new.recorded_at then
+      raise exception using
+        errcode = '40001',
+        message = 'inbox_v2.source_occurrence_account_identity_fence_conflict';
+    end if;
   end if;
 
   select thread_row.identity_declaration
@@ -948,14 +983,15 @@ begin
        and route_row.adapter_contract_id = new.adapter_contract_id
        and route_row.adapter_contract_version = new.adapter_contract_version
        and route_row.adapter_surface_id = new.adapter_surface_id
-       and route_row.account_generation = head_row.account_generation
-       and route_row.binding_generation = head_row.binding_generation
-       and route_row.remote_access_revision = head_row.remote_access_revision
+       and route_row.binding_revision = snapshot_row.revision
+       and route_row.account_generation = snapshot_row.account_generation
+       and route_row.binding_generation = snapshot_row.binding_generation
+       and route_row.remote_access_revision = snapshot_row.remote_access_revision
        and route_row.administrative_revision =
-          head_row.administrative_revision
-       and route_row.capability_revision = head_row.capability_revision
+          snapshot_row.administrative_revision
+       and route_row.capability_revision = snapshot_row.capability_revision
        and route_row.route_descriptor_revision =
-          head_row.route_descriptor_revision
+          snapshot_row.route_descriptor_revision
        and route_row.created_at <= attempt_row.opened_at
        and attempt_row.opened_at <= new.observed_at
      for share of attempt_row, dispatch_row, route_row;
@@ -1218,8 +1254,89 @@ begin
          from public.inbox_v2_source_occurrences occurrence_row
         where occurrence_row.tenant_id = new_row->>'tenant_id'
           and occurrence_row.id = new_row->>'id'
-          and occurrence_row.resolution_state = 'pending'
-          and occurrence_row.revision = 1
+          and (
+            (occurrence_row.resolution_state = 'pending'
+              and occurrence_row.revision = 1)
+            or (
+              new_row->>'origin_kind' = 'provider_response'
+              and new_row->>'direction' = 'outbound'
+              and new_row->>'resolution_state' = 'pending'
+              and (new_row->>'revision')::bigint = 1
+              and new_row->>'resolved_external_message_reference_id' is null
+              and occurrence_row.origin_kind = 'provider_response'
+              and occurrence_row.direction = 'outbound'
+              and occurrence_row.outbound_dispatch_attempt_id is not null
+              and occurrence_row.resolution_state = 'resolved'
+              and occurrence_row.revision = 2
+              and occurrence_row.resolved_external_message_reference_id
+                is not null
+              and occurrence_row.resolution_candidate_count = 0
+              and occurrence_row.resolution_candidate_digest_sha256 is null
+              and occurrence_row.resolution_diagnostic_code_id is null
+              and occurrence_row.resolution_diagnostic_retryable is null
+              and occurrence_row.resolution_diagnostic_correlation_token is null
+              and occurrence_row.resolution_diagnostic_safe_operator_hint_id
+                is null
+              and 1 = (
+                select count(*)
+                  from public.inbox_v2_source_occurrence_resolution_transitions
+                    transition_row
+                  join public.inbox_v2_external_message_references reference_row
+                    on reference_row.tenant_id = transition_row.tenant_id
+                   and reference_row.id =
+                     transition_row.resolved_external_message_reference_id
+                 where transition_row.tenant_id = occurrence_row.tenant_id
+                   and transition_row.source_occurrence_id = occurrence_row.id
+                   and transition_row.expected_revision = 1
+                   and transition_row.resulting_revision = 2
+                   and transition_row.from_state = 'pending'
+                   and transition_row.to_state = 'resolved'
+                   and transition_row.resolved_external_message_reference_id =
+                     occurrence_row.resolved_external_message_reference_id
+                   and transition_row.candidate_count = 0
+                   and transition_row.candidates_digest_sha256 is null
+                   and transition_row.diagnostic_code_id is null
+                   and transition_row.diagnostic_retryable is null
+                   and transition_row.diagnostic_correlation_token is null
+                   and transition_row.diagnostic_safe_operator_hint_id is null
+                   and transition_row.resolver_trusted_service_id =
+                     occurrence_row.adapter_loaded_by_trusted_service_id
+                   and transition_row.changed_at = occurrence_row.updated_at
+                   and transition_row.revision = 1
+                   and reference_row.realm_id = occurrence_row.message_realm_id
+                   and reference_row.realm_version =
+                     occurrence_row.message_realm_version
+                   and reference_row.canonicalization_version =
+                     occurrence_row.message_canonicalization_version
+                   and reference_row.scope_kind::text =
+                     occurrence_row.message_scope_kind::text
+                   and reference_row.scope_source_account_id is not distinct from
+                     occurrence_row.message_scope_source_account_id
+                   and reference_row.scope_source_thread_binding_id
+                     is not distinct from
+                     occurrence_row.message_scope_source_thread_binding_id
+                   and reference_row.object_kind_id =
+                     occurrence_row.message_object_kind_id
+                   and reference_row.external_thread_id =
+                     occurrence_row.external_thread_id
+                   and reference_row.canonical_external_subject =
+                     occurrence_row.canonical_external_subject
+                   and reference_row.message_key_digest_sha256 =
+                     occurrence_row.message_key_digest_sha256
+                   and not exists (
+                     select 1
+                       from public.inbox_v2_source_occurrence_resolution_candidates
+                         candidate_row
+                      where candidate_row.tenant_id = transition_row.tenant_id
+                        and candidate_row.transition_id = transition_row.id
+                        and candidate_row.source_occurrence_id =
+                          transition_row.source_occurrence_id
+                        and candidate_row.resulting_revision =
+                          transition_row.resulting_revision
+                   )
+              )
+            )
+          )
      ) then
     raise exception using errcode = '23514',
       message = 'inbox_v2.source_occurrence_initial_commit_required';

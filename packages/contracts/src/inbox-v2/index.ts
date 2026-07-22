@@ -21,6 +21,7 @@ export * from "./message-source-action";
 export * from "./message-transport";
 export * from "./namespace";
 export * from "./outbound-dispatch";
+export * from "./outbound-provider-observation";
 export * from "./outbound-route";
 export * from "./participant-identity";
 export * from "./provider-semantic-proof";

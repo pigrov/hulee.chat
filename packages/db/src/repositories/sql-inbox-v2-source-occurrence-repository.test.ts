@@ -17,10 +17,14 @@ import {
   buildLockInboxV2SourceOccurrenceBindingSql,
   buildLockInboxV2SourceOccurrenceExternalThreadSql,
   buildLockInboxV2SourceOccurrenceNormalizedEventSql,
+  buildLockInboxV2ProviderResponseAccountSnapshotSql,
+  buildLockInboxV2ProviderResponseBindingSnapshotSql,
   buildLockInboxV2SourceOccurrenceProviderActorSql,
   buildLockInboxV2SourceOccurrenceRawEventSql,
   computeInboxV2SourceAccountCanonicalKeyDigest,
   createSqlInboxV2SourceOccurrenceRepository,
+  materializeInboxV2SourceOccurrenceInTransaction,
+  readInboxV2SourceOccurrenceHistoricalMaterializationFenceInTransaction,
   type InboxV2SourceOccurrenceTransactionExecutor,
   type RawSqlExecutor,
   type RawSqlQueryResult
@@ -433,6 +437,33 @@ describe("SQL Inbox V2 SourceOccurrence repository", () => {
     expect(queries[4]?.sql).toContain("for key share");
   });
 
+  it("pins provider-response settlement to immutable route-time snapshots", () => {
+    const commit = materializationCommit();
+    const binding = renderQuery(
+      buildLockInboxV2ProviderResponseBindingSnapshotSql(commit as never)
+    );
+    const identity = renderQuery(
+      buildLockInboxV2ProviderResponseAccountSnapshotSql(commit as never)
+    );
+
+    expect(binding.sql).toContain(
+      "from inbox_v2_source_thread_binding_snapshots snapshot"
+    );
+    expect(binding.sql).toContain("snapshot.revision = $3");
+    expect(binding.sql).not.toContain("source_thread_binding_heads");
+    expect(binding.params).toEqual([
+      tenantId,
+      sourceThreadBindingReference.id,
+      "1"
+    ]);
+    expect(identity.sql).toContain(
+      "from inbox_v2_source_account_identity_verified_snapshots"
+    );
+    expect(identity.sql).toContain("identity_revision = $3");
+    expect(identity.sql).not.toContain("source_account_identities\n");
+    expect(identity.params).toEqual([tenantId, sourceAccountReference.id, "1"]);
+  });
+
   it("builds exact aggregate and bounded child reads/writes", () => {
     const commit = materializationCommit();
     const input = {
@@ -511,6 +542,49 @@ describe("SQL Inbox V2 SourceOccurrence repository", () => {
       ]);
     }
   );
+
+  it("materializes idempotently inside a caller-owned transaction without nesting it", async () => {
+    const commit = materializationCommit();
+    const executor = new ScriptedOccurrenceExecutor(commit);
+    const transactionConfig = { isolationLevel: "read committed" } as const;
+
+    await expect(
+      executor.transaction(
+        (transaction) =>
+          materializeInboxV2SourceOccurrenceInTransaction(transaction, commit),
+        transactionConfig
+      )
+    ).resolves.toEqual({
+      kind: "materialized",
+      occurrence: commit.occurrence
+    });
+    expect(executor.transactionCount).toBe(1);
+    expect(executor.transactionStatements.slice(0, 6)).toEqual([
+      "binding",
+      "account_identity",
+      "external_thread",
+      "raw_event",
+      "normalized_event",
+      "provider_actor"
+    ]);
+
+    const statementCountAfterMaterialization =
+      executor.transactionStatements.length;
+    await expect(
+      executor.transaction(
+        (transaction) =>
+          materializeInboxV2SourceOccurrenceInTransaction(transaction, commit),
+        transactionConfig
+      )
+    ).resolves.toEqual({
+      kind: "already_materialized",
+      occurrence: commit.occurrence
+    });
+    expect(executor.transactionCount).toBe(2);
+    expect(executor.transactionStatements).toHaveLength(
+      statementCountAfterMaterialization
+    );
+  });
 
   it("recovers one strict tenant-scoped aggregate in a repeatable-read snapshot", async () => {
     const commit = materializationCommit();
@@ -720,6 +794,50 @@ describe("SQL Inbox V2 SourceOccurrence repository", () => {
       { isolationLevel: "read committed" },
       { isolationLevel: "read committed" }
     ]);
+  });
+
+  it("loads the immutable occurrence-time binding/account fence without consulting current heads", async () => {
+    const commit = materializationCommit();
+    const occurrence = commit.occurrence;
+    const historicalBinding =
+      commit.bindingMaterialization.currentProjection.binding;
+    const adapter = occurrence.descriptor.adapterContract;
+    const executor: RawSqlExecutor = {
+      async execute<Row extends Record<string, unknown>>(query: SQL) {
+        const statement = normalizeSql(renderQuery(query).sql);
+        expect(statement).toContain("from inbox_v2_source_occurrences");
+        expect(statement).not.toContain("source_thread_binding_heads");
+        return rowsResult<Row>([
+          {
+            external_thread_id: occurrence.bindingContext.externalThread.id,
+            source_account_id: occurrence.bindingContext.sourceAccount.id,
+            source_thread_binding_id:
+              occurrence.bindingContext.sourceThreadBinding.id,
+            binding_revision: historicalBinding.revision,
+            binding_generation: occurrence.bindingContext.bindingGeneration,
+            account_identity_revision: commit.sourceAccountIdentity.revision,
+            capability_revision: occurrence.descriptor.capabilityRevision,
+            adapter_contract_id: adapter.contractId,
+            adapter_contract_version: adapter.contractVersion,
+            adapter_declaration_revision: adapter.declarationRevision,
+            adapter_surface_id: adapter.surfaceId,
+            adapter_loaded_by_trusted_service_id:
+              adapter.loadedByTrustedServiceId,
+            adapter_loaded_at: adapter.loadedAt
+          } as unknown as Row
+        ]);
+      }
+    };
+
+    await expect(
+      readInboxV2SourceOccurrenceHistoricalMaterializationFenceInTransaction(
+        executor,
+        { occurrence }
+      )
+    ).resolves.toEqual({
+      bindingRevision: historicalBinding.revision,
+      accountIdentityRevision: commit.sourceAccountIdentity.revision
+    });
   });
 });
 

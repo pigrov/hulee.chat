@@ -8,6 +8,7 @@ import {
   inboxV2MessageContentBlockSchema,
   inboxV2MessageMutationCommitSchema,
   inboxV2MessageIdSchema,
+  inboxV2MessageTransportAssociationCommitSchema,
   inboxV2ProviderSemanticOrderingHeadSchema,
   inboxV2ReactionSemanticSlotKeyFor,
   inboxV2TenantIdSchema,
@@ -23,8 +24,14 @@ import { describe, expect, it } from "vitest";
 import {
   fixtureHuleeCreationCommit,
   fixtureInternalCreationCommit,
+  fixtureExternalReference,
+  fixtureExternalThreadMapping,
+  fixtureOccurrence,
+  fixtureOutboundBindingSnapshot,
   fixtureReference,
-  fixtureSourceCreationCommit
+  fixtureSourceCreationCommit,
+  fixtureT3,
+  fixtureTransportLink
 } from "../../../contracts/src/inbox-v2/timeline-message-fixtures.type-fixture";
 import type {
   RawSqlExecutor,
@@ -34,6 +41,7 @@ import type {
 import {
   actionAttributionRowMatches,
   assertInboxV2MessageCreationAuthority,
+  assertInboxV2MessageTransportAssociationAuthority,
   buildAdvanceInboxV2ProviderSemanticOrderingHeadSql,
   buildInboxV2AtomicSourceMessageResolutionSql,
   buildFindInboxV2ProviderSemanticOrderingHeadSql,
@@ -63,6 +71,7 @@ import {
   buildLockInboxV2ProviderSemanticOrderingReferenceSql,
   buildPurgeInboxV2TimelineContentPayloadSql,
   computeInboxV2TimelineMessageCommitDigest,
+  createSqlInboxV2TimelineMessageRepository,
   decodeInboxV2AuxiliaryReadCursor,
   decodeInboxV2AuxiliaryReadSnapshotToken,
   deriveInboxV2MessageCreationSourceOccurrenceFence,
@@ -87,6 +96,7 @@ import {
   type InboxV2MessageReactionCommit,
   type InboxV2MessageTransportAssociationCommit,
   type InboxV2MessageTransportFactCommit,
+  type InboxV2TimelineMessageTransactionExecutor,
   type InboxV2OutboundRouteConsumptionRecord
 } from "./sql-inbox-v2-timeline-message-repository";
 
@@ -1603,6 +1613,97 @@ describe("SQL Inbox V2 timeline/message repository", () => {
     );
   });
 
+  it("binds provider-observation transport association authority to the exact trusted adapter runtime", () => {
+    const commit = providerEchoTransportAssociationCommit();
+    const authorizationDecisionId =
+      "authorization_decision:provider-observation-unit";
+    const authorizationEpoch = "1";
+    const context = {
+      tenantId: commit.tenantId,
+      commandTypeId: "core:outbound-provider-observation.settle",
+      actor: {
+        kind: "trusted_service" as const,
+        trustedServiceId: "core:source-runtime"
+      },
+      occurredAt: commit.committedAt,
+      authorizationEpoch,
+      authorizationDecisionId,
+      authorizationDecisionRefs: [
+        {
+          id: authorizationDecisionId,
+          permissionId: "core:message.receive_external",
+          resourceScopeId: "core:conversation",
+          resource: {
+            tenantId: commit.tenantId,
+            entityTypeId: "core:conversation",
+            entityId: commit.message.conversation.id
+          },
+          principal: {
+            kind: "trusted_service" as const,
+            trustedServiceId: "core:source-runtime"
+          },
+          authorizationEpoch,
+          resourceAccessRevision: "7",
+          outcome: "allowed" as const
+        }
+      ],
+      authorizationResourceRevisionFences: [
+        {
+          resourceKind: "conversation" as const,
+          resourceId: commit.message.conversation.id,
+          expectedResourceAccessRevision: "7",
+          advance: "none" as const
+        }
+      ]
+    } as unknown as Parameters<
+      typeof assertInboxV2MessageTransportAssociationAuthority
+    >[0];
+
+    expect(() =>
+      assertInboxV2MessageTransportAssociationAuthority(context, commit)
+    ).not.toThrow();
+    expect(() =>
+      assertInboxV2MessageTransportAssociationAuthority(
+        {
+          ...context,
+          actor: {
+            kind: "trusted_service",
+            trustedServiceId: "core:other-runtime"
+          }
+        },
+        commit
+      )
+    ).toThrow("authorized provider-observation settlement");
+    expect(() =>
+      assertInboxV2MessageTransportAssociationAuthority(
+        { ...context, commandTypeId: "core:message.receive" },
+        commit
+      )
+    ).toThrow("authorized provider-observation settlement");
+  });
+
+  it("rejects the public raw transport seam for provider observations before opening a transaction", async () => {
+    let transactionCalls = 0;
+    const executor: InboxV2TimelineMessageTransactionExecutor = {
+      async execute<TResult>(): Promise<RawSqlQueryResult<TResult>> {
+        return { rows: [] };
+      },
+      async transaction<TResult>(): Promise<TResult> {
+        transactionCalls += 1;
+        throw new Error("transaction must not open");
+      }
+    };
+    const repository = createSqlInboxV2TimelineMessageRepository(executor);
+
+    await expect(
+      repository.associateTransportOccurrence({
+        commit: providerEchoTransportAssociationCommit(),
+        streamPosition
+      })
+    ).rejects.toThrow("authorized provider-observation settlement");
+    expect(transactionCalls).toBe(0);
+  });
+
   it("stores receipt opaque values in a separately purgeable row and only digests in the durable observation", () => {
     const observation = {
       tenantId,
@@ -2210,6 +2311,65 @@ describe("SQL Inbox V2 timeline/message repository", () => {
     );
   });
 });
+
+function providerEchoTransportAssociationCommit(): InboxV2MessageTransportAssociationCommit {
+  const creation = inboxV2MessageCreationCommitSchema.parse(
+    fixtureHuleeCreationCommit()
+  );
+  const route = creation.outboundRoute;
+  const timelineItem = creation.timelineAllocation.items[0];
+  if (route === null || timelineItem === undefined) {
+    throw new Error("Hulee transport association fixture is incomplete.");
+  }
+  const occurrenceFixture = fixtureOccurrence({
+    origin: "provider_echo",
+    direction: "outbound",
+    recordedAt: fixtureT3,
+    occurrenceId: "source_occurrence:provider-echo-authority"
+  });
+  const sourceOccurrence = {
+    ...occurrenceFixture,
+    descriptor: {
+      ...occurrenceFixture.descriptor,
+      capabilityRevision: route.bindingFence.capabilityRevision
+    }
+  };
+  const externalMessageReference = fixtureExternalReference(sourceOccurrence);
+  const link = fixtureTransportLink(
+    sourceOccurrence,
+    "provider_echo",
+    sourceOccurrence.recordedAt
+  );
+  return inboxV2MessageTransportAssociationCommitSchema.parse({
+    tenantId: creation.tenantId,
+    message: creation.message,
+    timelineItem,
+    linkHeadBefore: null,
+    sourceOccurrence,
+    externalMessageReference,
+    externalThreadMapping: fixtureExternalThreadMapping(),
+    occurrenceBinding: fixtureOutboundBindingSnapshot(route),
+    messageOriginProof: { kind: "hulee_outbound", outboundRoute: route },
+    link,
+    linkHeadAfter: {
+      tenantId: creation.tenantId,
+      message: {
+        tenantId: creation.tenantId,
+        kind: "message",
+        id: creation.message.id
+      },
+      linkCount: "1",
+      latestLink: {
+        tenantId: creation.tenantId,
+        kind: "message_transport_occurrence_link",
+        id: link.id
+      },
+      revision: "1",
+      updatedAt: sourceOccurrence.recordedAt
+    },
+    committedAt: sourceOccurrence.recordedAt
+  });
+}
 
 function providerSemanticOrderingHead() {
   return inboxV2ProviderSemanticOrderingHeadSchema.parse({

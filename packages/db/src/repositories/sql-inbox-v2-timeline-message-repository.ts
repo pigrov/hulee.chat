@@ -10,6 +10,9 @@ import {
   INBOX_V2_MESSAGE_LIFECYCLE_SCHEMA_VERSION,
   INBOX_V2_MESSAGE_SCHEMA_ID,
   INBOX_V2_MESSAGE_SCHEMA_VERSION,
+  INBOX_V2_MESSAGE_TRANSPORT_ASSOCIATION_COMMIT_SCHEMA_ID,
+  INBOX_V2_MESSAGE_TRANSPORT_OCCURRENCE_LINK_SCHEMA_ID,
+  INBOX_V2_MESSAGE_TRANSPORT_SCHEMA_VERSION,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION,
   INBOX_V2_OUTBOUND_DISPATCH_REROUTE_COMMIT_SCHEMA_ID,
@@ -60,6 +63,7 @@ import {
   inboxV2MessageTransportOccurrenceLinkSchema,
   inboxV2RoutingTokenSchema,
   inboxV2SourceOccurrenceIdSchema,
+  inboxV2SourceOccurrenceResolutionCommitSchema,
   inboxV2TenantIdSchema,
   inboxV2ExternalMessageKeySchema,
   inboxV2TimelineActivitySchema,
@@ -81,6 +85,7 @@ import {
   type InboxV2MessageRevision,
   type InboxV2OutboundDispatchRerouteCommit,
   type InboxV2SourceOccurrenceId,
+  type InboxV2SourceOccurrenceResolutionCommit,
   type InboxV2TenantId,
   type InboxV2TimelineItem,
   type InboxV2TimelineItemId,
@@ -97,13 +102,18 @@ import {
   consumeInboxV2AtomicAttachmentMaterializationProof,
   deriveInboxV2AttachmentMaterializationAuditReference,
   deriveInboxV2MessageReactionAuditTargetReference,
+  deriveInboxV2NativeOutboundConversationAuditReference,
+  deriveInboxV2NativeOutboundTransportAuditTargetReference,
+  deriveInboxV2ProviderObservationAuditTargetReference,
   issueInboxV2AtomicMaterializationSealReceipt,
   registerInboxV2AtomicOutboundRouteProof,
   requireInboxV2AtomicSealExecutor,
   type InboxV2AtomicAttachmentMaterializationProof,
   type InboxV2AtomicMaterializationSealReceipt,
   type InboxV2AtomicMessageLifecycleSealManifest,
-  type InboxV2AtomicMessageReactionSealManifest
+  type InboxV2AtomicNativeOutboundTransportAssociationSealManifest,
+  type InboxV2AtomicMessageReactionSealManifest,
+  type InboxV2AtomicMessageTransportAssociationSealManifest
 } from "./sql-inbox-v2-atomic-materialization-internal";
 import {
   assertInboxV2AuthorizedAtomicMaterializationContext,
@@ -481,6 +491,55 @@ export type PersistInboxV2MessageAuxiliaryResult<TResult = undefined> =
       code: InboxV2TimelineMessageConflictCode;
     }>
   | Readonly<{ kind: "message_not_found" }>;
+
+const inboxV2PreparedMessageTransportAssociationCapabilityBrand: unique symbol =
+  Symbol("inbox-v2-prepared-message-transport-association-capability");
+
+/** Transaction-local proof of the exact Message/Timeline/link-head locks. */
+export type InboxV2PreparedMessageTransportAssociationCapability = Readonly<{
+  [inboxV2PreparedMessageTransportAssociationCapabilityBrand]: true;
+}>;
+
+export type PrepareInboxV2MessageTransportAssociationResult =
+  | Readonly<{
+      kind: "ready";
+      capability: InboxV2PreparedMessageTransportAssociationCapability;
+    }>
+  | Exclude<
+      PersistInboxV2MessageAuxiliaryResult<never>,
+      Readonly<{ kind: "appended" }>
+    >;
+
+export type SealInboxV2PreparedMessageTransportAssociationResult = Extract<
+  PersistInboxV2MessageAuxiliaryResult,
+  Readonly<{ kind: "appended" }>
+> &
+  Readonly<{ receipt: InboxV2AtomicMaterializationSealReceipt }>;
+
+const inboxV2PreparedNativeOutboundTransportAssociationCapabilityBrand: unique symbol =
+  Symbol("inbox-v2-prepared-native-outbound-transport-association-capability");
+
+export type InboxV2PreparedNativeOutboundTransportAssociationCapability =
+  Readonly<{
+    [inboxV2PreparedNativeOutboundTransportAssociationCapabilityBrand]: true;
+  }>;
+
+export type PrepareInboxV2NativeOutboundTransportAssociationResult =
+  | Readonly<{
+      kind: "ready";
+      capability: InboxV2PreparedNativeOutboundTransportAssociationCapability;
+    }>
+  | Exclude<
+      PersistInboxV2MessageAuxiliaryResult<never>,
+      Readonly<{ kind: "appended" }>
+    >;
+
+export type SealInboxV2PreparedNativeOutboundTransportAssociationResult =
+  Extract<
+    PersistInboxV2MessageAuxiliaryResult,
+    Readonly<{ kind: "appended" }>
+  > &
+    Readonly<{ receipt: InboxV2AtomicMaterializationSealReceipt }>;
 
 export type ListInboxV2TimelineInput = Readonly<{
   tenantId: InboxV2TenantId;
@@ -993,6 +1052,14 @@ export function createSqlInboxV2TimelineMessageRepository(
       const commit = inboxV2MessageTransportAssociationCommitSchema.parse(
         input.commit
       );
+      if (
+        commit.link.role === "provider_echo" ||
+        commit.link.role === "provider_response"
+      ) {
+        throw new TypeError(
+          "Provider echo/response transport association requires the authorized provider-observation settlement boundary."
+        );
+      }
       const streamPosition = inboxV2BigintCounterSchema.parse(
         input.streamPosition
       );
@@ -1309,7 +1376,7 @@ type PreparedInboxV2AttachmentMaterializationMessageMutationState = {
   readonly atomicMaterializationToken: object;
   readonly sealExecutor: RawSqlExecutor;
   readonly commit: InboxV2MessageMutationCommit;
-  readonly current: LoadedTimelineMessageAggregate;
+  readonly current: InboxV2LoadedTimelineMessageAggregate;
   consumed: boolean;
 };
 const preparedInboxV2AttachmentMaterializationMessageMutations = new WeakMap<
@@ -1323,7 +1390,7 @@ type PreparedProviderLifecycleCreationForAtomicSeal = Readonly<{
 type PreparedInboxV2MessageLifecycleCommandState = {
   readonly atomicMaterializationToken: object;
   readonly sealExecutor: RawSqlExecutor;
-  readonly current: LoadedTimelineMessageAggregate;
+  readonly current: InboxV2LoadedTimelineMessageAggregate;
   readonly commandKind: "edit" | "local_delete" | "provider_delete";
   readonly messageMutation: InboxV2MessageMutationCommit | null;
   readonly providerLifecycleCommit: InboxV2MessageProviderLifecycleCreationCommit | null;
@@ -1341,7 +1408,7 @@ const preparedInboxV2MessageLifecycleCommands = new WeakMap<
 type PreparedInboxV2MessageReactionCommandState = {
   readonly atomicMaterializationToken: object;
   readonly sealExecutor: RawSqlExecutor;
-  readonly current: LoadedTimelineMessageAggregate;
+  readonly current: InboxV2LoadedTimelineMessageAggregate;
   readonly commit: InboxV2MessageReactionCommit;
   readonly routeConsumption: InboxV2OutboundRouteConsumptionRecord | null;
   readonly routeDisposition: InboxV2OutboundRouteConsumptionDisposition;
@@ -1350,6 +1417,28 @@ type PreparedInboxV2MessageReactionCommandState = {
 const preparedInboxV2MessageReactionCommands = new WeakMap<
   InboxV2PreparedMessageReactionCommandCapability,
   PreparedInboxV2MessageReactionCommandState
+>();
+type PreparedInboxV2MessageTransportAssociationState = {
+  readonly atomicMaterializationToken: object | null;
+  readonly sealExecutor: RawSqlExecutor;
+  readonly current: InboxV2LoadedTimelineMessageAggregate;
+  readonly commit: InboxV2MessageTransportAssociationCommit;
+  consumed: boolean;
+};
+const preparedInboxV2MessageTransportAssociations = new WeakMap<
+  InboxV2PreparedMessageTransportAssociationCapability,
+  PreparedInboxV2MessageTransportAssociationState
+>();
+type PreparedInboxV2NativeOutboundTransportAssociationState = {
+  readonly atomicMaterializationToken: object;
+  readonly commit: InboxV2MessageTransportAssociationCommit;
+  readonly sourceResolutionCommit: InboxV2SourceOccurrenceResolutionCommit;
+  readonly transport: InboxV2PreparedMessageTransportAssociationCapability;
+  consumed: boolean;
+};
+const preparedInboxV2NativeOutboundTransportAssociations = new WeakMap<
+  InboxV2PreparedNativeOutboundTransportAssociationCapability,
+  PreparedInboxV2NativeOutboundTransportAssociationState
 >();
 export type InboxV2OutboundRouteConsumptionRecord = Readonly<{
   tenantId: InboxV2TenantId;
@@ -1387,7 +1476,7 @@ export type InboxV2MessageCreationDispatchIdentity = Readonly<{
   conversationId: InboxV2ConversationId;
   timelineItemId: InboxV2TimelineItemId;
 }>;
-type LoadedTimelineMessageAggregate = Readonly<{
+export type InboxV2LoadedTimelineMessageAggregate = Readonly<{
   message: InboxV2Message;
   timelineItem: InboxV2TimelineItem;
   content: InboxV2TimelineContent;
@@ -3280,7 +3369,7 @@ export async function prepareInboxV2MessageLifecycleCommand(
         )
       : Object.freeze([] as InboxV2MessageEditFileSourceAuthorityTarget[]);
 
-  let current: LoadedTimelineMessageAggregate;
+  let current: InboxV2LoadedTimelineMessageAggregate;
   let commandKind: "edit" | "local_delete" | "provider_delete";
   let messageMutation: InboxV2MessageMutationCommit | null;
   let providerLifecycleCommit: InboxV2MessageProviderLifecycleCreationCommit | null;
@@ -5397,7 +5486,7 @@ async function prepareMessageMutationInTransaction(
 
 async function applyPreparedMessageMutationWrites<TResult>(
   transaction: RawSqlExecutor,
-  current: LoadedTimelineMessageAggregate,
+  current: InboxV2LoadedTimelineMessageAggregate,
   commit: InboxV2MessageMutationCommit,
   streamPosition: InboxV2BigintCounter,
   persist: (context: {
@@ -5677,7 +5766,7 @@ function transportFactReplayResult(
   input: Readonly<{
     rows: readonly Record<string, unknown>[];
     commit: InboxV2MessageTransportFactCommit;
-    current: LoadedTimelineMessageAggregate;
+    current: InboxV2LoadedTimelineMessageAggregate;
     expectedDigest: string;
   }>
 ): PersistInboxV2MessageAuxiliaryResult {
@@ -5757,150 +5846,808 @@ async function persistTransportAssociation(
   return runTimelineMessageTransaction(
     transactionExecutor,
     async (transaction) => {
-      const conversationLock = await transaction.execute<ConversationHeadRow>(
-        buildLockInboxV2TimelineConversationHeadSql({
-          tenantId: commit.tenantId,
-          conversationId: commit.message.conversation.id
-        })
-      );
-      assertAtMostOneRow(conversationLock, "Transport link Conversation lock");
-      if (conversationLock.rows.length === 0) {
-        return { kind: "message_not_found" } as const;
-      }
-      const current = await loadTimelineMessageAggregate(transaction, {
-        tenantId: commit.tenantId,
-        messageId: commit.message.id,
-        lock: true
-      });
-      if (current === null) return { kind: "message_not_found" } as const;
-      const headResult = await transaction.execute<Record<string, unknown>>(
-        buildLockInboxV2MessageTransportLinkHeadSql({
-          tenantId: commit.tenantId,
-          messageId: commit.message.id
-        })
-      );
-      assertAtMostOneRow(headResult, "Transport link-head lock");
-      const envelope = buildInboxV2SafeGenericEnvelope({
-        tenantId: commit.tenantId,
-        entityKind: "message_transport",
-        entityId: commit.link.id,
-        entityRevision: commit.linkHeadAfter.revision,
-        timelineItemId: commit.timelineItem.id,
-        timelineSequence: commit.timelineItem.timelineSequence,
-        streamPosition,
-        changeKind: `transport_link.${commit.link.role}`,
-        occurredAt: commit.committedAt
-      });
-      const existing = await transaction.execute<Record<string, unknown>>(
-        buildFindInboxV2MessageTransportLinkSql({
-          tenantId: commit.tenantId,
-          linkId: commit.link.id,
-          sourceOccurrenceId: commit.link.sourceOccurrence.id
-        })
-      );
-      if (existing.rows.length > 0) {
-        if (existing.rows.length !== 1) {
-          return {
-            kind: "conflict",
-            code: "message.transport_conflict"
-          } as const;
-        }
-        const persisted = existing.rows[0];
-        return transportLinkRowMatches(
-          persisted,
-          commit.link,
-          commit.linkHeadAfter.revision
-        )
-          ? ({
-              kind: "already_applied",
-              envelope: buildInboxV2SafeGenericEnvelope({
-                tenantId: commit.tenantId,
-                entityKind: "message_transport",
-                entityId: requireString(
-                  persisted.id,
-                  "Transport link replay id"
-                ),
-                entityRevision: parseRevision(
-                  persisted.resulting_head_revision,
-                  "Transport link replay resulting head revision"
-                ),
-                timelineItemId: current.timelineItem.id,
-                timelineSequence: current.timelineItem.timelineSequence,
-                streamPosition: inboxV2BigintCounterSchema.parse(
-                  parseDatabaseBigint(
-                    persisted.recorded_stream_position,
-                    "Transport link replay stream position"
-                  )
-                ),
-                changeKind: `transport_link.${requireString(
-                  persisted.role,
-                  "Transport link replay role"
-                )}`,
-                occurredAt: parseTimestamp(
-                  persisted.linked_at,
-                  "Transport link replay linkedAt"
-                )
-              })
-            } as const)
-          : ({
-              kind: "conflict",
-              code: "message.transport_conflict"
-            } as const);
-      }
-      if (
-        !sameValue(current.message, commit.message) ||
-        !sameValue(current.timelineItem, commit.timelineItem)
-      ) {
-        return { kind: "conflict", code: "revision.conflict" } as const;
-      }
-      const currentHead = headResult.rows[0];
-      if (
-        (commit.linkHeadBefore === null) !== (currentHead === undefined) ||
-        (commit.linkHeadBefore !== null &&
-          currentHead !== undefined &&
-          !transportLinkHeadRowMatches(currentHead, commit.linkHeadBefore))
-      ) {
-        return {
-          kind: "conflict",
-          code: "message.transport_conflict"
-        } as const;
-      }
-      const linkInsert = await transaction.execute<IdRow>(
-        buildInsertInboxV2MessageTransportLinkSql({
-          link: commit.link,
-          resultingHeadRevision: commit.linkHeadAfter.revision,
-          streamPosition
-        })
-      );
-      if (linkInsert.rows.length !== 1) {
-        return {
-          kind: "conflict",
-          code: "message.transport_conflict"
-        } as const;
-      }
-      if (commit.linkHeadBefore === null) {
-        await expectOneRow(
+      const preparation =
+        await prepareInboxV2MessageTransportAssociationInTransaction(
           transaction,
-          buildInsertInboxV2MessageTransportLinkHeadSql({
-            head: commit.linkHeadAfter,
-            streamPosition
-          }),
-          "Message transport link-head insert"
+          { commit },
+          null,
+          transaction
         );
-      } else {
-        await expectOneRow(
-          transaction,
-          buildAdvanceInboxV2MessageTransportLinkHeadSql({
-            before: commit.linkHeadBefore,
-            after: commit.linkHeadAfter,
-            streamPosition
-          }),
-          "Message transport link-head CAS"
-        );
-      }
-      return { kind: "appended", envelope, result: undefined } as const;
+      if (preparation.kind !== "ready") return preparation;
+      return sealInboxV2PreparedMessageTransportAssociationInTransaction({
+        capability: preparation.capability,
+        streamPosition
+      });
     }
   );
+}
+
+export async function prepareInboxV2MessageTransportAssociation(
+  context: InboxV2AuthorizedCommandMutationContext,
+  input: Readonly<{ commit: InboxV2MessageTransportAssociationCommit }>
+): Promise<PrepareInboxV2MessageTransportAssociationResult> {
+  assertInboxV2AuthorizedCommandMutationContext(context);
+  if (
+    context.profile !== "domain" ||
+    context.atomicMaterializationToken === undefined
+  ) {
+    throw invariantError(
+      "Message transport association preparation requires an authorized atomic domain context."
+    );
+  }
+  const commit = inboxV2MessageTransportAssociationCommitSchema.parse(
+    input.commit
+  );
+  assertInboxV2MessageTransportAssociationAuthority(context, commit);
+  return prepareInboxV2MessageTransportAssociationInTransaction(
+    context.executor,
+    { commit },
+    context.atomicMaterializationToken,
+    requireInboxV2AtomicSealExecutor(context)
+  );
+}
+
+async function prepareInboxV2MessageTransportAssociationInTransaction(
+  executor: RawSqlExecutor,
+  input: Readonly<{ commit: InboxV2MessageTransportAssociationCommit }>,
+  atomicMaterializationToken: object | null,
+  sealExecutor: RawSqlExecutor
+): Promise<PrepareInboxV2MessageTransportAssociationResult> {
+  const commit = inboxV2MessageTransportAssociationCommitSchema.parse(
+    input.commit
+  );
+  const conversationLock = await executor.execute<ConversationHeadRow>(
+    buildLockInboxV2TimelineConversationHeadSql({
+      tenantId: commit.tenantId,
+      conversationId: commit.message.conversation.id
+    })
+  );
+  assertAtMostOneRow(conversationLock, "Transport link Conversation lock");
+  if (conversationLock.rows.length === 0) return { kind: "message_not_found" };
+
+  const current = await loadTimelineMessageAggregate(executor, {
+    tenantId: commit.tenantId,
+    messageId: commit.message.id,
+    lock: true
+  });
+  if (current === null) return { kind: "message_not_found" };
+  const headResult = await executor.execute<Record<string, unknown>>(
+    buildLockInboxV2MessageTransportLinkHeadSql({
+      tenantId: commit.tenantId,
+      messageId: commit.message.id
+    })
+  );
+  assertAtMostOneRow(headResult, "Transport link-head lock");
+  const existing = await executor.execute<Record<string, unknown>>(
+    buildFindInboxV2MessageTransportLinkSql({
+      tenantId: commit.tenantId,
+      linkId: commit.link.id,
+      sourceOccurrenceId: commit.link.sourceOccurrence.id
+    })
+  );
+  if (existing.rows.length > 0) {
+    const persisted = existing.rows[0];
+    const currentHead = headResult.rows[0];
+    const exact =
+      existing.rows.length === 1 &&
+      persisted !== undefined &&
+      currentHead !== undefined &&
+      sameValue(current.message, commit.message) &&
+      sameValue(current.timelineItem, commit.timelineItem) &&
+      transportLinkRowMatches(
+        persisted,
+        commit.link,
+        commit.linkHeadAfter.revision
+      ) &&
+      transportLinkHeadRowMatches(currentHead, commit.linkHeadAfter);
+    if (!exact || persisted === undefined) {
+      return { kind: "conflict", code: "message.transport_conflict" };
+    }
+    return {
+      kind: "already_applied",
+      envelope: buildInboxV2SafeGenericEnvelope({
+        tenantId: commit.tenantId,
+        entityKind: "message_transport",
+        entityId: requireString(persisted.id, "Transport link replay id"),
+        entityRevision: parseRevision(
+          persisted.resulting_head_revision,
+          "Transport link replay resulting head revision"
+        ),
+        timelineItemId: current.timelineItem.id,
+        timelineSequence: current.timelineItem.timelineSequence,
+        streamPosition: inboxV2BigintCounterSchema.parse(
+          parseDatabaseBigint(
+            persisted.recorded_stream_position,
+            "Transport link replay stream position"
+          )
+        ),
+        changeKind: `transport_link.${requireString(
+          persisted.role,
+          "Transport link replay role"
+        )}`,
+        occurredAt: parseTimestamp(
+          persisted.linked_at,
+          "Transport link replay linkedAt"
+        )
+      })
+    };
+  }
+  if (
+    !sameValue(current.message, commit.message) ||
+    !sameValue(current.timelineItem, commit.timelineItem)
+  ) {
+    return { kind: "conflict", code: "revision.conflict" };
+  }
+  const currentHead = headResult.rows[0];
+  if (
+    (commit.linkHeadBefore === null) !== (currentHead === undefined) ||
+    (commit.linkHeadBefore !== null &&
+      currentHead !== undefined &&
+      !transportLinkHeadRowMatches(currentHead, commit.linkHeadBefore))
+  ) {
+    return { kind: "conflict", code: "message.transport_conflict" };
+  }
+
+  const capability = Object.freeze({
+    [inboxV2PreparedMessageTransportAssociationCapabilityBrand]: true as const
+  });
+  preparedInboxV2MessageTransportAssociations.set(capability, {
+    atomicMaterializationToken,
+    sealExecutor,
+    current,
+    commit,
+    consumed: false
+  });
+  return { kind: "ready", capability };
+}
+
+async function sealInboxV2PreparedMessageTransportAssociationInTransaction(
+  input: Readonly<{
+    capability: InboxV2PreparedMessageTransportAssociationCapability;
+    streamPosition: InboxV2BigintCounter;
+  }>
+): Promise<
+  Extract<PersistInboxV2MessageAuxiliaryResult, { kind: "appended" }>
+> {
+  const prepared = preparedInboxV2MessageTransportAssociations.get(
+    input.capability
+  );
+  if (prepared === undefined || prepared.consumed) {
+    throw invariantError(
+      "Message transport association capability is unknown or was already consumed."
+    );
+  }
+  prepared.consumed = true;
+  const commit = prepared.commit;
+  const streamPosition = inboxV2BigintCounterSchema.parse(input.streamPosition);
+  await expectOneRow(
+    prepared.sealExecutor,
+    buildInsertInboxV2MessageTransportLinkSql({
+      link: commit.link,
+      resultingHeadRevision: commit.linkHeadAfter.revision,
+      streamPosition
+    }),
+    "Message transport link insert"
+  );
+  if (commit.linkHeadBefore === null) {
+    await expectOneRow(
+      prepared.sealExecutor,
+      buildInsertInboxV2MessageTransportLinkHeadSql({
+        head: commit.linkHeadAfter,
+        streamPosition
+      }),
+      "Message transport link-head insert"
+    );
+  } else {
+    await expectOneRow(
+      prepared.sealExecutor,
+      buildAdvanceInboxV2MessageTransportLinkHeadSql({
+        before: commit.linkHeadBefore,
+        after: commit.linkHeadAfter,
+        streamPosition
+      }),
+      "Message transport link-head CAS"
+    );
+  }
+  return {
+    kind: "appended",
+    envelope: buildInboxV2SafeGenericEnvelope({
+      tenantId: commit.tenantId,
+      entityKind: "message_transport",
+      entityId: commit.link.id,
+      entityRevision: commit.linkHeadAfter.revision,
+      timelineItemId: commit.timelineItem.id,
+      timelineSequence: commit.timelineItem.timelineSequence,
+      streamPosition,
+      changeKind: `transport_link.${commit.link.role}`,
+      occurredAt: commit.committedAt
+    }),
+    result: undefined
+  };
+}
+
+export async function sealInboxV2PreparedMessageTransportAssociation(
+  context: InboxV2AuthorizedAtomicMaterializationContext,
+  input: Readonly<{
+    capability: InboxV2PreparedMessageTransportAssociationCapability;
+  }>
+): Promise<SealInboxV2PreparedMessageTransportAssociationResult> {
+  assertInboxV2AuthorizedAtomicMaterializationContext(context);
+  const prepared = preparedInboxV2MessageTransportAssociations.get(
+    input.capability
+  );
+  if (prepared === undefined || prepared.consumed) {
+    throw invariantError(
+      "Message transport association capability is unknown or was already consumed."
+    );
+  }
+  if (
+    prepared.atomicMaterializationToken !==
+      context.atomicMaterializationToken ||
+    prepared.commit.tenantId !== context.tenantId
+  ) {
+    throw invariantError(
+      "Message transport association capability belongs to a different authorized mutation."
+    );
+  }
+  assertInboxV2MessageTransportAssociationAuthority(context, prepared.commit);
+  const sealed =
+    await sealInboxV2PreparedMessageTransportAssociationInTransaction({
+      capability: input.capability,
+      streamPosition: inboxV2BigintCounterSchema.parse(context.streamPosition)
+    });
+  const commit = prepared.commit;
+  const trustedServiceId =
+    inboxV2MessageTransportAssociationTrustedServiceId(commit);
+  const role = inboxV2ProviderTransportAssociationRole(commit);
+  const sourceAccountIds = [
+    commit.messageOriginProof.kind === "hulee_outbound"
+      ? commit.messageOriginProof.outboundRoute.sourceAccount.id
+      : null,
+    commit.sourceOccurrence.bindingContext.sourceAccount.id
+  ]
+    .map((id) => (id === null ? null : String(id)))
+    .filter((id): id is string => id !== null)
+    .filter((id, index, values) => values.indexOf(id) === index)
+    .sort();
+  const payloadReference = inboxV2AtomicPayloadReference({
+    tenantId: commit.tenantId,
+    recordId: commit.link.id,
+    schemaId: INBOX_V2_MESSAGE_TRANSPORT_OCCURRENCE_LINK_SCHEMA_ID,
+    schemaVersion: INBOX_V2_MESSAGE_TRANSPORT_SCHEMA_VERSION,
+    payload: commit.link
+  });
+  const domainCommitReference = inboxV2AtomicPayloadReference({
+    tenantId: commit.tenantId,
+    recordId: commit.link.id,
+    schemaId: INBOX_V2_MESSAGE_TRANSPORT_ASSOCIATION_COMMIT_SCHEMA_ID,
+    schemaVersion: INBOX_V2_MESSAGE_TRANSPORT_SCHEMA_VERSION,
+    payload: commit
+  });
+  const manifest: InboxV2AtomicMessageTransportAssociationSealManifest = {
+    kind: "message_transport_association",
+    tenantId: commit.tenantId,
+    correlationId: context.correlationId,
+    conversationId: commit.message.conversation.id,
+    messageId: commit.message.id,
+    timelineItemId: commit.timelineItem.id,
+    timelineItemRevision: commit.timelineItem.revision,
+    timelineSequence: commit.timelineItem.timelineSequence,
+    linkId: commit.link.id,
+    linkRevision: commit.link.revision,
+    linkHeadRevision: commit.linkHeadAfter.revision,
+    sourceOccurrenceId: commit.link.sourceOccurrence.id,
+    externalMessageReferenceId: commit.link.externalMessageReference.id,
+    role,
+    authorizationBasis: "historical_provider_truth",
+    trustedServiceId,
+    auditTargetEntityId: deriveInboxV2ProviderObservationAuditTargetReference({
+      tenantId: commit.tenantId,
+      linkId: commit.link.id
+    }).entityId,
+    sourceAccountIds,
+    audience: inboxV2AtomicMessageAudience(commit.timelineItem.visibility),
+    stateSchemaId: INBOX_V2_MESSAGE_TRANSPORT_OCCURRENCE_LINK_SCHEMA_ID,
+    stateSchemaVersion: INBOX_V2_MESSAGE_TRANSPORT_SCHEMA_VERSION,
+    stateHash: payloadReference.digest,
+    payloadReference,
+    domainCommitReference,
+    event: {
+      typeId: "core:message.changed",
+      payloadSchemaId: INBOX_V2_MESSAGE_TRANSPORT_ASSOCIATION_COMMIT_SCHEMA_ID,
+      payloadSchemaVersion: INBOX_V2_MESSAGE_TRANSPORT_SCHEMA_VERSION,
+      payloadReference: domainCommitReference,
+      occurredAt: commit.committedAt,
+      recordedAt: commit.committedAt
+    }
+  };
+  return {
+    ...sealed,
+    receipt: issueInboxV2AtomicMaterializationSealReceipt(
+      context.atomicMaterializationToken,
+      manifest
+    )
+  };
+}
+
+export const INBOX_V2_NATIVE_OUTBOUND_OCCURRENCE_ATTACH_COMMAND_TYPE_ID =
+  "core:message.native_outbound_occurrence.attach" as const;
+
+/**
+ * Prepares an exact duplicate provider-native outbound occurrence and resolves
+ * it inside the live authorized transaction. The opaque transport capability
+ * is bound to the same atomic token and cannot be sealed by a provider
+ * observation/settlement command.
+ */
+export async function prepareInboxV2NativeOutboundTransportAssociation(
+  context: InboxV2AuthorizedCommandMutationContext,
+  input: Readonly<{
+    commit: InboxV2MessageTransportAssociationCommit;
+    sourceResolutionCommit: InboxV2SourceOccurrenceResolutionCommit;
+  }>
+): Promise<PrepareInboxV2NativeOutboundTransportAssociationResult> {
+  assertInboxV2AuthorizedCommandMutationContext(context);
+  if (
+    context.profile !== "domain" ||
+    context.atomicMaterializationToken === undefined
+  ) {
+    throw invariantError(
+      "Native outbound transport preparation requires an authorized atomic domain context."
+    );
+  }
+  const commit = inboxV2MessageTransportAssociationCommitSchema.parse(
+    input.commit
+  );
+  const sourceResolutionCommit =
+    inboxV2SourceOccurrenceResolutionCommitSchema.parse(
+      input.sourceResolutionCommit
+    );
+  assertInboxV2NativeOutboundTransportAssociationAuthority(
+    context,
+    commit,
+    sourceResolutionCommit
+  );
+  const transport =
+    await prepareInboxV2MessageTransportAssociationInTransaction(
+      context.executor,
+      { commit },
+      context.atomicMaterializationToken,
+      requireInboxV2AtomicSealExecutor(context)
+    );
+  if (transport.kind !== "ready") return transport;
+
+  const author = await context.executor.execute<IdRow>(
+    buildLockInboxV2NativeOutboundTransportAuthorSql({
+      commit,
+      sourceResolutionCommit
+    })
+  );
+  assertAtMostOneRow(author, "Native outbound transport author fence");
+  if (author.rows.length !== 1) {
+    const prepared = preparedInboxV2MessageTransportAssociations.get(
+      transport.capability
+    );
+    if (prepared !== undefined) prepared.consumed = true;
+    return { kind: "conflict", code: "message.transport_conflict" };
+  }
+
+  await expectOneRow(
+    context.executor,
+    buildInsertInboxV2SourceOccurrenceResolutionTransitionSql(
+      sourceResolutionCommit
+    ),
+    "Native outbound SourceOccurrence resolution transition insert"
+  );
+  await expectOneRow(
+    context.executor,
+    buildCompareAndSwapInboxV2SourceOccurrenceResolutionSql(
+      sourceResolutionCommit
+    ),
+    "Native outbound SourceOccurrence resolution compare-and-swap"
+  );
+
+  const capability = Object.freeze({
+    [inboxV2PreparedNativeOutboundTransportAssociationCapabilityBrand]:
+      true as const
+  });
+  preparedInboxV2NativeOutboundTransportAssociations.set(capability, {
+    atomicMaterializationToken: context.atomicMaterializationToken,
+    commit,
+    sourceResolutionCommit,
+    transport: transport.capability,
+    consumed: false
+  });
+  return { kind: "ready", capability };
+}
+
+export async function sealInboxV2PreparedNativeOutboundTransportAssociation(
+  context: InboxV2AuthorizedAtomicMaterializationContext,
+  input: Readonly<{
+    capability: InboxV2PreparedNativeOutboundTransportAssociationCapability;
+  }>
+): Promise<SealInboxV2PreparedNativeOutboundTransportAssociationResult> {
+  assertInboxV2AuthorizedAtomicMaterializationContext(context);
+  const prepared = preparedInboxV2NativeOutboundTransportAssociations.get(
+    input.capability
+  );
+  if (prepared === undefined || prepared.consumed) {
+    throw invariantError(
+      "Native outbound transport capability is unknown or was already consumed."
+    );
+  }
+  if (
+    prepared.atomicMaterializationToken !==
+      context.atomicMaterializationToken ||
+    prepared.commit.tenantId !== context.tenantId
+  ) {
+    throw invariantError(
+      "Native outbound transport capability belongs to a different authorized mutation."
+    );
+  }
+  assertInboxV2NativeOutboundTransportAssociationAuthority(
+    context,
+    prepared.commit,
+    prepared.sourceResolutionCommit
+  );
+  prepared.consumed = true;
+  const sealed =
+    await sealInboxV2PreparedMessageTransportAssociationInTransaction({
+      capability: prepared.transport,
+      streamPosition: inboxV2BigintCounterSchema.parse(context.streamPosition)
+    });
+  const commit = prepared.commit;
+  const resolution = prepared.sourceResolutionCommit;
+  const actor = commit.sourceOccurrence.providerActor;
+  if (
+    actor?.kind !== "source_external_identity" ||
+    commit.messageOriginProof.kind !== "source_originated"
+  ) {
+    throw invariantError(
+      "Native outbound transport seal lost its source identity proof."
+    );
+  }
+  const payloadReference = inboxV2AtomicPayloadReference({
+    tenantId: commit.tenantId,
+    recordId: commit.link.id,
+    schemaId: INBOX_V2_MESSAGE_TRANSPORT_OCCURRENCE_LINK_SCHEMA_ID,
+    schemaVersion: INBOX_V2_MESSAGE_TRANSPORT_SCHEMA_VERSION,
+    payload: commit.link
+  });
+  const domainCommitReference = inboxV2AtomicPayloadReference({
+    tenantId: commit.tenantId,
+    recordId: commit.link.id,
+    schemaId: INBOX_V2_MESSAGE_TRANSPORT_ASSOCIATION_COMMIT_SCHEMA_ID,
+    schemaVersion: INBOX_V2_MESSAGE_TRANSPORT_SCHEMA_VERSION,
+    payload: commit
+  });
+  const sourceResolutionReference = inboxV2AtomicPayloadReference({
+    tenantId: commit.tenantId,
+    recordId: deriveInboxV2SourceOccurrenceResolutionTransitionId(resolution),
+    schemaId: INBOX_V2_SOURCE_OCCURRENCE_RESOLUTION_COMMIT_SCHEMA_ID,
+    schemaVersion: INBOX_V2_EXTERNAL_MESSAGE_SCHEMA_VERSION,
+    payload: resolution
+  });
+  const auditTarget = deriveInboxV2NativeOutboundTransportAuditTargetReference({
+    tenantId: commit.tenantId,
+    messageId: commit.message.id,
+    linkId: commit.link.id
+  });
+  const conversationFacet =
+    deriveInboxV2NativeOutboundConversationAuditReference({
+      tenantId: commit.tenantId,
+      conversationId: commit.message.conversation.id
+    });
+  const manifest: InboxV2AtomicNativeOutboundTransportAssociationSealManifest =
+    {
+      kind: "native_outbound_transport_association",
+      tenantId: commit.tenantId,
+      correlationId: context.correlationId,
+      conversationId: commit.message.conversation.id,
+      messageId: commit.message.id,
+      authorParticipantId: commit.message.authorParticipant.id,
+      sourceExternalIdentityId: actor.sourceExternalIdentity.id,
+      originSourceOccurrenceId: commit.messageOriginProof.originOccurrence.id,
+      sourceOccurrenceId: commit.sourceOccurrence.id,
+      sourceOccurrenceRevision: commit.sourceOccurrence.revision,
+      resolutionTransitionId:
+        deriveInboxV2SourceOccurrenceResolutionTransitionId(resolution),
+      externalMessageReferenceId: commit.externalMessageReference.id,
+      timelineItemId: commit.timelineItem.id,
+      timelineItemRevision: commit.timelineItem.revision,
+      timelineSequence: commit.timelineItem.timelineSequence,
+      linkId: commit.link.id,
+      linkRevision: commit.link.revision,
+      linkHeadRevision: commit.linkHeadAfter.revision,
+      role: "native_outbound",
+      trustedServiceId: resolution.resolver.trustedServiceId,
+      auditTargetEntityId: auditTarget.entityId,
+      auditConversationFacetEntityId: conversationFacet.entityId,
+      audience: inboxV2AtomicMessageAudience(commit.timelineItem.visibility),
+      stateSchemaId: INBOX_V2_MESSAGE_TRANSPORT_OCCURRENCE_LINK_SCHEMA_ID,
+      stateSchemaVersion: INBOX_V2_MESSAGE_TRANSPORT_SCHEMA_VERSION,
+      stateHash: payloadReference.digest,
+      payloadReference,
+      domainCommitReference,
+      sourceResolutionReference,
+      event: {
+        typeId: "core:message.changed",
+        payloadSchemaId:
+          INBOX_V2_MESSAGE_TRANSPORT_ASSOCIATION_COMMIT_SCHEMA_ID,
+        payloadSchemaVersion: INBOX_V2_MESSAGE_TRANSPORT_SCHEMA_VERSION,
+        payloadReference: domainCommitReference,
+        occurredAt: commit.committedAt,
+        recordedAt: commit.committedAt
+      }
+    };
+  return {
+    ...sealed,
+    receipt: issueInboxV2AtomicMaterializationSealReceipt(
+      context.atomicMaterializationToken,
+      manifest
+    )
+  };
+}
+
+export function assertInboxV2NativeOutboundTransportAssociationAuthority(
+  context: Pick<
+    InboxV2AuthorizedCommandMutationContext,
+    | "tenantId"
+    | "commandTypeId"
+    | "actor"
+    | "authorizationEpoch"
+    | "authorizationDecisionId"
+    | "authorizationDecisionRefs"
+    | "authorizationResourceRevisionFences"
+    | "occurredAt"
+  >,
+  commit: InboxV2MessageTransportAssociationCommit,
+  resolution: InboxV2SourceOccurrenceResolutionCommit
+): void {
+  const observedActor = commit.sourceOccurrence.providerActor;
+  const origin = commit.messageOriginProof;
+  const originActor =
+    origin.kind === "source_originated"
+      ? origin.originOccurrence.providerActor
+      : null;
+  const trustedServiceId =
+    resolution.resolver.kind === "trusted_service"
+      ? resolution.resolver.trustedServiceId
+      : null;
+  const decisions = context.authorizationDecisionRefs.filter(
+    (decision) => decision.id === context.authorizationDecisionId
+  );
+  const decision = decisions[0];
+  const fences =
+    decision === undefined
+      ? []
+      : context.authorizationResourceRevisionFences.filter(
+          (fence) =>
+            fence.resourceKind === "conversation" &&
+            String(fence.resourceId) ===
+              String(commit.message.conversation.id) &&
+            String(fence.expectedResourceAccessRevision) ===
+              String(decision.resourceAccessRevision) &&
+            fence.advance === "none"
+        );
+  if (
+    context.tenantId !== commit.tenantId ||
+    context.commandTypeId !==
+      INBOX_V2_NATIVE_OUTBOUND_OCCURRENCE_ATTACH_COMMAND_TYPE_ID ||
+    context.actor.kind !== "trusted_service" ||
+    trustedServiceId === null ||
+    context.actor.trustedServiceId !== trustedServiceId ||
+    context.occurredAt !== commit.committedAt ||
+    resolution.changedAt !== commit.committedAt ||
+    commit.message.origin.kind !== "source_originated" ||
+    commit.message.origin.direction !== "outbound" ||
+    commit.message.appActor !== null ||
+    commit.message.automationCausation !== null ||
+    origin.kind !== "source_originated" ||
+    origin.originOccurrence.id !== commit.message.origin.originOccurrence.id ||
+    origin.originOccurrence.direction !== "outbound" ||
+    originActor?.kind !== "source_external_identity" ||
+    commit.sourceOccurrence.id === origin.originOccurrence.id ||
+    commit.sourceOccurrence.direction !== "outbound" ||
+    commit.sourceOccurrence.origin.kind === "provider_echo" ||
+    commit.sourceOccurrence.origin.kind === "provider_response" ||
+    observedActor?.kind !== "source_external_identity" ||
+    observedActor.sourceExternalIdentity.id !==
+      originActor.sourceExternalIdentity.id ||
+    commit.link.role !== "native_outbound" ||
+    commit.link.sourceOccurrence.id !== commit.sourceOccurrence.id ||
+    commit.link.externalMessageReference.id !==
+      commit.externalMessageReference.id ||
+    !sameValue(resolution.before, {
+      ...commit.sourceOccurrence,
+      resolution: resolution.before.resolution,
+      revision: resolution.before.revision,
+      updatedAt: resolution.before.updatedAt
+    }) ||
+    !sameValue(resolution.after, commit.sourceOccurrence) ||
+    !sameValue(resolution.resolvedReference, commit.externalMessageReference) ||
+    decisions.length !== 1 ||
+    decision === undefined ||
+    decision.tenantId !== commit.tenantId ||
+    decision.authorizationEpoch !== context.authorizationEpoch ||
+    decision.permissionId !== "core:message.receive_external" ||
+    decision.resourceScopeId !== "core:conversation" ||
+    decision.resource.tenantId !== commit.tenantId ||
+    decision.resource.entityTypeId !== "core:conversation" ||
+    String(decision.resource.entityId) !==
+      String(commit.message.conversation.id) ||
+    decision.principal.kind !== "trusted_service" ||
+    decision.principal.trustedServiceId !== trustedServiceId ||
+    decision.outcome !== "allowed" ||
+    fences.length !== 1
+  ) {
+    throw invariantError(
+      "Native outbound transport association requires one exact source-authored outbound Message, occurrence resolution and Conversation receive authority."
+    );
+  }
+}
+
+export function buildLockInboxV2NativeOutboundTransportAuthorSql(input: {
+  commit: InboxV2MessageTransportAssociationCommit;
+  sourceResolutionCommit: InboxV2SourceOccurrenceResolutionCommit;
+}): SQL {
+  const commit = input.commit;
+  const resolution = input.sourceResolutionCommit;
+  const actor = commit.sourceOccurrence.providerActor;
+  if (actor?.kind !== "source_external_identity") {
+    throw invariantError(
+      "Native outbound transport author fence requires a source identity actor."
+    );
+  }
+  return sql`
+    select author_row.id
+      from inbox_v2_messages message_row
+      join inbox_v2_action_attributions attribution_row
+        on attribution_row.tenant_id = message_row.tenant_id
+       and attribution_row.id = message_row.creation_attribution_id
+      join inbox_v2_conversation_participants author_row
+        on author_row.tenant_id = message_row.tenant_id
+       and author_row.id = message_row.author_participant_id
+       and author_row.conversation_id = message_row.conversation_id
+      join inbox_v2_source_occurrences origin_occurrence
+        on origin_occurrence.tenant_id = message_row.tenant_id
+       and origin_occurrence.id = message_row.origin_source_occurrence_id
+      join inbox_v2_source_occurrences observed_occurrence
+        on observed_occurrence.tenant_id = message_row.tenant_id
+       and observed_occurrence.id = ${resolution.before.id}
+      join inbox_v2_external_message_references reference_row
+        on reference_row.tenant_id = message_row.tenant_id
+       and reference_row.id = ${commit.externalMessageReference.id}
+       and reference_row.message_id = message_row.id
+       and reference_row.timeline_item_id = message_row.timeline_item_id
+     where message_row.tenant_id = ${commit.tenantId}
+       and message_row.id = ${commit.message.id}
+       and message_row.conversation_id = ${commit.message.conversation.id}
+       and message_row.timeline_item_id = ${commit.timelineItem.id}
+       and message_row.author_participant_id =
+           ${commit.message.authorParticipant.id}
+       and message_row.origin_kind = 'source_originated'
+       and message_row.origin_source_direction = 'outbound'
+       and message_row.origin_outbound_route_id is null
+       and attribution_row.app_actor_kind is null
+       and attribution_row.app_actor_employee_id is null
+       and attribution_row.app_authorization_epoch is null
+       and attribution_row.app_trusted_service_id is null
+       and attribution_row.automation_kind is null
+       and author_row.subject_kind = 'source_external_identity'
+       and author_row.subject_source_external_identity_id =
+           ${actor.sourceExternalIdentity.id}
+       and origin_occurrence.direction = 'outbound'
+       and origin_occurrence.origin_kind not in (
+         'provider_echo', 'provider_response'
+       )
+       and origin_occurrence.provider_actor_kind =
+           'source_external_identity'
+       and origin_occurrence.provider_actor_source_external_identity_id =
+           ${actor.sourceExternalIdentity.id}
+       and observed_occurrence.direction = 'outbound'
+       and observed_occurrence.origin_kind not in (
+         'provider_echo', 'provider_response'
+       )
+       and observed_occurrence.provider_actor_kind =
+           'source_external_identity'
+       and observed_occurrence.provider_actor_source_external_identity_id =
+           ${actor.sourceExternalIdentity.id}
+       and observed_occurrence.resolution_state =
+           ${resolution.before.resolution.state}
+       and observed_occurrence.revision =
+           ${BigInt(resolution.expectedRevision)}
+       and observed_occurrence.updated_at = ${resolution.before.updatedAt}
+     for share of message_row, attribution_row, author_row,
+       origin_occurrence, reference_row
+     for update of observed_occurrence
+  `;
+}
+
+export function assertInboxV2MessageTransportAssociationAuthority(
+  context: Pick<
+    InboxV2AuthorizedCommandMutationContext,
+    | "tenantId"
+    | "commandTypeId"
+    | "actor"
+    | "occurredAt"
+    | "authorizationEpoch"
+    | "authorizationDecisionId"
+    | "authorizationDecisionRefs"
+    | "authorizationResourceRevisionFences"
+  >,
+  commit: InboxV2MessageTransportAssociationCommit
+): void {
+  const trustedServiceId =
+    inboxV2MessageTransportAssociationTrustedServiceId(commit);
+  const role = inboxV2ProviderTransportAssociationRole(commit);
+  const occurrenceOrigin = commit.sourceOccurrence.origin.kind;
+  const decisions = context.authorizationDecisionRefs.filter(
+    (decision) =>
+      decision.permissionId === "core:message.receive_external" &&
+      decision.resourceScopeId === "core:conversation" &&
+      decision.resource.tenantId === commit.tenantId &&
+      decision.resource.entityTypeId === "core:conversation" &&
+      String(decision.resource.entityId) ===
+        String(commit.message.conversation.id) &&
+      decision.principal.kind === "trusted_service" &&
+      decision.principal.trustedServiceId === trustedServiceId &&
+      decision.authorizationEpoch === context.authorizationEpoch &&
+      decision.outcome === "allowed"
+  );
+  const conversationFences = context.authorizationResourceRevisionFences.filter(
+    (fence) =>
+      fence.resourceKind === "conversation" &&
+      String(fence.resourceId) === String(commit.message.conversation.id) &&
+      fence.advance === "none" &&
+      String(fence.expectedResourceAccessRevision) ===
+        String(decisions[0]?.resourceAccessRevision)
+  );
+  if (
+    context.tenantId !== commit.tenantId ||
+    context.commandTypeId !== "core:outbound-provider-observation.settle" ||
+    context.actor.kind !== "trusted_service" ||
+    context.actor.trustedServiceId !== trustedServiceId ||
+    decisions.length !== 1 ||
+    decisions[0]?.id !== context.authorizationDecisionId ||
+    conversationFences.length !== 1 ||
+    context.authorizationResourceRevisionFences.length !== 1 ||
+    context.occurredAt !== commit.committedAt ||
+    (role === "provider_echo" && occurrenceOrigin !== "provider_echo") ||
+    (role === "provider_response" && occurrenceOrigin !== "provider_response")
+  ) {
+    throw invariantError(
+      "Message transport association does not match the authorized provider-observation settlement."
+    );
+  }
+}
+
+function inboxV2MessageTransportAssociationTrustedServiceId(
+  commit: InboxV2MessageTransportAssociationCommit
+): string {
+  if (
+    commit.message.origin.kind !== "hulee_external" ||
+    commit.messageOriginProof.kind !== "hulee_outbound"
+  ) {
+    throw invariantError(
+      "Provider-observation settlement requires an existing Hulee outbound Message route proof."
+    );
+  }
+  return commit.messageOriginProof.outboundRoute.adapterContract
+    .loadedByTrustedServiceId;
+}
+
+function inboxV2ProviderTransportAssociationRole(
+  commit: InboxV2MessageTransportAssociationCommit
+): "provider_echo" | "provider_response" {
+  if (
+    commit.link.role !== "provider_echo" &&
+    commit.link.role !== "provider_response"
+  ) {
+    throw invariantError(
+      "Provider-observation settlement accepts only provider echo or response transport links."
+    );
+  }
+  return commit.link.role;
 }
 
 async function persistProviderLifecycleCreation(
@@ -7358,7 +8105,7 @@ async function loadTimelineMessageAggregate(
     messageId: InboxV2MessageId;
     lock: boolean;
   }>
-): Promise<LoadedTimelineMessageAggregate | null> {
+): Promise<InboxV2LoadedTimelineMessageAggregate | null> {
   const result = await executor.execute<MessageHeadRow>(
     buildFindInboxV2TimelineMessageSql(input)
   );
@@ -7450,6 +8197,22 @@ async function loadTimelineMessageAggregate(
     databaseNow,
     streamPosition
   };
+}
+
+/** Transaction-local exact Message/TimelineItem loader for DB-owned planners. */
+export async function loadInboxV2TimelineMessageAggregateInTransaction(
+  executor: RawSqlExecutor,
+  input: Readonly<{
+    tenantId: InboxV2TenantId;
+    messageId: InboxV2MessageId;
+    lock?: boolean;
+  }>
+): Promise<InboxV2LoadedTimelineMessageAggregate | null> {
+  return loadTimelineMessageAggregate(executor, {
+    tenantId: input.tenantId,
+    messageId: input.messageId,
+    lock: input.lock ?? false
+  });
 }
 
 async function loadTimelineContent(
@@ -11365,6 +12128,60 @@ export function buildFindInboxV2MessageTransportLinkHeadReadSql(input: {
   `;
 }
 
+export async function readInboxV2MessageTransportLinkHeadInTransaction(
+  executor: RawSqlExecutor,
+  input: Readonly<{
+    tenantId: InboxV2TenantId;
+    messageId: InboxV2MessageId;
+  }>
+): Promise<InboxV2MessageTransportLinkHeadRead | null> {
+  const result = await executor.execute<Record<string, unknown>>(sql`
+    select tenant_id, message_id, link_count, latest_link_id, revision,
+           last_changed_stream_position, updated_at
+      from inbox_v2_message_transport_link_heads
+     where tenant_id = ${input.tenantId}
+       and message_id = ${input.messageId}
+     for share
+  `);
+  assertAtMostOneRow(result, "Message transport-link head planner read");
+  const row = result.rows[0];
+  if (row === undefined) return null;
+  const revision = inboxV2EntityRevisionSchema.parse(
+    parseDatabaseBigint(row.revision, "Message transport-link head revision")
+  );
+  const linkCount = inboxV2BigintCounterSchema.parse(
+    parseDatabaseBigint(row.link_count, "Message transport-link count")
+  );
+  if (String(revision) !== String(linkCount)) {
+    throw invariantError(
+      "Message transport-link head revision and count diverged."
+    );
+  }
+  return {
+    head: inboxV2MessageTransportLinkHeadSchema.parse({
+      tenantId: input.tenantId,
+      message: messageReference(input.tenantId, input.messageId),
+      linkCount,
+      latestLink: {
+        tenantId: input.tenantId,
+        kind: "message_transport_occurrence_link",
+        id: row.latest_link_id
+      },
+      revision,
+      updatedAt: parseTimestamp(
+        row.updated_at,
+        "Message transport-link head updatedAt"
+      )
+    }),
+    lastChangedStreamPosition: inboxV2BigintCounterSchema.parse(
+      parseDatabaseBigint(
+        row.last_changed_stream_position,
+        "Message transport-link head stream position"
+      )
+    )
+  };
+}
+
 export function buildFindInboxV2MessageTransportLinkAtRevisionSql(input: {
   tenantId: InboxV2TenantId;
   messageId: InboxV2MessageId;
@@ -13426,7 +14243,7 @@ function transportLinkRowMatches(
 
 function transportLinkHeadRowMatches(
   row: Record<string, unknown>,
-  head: NonNullable<InboxV2MessageTransportAssociationCommit["linkHeadBefore"]>
+  head: InboxV2MessageTransportAssociationCommit["linkHeadAfter"]
 ): boolean {
   return (
     row.message_id === head.message.id &&

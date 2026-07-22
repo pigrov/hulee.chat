@@ -569,6 +569,90 @@ describe("SQL Inbox V2 source-message reconciliation repository", () => {
     });
   });
 
+  it("lets an exact outbound correlation settle an echo before its reference arrives", async () => {
+    const plan = makePlan("echo_handoff", "correlated-before-response");
+    if (plan.intent.kind !== "echo_handoff") {
+      throw new Error("Expected echo-handoff plan.");
+    }
+    const state = makeState(plan);
+    const reference = candidateReference(plan);
+    const callbacks = defaultCallbacks(state, {
+      async resolveProviderEcho(_transaction, input) {
+        expect(input.plan.sourceOccurrence.id).toBe(plan.sourceOccurrence.id);
+        state.references.push(reference);
+        const occurrence = resolveOccurrence(
+          input.plan.sourceOccurrence,
+          reference,
+          input.plan.materializedAt
+        );
+        state.occurrences.set(occurrence.id, occurrence);
+        state.transportLinks.push(
+          transportLinkForPlan(input.plan, reference, "provider_echo")
+        );
+        return {
+          kind: "committed",
+          result: {
+            externalMessageReference: reference,
+            sourceOccurrence: occurrence
+          }
+        };
+      }
+    });
+    const repository = makeRepository(
+      state,
+      new MemoryTransactionExecutor(state),
+      callbacks
+    );
+
+    await expect(repository.reconcile({ plan })).resolves.toMatchObject({
+      kind: "echo_handoff",
+      externalMessageReference: { id: reference.id },
+      sourceOccurrence: { id: plan.sourceOccurrence.id }
+    });
+    expect(state.references).toEqual([reference]);
+    expect(state.transportLinks).toHaveLength(1);
+  });
+
+  it("routes an exact echo through provider settlement even when a response already created its reference", async () => {
+    const plan = makePlan("echo_handoff", "response-before-echo");
+    if (plan.intent.kind !== "echo_handoff") {
+      throw new Error("Expected echo-handoff plan.");
+    }
+    const state = makeState(plan);
+    const reference = candidateReference(plan);
+    state.references.push(reference);
+    const resolveProviderEcho = vi.fn(async () => ({
+      kind: "pending" as const
+    }));
+    const attachOccurrence = vi.fn(async () => {
+      throw new Error("Exact provider echo must not use generic attachment.");
+    });
+    const callbacks = defaultCallbacks(state, {
+      resolveProviderEcho,
+      attachOccurrence
+    });
+    const repository = makeRepository(
+      state,
+      new MemoryTransactionExecutor(state),
+      callbacks
+    );
+
+    await expect(repository.reconcile({ plan })).resolves.toEqual({
+      kind: "echo_handoff_pending",
+      messageKey: plan.messageKey,
+      candidateExternalMessageReferenceId:
+        plan.candidateExternalMessageReferenceId,
+      retainedOccurrence: plan.sourceOccurrence
+    });
+    expect(resolveProviderEcho).toHaveBeenCalledOnce();
+    expect(attachOccurrence).not.toHaveBeenCalled();
+    expect(state.references).toEqual([reference]);
+    expect(state.transportLinks).toHaveLength(0);
+    expect(state.occurrences.get(plan.sourceOccurrence.id)).toEqual(
+      plan.sourceOccurrence
+    );
+  });
+
   it("induces an existing-target source action before invoking its terminal callback", async () => {
     const plan = makePlan("source_action", "a");
     if (plan.intent.kind !== "source_action") {

@@ -1420,6 +1420,20 @@ function assertAliasReservationCoherence(
   }
 }
 
+export async function readInboxV2ExternalThreadMappingByIdInTransaction(
+  executor: RawSqlExecutor,
+  input: Readonly<{
+    tenantId: InboxV2TenantId;
+    threadId: InboxV2ExternalThreadId;
+  }>,
+  options: Readonly<{ lock?: boolean }> = {}
+): Promise<InboxV2ExternalThreadMapping | null> {
+  return loadMappingById(executor, {
+    ...input,
+    lock: options.lock ?? false
+  });
+}
+
 async function loadMappingById(
   executor: RawSqlExecutor,
   input: {

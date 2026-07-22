@@ -1535,6 +1535,7 @@ CREATE TYPE public.inbox_v2_outbound_dispatch_artifact_state AS ENUM (
 
 CREATE TYPE public.inbox_v2_outbound_dispatch_attempt_completion_source AS ENUM (
     'provider_result',
+    'provider_observation',
     'lease_expired',
     'preflight_blocked'
 );
@@ -1602,6 +1603,32 @@ CREATE TYPE public.inbox_v2_outbound_dispatch_state AS ENUM (
 CREATE TYPE public.inbox_v2_outbound_dispatch_unknown_required_action AS ENUM (
     'automated_reconciliation_required',
     'operator_duplicate_risk_decision_required'
+);
+
+
+
+--
+-- Name: inbox_v2_outbound_provider_settlement_transition_kind; Type: TYPE; Schema: public; Owner: <database-owner>
+--
+
+CREATE TYPE public.inbox_v2_outbound_provider_settlement_transition_kind AS ENUM (
+    'retain_dispatch_state',
+    'complete_pending_attempt',
+    'reconcile_outcome_unknown',
+    'already_accepted'
+);
+
+
+
+--
+-- Name: inbox_v2_outbound_provider_settlement_work_state; Type: TYPE; Schema: public; Owner: <database-owner>
+--
+
+CREATE TYPE public.inbox_v2_outbound_provider_settlement_work_state AS ENUM (
+    'pending',
+    'leased',
+    'settled',
+    'dead'
 );
 
 
@@ -6277,6 +6304,55 @@ begin
      ) then
     raise exception using errcode = '23514',
       message = 'inbox_v2.outbound_multi_send_children_invalid';
+  end if;
+end;
+$$;
+
+
+
+--
+-- Name: inbox_v2_assert_outbound_provider_observation_work(text, text); Type: FUNCTION; Schema: public; Owner: <database-owner>
+--
+
+CREATE FUNCTION public.inbox_v2_assert_outbound_provider_observation_work(checked_tenant_id text, checked_observation_id text) RETURNS void
+    LANGUAGE plpgsql
+    SET search_path TO 'pg_catalog', 'public', 'pg_temp'
+    AS $$
+declare
+  coherent_work_count bigint := 0;
+begin
+  if not exists (
+    select 1
+      from public.tenants tenant_row
+     where tenant_row.id = checked_tenant_id
+  ) then
+    return;
+  end if;
+
+  if not exists (
+    select 1
+      from public.inbox_v2_outbound_provider_observations observation_row
+     where observation_row.tenant_id = checked_tenant_id
+       and observation_row.id = checked_observation_id
+  ) then
+    return;
+  end if;
+
+  select count(*)
+    into coherent_work_count
+    from public.inbox_v2_outbound_provider_observations observation_row
+    join public.inbox_v2_outbound_provider_settlement_work_items work_row
+      on work_row.tenant_id = observation_row.tenant_id
+     and work_row.observation_id = observation_row.id
+     and work_row.trusted_service_id =
+       observation_row.observed_by_trusted_service_id
+     and work_row.created_at = observation_row.recorded_at
+   where observation_row.tenant_id = checked_tenant_id
+     and observation_row.id = checked_observation_id;
+
+  if coherent_work_count <> 1 then
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.outbound_provider_observation_work_required';
   end if;
 end;
 $$;
@@ -22018,24 +22094,53 @@ begin
      and reference_row.id = occurrence_row.resolved_external_message_reference_id
      and reference_row.external_thread_id = route_row.external_thread_id
      and reference_row.message_id = artifact_row.message_id
+    left join public.inbox_v2_outbound_dispatch_artifact_resolutions
+      resolution_row
+      on resolution_row.tenant_id = artifact_row.tenant_id
+     and resolution_row.artifact_id = artifact_row.id
+     and resolution_row.dispatch_id = artifact_row.dispatch_id
+     and resolution_row.route_id = artifact_row.route_id
+     and resolution_row.attempt_id = artifact_row.attempt_id
+     and resolution_row.message_id = artifact_row.message_id
+     and resolution_row.artifact_ordinal = artifact_row.ordinal
+     and resolution_row.effective_state = 'accepted'
    where artifact_row.tenant_id = new.tenant_id
      and artifact_row.id = new.artifact_id
      and artifact_row.dispatch_id = new.dispatch_id
      and artifact_row.route_id = new.route_id
      and artifact_row.attempt_id = new.attempt_id
      and artifact_row.message_id = new.message_id
-     and artifact_row.state = 'accepted'
+     and (
+       artifact_row.state = 'accepted'
+       or (artifact_row.state = 'outcome_unknown'
+         and resolution_row.id is not null)
+     )
      and route_row.external_thread_id = new.external_thread_id
-     and route_row.source_thread_binding_id = occurrence_row.source_thread_binding_id
-     and route_row.source_connection_id = occurrence_row.source_connection_id
-     and route_row.source_account_id = occurrence_row.source_account_id
+     and (
+       (
+         route_row.source_thread_binding_id =
+           occurrence_row.source_thread_binding_id
+         and route_row.source_connection_id = occurrence_row.source_connection_id
+         and route_row.source_account_id = occurrence_row.source_account_id
+         and route_row.binding_generation = occurrence_row.binding_generation
+       )
+       or (
+         new.evidence_kind = 'provider_echo_correlation'
+         and occurrence_row.origin_kind = 'provider_echo'
+         and occurrence_row.message_scope_kind = 'provider_thread'
+         and occurrence_row.message_decision_strength = 'authoritative'
+         and reference_row.scope_kind = 'provider_thread'
+       )
+     )
      and route_row.adapter_contract_id = occurrence_row.adapter_contract_id
      and route_row.adapter_contract_version = occurrence_row.adapter_contract_version
      and route_row.adapter_surface_id = occurrence_row.adapter_surface_id
      and transition_row.resolver_trusted_service_id =
         new.linked_by_trusted_service_id
      and artifact_row.created_at >= attempt_row.opened_at
-     and new.linked_at >= artifact_row.created_at
+     and new.linked_at >= coalesce(
+       resolution_row.resolved_at, artifact_row.created_at
+     )
      and new.linked_at >= occurrence_row.updated_at
      and new.linked_at >= reference_row.created_at
      and (
@@ -22063,6 +22168,55 @@ begin
   if not found then
     raise exception using errcode = '23514',
       message = 'inbox_v2.outbound_artifact_reference_link_invalid';
+  end if;
+
+  return new;
+end;
+$$;
+
+
+
+--
+-- Name: inbox_v2_outbound_artifact_resolution_guard_insert(); Type: FUNCTION; Schema: public; Owner: <database-owner>
+--
+
+CREATE FUNCTION public.inbox_v2_outbound_artifact_resolution_guard_insert() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'pg_catalog', 'public', 'pg_temp'
+    AS $$
+begin
+  perform 1
+    from public.inbox_v2_outbound_provider_observations observation_row
+    join public.inbox_v2_outbound_dispatch_artifacts artifact_row
+      on artifact_row.tenant_id = observation_row.tenant_id
+     and artifact_row.id = observation_row.artifact_id
+     and artifact_row.dispatch_id = observation_row.dispatch_id
+     and artifact_row.route_id = observation_row.route_id
+     and artifact_row.attempt_id = observation_row.attempt_id
+     and artifact_row.message_id = observation_row.message_id
+     and artifact_row.ordinal = observation_row.artifact_ordinal
+     and artifact_row.state = observation_row.artifact_state
+   where observation_row.tenant_id = new.tenant_id
+     and observation_row.id = new.observation_id
+     and observation_row.artifact_id = new.artifact_id
+     and observation_row.dispatch_id = new.dispatch_id
+     and observation_row.route_id = new.route_id
+     and observation_row.attempt_id = new.attempt_id
+     and observation_row.message_id = new.message_id
+     and observation_row.artifact_ordinal = new.artifact_ordinal
+     and observation_row.artifact_state = new.from_state
+     and observation_row.effective_state = new.effective_state
+     and observation_row.source_occurrence_id =
+       new.observation_source_occurrence_id
+     and observation_row.observed_by_trusted_service_id =
+       new.resolved_by_trusted_service_id
+     and observation_row.recorded_at <= new.resolved_at
+     and artifact_row.created_at <= new.resolved_at
+   for share of observation_row, artifact_row;
+
+  if not found then
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.outbound_artifact_resolution_invalid';
   end if;
 
   return new;
@@ -22277,6 +22431,70 @@ $$;
 
 
 --
+-- Name: inbox_v2_outbound_correlation_anchor_guard_insert(); Type: FUNCTION; Schema: public; Owner: <database-owner>
+--
+
+CREATE FUNCTION public.inbox_v2_outbound_correlation_anchor_guard_insert() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'pg_catalog', 'public', 'pg_temp'
+    AS $$
+begin
+  perform 1
+    from public.inbox_v2_outbound_dispatch_attempts attempt_row
+    join public.inbox_v2_outbound_dispatches dispatch_row
+      on dispatch_row.tenant_id = attempt_row.tenant_id
+     and dispatch_row.id = attempt_row.dispatch_id
+     and dispatch_row.route_id = attempt_row.route_id
+     and dispatch_row.message_id = attempt_row.message_id
+    join public.inbox_v2_outbound_routes route_row
+      on route_row.tenant_id = attempt_row.tenant_id
+     and route_row.id = attempt_row.route_id
+   where attempt_row.tenant_id = new.tenant_id
+     and attempt_row.id = new.first_attempt_id
+     and attempt_row.dispatch_id = new.dispatch_id
+     and attempt_row.route_id = new.route_id
+     and attempt_row.message_id = new.message_id
+     and attempt_row.attempt_number = 1
+     and attempt_row.retry_safety_mechanism = new.retry_safety_mechanism
+     and attempt_row.retry_safety_mechanism <> 'unsafe_or_unknown'
+     and attempt_row.provider_correlation_token = new.correlation_token
+     and attempt_row.retry_safety_declared_by_trusted_service_id =
+       new.declared_by_trusted_service_id
+     and attempt_row.retry_safety_adapter_contract_snapshot #>>
+       '{contractId}' = new.adapter_contract_id
+     and attempt_row.retry_safety_adapter_contract_snapshot #>>
+       '{contractVersion}' = new.adapter_contract_version
+     and attempt_row.retry_safety_adapter_contract_snapshot #>>
+       '{declarationRevision}' = new.adapter_declaration_revision::text
+     and attempt_row.retry_safety_adapter_contract_snapshot #>>
+       '{surfaceId}' = new.adapter_surface_id
+     and route_row.external_thread_id = new.external_thread_id
+     and route_row.source_connection_id = new.source_connection_id
+     and route_row.source_account_id = new.source_account_id
+     and route_row.source_thread_binding_id = new.source_thread_binding_id
+     and route_row.binding_generation = new.binding_generation
+     and route_row.adapter_contract_id = new.adapter_contract_id
+     and route_row.adapter_contract_version = new.adapter_contract_version
+     and route_row.adapter_declaration_revision =
+       new.adapter_declaration_revision
+     and route_row.adapter_surface_id = new.adapter_surface_id
+     and route_row.adapter_loaded_by_trusted_service_id =
+       new.declared_by_trusted_service_id
+     and new.created_at = attempt_row.opened_at
+   for share of attempt_row, dispatch_row, route_row;
+
+  if not found then
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.outbound_correlation_anchor_invalid';
+  end if;
+
+  return new;
+end;
+$$;
+
+
+
+--
 -- Name: inbox_v2_outbound_dispatch_deferred_head(); Type: FUNCTION; Schema: public; Owner: <database-owner>
 --
 
@@ -22466,6 +22684,1279 @@ begin
     );
   end if;
   return null;
+end;
+$$;
+
+
+
+--
+-- Name: inbox_v2_outbound_provider_observation_guard_insert(); Type: FUNCTION; Schema: public; Owner: <database-owner>
+--
+
+CREATE FUNCTION public.inbox_v2_outbound_provider_observation_guard_insert() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'pg_catalog', 'public', 'pg_temp'
+    AS $$
+begin
+  perform 1
+    from public.inbox_v2_outbound_dispatch_artifacts artifact_row
+    join public.inbox_v2_outbound_dispatch_attempts attempt_row
+      on attempt_row.tenant_id = artifact_row.tenant_id
+     and attempt_row.id = artifact_row.attempt_id
+     and attempt_row.dispatch_id = artifact_row.dispatch_id
+     and attempt_row.route_id = artifact_row.route_id
+     and attempt_row.message_id = artifact_row.message_id
+    join public.inbox_v2_outbound_dispatches dispatch_row
+      on dispatch_row.tenant_id = artifact_row.tenant_id
+     and dispatch_row.id = artifact_row.dispatch_id
+     and dispatch_row.route_id = artifact_row.route_id
+     and dispatch_row.message_id = artifact_row.message_id
+    join public.inbox_v2_outbound_routes route_row
+      on route_row.tenant_id = artifact_row.tenant_id
+     and route_row.id = artifact_row.route_id
+    join public.inbox_v2_file_outbound_dispatch_plans content_plan_row
+      on content_plan_row.tenant_id = artifact_row.tenant_id
+     and content_plan_row.id = new.content_plan_id
+     and content_plan_row.dispatch_id = artifact_row.dispatch_id
+    join public.inbox_v2_file_outbound_artifact_plans artifact_plan_row
+      on artifact_plan_row.tenant_id = content_plan_row.tenant_id
+     and artifact_plan_row.content_plan_id = content_plan_row.id
+     and artifact_plan_row.id = new.artifact_plan_id
+     and artifact_plan_row.ordinal = artifact_row.ordinal
+     and artifact_plan_row.dispatch_id = artifact_row.dispatch_id
+    cross join lateral (
+      select public.inbox_v2_outbound_provider_transport_lineage(
+        new.observation_detail, dispatch_row, attempt_row
+      ) as transport_lineage
+    ) lineage_row
+   where artifact_row.tenant_id = new.tenant_id
+      and artifact_row.id = new.artifact_id
+     and artifact_row.dispatch_id = new.dispatch_id
+     and artifact_row.route_id = new.route_id
+     and artifact_row.attempt_id = new.attempt_id
+     and artifact_row.message_id = new.message_id
+     and artifact_row.ordinal = new.artifact_ordinal
+     and artifact_row.state = new.artifact_state
+     and content_plan_row.message_id = new.message_id
+     and content_plan_row.route_id = new.route_id
+     and content_plan_row.plan_digest_sha256 =
+       new.content_plan_digest_sha256
+     and content_plan_row.artifact_count = new.planned_artifact_count
+      and artifact_plan_row.artifact_plan_hash_sha256 =
+        new.artifact_plan_hash_sha256
+      and new.observation_detail ?& array[
+        'tenantId', 'id', 'artifact', 'dispatch', 'route', 'attempt',
+        'sourceOccurrence', 'sourceOccurrenceDetailDigestSha256', 'evidence',
+        'effectDisposition', 'observedByTrustedServiceId', 'recordedAt',
+        'revision'
+      ]
+      and new.observation_detail - array[
+        'tenantId', 'id', 'artifact', 'dispatch', 'route', 'attempt',
+        'sourceOccurrence', 'sourceOccurrenceDetailDigestSha256', 'evidence',
+        'effectDisposition', 'observedByTrustedServiceId', 'recordedAt',
+        'revision'
+      ] = '{}'::jsonb
+      and new.observation_detail #>> '{tenantId}' = new.tenant_id
+      and new.observation_detail #>> '{id}' = new.id
+      and new.observation_detail #>> '{revision}' = new.revision::text
+      and new.observation_detail #>> '{observedByTrustedServiceId}' =
+        new.observed_by_trusted_service_id
+      and (new.observation_detail #>> '{recordedAt}')::timestamptz =
+        new.recorded_at
+      and new.observation_detail #> '{sourceOccurrence}' =
+        new.source_occurrence_detail
+      and new.observation_detail #>> '{sourceOccurrenceDetailDigestSha256}' =
+        new.source_occurrence_detail_digest_sha256
+      and new.observation_detail #> '{effectDisposition}' =
+        jsonb_build_object(
+          'countsAsCustomerInbound', new.counts_as_customer_inbound,
+          'createsUnread', new.creates_unread,
+          'createsWorkItem', new.creates_work_item,
+          'requiresProviderIo', new.requires_provider_io,
+          'createsOutboundDispatch', new.creates_outbound_dispatch,
+          'notificationEligible', new.notification_eligible
+        )
+      and (new.observation_detail #> '{artifact}') ?& array[
+        'tenantId', 'id', 'dispatch', 'route', 'attempt', 'ordinal', 'state',
+        'diagnostic', 'createdAt', 'revision'
+      ]
+      and (new.observation_detail #> '{artifact}') - array[
+        'tenantId', 'id', 'dispatch', 'route', 'attempt', 'ordinal', 'state',
+        'diagnostic', 'createdAt', 'revision'
+      ] = '{}'::jsonb
+      and new.observation_detail #>> '{artifact,tenantId}' =
+        artifact_row.tenant_id
+      and new.observation_detail #>> '{artifact,id}' = artifact_row.id
+      and new.observation_detail #> '{artifact,dispatch}' = jsonb_build_object(
+        'tenantId', artifact_row.tenant_id,
+        'kind', 'outbound_dispatch',
+        'id', artifact_row.dispatch_id
+      )
+      and new.observation_detail #> '{artifact,route}' = jsonb_build_object(
+        'tenantId', artifact_row.tenant_id,
+        'kind', 'outbound_route',
+        'id', artifact_row.route_id
+      )
+      and new.observation_detail #> '{artifact,attempt}' = jsonb_build_object(
+        'tenantId', artifact_row.tenant_id,
+        'kind', 'outbound_dispatch_attempt',
+        'id', artifact_row.attempt_id
+      )
+      and (new.observation_detail #>> '{artifact,ordinal}')::integer =
+        artifact_row.ordinal
+      and new.observation_detail #>> '{artifact,state}' = artifact_row.state::text
+      and new.observation_detail #> '{artifact,diagnostic}' = case
+        when artifact_row.state = 'accepted' then 'null'::jsonb
+        else jsonb_build_object(
+          'codeId', artifact_row.diagnostic_code_id,
+          'retryable', artifact_row.diagnostic_retryable,
+          'correlationToken', artifact_row.diagnostic_correlation_token,
+          'safeOperatorHintId', artifact_row.diagnostic_safe_operator_hint_id
+        )
+      end
+      and (new.observation_detail #>> '{artifact,createdAt}')::timestamptz =
+        artifact_row.created_at
+      and (new.observation_detail #>> '{artifact,revision}')::bigint =
+        artifact_row.revision
+      and (new.observation_detail #> '{route}') ?& array[
+        'tenantId', 'id', 'principal', 'conversation', 'externalThread',
+        'sourceThreadBinding', 'sourceAccount', 'sourceConnection',
+        'operationId', 'contentKindId', 'authorizationEpoch',
+        'requiredConversationPermissionId', 'bindingFence', 'adapterContract',
+        'routeDescriptor', 'routePolicy', 'routePolicyRevision',
+        'conversationAuthorization', 'sourceAccountAuthorization',
+        'referenceContext', 'runtimeObservationAtResolution', 'selection',
+        'mutationToken', 'idempotencyToken', 'correlationToken', 'revision',
+        'createdAt'
+      ]
+      and (new.observation_detail #> '{route}') - array[
+        'tenantId', 'id', 'principal', 'conversation', 'externalThread',
+        'sourceThreadBinding', 'sourceAccount', 'sourceConnection',
+        'operationId', 'contentKindId', 'authorizationEpoch',
+        'requiredConversationPermissionId', 'bindingFence', 'adapterContract',
+        'routeDescriptor', 'routePolicy', 'routePolicyRevision',
+        'conversationAuthorization', 'sourceAccountAuthorization',
+        'referenceContext', 'runtimeObservationAtResolution', 'selection',
+        'mutationToken', 'idempotencyToken', 'correlationToken', 'revision',
+        'createdAt'
+      ] = '{}'::jsonb
+      and new.observation_detail #>> '{route,tenantId}' = route_row.tenant_id
+      and new.observation_detail #>> '{route,id}' = route_row.id
+      and new.observation_detail #> '{route,principal}' = case
+        when route_row.principal_kind = 'employee' then jsonb_build_object(
+          'kind', 'employee',
+          'employee', jsonb_build_object(
+            'tenantId', route_row.tenant_id,
+            'kind', 'employee',
+            'id', route_row.principal_employee_id
+          )
+        )
+        else jsonb_build_object(
+          'kind', 'trusted_service',
+          'trustedServiceId', route_row.principal_trusted_service_id
+        )
+      end
+      and new.observation_detail #> '{route,conversation}' =
+        jsonb_build_object(
+          'tenantId', route_row.tenant_id,
+          'kind', 'conversation',
+          'id', route_row.conversation_id
+        )
+      and new.observation_detail #> '{route,externalThread}' =
+        jsonb_build_object(
+          'tenantId', route_row.tenant_id,
+          'kind', 'external_thread',
+          'id', route_row.external_thread_id
+        )
+      and new.observation_detail #> '{route,sourceConnection}' =
+        jsonb_build_object(
+          'tenantId', route_row.tenant_id,
+          'kind', 'source_connection',
+          'id', route_row.source_connection_id
+        )
+      and new.observation_detail #> '{route,sourceAccount}' =
+        jsonb_build_object(
+          'tenantId', route_row.tenant_id,
+          'kind', 'source_account',
+          'id', route_row.source_account_id
+        )
+      and new.observation_detail #> '{route,sourceThreadBinding}' =
+        jsonb_build_object(
+          'tenantId', route_row.tenant_id,
+          'kind', 'source_thread_binding',
+          'id', route_row.source_thread_binding_id
+        )
+      and new.observation_detail #>> '{route,operationId}' = route_row.operation_id
+      and new.observation_detail #> '{route,contentKindId}' = case
+        when route_row.content_kind_id is null then 'null'::jsonb
+        else to_jsonb(route_row.content_kind_id)
+      end
+      and new.observation_detail #>> '{route,authorizationEpoch}' =
+        route_row.authorization_epoch
+      and new.observation_detail #>>
+        '{route,requiredConversationPermissionId}' =
+        route_row.required_conversation_permission_id
+      and new.observation_detail #> '{route,bindingFence}' =
+        jsonb_build_object(
+          'accountGeneration', route_row.account_generation::text,
+          'bindingGeneration', route_row.binding_generation::text,
+          'remoteAccessRevision', route_row.remote_access_revision::text,
+          'administrativeRevision', route_row.administrative_revision::text,
+          'capabilityRevision', route_row.capability_revision::text,
+          'routeDescriptorRevision', route_row.route_descriptor_revision::text
+        )
+      and new.observation_detail #> '{route,adapterContract}' =
+        route_row.adapter_contract_snapshot
+      and new.observation_detail #> '{route,routeDescriptor}' =
+        route_row.route_descriptor_snapshot
+      and new.observation_detail #> '{route,routePolicy}' = jsonb_build_object(
+        'tenantId', route_row.tenant_id,
+        'kind', 'thread_route_policy',
+        'id', route_row.route_policy_id
+      )
+      and (new.observation_detail #>> '{route,routePolicyRevision}')::bigint =
+        route_row.route_policy_revision
+      and new.observation_detail #> '{route,conversationAuthorization}' =
+        route_row.conversation_authorization_snapshot
+      and new.observation_detail #> '{route,sourceAccountAuthorization}' =
+        route_row.source_account_authorization_snapshot
+      and new.observation_detail #> '{route,referenceContext}' =
+        route_row.reference_context_snapshot
+      and new.observation_detail #> '{route,runtimeObservationAtResolution}' =
+        route_row.runtime_observation_snapshot
+      and new.observation_detail #> '{route,selection,intent}' =
+        route_row.selection_intent_snapshot
+      and (new.observation_detail #> '{route,selection}') ?& array[
+        'intent', 'reason', 'candidateSnapshotToken',
+        'candidateSnapshotNotAfter', 'fallbackPolicyOrdinal', 'selectedAt'
+      ]
+      and (new.observation_detail #> '{route,selection}') - array[
+        'intent', 'reason', 'candidateSnapshotToken',
+        'candidateSnapshotNotAfter', 'fallbackPolicyOrdinal', 'selectedAt'
+      ] = '{}'::jsonb
+      and new.observation_detail #>> '{route,selection,reason}' =
+        route_row.selection_reason::text
+      and new.observation_detail #>>
+        '{route,selection,candidateSnapshotToken}' =
+        route_row.candidate_snapshot_token
+      and (new.observation_detail #>>
+        '{route,selection,candidateSnapshotNotAfter}')::timestamptz =
+        route_row.candidate_snapshot_not_after
+      and new.observation_detail #> '{route,selection,fallbackPolicyOrdinal}' =
+        case
+          when route_row.fallback_policy_ordinal is null then 'null'::jsonb
+          else to_jsonb(route_row.fallback_policy_ordinal)
+        end
+      and (new.observation_detail #>>
+        '{route,selection,selectedAt}')::timestamptz = route_row.selected_at
+      and new.observation_detail #>> '{route,mutationToken}' =
+        route_row.mutation_token
+      and new.observation_detail #>> '{route,idempotencyToken}' =
+        route_row.idempotency_token
+      and new.observation_detail #>> '{route,correlationToken}' =
+        route_row.correlation_token
+      and (new.observation_detail #>> '{route,revision}')::bigint =
+        route_row.revision
+      and (new.observation_detail #>> '{route,createdAt}')::timestamptz =
+        route_row.created_at
+      and (new.observation_detail #>> '{evidence,artifactOrdinal}')::integer =
+        new.artifact_ordinal
+      and (
+        (new.evidence_kind = 'provider_response_attempt'
+          and new.observation_detail #> '{evidence}' = jsonb_build_object(
+            'kind', 'provider_response_attempt',
+            'artifactOrdinal', new.artifact_ordinal,
+            'outboundDispatchAttempt', jsonb_build_object(
+              'tenantId', new.tenant_id,
+              'kind', 'outbound_dispatch_attempt',
+              'id', new.attempt_id
+            )))
+        or (new.evidence_kind = 'provider_echo_correlation'
+          and new.observation_detail #> '{evidence}' = jsonb_build_object(
+            'kind', 'provider_echo_correlation',
+            'artifactOrdinal', new.artifact_ordinal,
+            'providerReferenceKindId', new.provider_reference_kind_id,
+            'correlationToken', new.correlation_token
+          ))
+      )
+      and route_row.external_thread_id = new.external_thread_id
+     and route_row.source_connection_id = new.route_source_connection_id
+     and route_row.source_account_id = new.route_source_account_id
+     and route_row.source_thread_binding_id =
+       new.route_source_thread_binding_id
+     and route_row.binding_generation = new.route_binding_generation
+     and route_row.adapter_contract_id = new.adapter_contract_id
+     and route_row.adapter_contract_version = new.adapter_contract_version
+     and route_row.adapter_declaration_revision =
+       new.adapter_declaration_revision
+     and route_row.adapter_surface_id = new.adapter_surface_id
+     and route_row.adapter_loaded_by_trusted_service_id =
+       new.observed_by_trusted_service_id
+     and new.source_occurrence_detail #>>
+       '{messageIdentityDeclaration,adapterContract,loadedByTrustedServiceId}' =
+       new.observed_by_trusted_service_id
+      and (new.source_occurrence_detail #>>
+        '{messageIdentityDeclaration,adapterContract,loadedAt}')::timestamptz =
+        route_row.adapter_loaded_at
+      and lineage_row.transport_lineage in (
+        'exact_head',
+        'pending_to_outcome_unknown',
+        'pending_to_accepted'
+      )
+      and (
+        dispatch_row.state <> 'accepted'
+        or attempt_row.outcome_kind <> 'outcome_unknown'
+        or exists (
+          select 1
+            from public.inbox_v2_outbound_dispatch_reconciliation_decisions
+              accepted_decision_row
+           where accepted_decision_row.tenant_id = dispatch_row.tenant_id
+             and accepted_decision_row.dispatch_id = dispatch_row.id
+             and accepted_decision_row.route_id = dispatch_row.route_id
+             and accepted_decision_row.unknown_attempt_id = attempt_row.id
+             and accepted_decision_row.result_state = 'accepted'
+             and accepted_decision_row.decided_by_kind = 'trusted_service'
+             and accepted_decision_row.decided_at = dispatch_row.updated_at
+        )
+      )
+     and artifact_row.created_at >= attempt_row.opened_at
+     and content_plan_row.created_at >= dispatch_row.created_at
+     and (new.source_occurrence_detail #>> '{observedAt}')::timestamptz >=
+       attempt_row.opened_at
+     and (new.source_occurrence_detail #>> '{observedAt}')::timestamptz <=
+       new.recorded_at
+     and artifact_row.created_at <= new.recorded_at
+     and content_plan_row.created_at <= new.recorded_at
+     and dispatch_row.updated_at <= new.recorded_at
+   for share of artifact_row, attempt_row, dispatch_row, route_row,
+     content_plan_row, artifact_plan_row;
+
+  if not found then
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.outbound_provider_observation_invalid';
+  end if;
+
+  return new;
+end;
+$$;
+
+
+
+--
+-- Name: inbox_v2_outbound_provider_observation_work_deferred(); Type: FUNCTION; Schema: public; Owner: <database-owner>
+--
+
+CREATE FUNCTION public.inbox_v2_outbound_provider_observation_work_deferred() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'pg_catalog', 'public', 'pg_temp'
+    AS $$
+declare
+  old_row jsonb := to_jsonb(old);
+  new_row jsonb := to_jsonb(new);
+begin
+  if tg_op <> 'INSERT' then
+    perform public.inbox_v2_assert_outbound_provider_observation_work(
+      old_row->>'tenant_id',
+      case when tg_table_name = 'inbox_v2_outbound_provider_observations'
+        then old_row->>'id' else old_row->>'observation_id' end
+    );
+  end if;
+  if tg_op <> 'DELETE' then
+    perform public.inbox_v2_assert_outbound_provider_observation_work(
+      new_row->>'tenant_id',
+      case when tg_table_name = 'inbox_v2_outbound_provider_observations'
+        then new_row->>'id' else new_row->>'observation_id' end
+    );
+  end if;
+  return null;
+end;
+$$;
+
+
+
+--
+-- Name: inbox_v2_outbound_provider_settlement_guard_insert(); Type: FUNCTION; Schema: public; Owner: <database-owner>
+--
+
+CREATE FUNCTION public.inbox_v2_outbound_provider_settlement_guard_insert() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'pg_catalog', 'public', 'pg_temp'
+    AS $$
+declare
+  coverage_complete boolean := false;
+  current_attempt_outcome public.inbox_v2_outbound_dispatch_attempt_outcome;
+  current_attempt_completion_source
+    public.inbox_v2_outbound_dispatch_attempt_completion_source;
+  current_attempt_completed_at timestamptz;
+  current_dispatch_state public.inbox_v2_outbound_dispatch_state;
+  current_dispatch_updated_at timestamptz;
+  observation_transport_lineage text := 'invalid';
+  accepted_reconciliation_proven boolean := false;
+begin
+  perform 1
+    from public.inbox_v2_outbound_provider_observations observation_row
+    join public.inbox_v2_outbound_dispatch_artifact_resolutions resolution_row
+      on resolution_row.tenant_id = observation_row.tenant_id
+     and resolution_row.id = new.artifact_resolution_id
+     and resolution_row.artifact_id = observation_row.artifact_id
+     and resolution_row.dispatch_id = observation_row.dispatch_id
+     and resolution_row.route_id = observation_row.route_id
+     and resolution_row.attempt_id = observation_row.attempt_id
+     and resolution_row.message_id = observation_row.message_id
+     and resolution_row.artifact_ordinal = observation_row.artifact_ordinal
+     and resolution_row.effective_state = observation_row.effective_state
+    join public.inbox_v2_source_occurrences occurrence_row
+      on occurrence_row.tenant_id = observation_row.tenant_id
+     and occurrence_row.id = observation_row.source_occurrence_id
+     and occurrence_row.revision = new.source_occurrence_revision
+     and occurrence_row.resolution_state = 'resolved'
+     and occurrence_row.resolved_external_message_reference_id =
+       new.external_message_reference_id
+    join public.inbox_v2_source_occurrence_resolution_transitions transition_row
+      on transition_row.tenant_id = occurrence_row.tenant_id
+     and transition_row.source_occurrence_id = occurrence_row.id
+     and transition_row.resulting_revision = occurrence_row.revision
+     and transition_row.to_state = 'resolved'
+     and transition_row.resolved_external_message_reference_id =
+       new.external_message_reference_id
+    join public.inbox_v2_external_message_references reference_row
+      on reference_row.tenant_id = occurrence_row.tenant_id
+     and reference_row.id = new.external_message_reference_id
+     and reference_row.external_thread_id = new.external_thread_id
+     and reference_row.message_id = observation_row.message_id
+    join public.inbox_v2_outbound_dispatch_artifact_reference_links artifact_link_row
+      on artifact_link_row.tenant_id = observation_row.tenant_id
+     and artifact_link_row.id = new.canonical_artifact_reference_link_id
+     and artifact_link_row.artifact_id = observation_row.artifact_id
+     and artifact_link_row.dispatch_id = observation_row.dispatch_id
+     and artifact_link_row.route_id = observation_row.route_id
+     and artifact_link_row.attempt_id = observation_row.attempt_id
+     and artifact_link_row.message_id = observation_row.message_id
+     and artifact_link_row.external_thread_id = new.external_thread_id
+     and artifact_link_row.external_message_reference_id = reference_row.id
+    join public.inbox_v2_message_transport_links transport_link_row
+      on transport_link_row.tenant_id = observation_row.tenant_id
+     and transport_link_row.id = new.message_transport_link_id
+     and transport_link_row.message_id = observation_row.message_id
+     and transport_link_row.source_occurrence_id = occurrence_row.id
+     and transport_link_row.external_message_reference_id = reference_row.id
+    join public.inbox_v2_outbound_dispatch_attempts attempt_row
+      on attempt_row.tenant_id = observation_row.tenant_id
+     and attempt_row.id = observation_row.attempt_id
+     and attempt_row.dispatch_id = observation_row.dispatch_id
+     and attempt_row.route_id = observation_row.route_id
+     and attempt_row.message_id = observation_row.message_id
+    join public.inbox_v2_outbound_dispatches dispatch_row
+      on dispatch_row.tenant_id = attempt_row.tenant_id
+     and dispatch_row.id = attempt_row.dispatch_id
+     and dispatch_row.route_id = attempt_row.route_id
+     and dispatch_row.message_id = attempt_row.message_id
+    join public.inbox_v2_outbound_routes route_row
+      on route_row.tenant_id = attempt_row.tenant_id
+     and route_row.id = attempt_row.route_id
+   where observation_row.tenant_id = new.tenant_id
+     and observation_row.id = new.observation_id
+     and observation_row.artifact_id = new.artifact_id
+     and observation_row.dispatch_id = new.dispatch_id
+     and observation_row.route_id = new.route_id
+     and observation_row.attempt_id = new.attempt_id
+     and observation_row.message_id = new.message_id
+     and observation_row.artifact_ordinal = new.artifact_ordinal
+     and observation_row.effective_state = new.effective_state
+     and observation_row.source_occurrence_id = new.source_occurrence_id
+     and resolution_row.resolved_by_trusted_service_id =
+       new.settled_by_trusted_service_id
+     and resolution_row.resolved_at <= new.settled_at
+     and observation_row.observed_by_trusted_service_id =
+       new.settled_by_trusted_service_id
+     and observation_row.recorded_at <= new.settled_at
+     and occurrence_row.external_thread_id = observation_row.external_thread_id
+     and occurrence_row.source_connection_id = observation_row.source_connection_id
+     and occurrence_row.source_account_id = observation_row.source_account_id
+     and occurrence_row.source_thread_binding_id =
+       observation_row.source_thread_binding_id
+     and occurrence_row.binding_generation =
+       observation_row.source_binding_generation
+     and occurrence_row.message_scope_kind =
+       observation_row.source_message_scope_kind
+     and occurrence_row.message_decision_strength =
+       observation_row.source_message_decision_strength
+     and occurrence_row.adapter_contract_id = observation_row.adapter_contract_id
+     and occurrence_row.adapter_contract_version =
+       observation_row.adapter_contract_version
+     and occurrence_row.adapter_declaration_revision =
+       observation_row.adapter_declaration_revision
+     and occurrence_row.adapter_surface_id = observation_row.adapter_surface_id
+     and occurrence_row.adapter_loaded_by_trusted_service_id =
+       observation_row.observed_by_trusted_service_id
+     and occurrence_row.direction = 'outbound'
+     and occurrence_row.provider_actor_kind is null
+     and occurrence_row.created_at = observation_row.recorded_at
+     and occurrence_row.recorded_at = observation_row.recorded_at
+     and occurrence_row.updated_at = new.settled_at
+     and transition_row.resolver_trusted_service_id =
+       new.settled_by_trusted_service_id
+     and transition_row.changed_at = new.settled_at
+     and artifact_link_row.linked_at <= new.settled_at
+     and transport_link_row.linked_at = new.settled_at
+     and transport_link_row.role = case observation_row.evidence_kind
+       when 'provider_response_attempt' then
+         'provider_response'::public.inbox_v2_message_transport_link_role
+       when 'provider_echo_correlation' then
+         'provider_echo'::public.inbox_v2_message_transport_link_role
+     end
+     and route_row.adapter_loaded_by_trusted_service_id =
+       new.settled_by_trusted_service_id
+     and (
+       (observation_row.evidence_kind = 'provider_response_attempt'
+         and occurrence_row.origin_kind = 'provider_response'
+         and occurrence_row.outbound_dispatch_attempt_id = attempt_row.id)
+       or (observation_row.evidence_kind = 'provider_echo_correlation'
+         and occurrence_row.origin_kind = 'provider_echo')
+     )
+   for share of observation_row, resolution_row, occurrence_row,
+     transition_row, reference_row, artifact_link_row, transport_link_row,
+     attempt_row, dispatch_row, route_row;
+
+  if not found then
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.outbound_provider_settlement_chain_invalid';
+  end if;
+
+  select
+    not exists (
+      select 1
+        from public.inbox_v2_file_outbound_artifact_plans plan_artifact_row
+       where plan_artifact_row.tenant_id = observation_row.tenant_id
+         and plan_artifact_row.content_plan_id = observation_row.content_plan_id
+         and not exists (
+           select 1
+             from public.inbox_v2_outbound_dispatch_artifact_resolutions
+               coverage_resolution_row
+             join public.inbox_v2_outbound_provider_observations
+               coverage_observation_row
+               on coverage_observation_row.tenant_id =
+                    coverage_resolution_row.tenant_id
+              and coverage_observation_row.id =
+                    coverage_resolution_row.observation_id
+            where coverage_resolution_row.tenant_id = observation_row.tenant_id
+              and coverage_resolution_row.dispatch_id =
+                    observation_row.dispatch_id
+              and coverage_resolution_row.route_id = observation_row.route_id
+              and coverage_resolution_row.attempt_id =
+                    observation_row.attempt_id
+              and coverage_resolution_row.message_id =
+                    observation_row.message_id
+              and coverage_resolution_row.artifact_ordinal =
+                    plan_artifact_row.ordinal
+              and coverage_resolution_row.effective_state = 'accepted'
+              and coverage_resolution_row.resolved_at <= new.settled_at
+              and coverage_observation_row.content_plan_id =
+                    observation_row.content_plan_id
+         )
+    )
+    and (
+      select count(*)
+        from public.inbox_v2_file_outbound_artifact_plans plan_artifact_row
+       where plan_artifact_row.tenant_id = observation_row.tenant_id
+         and plan_artifact_row.content_plan_id = observation_row.content_plan_id
+    ) = observation_row.planned_artifact_count,
+    attempt_row.outcome_kind,
+    attempt_row.completion_source,
+    attempt_row.completed_at,
+    dispatch_row.state,
+    dispatch_row.updated_at,
+    public.inbox_v2_outbound_provider_transport_lineage(
+      observation_row.observation_detail, dispatch_row, attempt_row
+    ),
+    exists (
+      select 1
+        from public.inbox_v2_outbound_dispatch_reconciliation_decisions
+          accepted_decision_row
+       where accepted_decision_row.tenant_id = observation_row.tenant_id
+         and accepted_decision_row.dispatch_id = observation_row.dispatch_id
+         and accepted_decision_row.route_id = observation_row.route_id
+         and accepted_decision_row.unknown_attempt_id = observation_row.attempt_id
+         and accepted_decision_row.result_state = 'accepted'
+         and accepted_decision_row.decided_by_kind = 'trusted_service'
+         and accepted_decision_row.decided_at = dispatch_row.updated_at
+    )
+    into coverage_complete, current_attempt_outcome,
+      current_attempt_completion_source, current_attempt_completed_at,
+      current_dispatch_state, current_dispatch_updated_at,
+      observation_transport_lineage, accepted_reconciliation_proven
+    from public.inbox_v2_outbound_provider_observations observation_row
+    join public.inbox_v2_outbound_dispatch_attempts attempt_row
+      on attempt_row.tenant_id = observation_row.tenant_id
+     and attempt_row.id = observation_row.attempt_id
+    join public.inbox_v2_outbound_dispatches dispatch_row
+      on dispatch_row.tenant_id = observation_row.tenant_id
+     and dispatch_row.id = observation_row.dispatch_id
+   where observation_row.tenant_id = new.tenant_id
+     and observation_row.id = new.observation_id;
+
+  if new.transition_kind = 'retain_dispatch_state' then
+    if coverage_complete
+       or observation_transport_lineage not in (
+         'exact_head', 'pending_to_outcome_unknown'
+       )
+       or (current_dispatch_state = 'accepted'
+         and current_attempt_outcome = 'outcome_unknown'
+         and not accepted_reconciliation_proven) then
+      raise exception using errcode = '23514',
+        message = 'inbox_v2.outbound_provider_partial_settlement_invalid';
+    end if;
+  elsif new.transition_kind = 'complete_pending_attempt' then
+    if not coverage_complete
+       or observation_transport_lineage <> 'pending_to_accepted'
+       or current_attempt_outcome <> 'accepted'
+       or current_attempt_completion_source <> 'provider_observation'
+       or current_attempt_completed_at <> new.settled_at
+       or current_dispatch_state <> 'accepted'
+       or current_dispatch_updated_at <> new.settled_at then
+      raise exception using errcode = '23514',
+        message = 'inbox_v2.outbound_provider_completion_invalid';
+    end if;
+  elsif new.transition_kind = 'reconcile_outcome_unknown' then
+    if not coverage_complete
+       or observation_transport_lineage not in (
+         'outcome_unknown_to_accepted',
+         'pending_to_outcome_unknown_to_accepted'
+       )
+       or current_attempt_outcome <> 'outcome_unknown'
+       or current_dispatch_state <> 'accepted'
+       or current_dispatch_updated_at <> new.settled_at
+       or not accepted_reconciliation_proven
+       or not exists (
+         select 1
+           from public.inbox_v2_outbound_dispatch_reconciliation_decisions
+             decision_row
+          where decision_row.tenant_id = new.tenant_id
+            and decision_row.id = new.reconciliation_decision_id
+            and decision_row.dispatch_id = new.dispatch_id
+            and decision_row.route_id = new.route_id
+            and decision_row.unknown_attempt_id = new.attempt_id
+            and decision_row.result_state = 'accepted'
+            and decision_row.decided_by_kind = 'trusted_service'
+            and decision_row.decided_by_trusted_service_id =
+              new.settled_by_trusted_service_id
+            and decision_row.decided_at = new.settled_at
+       ) then
+      raise exception using errcode = '23514',
+        message = 'inbox_v2.outbound_provider_reconciliation_invalid';
+    end if;
+  elsif new.transition_kind = 'already_accepted' then
+    if current_dispatch_state <> 'accepted'
+       or observation_transport_lineage not in (
+         'exact_head',
+         'pending_to_accepted',
+         'outcome_unknown_to_accepted',
+         'pending_to_outcome_unknown_to_accepted'
+       )
+       or (current_attempt_outcome = 'outcome_unknown'
+         and not accepted_reconciliation_proven)
+       or current_dispatch_updated_at > new.settled_at then
+      raise exception using errcode = '23514',
+        message = 'inbox_v2.outbound_provider_already_accepted_invalid';
+    end if;
+  else
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.outbound_provider_transition_invalid';
+  end if;
+
+  return new;
+end;
+$$;
+
+
+
+--
+-- Name: inbox_v2_outbound_provider_settlement_work_guard(); Type: FUNCTION; Schema: public; Owner: <database-owner>
+--
+
+CREATE FUNCTION public.inbox_v2_outbound_provider_settlement_work_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'pg_catalog', 'public', 'pg_temp'
+    AS $$
+begin
+  if tg_op = 'DELETE' then
+    if not exists (
+      select 1 from public.tenants tenant_row
+       where tenant_row.id = old.tenant_id
+    ) then
+      return old;
+    end if;
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.outbound_provider_settlement_work_delete_forbidden';
+  end if;
+
+  if tg_op = 'INSERT' then
+    perform 1
+      from public.inbox_v2_outbound_provider_observations observation_row
+     where observation_row.tenant_id = new.tenant_id
+       and observation_row.id = new.observation_id
+       and observation_row.observed_by_trusted_service_id =
+         new.trusted_service_id
+       and observation_row.recorded_at = new.created_at
+       and new.state = 'pending'
+       and new.attempt_count = 0
+       and new.available_at = new.created_at
+       and new.created_at = new.updated_at
+       and new.revision = 1
+       and row(
+         new.lease_owner_id, new.lease_token_hash, new.lease_revision,
+         new.lease_claimed_at, new.lease_expires_at,
+         new.last_finalized_lease_owner_id,
+         new.last_finalized_lease_token_hash,
+         new.last_finalized_lease_revision,
+         new.last_finalized_result_hash, new.last_finalized_at,
+         new.last_error_code, new.terminal_at
+       ) is not distinct from row(
+         null, null, null, null, null, null, null, null, null, null,
+         null, null
+       )
+     for share of observation_row;
+
+    if not found then
+      raise exception using errcode = '23514',
+        message = 'inbox_v2.outbound_provider_settlement_work_initial_invalid';
+    end if;
+    return new;
+  end if;
+
+  if row(
+       new.tenant_id, new.observation_id,
+       new.candidate_external_message_reference_id,
+       new.candidate_transport_link_id, new.trusted_service_id,
+       new.created_at
+     ) is distinct from row(
+       old.tenant_id, old.observation_id,
+       old.candidate_external_message_reference_id,
+       old.candidate_transport_link_id, old.trusted_service_id,
+       old.created_at
+     )
+     or new.revision <> old.revision + 1
+     or new.updated_at < old.updated_at
+     or new.attempt_count < old.attempt_count then
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.outbound_provider_settlement_work_fence_invalid';
+  end if;
+
+  if old.state in ('settled', 'dead') then
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.outbound_provider_settlement_work_terminal';
+  end if;
+
+  if old.state = 'pending' then
+    if new.state <> 'leased'
+       or old.available_at > clock_timestamp()
+       or new.available_at is distinct from old.available_at
+       or new.attempt_count <> old.attempt_count + 1
+       or new.lease_revision <> new.attempt_count
+       or new.lease_claimed_at <> new.updated_at
+       or new.lease_expires_at <= new.lease_claimed_at
+       or row(
+         new.last_finalized_lease_owner_id,
+         new.last_finalized_lease_token_hash,
+         new.last_finalized_lease_revision,
+         new.last_finalized_result_hash, new.last_finalized_at,
+         new.last_error_code, new.terminal_at
+       ) is distinct from row(
+         old.last_finalized_lease_owner_id,
+         old.last_finalized_lease_token_hash,
+         old.last_finalized_lease_revision,
+         old.last_finalized_result_hash, old.last_finalized_at,
+         old.last_error_code, old.terminal_at
+       ) then
+      raise exception using errcode = '23514',
+        message = 'inbox_v2.outbound_provider_settlement_work_claim_invalid';
+    end if;
+    return new;
+  end if;
+
+  if new.state = 'leased' then
+    if old.lease_expires_at > clock_timestamp()
+       or new.available_at is distinct from old.available_at
+       or new.attempt_count <> old.attempt_count + 1
+       or new.lease_revision <> new.attempt_count
+       or new.lease_claimed_at <> new.updated_at
+       or new.lease_expires_at <= new.lease_claimed_at
+       or row(
+         new.last_finalized_lease_owner_id,
+         new.last_finalized_lease_token_hash,
+         new.last_finalized_lease_revision,
+         new.last_finalized_result_hash, new.last_finalized_at,
+         new.last_error_code, new.terminal_at
+       ) is distinct from row(
+         old.last_finalized_lease_owner_id,
+         old.last_finalized_lease_token_hash,
+         old.last_finalized_lease_revision,
+         old.last_finalized_result_hash, old.last_finalized_at,
+         old.last_error_code, old.terminal_at
+       ) then
+      raise exception using errcode = '23514',
+        message = 'inbox_v2.outbound_provider_settlement_work_reclaim_invalid';
+    end if;
+    return new;
+  end if;
+
+  if old.lease_expires_at <= new.updated_at
+     or new.attempt_count <> old.attempt_count
+     or new.lease_owner_id is not null
+     or new.lease_token_hash is not null
+     or new.lease_revision is not null
+     or new.lease_claimed_at is not null
+     or new.lease_expires_at is not null
+     or new.last_finalized_lease_owner_id <> old.lease_owner_id
+     or new.last_finalized_lease_token_hash <> old.lease_token_hash
+     or new.last_finalized_lease_revision <> old.lease_revision
+     or new.last_finalized_result_hash is null
+     or new.last_finalized_at <> new.updated_at then
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.outbound_provider_settlement_work_completion_fence_invalid';
+  end if;
+
+  if new.state = 'pending' then
+    if new.available_at <= new.updated_at
+       or new.last_error_code is null
+       or new.terminal_at is not null then
+      raise exception using errcode = '23514',
+        message = 'inbox_v2.outbound_provider_settlement_work_retry_invalid';
+    end if;
+  elsif new.state = 'settled' then
+    if new.available_at is not null
+       or new.last_error_code is not null
+       or new.terminal_at <> new.updated_at
+       or not exists (
+         select 1
+           from public.inbox_v2_outbound_provider_observation_settlements
+             settlement_row
+          where settlement_row.tenant_id = new.tenant_id
+            and settlement_row.observation_id = new.observation_id
+            and settlement_row.settled_by_trusted_service_id =
+              new.trusted_service_id
+            and settlement_row.settled_at <= new.updated_at
+       ) then
+      raise exception using errcode = '23514',
+        message = 'inbox_v2.outbound_provider_settlement_work_settled_invalid';
+    end if;
+  elsif new.state = 'dead' then
+    if new.available_at is not null
+       or new.last_error_code is null
+       or new.terminal_at <> new.updated_at then
+      raise exception using errcode = '23514',
+        message = 'inbox_v2.outbound_provider_settlement_work_dead_invalid';
+    end if;
+  else
+    raise exception using errcode = '23514',
+      message = 'inbox_v2.outbound_provider_settlement_work_transition_invalid';
+  end if;
+
+  return new;
+end;
+$$;
+
+
+
+
+
+--
+-- Name: inbox_v2_outbound_dispatch_attempts; Type: TABLE; Schema: public; Owner: <database-owner>
+--
+
+CREATE TABLE public.inbox_v2_outbound_dispatch_attempts (
+    tenant_id text NOT NULL,
+    id text NOT NULL,
+    dispatch_id text NOT NULL,
+    route_id text NOT NULL,
+    message_id text NOT NULL,
+    attempt_number integer NOT NULL,
+    claim_token text NOT NULL,
+    retry_safety_mechanism public.inbox_v2_outbound_retry_safety_mechanism NOT NULL,
+    retry_safety_adapter_contract_snapshot jsonb NOT NULL,
+    retry_safety_declared_by_trusted_service_id text NOT NULL,
+    retry_safety_declaration_token text NOT NULL,
+    retry_safety_declared_at timestamp(3) with time zone NOT NULL,
+    provider_correlation_token text,
+    automatic_retry_allowed boolean NOT NULL,
+    lease_expires_at timestamp(3) with time zone NOT NULL,
+    opened_at timestamp(3) with time zone NOT NULL,
+    outcome_kind public.inbox_v2_outbound_dispatch_attempt_outcome DEFAULT 'pending'::public.inbox_v2_outbound_dispatch_attempt_outcome NOT NULL,
+    completion_source public.inbox_v2_outbound_dispatch_attempt_completion_source,
+    completed_at timestamp(3) with time zone,
+    retry_at timestamp(3) with time zone,
+    provider_acknowledgement_token text,
+    diagnostic_code_id text,
+    diagnostic_retryable boolean,
+    diagnostic_correlation_token text,
+    diagnostic_safe_operator_hint_id text,
+    unknown_required_action public.inbox_v2_outbound_dispatch_unknown_required_action,
+    revision bigint DEFAULT 1 NOT NULL,
+    CONSTRAINT inbox_v2_outbound_dispatch_attempts_id_check CHECK (COALESCE(((char_length(id) <= 256) AND (id ~ '^outbound_dispatch_attempt:[A-Za-z0-9][A-Za-z0-9._~:-]{0,199}$'::text)), false)),
+    CONSTRAINT inbox_v2_outbound_dispatch_attempts_lease_check CHECK (((attempt_number >= 1) AND (attempt_number <= 1000000) AND COALESCE(((char_length(claim_token) >= 8) AND (char_length(claim_token) <= 256) AND (claim_token ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'::text)), false) AND isfinite(opened_at) AND isfinite(lease_expires_at) AND (lease_expires_at > opened_at))),
+    CONSTRAINT inbox_v2_outbound_dispatch_attempts_outcome_check CHECK (((((outcome_kind = 'pending'::public.inbox_v2_outbound_dispatch_attempt_outcome) AND (completion_source IS NULL) AND (completed_at IS NULL) AND (retry_at IS NULL) AND (provider_acknowledgement_token IS NULL) AND (diagnostic_code_id IS NULL) AND (diagnostic_retryable IS NULL) AND (diagnostic_correlation_token IS NULL) AND (diagnostic_safe_operator_hint_id IS NULL) AND (unknown_required_action IS NULL) AND (revision = 1)) OR ((outcome_kind = 'accepted'::public.inbox_v2_outbound_dispatch_attempt_outcome) AND (completion_source = ANY (ARRAY['provider_result'::public.inbox_v2_outbound_dispatch_attempt_completion_source, 'provider_observation'::public.inbox_v2_outbound_dispatch_attempt_completion_source])) AND isfinite(completed_at) AND (completed_at >= opened_at) AND ((completion_source = 'provider_observation'::public.inbox_v2_outbound_dispatch_attempt_completion_source) OR (completed_at <= lease_expires_at)) AND (retry_at IS NULL) AND ((provider_acknowledgement_token IS NULL) OR COALESCE(((char_length(provider_acknowledgement_token) >= 8) AND (char_length(provider_acknowledgement_token) <= 256) AND (provider_acknowledgement_token ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'::text)), false)) AND (diagnostic_code_id IS NULL) AND (diagnostic_retryable IS NULL) AND (diagnostic_correlation_token IS NULL) AND (diagnostic_safe_operator_hint_id IS NULL) AND (unknown_required_action IS NULL) AND (revision = 2)) OR ((outcome_kind = 'retryable_failure'::public.inbox_v2_outbound_dispatch_attempt_outcome) AND (completion_source = ANY (ARRAY['provider_result'::public.inbox_v2_outbound_dispatch_attempt_completion_source, 'preflight_blocked'::public.inbox_v2_outbound_dispatch_attempt_completion_source])) AND isfinite(completed_at) AND ((completed_at >= opened_at) AND (completed_at <= lease_expires_at)) AND isfinite(retry_at) AND (retry_at >= completed_at) AND (provider_acknowledgement_token IS NULL) AND COALESCE(((char_length(diagnostic_code_id) <= 256) AND (((diagnostic_code_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_code_id, ':'::text, 2)) <= 160)) OR ((diagnostic_code_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_code_id, ':'::text, 2)) <= 80) AND (char_length(split_part(diagnostic_code_id, ':'::text, 3)) <= 160) AND (split_part(diagnostic_code_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false) AND (diagnostic_retryable IS NOT NULL) AND COALESCE(((char_length(diagnostic_correlation_token) >= 8) AND (char_length(diagnostic_correlation_token) <= 256) AND (diagnostic_correlation_token ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'::text)), false) AND ((diagnostic_safe_operator_hint_id IS NULL) OR COALESCE(((char_length(diagnostic_safe_operator_hint_id) <= 256) AND (((diagnostic_safe_operator_hint_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_safe_operator_hint_id, ':'::text, 2)) <= 160)) OR ((diagnostic_safe_operator_hint_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_safe_operator_hint_id, ':'::text, 2)) <= 80) AND (char_length(split_part(diagnostic_safe_operator_hint_id, ':'::text, 3)) <= 160) AND (split_part(diagnostic_safe_operator_hint_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false)) AND diagnostic_retryable AND (unknown_required_action IS NULL) AND (revision = 2)) OR ((outcome_kind = 'terminal_failure'::public.inbox_v2_outbound_dispatch_attempt_outcome) AND (completion_source = ANY (ARRAY['provider_result'::public.inbox_v2_outbound_dispatch_attempt_completion_source, 'preflight_blocked'::public.inbox_v2_outbound_dispatch_attempt_completion_source])) AND isfinite(completed_at) AND ((completed_at >= opened_at) AND (completed_at <= lease_expires_at)) AND (retry_at IS NULL) AND (provider_acknowledgement_token IS NULL) AND COALESCE(((char_length(diagnostic_code_id) <= 256) AND (((diagnostic_code_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_code_id, ':'::text, 2)) <= 160)) OR ((diagnostic_code_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_code_id, ':'::text, 2)) <= 80) AND (char_length(split_part(diagnostic_code_id, ':'::text, 3)) <= 160) AND (split_part(diagnostic_code_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false) AND (diagnostic_retryable IS NOT NULL) AND COALESCE(((char_length(diagnostic_correlation_token) >= 8) AND (char_length(diagnostic_correlation_token) <= 256) AND (diagnostic_correlation_token ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'::text)), false) AND ((diagnostic_safe_operator_hint_id IS NULL) OR COALESCE(((char_length(diagnostic_safe_operator_hint_id) <= 256) AND (((diagnostic_safe_operator_hint_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_safe_operator_hint_id, ':'::text, 2)) <= 160)) OR ((diagnostic_safe_operator_hint_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_safe_operator_hint_id, ':'::text, 2)) <= 80) AND (char_length(split_part(diagnostic_safe_operator_hint_id, ':'::text, 3)) <= 160) AND (split_part(diagnostic_safe_operator_hint_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false)) AND (NOT diagnostic_retryable) AND (unknown_required_action IS NULL) AND (revision = 2)) OR ((outcome_kind = 'outcome_unknown'::public.inbox_v2_outbound_dispatch_attempt_outcome) AND (completion_source = ANY (ARRAY['provider_result'::public.inbox_v2_outbound_dispatch_attempt_completion_source, 'lease_expired'::public.inbox_v2_outbound_dispatch_attempt_completion_source])) AND isfinite(completed_at) AND (completed_at >= opened_at) AND (((completion_source = 'provider_result'::public.inbox_v2_outbound_dispatch_attempt_completion_source) AND (completed_at <= lease_expires_at)) OR ((completion_source = 'lease_expired'::public.inbox_v2_outbound_dispatch_attempt_completion_source) AND (completed_at >= lease_expires_at))) AND (retry_at IS NULL) AND (provider_acknowledgement_token IS NULL) AND COALESCE(((char_length(diagnostic_code_id) <= 256) AND (((diagnostic_code_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_code_id, ':'::text, 2)) <= 160)) OR ((diagnostic_code_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_code_id, ':'::text, 2)) <= 80) AND (char_length(split_part(diagnostic_code_id, ':'::text, 3)) <= 160) AND (split_part(diagnostic_code_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false) AND (diagnostic_retryable IS NOT NULL) AND COALESCE(((char_length(diagnostic_correlation_token) >= 8) AND (char_length(diagnostic_correlation_token) <= 256) AND (diagnostic_correlation_token ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'::text)), false) AND ((diagnostic_safe_operator_hint_id IS NULL) OR COALESCE(((char_length(diagnostic_safe_operator_hint_id) <= 256) AND (((diagnostic_safe_operator_hint_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_safe_operator_hint_id, ':'::text, 2)) <= 160)) OR ((diagnostic_safe_operator_hint_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_safe_operator_hint_id, ':'::text, 2)) <= 80) AND (char_length(split_part(diagnostic_safe_operator_hint_id, ':'::text, 3)) <= 160) AND (split_part(diagnostic_safe_operator_hint_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false)) AND ((automatic_retry_allowed AND (diagnostic_code_id <> 'core:provider-artifact-outcomes-mixed'::text) AND (unknown_required_action = 'automated_reconciliation_required'::public.inbox_v2_outbound_dispatch_unknown_required_action)) OR (((NOT automatic_retry_allowed) OR (diagnostic_code_id = 'core:provider-artifact-outcomes-mixed'::text)) AND (unknown_required_action = 'operator_duplicate_risk_decision_required'::public.inbox_v2_outbound_dispatch_unknown_required_action))) AND (revision = 2))) IS TRUE)),
+    CONSTRAINT inbox_v2_outbound_dispatch_attempts_retry_safety_check CHECK (((COALESCE(((jsonb_typeof(retry_safety_adapter_contract_snapshot) = 'object'::text) AND ((octet_length((retry_safety_adapter_contract_snapshot)::text) >= 2) AND (octet_length((retry_safety_adapter_contract_snapshot)::text) <= 16384))), false) AND COALESCE(((char_length(retry_safety_declared_by_trusted_service_id) <= 256) AND (((retry_safety_declared_by_trusted_service_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(retry_safety_declared_by_trusted_service_id, ':'::text, 2)) <= 160)) OR ((retry_safety_declared_by_trusted_service_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(retry_safety_declared_by_trusted_service_id, ':'::text, 2)) <= 80) AND (char_length(split_part(retry_safety_declared_by_trusted_service_id, ':'::text, 3)) <= 160) AND (split_part(retry_safety_declared_by_trusted_service_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false) AND COALESCE(((char_length(retry_safety_declaration_token) >= 8) AND (char_length(retry_safety_declaration_token) <= 256) AND (retry_safety_declaration_token ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'::text)), false) AND isfinite(((retry_safety_adapter_contract_snapshot #>> '{loadedAt}'::text[]))::timestamp with time zone) AND isfinite(retry_safety_declared_at) AND (((retry_safety_adapter_contract_snapshot #>> '{loadedAt}'::text[]))::timestamp with time zone <= retry_safety_declared_at) AND (retry_safety_declared_at <= opened_at) AND (((retry_safety_mechanism = 'unsafe_or_unknown'::public.inbox_v2_outbound_retry_safety_mechanism) AND (provider_correlation_token IS NULL) AND (NOT automatic_retry_allowed)) OR ((retry_safety_mechanism <> 'unsafe_or_unknown'::public.inbox_v2_outbound_retry_safety_mechanism) AND COALESCE(((char_length(provider_correlation_token) >= 8) AND (char_length(provider_correlation_token) <= 256) AND (provider_correlation_token ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'::text)), false)))) IS TRUE))
+);
+
+
+
+--
+-- Name: inbox_v2_outbound_dispatches; Type: TABLE; Schema: public; Owner: <database-owner>
+--
+
+CREATE TABLE public.inbox_v2_outbound_dispatches (
+    tenant_id text NOT NULL,
+    id text NOT NULL,
+    message_id text NOT NULL,
+    conversation_id text NOT NULL,
+    timeline_item_id text NOT NULL,
+    route_id text NOT NULL,
+    multi_send_operation_id text,
+    state public.inbox_v2_outbound_dispatch_state DEFAULT 'queued'::public.inbox_v2_outbound_dispatch_state NOT NULL,
+    attempt_count integer DEFAULT 0 NOT NULL,
+    active_attempt_id text,
+    last_attempt_id text,
+    retry_authorization_decision_id text,
+    revision bigint DEFAULT 1 NOT NULL,
+    created_at timestamp(3) with time zone NOT NULL,
+    updated_at timestamp(3) with time zone NOT NULL,
+    CONSTRAINT inbox_v2_outbound_dispatches_id_check CHECK (COALESCE(((char_length(id) <= 256) AND (id ~ '^outbound_dispatch:[A-Za-z0-9][A-Za-z0-9._~:-]{0,199}$'::text)), false)),
+    CONSTRAINT inbox_v2_outbound_dispatches_state_check CHECK ((((attempt_count >= 0) AND (attempt_count <= 1000000) AND (((state = 'queued'::public.inbox_v2_outbound_dispatch_state) AND (attempt_count = 0) AND (active_attempt_id IS NULL) AND (last_attempt_id IS NULL) AND (retry_authorization_decision_id IS NULL) AND (revision = 1)) OR ((state = 'attempting'::public.inbox_v2_outbound_dispatch_state) AND (attempt_count >= 1) AND (active_attempt_id IS NOT NULL) AND (active_attempt_id = last_attempt_id) AND (retry_authorization_decision_id IS NULL) AND (revision >= 2)) OR ((state <> ALL (ARRAY['queued'::public.inbox_v2_outbound_dispatch_state, 'attempting'::public.inbox_v2_outbound_dispatch_state])) AND (active_attempt_id IS NULL) AND ((attempt_count = 0) OR (last_attempt_id IS NOT NULL)) AND ((state <> 'retryable_failure'::public.inbox_v2_outbound_dispatch_state) OR (attempt_count >= 1)) AND ((state = 'retryable_failure'::public.inbox_v2_outbound_dispatch_state) OR (retry_authorization_decision_id IS NULL)) AND (revision >= 2)))) IS TRUE)),
+    CONSTRAINT inbox_v2_outbound_dispatches_timestamps_check CHECK ((isfinite(created_at) AND isfinite(updated_at) AND (updated_at >= created_at)))
+);
+
+
+
+--
+-- Name: inbox_v2_outbound_provider_transport_lineage(jsonb, public.inbox_v2_outbound_dispatches, public.inbox_v2_outbound_dispatch_attempts); Type: FUNCTION; Schema: public; Owner: <database-owner>
+--
+
+CREATE FUNCTION public.inbox_v2_outbound_provider_transport_lineage(checked_observation_detail jsonb, checked_dispatch public.inbox_v2_outbound_dispatches, checked_attempt public.inbox_v2_outbound_dispatch_attempts) RETURNS text
+    LANGUAGE plpgsql IMMUTABLE
+    SET search_path TO 'pg_catalog', 'public', 'pg_temp'
+    AS $$
+declare
+  observation_dispatch jsonb := checked_observation_detail #> '{dispatch}';
+  observation_attempt jsonb := checked_observation_detail #> '{attempt}';
+  observation_outcome jsonb := checked_observation_detail #> '{attempt,outcome}';
+  stable_projection_matches boolean := false;
+  current_attempt_projection_matches boolean := false;
+  current_dispatch_projection_matches boolean := false;
+  observation_is_pending_head boolean := false;
+  observation_is_unknown_head boolean := false;
+begin
+  stable_projection_matches := (
+    observation_dispatch ?& array[
+      'tenantId', 'id', 'message', 'route', 'multiSendOperation', 'state',
+      'attemptCount', 'activeAttempt', 'lastAttempt', 'retryAuthorization',
+      'revision', 'createdAt', 'updatedAt'
+    ]
+    and observation_dispatch - array[
+      'tenantId', 'id', 'message', 'route', 'multiSendOperation', 'state',
+      'attemptCount', 'activeAttempt', 'lastAttempt', 'retryAuthorization',
+      'revision', 'createdAt', 'updatedAt'
+    ] = '{}'::jsonb
+    and observation_attempt ?& array[
+      'tenantId', 'id', 'dispatch', 'route', 'attemptNumber', 'claimToken',
+      'retrySafety', 'leaseExpiresAt', 'openedAt', 'outcome',
+      'completionSource', 'revision'
+    ]
+    and observation_attempt - array[
+      'tenantId', 'id', 'dispatch', 'route', 'attemptNumber', 'claimToken',
+      'retrySafety', 'leaseExpiresAt', 'openedAt', 'outcome',
+      'completionSource', 'revision'
+    ] = '{}'::jsonb
+    and (observation_attempt #> '{retrySafety}') ?& array[
+      'adapterContract', 'declaredByTrustedServiceId', 'declarationToken',
+      'declaredAt', 'mechanism', 'providerCorrelationToken',
+      'automaticRetryAllowed'
+    ]
+    and (observation_attempt #> '{retrySafety}') - array[
+      'adapterContract', 'declaredByTrustedServiceId', 'declarationToken',
+      'declaredAt', 'mechanism', 'providerCorrelationToken',
+      'automaticRetryAllowed'
+    ] = '{}'::jsonb
+    and observation_dispatch #>> '{tenantId}' = checked_dispatch.tenant_id
+    and observation_dispatch #>> '{id}' = checked_dispatch.id
+    and observation_dispatch #> '{message}' = jsonb_build_object(
+      'tenantId', checked_dispatch.tenant_id,
+      'kind', 'message',
+      'id', checked_dispatch.message_id
+    )
+    and observation_dispatch #> '{route}' = jsonb_build_object(
+      'tenantId', checked_dispatch.tenant_id,
+      'kind', 'outbound_route',
+      'id', checked_dispatch.route_id
+    )
+    and observation_dispatch #> '{multiSendOperation}' = case
+      when checked_dispatch.multi_send_operation_id is null then 'null'::jsonb
+      else jsonb_build_object(
+        'tenantId', checked_dispatch.tenant_id,
+        'kind', 'outbound_multi_send_operation',
+        'id', checked_dispatch.multi_send_operation_id
+      )
+    end
+    and (observation_dispatch #>> '{createdAt}')::timestamptz =
+      checked_dispatch.created_at
+    and observation_attempt #>> '{tenantId}' = checked_attempt.tenant_id
+    and observation_attempt #>> '{id}' = checked_attempt.id
+    and observation_attempt #> '{dispatch}' = jsonb_build_object(
+      'tenantId', checked_attempt.tenant_id,
+      'kind', 'outbound_dispatch',
+      'id', checked_attempt.dispatch_id
+    )
+    and observation_attempt #> '{route}' = jsonb_build_object(
+      'tenantId', checked_attempt.tenant_id,
+      'kind', 'outbound_route',
+      'id', checked_attempt.route_id
+    )
+    and (observation_attempt #>> '{attemptNumber}')::integer =
+      checked_attempt.attempt_number
+    and observation_attempt #>> '{claimToken}' = checked_attempt.claim_token
+    and observation_attempt #> '{retrySafety,adapterContract}' =
+      checked_attempt.retry_safety_adapter_contract_snapshot
+    and observation_attempt #>> '{retrySafety,declaredByTrustedServiceId}' =
+      checked_attempt.retry_safety_declared_by_trusted_service_id
+    and observation_attempt #>> '{retrySafety,declarationToken}' =
+      checked_attempt.retry_safety_declaration_token
+    and (observation_attempt #>> '{retrySafety,declaredAt}')::timestamptz =
+      checked_attempt.retry_safety_declared_at
+    and observation_attempt #>> '{retrySafety,mechanism}' =
+      checked_attempt.retry_safety_mechanism::text
+    and observation_attempt #>> '{retrySafety,providerCorrelationToken}'
+      is not distinct from checked_attempt.provider_correlation_token
+    and (observation_attempt #>>
+      '{retrySafety,automaticRetryAllowed}')::boolean =
+      checked_attempt.automatic_retry_allowed
+    and (observation_attempt #>> '{leaseExpiresAt}')::timestamptz =
+      checked_attempt.lease_expires_at
+    and (observation_attempt #>> '{openedAt}')::timestamptz =
+      checked_attempt.opened_at
+  ) is true;
+
+  if not stable_projection_matches then
+    return 'invalid';
+  end if;
+
+  current_attempt_projection_matches := (
+    case checked_attempt.outcome_kind::text
+      when 'pending' then observation_outcome = '{"kind":"pending"}'::jsonb
+      when 'accepted' then
+        jsonb_typeof(observation_outcome) = 'object'
+        and observation_outcome ?&
+          array['kind', 'completedAt', 'providerAcknowledgementToken']
+        and observation_outcome -
+          array['kind', 'completedAt', 'providerAcknowledgementToken'] =
+          '{}'::jsonb
+        and observation_outcome #>> '{kind}' = 'accepted'
+        and (observation_outcome #>> '{completedAt}')::timestamptz =
+          checked_attempt.completed_at
+        and observation_outcome #>> '{providerAcknowledgementToken}'
+          is not distinct from checked_attempt.provider_acknowledgement_token
+      when 'retryable_failure' then
+        jsonb_typeof(observation_outcome) = 'object'
+        and observation_outcome ?&
+          array['kind', 'completedAt', 'retryAt', 'diagnostic']
+        and observation_outcome -
+          array['kind', 'completedAt', 'retryAt', 'diagnostic'] = '{}'::jsonb
+        and observation_outcome #>> '{kind}' = 'retryable_failure'
+        and (observation_outcome #>> '{completedAt}')::timestamptz =
+          checked_attempt.completed_at
+        and (observation_outcome #>> '{retryAt}')::timestamptz =
+          checked_attempt.retry_at
+        and observation_outcome #> '{diagnostic}' = jsonb_build_object(
+          'codeId', checked_attempt.diagnostic_code_id,
+          'retryable', checked_attempt.diagnostic_retryable,
+          'correlationToken', checked_attempt.diagnostic_correlation_token,
+          'safeOperatorHintId', checked_attempt.diagnostic_safe_operator_hint_id
+        )
+      when 'terminal_failure' then
+        jsonb_typeof(observation_outcome) = 'object'
+        and observation_outcome ?& array['kind', 'completedAt', 'diagnostic']
+        and observation_outcome - array['kind', 'completedAt', 'diagnostic'] =
+          '{}'::jsonb
+        and observation_outcome #>> '{kind}' = 'terminal_failure'
+        and (observation_outcome #>> '{completedAt}')::timestamptz =
+          checked_attempt.completed_at
+        and observation_outcome #> '{diagnostic}' = jsonb_build_object(
+          'codeId', checked_attempt.diagnostic_code_id,
+          'retryable', checked_attempt.diagnostic_retryable,
+          'correlationToken', checked_attempt.diagnostic_correlation_token,
+          'safeOperatorHintId', checked_attempt.diagnostic_safe_operator_hint_id
+        )
+      when 'outcome_unknown' then
+        jsonb_typeof(observation_outcome) = 'object'
+        and observation_outcome ?&
+          array['kind', 'completedAt', 'diagnostic', 'requiredAction']
+        and observation_outcome -
+          array['kind', 'completedAt', 'diagnostic', 'requiredAction'] =
+          '{}'::jsonb
+        and observation_outcome #>> '{kind}' = 'outcome_unknown'
+        and (observation_outcome #>> '{completedAt}')::timestamptz =
+          checked_attempt.completed_at
+        and observation_outcome #> '{diagnostic}' = jsonb_build_object(
+          'codeId', checked_attempt.diagnostic_code_id,
+          'retryable', checked_attempt.diagnostic_retryable,
+          'correlationToken', checked_attempt.diagnostic_correlation_token,
+          'safeOperatorHintId', checked_attempt.diagnostic_safe_operator_hint_id
+        )
+        and observation_outcome #>> '{requiredAction}' =
+          checked_attempt.unknown_required_action::text
+      else false
+    end
+    and observation_attempt ? 'completionSource'
+    and observation_attempt #>> '{completionSource}'
+      is not distinct from checked_attempt.completion_source::text
+    and (observation_attempt #>> '{revision}')::bigint =
+      checked_attempt.revision
+  ) is true;
+
+  current_dispatch_projection_matches := (
+    observation_dispatch #>> '{state}' = checked_dispatch.state::text
+    and (observation_dispatch #>> '{attemptCount}')::integer =
+      checked_dispatch.attempt_count
+    and observation_dispatch #> '{activeAttempt}' = case
+      when checked_dispatch.active_attempt_id is null then 'null'::jsonb
+      else jsonb_build_object(
+        'tenantId', checked_dispatch.tenant_id,
+        'kind', 'outbound_dispatch_attempt',
+        'id', checked_dispatch.active_attempt_id
+      )
+    end
+    and observation_dispatch #> '{lastAttempt}' = case
+      when checked_dispatch.last_attempt_id is null then 'null'::jsonb
+      else jsonb_build_object(
+        'tenantId', checked_dispatch.tenant_id,
+        'kind', 'outbound_dispatch_attempt',
+        'id', checked_dispatch.last_attempt_id
+      )
+    end
+    and observation_dispatch #> '{retryAuthorization}' = case
+      when checked_dispatch.retry_authorization_decision_id is null then
+        'null'::jsonb
+      else jsonb_build_object(
+        'tenantId', checked_dispatch.tenant_id,
+        'kind', 'outbound_dispatch_reconciliation_decision',
+        'id', checked_dispatch.retry_authorization_decision_id
+      )
+    end
+    and (observation_dispatch #>> '{revision}')::bigint =
+      checked_dispatch.revision
+    and (observation_dispatch #>> '{updatedAt}')::timestamptz =
+      checked_dispatch.updated_at
+  ) is true;
+
+  if current_attempt_projection_matches
+     and current_dispatch_projection_matches
+     and checked_dispatch.attempt_count = checked_attempt.attempt_number
+     and checked_dispatch.last_attempt_id = checked_attempt.id
+     and checked_dispatch.retry_authorization_decision_id is null
+     and (
+       (checked_dispatch.state = 'attempting'
+         and checked_attempt.outcome_kind = 'pending'
+         and checked_dispatch.active_attempt_id = checked_attempt.id)
+       or (checked_dispatch.state = 'outcome_unknown'
+         and checked_attempt.outcome_kind = 'outcome_unknown'
+         and checked_dispatch.active_attempt_id is null)
+       or (checked_dispatch.state = 'accepted'
+         and checked_attempt.outcome_kind in ('accepted', 'outcome_unknown')
+         and checked_dispatch.active_attempt_id is null)
+     ) then
+    return 'exact_head';
+  end if;
+
+  observation_is_pending_head := (
+    observation_dispatch #>> '{state}' = 'attempting'
+    and (observation_dispatch #>> '{attemptCount}')::integer =
+      checked_attempt.attempt_number
+    and observation_dispatch #> '{activeAttempt}' = jsonb_build_object(
+      'tenantId', checked_attempt.tenant_id,
+      'kind', 'outbound_dispatch_attempt',
+      'id', checked_attempt.id
+    )
+    and observation_dispatch #> '{lastAttempt}' = jsonb_build_object(
+      'tenantId', checked_attempt.tenant_id,
+      'kind', 'outbound_dispatch_attempt',
+      'id', checked_attempt.id
+    )
+    and observation_dispatch #> '{retryAuthorization}' = 'null'::jsonb
+    and (observation_dispatch #>> '{updatedAt}')::timestamptz =
+      checked_attempt.opened_at
+    and observation_outcome = '{"kind":"pending"}'::jsonb
+    and observation_attempt #> '{completionSource}' = 'null'::jsonb
+    and (observation_attempt #>> '{revision}')::bigint = 1
+  ) is true;
+
+  if observation_is_pending_head
+     and checked_dispatch.attempt_count = checked_attempt.attempt_number
+     and checked_dispatch.active_attempt_id is null
+     and checked_dispatch.last_attempt_id = checked_attempt.id
+     and checked_dispatch.retry_authorization_decision_id is null
+     and (checked_attempt.revision =
+       (observation_attempt #>> '{revision}')::bigint + 1)
+     and (checked_dispatch.revision =
+       (observation_dispatch #>> '{revision}')::bigint + 1)
+     and checked_dispatch.updated_at = checked_attempt.completed_at then
+    if checked_dispatch.state = 'outcome_unknown'
+       and checked_attempt.outcome_kind = 'outcome_unknown'
+       and checked_attempt.completion_source in ('provider_result', 'lease_expired')
+       then
+      return 'pending_to_outcome_unknown';
+    end if;
+    if checked_dispatch.state = 'accepted'
+       and checked_attempt.outcome_kind = 'accepted'
+       and checked_attempt.completion_source in
+         ('provider_result', 'provider_observation') then
+      return 'pending_to_accepted';
+    end if;
+  end if;
+
+  observation_is_unknown_head := (
+    observation_dispatch #>> '{state}' = 'outcome_unknown'
+    and (observation_dispatch #>> '{attemptCount}')::integer =
+      checked_attempt.attempt_number
+    and observation_dispatch #> '{activeAttempt}' = 'null'::jsonb
+    and observation_dispatch #> '{lastAttempt}' = jsonb_build_object(
+      'tenantId', checked_attempt.tenant_id,
+      'kind', 'outbound_dispatch_attempt',
+      'id', checked_attempt.id
+    )
+    and observation_dispatch #> '{retryAuthorization}' = 'null'::jsonb
+    and current_attempt_projection_matches
+    and checked_attempt.outcome_kind = 'outcome_unknown'
+    and (observation_dispatch #>> '{updatedAt}')::timestamptz =
+      checked_attempt.completed_at
+  ) is true;
+
+  if observation_is_unknown_head
+     and checked_dispatch.state = 'accepted'
+     and checked_dispatch.attempt_count = checked_attempt.attempt_number
+     and checked_dispatch.active_attempt_id is null
+     and checked_dispatch.last_attempt_id = checked_attempt.id
+     and checked_dispatch.retry_authorization_decision_id is null
+     and checked_dispatch.revision =
+       (observation_dispatch #>> '{revision}')::bigint + 1
+     and checked_dispatch.updated_at >= checked_attempt.completed_at then
+    return 'outcome_unknown_to_accepted';
+  end if;
+
+  if observation_is_pending_head
+     and checked_dispatch.state = 'accepted'
+     and checked_attempt.outcome_kind = 'outcome_unknown'
+     and checked_attempt.completion_source in ('provider_result', 'lease_expired')
+     and checked_dispatch.attempt_count = checked_attempt.attempt_number
+     and checked_dispatch.active_attempt_id is null
+     and checked_dispatch.last_attempt_id = checked_attempt.id
+     and checked_dispatch.retry_authorization_decision_id is null
+     and checked_attempt.revision =
+       (observation_attempt #>> '{revision}')::bigint + 1
+     and checked_dispatch.revision =
+       (observation_dispatch #>> '{revision}')::bigint + 2
+     and checked_dispatch.updated_at >= checked_attempt.completed_at then
+    return 'pending_to_outcome_unknown_to_accepted';
+  end if;
+
+  return 'invalid';
 end;
 $$;
 
@@ -27032,8 +28523,89 @@ begin
          from public.inbox_v2_source_occurrences occurrence_row
         where occurrence_row.tenant_id = new_row->>'tenant_id'
           and occurrence_row.id = new_row->>'id'
-          and occurrence_row.resolution_state = 'pending'
-          and occurrence_row.revision = 1
+          and (
+            (occurrence_row.resolution_state = 'pending'
+              and occurrence_row.revision = 1)
+            or (
+              new_row->>'origin_kind' = 'provider_response'
+              and new_row->>'direction' = 'outbound'
+              and new_row->>'resolution_state' = 'pending'
+              and (new_row->>'revision')::bigint = 1
+              and new_row->>'resolved_external_message_reference_id' is null
+              and occurrence_row.origin_kind = 'provider_response'
+              and occurrence_row.direction = 'outbound'
+              and occurrence_row.outbound_dispatch_attempt_id is not null
+              and occurrence_row.resolution_state = 'resolved'
+              and occurrence_row.revision = 2
+              and occurrence_row.resolved_external_message_reference_id
+                is not null
+              and occurrence_row.resolution_candidate_count = 0
+              and occurrence_row.resolution_candidate_digest_sha256 is null
+              and occurrence_row.resolution_diagnostic_code_id is null
+              and occurrence_row.resolution_diagnostic_retryable is null
+              and occurrence_row.resolution_diagnostic_correlation_token is null
+              and occurrence_row.resolution_diagnostic_safe_operator_hint_id
+                is null
+              and 1 = (
+                select count(*)
+                  from public.inbox_v2_source_occurrence_resolution_transitions
+                    transition_row
+                  join public.inbox_v2_external_message_references reference_row
+                    on reference_row.tenant_id = transition_row.tenant_id
+                   and reference_row.id =
+                     transition_row.resolved_external_message_reference_id
+                 where transition_row.tenant_id = occurrence_row.tenant_id
+                   and transition_row.source_occurrence_id = occurrence_row.id
+                   and transition_row.expected_revision = 1
+                   and transition_row.resulting_revision = 2
+                   and transition_row.from_state = 'pending'
+                   and transition_row.to_state = 'resolved'
+                   and transition_row.resolved_external_message_reference_id =
+                     occurrence_row.resolved_external_message_reference_id
+                   and transition_row.candidate_count = 0
+                   and transition_row.candidates_digest_sha256 is null
+                   and transition_row.diagnostic_code_id is null
+                   and transition_row.diagnostic_retryable is null
+                   and transition_row.diagnostic_correlation_token is null
+                   and transition_row.diagnostic_safe_operator_hint_id is null
+                   and transition_row.resolver_trusted_service_id =
+                     occurrence_row.adapter_loaded_by_trusted_service_id
+                   and transition_row.changed_at = occurrence_row.updated_at
+                   and transition_row.revision = 1
+                   and reference_row.realm_id = occurrence_row.message_realm_id
+                   and reference_row.realm_version =
+                     occurrence_row.message_realm_version
+                   and reference_row.canonicalization_version =
+                     occurrence_row.message_canonicalization_version
+                   and reference_row.scope_kind::text =
+                     occurrence_row.message_scope_kind::text
+                   and reference_row.scope_source_account_id is not distinct from
+                     occurrence_row.message_scope_source_account_id
+                   and reference_row.scope_source_thread_binding_id
+                     is not distinct from
+                     occurrence_row.message_scope_source_thread_binding_id
+                   and reference_row.object_kind_id =
+                     occurrence_row.message_object_kind_id
+                   and reference_row.external_thread_id =
+                     occurrence_row.external_thread_id
+                   and reference_row.canonical_external_subject =
+                     occurrence_row.canonical_external_subject
+                   and reference_row.message_key_digest_sha256 =
+                     occurrence_row.message_key_digest_sha256
+                   and not exists (
+                     select 1
+                       from public.inbox_v2_source_occurrence_resolution_candidates
+                         candidate_row
+                      where candidate_row.tenant_id = transition_row.tenant_id
+                        and candidate_row.transition_id = transition_row.id
+                        and candidate_row.source_occurrence_id =
+                          transition_row.source_occurrence_id
+                        and candidate_row.resulting_revision =
+                          transition_row.resulting_revision
+                   )
+              )
+            )
+          )
      ) then
     raise exception using errcode = '23514',
       message = 'inbox_v2.source_occurrence_initial_commit_required';
@@ -27069,6 +28641,7 @@ declare
   head_row public.inbox_v2_source_thread_binding_heads%rowtype;
   snapshot_row public.inbox_v2_source_thread_binding_snapshots%rowtype;
   account_identity_row public.inbox_v2_source_account_identities%rowtype;
+  account_snapshot_row public.inbox_v2_source_account_identity_verified_snapshots%rowtype;
   thread_identity_declaration jsonb;
   actor_scope_kind public.inbox_v2_source_identity_scope_kind;
   actor_scope_source_connection_id text;
@@ -27092,16 +28665,18 @@ begin
       message = 'inbox_v2.source_occurrence_initial_resolution_invalid';
   end if;
 
-  select * into head_row
-    from public.inbox_v2_source_thread_binding_heads candidate_row
-   where candidate_row.tenant_id = new.tenant_id
-     and candidate_row.binding_id = new.source_thread_binding_id
-   for share;
+  if new.origin_kind <> 'provider_response' then
+    select * into head_row
+      from public.inbox_v2_source_thread_binding_heads candidate_row
+     where candidate_row.tenant_id = new.tenant_id
+       and candidate_row.binding_id = new.source_thread_binding_id
+     for share;
 
-  if not found then
-    raise exception using
-      errcode = '23514',
-      message = 'inbox_v2.source_occurrence_binding_head_missing';
+    if not found then
+      raise exception using
+        errcode = '23514',
+        message = 'inbox_v2.source_occurrence_binding_head_missing';
+    end if;
   end if;
 
   select * into snapshot_row
@@ -27112,18 +28687,23 @@ begin
    for share;
 
   if not found
-     or head_row.revision <> new.binding_revision
-     or head_row.external_thread_id <> new.external_thread_id
-     or head_row.source_connection_id <> new.source_connection_id
-     or head_row.source_account_id <> new.source_account_id
-     or head_row.binding_generation <> new.binding_generation
-     or head_row.capability_revision <> new.capability_revision
-     or head_row.account_identity_revision <> new.account_identity_revision
-     or head_row.account_generation <> new.account_generation
-     or head_row.account_canonical_key_digest_sha256 <>
-        new.account_canonical_key_digest_sha256
-     or head_row.created_at > new.recorded_at
-     or head_row.updated_at > new.recorded_at
+     or (
+       new.origin_kind <> 'provider_response'
+       and (
+         head_row.revision <> new.binding_revision
+         or head_row.external_thread_id <> new.external_thread_id
+         or head_row.source_connection_id <> new.source_connection_id
+         or head_row.source_account_id <> new.source_account_id
+         or head_row.binding_generation <> new.binding_generation
+         or head_row.capability_revision <> new.capability_revision
+         or head_row.account_identity_revision <> new.account_identity_revision
+         or head_row.account_generation <> new.account_generation
+         or head_row.account_canonical_key_digest_sha256 <>
+            new.account_canonical_key_digest_sha256
+         or head_row.created_at > new.recorded_at
+         or head_row.updated_at > new.recorded_at
+       )
+     )
      or snapshot_row.external_thread_id <> new.external_thread_id
      or snapshot_row.source_connection_id <> new.source_connection_id
      or snapshot_row.source_account_id <> new.source_account_id
@@ -27143,29 +28723,56 @@ begin
       message = 'inbox_v2.source_occurrence_binding_fence_conflict';
   end if;
 
-  select * into account_identity_row
-    from public.inbox_v2_source_account_identities candidate_row
-   where candidate_row.tenant_id = new.tenant_id
-     and candidate_row.source_account_id = new.source_account_id
-   for share;
+  if new.origin_kind = 'provider_response' then
+    select * into account_snapshot_row
+      from public.inbox_v2_source_account_identity_verified_snapshots candidate_row
+     where candidate_row.tenant_id = new.tenant_id
+       and candidate_row.source_account_id = new.source_account_id
+       and candidate_row.identity_revision = new.account_identity_revision
+     for share;
 
-  if not found
-     or account_identity_row.source_connection_id <> new.source_connection_id
-     or account_identity_row.state <> 'verified'
-     or account_identity_row.revision <> new.account_identity_revision
-     or account_identity_row.account_generation <> new.account_generation
-     or account_identity_row.canonical_key_digest_sha256 <>
-        new.account_canonical_key_digest_sha256
-     or account_identity_row.declaration_contract_id <>
-        new.adapter_contract_id
-     or account_identity_row.declaration_contract_version <>
-        new.adapter_contract_version
-     or account_identity_row.declaration_surface_id <>
-        new.adapter_surface_id
-     or account_identity_row.updated_at > new.recorded_at then
-    raise exception using
-      errcode = '40001',
-      message = 'inbox_v2.source_occurrence_account_identity_fence_conflict';
+    if not found
+       or account_snapshot_row.source_connection_id <> new.source_connection_id
+       or account_snapshot_row.state <> 'verified'
+       or account_snapshot_row.account_generation <> new.account_generation
+       or account_snapshot_row.canonical_key_digest_sha256 <>
+          new.account_canonical_key_digest_sha256
+       or account_snapshot_row.declaration_contract_id <>
+          new.adapter_contract_id
+       or account_snapshot_row.declaration_contract_version <>
+          new.adapter_contract_version
+       or account_snapshot_row.declaration_surface_id <>
+          new.adapter_surface_id
+       or account_snapshot_row.verified_at > new.recorded_at then
+      raise exception using
+        errcode = '40001',
+        message = 'inbox_v2.source_occurrence_account_snapshot_fence_conflict';
+    end if;
+  else
+    select * into account_identity_row
+      from public.inbox_v2_source_account_identities candidate_row
+     where candidate_row.tenant_id = new.tenant_id
+       and candidate_row.source_account_id = new.source_account_id
+     for share;
+
+    if not found
+       or account_identity_row.source_connection_id <> new.source_connection_id
+       or account_identity_row.state <> 'verified'
+       or account_identity_row.revision <> new.account_identity_revision
+       or account_identity_row.account_generation <> new.account_generation
+       or account_identity_row.canonical_key_digest_sha256 <>
+          new.account_canonical_key_digest_sha256
+       or account_identity_row.declaration_contract_id <>
+          new.adapter_contract_id
+       or account_identity_row.declaration_contract_version <>
+          new.adapter_contract_version
+       or account_identity_row.declaration_surface_id <>
+          new.adapter_surface_id
+       or account_identity_row.updated_at > new.recorded_at then
+      raise exception using
+        errcode = '40001',
+        message = 'inbox_v2.source_occurrence_account_identity_fence_conflict';
+    end if;
   end if;
 
   select thread_row.identity_declaration
@@ -27235,14 +28842,15 @@ begin
        and route_row.adapter_contract_id = new.adapter_contract_id
        and route_row.adapter_contract_version = new.adapter_contract_version
        and route_row.adapter_surface_id = new.adapter_surface_id
-       and route_row.account_generation = head_row.account_generation
-       and route_row.binding_generation = head_row.binding_generation
-       and route_row.remote_access_revision = head_row.remote_access_revision
+       and route_row.binding_revision = snapshot_row.revision
+       and route_row.account_generation = snapshot_row.account_generation
+       and route_row.binding_generation = snapshot_row.binding_generation
+       and route_row.remote_access_revision = snapshot_row.remote_access_revision
        and route_row.administrative_revision =
-          head_row.administrative_revision
-       and route_row.capability_revision = head_row.capability_revision
+          snapshot_row.administrative_revision
+       and route_row.capability_revision = snapshot_row.capability_revision
        and route_row.route_descriptor_revision =
-          head_row.route_descriptor_revision
+          snapshot_row.route_descriptor_revision
        and route_row.created_at <= attempt_row.opened_at
        and attempt_row.opened_at <= new.observed_at
      for share of attempt_row, dispatch_row, route_row;
@@ -36102,8 +37710,6 @@ $$;
 
 
 
-
-
 --
 -- Name: inbox_v2_provider_semantic_ordering_heads; Type: TABLE; Schema: public; Owner: <database-owner>
 --
@@ -44887,6 +46493,33 @@ CREATE TABLE public.inbox_v2_outbound_dispatch_artifact_reference_links (
 
 
 --
+-- Name: inbox_v2_outbound_dispatch_artifact_resolutions; Type: TABLE; Schema: public; Owner: <database-owner>
+--
+
+CREATE TABLE public.inbox_v2_outbound_dispatch_artifact_resolutions (
+    tenant_id text NOT NULL,
+    id text NOT NULL,
+    artifact_id text NOT NULL,
+    dispatch_id text NOT NULL,
+    route_id text NOT NULL,
+    attempt_id text NOT NULL,
+    message_id text NOT NULL,
+    artifact_ordinal smallint NOT NULL,
+    from_state public.inbox_v2_outbound_dispatch_artifact_state NOT NULL,
+    effective_state public.inbox_v2_outbound_dispatch_artifact_state DEFAULT 'accepted'::public.inbox_v2_outbound_dispatch_artifact_state NOT NULL,
+    observation_id text NOT NULL,
+    observation_source_occurrence_id text NOT NULL,
+    resolved_by_trusted_service_id text NOT NULL,
+    resolved_at timestamp(3) with time zone NOT NULL,
+    revision bigint DEFAULT 1 NOT NULL,
+    CONSTRAINT inbox_v2_outbound_dispatch_artifact_resolutions_id_check CHECK (COALESCE(((char_length(id) <= 256) AND (id ~ '^outbound_dispatch_artifact_resolution:[A-Za-z0-9][A-Za-z0-9._~:-]{0,199}$'::text)), false)),
+    CONSTRAINT inbox_v2_outbound_dispatch_artifact_resolutions_immutable_check CHECK ((COALESCE(((char_length(resolved_by_trusted_service_id) <= 256) AND (((resolved_by_trusted_service_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(resolved_by_trusted_service_id, ':'::text, 2)) <= 160)) OR ((resolved_by_trusted_service_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(resolved_by_trusted_service_id, ':'::text, 2)) <= 80) AND (char_length(split_part(resolved_by_trusted_service_id, ':'::text, 3)) <= 160) AND (split_part(resolved_by_trusted_service_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false) AND isfinite(resolved_at) AND (revision = 1))),
+    CONSTRAINT inbox_v2_outbound_dispatch_artifact_resolutions_state_check CHECK (((artifact_ordinal >= 1) AND (artifact_ordinal <= 64) AND (from_state = ANY (ARRAY['accepted'::public.inbox_v2_outbound_dispatch_artifact_state, 'outcome_unknown'::public.inbox_v2_outbound_dispatch_artifact_state])) AND (effective_state = 'accepted'::public.inbox_v2_outbound_dispatch_artifact_state)))
+);
+
+
+
+--
 -- Name: inbox_v2_outbound_dispatch_artifacts; Type: TABLE; Schema: public; Owner: <database-owner>
 --
 
@@ -44908,46 +46541,6 @@ CREATE TABLE public.inbox_v2_outbound_dispatch_artifacts (
     CONSTRAINT inbox_v2_outbound_dispatch_artifacts_id_check CHECK (COALESCE(((char_length(id) <= 256) AND (id ~ '^outbound_dispatch_artifact:[A-Za-z0-9][A-Za-z0-9._~:-]{0,199}$'::text)), false)),
     CONSTRAINT inbox_v2_outbound_dispatch_artifacts_immutable_check CHECK (((revision = 1) AND isfinite(created_at))),
     CONSTRAINT inbox_v2_outbound_dispatch_artifacts_state_check CHECK (((ordinal >= 1) AND (ordinal <= 100) AND (((state = 'accepted'::public.inbox_v2_outbound_dispatch_artifact_state) AND (diagnostic_code_id IS NULL) AND (diagnostic_retryable IS NULL) AND (diagnostic_correlation_token IS NULL) AND (diagnostic_safe_operator_hint_id IS NULL)) OR ((state <> 'accepted'::public.inbox_v2_outbound_dispatch_artifact_state) AND COALESCE(((char_length(diagnostic_code_id) <= 256) AND (((diagnostic_code_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_code_id, ':'::text, 2)) <= 160)) OR ((diagnostic_code_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_code_id, ':'::text, 2)) <= 80) AND (char_length(split_part(diagnostic_code_id, ':'::text, 3)) <= 160) AND (split_part(diagnostic_code_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false) AND (diagnostic_retryable IS NOT NULL) AND COALESCE(((char_length(diagnostic_correlation_token) >= 8) AND (char_length(diagnostic_correlation_token) <= 256) AND (diagnostic_correlation_token ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'::text)), false) AND ((diagnostic_safe_operator_hint_id IS NULL) OR COALESCE(((char_length(diagnostic_safe_operator_hint_id) <= 256) AND (((diagnostic_safe_operator_hint_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_safe_operator_hint_id, ':'::text, 2)) <= 160)) OR ((diagnostic_safe_operator_hint_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_safe_operator_hint_id, ':'::text, 2)) <= 80) AND (char_length(split_part(diagnostic_safe_operator_hint_id, ':'::text, 3)) <= 160) AND (split_part(diagnostic_safe_operator_hint_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false))))))
-);
-
-
-
---
--- Name: inbox_v2_outbound_dispatch_attempts; Type: TABLE; Schema: public; Owner: <database-owner>
---
-
-CREATE TABLE public.inbox_v2_outbound_dispatch_attempts (
-    tenant_id text NOT NULL,
-    id text NOT NULL,
-    dispatch_id text NOT NULL,
-    route_id text NOT NULL,
-    message_id text NOT NULL,
-    attempt_number integer NOT NULL,
-    claim_token text NOT NULL,
-    retry_safety_mechanism public.inbox_v2_outbound_retry_safety_mechanism NOT NULL,
-    retry_safety_adapter_contract_snapshot jsonb NOT NULL,
-    retry_safety_declared_by_trusted_service_id text NOT NULL,
-    retry_safety_declaration_token text NOT NULL,
-    retry_safety_declared_at timestamp(3) with time zone NOT NULL,
-    provider_correlation_token text,
-    automatic_retry_allowed boolean NOT NULL,
-    lease_expires_at timestamp(3) with time zone NOT NULL,
-    opened_at timestamp(3) with time zone NOT NULL,
-    outcome_kind public.inbox_v2_outbound_dispatch_attempt_outcome DEFAULT 'pending'::public.inbox_v2_outbound_dispatch_attempt_outcome NOT NULL,
-    completion_source public.inbox_v2_outbound_dispatch_attempt_completion_source,
-    completed_at timestamp(3) with time zone,
-    retry_at timestamp(3) with time zone,
-    provider_acknowledgement_token text,
-    diagnostic_code_id text,
-    diagnostic_retryable boolean,
-    diagnostic_correlation_token text,
-    diagnostic_safe_operator_hint_id text,
-    unknown_required_action public.inbox_v2_outbound_dispatch_unknown_required_action,
-    revision bigint DEFAULT 1 NOT NULL,
-    CONSTRAINT inbox_v2_outbound_dispatch_attempts_id_check CHECK (COALESCE(((char_length(id) <= 256) AND (id ~ '^outbound_dispatch_attempt:[A-Za-z0-9][A-Za-z0-9._~:-]{0,199}$'::text)), false)),
-    CONSTRAINT inbox_v2_outbound_dispatch_attempts_lease_check CHECK (((attempt_number >= 1) AND (attempt_number <= 1000000) AND COALESCE(((char_length(claim_token) >= 8) AND (char_length(claim_token) <= 256) AND (claim_token ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'::text)), false) AND isfinite(opened_at) AND isfinite(lease_expires_at) AND (lease_expires_at > opened_at))),
-    CONSTRAINT inbox_v2_outbound_dispatch_attempts_outcome_check CHECK (((((outcome_kind = 'pending'::public.inbox_v2_outbound_dispatch_attempt_outcome) AND (completion_source IS NULL) AND (completed_at IS NULL) AND (retry_at IS NULL) AND (provider_acknowledgement_token IS NULL) AND (diagnostic_code_id IS NULL) AND (diagnostic_retryable IS NULL) AND (diagnostic_correlation_token IS NULL) AND (diagnostic_safe_operator_hint_id IS NULL) AND (unknown_required_action IS NULL) AND (revision = 1)) OR ((outcome_kind = 'accepted'::public.inbox_v2_outbound_dispatch_attempt_outcome) AND (completion_source = 'provider_result'::public.inbox_v2_outbound_dispatch_attempt_completion_source) AND isfinite(completed_at) AND ((completed_at >= opened_at) AND (completed_at <= lease_expires_at)) AND (retry_at IS NULL) AND ((provider_acknowledgement_token IS NULL) OR COALESCE(((char_length(provider_acknowledgement_token) >= 8) AND (char_length(provider_acknowledgement_token) <= 256) AND (provider_acknowledgement_token ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'::text)), false)) AND (diagnostic_code_id IS NULL) AND (diagnostic_retryable IS NULL) AND (diagnostic_correlation_token IS NULL) AND (diagnostic_safe_operator_hint_id IS NULL) AND (unknown_required_action IS NULL) AND (revision = 2)) OR ((outcome_kind = 'retryable_failure'::public.inbox_v2_outbound_dispatch_attempt_outcome) AND (completion_source = ANY (ARRAY['provider_result'::public.inbox_v2_outbound_dispatch_attempt_completion_source, 'preflight_blocked'::public.inbox_v2_outbound_dispatch_attempt_completion_source])) AND isfinite(completed_at) AND ((completed_at >= opened_at) AND (completed_at <= lease_expires_at)) AND isfinite(retry_at) AND (retry_at >= completed_at) AND (provider_acknowledgement_token IS NULL) AND COALESCE(((char_length(diagnostic_code_id) <= 256) AND (((diagnostic_code_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_code_id, ':'::text, 2)) <= 160)) OR ((diagnostic_code_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_code_id, ':'::text, 2)) <= 80) AND (char_length(split_part(diagnostic_code_id, ':'::text, 3)) <= 160) AND (split_part(diagnostic_code_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false) AND (diagnostic_retryable IS NOT NULL) AND COALESCE(((char_length(diagnostic_correlation_token) >= 8) AND (char_length(diagnostic_correlation_token) <= 256) AND (diagnostic_correlation_token ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'::text)), false) AND ((diagnostic_safe_operator_hint_id IS NULL) OR COALESCE(((char_length(diagnostic_safe_operator_hint_id) <= 256) AND (((diagnostic_safe_operator_hint_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_safe_operator_hint_id, ':'::text, 2)) <= 160)) OR ((diagnostic_safe_operator_hint_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_safe_operator_hint_id, ':'::text, 2)) <= 80) AND (char_length(split_part(diagnostic_safe_operator_hint_id, ':'::text, 3)) <= 160) AND (split_part(diagnostic_safe_operator_hint_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false)) AND diagnostic_retryable AND (unknown_required_action IS NULL) AND (revision = 2)) OR ((outcome_kind = 'terminal_failure'::public.inbox_v2_outbound_dispatch_attempt_outcome) AND (completion_source = ANY (ARRAY['provider_result'::public.inbox_v2_outbound_dispatch_attempt_completion_source, 'preflight_blocked'::public.inbox_v2_outbound_dispatch_attempt_completion_source])) AND isfinite(completed_at) AND ((completed_at >= opened_at) AND (completed_at <= lease_expires_at)) AND (retry_at IS NULL) AND (provider_acknowledgement_token IS NULL) AND COALESCE(((char_length(diagnostic_code_id) <= 256) AND (((diagnostic_code_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_code_id, ':'::text, 2)) <= 160)) OR ((diagnostic_code_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_code_id, ':'::text, 2)) <= 80) AND (char_length(split_part(diagnostic_code_id, ':'::text, 3)) <= 160) AND (split_part(diagnostic_code_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false) AND (diagnostic_retryable IS NOT NULL) AND COALESCE(((char_length(diagnostic_correlation_token) >= 8) AND (char_length(diagnostic_correlation_token) <= 256) AND (diagnostic_correlation_token ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'::text)), false) AND ((diagnostic_safe_operator_hint_id IS NULL) OR COALESCE(((char_length(diagnostic_safe_operator_hint_id) <= 256) AND (((diagnostic_safe_operator_hint_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_safe_operator_hint_id, ':'::text, 2)) <= 160)) OR ((diagnostic_safe_operator_hint_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_safe_operator_hint_id, ':'::text, 2)) <= 80) AND (char_length(split_part(diagnostic_safe_operator_hint_id, ':'::text, 3)) <= 160) AND (split_part(diagnostic_safe_operator_hint_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false)) AND (NOT diagnostic_retryable) AND (unknown_required_action IS NULL) AND (revision = 2)) OR ((outcome_kind = 'outcome_unknown'::public.inbox_v2_outbound_dispatch_attempt_outcome) AND (completion_source = ANY (ARRAY['provider_result'::public.inbox_v2_outbound_dispatch_attempt_completion_source, 'lease_expired'::public.inbox_v2_outbound_dispatch_attempt_completion_source])) AND isfinite(completed_at) AND (completed_at >= opened_at) AND (((completion_source = 'provider_result'::public.inbox_v2_outbound_dispatch_attempt_completion_source) AND (completed_at <= lease_expires_at)) OR ((completion_source = 'lease_expired'::public.inbox_v2_outbound_dispatch_attempt_completion_source) AND (completed_at >= lease_expires_at))) AND (retry_at IS NULL) AND (provider_acknowledgement_token IS NULL) AND COALESCE(((char_length(diagnostic_code_id) <= 256) AND (((diagnostic_code_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_code_id, ':'::text, 2)) <= 160)) OR ((diagnostic_code_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_code_id, ':'::text, 2)) <= 80) AND (char_length(split_part(diagnostic_code_id, ':'::text, 3)) <= 160) AND (split_part(diagnostic_code_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false) AND (diagnostic_retryable IS NOT NULL) AND COALESCE(((char_length(diagnostic_correlation_token) >= 8) AND (char_length(diagnostic_correlation_token) <= 256) AND (diagnostic_correlation_token ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'::text)), false) AND ((diagnostic_safe_operator_hint_id IS NULL) OR COALESCE(((char_length(diagnostic_safe_operator_hint_id) <= 256) AND (((diagnostic_safe_operator_hint_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_safe_operator_hint_id, ':'::text, 2)) <= 160)) OR ((diagnostic_safe_operator_hint_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(diagnostic_safe_operator_hint_id, ':'::text, 2)) <= 80) AND (char_length(split_part(diagnostic_safe_operator_hint_id, ':'::text, 3)) <= 160) AND (split_part(diagnostic_safe_operator_hint_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false)) AND ((automatic_retry_allowed AND (unknown_required_action = 'automated_reconciliation_required'::public.inbox_v2_outbound_dispatch_unknown_required_action)) OR ((NOT automatic_retry_allowed) AND (unknown_required_action = 'operator_duplicate_risk_decision_required'::public.inbox_v2_outbound_dispatch_unknown_required_action))) AND (revision = 2))) IS TRUE)),
-    CONSTRAINT inbox_v2_outbound_dispatch_attempts_retry_safety_check CHECK (((COALESCE(((jsonb_typeof(retry_safety_adapter_contract_snapshot) = 'object'::text) AND ((octet_length((retry_safety_adapter_contract_snapshot)::text) >= 2) AND (octet_length((retry_safety_adapter_contract_snapshot)::text) <= 16384))), false) AND COALESCE(((char_length(retry_safety_declared_by_trusted_service_id) <= 256) AND (((retry_safety_declared_by_trusted_service_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(retry_safety_declared_by_trusted_service_id, ':'::text, 2)) <= 160)) OR ((retry_safety_declared_by_trusted_service_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(retry_safety_declared_by_trusted_service_id, ':'::text, 2)) <= 80) AND (char_length(split_part(retry_safety_declared_by_trusted_service_id, ':'::text, 3)) <= 160) AND (split_part(retry_safety_declared_by_trusted_service_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false) AND COALESCE(((char_length(retry_safety_declaration_token) >= 8) AND (char_length(retry_safety_declaration_token) <= 256) AND (retry_safety_declaration_token ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'::text)), false) AND isfinite(((retry_safety_adapter_contract_snapshot #>> '{loadedAt}'::text[]))::timestamp with time zone) AND isfinite(retry_safety_declared_at) AND (((retry_safety_adapter_contract_snapshot #>> '{loadedAt}'::text[]))::timestamp with time zone <= retry_safety_declared_at) AND (retry_safety_declared_at <= opened_at) AND (((retry_safety_mechanism = 'unsafe_or_unknown'::public.inbox_v2_outbound_retry_safety_mechanism) AND (provider_correlation_token IS NULL) AND (NOT automatic_retry_allowed)) OR ((retry_safety_mechanism <> 'unsafe_or_unknown'::public.inbox_v2_outbound_retry_safety_mechanism) AND COALESCE(((char_length(provider_correlation_token) >= 8) AND (char_length(provider_correlation_token) <= 256) AND (provider_correlation_token ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'::text)), false)))) IS TRUE))
 );
 
 
@@ -45017,33 +46610,6 @@ CREATE TABLE public.inbox_v2_outbound_dispatch_reconciliation_permissions (
 
 
 --
--- Name: inbox_v2_outbound_dispatches; Type: TABLE; Schema: public; Owner: <database-owner>
---
-
-CREATE TABLE public.inbox_v2_outbound_dispatches (
-    tenant_id text NOT NULL,
-    id text NOT NULL,
-    message_id text NOT NULL,
-    conversation_id text NOT NULL,
-    timeline_item_id text NOT NULL,
-    route_id text NOT NULL,
-    multi_send_operation_id text,
-    state public.inbox_v2_outbound_dispatch_state DEFAULT 'queued'::public.inbox_v2_outbound_dispatch_state NOT NULL,
-    attempt_count integer DEFAULT 0 NOT NULL,
-    active_attempt_id text,
-    last_attempt_id text,
-    retry_authorization_decision_id text,
-    revision bigint DEFAULT 1 NOT NULL,
-    created_at timestamp(3) with time zone NOT NULL,
-    updated_at timestamp(3) with time zone NOT NULL,
-    CONSTRAINT inbox_v2_outbound_dispatches_id_check CHECK (COALESCE(((char_length(id) <= 256) AND (id ~ '^outbound_dispatch:[A-Za-z0-9][A-Za-z0-9._~:-]{0,199}$'::text)), false)),
-    CONSTRAINT inbox_v2_outbound_dispatches_state_check CHECK ((((attempt_count >= 0) AND (attempt_count <= 1000000) AND (((state = 'queued'::public.inbox_v2_outbound_dispatch_state) AND (attempt_count = 0) AND (active_attempt_id IS NULL) AND (last_attempt_id IS NULL) AND (retry_authorization_decision_id IS NULL) AND (revision = 1)) OR ((state = 'attempting'::public.inbox_v2_outbound_dispatch_state) AND (attempt_count >= 1) AND (active_attempt_id IS NOT NULL) AND (active_attempt_id = last_attempt_id) AND (retry_authorization_decision_id IS NULL) AND (revision >= 2)) OR ((state <> ALL (ARRAY['queued'::public.inbox_v2_outbound_dispatch_state, 'attempting'::public.inbox_v2_outbound_dispatch_state])) AND (active_attempt_id IS NULL) AND ((attempt_count = 0) OR (last_attempt_id IS NOT NULL)) AND ((state <> 'retryable_failure'::public.inbox_v2_outbound_dispatch_state) OR (attempt_count >= 1)) AND ((state = 'retryable_failure'::public.inbox_v2_outbound_dispatch_state) OR (retry_authorization_decision_id IS NULL)) AND (revision >= 2)))) IS TRUE)),
-    CONSTRAINT inbox_v2_outbound_dispatches_timestamps_check CHECK ((isfinite(created_at) AND isfinite(updated_at) AND (updated_at >= created_at)))
-);
-
-
-
---
 -- Name: inbox_v2_outbound_multi_send_children; Type: TABLE; Schema: public; Owner: <database-owner>
 --
 
@@ -45084,6 +46650,171 @@ CREATE TABLE public.inbox_v2_outbound_multi_send_operations (
     CONSTRAINT inbox_v2_outbound_multi_send_operations_actor_check CHECK ((((actor_kind = 'employee'::public.inbox_v2_outbound_actor_kind) AND (actor_employee_id IS NOT NULL) AND (actor_trusted_service_id IS NULL)) OR ((actor_kind = 'trusted_service'::public.inbox_v2_outbound_actor_kind) AND (actor_employee_id IS NULL) AND COALESCE(((char_length(actor_trusted_service_id) <= 256) AND (((actor_trusted_service_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(actor_trusted_service_id, ':'::text, 2)) <= 160)) OR ((actor_trusted_service_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(actor_trusted_service_id, ':'::text, 2)) <= 80) AND (char_length(split_part(actor_trusted_service_id, ':'::text, 3)) <= 160) AND (split_part(actor_trusted_service_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false)))),
     CONSTRAINT inbox_v2_outbound_multi_send_operations_id_check CHECK (COALESCE(((char_length(id) <= 256) AND (id ~ '^outbound_multi_send_operation:[A-Za-z0-9][A-Za-z0-9._~:-]{0,199}$'::text)), false)),
     CONSTRAINT inbox_v2_outbound_multi_send_operations_values_check CHECK ((COALESCE(((char_length(mutation_token) >= 8) AND (char_length(mutation_token) <= 256) AND (mutation_token ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'::text)), false) AND COALESCE(((char_length(idempotency_token) >= 8) AND (char_length(idempotency_token) <= 256) AND (idempotency_token ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'::text)), false) AND COALESCE(((char_length(correlation_token) >= 8) AND (char_length(correlation_token) <= 256) AND (correlation_token ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'::text)), false) AND ((child_count >= 2) AND (child_count <= 100)) AND COALESCE((children_digest_sha256 ~ '^[a-f0-9]{64}$'::text), false) AND (revision = 1) AND isfinite(created_at)))
+);
+
+
+
+--
+-- Name: inbox_v2_outbound_provider_correlation_anchors; Type: TABLE; Schema: public; Owner: <database-owner>
+--
+
+CREATE TABLE public.inbox_v2_outbound_provider_correlation_anchors (
+    tenant_id text NOT NULL,
+    adapter_contract_id text NOT NULL,
+    adapter_contract_version text NOT NULL,
+    adapter_declaration_revision bigint NOT NULL,
+    adapter_surface_id text NOT NULL,
+    correlation_token text NOT NULL,
+    dispatch_id text NOT NULL,
+    route_id text NOT NULL,
+    message_id text NOT NULL,
+    first_attempt_id text NOT NULL,
+    external_thread_id text NOT NULL,
+    source_connection_id text NOT NULL,
+    source_account_id text NOT NULL,
+    source_thread_binding_id text NOT NULL,
+    binding_generation bigint NOT NULL,
+    retry_safety_mechanism public.inbox_v2_outbound_retry_safety_mechanism NOT NULL,
+    declared_by_trusted_service_id text NOT NULL,
+    created_at timestamp(3) with time zone NOT NULL,
+    revision bigint DEFAULT 1 NOT NULL,
+    CONSTRAINT inbox_v2_outbound_provider_correlation_anchors_value_check CHECK ((COALESCE(((char_length(adapter_contract_id) <= 256) AND (((adapter_contract_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(adapter_contract_id, ':'::text, 2)) <= 160)) OR ((adapter_contract_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(adapter_contract_id, ':'::text, 2)) <= 80) AND (char_length(split_part(adapter_contract_id, ':'::text, 3)) <= 160) AND (split_part(adapter_contract_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false) AND COALESCE((adapter_contract_version ~ '^v[1-9][0-9]*$'::text), false) AND (adapter_declaration_revision >= 1) AND COALESCE(((char_length(adapter_surface_id) <= 256) AND (((adapter_surface_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(adapter_surface_id, ':'::text, 2)) <= 160)) OR ((adapter_surface_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(adapter_surface_id, ':'::text, 2)) <= 80) AND (char_length(split_part(adapter_surface_id, ':'::text, 3)) <= 160) AND (split_part(adapter_surface_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false) AND COALESCE(((char_length(correlation_token) >= 8) AND (char_length(correlation_token) <= 256) AND (correlation_token ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'::text)), false) AND (binding_generation >= 1) AND (retry_safety_mechanism <> 'unsafe_or_unknown'::public.inbox_v2_outbound_retry_safety_mechanism) AND COALESCE(((char_length(declared_by_trusted_service_id) <= 256) AND (((declared_by_trusted_service_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(declared_by_trusted_service_id, ':'::text, 2)) <= 160)) OR ((declared_by_trusted_service_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(declared_by_trusted_service_id, ':'::text, 2)) <= 80) AND (char_length(split_part(declared_by_trusted_service_id, ':'::text, 3)) <= 160) AND (split_part(declared_by_trusted_service_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false) AND isfinite(created_at) AND (revision = 1)))
+);
+
+
+
+--
+-- Name: inbox_v2_outbound_provider_observation_settlements; Type: TABLE; Schema: public; Owner: <database-owner>
+--
+
+CREATE TABLE public.inbox_v2_outbound_provider_observation_settlements (
+    tenant_id text NOT NULL,
+    observation_id text NOT NULL,
+    artifact_resolution_id text NOT NULL,
+    artifact_id text NOT NULL,
+    dispatch_id text NOT NULL,
+    route_id text NOT NULL,
+    attempt_id text NOT NULL,
+    message_id text NOT NULL,
+    artifact_ordinal smallint NOT NULL,
+    effective_state public.inbox_v2_outbound_dispatch_artifact_state DEFAULT 'accepted'::public.inbox_v2_outbound_dispatch_artifact_state NOT NULL,
+    source_occurrence_id text NOT NULL,
+    source_occurrence_revision bigint NOT NULL,
+    source_occurrence_resolution_state public.inbox_v2_source_occurrence_resolution_state DEFAULT 'resolved'::public.inbox_v2_source_occurrence_resolution_state NOT NULL,
+    external_thread_id text NOT NULL,
+    external_message_reference_id text NOT NULL,
+    canonical_artifact_reference_link_id text NOT NULL,
+    message_transport_link_id text NOT NULL,
+    transition_kind public.inbox_v2_outbound_provider_settlement_transition_kind NOT NULL,
+    reconciliation_decision_id text,
+    reconciliation_result_state public.inbox_v2_outbound_dispatch_reconciliation_result,
+    settled_by_trusted_service_id text NOT NULL,
+    settled_at timestamp(3) with time zone NOT NULL,
+    revision bigint DEFAULT 1 NOT NULL,
+    CONSTRAINT inbox_v2_outbound_provider_observation_settlements_immutable_ch CHECK ((COALESCE(((char_length(settled_by_trusted_service_id) <= 256) AND (((settled_by_trusted_service_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(settled_by_trusted_service_id, ':'::text, 2)) <= 160)) OR ((settled_by_trusted_service_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(settled_by_trusted_service_id, ':'::text, 2)) <= 80) AND (char_length(split_part(settled_by_trusted_service_id, ':'::text, 3)) <= 160) AND (split_part(settled_by_trusted_service_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false) AND isfinite(settled_at) AND (revision = 1))),
+    CONSTRAINT inbox_v2_outbound_provider_observation_settlements_state_check CHECK (((artifact_ordinal >= 1) AND (artifact_ordinal <= 64) AND (effective_state = 'accepted'::public.inbox_v2_outbound_dispatch_artifact_state) AND (source_occurrence_revision >= 2) AND (source_occurrence_resolution_state = 'resolved'::public.inbox_v2_source_occurrence_resolution_state) AND (((transition_kind = 'reconcile_outcome_unknown'::public.inbox_v2_outbound_provider_settlement_transition_kind) AND (reconciliation_decision_id IS NOT NULL) AND (reconciliation_result_state = 'accepted'::public.inbox_v2_outbound_dispatch_reconciliation_result)) OR ((transition_kind <> 'reconcile_outcome_unknown'::public.inbox_v2_outbound_provider_settlement_transition_kind) AND (reconciliation_decision_id IS NULL) AND (reconciliation_result_state IS NULL)))))
+);
+
+
+
+--
+-- Name: inbox_v2_outbound_provider_observations; Type: TABLE; Schema: public; Owner: <database-owner>
+--
+
+CREATE TABLE public.inbox_v2_outbound_provider_observations (
+    tenant_id text NOT NULL,
+    id text NOT NULL,
+    artifact_id text NOT NULL,
+    dispatch_id text NOT NULL,
+    route_id text NOT NULL,
+    attempt_id text NOT NULL,
+    message_id text NOT NULL,
+    artifact_ordinal smallint NOT NULL,
+    artifact_state public.inbox_v2_outbound_dispatch_artifact_state NOT NULL,
+    effective_state public.inbox_v2_outbound_dispatch_artifact_state DEFAULT 'accepted'::public.inbox_v2_outbound_dispatch_artifact_state NOT NULL,
+    content_plan_id text NOT NULL,
+    content_plan_digest_sha256 text NOT NULL,
+    planned_artifact_count smallint NOT NULL,
+    artifact_plan_id text NOT NULL,
+    artifact_plan_hash_sha256 text NOT NULL,
+    external_thread_id text NOT NULL,
+    route_source_connection_id text NOT NULL,
+    route_source_account_id text NOT NULL,
+    route_source_thread_binding_id text NOT NULL,
+    route_binding_generation bigint NOT NULL,
+    source_connection_id text NOT NULL,
+    source_account_id text NOT NULL,
+    source_thread_binding_id text NOT NULL,
+    source_binding_generation bigint NOT NULL,
+    source_message_scope_kind public.inbox_v2_source_occurrence_message_scope_kind NOT NULL,
+    source_message_decision_strength public.inbox_v2_source_occurrence_decision_strength NOT NULL,
+    adapter_contract_id text NOT NULL,
+    adapter_contract_version text NOT NULL,
+    adapter_declaration_revision bigint NOT NULL,
+    adapter_surface_id text NOT NULL,
+    correlation_anchor_first_attempt_id text,
+    source_occurrence_id text NOT NULL,
+    source_occurrence_detail jsonb NOT NULL,
+    source_occurrence_detail_digest_sha256 text NOT NULL,
+    evidence_kind public.inbox_v2_outbound_artifact_association_evidence_kind NOT NULL,
+    provider_reference_kind_id text,
+    correlation_token text,
+    counts_as_customer_inbound boolean DEFAULT false NOT NULL,
+    creates_unread boolean DEFAULT false NOT NULL,
+    creates_work_item boolean DEFAULT false NOT NULL,
+    requires_provider_io boolean DEFAULT false NOT NULL,
+    creates_outbound_dispatch boolean DEFAULT false NOT NULL,
+    notification_eligible boolean DEFAULT false NOT NULL,
+    observed_by_trusted_service_id text NOT NULL,
+    recorded_at timestamp(3) with time zone NOT NULL,
+    revision bigint DEFAULT 1 NOT NULL,
+    observation_detail jsonb NOT NULL,
+    observation_detail_digest_sha256 text NOT NULL,
+    CONSTRAINT inbox_v2_outbound_provider_observations_artifact_check CHECK (((artifact_ordinal >= 1) AND (artifact_ordinal <= 64) AND ((planned_artifact_count >= 1) AND (planned_artifact_count <= 64)) AND (artifact_ordinal <= planned_artifact_count) AND (artifact_state = ANY (ARRAY['accepted'::public.inbox_v2_outbound_dispatch_artifact_state, 'outcome_unknown'::public.inbox_v2_outbound_dispatch_artifact_state])) AND (effective_state = 'accepted'::public.inbox_v2_outbound_dispatch_artifact_state) AND COALESCE((content_plan_digest_sha256 ~ '^[a-f0-9]{64}$'::text), false) AND COALESCE((artifact_plan_hash_sha256 ~ '^[a-f0-9]{64}$'::text), false))),
+    CONSTRAINT inbox_v2_outbound_provider_observations_detail_check CHECK ((COALESCE(((jsonb_typeof(source_occurrence_detail) = 'object'::text) AND ((octet_length((source_occurrence_detail)::text) >= 2) AND (octet_length((source_occurrence_detail)::text) <= 65536))), false) AND COALESCE((source_occurrence_detail_digest_sha256 ~ '^sha256:[a-f0-9]{64}$'::text), false) AND ((source_occurrence_detail #>> '{tenantId}'::text[]) = tenant_id) AND ((source_occurrence_detail #>> '{id}'::text[]) = source_occurrence_id) AND ((source_occurrence_detail #>> '{bindingContext,externalThread,id}'::text[]) = external_thread_id) AND ((source_occurrence_detail #>> '{bindingContext,sourceAccount,id}'::text[]) = source_account_id) AND ((source_occurrence_detail #>> '{bindingContext,sourceThreadBinding,id}'::text[]) = source_thread_binding_id) AND ((source_occurrence_detail #>> '{bindingContext,bindingGeneration}'::text[]) = (source_binding_generation)::text) AND ((source_occurrence_detail #>> '{messageIdentityDeclaration,scopeKind}'::text[]) = (source_message_scope_kind)::text) AND ((source_occurrence_detail #>> '{messageIdentityDeclaration,decisionStrength}'::text[]) = (source_message_decision_strength)::text) AND ((source_occurrence_detail #>> '{descriptor,adapterContract,contractId}'::text[]) = adapter_contract_id) AND ((source_occurrence_detail #>> '{descriptor,adapterContract,contractVersion}'::text[]) = adapter_contract_version) AND ((source_occurrence_detail #>> '{descriptor,adapterContract,declarationRevision}'::text[]) = (adapter_declaration_revision)::text) AND ((source_occurrence_detail #>> '{descriptor,adapterContract,surfaceId}'::text[]) = adapter_surface_id) AND ((source_occurrence_detail #>> '{direction}'::text[]) = 'outbound'::text) AND ((source_occurrence_detail -> 'providerActor'::text) = 'null'::jsonb) AND ((source_occurrence_detail #>> '{resolution,state}'::text[]) = 'pending'::text) AND ((source_occurrence_detail #>> '{revision}'::text[]) = '1'::text) AND (((source_occurrence_detail #>> '{recordedAt}'::text[]))::timestamp with time zone = recorded_at) AND (((source_occurrence_detail #>> '{createdAt}'::text[]))::timestamp with time zone = recorded_at) AND (((source_occurrence_detail #>> '{updatedAt}'::text[]))::timestamp with time zone = recorded_at))),
+    CONSTRAINT inbox_v2_outbound_provider_observations_effect_check CHECK (((NOT counts_as_customer_inbound) AND (NOT creates_unread) AND (NOT creates_work_item) AND (NOT requires_provider_io) AND (NOT creates_outbound_dispatch) AND (NOT notification_eligible))),
+    CONSTRAINT inbox_v2_outbound_provider_observations_evidence_check CHECK ((((evidence_kind = 'provider_response_attempt'::public.inbox_v2_outbound_artifact_association_evidence_kind) AND (provider_reference_kind_id IS NULL) AND (correlation_token IS NULL) AND (correlation_anchor_first_attempt_id IS NULL) AND ((source_occurrence_detail #>> '{origin,kind}'::text[]) = 'provider_response'::text) AND ((source_occurrence_detail #>> '{origin,outboundDispatchAttempt,id}'::text[]) = attempt_id) AND (route_source_connection_id = source_connection_id) AND (route_source_account_id = source_account_id) AND (route_source_thread_binding_id = source_thread_binding_id) AND (route_binding_generation = source_binding_generation)) OR ((evidence_kind = 'provider_echo_correlation'::public.inbox_v2_outbound_artifact_association_evidence_kind) AND COALESCE(((char_length(provider_reference_kind_id) <= 256) AND (((provider_reference_kind_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(provider_reference_kind_id, ':'::text, 2)) <= 160)) OR ((provider_reference_kind_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(provider_reference_kind_id, ':'::text, 2)) <= 80) AND (char_length(split_part(provider_reference_kind_id, ':'::text, 3)) <= 160) AND (split_part(provider_reference_kind_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false) AND COALESCE(((char_length(correlation_token) >= 8) AND (char_length(correlation_token) <= 256) AND (correlation_token ~ '^[A-Za-z0-9][A-Za-z0-9._~:-]*$'::text)), false) AND (correlation_anchor_first_attempt_id IS NOT NULL) AND ((source_occurrence_detail #>> '{origin,kind}'::text[]) = 'provider_echo'::text) AND (source_occurrence_detail @> jsonb_build_object('descriptor', jsonb_build_object('providerReferences', jsonb_build_array(jsonb_build_object('kindId', provider_reference_kind_id, 'subject', correlation_token)))))))),
+    CONSTRAINT inbox_v2_outbound_provider_observations_id_check CHECK (COALESCE(((char_length(id) <= 256) AND (id ~ '^outbound_provider_observation:[A-Za-z0-9][A-Za-z0-9._~:-]{0,199}$'::text)), false)),
+    CONSTRAINT inbox_v2_outbound_provider_observations_immutable_check CHECK ((COALESCE(((char_length(observed_by_trusted_service_id) <= 256) AND (((observed_by_trusted_service_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(observed_by_trusted_service_id, ':'::text, 2)) <= 160)) OR ((observed_by_trusted_service_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(observed_by_trusted_service_id, ':'::text, 2)) <= 80) AND (char_length(split_part(observed_by_trusted_service_id, ':'::text, 3)) <= 160) AND (split_part(observed_by_trusted_service_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false) AND isfinite(recorded_at) AND (revision = 1))),
+    CONSTRAINT inbox_v2_outbound_provider_observations_snapshot_check CHECK ((COALESCE(((jsonb_typeof(observation_detail) = 'object'::text) AND ((octet_length((observation_detail)::text) >= 2) AND (octet_length((observation_detail)::text) <= 262144))), false) AND COALESCE((observation_detail_digest_sha256 ~ '^sha256:[a-f0-9]{64}$'::text), false) AND ((observation_detail #>> '{tenantId}'::text[]) = tenant_id) AND ((observation_detail #>> '{id}'::text[]) = id) AND ((observation_detail #>> '{artifact,id}'::text[]) = artifact_id) AND ((observation_detail #>> '{artifact,ordinal}'::text[]) = (artifact_ordinal)::text) AND ((observation_detail #>> '{artifact,state}'::text[]) = (artifact_state)::text) AND ((observation_detail #>> '{dispatch,id}'::text[]) = dispatch_id) AND ((observation_detail #>> '{route,id}'::text[]) = route_id) AND ((observation_detail #>> '{attempt,id}'::text[]) = attempt_id) AND ((observation_detail #>> '{dispatch,message,id}'::text[]) = message_id) AND ((observation_detail -> 'sourceOccurrence'::text) = source_occurrence_detail) AND ((observation_detail #>> '{evidence,kind}'::text[]) = (evidence_kind)::text) AND ((observation_detail #>> '{observedByTrustedServiceId}'::text[]) = observed_by_trusted_service_id) AND (((observation_detail #>> '{recordedAt}'::text[]))::timestamp with time zone = recorded_at) AND ((observation_detail #>> '{revision}'::text[]) = '1'::text))),
+    CONSTRAINT inbox_v2_outbound_provider_observations_surface_check CHECK ((COALESCE(((char_length(adapter_contract_id) <= 256) AND (((adapter_contract_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(adapter_contract_id, ':'::text, 2)) <= 160)) OR ((adapter_contract_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(adapter_contract_id, ':'::text, 2)) <= 80) AND (char_length(split_part(adapter_contract_id, ':'::text, 3)) <= 160) AND (split_part(adapter_contract_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false) AND COALESCE((adapter_contract_version ~ '^v[1-9][0-9]*$'::text), false) AND (adapter_declaration_revision >= 1) AND COALESCE(((char_length(adapter_surface_id) <= 256) AND (((adapter_surface_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(adapter_surface_id, ':'::text, 2)) <= 160)) OR ((adapter_surface_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(adapter_surface_id, ':'::text, 2)) <= 80) AND (char_length(split_part(adapter_surface_id, ':'::text, 3)) <= 160) AND (split_part(adapter_surface_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false) AND (route_binding_generation >= 1) AND (source_binding_generation >= 1) AND (((route_source_connection_id = source_connection_id) AND (route_source_account_id = source_account_id) AND (route_source_thread_binding_id = source_thread_binding_id) AND (route_binding_generation = source_binding_generation)) OR ((evidence_kind = 'provider_echo_correlation'::public.inbox_v2_outbound_artifact_association_evidence_kind) AND (source_message_scope_kind = 'provider_thread'::public.inbox_v2_source_occurrence_message_scope_kind) AND (source_message_decision_strength = 'authoritative'::public.inbox_v2_source_occurrence_decision_strength)))))
+);
+
+
+
+--
+-- Name: inbox_v2_outbound_provider_settlement_work_items; Type: TABLE; Schema: public; Owner: <database-owner>
+--
+
+CREATE TABLE public.inbox_v2_outbound_provider_settlement_work_items (
+    tenant_id text NOT NULL,
+    observation_id text NOT NULL,
+    candidate_external_message_reference_id text NOT NULL,
+    candidate_transport_link_id text NOT NULL,
+    trusted_service_id text NOT NULL,
+    state public.inbox_v2_outbound_provider_settlement_work_state DEFAULT 'pending'::public.inbox_v2_outbound_provider_settlement_work_state NOT NULL,
+    attempt_count bigint DEFAULT 0 NOT NULL,
+    available_at timestamp(3) with time zone,
+    lease_owner_id text,
+    lease_token_hash text,
+    lease_revision bigint,
+    lease_claimed_at timestamp(3) with time zone,
+    lease_expires_at timestamp(3) with time zone,
+    last_finalized_lease_owner_id text,
+    last_finalized_lease_token_hash text,
+    last_finalized_lease_revision bigint,
+    last_finalized_result_hash text,
+    last_finalized_at timestamp(3) with time zone,
+    last_error_code text,
+    terminal_at timestamp(3) with time zone,
+    revision bigint DEFAULT 1 NOT NULL,
+    created_at timestamp(3) with time zone NOT NULL,
+    updated_at timestamp(3) with time zone NOT NULL,
+    CONSTRAINT inbox_v2_outbound_provider_settlement_work_items_lease_check CHECK ((((lease_owner_id IS NULL) AND (lease_token_hash IS NULL) AND (lease_revision IS NULL) AND (lease_claimed_at IS NULL) AND (lease_expires_at IS NULL)) OR ((lease_owner_id IS NOT NULL) AND (lease_token_hash IS NOT NULL) AND (lease_revision IS NOT NULL) AND (lease_claimed_at IS NOT NULL) AND (lease_expires_at IS NOT NULL) AND (lease_expires_at > lease_claimed_at)))),
+    CONSTRAINT inbox_v2_outbound_provider_settlement_work_items_replay_check CHECK ((((last_finalized_lease_owner_id IS NULL) AND (last_finalized_lease_token_hash IS NULL) AND (last_finalized_lease_revision IS NULL) AND (last_finalized_result_hash IS NULL) AND (last_finalized_at IS NULL)) OR ((last_finalized_lease_owner_id IS NOT NULL) AND (last_finalized_lease_token_hash IS NOT NULL) AND (last_finalized_lease_revision IS NOT NULL) AND (last_finalized_result_hash IS NOT NULL) AND (last_finalized_at IS NOT NULL)))),
+    CONSTRAINT inbox_v2_outbound_provider_settlement_work_items_state_check CHECK ((((state = 'pending'::public.inbox_v2_outbound_provider_settlement_work_state) AND (available_at IS NOT NULL) AND (lease_owner_id IS NULL) AND (terminal_at IS NULL)) OR ((state = 'leased'::public.inbox_v2_outbound_provider_settlement_work_state) AND (available_at IS NOT NULL) AND (lease_owner_id IS NOT NULL) AND (terminal_at IS NULL)) OR ((state = 'settled'::public.inbox_v2_outbound_provider_settlement_work_state) AND (available_at IS NULL) AND (lease_owner_id IS NULL) AND (last_finalized_at IS NOT NULL) AND (last_error_code IS NULL) AND (terminal_at = last_finalized_at)) OR ((state = 'dead'::public.inbox_v2_outbound_provider_settlement_work_state) AND (available_at IS NULL) AND (lease_owner_id IS NULL) AND (last_finalized_at IS NOT NULL) AND (last_error_code IS NOT NULL) AND (terminal_at = last_finalized_at)))),
+    CONSTRAINT inbox_v2_outbound_provider_settlement_work_items_times_check CHECK ((isfinite(created_at) AND isfinite(updated_at) AND (updated_at >= created_at) AND ((lease_claimed_at IS NULL) OR isfinite(lease_claimed_at)) AND ((lease_expires_at IS NULL) OR isfinite(lease_expires_at)) AND ((last_finalized_at IS NULL) OR isfinite(last_finalized_at)) AND ((terminal_at IS NULL) OR isfinite(terminal_at)))),
+    CONSTRAINT inbox_v2_outbound_provider_settlement_work_items_values_check CHECK ((COALESCE(((char_length(candidate_external_message_reference_id) <= 256) AND (candidate_external_message_reference_id ~ '^external_message_reference:[A-Za-z0-9][A-Za-z0-9._~:-]{0,199}$'::text)), false) AND COALESCE(((char_length(candidate_transport_link_id) <= 256) AND (candidate_transport_link_id ~ '^message_transport_occurrence_link:[A-Za-z0-9][A-Za-z0-9._~:-]{0,199}$'::text)), false) AND COALESCE(((char_length(trusted_service_id) <= 256) AND (((trusted_service_id ~ '^core:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(trusted_service_id, ':'::text, 2)) <= 160)) OR ((trusted_service_id ~ '^module:[a-z][a-z0-9]*([._-][a-z0-9]+)*:[a-z][a-z0-9]*([._-][a-z0-9]+)*$'::text) AND (char_length(split_part(trusted_service_id, ':'::text, 2)) <= 80) AND (char_length(split_part(trusted_service_id, ':'::text, 3)) <= 160) AND (split_part(trusted_service_id, ':'::text, 2) <> ALL (ARRAY['core'::text, 'hulee'::text, 'module'::text, 'platform'::text, 'system'::text]))))), false) AND (attempt_count >= 0) AND (revision >= 1) AND ((lease_owner_id IS NULL) OR ((char_length(lease_owner_id) >= 1) AND (char_length(lease_owner_id) <= 256))) AND ((lease_token_hash IS NULL) OR COALESCE((lease_token_hash ~ '^sha256:[a-f0-9]{64}$'::text), false)) AND ((lease_revision IS NULL) OR (lease_revision >= 1)) AND ((last_finalized_lease_owner_id IS NULL) OR ((char_length(last_finalized_lease_owner_id) >= 1) AND (char_length(last_finalized_lease_owner_id) <= 256))) AND ((last_finalized_lease_token_hash IS NULL) OR COALESCE((last_finalized_lease_token_hash ~ '^sha256:[a-f0-9]{64}$'::text), false)) AND ((last_finalized_lease_revision IS NULL) OR (last_finalized_lease_revision >= 1)) AND ((last_finalized_result_hash IS NULL) OR COALESCE((last_finalized_result_hash ~ '^sha256:[a-f0-9]{64}$'::text), false)) AND ((last_error_code IS NULL) OR ((char_length(last_error_code) >= 3) AND (char_length(last_error_code) <= 256)))))
 );
 
 
@@ -52364,6 +54095,30 @@ ALTER TABLE ONLY public.inbox_v2_outbound_dispatch_artifact_reference_links
 
 
 --
+-- Name: inbox_v2_outbound_dispatch_artifact_resolutions inbox_v2_outbound_dispatch_artifact_resolutions_artifact_unique; Type: CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_dispatch_artifact_resolutions
+    ADD CONSTRAINT inbox_v2_outbound_dispatch_artifact_resolutions_artifact_unique UNIQUE (tenant_id, artifact_id);
+
+
+--
+-- Name: inbox_v2_outbound_dispatch_artifact_resolutions inbox_v2_outbound_dispatch_artifact_resolutions_pk; Type: CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_dispatch_artifact_resolutions
+    ADD CONSTRAINT inbox_v2_outbound_dispatch_artifact_resolutions_pk PRIMARY KEY (tenant_id, id);
+
+
+--
+-- Name: inbox_v2_outbound_dispatch_artifact_resolutions inbox_v2_outbound_dispatch_artifact_resolutions_target_unique; Type: CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_dispatch_artifact_resolutions
+    ADD CONSTRAINT inbox_v2_outbound_dispatch_artifact_resolutions_target_unique UNIQUE (tenant_id, id, artifact_id, dispatch_id, route_id, attempt_id, message_id, effective_state);
+
+
+--
 -- Name: inbox_v2_outbound_dispatch_artifacts inbox_v2_outbound_dispatch_artifacts_chain_target_unique; Type: CONSTRAINT; Schema: public; Owner: <database-owner>
 --
 
@@ -52385,6 +54140,14 @@ ALTER TABLE ONLY public.inbox_v2_outbound_dispatch_artifacts
 
 ALTER TABLE ONLY public.inbox_v2_outbound_dispatch_artifacts
     ADD CONSTRAINT inbox_v2_outbound_dispatch_artifacts_pk PRIMARY KEY (tenant_id, id);
+
+
+--
+-- Name: inbox_v2_outbound_dispatch_artifacts inbox_v2_outbound_dispatch_artifacts_resolution_target_unique; Type: CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_dispatch_artifacts
+    ADD CONSTRAINT inbox_v2_outbound_dispatch_artifacts_resolution_target_unique UNIQUE (tenant_id, id, dispatch_id, route_id, attempt_id, message_id, ordinal, state);
 
 
 --
@@ -52545,6 +54308,86 @@ ALTER TABLE ONLY public.inbox_v2_outbound_multi_send_operations
 
 ALTER TABLE ONLY public.inbox_v2_outbound_multi_send_operations
     ADD CONSTRAINT inbox_v2_outbound_multi_send_operations_pk PRIMARY KEY (tenant_id, id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_correlation_anchors inbox_v2_outbound_provider_correlation_anchors_dispatch_unique; Type: CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_correlation_anchors
+    ADD CONSTRAINT inbox_v2_outbound_provider_correlation_anchors_dispatch_unique UNIQUE (tenant_id, dispatch_id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_correlation_anchors inbox_v2_outbound_provider_correlation_anchors_pk; Type: CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_correlation_anchors
+    ADD CONSTRAINT inbox_v2_outbound_provider_correlation_anchors_pk PRIMARY KEY (tenant_id, adapter_contract_id, adapter_contract_version, adapter_declaration_revision, adapter_surface_id, correlation_token);
+
+
+--
+-- Name: inbox_v2_outbound_provider_correlation_anchors inbox_v2_outbound_provider_correlation_anchors_target_unique; Type: CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_correlation_anchors
+    ADD CONSTRAINT inbox_v2_outbound_provider_correlation_anchors_target_unique UNIQUE (tenant_id, adapter_contract_id, adapter_contract_version, adapter_declaration_revision, adapter_surface_id, correlation_token, dispatch_id, route_id, message_id, first_attempt_id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_observation_settlements inbox_v2_outbound_provider_observation_settlements_occurrence_u; Type: CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_observation_settlements
+    ADD CONSTRAINT inbox_v2_outbound_provider_observation_settlements_occurrence_u UNIQUE (tenant_id, source_occurrence_id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_observation_settlements inbox_v2_outbound_provider_observation_settlements_pk; Type: CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_observation_settlements
+    ADD CONSTRAINT inbox_v2_outbound_provider_observation_settlements_pk PRIMARY KEY (tenant_id, observation_id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_observations inbox_v2_outbound_provider_observations_pk; Type: CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_observations
+    ADD CONSTRAINT inbox_v2_outbound_provider_observations_pk PRIMARY KEY (tenant_id, id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_observations inbox_v2_outbound_provider_observations_replay_unique; Type: CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_observations
+    ADD CONSTRAINT inbox_v2_outbound_provider_observations_replay_unique UNIQUE (tenant_id, artifact_id, source_occurrence_id, evidence_kind, source_occurrence_detail_digest_sha256);
+
+
+--
+-- Name: inbox_v2_outbound_provider_observations inbox_v2_outbound_provider_observations_target_unique; Type: CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_observations
+    ADD CONSTRAINT inbox_v2_outbound_provider_observations_target_unique UNIQUE (tenant_id, id, artifact_id, dispatch_id, route_id, attempt_id, message_id, artifact_ordinal, effective_state, source_occurrence_id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_settlement_work_items inbox_v2_outbound_provider_settlement_work_items_link_uk; Type: CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_settlement_work_items
+    ADD CONSTRAINT inbox_v2_outbound_provider_settlement_work_items_link_uk UNIQUE (tenant_id, candidate_transport_link_id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_settlement_work_items inbox_v2_outbound_provider_settlement_work_items_pk; Type: CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_settlement_work_items
+    ADD CONSTRAINT inbox_v2_outbound_provider_settlement_work_items_pk PRIMARY KEY (tenant_id, observation_id);
 
 
 --
@@ -56928,6 +58771,13 @@ CREATE INDEX inbox_v2_outbound_artifact_reference_links_reference_idx ON public.
 
 
 --
+-- Name: inbox_v2_outbound_dispatch_artifact_resolutions_attempt_idx; Type: INDEX; Schema: public; Owner: <database-owner>
+--
+
+CREATE INDEX inbox_v2_outbound_dispatch_artifact_resolutions_attempt_idx ON public.inbox_v2_outbound_dispatch_artifact_resolutions USING btree (tenant_id, dispatch_id, attempt_id, artifact_ordinal, id);
+
+
+--
 -- Name: inbox_v2_outbound_dispatch_artifacts_dispatch_idx; Type: INDEX; Schema: public; Owner: <database-owner>
 --
 
@@ -57009,6 +58859,69 @@ CREATE INDEX inbox_v2_outbound_multi_send_operations_actor_employee_idx ON publi
 --
 
 CREATE INDEX inbox_v2_outbound_multi_send_operations_tenant_created_idx ON public.inbox_v2_outbound_multi_send_operations USING btree (tenant_id, created_at, id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_correlation_anchors_dispatch_idx; Type: INDEX; Schema: public; Owner: <database-owner>
+--
+
+CREATE INDEX inbox_v2_outbound_provider_correlation_anchors_dispatch_idx ON public.inbox_v2_outbound_provider_correlation_anchors USING btree (tenant_id, dispatch_id, first_attempt_id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_observation_settlements_artifact_idx; Type: INDEX; Schema: public; Owner: <database-owner>
+--
+
+CREATE INDEX inbox_v2_outbound_provider_observation_settlements_artifact_idx ON public.inbox_v2_outbound_provider_observation_settlements USING btree (tenant_id, artifact_id, settled_at, observation_id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_observation_settlements_decision_idx; Type: INDEX; Schema: public; Owner: <database-owner>
+--
+
+CREATE INDEX inbox_v2_outbound_provider_observation_settlements_decision_idx ON public.inbox_v2_outbound_provider_observation_settlements USING btree (tenant_id, reconciliation_decision_id, observation_id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_observations_dispatch_idx; Type: INDEX; Schema: public; Owner: <database-owner>
+--
+
+CREATE INDEX inbox_v2_outbound_provider_observations_dispatch_idx ON public.inbox_v2_outbound_provider_observations USING btree (tenant_id, dispatch_id, attempt_id, artifact_ordinal, id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_observations_occurrence_idx; Type: INDEX; Schema: public; Owner: <database-owner>
+--
+
+CREATE INDEX inbox_v2_outbound_provider_observations_occurrence_idx ON public.inbox_v2_outbound_provider_observations USING btree (tenant_id, source_occurrence_id, recorded_at, id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_settlement_work_items_due_idx; Type: INDEX; Schema: public; Owner: <database-owner>
+--
+
+CREATE INDEX inbox_v2_outbound_provider_settlement_work_items_due_idx ON public.inbox_v2_outbound_provider_settlement_work_items USING btree (tenant_id, available_at, observation_id) WHERE (state = 'pending'::public.inbox_v2_outbound_provider_settlement_work_state);
+
+
+--
+-- Name: inbox_v2_outbound_provider_settlement_work_items_lease_uidx; Type: INDEX; Schema: public; Owner: <database-owner>
+--
+
+CREATE UNIQUE INDEX inbox_v2_outbound_provider_settlement_work_items_lease_uidx ON public.inbox_v2_outbound_provider_settlement_work_items USING btree (tenant_id, lease_token_hash) WHERE (lease_token_hash IS NOT NULL);
+
+
+--
+-- Name: inbox_v2_outbound_provider_settlement_work_items_reclaim_idx; Type: INDEX; Schema: public; Owner: <database-owner>
+--
+
+CREATE INDEX inbox_v2_outbound_provider_settlement_work_items_reclaim_idx ON public.inbox_v2_outbound_provider_settlement_work_items USING btree (tenant_id, lease_expires_at, observation_id) WHERE (state = 'leased'::public.inbox_v2_outbound_provider_settlement_work_state);
+
+
+--
+-- Name: inbox_v2_outbound_provider_settlement_work_items_service_idx; Type: INDEX; Schema: public; Owner: <database-owner>
+--
+
+CREATE INDEX inbox_v2_outbound_provider_settlement_work_items_service_idx ON public.inbox_v2_outbound_provider_settlement_work_items USING btree (tenant_id, trusted_service_id, state, observation_id);
 
 
 --
@@ -60988,6 +62901,20 @@ CREATE TRIGGER inbox_v2_outbound_artifact_reference_links_insert_guard_trigger B
 
 
 --
+-- Name: inbox_v2_outbound_dispatch_artifact_resolutions inbox_v2_outbound_artifact_resolutions_immutable_trigger; Type: TRIGGER; Schema: public; Owner: <database-owner>
+--
+
+CREATE TRIGGER inbox_v2_outbound_artifact_resolutions_immutable_trigger BEFORE DELETE OR UPDATE ON public.inbox_v2_outbound_dispatch_artifact_resolutions FOR EACH ROW EXECUTE FUNCTION public.inbox_v2_outbound_transport_reject_immutable();
+
+
+--
+-- Name: inbox_v2_outbound_dispatch_artifact_resolutions inbox_v2_outbound_artifact_resolutions_insert_guard_trigger; Type: TRIGGER; Schema: public; Owner: <database-owner>
+--
+
+CREATE TRIGGER inbox_v2_outbound_artifact_resolutions_insert_guard_trigger BEFORE INSERT ON public.inbox_v2_outbound_dispatch_artifact_resolutions FOR EACH ROW EXECUTE FUNCTION public.inbox_v2_outbound_artifact_resolution_guard_insert();
+
+
+--
 -- Name: inbox_v2_outbound_dispatch_reconciliation_decisions inbox_v2_outbound_artifact_retry_guard_trigger; Type: TRIGGER; Schema: public; Owner: <database-owner>
 --
 
@@ -60999,6 +62926,20 @@ CREATE TRIGGER inbox_v2_outbound_artifact_retry_guard_trigger BEFORE INSERT ON p
 --
 
 CREATE TRIGGER inbox_v2_outbound_attempt_mixed_outcome_guard_trigger BEFORE INSERT OR UPDATE ON public.inbox_v2_outbound_dispatch_attempts FOR EACH ROW EXECUTE FUNCTION public.inbox_v2_outbound_attempt_mixed_outcome_guard();
+
+
+--
+-- Name: inbox_v2_outbound_provider_correlation_anchors inbox_v2_outbound_correlation_anchors_immutable_trigger; Type: TRIGGER; Schema: public; Owner: <database-owner>
+--
+
+CREATE TRIGGER inbox_v2_outbound_correlation_anchors_immutable_trigger BEFORE DELETE OR UPDATE ON public.inbox_v2_outbound_provider_correlation_anchors FOR EACH ROW EXECUTE FUNCTION public.inbox_v2_outbound_transport_reject_immutable();
+
+
+--
+-- Name: inbox_v2_outbound_provider_correlation_anchors inbox_v2_outbound_correlation_anchors_insert_guard_trigger; Type: TRIGGER; Schema: public; Owner: <database-owner>
+--
+
+CREATE TRIGGER inbox_v2_outbound_correlation_anchors_insert_guard_trigger BEFORE INSERT ON public.inbox_v2_outbound_provider_correlation_anchors FOR EACH ROW EXECUTE FUNCTION public.inbox_v2_outbound_correlation_anchor_guard_insert();
 
 
 --
@@ -61097,6 +63038,55 @@ CREATE CONSTRAINT TRIGGER inbox_v2_outbound_multi_send_operations_children_const
 --
 
 CREATE TRIGGER inbox_v2_outbound_multi_send_operations_immutable_trigger BEFORE DELETE OR UPDATE ON public.inbox_v2_outbound_multi_send_operations FOR EACH ROW EXECUTE FUNCTION public.inbox_v2_outbound_transport_reject_immutable();
+
+
+--
+-- Name: inbox_v2_outbound_provider_observations inbox_v2_outbound_provider_observations_immutable_trigger; Type: TRIGGER; Schema: public; Owner: <database-owner>
+--
+
+CREATE TRIGGER inbox_v2_outbound_provider_observations_immutable_trigger BEFORE DELETE OR UPDATE ON public.inbox_v2_outbound_provider_observations FOR EACH ROW EXECUTE FUNCTION public.inbox_v2_outbound_transport_reject_immutable();
+
+
+--
+-- Name: inbox_v2_outbound_provider_observations inbox_v2_outbound_provider_observations_insert_guard_trigger; Type: TRIGGER; Schema: public; Owner: <database-owner>
+--
+
+CREATE TRIGGER inbox_v2_outbound_provider_observations_insert_guard_trigger BEFORE INSERT ON public.inbox_v2_outbound_provider_observations FOR EACH ROW EXECUTE FUNCTION public.inbox_v2_outbound_provider_observation_guard_insert();
+
+
+--
+-- Name: inbox_v2_outbound_provider_observations inbox_v2_outbound_provider_observations_work_constraint; Type: TRIGGER; Schema: public; Owner: <database-owner>
+--
+
+CREATE CONSTRAINT TRIGGER inbox_v2_outbound_provider_observations_work_constraint AFTER INSERT OR DELETE OR UPDATE ON public.inbox_v2_outbound_provider_observations DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.inbox_v2_outbound_provider_observation_work_deferred();
+
+
+--
+-- Name: inbox_v2_outbound_provider_settlement_work_items inbox_v2_outbound_provider_settlement_work_guard_trigger; Type: TRIGGER; Schema: public; Owner: <database-owner>
+--
+
+CREATE TRIGGER inbox_v2_outbound_provider_settlement_work_guard_trigger BEFORE INSERT OR DELETE OR UPDATE ON public.inbox_v2_outbound_provider_settlement_work_items FOR EACH ROW EXECUTE FUNCTION public.inbox_v2_outbound_provider_settlement_work_guard();
+
+
+--
+-- Name: inbox_v2_outbound_provider_settlement_work_items inbox_v2_outbound_provider_settlement_work_observation_constrai; Type: TRIGGER; Schema: public; Owner: <database-owner>
+--
+
+CREATE CONSTRAINT TRIGGER inbox_v2_outbound_provider_settlement_work_observation_constrai AFTER INSERT OR DELETE OR UPDATE ON public.inbox_v2_outbound_provider_settlement_work_items DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.inbox_v2_outbound_provider_observation_work_deferred();
+
+
+--
+-- Name: inbox_v2_outbound_provider_observation_settlements inbox_v2_outbound_provider_settlements_immutable_trigger; Type: TRIGGER; Schema: public; Owner: <database-owner>
+--
+
+CREATE TRIGGER inbox_v2_outbound_provider_settlements_immutable_trigger BEFORE DELETE OR UPDATE ON public.inbox_v2_outbound_provider_observation_settlements FOR EACH ROW EXECUTE FUNCTION public.inbox_v2_outbound_transport_reject_immutable();
+
+
+--
+-- Name: inbox_v2_outbound_provider_observation_settlements inbox_v2_outbound_provider_settlements_insert_guard_trigger; Type: TRIGGER; Schema: public; Owner: <database-owner>
+--
+
+CREATE TRIGGER inbox_v2_outbound_provider_settlements_insert_guard_trigger BEFORE INSERT ON public.inbox_v2_outbound_provider_observation_settlements FOR EACH ROW EXECUTE FUNCTION public.inbox_v2_outbound_provider_settlement_guard_insert();
 
 
 --
@@ -67873,6 +69863,30 @@ ALTER TABLE ONLY public.inbox_v2_outbound_dispatch_artifact_reference_links
 
 
 --
+-- Name: inbox_v2_outbound_dispatch_artifact_resolutions inbox_v2_outbound_dispatch_artifact_resolutions_artifact_fk; Type: FK CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_dispatch_artifact_resolutions
+    ADD CONSTRAINT inbox_v2_outbound_dispatch_artifact_resolutions_artifact_fk FOREIGN KEY (tenant_id, artifact_id, dispatch_id, route_id, attempt_id, message_id, artifact_ordinal, from_state) REFERENCES public.inbox_v2_outbound_dispatch_artifacts(tenant_id, id, dispatch_id, route_id, attempt_id, message_id, ordinal, state);
+
+
+--
+-- Name: inbox_v2_outbound_dispatch_artifact_resolutions inbox_v2_outbound_dispatch_artifact_resolutions_observation_fk; Type: FK CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_dispatch_artifact_resolutions
+    ADD CONSTRAINT inbox_v2_outbound_dispatch_artifact_resolutions_observation_fk FOREIGN KEY (tenant_id, observation_id, artifact_id, dispatch_id, route_id, attempt_id, message_id, artifact_ordinal, effective_state, observation_source_occurrence_id) REFERENCES public.inbox_v2_outbound_provider_observations(tenant_id, id, artifact_id, dispatch_id, route_id, attempt_id, message_id, artifact_ordinal, effective_state, source_occurrence_id);
+
+
+--
+-- Name: inbox_v2_outbound_dispatch_artifact_resolutions inbox_v2_outbound_dispatch_artifact_resolutions_tenant_fk; Type: FK CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_dispatch_artifact_resolutions
+    ADD CONSTRAINT inbox_v2_outbound_dispatch_artifact_resolutions_tenant_fk FOREIGN KEY (tenant_id) REFERENCES public.tenants(id) ON DELETE CASCADE;
+
+
+--
 -- Name: inbox_v2_outbound_dispatch_artifacts inbox_v2_outbound_dispatch_artifacts_attempt_fk; Type: FK CONSTRAINT; Schema: public; Owner: <database-owner>
 --
 
@@ -68062,6 +70076,174 @@ ALTER TABLE ONLY public.inbox_v2_outbound_multi_send_operations
 
 ALTER TABLE ONLY public.inbox_v2_outbound_multi_send_operations
     ADD CONSTRAINT inbox_v2_outbound_multi_send_operations_tenant_fk FOREIGN KEY (tenant_id) REFERENCES public.tenants(id) ON DELETE CASCADE;
+
+
+--
+-- Name: inbox_v2_outbound_provider_correlation_anchors inbox_v2_outbound_provider_correlation_anchors_attempt_fk; Type: FK CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_correlation_anchors
+    ADD CONSTRAINT inbox_v2_outbound_provider_correlation_anchors_attempt_fk FOREIGN KEY (tenant_id, first_attempt_id, dispatch_id, route_id, message_id) REFERENCES public.inbox_v2_outbound_dispatch_attempts(tenant_id, id, dispatch_id, route_id, message_id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_correlation_anchors inbox_v2_outbound_provider_correlation_anchors_binding_fk; Type: FK CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_correlation_anchors
+    ADD CONSTRAINT inbox_v2_outbound_provider_correlation_anchors_binding_fk FOREIGN KEY (tenant_id, source_thread_binding_id, external_thread_id, source_connection_id, source_account_id) REFERENCES public.inbox_v2_source_thread_bindings(tenant_id, id, external_thread_id, source_connection_id, source_account_id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_correlation_anchors inbox_v2_outbound_provider_correlation_anchors_dispatch_fk; Type: FK CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_correlation_anchors
+    ADD CONSTRAINT inbox_v2_outbound_provider_correlation_anchors_dispatch_fk FOREIGN KEY (tenant_id, dispatch_id, route_id, message_id) REFERENCES public.inbox_v2_outbound_dispatches(tenant_id, id, route_id, message_id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_correlation_anchors inbox_v2_outbound_provider_correlation_anchors_tenant_fk; Type: FK CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_correlation_anchors
+    ADD CONSTRAINT inbox_v2_outbound_provider_correlation_anchors_tenant_fk FOREIGN KEY (tenant_id) REFERENCES public.tenants(id) ON DELETE CASCADE;
+
+
+--
+-- Name: inbox_v2_outbound_provider_observation_settlements inbox_v2_outbound_provider_observation_settlements_artifact_lin; Type: FK CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_observation_settlements
+    ADD CONSTRAINT inbox_v2_outbound_provider_observation_settlements_artifact_lin FOREIGN KEY (tenant_id, canonical_artifact_reference_link_id) REFERENCES public.inbox_v2_outbound_dispatch_artifact_reference_links(tenant_id, id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_observation_settlements inbox_v2_outbound_provider_observation_settlements_decision_fk; Type: FK CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_observation_settlements
+    ADD CONSTRAINT inbox_v2_outbound_provider_observation_settlements_decision_fk FOREIGN KEY (tenant_id, reconciliation_decision_id, dispatch_id, route_id, attempt_id, reconciliation_result_state) REFERENCES public.inbox_v2_outbound_dispatch_reconciliation_decisions(tenant_id, id, dispatch_id, route_id, unknown_attempt_id, result_state);
+
+
+--
+-- Name: inbox_v2_outbound_provider_observation_settlements inbox_v2_outbound_provider_observation_settlements_observation_; Type: FK CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_observation_settlements
+    ADD CONSTRAINT inbox_v2_outbound_provider_observation_settlements_observation_ FOREIGN KEY (tenant_id, observation_id, artifact_id, dispatch_id, route_id, attempt_id, message_id, artifact_ordinal, effective_state, source_occurrence_id) REFERENCES public.inbox_v2_outbound_provider_observations(tenant_id, id, artifact_id, dispatch_id, route_id, attempt_id, message_id, artifact_ordinal, effective_state, source_occurrence_id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_observation_settlements inbox_v2_outbound_provider_observation_settlements_occurrence_f; Type: FK CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_observation_settlements
+    ADD CONSTRAINT inbox_v2_outbound_provider_observation_settlements_occurrence_f FOREIGN KEY (tenant_id, source_occurrence_id, source_occurrence_revision, source_occurrence_resolution_state, external_message_reference_id) REFERENCES public.inbox_v2_source_occurrences(tenant_id, id, revision, resolution_state, resolved_external_message_reference_id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_observation_settlements inbox_v2_outbound_provider_observation_settlements_reference_fk; Type: FK CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_observation_settlements
+    ADD CONSTRAINT inbox_v2_outbound_provider_observation_settlements_reference_fk FOREIGN KEY (tenant_id, external_message_reference_id, external_thread_id, message_id) REFERENCES public.inbox_v2_external_message_references(tenant_id, id, external_thread_id, message_id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_observation_settlements inbox_v2_outbound_provider_observation_settlements_resolution_f; Type: FK CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_observation_settlements
+    ADD CONSTRAINT inbox_v2_outbound_provider_observation_settlements_resolution_f FOREIGN KEY (tenant_id, artifact_resolution_id, artifact_id, dispatch_id, route_id, attempt_id, message_id, effective_state) REFERENCES public.inbox_v2_outbound_dispatch_artifact_resolutions(tenant_id, id, artifact_id, dispatch_id, route_id, attempt_id, message_id, effective_state);
+
+
+--
+-- Name: inbox_v2_outbound_provider_observation_settlements inbox_v2_outbound_provider_observation_settlements_transport_li; Type: FK CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_observation_settlements
+    ADD CONSTRAINT inbox_v2_outbound_provider_observation_settlements_transport_li FOREIGN KEY (tenant_id, message_transport_link_id, message_id) REFERENCES public.inbox_v2_message_transport_links(tenant_id, id, message_id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_observations inbox_v2_outbound_provider_observations_artifact_fk; Type: FK CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_observations
+    ADD CONSTRAINT inbox_v2_outbound_provider_observations_artifact_fk FOREIGN KEY (tenant_id, artifact_id, dispatch_id, route_id, attempt_id, message_id, artifact_ordinal, artifact_state) REFERENCES public.inbox_v2_outbound_dispatch_artifacts(tenant_id, id, dispatch_id, route_id, attempt_id, message_id, ordinal, state);
+
+
+--
+-- Name: inbox_v2_outbound_provider_observations inbox_v2_outbound_provider_observations_artifact_plan_fk; Type: FK CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_observations
+    ADD CONSTRAINT inbox_v2_outbound_provider_observations_artifact_plan_fk FOREIGN KEY (tenant_id, content_plan_id, artifact_plan_id, artifact_ordinal) REFERENCES public.inbox_v2_file_outbound_artifact_plans(tenant_id, content_plan_id, id, ordinal);
+
+
+--
+-- Name: inbox_v2_outbound_provider_observations inbox_v2_outbound_provider_observations_attempt_fk; Type: FK CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_observations
+    ADD CONSTRAINT inbox_v2_outbound_provider_observations_attempt_fk FOREIGN KEY (tenant_id, attempt_id, dispatch_id, route_id, message_id) REFERENCES public.inbox_v2_outbound_dispatch_attempts(tenant_id, id, dispatch_id, route_id, message_id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_observations inbox_v2_outbound_provider_observations_content_plan_fk; Type: FK CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_observations
+    ADD CONSTRAINT inbox_v2_outbound_provider_observations_content_plan_fk FOREIGN KEY (tenant_id, content_plan_id, dispatch_id) REFERENCES public.inbox_v2_file_outbound_dispatch_plans(tenant_id, id, dispatch_id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_observations inbox_v2_outbound_provider_observations_correlation_anchor_fk; Type: FK CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_observations
+    ADD CONSTRAINT inbox_v2_outbound_provider_observations_correlation_anchor_fk FOREIGN KEY (tenant_id, adapter_contract_id, adapter_contract_version, adapter_declaration_revision, adapter_surface_id, correlation_token, dispatch_id, route_id, message_id, correlation_anchor_first_attempt_id) REFERENCES public.inbox_v2_outbound_provider_correlation_anchors(tenant_id, adapter_contract_id, adapter_contract_version, adapter_declaration_revision, adapter_surface_id, correlation_token, dispatch_id, route_id, message_id, first_attempt_id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_observations inbox_v2_outbound_provider_observations_dispatch_fk; Type: FK CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_observations
+    ADD CONSTRAINT inbox_v2_outbound_provider_observations_dispatch_fk FOREIGN KEY (tenant_id, dispatch_id, route_id, message_id) REFERENCES public.inbox_v2_outbound_dispatches(tenant_id, id, route_id, message_id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_observations inbox_v2_outbound_provider_observations_route_binding_fk; Type: FK CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_observations
+    ADD CONSTRAINT inbox_v2_outbound_provider_observations_route_binding_fk FOREIGN KEY (tenant_id, route_source_thread_binding_id, external_thread_id, route_source_connection_id, route_source_account_id) REFERENCES public.inbox_v2_source_thread_bindings(tenant_id, id, external_thread_id, source_connection_id, source_account_id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_observations inbox_v2_outbound_provider_observations_source_binding_fk; Type: FK CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_observations
+    ADD CONSTRAINT inbox_v2_outbound_provider_observations_source_binding_fk FOREIGN KEY (tenant_id, source_thread_binding_id, external_thread_id, source_connection_id, source_account_id) REFERENCES public.inbox_v2_source_thread_bindings(tenant_id, id, external_thread_id, source_connection_id, source_account_id);
+
+
+--
+-- Name: inbox_v2_outbound_provider_observations inbox_v2_outbound_provider_observations_tenant_fk; Type: FK CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_observations
+    ADD CONSTRAINT inbox_v2_outbound_provider_observations_tenant_fk FOREIGN KEY (tenant_id) REFERENCES public.tenants(id) ON DELETE CASCADE;
+
+
+--
+-- Name: inbox_v2_outbound_provider_settlement_work_items inbox_v2_outbound_provider_settlement_work_items_observation_fk; Type: FK CONSTRAINT; Schema: public; Owner: <database-owner>
+--
+
+ALTER TABLE ONLY public.inbox_v2_outbound_provider_settlement_work_items
+    ADD CONSTRAINT inbox_v2_outbound_provider_settlement_work_items_observation_fk FOREIGN KEY (tenant_id, observation_id) REFERENCES public.inbox_v2_outbound_provider_observations(tenant_id, id) ON DELETE CASCADE;
 
 
 --

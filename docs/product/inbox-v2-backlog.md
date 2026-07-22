@@ -1872,14 +1872,24 @@ future non-chat items without a universal JSON message.
     findings. Detailed evidence and provider-runtime scope are in
     `docs/product/inbox-v2-msg-006-reactions-and-receipts.md`.
 
-- [ ] `INB2-MSG-007` Implement provider echo and out-of-band outbound handling.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-MSG-002`, `INB2-SRC-006`.
+- [x] `INB2-MSG-007` Implement provider echo and out-of-band outbound handling.
+  - State: `done`; Priority: `P0`; Started: `2026-07-22`; Completed:
+    `2026-07-22`; Owner: `Codex`; Depends on: `INB2-MSG-002`,
+    `INB2-SRC-006`.
   - Acceptance: native-app outbound imports once; provider echo reconciles a
     pending route; attempt-before-I/O and retry-safe capability handle uncertain
     provider acceptance without blind duplicate retry.
-  - Verification: echo/response/crash order permutations, cross-account echo,
-    unknown sender-account and non-idempotent uncertain outcome pass without
-    duplicate or false client notifications. Evidence: -
+  - Verification: exact echo/response/crash permutations, cross-account
+    authority, mixed artifact truth, non-idempotent uncertain outcomes,
+    native outbound import and settlement races pass without duplicate send or
+    false client effects. Task-focused Vitest passed `11/11` files / `254/254`;
+    source gate `80/80` / `1,269/1,269`; lifecycle `2/2`; focused PostgreSQL
+    `54/54`; race stress `10/10`; strict full PostgreSQL `34/34` files / `386`
+    passed (`6` skipped); default Vitest `360` passed files / `4,237` passed
+    tests (`33` files / `394` tests skipped). Final `pnpm check`, catalog,
+    baseline, format/lint/typecheck, clean-slate and independent P0/P1 reviews
+    passed. Evidence:
+    `docs/product/inbox-v2-msg-007-provider-echo-and-native-outbound.md`.
 
 - [ ] `INB2-MSG-008` Enforce staff-only internal notes.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-MSG-002`,

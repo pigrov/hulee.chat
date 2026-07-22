@@ -597,6 +597,22 @@ export {
 } from "./security-denial-retention-sweeper";
 export { createInboxV2SourceNormalizationProcessor } from "./source-normalization-processor";
 export { createInboxV2ProviderDispatchCoordinator } from "./inbox-v2-provider-dispatch-coordinator";
+export {
+  createInboxV2TrustedOutboundProviderObservationMaterializer,
+  isInboxV2TrustedOutboundProviderObservationMaterializer,
+  InboxV2OutboundProviderObservationMaterializerError,
+  type InboxV2OutboundProviderObservationMaterializationInput,
+  type InboxV2OutboundProviderObservationMaterializerErrorCode,
+  type InboxV2OutboundProviderSettlementWorkMaterialization,
+  type InboxV2TrustedOutboundProviderObservationMaterializer
+} from "./outbound-provider-observation-materializer";
+export {
+  createInboxV2OutboundProviderSettlementWorker,
+  INBOX_V2_OUTBOUND_PROVIDER_SETTLEMENT_PERMISSION_ID,
+  type InboxV2OutboundProviderSettlementAuthorizer,
+  type InboxV2OutboundProviderSettlementWorker,
+  type InboxV2OutboundProviderSettlementWorkerResult
+} from "./outbound-provider-settlement-worker";
 export { createWorkerInboxV2AttachmentMaterializationSweeper } from "./inbox-v2-attachment-materialization-sweeper";
 export {
   createInboxV2SourceIdentityResolutionProcessor,
