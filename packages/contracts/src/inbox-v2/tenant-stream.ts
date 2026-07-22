@@ -19,6 +19,10 @@ import {
   INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_SCHEMA_VERSION
 } from "./message-provider-lifecycle";
 import {
+  INBOX_V2_MESSAGE_REACTION_SCHEMA_VERSION,
+  INBOX_V2_MESSAGE_REACTION_TRANSITION_SCHEMA_ID
+} from "./message-reaction";
+import {
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID,
   INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION
 } from "./outbound-dispatch";
@@ -74,12 +78,15 @@ export const INBOX_V2_CORE_OUTBOX_INTENT_TYPE_IDS = [
   "core:notification.evaluate",
   "core:provider.dispatch",
   "core:provider.message_lifecycle",
+  "core:provider.message_reaction",
   "core:search.index",
   "core:workflow.evaluate"
 ] as const;
 
 export const INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_OPERATION_ENTITY_TYPE_ID =
   "core:message-provider-lifecycle-operation" as const;
+export const INBOX_V2_MESSAGE_REACTION_TRANSITION_ENTITY_TYPE_ID =
+  "core:message-reaction-transition" as const;
 
 const moduleNamespacedIdSchema = inboxV2NamespacedIdSchema.refine(
   (value) => value.startsWith("module:"),
@@ -474,7 +481,9 @@ export const inboxV2OutboxIntentSchema = z
         ? "dispatch"
         : intent.typeId === "core:provider.message_lifecycle"
           ? "message_lifecycle"
-          : null;
+          : intent.typeId === "core:provider.message_reaction"
+            ? "message_reaction"
+            : null;
     if (
       intent.effectClass === "provider_io" &&
       (providerPayloadKind === null ||
@@ -484,16 +493,21 @@ export const inboxV2OutboxIntentSchema = z
               INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID ||
             intent.payloadReference.schemaVersion !==
               INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_VERSION
-          : String(intent.payloadReference.schemaId) !==
-              INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_OPERATION_SCHEMA_ID ||
-            intent.payloadReference.schemaVersion !==
-              INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_SCHEMA_VERSION) ||
+          : providerPayloadKind === "message_lifecycle"
+            ? String(intent.payloadReference.schemaId) !==
+                INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_OPERATION_SCHEMA_ID ||
+              intent.payloadReference.schemaVersion !==
+                INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_SCHEMA_VERSION
+            : String(intent.payloadReference.schemaId) !==
+                INBOX_V2_MESSAGE_REACTION_TRANSITION_SCHEMA_ID ||
+              intent.payloadReference.schemaVersion !==
+                INBOX_V2_MESSAGE_REACTION_SCHEMA_VERSION) ||
         intent.changeIds.length === 0)
     ) {
       context.addIssue({
         code: "custom",
         message:
-          "Provider I/O requires an explicit dispatch or message-lifecycle intent, exact payload reference and owning changes."
+          "Provider I/O requires an explicit dispatch, message-lifecycle or message-reaction intent, exact versioned payload reference and owning changes."
       });
     }
   });
@@ -865,13 +879,17 @@ function validateOutboxIntents(
         ? "core:outbound-dispatch"
         : intent.typeId === "core:provider.message_lifecycle"
           ? INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_OPERATION_ENTITY_TYPE_ID
-          : null;
+          : intent.typeId === "core:provider.message_reaction"
+            ? INBOX_V2_MESSAGE_REACTION_TRANSITION_ENTITY_TYPE_ID
+            : null;
     const expectedProviderStateSchemaId =
       intent.typeId === "core:provider.dispatch"
         ? INBOX_V2_OUTBOUND_DISPATCH_SCHEMA_ID
         : intent.typeId === "core:provider.message_lifecycle"
           ? INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_OPERATION_SCHEMA_ID
-          : null;
+          : intent.typeId === "core:provider.message_reaction"
+            ? INBOX_V2_MESSAGE_REACTION_TRANSITION_SCHEMA_ID
+            : null;
     const pinnedProviderOperations =
       expectedProviderEntityTypeId === null ||
       expectedProviderStateSchemaId === null ||
@@ -889,7 +907,8 @@ function validateOutboxIntents(
           );
     const hasPinnedProviderOperation =
       intent.effectClass !== "provider_io" ||
-      (intent.typeId === "core:provider.message_lifecycle"
+      (intent.typeId === "core:provider.message_lifecycle" ||
+      intent.typeId === "core:provider.message_reaction"
         ? pinnedProviderOperations.length === 1
         : pinnedProviderOperations.length > 0);
     if (
@@ -1024,6 +1043,7 @@ function coreOutboxEffectClass(
       return "notification";
     case "core:provider.dispatch":
     case "core:provider.message_lifecycle":
+    case "core:provider.message_reaction":
       return "provider_io";
     case "core:search.index":
       return "search";

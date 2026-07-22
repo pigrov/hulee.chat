@@ -6115,6 +6115,20 @@ describe("Inbox V2 authorization policy", () => {
         makeInput([reaction(action), internalRead], grants)
       ).outcome
     ).toBe("allowed");
+    expect(
+      evaluateInboxV2AuthorizationPlan(
+        makeInput(
+          [
+            {
+              ...reaction(action),
+              resource: conversationResource
+            },
+            internalRead
+          ],
+          grants
+        )
+      ).outcome
+    ).toBe("denied");
     for (const invalidAction of [
       { ...action, capabilityState: "supported" as const },
       { ...action, capabilityNotAfter: GRANT_END },

@@ -623,6 +623,12 @@ export const inboxV2MessageReactionSlotHeadEnvelopeSchema =
 export type InboxV2MessageReaction = z.infer<
   typeof inboxV2MessageReactionSchema
 >;
+export type InboxV2MessageReactionTransition = z.infer<
+  typeof inboxV2MessageReactionTransitionSchema
+>;
+export type InboxV2MessageReactionCommit = z.infer<
+  typeof inboxV2MessageReactionCommitSchema
+>;
 export type InboxV2MessageReactionSlotHead = z.infer<
   typeof inboxV2MessageReactionSlotHeadSchema
 >;

@@ -24,10 +24,17 @@ export type {
   InboxV2MessageLifecycleAtomicCoordinator,
   InboxV2MessageLifecycleAtomicResult
 } from "./repositories/sql-inbox-v2-message-lifecycle-command-coordinator";
+export { deriveInboxV2MessageReactionAuditTargetReference } from "./repositories/sql-inbox-v2-atomic-materialization-internal";
+export { createSqlInboxV2MessageReactionAtomicCoordinator } from "./repositories/sql-inbox-v2-message-reaction-command-coordinator";
+export type {
+  InboxV2MessageReactionAtomicCoordinator,
+  InboxV2MessageReactionAtomicResult
+} from "./repositories/sql-inbox-v2-message-reaction-command-coordinator";
 export {
   createSqlInboxV2FencedOutboundTransportRuntimeRepository,
   InboxV2RouteResolutionRollbackError,
   persistInboxV2ExplicitRerouteResolutionInTransaction,
+  persistInboxV2ReactionRouteInTransaction,
   persistInboxV2RouteResolutionInTransaction
 } from "./repositories/sql-inbox-v2-outbound-transport-repository";
 export type {
@@ -42,14 +49,20 @@ export type {
 } from "./repositories/sql-inbox-v2-outbound-transport-repository";
 export {
   InboxV2TimelineMessagePersistenceInvariantError,
+  prepareInboxV2MessageReactionCommand,
   prepareInboxV2MessageCreation,
+  sealInboxV2PreparedMessageReactionCommand,
   sealInboxV2PreparedMessageCreation
 } from "./repositories/sql-inbox-v2-timeline-message-repository";
 export type {
   InboxV2MessageCreationCommit,
+  InboxV2MessageReactionCommit,
+  InboxV2PreparedMessageReactionCommandCapability,
   InboxV2PreparedMessageCreationCapability,
+  PrepareInboxV2MessageReactionCommandResult,
   PrepareInboxV2MessageCreationInput,
   PrepareInboxV2MessageCreationResult,
+  SealInboxV2PreparedMessageReactionCommandResult,
   SealInboxV2PreparedMessageCreationResult
 } from "./repositories/sql-inbox-v2-timeline-message-repository";
 export {
@@ -624,7 +637,11 @@ export * from "./repositories/sql-inbox-v2-source-normalization-repository";
 export * from "./repositories/sql-inbox-v2-source-identity-resolution-repository";
 export * from "./repositories/sql-inbox-v2-source-identity-resolution-lifecycle";
 export * from "./repositories/sql-inbox-v2-source-message-reconciliation-repository";
-export { createInboxV2SourceMessageLifecycleCallbacks } from "./repositories/sql-inbox-v2-source-message-lifecycle-adapter";
+export {
+  createInboxV2SourceMessageLifecycleCallbacks,
+  inboxV2SourceMessageEffectEntityTypeId,
+  verifyInboxV2SourceMessageEffectClosure
+} from "./repositories/sql-inbox-v2-source-message-lifecycle-adapter";
 export type {
   CreateInboxV2SourceMessageLifecycleCallbacksOptions,
   InboxV2DeferredLifecycleSourceAction,
@@ -633,5 +650,19 @@ export type {
   InboxV2SourceMessageLifecycleAdvancePlanner,
   InboxV2SourceMessageLifecycleEffectClosure
 } from "./repositories/sql-inbox-v2-source-message-lifecycle-adapter";
+export {
+  composeInboxV2SourceMessageActionCallbacks,
+  createInboxV2SourceMessageEffectCallbacks
+} from "./repositories/sql-inbox-v2-source-message-effect-adapter";
+export type {
+  ComposeInboxV2SourceMessageActionCallbacksInput,
+  CreateInboxV2SourceMessageEffectCallbacksOptions,
+  InboxV2DeferredMessageEffectSourceAction,
+  InboxV2SourceMessageEffectAdvancePlan,
+  InboxV2SourceMessageEffectAdvancePlanResult,
+  InboxV2SourceMessageEffectAdvancePlanner,
+  InboxV2SourceMessageEffectClosure,
+  InboxV2SourceMessageActionCallbacks
+} from "./repositories/sql-inbox-v2-source-message-effect-adapter";
 export * from "./repositories/sql-inbox-v2-source-processing-runtime-repository";
 export * from "./schema/inbox-v2/membership-privilege-boundary";

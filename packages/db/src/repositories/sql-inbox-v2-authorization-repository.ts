@@ -46,6 +46,7 @@ import { PgDialect } from "drizzle-orm/pg-core";
 import type { HuleeDatabase } from "../client";
 import {
   consumeInboxV2AtomicMaterializationSealReceipt,
+  deriveInboxV2MessageReactionAuditTargetReference,
   registerInboxV2AtomicSealExecutor,
   revokeInboxV2AtomicAttachmentMaterializationProofs,
   revokeInboxV2AtomicOutboundRerouteProofs,
@@ -54,6 +55,7 @@ import {
   type InboxV2AtomicMaterializationSealReceipt,
   type InboxV2AtomicMessageCreationSealManifest,
   type InboxV2AtomicMessageLifecycleSealManifest,
+  type InboxV2AtomicMessageReactionSealManifest,
   type InboxV2AtomicMessageMutationSealManifest,
   type InboxV2AtomicStreamEventManifest,
   type InboxV2AtomicTimelineItemCreationSealManifest
@@ -98,6 +100,9 @@ const POST_HEAD_INSERT_TABLES = new Set([
   "inbox_v2_message_reference_unresolved_targets",
   "inbox_v2_message_attachment_anchors",
   "inbox_v2_message_provider_lifecycle_operations",
+  "inbox_v2_message_reaction_slot_heads",
+  "inbox_v2_message_reaction_transitions",
+  "inbox_v2_message_reactions",
   "inbox_v2_message_revisions",
   "inbox_v2_message_transport_link_heads",
   "inbox_v2_message_transport_links",
@@ -174,6 +179,125 @@ const POST_HEAD_EXACT_INSERT_PATTERNS = new Map<string, RegExp>([
         "created_at"
       ],
       "id"
+    )
+  ],
+  [
+    "inbox_v2_message_reactions",
+    exactPostHeadInsertPattern(
+      "inbox_v2_message_reactions",
+      [
+        "tenant_id",
+        "id",
+        "message_id",
+        "actor_kind",
+        "actor_participant_id",
+        "actor_source_occurrence_id",
+        "opaque_actor_key",
+        "opaque_actor_key_digest_sha256",
+        "aggregate_scope",
+        "provider_actor_kind_id",
+        "provider_actor_subject",
+        "provider_actor_subject_digest_sha256",
+        "actor_identity_data_class_id",
+        "actor_identity_state",
+        "actor_identity_tombstone_event_id",
+        "actor_identity_purged_at",
+        "capability_kind",
+        "capability_id",
+        "capability_revision",
+        "cardinality",
+        "adapter_contract_id",
+        "adapter_contract_version",
+        "capability_detail",
+        "capability_detail_digest_sha256",
+        "semantic_slot_key",
+        "state_kind",
+        "value_kind",
+        "unicode_value",
+        "provider_reaction_kind_id",
+        "provider_canonical_code",
+        "cleared_at",
+        "external_operation",
+        "outbound_route_id",
+        "request_transition_id",
+        "request_attribution_id",
+        "external_outcome",
+        "result_token",
+        "result_digest_sha256",
+        "resolved_at",
+        "state_detail",
+        "state_detail_digest_sha256",
+        "revision",
+        "last_changed_stream_position",
+        "created_at",
+        "updated_at"
+      ],
+      "id"
+    )
+  ],
+  [
+    "inbox_v2_message_reaction_transitions",
+    exactPostHeadInsertPattern(
+      "inbox_v2_message_reaction_transitions",
+      [
+        "tenant_id",
+        "id",
+        "reaction_id",
+        "semantic_slot_key",
+        "mode",
+        "operation",
+        "expected_revision",
+        "resulting_revision",
+        "before_state_kind",
+        "after_state_kind",
+        "before_state_detail",
+        "before_state_detail_digest_sha256",
+        "after_state_detail",
+        "after_state_detail_digest_sha256",
+        "value_kind",
+        "unicode_value",
+        "provider_reaction_kind_id",
+        "provider_canonical_code",
+        "action_attribution_id",
+        "external_message_reference_id",
+        "source_occurrence_id",
+        "source_account_id",
+        "source_thread_binding_id",
+        "binding_generation",
+        "outbound_route_id",
+        "capability_id",
+        "capability_revision",
+        "adapter_contract_id",
+        "adapter_contract_version",
+        "external_authority_detail",
+        "external_authority_detail_digest_sha256",
+        "provider_result_proof_detail",
+        "provider_result_proof_detail_digest_sha256",
+        "result_token",
+        "result_digest_sha256",
+        "occurred_at",
+        "recorded_at",
+        "recorded_stream_position",
+        "record_revision"
+      ],
+      "id"
+    )
+  ],
+  [
+    "inbox_v2_message_reaction_slot_heads",
+    exactPostHeadInsertPattern(
+      "inbox_v2_message_reaction_slot_heads",
+      [
+        "tenant_id",
+        "message_id",
+        "semantic_slot_key",
+        "reaction_id",
+        "state_kind",
+        "revision",
+        "last_changed_stream_position",
+        "updated_at"
+      ],
+      "reaction_id\\s+as\\s+id|reaction_id"
     )
   ],
   [
@@ -449,6 +573,18 @@ const POST_HEAD_INSERT_PATTERN =
 const POST_HEAD_UPDATE_PATTERN =
   /^update\s+(?:(?:public)\.)?([a-z][a-z0-9_]*)\b/iu;
 const POST_HEAD_UPDATE_CAS_PREDICATES = new Map<string, readonly RegExp[]>([
+  [
+    "inbox_v2_message_reactions",
+    [
+      /^update\s+(?:(?:public)\.)?inbox_v2_message_reactions\s+set\s+state_kind\s*=\s*\$\d+,\s*value_kind\s*=\s*\$\d+,\s*unicode_value\s*=\s*\$\d+,\s*provider_reaction_kind_id\s*=\s*\$\d+,\s*provider_canonical_code\s*=\s*\$\d+,\s*cleared_at\s*=\s*\$\d+,\s*external_operation\s*=\s*\$\d+,\s*outbound_route_id\s*=\s*\$\d+,\s*request_transition_id\s*=\s*\$\d+,\s*request_attribution_id\s*=\s*\$\d+,\s*external_outcome\s*=\s*\$\d+,\s*result_token\s*=\s*\$\d+,\s*result_digest_sha256\s*=\s*\$\d+,\s*resolved_at\s*=\s*\$\d+,\s*state_detail\s*=\s*\$\d+::jsonb,\s*state_detail_digest_sha256\s*=\s*\$\d+,\s*revision\s*=\s*\$\d+,\s*last_changed_stream_position\s*=\s*\$\d+,\s*updated_at\s*=\s*\$\d+\s+where\s+tenant_id\s*=\s*\$\d+\s+and\s+id\s*=\s*\$\d+\s+and\s+message_id\s*=\s*\$\d+\s+and\s+semantic_slot_key\s*=\s*\$\d+\s+and\s+revision\s*=\s*\$\d+\s+and\s+state_detail_digest_sha256\s*=\s*\$\d+\s+returning\s+id\s*$/iu
+    ]
+  ],
+  [
+    "inbox_v2_message_reaction_slot_heads",
+    [
+      /^update\s+(?:(?:public)\.)?inbox_v2_message_reaction_slot_heads\s+set\s+reaction_id\s*=\s*\$\d+,\s*state_kind\s*=\s*\$\d+,\s*revision\s*=\s*\$\d+,\s*last_changed_stream_position\s*=\s*\$\d+,\s*updated_at\s*=\s*\$\d+\s+where\s+tenant_id\s*=\s*\$\d+\s+and\s+message_id\s*=\s*\$\d+\s+and\s+semantic_slot_key\s*=\s*\$\d+\s+and\s+reaction_id\s*=\s*\$\d+\s+and\s+state_kind\s*=\s*\$\d+\s+and\s+revision\s*=\s*\$\d+\s+returning\s+reaction_id\s+as\s+id\s*$/iu
+    ]
+  ],
   [
     "inbox_v2_file_objects",
     [
@@ -1527,6 +1663,8 @@ async function persistAuthorizedAtomicMaterialization<TPrepared, TResult>(
         assertInboxV2AtomicMessageCreationSealManifest(input, sealManifest);
       } else if (sealManifest.kind === "message_lifecycle") {
         assertInboxV2AtomicMessageLifecycleSealManifest(input, sealManifest);
+      } else if (sealManifest.kind === "message_reaction") {
+        assertInboxV2AtomicMessageReactionSealManifest(input, sealManifest);
       } else if (sealManifest.kind === "message_mutation") {
         assertInboxV2AtomicMessageMutationSealManifest(input, sealManifest);
       } else {
@@ -7440,6 +7578,214 @@ function assertInboxV2AtomicMessageLifecycleSealManifest(
       (decision, index) =>
         decision.id !== input.records.audit.authorizationDecisionRefs[index]?.id
     )
+  ) {
+    throw mismatch();
+  }
+}
+
+function assertInboxV2AtomicMessageReactionSealManifest(
+  input: WithPrivilegedAuthorizationMutationInput,
+  manifest: InboxV2AtomicMessageReactionSealManifest
+): void {
+  const mismatch = atomicMessageSealManifestMismatch;
+  const expectedCommandTypeId = `core:message.reaction.${manifest.commandKind}`;
+  const reactionChanges = input.records.changes.filter(
+    (change) =>
+      change.entity.entityTypeId === "core:message-reaction-transition"
+  );
+  const change = reactionChanges[0];
+  const state = change?.state;
+  const timeline = change?.timeline;
+  const external = manifest.mode === "external_request";
+  const expectedAuditTarget = deriveInboxV2MessageReactionAuditTargetReference({
+    tenantId: manifest.tenantId,
+    timelineItemId: manifest.timelineItemId
+  });
+  if (
+    input.tenantId !== manifest.tenantId ||
+    input.command.commandTypeId !== expectedCommandTypeId ||
+    input.occurredAt !== manifest.event.recordedAt ||
+    input.records.audit.actionId !== expectedCommandTypeId ||
+    input.records.audit.target.tenantId !== manifest.tenantId ||
+    input.records.audit.target.entityTypeId !== "core:timeline-item" ||
+    input.records.audit.target.entityId !== manifest.auditTargetEntityId ||
+    manifest.auditTargetEntityId !== expectedAuditTarget.entityId ||
+    input.records.events.length !== 1 ||
+    input.records.changes.length !== 1 ||
+    reactionChanges.length !== 1 ||
+    change === undefined ||
+    change.entity.tenantId !== manifest.tenantId ||
+    String(change.entity.entityId) !== String(manifest.transitionId) ||
+    String(change.resultingRevision) !== manifest.transitionRevision ||
+    change.audience !== manifest.audience ||
+    timeline === null ||
+    timeline === undefined ||
+    timeline.conversation.tenantId !== manifest.tenantId ||
+    String(timeline.conversation.id) !== String(manifest.conversationId) ||
+    String(timeline.timelineSequence) !== manifest.timelineSequence ||
+    state?.kind !== "upsert" ||
+    state.stateSchemaId !== manifest.stateSchemaId ||
+    state.stateSchemaVersion !== manifest.stateSchemaVersion ||
+    state.stateHash !== manifest.stateHash ||
+    !payloadReferencesMatch(
+      state.payloadReference,
+      manifest.payloadReference
+    ) ||
+    !payloadReferencesMatch(
+      state.domainCommitReference,
+      manifest.domainCommitReference
+    ) ||
+    external !== (manifest.outboundRouteId !== null) ||
+    external !== (manifest.sourceAccountId !== null)
+  ) {
+    throw mismatch();
+  }
+  if (
+    input.command.resultReference === null ||
+    !payloadReferencesMatch(
+      input.command.resultReference,
+      manifest.payloadReference
+    )
+  ) {
+    throw mismatch();
+  }
+
+  const event = input.records.events[0];
+  if (
+    event === undefined ||
+    event.typeId !== manifest.event.typeId ||
+    event.payloadSchemaId !== manifest.event.payloadSchemaId ||
+    event.payloadSchemaVersion !== manifest.event.payloadSchemaVersion ||
+    event.occurredAt !== manifest.event.occurredAt ||
+    event.recordedAt !== manifest.event.recordedAt ||
+    event.payloadReference === null ||
+    !payloadReferencesMatch(
+      event.payloadReference,
+      manifest.event.payloadReference
+    ) ||
+    event.changeIds.length !== 1 ||
+    String(event.changeIds[0]) !== String(change.id) ||
+    !event.subjects.some(
+      (subject) =>
+        subject.tenantId === manifest.tenantId &&
+        subject.entityTypeId === "core:message" &&
+        String(subject.entityId) === String(manifest.messageId)
+    ) ||
+    event.authorizationDecisionRefs.length !==
+      input.records.audit.authorizationDecisionRefs.length ||
+    event.authorizationDecisionRefs.some(
+      (decision, index) =>
+        decision.id !== input.records.audit.authorizationDecisionRefs[index]?.id
+    )
+  ) {
+    throw mismatch();
+  }
+
+  const projectionIntents = input.records.outboxIntents.filter(
+    (intent) =>
+      intent.typeId === "core:projection.update" &&
+      intent.effectClass === "projection"
+  );
+  const providerIntents = input.records.outboxIntents.filter(
+    (intent) => intent.effectClass === "provider_io"
+  );
+  const projection = projectionIntents[0];
+  if (
+    projectionIntents.length !== 1 ||
+    projection === undefined ||
+    String(projection.eventId) !== String(event.id) ||
+    projection.changeIds.length !== 1 ||
+    String(projection.changeIds[0]) !== String(change.id) ||
+    input.records.outboxIntents.length !== (external ? 2 : 1)
+  ) {
+    throw mismatch();
+  }
+  if (!external) {
+    if (providerIntents.length !== 0) throw mismatch();
+  } else {
+    const providerIntent = providerIntents[0];
+    if (
+      providerIntents.length !== 1 ||
+      providerIntent === undefined ||
+      providerIntent.typeId !== "core:provider.message_reaction" ||
+      providerIntent.effectClass !== "provider_io" ||
+      String(providerIntent.eventId) !== String(event.id) ||
+      providerIntent.changeIds.length !== 1 ||
+      String(providerIntent.changeIds[0]) !== String(change.id) ||
+      providerIntent.payloadReference === null ||
+      !payloadReferencesMatch(
+        providerIntent.payloadReference,
+        manifest.payloadReference
+      )
+    ) {
+      throw mismatch();
+    }
+  }
+
+  const primaryDecisions = input.records.audit.authorizationDecisionRefs.filter(
+    (decision) => decision.id === input.command.authorizationDecisionId
+  );
+  const primaryDecision = primaryDecisions[0];
+  const readPermissionId =
+    manifest.audience === "internal_participants"
+      ? "core:conversation.internal.read"
+      : "core:conversation.read";
+  const readDecisions = input.records.audit.authorizationDecisionRefs.filter(
+    (decision) =>
+      decision.permissionId === readPermissionId &&
+      decision.resourceScopeId === "core:conversation" &&
+      decision.resource.tenantId === manifest.tenantId &&
+      decision.resource.entityTypeId === "core:conversation" &&
+      String(decision.resource.entityId) === String(manifest.conversationId) &&
+      decision.outcome === "allowed"
+  );
+  const sourceDecisions = input.records.audit.authorizationDecisionRefs.filter(
+    (decision) =>
+      manifest.sourceAccountId !== null &&
+      decision.permissionId === "core:source_account.use" &&
+      decision.resourceScopeId === "core:source-account" &&
+      decision.resource.tenantId === manifest.tenantId &&
+      decision.resource.entityTypeId === "core:source-account" &&
+      String(decision.resource.entityId) === String(manifest.sourceAccountId) &&
+      decision.outcome === "allowed"
+  );
+  const readDecision = readDecisions[0];
+  const sourceDecision = sourceDecisions[0];
+  const conversationFences = input.revisions.resources.filter(
+    (resource) =>
+      readDecision !== undefined &&
+      resource.resourceKind === "conversation" &&
+      String(resource.resourceId) === String(manifest.conversationId) &&
+      String(resource.expectedResourceAccessRevision) ===
+        String(readDecision.resourceAccessRevision) &&
+      resource.advance === "none"
+  );
+  const sourceFences = input.revisions.resources.filter(
+    (resource) =>
+      sourceDecision !== undefined &&
+      resource.resourceKind === "source_account" &&
+      String(resource.resourceId) === String(manifest.sourceAccountId) &&
+      String(resource.expectedResourceAccessRevision) ===
+        String(sourceDecision.resourceAccessRevision) &&
+      resource.advance === "none"
+  );
+  if (
+    primaryDecisions.length !== 1 ||
+    primaryDecision === undefined ||
+    primaryDecision.permissionId !== "core:message.react" ||
+    primaryDecision.resourceScopeId !== "core:timeline-item" ||
+    primaryDecision.resource.tenantId !== manifest.tenantId ||
+    primaryDecision.resource.entityTypeId !== "core:timeline-item" ||
+    String(primaryDecision.resource.entityId) !==
+      String(manifest.timelineItemId) ||
+    String(primaryDecision.resourceAccessRevision) !==
+      String(manifest.timelineItemRevision) ||
+    primaryDecision.outcome !== "allowed" ||
+    readDecisions.length !== 1 ||
+    conversationFences.length !== 1 ||
+    (external
+      ? sourceDecisions.length !== 1 || sourceFences.length !== 1
+      : sourceDecisions.length !== 0 || sourceFences.length !== 0)
   ) {
     throw mismatch();
   }

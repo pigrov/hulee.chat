@@ -27,6 +27,7 @@ describe("Inbox V2 Epic 3 source gate runner", () => {
         "packages/db/src/repositories/sql-inbox-v2-source-conversation-resolution-repository.test.ts",
         "packages/db/src/repositories/sql-inbox-v2-source-message-reconciliation-repository.test.ts",
         "packages/db/src/repositories/sql-inbox-v2-source-message-lifecycle-adapter.test.ts",
+        "packages/db/src/repositories/sql-inbox-v2-source-message-effect-adapter.test.ts",
         "packages/db/src/repositories/sql-inbox-v2-authorization-repository.test.ts",
         "apps/worker/src/source-processing-production-activation.test.ts",
         "apps/worker/src/inbox-v2-provider-dispatch-coordinator.test.ts",

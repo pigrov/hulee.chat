@@ -7,7 +7,7 @@ export const inboxV2RuntimeSchemaContract = Object.freeze({
   epoch: INBOX_V2_RUNTIME_SCHEMA_EPOCH,
   migrations: Object.freeze([
     Object.freeze({
-      hash: "e59f826785aa07d454ed125973f5afda9fb684e0f48a6bddfcd84f8b644b0064",
+      hash: "2c9701257243a76640a921a6589254cb5f5493b77578bf04e74f2cb257446272",
       createdAt: "1784656735719"
     })
   ])

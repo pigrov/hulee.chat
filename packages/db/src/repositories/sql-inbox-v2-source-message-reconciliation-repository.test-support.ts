@@ -2,9 +2,15 @@ import {
   inboxV2DeferredMessageSourceActionCommitSchema,
   inboxV2DeferredMessageSourceActionSchema,
   inboxV2ExternalMessageReferenceSchema,
+  inboxV2MessageReactionCommitSchema,
+  inboxV2MessageTransportFactCommitSchema,
+  inboxV2ReactionSemanticSlotKeyFor,
   inboxV2SourceOccurrenceSchema,
   type InboxV2DeferredMessageSourceAction,
-  type InboxV2DeferredSourceActionOrderingHead
+  type InboxV2DeferredMessageSourceActionEffectProof,
+  type InboxV2DeferredSourceActionOrderingHead,
+  type InboxV2ExternalMessageReference,
+  type InboxV2SourceOccurrence
 } from "@hulee/contracts";
 
 import {
@@ -15,9 +21,9 @@ import {
   fixtureMessage,
   fixtureMessageReference,
   fixtureOccurrence,
+  fixtureParticipant,
   fixtureReference,
   fixtureSourceAccountReference,
-  fixtureSourceIdentityReference,
   fixtureT1,
   fixtureT2,
   fixtureT3,
@@ -70,6 +76,8 @@ export function makePendingDeferredAction(
   input: Readonly<{
     id?: string;
     occurrenceId?: string;
+    occurrenceOrigin?: "webhook" | "history" | "provider_echo";
+    occurrenceDirection?: "inbound" | "outbound";
     position?: string;
     fingerprint?: string;
     subject?: string;
@@ -79,6 +87,8 @@ export function makePendingDeferredAction(
     input.occurrenceId ?? "source_occurrence:deferred-source-action-1";
   const occurrence = fixtureOccurrence({
     occurrenceId,
+    origin: input.occurrenceOrigin,
+    direction: input.occurrenceDirection,
     externalSubject: input.subject
   });
   if (occurrence.origin.kind === "provider_response") {
@@ -115,7 +125,10 @@ export function makePendingDeferredAction(
     capabilityRevision: "1",
     semanticId,
     semanticRevision: "1",
-    actor: fixtureSourceIdentityReference,
+    actor:
+      sourceOccurrence.providerActor?.kind === "source_external_identity"
+        ? sourceOccurrence.providerActor.sourceExternalIdentity
+        : null,
     ordering: {
       kind: "monotonic_exact" as const,
       scopeToken: `scope:${payload.kind}:provider-message-42`,
@@ -491,4 +504,479 @@ function targetReference<const TKind extends string>(
   id: string
 ) {
   return { tenantId, kind, id };
+}
+
+export function makeDeferredMessageEffectTarget(
+  action: InboxV2DeferredMessageSourceAction
+): InboxV2ExternalMessageReference {
+  return externalReferenceFor(action.sourceOccurrence);
+}
+
+export function makeProviderObservedMessageEffectProof(
+  action: InboxV2DeferredMessageSourceAction,
+  target: InboxV2ExternalMessageReference,
+  resolvedOccurrence: InboxV2SourceOccurrence,
+  input: Readonly<{
+    recordedAt?: string;
+    previousReaction?: Extract<
+      InboxV2DeferredMessageSourceActionEffectProof,
+      { kind: "message_reaction" }
+    > | null;
+  }> = {}
+): InboxV2DeferredMessageSourceActionEffectProof {
+  const recordedAt = input.recordedAt ?? fixtureT3;
+  if (action.action.kind === "reaction") {
+    return providerObservedReactionEffect(
+      action as InboxV2DeferredMessageSourceAction & {
+        action: Extract<
+          InboxV2DeferredMessageSourceAction["action"],
+          { kind: "reaction" }
+        >;
+      },
+      target,
+      resolvedOccurrence,
+      input.previousReaction ?? null,
+      recordedAt
+    );
+  }
+  if (action.action.kind === "delivery") {
+    return providerObservedDeliveryEffect(
+      action as InboxV2DeferredMessageSourceAction & {
+        action: Extract<
+          InboxV2DeferredMessageSourceAction["action"],
+          { kind: "delivery" }
+        >;
+      },
+      target,
+      resolvedOccurrence,
+      recordedAt
+    );
+  }
+  if (action.action.kind === "receipt") {
+    return providerObservedReceiptEffect(
+      action as InboxV2DeferredMessageSourceAction & {
+        action: Extract<
+          InboxV2DeferredMessageSourceAction["action"],
+          { kind: "receipt" }
+        >;
+      },
+      target,
+      resolvedOccurrence,
+      recordedAt
+    );
+  }
+  throw new Error(
+    "Message-effect proof fixture requires reaction/delivery/receipt."
+  );
+}
+
+function providerObservedReactionEffect(
+  action: InboxV2DeferredMessageSourceAction & {
+    action: Extract<
+      InboxV2DeferredMessageSourceAction["action"],
+      { kind: "reaction" }
+    >;
+  },
+  target: InboxV2ExternalMessageReference,
+  resolvedOccurrence: InboxV2SourceOccurrence,
+  previousEffect: Extract<
+    InboxV2DeferredMessageSourceActionEffectProof,
+    { kind: "message_reaction" }
+  > | null,
+  recordedAt: string
+): Extract<
+  InboxV2DeferredMessageSourceActionEffectProof,
+  { kind: "message_reaction" }
+> {
+  const providerActor = resolvedOccurrence.providerActor;
+  if (providerActor?.kind !== "source_external_identity") {
+    throw new Error(
+      "Provider reaction fixture requires an exact external actor."
+    );
+  }
+  const previous = previousEffect?.commit ?? null;
+  if (
+    (action.action.operation === "set") !== (previous === null) ||
+    (previous !== null && previous.afterReaction.state.kind !== "active")
+  ) {
+    throw new Error(
+      "Provider reaction fixture requires set then active replace/clear."
+    );
+  }
+  const suffix = fixtureIdSuffix(action.id);
+  const participant = fixtureParticipant("source");
+  const participantReference = targetReference(
+    action.tenantId,
+    "conversation_participant",
+    participant.id
+  );
+  const occurrenceReference = targetReference(
+    action.tenantId,
+    "source_occurrence",
+    resolvedOccurrence.id
+  );
+  const externalReference = targetReference(
+    action.tenantId,
+    "external_message_reference",
+    target.id
+  );
+  const capability = {
+    kind: "external" as const,
+    capabilityId: action.semanticProof.capabilityId,
+    capabilityRevision: action.semanticProof.capabilityRevision,
+    cardinality: "single_value" as const,
+    adapterContract: resolvedOccurrence.descriptor.adapterContract
+  };
+  const beforeReaction = previous?.afterReaction ?? null;
+  const state =
+    action.action.operation === "clear"
+      ? {
+          kind: "cleared" as const,
+          lastValue:
+            beforeReaction?.state.kind === "active"
+              ? beforeReaction.state.value
+              : { kind: "unicode" as const, value: "?" },
+          clearedAt: recordedAt
+        }
+      : {
+          kind: "active" as const,
+          value: action.action.value as NonNullable<typeof action.action.value>
+        };
+  const semanticSlotKey =
+    beforeReaction?.semanticSlotKey ??
+    inboxV2ReactionSemanticSlotKeyFor({
+      message: target.message,
+      actor: { kind: "participant", participant: participantReference },
+      capability,
+      state
+    });
+  const reactionId =
+    beforeReaction?.id ?? `message_reaction:source-effect-${suffix}`;
+  const resultingRevision =
+    beforeReaction === null
+      ? "1"
+      : (BigInt(beforeReaction.revision) + 1n).toString();
+  const afterReaction = {
+    tenantId: action.tenantId,
+    id: reactionId,
+    message: target.message,
+    actor: { kind: "participant" as const, participant: participantReference },
+    capability,
+    semanticSlotKey,
+    state,
+    revision: resultingRevision,
+    createdAt: beforeReaction?.createdAt ?? recordedAt,
+    updatedAt: recordedAt
+  };
+  const authority = {
+    externalMessageReference: externalReference,
+    sourceOccurrence: occurrenceReference,
+    sourceAccount: resolvedOccurrence.bindingContext.sourceAccount,
+    sourceThreadBinding: resolvedOccurrence.bindingContext.sourceThreadBinding,
+    bindingGeneration: resolvedOccurrence.bindingContext.bindingGeneration,
+    outboundRoute: null,
+    adapterContract: resolvedOccurrence.descriptor.adapterContract,
+    capabilityFence: {
+      capabilityId: capability.capabilityId,
+      capabilityRevision: capability.capabilityRevision,
+      adapterContract: capability.adapterContract,
+      decision: "supported" as const,
+      evaluatedAt: resolvedOccurrence.observedAt,
+      notAfter: recordedAt
+    }
+  };
+  const semanticProof = {
+    ...action.semanticProof,
+    externalMessageReference: externalReference,
+    sourceOccurrence: occurrenceReference,
+    sourceAccount: resolvedOccurrence.bindingContext.sourceAccount,
+    sourceThreadBinding: resolvedOccurrence.bindingContext.sourceThreadBinding,
+    bindingGeneration: resolvedOccurrence.bindingContext.bindingGeneration,
+    adapterContract: resolvedOccurrence.descriptor.adapterContract,
+    actor: providerActor.sourceExternalIdentity,
+    proofToken: `proof:source-effect-${suffix}`,
+    occurredAt: action.observedAt,
+    recordedAt
+  };
+  if (semanticProof.ordering.kind !== "monotonic_exact") {
+    throw new Error(
+      "Provider reaction fixture requires monotonic exact ordering."
+    );
+  }
+  const orderingBefore =
+    previous?.providerObservation?.orderingCommit.after ?? null;
+  const orderingRevision =
+    orderingBefore === null
+      ? "1"
+      : (BigInt(orderingBefore.revision) + 1n).toString();
+  const orderingAfter = {
+    tenantId: action.tenantId,
+    semanticFamilyId: "core:message.reaction" as const,
+    externalMessageReference: externalReference,
+    sourceAccount: semanticProof.sourceAccount,
+    sourceThreadBinding: semanticProof.sourceThreadBinding,
+    bindingGeneration: semanticProof.bindingGeneration,
+    scopeToken: semanticProof.ordering.scopeToken,
+    comparatorId: semanticProof.ordering.comparatorId,
+    comparatorRevision: semanticProof.ordering.comparatorRevision,
+    position: semanticProof.ordering.position,
+    normalizedInboundEvent: semanticProof.normalizedInboundEvent,
+    proofToken: semanticProof.proofToken,
+    revision: orderingRevision,
+    updatedAt: recordedAt
+  };
+  const reactionReference = targetReference(
+    action.tenantId,
+    "message_reaction",
+    reactionId
+  );
+  const slotHeadBefore = previous?.slotHeadAfter ?? null;
+  const commit = inboxV2MessageReactionCommitSchema.parse({
+    tenantId: action.tenantId,
+    beforeMessage: fixtureMessage("source"),
+    beforeTimelineItem: fixtureTimelineItem("external"),
+    beforeReaction,
+    transition: {
+      tenantId: action.tenantId,
+      id: `message_reaction_transition:source-effect-${suffix}`,
+      reaction: reactionReference,
+      semanticSlotKey,
+      mode: "provider_observed",
+      operation: action.action.operation,
+      expectedRevision: beforeReaction?.revision ?? null,
+      resultingRevision,
+      beforeState: beforeReaction?.state ?? null,
+      afterState: state,
+      actionAttribution: {
+        actionParticipant: participantReference,
+        appActor: null,
+        sourceOccurrence: occurrenceReference,
+        automationCausation: null
+      },
+      externalAuthority: authority,
+      occurredAt: action.observedAt,
+      recordedAt,
+      recordRevision: "1"
+    },
+    afterReaction,
+    participantSnapshots: [participant],
+    externalAuthorityEvidence: {
+      externalMessageReference: target,
+      sourceOccurrence: resolvedOccurrence,
+      outboundRoute: null
+    },
+    outboundBindingSnapshot: null,
+    routeConsumption: null,
+    providerObservation: {
+      semanticProof,
+      orderingCommit: {
+        tenantId: action.tenantId,
+        semanticFamilyId: "core:message.reaction",
+        before: orderingBefore,
+        proof: semanticProof,
+        after: orderingAfter,
+        committedAt: recordedAt
+      },
+      normalizedState: state,
+      providerActorParticipant: participantReference
+    },
+    providerResultProof: null,
+    slotHeadBefore,
+    slotHeadAfter: {
+      tenantId: action.tenantId,
+      message: target.message,
+      semanticSlotKey,
+      reaction: reactionReference,
+      state,
+      revision:
+        slotHeadBefore === null
+          ? "1"
+          : (BigInt(slotHeadBefore.revision) + 1n).toString(),
+      updatedAt: recordedAt
+    }
+  });
+  return { kind: "message_reaction", commit };
+}
+
+function providerObservedDeliveryEffect(
+  action: InboxV2DeferredMessageSourceAction & {
+    action: Extract<
+      InboxV2DeferredMessageSourceAction["action"],
+      { kind: "delivery" }
+    >;
+  },
+  target: InboxV2ExternalMessageReference,
+  resolvedOccurrence: InboxV2SourceOccurrence,
+  recordedAt: string
+): Extract<
+  InboxV2DeferredMessageSourceActionEffectProof,
+  { kind: "message_transport_fact" }
+> {
+  const suffix = fixtureIdSuffix(action.id);
+  const externalReference = targetReference(
+    action.tenantId,
+    "external_message_reference",
+    target.id
+  );
+  const occurrenceReference = targetReference(
+    action.tenantId,
+    "source_occurrence",
+    resolvedOccurrence.id
+  );
+  const semanticProof = {
+    ...action.semanticProof,
+    externalMessageReference: externalReference,
+    sourceOccurrence: occurrenceReference,
+    sourceAccount: resolvedOccurrence.bindingContext.sourceAccount,
+    sourceThreadBinding: resolvedOccurrence.bindingContext.sourceThreadBinding,
+    bindingGeneration: resolvedOccurrence.bindingContext.bindingGeneration,
+    adapterContract: resolvedOccurrence.descriptor.adapterContract,
+    actor: null,
+    proofToken: `proof:source-effect-${suffix}`,
+    occurredAt: action.observedAt,
+    recordedAt
+  };
+  const observation = {
+    tenantId: action.tenantId,
+    id: `message_delivery_observation:source-effect-${suffix}`,
+    message: target.message,
+    fact: action.action.fact,
+    scope: {
+      kind: "external_reference" as const,
+      externalMessageReference: externalReference,
+      sourceOccurrence: occurrenceReference
+    },
+    sourceAccount: resolvedOccurrence.bindingContext.sourceAccount,
+    sourceThreadBinding: resolvedOccurrence.bindingContext.sourceThreadBinding,
+    bindingGeneration: resolvedOccurrence.bindingContext.bindingGeneration,
+    adapterContract: resolvedOccurrence.descriptor.adapterContract,
+    capabilityId: action.semanticProof.capabilityId,
+    capabilityRevision: action.semanticProof.capabilityRevision,
+    evidence: {
+      kind: "provider_event" as const,
+      normalizedInboundEvent: action.action.normalizedEvent,
+      externalMessageReference: externalReference,
+      sourceOccurrence: occurrenceReference
+    },
+    semanticProof,
+    evidenceKindId: "module:synthetic:provider-event",
+    evidenceDigestSha256: "d".repeat(64),
+    failureReasonId:
+      action.action.fact === "failed"
+        ? "module:synthetic:delivery-failed"
+        : null,
+    observedAt: action.observedAt,
+    recordedAt,
+    revision: "1" as const
+  };
+  const commit = inboxV2MessageTransportFactCommitSchema.parse({
+    tenantId: action.tenantId,
+    beforeMessage: fixtureMessage("hulee"),
+    beforeTimelineItem: fixtureTimelineItem("external"),
+    fact: { kind: "delivery", observation },
+    transportEvidence: {
+      kind: "external_reference",
+      externalMessageReference: target,
+      sourceOccurrence: resolvedOccurrence,
+      externalThreadMapping: fixtureExternalThreadMapping()
+    },
+    commitToken: `transport:source-effect-${suffix}`,
+    committedAt: recordedAt
+  });
+  return { kind: "message_transport_fact", commit };
+}
+
+function providerObservedReceiptEffect(
+  action: InboxV2DeferredMessageSourceAction & {
+    action: Extract<
+      InboxV2DeferredMessageSourceAction["action"],
+      { kind: "receipt" }
+    >;
+  },
+  target: InboxV2ExternalMessageReference,
+  resolvedOccurrence: InboxV2SourceOccurrence,
+  recordedAt: string
+): Extract<
+  InboxV2DeferredMessageSourceActionEffectProof,
+  { kind: "message_transport_fact" }
+> {
+  const suffix = fixtureIdSuffix(action.id);
+  const externalReference = targetReference(
+    action.tenantId,
+    "external_message_reference",
+    target.id
+  );
+  const occurrenceReference = targetReference(
+    action.tenantId,
+    "source_occurrence",
+    resolvedOccurrence.id
+  );
+  const providerActor = resolvedOccurrence.providerActor;
+  const reader =
+    providerActor?.kind === "source_external_identity"
+      ? providerActor
+      : {
+          kind: "aggregate_only" as const,
+          aggregateKey: `provider-read-${suffix}`
+        };
+  const semanticProof = {
+    ...action.semanticProof,
+    externalMessageReference: externalReference,
+    sourceOccurrence: occurrenceReference,
+    sourceAccount: resolvedOccurrence.bindingContext.sourceAccount,
+    sourceThreadBinding: resolvedOccurrence.bindingContext.sourceThreadBinding,
+    bindingGeneration: resolvedOccurrence.bindingContext.bindingGeneration,
+    adapterContract: resolvedOccurrence.descriptor.adapterContract,
+    actor:
+      reader.kind === "source_external_identity"
+        ? reader.sourceExternalIdentity
+        : null,
+    proofToken: `proof:source-effect-${suffix}`,
+    occurredAt: action.observedAt,
+    recordedAt
+  };
+  const observation = {
+    tenantId: action.tenantId,
+    id: `provider_receipt_observation:source-effect-${suffix}`,
+    fact: "read" as const,
+    target: {
+      kind: "exact_message" as const,
+      message: target.message,
+      externalMessageReference: externalReference,
+      sourceOccurrence: occurrenceReference
+    },
+    reader,
+    sourceAccount: resolvedOccurrence.bindingContext.sourceAccount,
+    sourceThreadBinding: resolvedOccurrence.bindingContext.sourceThreadBinding,
+    bindingGeneration: resolvedOccurrence.bindingContext.bindingGeneration,
+    adapterContract: resolvedOccurrence.descriptor.adapterContract,
+    capabilityId: action.semanticProof.capabilityId,
+    capabilityRevision: action.semanticProof.capabilityRevision,
+    evidenceEvent: action.action.normalizedEvent,
+    semanticProof,
+    evidenceKindId: "module:synthetic:provider-event",
+    evidenceDigestSha256: "e".repeat(64),
+    observedAt: action.observedAt,
+    recordedAt,
+    revision: "1" as const
+  };
+  const commit = inboxV2MessageTransportFactCommitSchema.parse({
+    tenantId: action.tenantId,
+    beforeMessage: fixtureMessage("hulee"),
+    beforeTimelineItem: fixtureTimelineItem("external"),
+    fact: { kind: "receipt", observation },
+    transportEvidence: {
+      kind: "external_reference",
+      externalMessageReference: target,
+      sourceOccurrence: resolvedOccurrence,
+      externalThreadMapping: fixtureExternalThreadMapping()
+    },
+    commitToken: `transport:source-effect-${suffix}`,
+    committedAt: recordedAt
+  });
+  return { kind: "message_transport_fact", commit };
+}
+
+function fixtureIdSuffix(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]/gu, "-").slice(-120);
 }

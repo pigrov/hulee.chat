@@ -8507,14 +8507,16 @@ begin
        or event_row.correlation_id <> intent_row.correlation_id
        or (
          intent_row.type_id in (
-           'core:provider.dispatch', 'core:provider.message_lifecycle'
+           'core:provider.dispatch', 'core:provider.message_lifecycle',
+           'core:provider.message_reaction'
          ) and intent_row.effect_class <> 'provider_io'
        )
        or (
          intent_row.effect_class = 'provider_io'
          and (
            intent_row.type_id not in (
-             'core:provider.dispatch', 'core:provider.message_lifecycle'
+             'core:provider.dispatch', 'core:provider.message_lifecycle',
+             'core:provider.message_reaction'
            )
             or intent_row.payload_reference is null
             or intent_row.payload_reference->>'schemaVersion' <> 'v1'
@@ -8719,6 +8721,85 @@ begin
                         )
                       )
                     )
+                )
+              )
+            )
+            or (
+              intent_row.type_id = 'core:provider.message_reaction'
+              and (
+                intent_row.payload_reference->>'schemaId' <>
+                  'core:inbox-v2.message-reaction-transition'
+                or not exists (
+                  select 1
+                    from public.inbox_v2_message_reaction_transitions
+                      reaction_transition
+                    join public.inbox_v2_message_reactions reaction_row
+                      on reaction_row.tenant_id =
+                        reaction_transition.tenant_id
+                     and reaction_row.id = reaction_transition.reaction_id
+                    join public.inbox_v2_outbound_route_consumptions
+                      consumption_row
+                      on consumption_row.tenant_id =
+                        reaction_transition.tenant_id
+                     and consumption_row.consumer_kind = 'reaction'
+                     and consumption_row.consumer_id =
+                        reaction_transition.id
+                     and consumption_row.message_id = reaction_row.message_id
+                     and consumption_row.outbound_route_id =
+                        reaction_transition.outbound_route_id
+                    join public.inbox_v2_outbound_routes route_row
+                      on route_row.tenant_id = reaction_transition.tenant_id
+                     and route_row.id = reaction_transition.outbound_route_id
+                    join public.inbox_v2_tenant_stream_changes reaction_change
+                      on reaction_change.tenant_id =
+                        reaction_transition.tenant_id
+                     and reaction_change.stream_commit_id =
+                        intent_row.stream_commit_id
+                     and reaction_change.mutation_id = intent_row.mutation_id
+                     and reaction_change.id in (
+                       select jsonb_array_elements_text(intent_row.change_ids)
+                     )
+                   where reaction_transition.tenant_id = intent_row.tenant_id
+                     and reaction_transition.id =
+                       intent_row.payload_reference->>'recordId'
+                     and reaction_transition.mode = 'external_request'
+                     and reaction_transition.record_revision = 1
+                     and reaction_transition.recorded_stream_position =
+                       v_stream.position
+                     and reaction_transition.recorded_at = new.committed_at
+                     and v_command.command_type_id =
+                       'core:message.reaction.' ||
+                         reaction_transition.operation::text
+                     and reaction_change.entity_type_id =
+                       'core:message-reaction-transition'
+                     and reaction_change.entity_id = reaction_transition.id
+                     and reaction_change.resulting_revision =
+                       reaction_transition.record_revision
+                     and reaction_change.state_kind = 'upsert'
+                     and reaction_change.state_schema_id =
+                       'core:inbox-v2.message-reaction-transition'
+                     and reaction_change.state_schema_version = 'v1'
+                     and reaction_change.payload_reference =
+                       intent_row.payload_reference
+                     and reaction_change.state_hash =
+                       reaction_change.payload_reference->>'digest'
+                     and route_row.source_account_id =
+                       reaction_transition.source_account_id
+                     and route_row.source_thread_binding_id =
+                       reaction_transition.source_thread_binding_id
+                     and route_row.operation_id =
+                       v_command.command_type_id
+                     and route_row.selection_intent_kind =
+                       'explicit_occurrence'
+                     and route_row.selection_reason = 'explicit_occurrence'
+                     and route_row.fallback_policy_ordinal is null
+                     and event_row.subjects @> jsonb_build_array(
+                       jsonb_build_object(
+                         'tenantId', reaction_transition.tenant_id,
+                         'entityTypeId', 'core:message',
+                         'entityId', reaction_row.message_id
+                       )
+                     )
                 )
               )
             )
@@ -10238,6 +10319,48 @@ begin
        select 1 from public.tenants tenant_row
         where tenant_row.id = v_tenant_id
      ) then
+    return null;
+  end if;
+
+  -- External reactions intentionally consume an exact occurrence route
+  -- without manufacturing an OutboundDispatch. Their own deferred reaction
+  -- invariant validates the full binding/reference/capability closure.
+  if tg_table_name = 'inbox_v2_outbound_routes' and exists (
+    select 1
+      from public.inbox_v2_outbound_routes reaction_route
+      join public.inbox_v2_outbound_route_consumptions consumption_row
+        on consumption_row.tenant_id = reaction_route.tenant_id
+       and consumption_row.outbound_route_id = reaction_route.id
+       and consumption_row.consumer_kind = 'reaction'
+      join public.inbox_v2_message_reaction_transitions transition_row
+        on transition_row.tenant_id = consumption_row.tenant_id
+       and transition_row.id = consumption_row.consumer_id
+       and transition_row.mode = 'external_request'
+       and transition_row.outbound_route_id = reaction_route.id
+       and transition_row.source_account_id = reaction_route.source_account_id
+       and transition_row.source_thread_binding_id =
+         reaction_route.source_thread_binding_id
+       and reaction_route.operation_id =
+         'core:message.reaction.' || transition_row.operation::text
+      join public.inbox_v2_message_reactions reaction_row
+        on reaction_row.tenant_id = transition_row.tenant_id
+       and reaction_row.id = transition_row.reaction_id
+       and reaction_row.message_id = consumption_row.message_id
+       and reaction_row.state_kind = 'pending_external'
+       and reaction_row.outbound_route_id = reaction_route.id
+       and reaction_row.request_transition_id = transition_row.id
+     where reaction_route.tenant_id = v_tenant_id
+       and reaction_route.id = v_route_id
+       and reaction_route.selection_intent_kind = 'explicit_occurrence'
+       and reaction_route.selection_reason = 'explicit_occurrence'
+       and reaction_route.fallback_policy_ordinal is null
+       and not exists (
+         select 1
+           from public.inbox_v2_outbound_dispatches dispatch_row
+          where dispatch_row.tenant_id = reaction_route.tenant_id
+            and dispatch_row.route_id = reaction_route.id
+       )
+  ) then
     return null;
   end if;
 

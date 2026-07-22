@@ -3,6 +3,9 @@ import {
   INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_CREATION_COMMIT_SCHEMA_ID,
   INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_OPERATION_SCHEMA_ID,
   INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_SCHEMA_VERSION,
+  INBOX_V2_MESSAGE_REACTION_COMMIT_SCHEMA_ID,
+  INBOX_V2_MESSAGE_REACTION_SCHEMA_VERSION,
+  INBOX_V2_MESSAGE_REACTION_TRANSITION_SCHEMA_ID,
   INBOX_V2_MESSAGE_REVISION_SCHEMA_ID,
   INBOX_V2_MESSAGE_LIFECYCLE_SCHEMA_VERSION,
   INBOX_V2_MESSAGE_SCHEMA_ID,
@@ -93,12 +96,14 @@ import {
   consumeInboxV2AtomicOutboundRerouteProof,
   consumeInboxV2AtomicAttachmentMaterializationProof,
   deriveInboxV2AttachmentMaterializationAuditReference,
+  deriveInboxV2MessageReactionAuditTargetReference,
   issueInboxV2AtomicMaterializationSealReceipt,
   registerInboxV2AtomicOutboundRouteProof,
   requireInboxV2AtomicSealExecutor,
   type InboxV2AtomicAttachmentMaterializationProof,
   type InboxV2AtomicMaterializationSealReceipt,
-  type InboxV2AtomicMessageLifecycleSealManifest
+  type InboxV2AtomicMessageLifecycleSealManifest,
+  type InboxV2AtomicMessageReactionSealManifest
 } from "./sql-inbox-v2-atomic-materialization-internal";
 import {
   assertInboxV2AuthorizedAtomicMaterializationContext,
@@ -390,6 +395,36 @@ export type SealInboxV2PreparedMessageLifecycleCommandResult = Readonly<{
   commandKind: "edit" | "local_delete" | "provider_delete";
   message: InboxV2Message;
   timelineItem: InboxV2TimelineItem;
+  envelope: InboxV2SafeGenericEnvelope;
+  receipt: InboxV2AtomicMaterializationSealReceipt;
+}>;
+
+const inboxV2PreparedMessageReactionCommandCapabilityBrand: unique symbol =
+  Symbol("inbox-v2-prepared-message-reaction-command-capability");
+
+/** Transaction-local proof of exact Message/Timeline/reaction-slot/route locks. */
+export type InboxV2PreparedMessageReactionCommandCapability = Readonly<{
+  [inboxV2PreparedMessageReactionCommandCapabilityBrand]: true;
+}>;
+
+export type PrepareInboxV2MessageReactionCommandResult =
+  | Readonly<{
+      kind: "ready";
+      capability: InboxV2PreparedMessageReactionCommandCapability;
+    }>
+  | Readonly<{
+      kind: "conflict";
+      code:
+        | "revision.conflict"
+        | "message.state_conflict"
+        | "message.transport_conflict";
+    }>
+  | Readonly<{ kind: "message_not_found" }>;
+
+export type SealInboxV2PreparedMessageReactionCommandResult = Readonly<{
+  kind: "applied";
+  reaction: InboxV2MessageReactionCommit["afterReaction"];
+  transition: InboxV2MessageReactionCommit["transition"];
   envelope: InboxV2SafeGenericEnvelope;
   receipt: InboxV2AtomicMaterializationSealReceipt;
 }>;
@@ -982,6 +1017,14 @@ export function createSqlInboxV2TimelineMessageRepository(
 
     async applyReaction(input) {
       const commit = inboxV2MessageReactionCommitSchema.parse(input.commit);
+      if (
+        commit.transition.mode !== "provider_observed" &&
+        commit.transition.mode !== "provider_result"
+      ) {
+        throw invariantError(
+          "App-authored Message reactions require the authorized atomic reaction coordinator."
+        );
+      }
       const streamPosition = inboxV2BigintCounterSchema.parse(
         input.streamPosition
       );
@@ -1294,6 +1337,19 @@ type PreparedInboxV2MessageLifecycleCommandState = {
 const preparedInboxV2MessageLifecycleCommands = new WeakMap<
   InboxV2PreparedMessageLifecycleCommandCapability,
   PreparedInboxV2MessageLifecycleCommandState
+>();
+type PreparedInboxV2MessageReactionCommandState = {
+  readonly atomicMaterializationToken: object;
+  readonly sealExecutor: RawSqlExecutor;
+  readonly current: LoadedTimelineMessageAggregate;
+  readonly commit: InboxV2MessageReactionCommit;
+  readonly routeConsumption: InboxV2OutboundRouteConsumptionRecord | null;
+  readonly routeDisposition: InboxV2OutboundRouteConsumptionDisposition;
+  consumed: boolean;
+};
+const preparedInboxV2MessageReactionCommands = new WeakMap<
+  InboxV2PreparedMessageReactionCommandCapability,
+  PreparedInboxV2MessageReactionCommandState
 >();
 export type InboxV2OutboundRouteConsumptionRecord = Readonly<{
   tenantId: InboxV2TenantId;
@@ -6404,6 +6460,440 @@ async function persistProviderLifecycleTransition(
       return { kind: "appended", envelope, result: undefined } as const;
     }
   );
+}
+
+export async function prepareInboxV2MessageReactionCommand(
+  context: InboxV2AuthorizedCommandMutationContext,
+  input: Readonly<{ commit: InboxV2MessageReactionCommit }>
+): Promise<PrepareInboxV2MessageReactionCommandResult> {
+  assertInboxV2AuthorizedCommandMutationContext(context);
+  if (
+    context.profile !== "domain" ||
+    context.atomicMaterializationToken === undefined
+  ) {
+    throw invariantError(
+      "Message reaction preparation requires an authorized atomic domain context."
+    );
+  }
+  const commit = inboxV2MessageReactionCommitSchema.parse(input.commit);
+  if (
+    commit.transition.mode !== "internal_apply" &&
+    commit.transition.mode !== "external_request"
+  ) {
+    throw invariantError(
+      "Operator Message reaction preparation accepts only internal apply or external request."
+    );
+  }
+  assertInboxV2MessageReactionCommandAuthority(context, commit);
+  const sealExecutor = requireInboxV2AtomicSealExecutor(context);
+  const conversationLock = await context.executor.execute<ConversationHeadRow>(
+    buildLockInboxV2TimelineConversationHeadSql({
+      tenantId: commit.tenantId,
+      conversationId: commit.beforeMessage.conversation.id
+    })
+  );
+  assertAtMostOneRow(conversationLock, "Reaction Conversation lock");
+  if (conversationLock.rows.length === 0) {
+    return { kind: "message_not_found" };
+  }
+  const current = await loadTimelineMessageAggregate(context.executor, {
+    tenantId: commit.tenantId,
+    messageId: commit.beforeMessage.id,
+    lock: true
+  });
+  if (current === null) return { kind: "message_not_found" };
+  if (
+    !sameValue(current.message, commit.beforeMessage) ||
+    !sameValue(current.timelineItem, commit.beforeTimelineItem)
+  ) {
+    return { kind: "conflict", code: "revision.conflict" };
+  }
+
+  const routeConsumption = reactionRouteConsumptionRecord(commit);
+  const routeDisposition =
+    routeConsumption === null
+      ? "absent"
+      : await inspectOutboundRouteConsumption(
+          context.executor,
+          routeConsumption
+        );
+  if (routeDisposition === "conflict") {
+    return { kind: "conflict", code: "message.transport_conflict" };
+  }
+  if (
+    (commit.transition.mode === "external_request") !==
+      (routeConsumption !== null) ||
+    routeDisposition !== "absent"
+  ) {
+    return { kind: "conflict", code: "message.transport_conflict" };
+  }
+
+  const slotResult = await context.executor.execute<Record<string, unknown>>(
+    buildLockInboxV2MessageReactionSlotHeadSql({
+      tenantId: commit.tenantId,
+      messageId: commit.beforeMessage.id,
+      semanticSlotKey: commit.afterReaction.semanticSlotKey
+    })
+  );
+  assertAtMostOneRow(slotResult, "Reaction slot-head lock");
+  const reactionResult = await context.executor.execute<
+    Record<string, unknown>
+  >(
+    buildFindInboxV2MessageReactionSql({
+      tenantId: commit.tenantId,
+      reactionId: commit.afterReaction.id,
+      lock: true
+    })
+  );
+  assertAtMostOneRow(reactionResult, "Reaction head lock");
+  const transitionResult = await context.executor.execute<
+    Record<string, unknown>
+  >(
+    buildFindInboxV2MessageReactionTransitionSql({
+      tenantId: commit.tenantId,
+      transitionId: commit.transition.id
+    })
+  );
+  assertAtMostOneRow(transitionResult, "Reaction transition replay");
+  if (transitionResult.rows.length !== 0) {
+    return { kind: "conflict", code: "message.state_conflict" };
+  }
+  const currentSlot = slotResult.rows[0];
+  const currentReaction = reactionResult.rows[0];
+  if (
+    (commit.beforeReaction === null) !== (currentReaction === undefined) ||
+    (commit.slotHeadBefore === null) !== (currentSlot === undefined) ||
+    (commit.beforeReaction !== null &&
+      currentReaction !== undefined &&
+      !reactionRowMatches(currentReaction, commit.beforeReaction)) ||
+    (commit.slotHeadBefore !== null &&
+      currentSlot !== undefined &&
+      !reactionSlotHeadRowMatches(currentSlot, commit.slotHeadBefore))
+  ) {
+    return { kind: "conflict", code: "message.state_conflict" };
+  }
+
+  const capability = Object.freeze({
+    [inboxV2PreparedMessageReactionCommandCapabilityBrand]: true as const
+  });
+  preparedInboxV2MessageReactionCommands.set(capability, {
+    atomicMaterializationToken: context.atomicMaterializationToken,
+    sealExecutor,
+    current,
+    commit,
+    routeConsumption,
+    routeDisposition,
+    consumed: false
+  });
+  return { kind: "ready", capability };
+}
+
+export async function sealInboxV2PreparedMessageReactionCommand(
+  context: InboxV2AuthorizedAtomicMaterializationContext,
+  input: Readonly<{
+    capability: InboxV2PreparedMessageReactionCommandCapability;
+  }>
+): Promise<SealInboxV2PreparedMessageReactionCommandResult> {
+  assertInboxV2AuthorizedAtomicMaterializationContext(context);
+  const prepared = preparedInboxV2MessageReactionCommands.get(input.capability);
+  if (prepared === undefined || prepared.consumed) {
+    throw invariantError(
+      "Message reaction capability is unknown or was already consumed."
+    );
+  }
+  if (
+    prepared.atomicMaterializationToken !==
+      context.atomicMaterializationToken ||
+    prepared.commit.tenantId !== context.tenantId
+  ) {
+    throw invariantError(
+      "Message reaction capability belongs to a different authorized mutation."
+    );
+  }
+  assertInboxV2MessageReactionCommandAuthority(context, prepared.commit);
+  prepared.consumed = true;
+  consumeInboxV2AtomicOutboundRouteProof(
+    context.atomicMaterializationToken,
+    inboxV2AtomicOutboundRouteProofFromReactionCommit(prepared.commit)
+  );
+  const streamPosition = inboxV2BigintCounterSchema.parse(
+    context.streamPosition
+  );
+  const commit = prepared.commit;
+  const attributionId = derivedInboxV2Id(
+    "action_attribution",
+    commit.transition.id
+  );
+  await expectOneRow(
+    prepared.sealExecutor,
+    buildInsertInboxV2ActionAttributionSql({
+      tenantId: commit.tenantId,
+      id: attributionId,
+      conversationId: commit.beforeMessage.conversation.id,
+      attribution: commit.transition.actionAttribution,
+      createdAt: commit.transition.recordedAt
+    }),
+    "Reaction action attribution insert"
+  );
+  if (commit.beforeReaction === null) {
+    await expectOneRow(
+      prepared.sealExecutor,
+      buildInsertInboxV2MessageReactionSql({
+        reaction: commit.afterReaction,
+        streamPosition
+      }),
+      "Reaction head insert"
+    );
+  }
+  await expectOneRow(
+    prepared.sealExecutor,
+    buildInsertInboxV2MessageReactionTransitionSql({
+      commit,
+      actionAttributionId: attributionId,
+      streamPosition
+    }),
+    "Reaction transition insert"
+  );
+  if (prepared.routeConsumption !== null) {
+    await expectOneRow(
+      prepared.sealExecutor,
+      buildInsertInboxV2OutboundRouteConsumptionSql(prepared.routeConsumption),
+      "Reaction outbound-route consumption insert"
+    );
+  }
+  if (commit.beforeReaction !== null) {
+    await expectOneRow(
+      prepared.sealExecutor,
+      buildAdvanceInboxV2MessageReactionSql({
+        before: commit.beforeReaction,
+        after: commit.afterReaction,
+        streamPosition
+      }),
+      "Reaction head CAS"
+    );
+  }
+  if (commit.slotHeadBefore === null) {
+    await expectOneRow(
+      prepared.sealExecutor,
+      buildInsertInboxV2MessageReactionSlotHeadSql({
+        head: commit.slotHeadAfter,
+        streamPosition
+      }),
+      "Reaction slot-head insert"
+    );
+  } else {
+    await expectOneRow(
+      prepared.sealExecutor,
+      buildAdvanceInboxV2MessageReactionSlotHeadSql({
+        before: commit.slotHeadBefore,
+        after: commit.slotHeadAfter,
+        streamPosition
+      }),
+      "Reaction slot-head CAS"
+    );
+  }
+  const envelope = buildInboxV2SafeGenericEnvelope({
+    tenantId: commit.tenantId,
+    entityKind: "message_reaction",
+    entityId: commit.afterReaction.id,
+    entityRevision: commit.afterReaction.revision,
+    timelineItemId: prepared.current.timelineItem.id,
+    timelineSequence: prepared.current.timelineItem.timelineSequence,
+    streamPosition,
+    changeKind: `reaction.${commit.transition.mode}.${commit.transition.operation}`,
+    occurredAt: commit.transition.occurredAt
+  });
+  return {
+    kind: "applied",
+    reaction: commit.afterReaction,
+    transition: commit.transition,
+    envelope,
+    receipt: issueInboxV2AtomicMaterializationSealReceipt(
+      context.atomicMaterializationToken,
+      inboxV2AtomicMessageReactionSealManifest(prepared)
+    )
+  };
+}
+
+function inboxV2AtomicMessageReactionSealManifest(
+  prepared: PreparedInboxV2MessageReactionCommandState
+): InboxV2AtomicMessageReactionSealManifest {
+  const commit = prepared.commit;
+  const transitionPayloadReference = inboxV2AtomicPayloadReference({
+    tenantId: commit.tenantId,
+    recordId: commit.transition.id,
+    schemaId: INBOX_V2_MESSAGE_REACTION_TRANSITION_SCHEMA_ID,
+    schemaVersion: INBOX_V2_MESSAGE_REACTION_SCHEMA_VERSION,
+    payload: commit.transition
+  });
+  const domainCommitReference = inboxV2AtomicPayloadReference({
+    tenantId: commit.tenantId,
+    recordId: commit.transition.id,
+    schemaId: INBOX_V2_MESSAGE_REACTION_COMMIT_SCHEMA_ID,
+    schemaVersion: INBOX_V2_MESSAGE_REACTION_SCHEMA_VERSION,
+    payload: commit
+  });
+  const route = commit.externalAuthorityEvidence?.outboundRoute ?? null;
+  return {
+    kind: "message_reaction",
+    commandKind: commit.transition.operation,
+    mode: commit.transition.mode as "internal_apply" | "external_request",
+    tenantId: commit.tenantId,
+    conversationId: commit.beforeMessage.conversation.id,
+    messageId: commit.beforeMessage.id,
+    timelineItemId: commit.beforeTimelineItem.id,
+    timelineItemRevision: commit.beforeTimelineItem.revision,
+    auditTargetEntityId: deriveInboxV2MessageReactionAuditTargetReference({
+      tenantId: commit.tenantId,
+      timelineItemId: commit.beforeTimelineItem.id
+    }).entityId,
+    timelineSequence: commit.beforeTimelineItem.timelineSequence,
+    reactionId: commit.afterReaction.id,
+    reactionRevision: commit.afterReaction.revision,
+    transitionId: commit.transition.id,
+    transitionRevision: commit.transition.recordRevision,
+    audience: inboxV2AtomicMessageAudience(
+      commit.beforeTimelineItem.visibility
+    ),
+    stateSchemaId: INBOX_V2_MESSAGE_REACTION_TRANSITION_SCHEMA_ID,
+    stateSchemaVersion: INBOX_V2_MESSAGE_REACTION_SCHEMA_VERSION,
+    stateHash: transitionPayloadReference.digest,
+    payloadReference: transitionPayloadReference,
+    domainCommitReference,
+    outboundRouteId: route?.id ?? null,
+    sourceAccountId: route?.sourceAccount.id ?? null,
+    event: {
+      typeId: "core:message.changed",
+      payloadSchemaId: INBOX_V2_MESSAGE_REACTION_COMMIT_SCHEMA_ID,
+      payloadSchemaVersion: INBOX_V2_MESSAGE_REACTION_SCHEMA_VERSION,
+      payloadReference: domainCommitReference,
+      occurredAt: commit.transition.occurredAt,
+      recordedAt: commit.transition.recordedAt
+    }
+  };
+}
+
+function inboxV2AtomicOutboundRouteProofFromReactionCommit(
+  commit: InboxV2MessageReactionCommit
+) {
+  const route = commit.externalAuthorityEvidence?.outboundRoute ?? null;
+  if (commit.transition.mode !== "external_request") return null;
+  if (route === null) {
+    throw invariantError("External reaction lost its exact OutboundRoute.");
+  }
+  return {
+    tenantId: route.tenantId,
+    routeId: route.id,
+    conversationId: route.conversation.id,
+    sourceAccountId: route.sourceAccount.id,
+    routePolicyId: route.routePolicy.id,
+    routePolicyRevision: route.routePolicyRevision,
+    routeDigest: computeInboxV2OutboundRouteDigest(route)
+  };
+}
+
+function assertInboxV2MessageReactionCommandAuthority(
+  context: Pick<
+    InboxV2AuthorizedCommandMutationContext,
+    | "tenantId"
+    | "commandTypeId"
+    | "actor"
+    | "authorizationEpoch"
+    | "authorizationDecisionId"
+    | "authorizationDecisionRefs"
+    | "authorizationResourceRevisionFences"
+    | "occurredAt"
+  >,
+  commit: InboxV2MessageReactionCommit
+): void {
+  const transition = commit.transition;
+  const actor = transition.actionAttribution.appActor;
+  const expectedCommandTypeId = `core:message.reaction.${transition.operation}`;
+  const actorMatches =
+    actor !== null &&
+    (context.actor.kind === "employee"
+      ? actor.kind === "employee" &&
+        actor.employee.id === context.actor.employeeId
+      : actor.kind === "trusted_service" &&
+        actor.trustedServiceId === context.actor.trustedServiceId);
+  const primary = context.authorizationDecisionRefs.filter(
+    (decision) => decision.id === context.authorizationDecisionId
+  );
+  const reactDecision = primary[0];
+  const requiredReadPermissionId =
+    commit.beforeTimelineItem.visibility === "conversation_external"
+      ? "core:conversation.read"
+      : commit.beforeTimelineItem.visibility === "internal_participants"
+        ? "core:conversation.internal.read"
+        : null;
+  const readDecisions = context.authorizationDecisionRefs.filter(
+    (decision) =>
+      requiredReadPermissionId !== null &&
+      decision.permissionId === requiredReadPermissionId &&
+      decision.outcome === "allowed" &&
+      decision.authorizationEpoch === context.authorizationEpoch &&
+      decision.resourceScopeId === "core:conversation" &&
+      decision.resource.tenantId === context.tenantId &&
+      decision.resource.entityTypeId === "core:conversation" &&
+      String(decision.resource.entityId) ===
+        String(commit.beforeMessage.conversation.id) &&
+      reactionAuthorizationDecisionPrincipalMatches(decision, context.actor)
+  );
+  const route = commit.externalAuthorityEvidence?.outboundRoute ?? null;
+  const sourceDecisions = context.authorizationDecisionRefs.filter(
+    (decision) =>
+      route !== null &&
+      decision.permissionId === "core:source_account.use" &&
+      decision.outcome === "allowed" &&
+      decision.authorizationEpoch === context.authorizationEpoch &&
+      decision.resourceScopeId === "core:source-account" &&
+      decision.resource.tenantId === context.tenantId &&
+      decision.resource.entityTypeId === "core:source-account" &&
+      String(decision.resource.entityId) === String(route.sourceAccount.id) &&
+      reactionAuthorizationDecisionPrincipalMatches(decision, context.actor)
+  );
+  const external = transition.mode === "external_request";
+  if (
+    context.commandTypeId !== expectedCommandTypeId ||
+    context.tenantId !== commit.tenantId ||
+    context.occurredAt !== transition.recordedAt ||
+    !actorMatches ||
+    requiredReadPermissionId === null ||
+    primary.length !== 1 ||
+    reactDecision === undefined ||
+    reactDecision.permissionId !== "core:message.react" ||
+    reactDecision.outcome !== "allowed" ||
+    reactDecision.authorizationEpoch !== context.authorizationEpoch ||
+    reactDecision.resourceScopeId !== "core:timeline-item" ||
+    reactDecision.resource.tenantId !== context.tenantId ||
+    reactDecision.resource.entityTypeId !== "core:timeline-item" ||
+    String(reactDecision.resource.entityId) !==
+      String(commit.beforeTimelineItem.id) ||
+    String(reactDecision.resourceAccessRevision) !==
+      String(commit.beforeTimelineItem.revision) ||
+    !reactionAuthorizationDecisionPrincipalMatches(
+      reactDecision,
+      context.actor
+    ) ||
+    readDecisions.length !== 1 ||
+    (external ? sourceDecisions.length !== 1 : sourceDecisions.length !== 0) ||
+    external !== (route !== null)
+  ) {
+    throw invariantError(
+      "Message reaction commit crossed its exact react/read/source-account authority."
+    );
+  }
+}
+
+function reactionAuthorizationDecisionPrincipalMatches(
+  decision: InboxV2AuthorizationDecisionReference,
+  actor: InboxV2AuthorizedCommandMutationContext["actor"]
+): boolean {
+  return actor.kind === "employee"
+    ? decision.principal.kind === "employee" &&
+        decision.principal.employee.id === actor.employeeId
+    : decision.principal.kind === "trusted_service" &&
+        decision.principal.trustedServiceId === actor.trustedServiceId;
 }
 
 async function persistReaction(

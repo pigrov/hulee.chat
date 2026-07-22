@@ -255,13 +255,27 @@ export const inboxV2StaffNoteReadProofSchema = z
   })
   .strict();
 
+const reactionMessageTargetProofFields = {
+  conversation: inboxV2ConversationReferenceSchema,
+  message: inboxV2MessageReferenceSchema,
+  timelineItem: inboxV2TimelineItemReferenceSchema,
+  expectedMessageRevision: inboxV2EntityRevisionSchema,
+  expectedTimelineItemRevision: inboxV2EntityRevisionSchema,
+  ownerParticipant: inboxV2ConversationParticipantReferenceSchema
+} as const;
+
+/** Exact server-loaded Message/TimelineItem topology used to authorize a set. */
+export const inboxV2ReactionMessageTargetProofSchema = z
+  .object({
+    ...reactionMessageTargetProofFields
+  })
+  .strict();
+
+/** Exact server-loaded reaction owner and Message/TimelineItem topology. */
 export const inboxV2ReactionTargetProofSchema = z
   .object({
-    conversation: inboxV2ConversationReferenceSchema,
-    reaction: inboxV2MessageReactionReferenceSchema,
-    message: inboxV2MessageReferenceSchema,
-    expectedMessageRevision: inboxV2EntityRevisionSchema,
-    ownerParticipant: inboxV2ConversationParticipantReferenceSchema
+    ...reactionMessageTargetProofFields,
+    reaction: inboxV2MessageReactionReferenceSchema
   })
   .strict();
 
@@ -768,6 +782,7 @@ const reactionSetSchema = z
     conversation: inboxV2ConversationReferenceSchema,
     message: inboxV2MessageReferenceSchema,
     expectedMessageRevision: inboxV2EntityRevisionSchema.optional(),
+    targetProof: inboxV2ReactionMessageTargetProofSchema.optional(),
     actionParticipant: inboxV2ConversationParticipantReferenceSchema,
     appActor: inboxV2AppActorSchema,
     value: inboxV2ReactionValueSchema,
@@ -776,6 +791,25 @@ const reactionSetSchema = z
   })
   .strict()
   .superRefine((intent, context) => {
+    if (
+      intent.targetProof !== undefined &&
+      (!reactionMessageTargetProofMatches(
+        intent.targetProof,
+        intent.conversation,
+        intent.actionParticipant
+      ) ||
+        intent.targetProof.message.tenantId !== intent.message.tenantId ||
+        intent.targetProof.message.id !== intent.message.id ||
+        (intent.expectedMessageRevision !== undefined &&
+          intent.targetProof.expectedMessageRevision !==
+            intent.expectedMessageRevision))
+    ) {
+      addIssue(
+        context,
+        ["targetProof"],
+        "Reaction set proof must pin its exact Conversation, Message revision, TimelineItem and owning participant."
+      );
+    }
     if (intent.target.kind === "external") {
       addRouteAuthorizationProofIssues(
         context,
@@ -809,20 +843,18 @@ function reactionMutationSchema<
     .superRefine((intent, context) => {
       if (
         intent.targetProof !== undefined &&
-        (intent.targetProof.conversation.tenantId !==
-          intent.conversation.tenantId ||
-          intent.targetProof.conversation.id !== intent.conversation.id ||
+        (!reactionMessageTargetProofMatches(
+          intent.targetProof,
+          intent.conversation,
+          intent.actionParticipant
+        ) ||
           intent.targetProof.reaction.tenantId !== intent.reaction.tenantId ||
-          intent.targetProof.reaction.id !== intent.reaction.id ||
-          intent.targetProof.ownerParticipant.tenantId !==
-            intent.actionParticipant.tenantId ||
-          intent.targetProof.ownerParticipant.id !==
-            intent.actionParticipant.id)
+          intent.targetProof.reaction.id !== intent.reaction.id)
       ) {
         addIssue(
           context,
           ["targetProof"],
-          "Reaction mutation proof must pin its exact Conversation, Message and owning participant."
+          "Reaction mutation proof must pin its exact Conversation, Message revision, TimelineItem, Reaction and owning participant."
         );
       }
       if (intent.target.kind === "external") {
@@ -1049,6 +1081,23 @@ function addRouteAuthorizationProofIssues(
       "Route authorization proof must pin the selected route, SourceAccount and binding in the destination tenant."
     );
   }
+}
+
+function reactionMessageTargetProofMatches(
+  proof: z.infer<typeof inboxV2ReactionMessageTargetProofSchema>,
+  conversation: z.infer<typeof inboxV2ConversationReferenceSchema>,
+  ownerParticipant: z.infer<
+    typeof inboxV2ConversationParticipantReferenceSchema
+  >
+): boolean {
+  return (
+    proof.conversation.tenantId === conversation.tenantId &&
+    proof.conversation.id === conversation.id &&
+    proof.message.tenantId === conversation.tenantId &&
+    proof.timelineItem.tenantId === conversation.tenantId &&
+    proof.ownerParticipant.tenantId === ownerParticipant.tenantId &&
+    proof.ownerParticipant.id === ownerParticipant.id
+  );
 }
 
 function addReplyAuthorityIssues(

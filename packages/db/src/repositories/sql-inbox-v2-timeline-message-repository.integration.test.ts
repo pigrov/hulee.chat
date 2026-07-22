@@ -24,6 +24,7 @@ import {
   inboxV2ConversationClientLinkTransitionIdSchema,
   inboxV2ConversationParticipantSchema,
   inboxV2EntityRevisionSchema,
+  inboxV2EmployeeIdSchema,
   inboxV2MessageCreationCommitSchema,
   inboxV2MessageIdSchema,
   inboxV2MessageMutationCommitSchema,
@@ -62,6 +63,7 @@ import {
   type InboxV2EmployeeId,
   type InboxV2Message,
   type InboxV2MessageCreationCommit,
+  type InboxV2MessageReactionCommit,
   type InboxV2TimelineContent,
   type InboxV2TimelineItem,
   type InboxV2SystemEventTimelineCreationCommit
@@ -112,6 +114,7 @@ import { createSqlEmployeeDirectoryRepository } from "./sql-employee-directory-r
 import { createSqlInboxV2ClientMergeRepository } from "./sql-inbox-v2-client-merge-repository";
 import { createSqlInboxV2ConversationClientLinkRepository } from "./sql-inbox-v2-conversation-client-link-repository";
 import { createSqlInboxV2ConversationRepository } from "./sql-inbox-v2-conversation-repository";
+import { createSqlInboxV2EmployeeConversationStateRepository } from "./sql-inbox-v2-employee-conversation-state-repository";
 import { createSqlInboxV2ExternalThreadRepository } from "./sql-inbox-v2-external-thread-repository";
 import {
   INBOX_V2_ATTACHMENT_MATERIALIZATION_RESERVATION_COMMAND_TYPE_ID,
@@ -153,6 +156,7 @@ import {
   buildAdvanceInboxV2TimelineItemSql,
   buildInsertInboxV2ActionAttributionSql,
   buildInsertInboxV2MessageReactionSql,
+  buildInsertInboxV2MessageReactionSlotHeadSql,
   buildInsertInboxV2MessageReactionTransitionSql,
   buildInsertInboxV2MessageReferenceCanonicalTargetsSql,
   buildInsertInboxV2MessageReferenceContextSql,
@@ -3307,6 +3311,87 @@ describePostgres(
       });
     });
 
+    it("persists an exact provider read receipt without advancing the employee read cursor", async () => {
+      const suffix = "receipt-independent-read-cursor";
+      const creation = sourceOutboundCreationCommit(suffix);
+      await seedExternalCreationAnchors(db, creation, suffix);
+      expect(
+        await createSourceMessage(
+          historicalTimelineFixtureRepository(db),
+          creation,
+          "204"
+        )
+      ).toMatchObject({ kind: "created" });
+
+      const employeeId = inboxV2EmployeeIdSchema.parse(
+        `employee:db005-receipt-cursor-${runId}`
+      );
+      await db.execute(sql`
+        insert into employees (
+          id, tenant_id, email, display_name, profile, created_at, updated_at
+        ) values (
+          ${employeeId}, ${tenantId},
+          ${`db005-receipt-cursor-${runId}@example.test`},
+          'DB005 receipt cursor employee', '{}'::jsonb, ${fixtureT2}, ${fixtureT2}
+        )
+      `);
+      const employeeStates =
+        createSqlInboxV2EmployeeConversationStateRepository(db);
+      const timelineItem = creation.timelineAllocation.items[0];
+      if (timelineItem === undefined) {
+        throw new Error("Expected one receipt target TimelineItem.");
+      }
+      const readState = await employeeStates.markReadThrough(
+        {
+          tenantId,
+          employeeId,
+          conversationId: creation.message.conversation.id,
+          sequence: timelineItem.timelineSequence,
+          changedAt: fixtureT3
+        },
+        async () => ({ streamPosition: position("8000"), result: "read" })
+      );
+      expect(readState).toMatchObject({
+        kind: "advanced",
+        record: { state: { lastReadSequence: timelineItem.timelineSequence } }
+      });
+      const employeeStateBefore = await employeeStates.find({
+        tenantId,
+        employeeId,
+        conversationId: creation.message.conversation.id
+      });
+
+      const receipt = receiptFactCommit(
+        suffix,
+        creation,
+        `transport:receipt-independent-${runId}`
+      );
+      await expect(
+        createSqlInboxV2TimelineMessageRepository(db).appendTransportFact({
+          commit: receipt,
+          streamPosition: position("8001")
+        })
+      ).resolves.toMatchObject({
+        kind: "appended",
+        envelope: { entityKind: "message_transport", streamPosition: "8001" }
+      });
+
+      expect(
+        await employeeStates.find({
+          tenantId,
+          employeeId,
+          conversationId: creation.message.conversation.id
+        })
+      ).toEqual(employeeStateBefore);
+      const persistedReceipt = await db.execute<{ count: string }>(sql`
+        select count(*)::text as count
+          from inbox_v2_provider_receipt_observations
+         where tenant_id = ${tenantId}
+           and id = ${receipt.fact.observation.id}
+      `);
+      expect(persistedReceipt.rows[0]?.count).toBe("1");
+    });
+
     it("creates and replays an exact queued dispatch while rejecting missing, cross-wired and wrong-author creation graphs", async () => {
       const repository = createSqlInboxV2TimelineMessageRepository(db);
       const happySuffix = "hulee-external-dispatch-happy";
@@ -4134,7 +4219,7 @@ describePostgres(
         "🔥"
       );
       await expect(
-        repository.applyReaction({
+        applyHistoricalAppAuthoredReactionFixture(db, {
           commit: setA,
           streamPosition: position("701")
         })
@@ -4143,7 +4228,7 @@ describePostgres(
         envelope: { streamPosition: "701", entityRevision: "1" }
       });
       await expect(
-        repository.applyReaction({
+        applyHistoricalAppAuthoredReactionFixture(db, {
           commit: setA,
           streamPosition: position("9701")
         })
@@ -4152,7 +4237,7 @@ describePostgres(
         envelope: { streamPosition: "701", entityRevision: "1" }
       });
       await expect(
-        repository.applyReaction({
+        applyHistoricalAppAuthoredReactionFixture(db, {
           commit: setB,
           streamPosition: position("702")
         })
@@ -4179,7 +4264,7 @@ describePostgres(
 
       const clearB = internalReactionClearCommit(setB, "reaction-b-clear");
       await expect(
-        repository.applyReaction({
+        applyHistoricalAppAuthoredReactionFixture(db, {
           commit: clearB,
           streamPosition: position("703")
         })
@@ -4188,7 +4273,7 @@ describePostgres(
         envelope: { streamPosition: "703", entityRevision: "2" }
       });
       await expect(
-        repository.applyReaction({
+        applyHistoricalAppAuthoredReactionFixture(db, {
           commit: clearB,
           streamPosition: position("9703")
         })
@@ -4198,7 +4283,7 @@ describePostgres(
       });
       const staleClearB = internalReactionClearCommit(setB, "reaction-b-stale");
       await expect(
-        repository.applyReaction({
+        applyHistoricalAppAuthoredReactionFixture(db, {
           commit: staleClearB,
           streamPosition: position("704")
         })
@@ -5118,7 +5203,6 @@ describePostgres(
     });
 
     it("rejects raw reaction FSM corruption and a non-monotonic reaction head advance", async () => {
-      const repository = createSqlInboxV2TimelineMessageRepository(db);
       const suffix = "reaction-raw-fsm";
       const creation = creationCommit(suffix);
       await seedCreationAnchors(db, creation);
@@ -5134,7 +5218,7 @@ describePostgres(
         "🔥"
       );
       await expect(
-        repository.applyReaction({
+        applyHistoricalAppAuthoredReactionFixture(db, {
           commit: setCommit,
           streamPosition: position("871")
         })
@@ -5705,7 +5789,7 @@ describePostgres(
         observation_count: "0"
       });
       await expect(
-        repository.applyReaction({
+        applyHistoricalAppAuthoredReactionFixture(db, {
           commit: requestCommit,
           streamPosition: position("861")
         })
@@ -12721,6 +12805,203 @@ function derivedInboxV2Id(prefix: string, source: string): string {
   return `${prefix}:${createHash("sha256")
     .update(source, "utf8")
     .digest("hex")}`;
+}
+
+/**
+ * Seeds the pre-MSG006 app-authored reaction history used by repository
+ * recovery/FSM tests. Production app commands must use the authorized atomic
+ * reaction coordinator; keeping this fixture local prevents that historical
+ * bypass from becoming a runtime repository surface again.
+ */
+async function applyHistoricalAppAuthoredReactionFixture(
+  db: HuleeDatabase,
+  input: Readonly<{
+    commit: InboxV2MessageReactionCommit;
+    streamPosition: ReturnType<typeof position>;
+  }>
+) {
+  return db.transaction(async (transaction) => {
+    await transaction.execute(
+      sql`set local session_replication_role = replica`
+    );
+    try {
+      const replay = await transaction.execute<{
+        resulting_revision: string;
+        recorded_stream_position: string;
+      }>(sql`
+        select resulting_revision::text as resulting_revision,
+               recorded_stream_position::text as recorded_stream_position
+          from inbox_v2_message_reaction_transitions
+         where tenant_id = ${input.commit.tenantId}
+           and id = ${input.commit.transition.id}
+      `);
+      if (replay.rows[0] !== undefined) {
+        return {
+          kind: "already_applied" as const,
+          envelope: {
+            streamPosition: replay.rows[0].recorded_stream_position,
+            entityRevision: replay.rows[0].resulting_revision
+          }
+        };
+      }
+
+      const reactionHead = await transaction.execute<{ revision: string }>(sql`
+        select revision::text as revision
+          from inbox_v2_message_reactions
+         where tenant_id = ${input.commit.tenantId}
+           and id = ${input.commit.afterReaction.id}
+         for update
+      `);
+      const slotHead = await transaction.execute<{
+        reaction_id: string;
+        revision: string;
+      }>(sql`
+        select reaction_id, revision::text as revision
+          from inbox_v2_message_reaction_slot_heads
+         where tenant_id = ${input.commit.tenantId}
+           and message_id = ${input.commit.beforeMessage.id}
+           and semantic_slot_key = ${input.commit.afterReaction.semanticSlotKey}
+         for update
+      `);
+      const expectedReactionRevision = input.commit.beforeReaction?.revision;
+      const expectedSlotRevision = input.commit.slotHeadBefore?.revision;
+      if (
+        (expectedReactionRevision === undefined) !==
+          (reactionHead.rows[0] === undefined) ||
+        (expectedSlotRevision === undefined) !==
+          (slotHead.rows[0] === undefined) ||
+        (expectedReactionRevision !== undefined &&
+          reactionHead.rows[0]?.revision !== expectedReactionRevision) ||
+        (expectedSlotRevision !== undefined &&
+          slotHead.rows[0]?.revision !== expectedSlotRevision) ||
+        (input.commit.slotHeadBefore !== null &&
+          slotHead.rows[0]?.reaction_id !==
+            input.commit.slotHeadBefore.reaction.id)
+      ) {
+        return {
+          kind: "conflict" as const,
+          code: "message.state_conflict" as const
+        };
+      }
+
+      const attributionId = derivedInboxV2Id(
+        "action_attribution",
+        input.commit.transition.id
+      );
+      await expectHistoricalReactionFixtureWrite(
+        transaction.execute(
+          buildInsertInboxV2ActionAttributionSql({
+            tenantId: input.commit.tenantId,
+            id: attributionId,
+            conversationId: input.commit.beforeMessage.conversation.id,
+            attribution: input.commit.transition.actionAttribution,
+            createdAt: input.commit.transition.recordedAt
+          })
+        ),
+        "action attribution"
+      );
+      if (input.commit.beforeReaction === null) {
+        await expectHistoricalReactionFixtureWrite(
+          transaction.execute(
+            buildInsertInboxV2MessageReactionSql({
+              reaction: input.commit.afterReaction,
+              streamPosition: input.streamPosition
+            })
+          ),
+          "reaction head insert"
+        );
+      }
+      await expectHistoricalReactionFixtureWrite(
+        transaction.execute(
+          buildInsertInboxV2MessageReactionTransitionSql({
+            commit: input.commit,
+            actionAttributionId: attributionId,
+            streamPosition: input.streamPosition
+          })
+        ),
+        "reaction transition"
+      );
+      if (input.commit.routeConsumption !== null) {
+        const consumption = input.commit.routeConsumption;
+        await expectHistoricalReactionFixtureWrite(
+          transaction.execute(
+            buildInsertInboxV2OutboundRouteConsumptionSql({
+              tenantId: input.commit.tenantId,
+              consumerKind: "reaction",
+              consumerId: input.commit.transition.id,
+              messageId: input.commit.beforeMessage.id,
+              outboundRouteId: consumption.outboundRoute.id,
+              mutationToken: consumption.mutationToken,
+              idempotencyToken: consumption.idempotencyToken,
+              correlationToken: consumption.correlationToken,
+              consumedByTrustedServiceId:
+                consumption.consumedByTrustedServiceId,
+              consumedAt: consumption.consumedAt,
+              revision: inboxV2EntityRevisionSchema.parse(consumption.revision),
+              commitDigestSha256:
+                computeInboxV2TimelineMessageCommitDigest(consumption)
+            })
+          ),
+          "route consumption"
+        );
+      }
+      if (input.commit.beforeReaction !== null) {
+        await expectHistoricalReactionFixtureWrite(
+          transaction.execute(
+            buildAdvanceInboxV2MessageReactionSql({
+              before: input.commit.beforeReaction,
+              after: input.commit.afterReaction,
+              streamPosition: input.streamPosition
+            })
+          ),
+          "reaction head advance"
+        );
+      }
+      if (input.commit.slotHeadBefore === null) {
+        await expectHistoricalReactionFixtureWrite(
+          transaction.execute(
+            buildInsertInboxV2MessageReactionSlotHeadSql({
+              head: input.commit.slotHeadAfter,
+              streamPosition: input.streamPosition
+            })
+          ),
+          "reaction slot insert"
+        );
+      } else {
+        await expectHistoricalReactionFixtureWrite(
+          transaction.execute(
+            buildAdvanceInboxV2MessageReactionSlotHeadSql({
+              before: input.commit.slotHeadBefore,
+              after: input.commit.slotHeadAfter,
+              streamPosition: input.streamPosition
+            })
+          ),
+          "reaction slot advance"
+        );
+      }
+      return {
+        kind: "appended" as const,
+        envelope: {
+          streamPosition: input.streamPosition,
+          entityRevision: input.commit.afterReaction.revision
+        }
+      };
+    } finally {
+      await transaction.execute(
+        sql`set local session_replication_role = origin`
+      );
+    }
+  });
+}
+
+async function expectHistoricalReactionFixtureWrite(
+  write: Promise<{ rows: readonly unknown[] }>,
+  label: string
+): Promise<void> {
+  const result = await write;
+  if (result.rows.length !== 1) {
+    throw new Error(`Historical reaction fixture ${label} did not write once.`);
+  }
 }
 
 async function insertRawStaffNoteCreation(

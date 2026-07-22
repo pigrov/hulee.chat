@@ -137,6 +137,58 @@ export type InboxV2AtomicMessageLifecycleSealManifest = Readonly<{
   event: InboxV2AtomicStreamEventManifest;
 }>;
 
+/**
+ * Canonical closure for one operator-authored Message reaction command. The
+ * stream entity is the immutable transition (rather than the mutable reaction
+ * slot head), so provider work can pin one exact set/replace/clear request.
+ */
+export type InboxV2AtomicMessageReactionSealManifest = Readonly<{
+  kind: "message_reaction";
+  commandKind: "set" | "replace" | "clear";
+  mode: "internal_apply" | "external_request";
+  tenantId: string;
+  conversationId: string;
+  messageId: string;
+  timelineItemId: string;
+  timelineItemRevision: string;
+  auditTargetEntityId: string;
+  timelineSequence: string;
+  reactionId: string;
+  reactionRevision: string;
+  transitionId: string;
+  transitionRevision: string;
+  audience: "internal_participants" | "conversation_external";
+  stateSchemaId: string;
+  stateSchemaVersion: string;
+  stateHash: string;
+  payloadReference: InboxV2PayloadReference;
+  domainCommitReference: InboxV2PayloadReference;
+  outboundRouteId: string | null;
+  sourceAccountId: string | null;
+  event: InboxV2AtomicStreamEventManifest;
+}>;
+
+/**
+ * Audit references intentionally use opaque internal IDs. Derive that opaque
+ * ID from the exact TimelineItem instead of accepting an arbitrary sibling
+ * target from the command materialization input.
+ */
+export function deriveInboxV2MessageReactionAuditTargetReference(input: {
+  tenantId: string;
+  timelineItemId: string;
+}): InboxV2InternalEntityReference {
+  const digest = calculateInboxV2CanonicalSha256({
+    domain: "core:inbox-v2.message-reaction-audit-target@v1",
+    tenantId: input.tenantId,
+    timelineItemId: input.timelineItemId
+  });
+  return inboxV2InternalEntityReferenceSchema.parse({
+    tenantId: input.tenantId,
+    entityTypeId: "core:timeline-item",
+    entityId: `internal-ref:${digest.slice("sha256:".length)}`
+  });
+}
+
 export function deriveInboxV2AttachmentMaterializationAuditReference(input: {
   tenantId: string;
   entityTypeId: "core:message" | "core:conversation";
@@ -207,6 +259,7 @@ export type InboxV2AtomicTimelineItemCreationSealManifest = Readonly<{
 export type InboxV2AtomicMaterializationSealManifest =
   | InboxV2AtomicMessageCreationSealManifest
   | InboxV2AtomicMessageLifecycleSealManifest
+  | InboxV2AtomicMessageReactionSealManifest
   | InboxV2AtomicMessageMutationSealManifest
   | InboxV2AtomicTimelineItemCreationSealManifest;
 
@@ -592,6 +645,7 @@ function recursivelyFrozenManifest(
     manifest === null ||
     (manifest.kind !== "message_creation" &&
       manifest.kind !== "message_lifecycle" &&
+      manifest.kind !== "message_reaction" &&
       manifest.kind !== "message_mutation" &&
       manifest.kind !== "timeline_item_creation")
   ) {

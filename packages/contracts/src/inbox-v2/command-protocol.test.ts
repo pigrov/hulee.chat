@@ -247,6 +247,17 @@ function routeAuthorization() {
   };
 }
 
+function reactionMessageTargetProof() {
+  return {
+    conversation,
+    message,
+    timelineItem,
+    expectedMessageRevision: "6",
+    expectedTimelineItemRevision: "6",
+    ownerParticipant: authorParticipant
+  };
+}
+
 function textContent() {
   return {
     blocks: [
@@ -1363,19 +1374,18 @@ describe("Inbox V2 command protocol", () => {
     ).toBe(false);
   });
 
-  it("rejects reaction_set without an exact expected Message revision", () => {
-    const evidence: AuthorizationEvidence[] = [
-      ...conversationEvidence(
-        "core:message.react",
-        "core:conversation.internal.read"
-      )
-    ];
+  it("authorizes reaction_set on its exact TimelineItem with a separate Conversation read", () => {
+    const evidence = lifecycleEvidence(
+      "core:message.react",
+      "core:conversation.internal.read"
+    );
     const intent = {
       kind: "reaction_set" as const,
       tenantId,
       conversation,
       message,
       expectedMessageRevision: "6",
+      targetProof: reactionMessageTargetProof(),
       actionParticipant: authorParticipant,
       appActor: {
         kind: "employee" as const,
@@ -1393,6 +1403,32 @@ describe("Inbox V2 command protocol", () => {
       ).success
     ).toBe(true);
 
+    expect(
+      inboxV2AuthorizedCommandEnvelopeSchema.safeParse(
+        authorizedTimelineCommand(
+          intent,
+          conversationEvidence(
+            "core:message.react",
+            "core:conversation.internal.read"
+          )
+        )
+      ).success
+    ).toBe(false);
+
+    const { targetProof: _targetProof, ...withoutTargetProof } = intent;
+    expect(
+      inboxV2TimelineCommandIntentEnvelopeSchema.safeParse({
+        schemaId: "core:inbox-v2.timeline-command-intent",
+        schemaVersion: "v1",
+        payload: withoutTargetProof
+      }).success
+    ).toBe(true);
+    expect(
+      inboxV2AuthorizedCommandEnvelopeSchema.safeParse(
+        authorizedTimelineCommand(withoutTargetProof, evidence)
+      ).success
+    ).toBe(false);
+
     const {
       expectedMessageRevision: _expectedMessageRevision,
       ...withoutExpectedRevision
@@ -1408,6 +1444,16 @@ describe("Inbox V2 command protocol", () => {
       inboxV2AuthorizedCommandEnvelopeSchema.safeParse(
         authorizedTimelineCommand(withoutExpectedRevision, evidence)
       ).success
+    ).toBe(false);
+
+    expect(
+      inboxV2TimelineCommandIntentSchema.safeParse({
+        ...intent,
+        targetProof: {
+          ...intent.targetProof,
+          expectedMessageRevision: "7"
+        }
+      }).success
     ).toBe(false);
   });
 
@@ -1729,7 +1775,9 @@ describe("Inbox V2 command protocol", () => {
         conversation,
         reaction,
         message,
+        timelineItem,
         expectedMessageRevision: "6",
+        expectedTimelineItemRevision: "6",
         ownerParticipant: authorParticipant
       },
       actionParticipant: authorParticipant,
@@ -1738,7 +1786,7 @@ describe("Inbox V2 command protocol", () => {
       target: { kind: "internal" as const },
       occurredAt: now
     };
-    const evidence = conversationEvidence(
+    const evidence = lifecycleEvidence(
       "core:message.react",
       "core:conversation.internal.read"
     );
@@ -1747,6 +1795,17 @@ describe("Inbox V2 command protocol", () => {
         authorizedTimelineCommand(intent, evidence)
       ).success
     ).toBe(true);
+    expect(
+      inboxV2AuthorizedCommandEnvelopeSchema.safeParse(
+        authorizedTimelineCommand(
+          intent,
+          conversationEvidence(
+            "core:message.react",
+            "core:conversation.internal.read"
+          )
+        )
+      ).success
+    ).toBe(false);
     const { targetProof: _targetProof, ...withoutTargetProof } = intent;
     expect(
       inboxV2TimelineCommandIntentEnvelopeSchema.safeParse({

@@ -18,6 +18,7 @@ import {
   inboxV2OutboundDispatchRouteFailureCommitSchema,
   inboxV2OutboundDispatchSchema,
   inboxV2MessageIdSchema,
+  inboxV2MessageReactionCommitSchema,
   inboxV2OutboundMultiSendOperationSchema,
   inboxV2OutboundRouteResolutionCommitSchema,
   inboxV2OutboxIntentSchema,
@@ -48,6 +49,7 @@ import {
   type InboxV2OutboundRouteResolutionCommit,
   type InboxV2FinalizeOutboxInput,
   type InboxV2MessageId,
+  type InboxV2MessageReactionCommit,
   type InboxV2OutboxIntent,
   type InboxV2OutboxWorkItem,
   type InboxV2SourceOccurrenceResolutionCommit,
@@ -424,6 +426,28 @@ type BindingRouteFenceRow = BindingAnchorRow & {
 type BindingFenceRow = BindingRouteFenceRow & {
   runtime_health_revision: unknown;
   updated_at: unknown;
+};
+type ReactionSourceAccountIdentityRow = {
+  source_account_id: unknown;
+  source_connection_id: unknown;
+  state: unknown;
+  revision: unknown;
+  account_generation: unknown;
+  updated_at: unknown;
+};
+type ReactionRoutePolicyRow = {
+  revision: unknown;
+  conversation_id: unknown;
+  external_thread_id: unknown;
+  operation_id: unknown;
+  content_kind_id: unknown;
+  required_conversation_permission_id: unknown;
+  preferred_binding_id: unknown;
+  fallback_kind: unknown;
+  fallback_binding_count: unknown;
+};
+type ReactionCapabilityRow = {
+  capability_id: unknown;
 };
 type ExistingPolicyRow = {
   policy_id: unknown;
@@ -942,6 +966,102 @@ export async function persistInboxV2RouteResolutionInTransaction(
 }
 
 /**
+ * Persists the one-shot route carried by an external reaction request. Unlike
+ * Message send, the canonical conversation permission is `message.react`;
+ * the operation-specific `*_external` ID remains only the immutable provider
+ * route profile. The exact original occurrence/account/binding is mandatory
+ * and no policy/preferred/fallback route is accepted.
+ */
+export async function persistInboxV2ReactionRouteInTransaction(
+  context: InboxV2AuthorizedCommandMutationContext,
+  input: InboxV2MessageReactionCommit
+): Promise<PersistInboxV2RouteResolutionResult> {
+  assertInboxV2AuthorizedCommandMutationContext(context);
+  if (context.profile !== "domain") {
+    throw invariantError(
+      "Inbox V2 reaction route requires an authorized domain context."
+    );
+  }
+  const commit = inboxV2MessageReactionCommitSchema.parse(input);
+  const authority = commit.transition.externalAuthority;
+  const evidence = commit.externalAuthorityEvidence;
+  const route = evidence?.outboundRoute ?? null;
+  if (
+    commit.transition.mode !== "external_request" ||
+    authority === null ||
+    authority.outboundRoute === null ||
+    route === null ||
+    commit.outboundBindingSnapshot === null ||
+    commit.routeConsumption === null
+  ) {
+    throw invariantError(
+      "Inbox V2 reaction route persistence requires one closed external request."
+    );
+  }
+
+  assertInboxV2ReactionRouteAuthorizedContext(context, commit, route);
+  const policyCurrent = await lockAndValidateReactionRoutePolicy(
+    context.executor,
+    route
+  );
+  if (!policyCurrent) {
+    return { kind: "policy_conflict" };
+  }
+  const identityCurrent = await lockAndValidateReactionSourceAccountIdentity(
+    context.executor,
+    route,
+    commit.outboundBindingSnapshot
+  );
+  if (!identityCurrent) {
+    return { kind: "binding_fence_conflict" };
+  }
+  const fence = await lockBindingFence(context.executor, route);
+  if (fence === null) return { kind: "binding_not_found" };
+  if (
+    !bindingAnchorMatchesRoute(fence, route) ||
+    !bindingFenceMatchesRoute(fence, route) ||
+    String(fence.binding_revision) !==
+      String(commit.outboundBindingSnapshot.revision) ||
+    String(fence.provider_access_revision) !==
+      String(commit.outboundBindingSnapshot.providerAccess.revision) ||
+    String(fence.runtime_health_revision) !==
+      String(commit.outboundBindingSnapshot.runtimeHealth.revision) ||
+    !sameTimestamp(fence.updated_at, commit.outboundBindingSnapshot.updatedAt)
+  ) {
+    return { kind: "binding_fence_conflict" };
+  }
+  if (
+    fence.remote_access_state !== "active" ||
+    fence.administrative_state !== "enabled" ||
+    fence.runtime_health_state !== "ready"
+  ) {
+    return { kind: "binding_inactive" };
+  }
+  if (
+    !(await lockAndValidateReactionCapability(context.executor, commit, route))
+  ) {
+    return { kind: "binding_fence_conflict" };
+  }
+
+  const inserted = await context.executor.execute<IdRow>(
+    buildInsertInboxV2OutboundRouteSql(route, fence)
+  );
+  if (inserted.rows.length !== 1) {
+    return { kind: "route_id_conflict" };
+  }
+  registerInboxV2AtomicOutboundRouteProof(context.atomicMaterializationToken!, {
+    tenantId: route.tenantId,
+    routeId: route.id,
+    conversationId: route.conversation.id,
+    sourceAccountId: route.sourceAccount.id,
+    routePolicyId: route.routePolicy.id,
+    routePolicyRevision: route.routePolicyRevision,
+    routeDigest: computeInboxV2OutboundRouteDigest(route)
+  });
+  return { kind: "committed", route };
+}
+
+/**
  * Atomically cancels the untouched original queued Dispatch and persists the
  * immutable replacement route. The Message/replacement Dispatch/outbox half
  * is sealed later by the same coordinator-owned transaction.
@@ -1157,6 +1277,220 @@ function isInboxV2OutboundMessageActionAuthorityPair(input: {
     default:
       return false;
   }
+}
+
+function assertInboxV2ReactionRouteAuthorizedContext(
+  context: InboxV2AuthorizedCommandMutationContext,
+  commit: InboxV2MessageReactionCommit,
+  route: InboxV2OutboundRoute
+): void {
+  const transition = commit.transition;
+  const authority = transition.externalAuthority;
+  const evidence = commit.externalAuthorityEvidence;
+  const expectedOperationId = `core:message.reaction.${transition.operation}`;
+  const expectedRoutePermissionId = `${expectedOperationId}_external`;
+  const reactDecisions = context.authorizationDecisionRefs.filter(
+    (decision) =>
+      decision.tenantId === context.tenantId &&
+      decision.authorizationEpoch === context.authorizationEpoch &&
+      decision.outcome === "allowed" &&
+      decision.permissionId === "core:message.react" &&
+      decision.resourceScopeId === "core:timeline-item" &&
+      decision.resource.tenantId === context.tenantId &&
+      decision.resource.entityTypeId === "core:timeline-item" &&
+      String(decision.resource.entityId) ===
+        String(commit.beforeTimelineItem.id) &&
+      authorizationDecisionPrincipalMatchesContext(decision, context)
+  );
+  const sourceAccountDecisions = context.authorizationDecisionRefs.filter(
+    (decision) =>
+      decision.tenantId === context.tenantId &&
+      decision.authorizationEpoch === context.authorizationEpoch &&
+      decision.outcome === "allowed" &&
+      decision.permissionId === "core:source_account.use" &&
+      decision.resourceScopeId === "core:source-account" &&
+      decision.resource.tenantId === context.tenantId &&
+      decision.resource.entityTypeId === "core:source-account" &&
+      String(decision.resource.entityId) === String(route.sourceAccount.id) &&
+      authorizationDecisionPrincipalMatchesContext(decision, context)
+  );
+  const sourceDecision = sourceAccountDecisions[0];
+  const reference = route.referenceContext;
+  const selectionIntent = route.selection.intent;
+  const appActor = transition.actionAttribution.appActor;
+  const actorMatches =
+    appActor !== null &&
+    (context.actor.kind === "employee"
+      ? appActor.kind === "employee" &&
+        appActor.employee.id === context.actor.employeeId
+      : appActor.kind === "trusted_service" &&
+        appActor.trustedServiceId === context.actor.trustedServiceId);
+  const routePrincipalMatches =
+    context.actor.kind === "employee"
+      ? route.principal.kind === "employee" &&
+        route.principal.employee.id === context.actor.employeeId
+      : route.principal.kind === "trusted_service" &&
+        route.principal.trustedServiceId === context.actor.trustedServiceId;
+  if (
+    context.atomicMaterializationToken === undefined ||
+    authority === null ||
+    evidence === null ||
+    context.commandTypeId !== expectedOperationId ||
+    context.tenantId !== commit.tenantId ||
+    context.occurredAt !== transition.recordedAt ||
+    context.authorizationDecisionId !== reactDecisions[0]?.id ||
+    reactDecisions.length !== 1 ||
+    sourceAccountDecisions.length !== 1 ||
+    sourceDecision === undefined ||
+    !actorMatches ||
+    !routePrincipalMatches ||
+    route.authorizationEpoch !== context.authorizationEpoch ||
+    route.operationId !== expectedOperationId ||
+    route.requiredConversationPermissionId !== expectedRoutePermissionId ||
+    route.tenantId !== context.tenantId ||
+    route.conversation.id !== commit.beforeMessage.conversation.id ||
+    route.sourceAccount.id !== authority.sourceAccount.id ||
+    route.sourceThreadBinding.id !== authority.sourceThreadBinding.id ||
+    route.bindingFence.bindingGeneration !== authority.bindingGeneration ||
+    route.selection.reason !== "explicit_occurrence" ||
+    route.selection.fallbackPolicyOrdinal !== null ||
+    selectionIntent.kind !== "explicit_occurrence" ||
+    (selectionIntent.kind === "explicit_occurrence" &&
+      selectionIntent.occurrence.id !== authority.sourceOccurrence.id) ||
+    reference.kind !== "external_message" ||
+    (reference.kind === "external_message" &&
+      (reference.externalMessageReference.id !==
+        authority.externalMessageReference.id ||
+        reference.sourceOccurrence.id !== authority.sourceOccurrence.id ||
+        reference.originBinding.id !== authority.sourceThreadBinding.id ||
+        reference.originSourceAccount.id !== authority.sourceAccount.id)) ||
+    route.conversationAuthorization.effect !== "allow" ||
+    route.conversationAuthorization.target.authorizationEpoch !==
+      context.authorizationEpoch ||
+    route.conversationAuthorization.requiredPermissionId !==
+      expectedRoutePermissionId ||
+    !routeAuthorizationSnapshotMatchesDecision(
+      route.sourceAccountAuthorization,
+      sourceDecision,
+      "source_account",
+      route.sourceAccount.id
+    )
+  ) {
+    throw invariantError(
+      "Inbox V2 reaction route crossed its exact react/source-account authority or attempted fallback routing."
+    );
+  }
+}
+
+async function lockAndValidateReactionRoutePolicy(
+  executor: RawSqlExecutor,
+  route: InboxV2OutboundRoute
+): Promise<boolean> {
+  const result = await executor.execute<ReactionRoutePolicyRow>(sql`
+    select head.revision, head.conversation_id, head.external_thread_id,
+           head.operation_id, head.content_kind_id,
+           version.required_conversation_permission_id,
+           version.preferred_binding_id, version.fallback_kind,
+           version.fallback_binding_count
+      from inbox_v2_thread_route_policy_heads head
+      join inbox_v2_thread_route_policy_versions version
+        on version.tenant_id = head.tenant_id
+       and version.policy_id = head.policy_id
+       and version.revision = head.revision
+     where head.tenant_id = ${route.tenantId}
+       and head.policy_id = ${route.routePolicy.id}
+     for share of head, version
+  `);
+  if (result.rows.length !== 1) return false;
+  const row = result.rows[0]!;
+  return (
+    String(row.revision) === String(route.routePolicyRevision) &&
+    String(row.conversation_id) === String(route.conversation.id) &&
+    String(row.external_thread_id) === String(route.externalThread.id) &&
+    String(row.operation_id) === String(route.operationId) &&
+    nullableString(row.content_kind_id) ===
+      nullableString(route.contentKindId) &&
+    String(row.required_conversation_permission_id) ===
+      String(route.requiredConversationPermissionId) &&
+    row.preferred_binding_id === null &&
+    String(row.fallback_kind) === "none" &&
+    Number(row.fallback_binding_count) === 0
+  );
+}
+
+async function lockAndValidateReactionSourceAccountIdentity(
+  executor: RawSqlExecutor,
+  route: InboxV2OutboundRoute,
+  binding: NonNullable<InboxV2MessageReactionCommit["outboundBindingSnapshot"]>
+): Promise<boolean> {
+  const result = await executor.execute<ReactionSourceAccountIdentityRow>(sql`
+    select source_account_id, source_connection_id, state, revision,
+           account_generation, updated_at
+      from inbox_v2_source_account_identities
+     where tenant_id = ${route.tenantId}
+       and source_account_id = ${route.sourceAccount.id}
+     for share
+  `);
+  if (result.rows.length !== 1) return false;
+  const row = result.rows[0]!;
+  return (
+    String(row.source_account_id) === String(route.sourceAccount.id) &&
+    String(row.source_connection_id) === String(route.sourceConnection.id) &&
+    String(row.state) === "verified" &&
+    String(row.account_generation) ===
+      String(route.bindingFence.accountGeneration) &&
+    String(row.account_generation) ===
+      String(binding.accountIdentitySnapshot.accountGeneration) &&
+    Date.parse(String(row.updated_at)) <= Date.parse(route.createdAt) &&
+    Date.parse(binding.accountIdentitySnapshot.verifiedAt) <=
+      Date.parse(String(row.updated_at))
+  );
+}
+
+async function lockAndValidateReactionCapability(
+  executor: RawSqlExecutor,
+  commit: InboxV2MessageReactionCommit,
+  route: InboxV2OutboundRoute
+): Promise<boolean> {
+  const binding = commit.outboundBindingSnapshot;
+  const capability = commit.afterReaction.capability;
+  if (binding === null || capability.kind !== "external") return false;
+  const result = await executor.execute<ReactionCapabilityRow>(sql`
+    select capability.capability_id
+      from inbox_v2_source_thread_binding_capability_entries capability
+     where capability.tenant_id = ${route.tenantId}
+       and capability.binding_id = ${route.sourceThreadBinding.id}
+       and capability.capability_revision =
+           ${BigInt(route.bindingFence.capabilityRevision)}
+       and capability.capability_id = ${capability.capabilityId}
+       and capability.operation_id = ${route.operationId}
+       and capability.content_kind_id is not distinct from ${route.contentKindId}
+       and capability.state = 'supported'
+       and (
+         capability.valid_until is null
+         or capability.valid_until >= ${toDate(commit.transition.recordedAt)}
+       )
+       and not exists (
+         select 1
+           from inbox_v2_source_thread_binding_capability_required_roles required_role
+          where required_role.tenant_id = capability.tenant_id
+            and required_role.binding_id = capability.binding_id
+            and required_role.capability_revision = capability.capability_revision
+            and required_role.capability_ordinal = capability.ordinal
+            and not exists (
+              select 1
+                from inbox_v2_source_thread_binding_provider_roles provider_role
+               where provider_role.tenant_id = required_role.tenant_id
+                 and provider_role.binding_id = required_role.binding_id
+                 and provider_role.provider_access_revision =
+                     ${BigInt(binding.providerAccess.revision)}
+                 and provider_role.provider_role_id =
+                     required_role.provider_role_id
+            )
+       )
+     for share of capability
+  `);
+  return result.rows.length === 1;
 }
 
 type InboxV2RouteAuthorizationSnapshot =

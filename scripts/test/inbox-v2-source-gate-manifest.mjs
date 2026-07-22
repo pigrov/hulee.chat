@@ -86,6 +86,7 @@ export const INBOX_V2_SOURCE_GATE_TASK_GROUPS = Object.freeze([
     "apps/worker/src/source-message-reconciliation-plan-verifier.test.ts",
     "packages/db/src/repositories/sql-inbox-v2-source-message-reconciliation-repository.test.ts",
     "packages/db/src/repositories/sql-inbox-v2-source-message-lifecycle-adapter.test.ts",
+    "packages/db/src/repositories/sql-inbox-v2-source-message-effect-adapter.test.ts",
     "packages/db/src/schema/inbox-v2-source-message-reconciliation-schema.test.ts"
   ]),
   taskGroup("INB2-SRC-007", "Atomic materialization", [

@@ -541,7 +541,7 @@ describe("Inbox V2 source Message lifecycle adapter", () => {
         [sourceLifecycleEnvelope()]
       )
     ).rejects.toThrow(
-      "Source lifecycle effect omitted or duplicated its exact stream change, event or projection closure."
+      "Source Message effect omitted or duplicated its exact stream change, event or projection closure."
     );
   });
 

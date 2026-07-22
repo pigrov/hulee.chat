@@ -881,10 +881,7 @@ async function assertNoProviderIoClosure(
       "Provider-observed lifecycle effects cannot enqueue provider I/O."
     );
   }
-  await verifyInboxV2SourceMessageLifecycleEffectClosure(
-    transaction,
-    envelopes
-  );
+  await verifyInboxV2SourceMessageEffectClosure(transaction, envelopes);
 }
 
 type SourceLifecycleEffectClosureRow = Readonly<{
@@ -903,10 +900,11 @@ type SourceLifecycleEffectClosureRow = Readonly<{
 /**
  * Verifies the durable inverse closure instead of trusting a callback receipt.
  * The check runs in the same ambient transaction as the Message/provider
- * lifecycle write and deferred-action CAS, so any missing/extra effect aborts
+ * lifecycle/reaction/transport write and deferred-action CAS, so any
+ * missing/extra effect aborts
  * the whole reconciliation unit.
  */
-export async function verifyInboxV2SourceMessageLifecycleEffectClosure(
+export async function verifyInboxV2SourceMessageEffectClosure(
   transaction: RawSqlExecutor,
   envelopes: readonly InboxV2SafeGenericEnvelope[]
 ): Promise<void> {
@@ -919,7 +917,7 @@ export async function verifyInboxV2SourceMessageLifecycleEffectClosure(
     new Set(envelopeIdentities).size !== envelopes.length
   ) {
     throw new InboxV2TimelineMessagePersistenceInvariantError(
-      "Source lifecycle effect requires one unique entity envelope per tenant-stream position."
+      "Source Message effect requires one unique entity envelope per tenant-stream position."
     );
   }
   const groups = new Map<string, InboxV2SafeGenericEnvelope[]>();
@@ -931,7 +929,7 @@ export async function verifyInboxV2SourceMessageLifecycleEffectClosure(
   }
   for (const group of groups.values()) {
     const result = await transaction.execute<SourceLifecycleEffectClosureRow>(
-      buildVerifyInboxV2SourceMessageLifecycleEffectClosureSql(group)
+      buildVerifyInboxV2SourceMessageEffectClosureSql(group)
     );
     const row = result.rows[0];
     if (
@@ -948,13 +946,13 @@ export async function verifyInboxV2SourceMessageLifecycleEffectClosure(
       databaseCount(row?.provider_io_count) !== 0
     ) {
       throw new InboxV2TimelineMessagePersistenceInvariantError(
-        "Source lifecycle effect omitted or duplicated its exact stream change, event or projection closure."
+        "Source Message effect omitted or duplicated its exact stream change, event or projection closure."
       );
     }
   }
 }
 
-export function buildVerifyInboxV2SourceMessageLifecycleEffectClosureSql(
+export function buildVerifyInboxV2SourceMessageEffectClosureSql(
   envelopes: readonly InboxV2SafeGenericEnvelope[]
 ): SQL {
   const envelope = envelopes[0];
@@ -967,7 +965,7 @@ export function buildVerifyInboxV2SourceMessageLifecycleEffectClosureSql(
     )
   ) {
     throw new InboxV2TimelineMessagePersistenceInvariantError(
-      "Source lifecycle closure SQL requires one non-empty tenant-stream group."
+      "Source Message effect closure SQL requires one non-empty tenant-stream group."
     );
   }
   const expectedChanges = JSON.stringify(
@@ -1123,6 +1121,14 @@ export function buildVerifyInboxV2SourceMessageLifecycleEffectClosureSql(
   `;
 }
 
+/** @deprecated Use the domain-neutral source Message effect verifier. */
+export const verifyInboxV2SourceMessageLifecycleEffectClosure =
+  verifyInboxV2SourceMessageEffectClosure;
+
+/** @deprecated Use the domain-neutral source Message effect SQL builder. */
+export const buildVerifyInboxV2SourceMessageLifecycleEffectClosureSql =
+  buildVerifyInboxV2SourceMessageEffectClosureSql;
+
 function messageLifecycleEffectEnvelopes(
   effectProof: MessageLifecycleEffectProof,
   messageEnvelope: InboxV2SafeGenericEnvelope
@@ -1146,12 +1152,20 @@ function messageLifecycleEffectEnvelopes(
   ];
 }
 
-function sourceLifecycleEntityTypeId(
+export function inboxV2SourceMessageEffectEntityTypeId(
   envelope: InboxV2SafeGenericEnvelope
 ):
   | "core:message"
+  | "core:message-reaction"
+  | "core:message-transport-observation"
   | typeof INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_OPERATION_ENTITY_TYPE_ID {
   if (envelope.entityKind === "message") return "core:message";
+  if (envelope.entityKind === "message_reaction") {
+    return "core:message-reaction";
+  }
+  if (envelope.entityKind === "message_transport") {
+    return "core:message-transport-observation";
+  }
   if (envelope.entityKind === "provider_lifecycle") {
     return INBOX_V2_MESSAGE_PROVIDER_LIFECYCLE_OPERATION_ENTITY_TYPE_ID;
   }
@@ -1159,6 +1173,8 @@ function sourceLifecycleEntityTypeId(
     "Source lifecycle effect envelope has an unsupported entity kind."
   );
 }
+
+const sourceLifecycleEntityTypeId = inboxV2SourceMessageEffectEntityTypeId;
 
 function databaseCount(value: unknown): number {
   const parsed = Number(String(value));

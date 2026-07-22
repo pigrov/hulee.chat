@@ -139,7 +139,7 @@ describePostgres(
             return result;
           })
         ).rejects.toThrow(
-          "Source lifecycle effect omitted or duplicated its exact stream change, event or projection closure."
+          "Source Message effect omitted or duplicated its exact stream change, event or projection closure."
         );
 
         expect(await closureSnapshot(db, fixture)).toEqual(before);

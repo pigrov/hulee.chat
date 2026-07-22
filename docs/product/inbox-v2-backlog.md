@@ -1847,15 +1847,29 @@ future non-chat items without a universal JSON message.
     P0/P1 findings. Detailed evidence and provider-runtime scope are in
     `docs/product/inbox-v2-msg-005-edit-delete-and-tombstones.md`.
 
-- [ ] `INB2-MSG-006` Implement reaction and delivery/receipt models.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-MSG-002`,
+- [x] `INB2-MSG-006` Implement reaction and delivery/receipt models.
+  - State: `done`; Priority: `P0`; Started: `2026-07-22`; Completed:
+    `2026-07-22`; Owner: `Codex`; Depends on: `INB2-MSG-002`,
     `INB2-RBAC-002`.
   - Acceptance: reactions retain actor identity where available; sent,
     delivered, read and failed reflect provider truth without invented states;
     external reaction requires exact original SourceAccount/binding/reference
     authority and capability, never a fallback route.
   - Verification: provider receipt and employee read cursor change independently;
-    set/replace/clear reaction fixtures pass. Evidence: -
+    set/replace/clear reaction fixtures pass. Evidence: exact TimelineItem/
+    Conversation/SourceAccount authorization, actor-preserving append-only
+    reaction transitions, external pending state, one-use original occurrence
+    route with no fallback, provider-truth transport facts, independent employee
+    read cursors, atomic event/projection/outbox closure and provider-observed
+    no-echo reconciliation are implemented. API passed `26/26`; source gate
+    passed `80/80` files / `1,218/1,218`; focused DB/source passed `220/220`;
+    disposable PostgreSQL passed `34/34` files / `377` tests (`6` skipped) on
+    the single clean baseline. Default Vitest passed `352` files / `4,082` tests
+    (`33` files / `385` tests skipped). Full `pnpm check`, task-scoped format/
+    lint, typecheck, `db:check` and clean-slate guards passed; two independent
+    final reviews returned `READY` with no P0/P1 findings. Detailed evidence and
+    provider-runtime scope are in
+    `docs/product/inbox-v2-msg-006-reactions-and-receipts.md`.
 
 - [ ] `INB2-MSG-007` Implement provider echo and out-of-band outbound handling.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-MSG-002`, `INB2-SRC-006`.

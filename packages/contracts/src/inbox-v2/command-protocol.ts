@@ -806,7 +806,9 @@ function isTimelineAuthorizationContextComplete(
     return false;
   }
   if (
-    (intent.kind === "reaction_replace" || intent.kind === "reaction_clear") &&
+    (intent.kind === "reaction_set" ||
+      intent.kind === "reaction_replace" ||
+      intent.kind === "reaction_clear") &&
     intent.targetProof === undefined
   ) {
     return false;
@@ -1015,19 +1017,39 @@ function requiredActionAuthorizationForIntent(
         resource: conversationResource
       };
     case "reaction_set":
-      return {
-        permissionId: "core:message.react",
-        resourceScopeId: "core:conversation",
-        resource: conversationResource
-      };
     case "reaction_replace":
     case "reaction_clear":
-      return {
-        permissionId: "core:message.react",
-        resourceScopeId: "core:conversation",
-        resource: conversationResource
-      };
+      return reactionActionAuthorization(intent, conversationResource);
   }
+}
+
+function reactionActionAuthorization(
+  intent: Extract<
+    InboxV2TimelineCommandIntent,
+    { kind: "reaction_set" | "reaction_replace" | "reaction_clear" }
+  >,
+  conversationResource: InboxV2RequiredAuthorization["resource"]
+): InboxV2RequiredAuthorization {
+  const targetProof = intent.targetProof;
+  if (targetProof === undefined) {
+    // Incomplete trusted-resolution input is rejected by
+    // isTimelineAuthorizationContextComplete. Do not manufacture an
+    // untrusted TimelineItem identifier while keeping this function total.
+    return {
+      permissionId: "core:message.react",
+      resourceScopeId: "core:conversation",
+      resource: conversationResource
+    };
+  }
+  return {
+    permissionId: "core:message.react",
+    resourceScopeId: "core:timeline-item",
+    resource: {
+      tenantId: targetProof.timelineItem.tenantId,
+      entityTypeId: "core:timeline-item",
+      entityId: targetProof.timelineItem.id
+    }
+  };
 }
 
 function lifecycleActionAuthorization(

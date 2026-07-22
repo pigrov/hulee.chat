@@ -260,6 +260,48 @@ function providerLifecycleChange(): z.input<
   };
 }
 
+function providerReactionIntent(): z.input<typeof inboxV2OutboxIntentSchema> {
+  return {
+    ...providerIntent(),
+    id: "outbox-intent:message-reaction-1",
+    typeId: "core:provider.message_reaction",
+    handlerId: "core:provider-message-reaction-handler",
+    changeIds: ["change:message-reaction-1"],
+    payloadReference: providerReactionPayloadReference()
+  };
+}
+
+function providerReactionPayloadReference() {
+  return {
+    ...payloadReference("message-reaction-transition:transition-1"),
+    schemaId: "core:inbox-v2.message-reaction-transition"
+  };
+}
+
+function providerReactionChange(): z.input<
+  typeof inboxV2TenantStreamChangeSchema
+> {
+  const base = change({
+    changeId: "change:message-reaction-1",
+    ordinal: "2",
+    entityTypeId: "core:message-reaction-transition",
+    entityId: "message_reaction_transition:transition-1"
+  });
+  if (base.state.kind !== "upsert") {
+    throw new Error(
+      "Fixture invariant: provider reaction transition must be an upsert."
+    );
+  }
+  return {
+    ...base,
+    state: {
+      ...base.state,
+      stateSchemaId: "core:inbox-v2.message-reaction-transition",
+      payloadReference: providerReactionPayloadReference()
+    }
+  };
+}
+
 function commandRecord() {
   return {
     scope: {
@@ -632,6 +674,99 @@ describe("Inbox V2 tenant stream", () => {
             changeIds: [
               lifecycleChange.reference.changeId,
               duplicateOperationChange.reference.changeId
+            ]
+          }
+        ]
+      }).success
+    ).toBe(false);
+  });
+
+  it("routes a provider reaction through one exact versioned transition payload", () => {
+    const withReaction = bundle();
+    const intent = providerReactionIntent();
+    const reactionChange = providerReactionChange();
+    withReaction.changes.push(reactionChange);
+    withReaction.commit.changeIds.push(reactionChange.reference.changeId);
+    withReaction.events[0]!.changeIds.push(reactionChange.reference.changeId);
+    withReaction.events[0]!.subjects.push(reactionChange.entity);
+    withReaction.commit.outboxIntentIds = [intent.id];
+    withReaction.outboxIntents = [intent];
+
+    expect(
+      inboxV2AtomicMutationCommitSchema.safeParse(withReaction).success
+    ).toBe(true);
+    expect(
+      inboxV2OutboxIntentSchema.safeParse({
+        ...intent,
+        payloadReference: {
+          ...providerReactionPayloadReference(),
+          schemaVersion: "v2"
+        }
+      }).success
+    ).toBe(false);
+    expect(
+      inboxV2OutboxIntentSchema.safeParse({
+        ...intent,
+        payloadReference: providerLifecyclePayloadReference()
+      }).success
+    ).toBe(false);
+    expect(
+      inboxV2AtomicMutationCommitSchema.safeParse({
+        ...withReaction,
+        changes: [
+          {
+            ...reactionChange,
+            entity: {
+              ...reactionChange.entity,
+              entityTypeId: "core:message-provider-lifecycle-operation"
+            }
+          }
+        ]
+      }).success
+    ).toBe(false);
+
+    const duplicateTransitionChange = {
+      ...reactionChange,
+      reference: {
+        ...reactionChange.reference,
+        changeId: "change:message-reaction-2",
+        ordinal: "3"
+      },
+      entity: {
+        ...reactionChange.entity,
+        entityId: "message_reaction_transition:transition-2"
+      }
+    };
+    expect(
+      inboxV2AtomicMutationCommitSchema.safeParse({
+        ...withReaction,
+        commit: {
+          ...withReaction.commit,
+          changeIds: [
+            ...withReaction.commit.changeIds,
+            duplicateTransitionChange.reference.changeId
+          ]
+        },
+        changes: [...withReaction.changes, duplicateTransitionChange],
+        events: [
+          {
+            ...withReaction.events[0]!,
+            changeIds: [
+              ...withReaction.events[0]!.changeIds,
+              duplicateTransitionChange.reference.changeId
+            ],
+            subjects: [
+              ...withReaction.events[0]!.subjects,
+              duplicateTransitionChange.entity
+            ]
+          }
+        ],
+        outboxIntents: [
+          {
+            ...intent,
+            changeIds: [
+              reactionChange.reference.changeId,
+              duplicateTransitionChange.reference.changeId
             ]
           }
         ]

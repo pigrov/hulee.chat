@@ -16,16 +16,27 @@ export { persistInboxV2OutboundDispatchContentPlanInTransaction } from "./sql-in
 export type { PersistInboxV2OutboundDispatchContentPlanResult } from "./sql-inbox-v2-file-object-repository";
 export {
   InboxV2TimelineMessagePersistenceInvariantError,
+  prepareInboxV2MessageReactionCommand,
   prepareInboxV2MessageCreation,
+  sealInboxV2PreparedMessageReactionCommand,
   sealInboxV2PreparedMessageCreation
 } from "./sql-inbox-v2-timeline-message-repository";
 export type {
   InboxV2MessageCreationCommit,
+  InboxV2MessageReactionCommit,
   InboxV2PreparedMessageCreationCapability,
+  InboxV2PreparedMessageReactionCommandCapability,
+  PrepareInboxV2MessageReactionCommandResult,
   PrepareInboxV2MessageCreationInput,
   PrepareInboxV2MessageCreationResult,
+  SealInboxV2PreparedMessageReactionCommandResult,
   SealInboxV2PreparedMessageCreationResult
 } from "./sql-inbox-v2-timeline-message-repository";
+export { createSqlInboxV2MessageReactionAtomicCoordinator } from "./sql-inbox-v2-message-reaction-command-coordinator";
+export type {
+  InboxV2MessageReactionAtomicCoordinator,
+  InboxV2MessageReactionAtomicResult
+} from "./sql-inbox-v2-message-reaction-command-coordinator";
 export {
   INBOX_V2_SYSTEM_EVENT_TIMELINE_COMMAND_TYPE_ID,
   INBOX_V2_SYSTEM_EVENT_TIMELINE_PERMISSION_ID,
@@ -289,6 +300,7 @@ export {
   findInboxV2ExternalMessageReferenceCandidatesInTransaction,
   InboxV2RouteResolutionRollbackError,
   persistInboxV2ExplicitRerouteResolutionInTransaction,
+  persistInboxV2ReactionRouteInTransaction,
   persistInboxV2RouteResolutionInTransaction
 } from "./sql-inbox-v2-outbound-transport-repository";
 export type {
@@ -330,6 +342,8 @@ export {
   createSqlInboxV2SourceConversationResolutionRepository
 } from "./sql-inbox-v2-source-conversation-resolution-repository";
 export * from "./sql-inbox-v2-source-message-reconciliation-repository";
+export * from "./sql-inbox-v2-source-message-lifecycle-adapter";
+export * from "./sql-inbox-v2-source-message-effect-adapter";
 export type {
   CreateSqlInboxV2SourceConversationResolutionRepositoryOptions,
   InboxV2SourceConversationMaterializationPlanAuthorizationVerifier,
