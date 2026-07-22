@@ -25,6 +25,7 @@ import {
   createInternalApiHandler,
   createLocalDevInternalSessionResolver,
   createSignedInternalSessionResolver,
+  type InternalApiHandlerOptions,
   type InternalApiSession
 } from "./internal-api-handler";
 
@@ -57,6 +58,10 @@ const tenantBrand = {
 function createHandler(input?: {
   session?: InternalApiSession | null;
   fileDownloadsConfigured?: boolean;
+  handlerOptions?: Pick<
+    InternalApiHandlerOptions,
+    "runtimeSchemaEvidence" | "buildRevision"
+  >;
 }) {
   const redeemFileDownload = vi.fn(async () => ({
     fileName: "exact-photo.jpg",
@@ -638,7 +643,8 @@ function createHandler(input?: {
       listDirectGrants,
       createDirectGrant,
       revokeDirectGrant
-    }
+    },
+    ...input?.handlerOptions
   });
 
   return {
@@ -702,6 +708,31 @@ describe("internal API handler", () => {
         status: "ok",
         version: "v1"
       }
+    });
+  });
+
+  it("publishes verified schema epoch and build revision in runtime health", async () => {
+    const { handler } = createHandler({
+      session: null,
+      handlerOptions: {
+        runtimeSchemaEvidence: {
+          epoch: "preproduction-inbox-v2-1",
+          migrationCount: 1
+        },
+        buildRevision: "revision-clean-gate"
+      }
+    });
+    const response = await handler.handle({
+      method: "GET",
+      path: "/internal/v1/health"
+    });
+
+    expect(response.body).toEqual({
+      status: "ok",
+      version: "v1",
+      schemaEpoch: "preproduction-inbox-v2-1",
+      migrationCount: 1,
+      buildRevision: "revision-clean-gate"
     });
   });
 

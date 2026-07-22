@@ -1,4 +1,6 @@
 import {
+  assertInboxV2RuntimeSchemaEpoch,
+  assertInboxV2RuntimeSchemaEpochDeclaration,
   closeHuleeDatabase,
   createHuleeDatabase,
   createSqlDeploymentEgressStatusRepository
@@ -13,9 +15,21 @@ import {
 } from "./index";
 
 const runtime = createWorkerRuntime();
+assertInboxV2RuntimeSchemaEpochDeclaration({
+  runtimeEnvironment: process.env.NODE_ENV,
+  declaredEpoch: process.env.HULEE_SCHEMA_EPOCH
+});
 const database = createHuleeDatabase({
   connectionString: runtime.config.databaseUrl
 });
+try {
+  const schemaEvidence = await assertInboxV2RuntimeSchemaEpoch(database);
+  runtime.logger.info("worker.schema_epoch_verified", schemaEvidence);
+} catch (error) {
+  runtime.logger.error("worker.schema_epoch_rejected", undefined, error);
+  await closeHuleeDatabase(database);
+  throw error;
+}
 const coreWorkerEnabled = runtime.config.workerFeatures.includes("core");
 const securityDenialRetentionDatabase = coreWorkerEnabled
   ? createHuleeDatabase(

@@ -3024,8 +3024,8 @@ dual materialization, backfill, N-1 V1 runtime or soak window is required.
     `docs/product/inbox-v2-clean-003-residual-v1-removal.md`.
 
 - [ ] `INB2-CLEAN-GATE` Verify the V2-only clean-slate boundary.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-CLEAN-002`,
-    `INB2-DB-011`, `INB2-CLEAN-003`.
+  - State: `in_progress`; Priority: `P0`; Started: `2026-07-22`; Owner:
+    `Codex`; Depends on: `INB2-CLEAN-002`, `INB2-DB-011`, `INB2-CLEAN-003`.
   - Acceptance: one baseline and one canonical Inbox implementation remain;
     stale images/epochs fail closed; provider egress is disabled until a V2
     adapter path is explicitly activated. Passing this gate may remove the

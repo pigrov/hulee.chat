@@ -7,6 +7,11 @@ on:
         description: Type DEPLOY_CLEAN_SLATE_V2 after INB2-CLEAN-GATE approval
         required: true
         type: string
+      bootstrap_foundation:
+        description: Run the one-shot foundation seed after fresh epoch migration
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: production-deploy
@@ -54,12 +59,12 @@ jobs:
       - name: Build and push image
         run: |
           docker build \
+            --build-arg "HULEE_BUILD_REVISION=${{ github.sha }}" \
+            --build-arg "HULEE_SCHEMA_EPOCH=preproduction-inbox-v2-1" \
             -f deploy/docker/Dockerfile \
             -t "$IMAGE_NAME:${{ github.sha }}" \
-            -t "$IMAGE_NAME:latest" \
             .
           docker push "$IMAGE_NAME:${{ github.sha }}"
-          docker push "$IMAGE_NAME:latest"
 
       - name: Configure SSH
         run: |
@@ -105,6 +110,9 @@ jobs:
           cd '${{ vars.DEPLOY_PATH }}'
           printf '%s' '${{ secrets.GHCR_TOKEN }}' | docker login ghcr.io -u '${{ github.repository_owner }}' --password-stdin >/dev/null
           expected_image='${{ env.IMAGE_NAME }}:${{ github.sha }}'
+          expected_revision='${{ github.sha }}'
+          expected_epoch='preproduction-inbox-v2-1'
+          bootstrap_foundation='${{ inputs.bootstrap_foundation }}'
           ensure_env_var() {
             local key="$1"
             local value="$2"
@@ -119,6 +127,15 @@ jobs:
               head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
             fi
           }
+          require_non_placeholder_env_var() {
+            local key="$1"
+            local value
+            value=$(grep -E "^[[:space:]]*${key}[[:space:]]*=" .env | tail -n 1 | cut -d= -f2- | sed 's/[[:space:]]*#.*$//' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)
+            if [ -z "$value" ] || [[ "$value" == change-this-* ]] || [ "$value" = "hulee-local-dev-key" ]; then
+              echo "$key must be explicitly configured with a non-placeholder value before foundation bootstrap." >&2
+              exit 1
+            fi
+          }
           ensure_env_var HULEE_OBJECT_STORAGE_ENDPOINT http://minio:9000
           ensure_env_var HULEE_OBJECT_STORAGE_REGION us-east-1
           ensure_env_var HULEE_OBJECT_STORAGE_BUCKET hulee-files
@@ -127,6 +144,21 @@ jobs:
             ensure_env_var HULEE_OBJECT_STORAGE_SECRET_ACCESS_KEY "$(random_secret)"
           fi
           ensure_env_var HULEE_OBJECT_STORAGE_FORCE_PATH_STYLE true
+          if [ "$bootstrap_foundation" = "true" ]; then
+            for required_seed_key in \
+              POSTGRES_PASSWORD \
+              HULEE_SECRET_ENCRYPTION_KEY \
+              HULEE_INTERNAL_API_SECRET \
+              HULEE_OBJECT_STORAGE_SECRET_ACCESS_KEY \
+              HULEE_SEED_TENANT_SLUG \
+              HULEE_SEED_TENANT_NAME \
+              HULEE_SEED_PRODUCT_NAME \
+              HULEE_SEED_ADMIN_EMAIL \
+              HULEE_SEED_API_KEY \
+              HULEE_SEED_API_KEY_NAME; do
+              require_non_placeholder_env_var "$required_seed_key"
+            done
+          fi
           legacy_provider_egress_enabled=$(grep -E '^[[:space:]]*HULEE_PROVIDER_EGRESS_ENABLED[[:space:]]*=' .env | tail -n 1 | cut -d= -f2- | sed 's/[[:space:]]*#.*$//' | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]' || true)
           if [[ "$legacy_provider_egress_enabled" =~ ^(true|1|yes)$ ]]; then
             echo "Legacy provider egress is enabled in .env. INB2-CLEAN-002 requires it to stay disabled until an Inbox V2 adapter is reviewed." >&2
@@ -143,12 +175,39 @@ jobs:
               exit 1
             fi
           done
+          allowed_hulee_containers='^(hulee_chat_postgres|hulee_chat_minio|hulee_chat_minio_create_bucket|hulee_chat_migrate|hulee_chat_seed|hulee_chat_api|hulee_chat_worker|hulee_chat_web|hulee_site)$'
+          while IFS=$'\t' read -r container_name container_image; do
+            if [[ "$container_image" == '${{ env.IMAGE_NAME }}:'* ]] &&
+               [[ ! "$container_name" =~ $allowed_hulee_containers ]]; then
+              echo "Unreviewed Hulee image container $container_name ($container_image) must be removed before deployment." >&2
+              exit 1
+            fi
+          done < <(docker ps -a --format '{{.Names}}\t{{.Image}}')
+          allowed_compose_services='^(postgres|minio|minio-create-bucket|migrate|seed|api|worker|web|site)$'
+          while IFS= read -r container_id; do
+            [ -z "$container_id" ] && continue
+            compose_service=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$container_id")
+            if [[ ! "$compose_service" =~ $allowed_compose_services ]]; then
+              echo "Unreviewed hulee-chat Compose service $compose_service remains attached to the project." >&2
+              exit 1
+            fi
+          done < <(docker ps -aq --filter label=com.docker.compose.project=hulee-chat)
+          for stale_runtime in hulee_chat_api hulee_chat_worker hulee_chat_web; do
+            if docker container inspect "$stale_runtime" >/dev/null 2>&1; then
+              docker update --restart=no "$stale_runtime" >/dev/null
+              docker stop --time 30 "$stale_runtime" >/dev/null
+              docker rm "$stale_runtime" >/dev/null
+            fi
+          done
           compose=(docker compose --env-file .env --env-file .release.env -f docker-compose.yml)
           core_services=(postgres minio minio-create-bucket api worker web site)
           pull_services=(postgres minio minio-create-bucket api worker web site)
           image_containers=(hulee_chat_api hulee_chat_web hulee_chat_worker hulee_site)
           "${compose[@]}" pull "${pull_services[@]}"
           "${compose[@]}" run --rm -T migrate </dev/null
+          if [ "$bootstrap_foundation" = "true" ]; then
+            "${compose[@]}" --profile bootstrap run --rm -T seed </dev/null
+          fi
           "${compose[@]}" up -d --force-recreate --wait --wait-timeout 180 "${core_services[@]}"
           for container in "${image_containers[@]}"; do
             actual_image=$(docker inspect --format '{{.Config.Image}}' "$container")
@@ -156,11 +215,17 @@ jobs:
               echo "$container is running $actual_image, expected $expected_image" >&2
               exit 1
             fi
+            actual_revision=$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$container")
+            actual_epoch=$(docker inspect --format '{{index .Config.Labels "io.hulee.schema-epoch"}}' "$container")
+            if [ "$actual_revision" != "$expected_revision" ] || [ "$actual_epoch" != "$expected_epoch" ]; then
+              echo "$container has revision=$actual_revision epoch=$actual_epoch; expected revision=$expected_revision epoch=$expected_epoch" >&2
+              exit 1
+            fi
           done
           "${compose[@]}" ps
           EOF
 
-      - name: Smoke internal API
+      - name: Smoke API and worker epoch
         run: |
           ssh -T -i ~/.ssh/deploy_key \
             -p "${{ vars.DEPLOY_PORT }}" \
@@ -168,13 +233,37 @@ jobs:
             "bash -s" <<'EOF'
           set -euo pipefail
           cd '${{ vars.DEPLOY_PATH }}'
+          expected_revision='${{ github.sha }}'
+          api_ready=false
           for attempt in $(seq 1 30); do
-            if docker exec hulee_chat_api node -e "fetch('http://127.0.0.1:3000/internal/v1/health').then(async r => { if (!r.ok) process.exit(1); console.log(await r.text()); }).catch(() => process.exit(1))"; then
-              exit 0
+            if docker exec -e EXPECTED_REVISION="$expected_revision" hulee_chat_api node -e "fetch('http://127.0.0.1:3000/internal/v1/health').then(async r => { const body = await r.json(); if (!r.ok || body.schemaEpoch !== 'preproduction-inbox-v2-1' || body.migrationCount !== 1 || body.buildRevision !== process.env.EXPECTED_REVISION) process.exit(1); console.log(JSON.stringify(body)); }).catch(() => process.exit(1))"; then
+              api_ready=true
+              break
             fi
             docker compose --env-file .env --env-file .release.env -f docker-compose.yml ps || true
             sleep 5
           done
-          docker logs --tail=100 hulee_chat_api || true
-          exit 1
+          if [ "$api_ready" != "true" ]; then
+            docker logs --tail=100 hulee_chat_api || true
+            exit 1
+          fi
+          worker_ready=false
+          for attempt in $(seq 1 30); do
+            worker_logs=$(docker logs --tail=200 hulee_chat_worker 2>&1 || true)
+            if grep -Fq '"message":"worker.schema_epoch_verified"' <<<"$worker_logs" &&
+               grep -Fq '"epoch":"preproduction-inbox-v2-1"' <<<"$worker_logs" &&
+               grep -Fq '"message":"worker.started"' <<<"$worker_logs" &&
+               grep -Fq '"workerFeatures":["core"]' <<<"$worker_logs" &&
+               grep -Fq '"egressProfileKind":"disabled"' <<<"$worker_logs" &&
+               grep -Fq '"egressProfileStatus":"unavailable"' <<<"$worker_logs" &&
+               grep -Fq '"egressProbesEnabled":false' <<<"$worker_logs"; then
+              worker_ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [ "$worker_ready" != "true" ]; then
+            printf '%s\n' "$worker_logs"
+            exit 1
+          fi
           EOF

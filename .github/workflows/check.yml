@@ -111,3 +111,150 @@ jobs:
           if docker container inspect "$POSTGRES_CONTAINER" >/dev/null 2>&1; then
             docker stop "$POSTGRES_CONTAINER"
           fi
+
+  inbox-v2-production-runtime-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      HULEE_SCHEMA_EPOCH: preproduction-inbox-v2-1
+      RUNTIME_IMAGE: hulee-clean-gate:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build the exact production image
+        run: |
+          docker build \
+            --build-arg "HULEE_BUILD_REVISION=${{ github.sha }}" \
+            --build-arg "HULEE_SCHEMA_EPOCH=$HULEE_SCHEMA_EPOCH" \
+            --file deploy/docker/Dockerfile \
+            --tag "$RUNTIME_IMAGE" \
+            .
+      - name: Prepare isolated clean-slate runtime
+        run: |
+          cat > deploy/production/.env <<'EOF'
+          POSTGRES_DB=hulee
+          POSTGRES_USER=hulee
+          POSTGRES_PASSWORD=clean-gate-postgres
+          DATABASE_URL=postgres://hulee:clean-gate-postgres@postgres:5432/hulee
+          HULEE_DEPLOYMENT_TYPE=saas_shared
+          HULEE_LOG_LEVEL=info
+          HULEE_SECRET_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          HULEE_INTERNAL_API_SECRET=clean-gate-internal-api-secret
+          HULEE_SCHEMA_EPOCH=preproduction-inbox-v2-1
+          HULEE_WEB_TENANT_ID=tenant_local_1
+          HULEE_WEB_EMPLOYEE_ID=employee:local-dev
+          HULEE_OBJECT_STORAGE_ACCESS_KEY_ID=hulee
+          HULEE_OBJECT_STORAGE_SECRET_ACCESS_KEY=clean-gate-object-secret
+          HULEE_OBJECT_STORAGE_BUCKET=hulee-files
+          HULEE_SEED_TENANT_SLUG=clean-gate
+          HULEE_SEED_TENANT_NAME=Clean Gate
+          HULEE_SEED_PRODUCT_NAME=Hulee
+          HULEE_SEED_ADMIN_EMAIL=clean-gate@hulee.invalid
+          HULEE_SEED_API_KEY=clean-gate-api-key
+          HULEE_SEED_API_KEY_NAME=Clean Gate API key
+          HULEE_SEED_ID_SEED=clean-gate
+          HULEE_SEED_NOW=2026-07-22T00:00:00.000Z
+          EOF
+          cat > deploy/production/.release.env <<EOF
+          HULEE_IMAGE=$RUNTIME_IMAGE
+          HULEE_PUBLIC_BASE_URL=http://web:3000
+          HULEE_PUBLIC_WEBHOOK_BASE_URL=http://api:3000
+          EOF
+          docker network create web
+      - name: Migrate, seed and start API, Web and worker
+        working-directory: deploy/production
+        run: |
+          compose=(docker compose --env-file .env --env-file .release.env -f docker-compose.yml)
+          "${compose[@]}" run --rm -T migrate </dev/null
+          "${compose[@]}" --profile bootstrap run --rm -T seed </dev/null
+          "${compose[@]}" up -d --wait --wait-timeout 180 \
+            postgres minio minio-create-bucket api worker web
+          "${compose[@]}" ps
+      - name: Verify exact epoch, image and provider-free startup
+        run: |
+          docker exec -e GITHUB_SHA="$GITHUB_SHA" -i hulee_chat_api node --input-type=module - <<'NODE'
+          const expectedRevision = process.env.GITHUB_SHA;
+          const response = await fetch("http://127.0.0.1:3000/internal/v1/health");
+          const body = await response.json();
+          if (
+            !response.ok ||
+            body.schemaEpoch !== "preproduction-inbox-v2-1" ||
+            body.migrationCount !== 1 ||
+            body.buildRevision !== expectedRevision
+          ) {
+            throw new Error(`Unexpected API readiness: ${JSON.stringify(body)}`);
+          }
+          NODE
+          docker exec hulee_chat_web node -e \
+            "fetch('http://127.0.0.1:3000/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+          test "$(docker inspect --format '{{.State.Health.Status}}' hulee_chat_worker)" = healthy
+          worker_ready=false
+          for attempt in $(seq 1 30); do
+            worker_logs=$(docker logs --tail=200 hulee_chat_worker 2>&1 || true)
+            if grep -Fq '"message":"worker.schema_epoch_verified"' <<<"$worker_logs" &&
+               grep -Fq '"message":"worker.started"' <<<"$worker_logs" &&
+               grep -Fq '"workerFeatures":["core"]' <<<"$worker_logs" &&
+               grep -Fq '"egressProfileKind":"disabled"' <<<"$worker_logs" &&
+               grep -Fq '"egressProfileStatus":"unavailable"' <<<"$worker_logs" &&
+               grep -Fq '"egressProbesEnabled":false' <<<"$worker_logs"; then
+              worker_ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$worker_ready" != "true" ]; then
+            printf '%s\n' "$worker_logs"
+            exit 1
+          fi
+          for container in hulee_chat_api hulee_chat_web hulee_chat_worker; do
+            test "$(docker inspect --format '{{index .Config.Labels "io.hulee.schema-epoch"}}' "$container")" = "$HULEE_SCHEMA_EPOCH"
+            test "$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$container")" = "$GITHUB_SHA"
+          done
+          if docker ps -a --format '{{.Names}}' | grep -Eq 'provider|egress|vpn'; then
+            echo "Provider/VPN runtime must not exist in the clean-slate smoke." >&2
+            exit 1
+          fi
+      - name: Prove a stale declared epoch fails before worker startup
+        run: |
+          set +e
+          stale_output=$(timeout --signal=TERM 30s docker run --rm \
+            --network hulee-chat_default \
+            --env NODE_ENV=production \
+            --env HULEE_SCHEMA_EPOCH=stale-inbox-epoch \
+            --env DATABASE_URL=postgres://hulee:clean-gate-postgres@postgres:5432/hulee \
+            --env HULEE_DEPLOYMENT_TYPE=saas_shared \
+            --env HULEE_INTERNAL_API_SECRET=clean-gate-internal-api-secret \
+            --env HULEE_PUBLIC_BASE_URL=http://web:3000 \
+            --env HULEE_PUBLIC_WEBHOOK_BASE_URL=http://api:3000 \
+            --env HULEE_WORKER_FEATURES=core \
+            "$RUNTIME_IMAGE" pnpm --filter @hulee/worker start 2>&1)
+          stale_status=$?
+          set -e
+          printf '%s\n' "$stale_output"
+          if [ "$stale_status" -eq 0 ]; then
+            echo "A stale schema epoch unexpectedly started the worker." >&2
+            exit 1
+          fi
+          if ! grep -q 'inbox_v2.runtime_schema_epoch_mismatch' <<<"$stale_output"; then
+            echo "The stale-epoch probe failed for an unrelated reason." >&2
+            exit 1
+          fi
+          if grep -q '"message":"worker.started"' <<<"$stale_output"; then
+            echo "The stale-epoch worker scheduled work before rejection." >&2
+            exit 1
+          fi
+      - name: Remove isolated clean-slate runtime
+        if: always()
+        working-directory: deploy/production
+        run: |
+          docker compose --env-file .env --env-file .release.env -f docker-compose.yml down --volumes --remove-orphans || true
+          docker network rm web || true

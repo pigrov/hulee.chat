@@ -1,5 +1,6 @@
 export type { TableDefinition, TableScope } from "./schema";
 export { initialTables } from "./schema";
+export * from "./inbox-v2-runtime-schema-guard";
 export * from "./repositories/sql-inbox-v2-authorization-repository";
 export * from "./repositories/sql-inbox-v2-data-governance-privacy-repository";
 export * from "./repositories/sql-inbox-v2-security-denial-repository";

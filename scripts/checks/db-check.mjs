@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 
 import {
@@ -11,6 +12,8 @@ const baselineFileName = "0000_inbox_v2_baseline.sql";
 const snapshotFileName = "0000_snapshot.json";
 const journalFileName = "_journal.json";
 const baselineTag = "0000_inbox_v2_baseline";
+const runtimeSchemaContractFileName =
+  "packages/db/src/inbox-v2-runtime-schema-guard.ts";
 
 const legacyTableNames = [
   "conversations",
@@ -79,16 +82,23 @@ const requiredTriggerNames = [
   "inbox_v2_conversations_update_guard_trigger"
 ];
 
-const [migrationFileNames, metadataFileNames, baselineSql, journal, snapshot] =
-  await Promise.all([
-    readdir(migrationDirectory).then((fileNames) =>
-      fileNames.filter((fileName) => fileName.endsWith(".sql")).sort()
-    ),
-    readdir(metadataDirectory).then((fileNames) => fileNames.sort()),
-    readFile(`${migrationDirectory}/${baselineFileName}`, "utf8"),
-    readJson(`${metadataDirectory}/${journalFileName}`),
-    readJson(`${metadataDirectory}/${snapshotFileName}`)
-  ]);
+const [
+  migrationFileNames,
+  metadataFileNames,
+  baselineSql,
+  journal,
+  snapshot,
+  runtimeSchemaContract
+] = await Promise.all([
+  readdir(migrationDirectory).then((fileNames) =>
+    fileNames.filter((fileName) => fileName.endsWith(".sql")).sort()
+  ),
+  readdir(metadataDirectory).then((fileNames) => fileNames.sort()),
+  readFile(`${migrationDirectory}/${baselineFileName}`, "utf8"),
+  readJson(`${metadataDirectory}/${journalFileName}`),
+  readJson(`${metadataDirectory}/${snapshotFileName}`),
+  readFile(runtimeSchemaContractFileName, "utf8")
+]);
 
 assertExactSequence(
   migrationFileNames,
@@ -101,6 +111,7 @@ assertExactSequence(
   "Migration metadata directory must contain exactly one baseline snapshot and one journal"
 );
 assertBaselineJournal(journal);
+assertRuntimeSchemaContract({ baselineSql, journal, runtimeSchemaContract });
 assertBaselineSnapshotIdentity(snapshot);
 assertLegacyObjectsAbsent({ baselineSql, snapshot });
 assertRetainedObjectsPresent({ baselineSql, snapshot });
@@ -129,12 +140,36 @@ console.log(
     "DB check passed:",
     "one Inbox V2 baseline migration",
     "one journal entry and snapshot",
+    "runtime schema epoch pinned to that exact baseline",
     "current Drizzle snapshot parity",
     "no Inbox V1 relations or enums",
     "retained platform/V2 objects",
     "managed roles, routines, triggers, ACLs, and SECURITY DEFINER search_path guards"
   ].join(" ")
 );
+
+function assertRuntimeSchemaContract({
+  baselineSql,
+  journal,
+  runtimeSchemaContract
+}) {
+  const migrationHash = createHash("sha256").update(baselineSql).digest("hex");
+  const createdAt = String(journal.entries[0].when);
+  for (const [literal, label] of [
+    [
+      `export const INBOX_V2_RUNTIME_SCHEMA_EPOCH =\n  "preproduction-inbox-v2-1" as const;`,
+      "clean-slate schema epoch"
+    ],
+    [`hash: "${migrationHash}"`, "baseline migration hash"],
+    [`createdAt: "${createdAt}"`, "baseline journal timestamp"]
+  ]) {
+    if (!runtimeSchemaContract.includes(literal)) {
+      throw new Error(
+        `Runtime schema guard must pin the current ${label} exactly.`
+      );
+    }
+  }
+}
 
 function assertBaselineJournal(value) {
   if (

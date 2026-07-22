@@ -19,9 +19,23 @@ variable `HULEE_CLEAN_SLATE_DEPLOY_UNLOCKED` is `true` and the operator enters
 the exact `DEPLOY_CLEAN_SLATE_V2` confirmation. These controls are an explicit
 temporary exception gate, not permission to restore Inbox V1 or provider I/O.
 
+The one clean-slate deployment may set the manual
+`bootstrap_foundation=true` input after replacing the disposable PostgreSQL and
+MinIO volumes. That input runs `db:seed:foundation` exactly once after the
+baseline migration and before API/Web/worker startup. Leave it `false` for
+ordinary deployments; the foundation seed deliberately rejects an accidental
+repeat.
+
 The known pre-production runtime drain is recorded separately in
 `docs/product/inbox-v2-clean-002-runtime-detachment.md`. Do not infer remote
 drain state from this deployment recipe.
+
+The generic `db:inbox-v2:reset` command must not be weakened or relabelled for
+the shared pre-production target: its contract intentionally accepts only
+`personal_local` and `ephemeral_ci`. ADR 0016 authorizes a one-time operator
+replacement of the two exact disposable Compose volumes for the known target,
+with fresh credentials and a recorded before/after receipt. It does not create
+a reusable destructive SaaS reset path.
 
 Initial server preparation:
 
@@ -84,3 +98,20 @@ container still exists.
 Provider egress may return only through an explicitly reviewed Inbox V2 adapter
 activation after the clean-slate gate. Retained egress policy and diagnostics
 schemas are platform foundations and do not grant runtime provider authority.
+
+## Runtime schema epoch
+
+Production images and Compose declare the exact
+`preproduction-inbox-v2-1` epoch. API, Web prestart and worker compare the live
+Drizzle journal with the one checked-in baseline and reject missing, older,
+newer or V1-bearing databases before opening a listener or scheduling work.
+The API health response publishes the verified epoch, migration count and build
+revision. The production image carries the same build revision and epoch as OCI
+labels, and deployment verifies both labels as well as the exact SHA image tag.
+
+For the one-time epoch replacement, remove every stopped old application
+container and rotate the database password, MinIO credential, encryption key,
+internal API secret and bootstrap API key before creating the new volumes.
+Delete explicitly inventoried secret-bearing `.env` and SQL backup copies.
+Those rotations are the reconnect fence for pre-gate images that predate the
+runtime assertion; exact-image and epoch checks protect all subsequent images.

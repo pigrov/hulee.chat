@@ -118,6 +118,11 @@ export type InternalApiDataPlaneHandlerOptions = {
   inboxV2FileDownloadMaximumBytes?: number;
   publicWebhookBaseUrl?: string;
   telegramApiBaseUrl?: string;
+  runtimeSchemaEvidence?: Readonly<{
+    epoch: string;
+    migrationCount: number;
+  }>;
+  buildRevision?: string;
   logger?: Logger;
   requestIdFactory?: () => string;
 };
@@ -213,6 +218,8 @@ export function createInternalApiDataPlaneHandler(
       audit: createSqlSecurityAuditRepository(options.database),
       events: createSqlDomainEventRepository(options.database)
     }),
+    runtimeSchemaEvidence: options.runtimeSchemaEvidence,
+    buildRevision: options.buildRevision,
     logger: options.logger,
     requestIdFactory: options.requestIdFactory
   });
@@ -245,6 +252,8 @@ export type ApiDataPlaneHandlerOptions = PublicApiDataPlaneHandlerOptions &
     | "inboxV2FileDownloadMaximumBytes"
     | "publicWebhookBaseUrl"
     | "telegramApiBaseUrl"
+    | "runtimeSchemaEvidence"
+    | "buildRevision"
   >;
 
 export function createApiDataPlaneHandler(

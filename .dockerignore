@@ -5,6 +5,11 @@ dist
 coverage
 .next
 apps/*/.next
+.agents
+.codex
+.codex-runtime-logs
+.hulee
+.logs
 .env
 .env.*
 env.local

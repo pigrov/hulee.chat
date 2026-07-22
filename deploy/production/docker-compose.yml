@@ -12,6 +12,7 @@ x-app-base: &app-base
     HULEE_INTERNAL_API_SECRET: ${HULEE_INTERNAL_API_SECRET:?HULEE_INTERNAL_API_SECRET is required}
     HULEE_PUBLIC_BASE_URL: ${HULEE_PUBLIC_BASE_URL:?HULEE_PUBLIC_BASE_URL is required}
     HULEE_PUBLIC_WEBHOOK_BASE_URL: ${HULEE_PUBLIC_WEBHOOK_BASE_URL:?HULEE_PUBLIC_WEBHOOK_BASE_URL is required}
+    HULEE_SCHEMA_EPOCH: preproduction-inbox-v2-1
   restart: unless-stopped
   depends_on:
     postgres:
@@ -99,6 +100,12 @@ services:
       HULEE_INTERNAL_API_SECRET: ${HULEE_INTERNAL_API_SECRET:?HULEE_INTERNAL_API_SECRET is required}
       HULEE_PUBLIC_BASE_URL: ${HULEE_PUBLIC_BASE_URL:?HULEE_PUBLIC_BASE_URL is required}
       HULEE_PUBLIC_WEBHOOK_BASE_URL: ${HULEE_PUBLIC_WEBHOOK_BASE_URL:?HULEE_PUBLIC_WEBHOOK_BASE_URL is required}
+      HULEE_SCHEMA_EPOCH: preproduction-inbox-v2-1
+      HULEE_EGRESS_PROFILE_ID: deployment:clean-slate-provider-disabled
+      HULEE_EGRESS_PROFILE_KIND: disabled
+      HULEE_EGRESS_PROFILE_STATUS: unavailable
+      HULEE_EGRESS_OPERATOR_HINT: Provider egress is disabled until a reviewed Inbox V2 adapter activation.
+      HULEE_EGRESS_PROBES_ENABLED: "false"
       HULEE_API_HOST: 0.0.0.0
       HULEE_API_PORT: 3000
     command: ["pnpm", "--filter", "@hulee/api", "start"]
@@ -126,7 +133,13 @@ services:
       HULEE_INTERNAL_API_SECRET: ${HULEE_INTERNAL_API_SECRET:?HULEE_INTERNAL_API_SECRET is required}
       HULEE_PUBLIC_BASE_URL: ${HULEE_PUBLIC_BASE_URL:?HULEE_PUBLIC_BASE_URL is required}
       HULEE_PUBLIC_WEBHOOK_BASE_URL: ${HULEE_PUBLIC_WEBHOOK_BASE_URL:?HULEE_PUBLIC_WEBHOOK_BASE_URL is required}
+      HULEE_SCHEMA_EPOCH: preproduction-inbox-v2-1
       HULEE_WORKER_FEATURES: core
+      HULEE_EGRESS_PROFILE_ID: deployment:clean-slate-provider-disabled
+      HULEE_EGRESS_PROFILE_KIND: disabled
+      HULEE_EGRESS_PROFILE_STATUS: unavailable
+      HULEE_EGRESS_OPERATOR_HINT: Provider egress is disabled until a reviewed Inbox V2 adapter activation.
+      HULEE_EGRESS_PROBES_ENABLED: "false"
     command: ["pnpm", "--filter", "@hulee/worker", "start"]
     depends_on:
       postgres:
@@ -135,6 +148,15 @@ services:
         condition: service_healthy
       minio-create-bucket:
         condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "tr '\\0' ' ' </proc/1/cmdline | grep -q -- '@hulee/worker'"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   web:
     <<: *app-base
@@ -147,6 +169,7 @@ services:
       HULEE_INTERNAL_API_SECRET: ${HULEE_INTERNAL_API_SECRET:?HULEE_INTERNAL_API_SECRET is required}
       HULEE_PUBLIC_BASE_URL: ${HULEE_PUBLIC_BASE_URL:?HULEE_PUBLIC_BASE_URL is required}
       HULEE_PUBLIC_WEBHOOK_BASE_URL: ${HULEE_PUBLIC_WEBHOOK_BASE_URL:?HULEE_PUBLIC_WEBHOOK_BASE_URL is required}
+      HULEE_SCHEMA_EPOCH: preproduction-inbox-v2-1
       HULEE_INTERNAL_API_BASE_URL: http://api:3000
       HULEE_WEB_TENANT_ID: ${HULEE_WEB_TENANT_ID:-tenant_local_1}
       HULEE_WEB_EMPLOYEE_ID: ${HULEE_WEB_EMPLOYEE_ID:-employee:local-dev}

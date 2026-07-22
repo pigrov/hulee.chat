@@ -118,6 +118,30 @@ export function validateInboxV2CleanSlateFreeze(input) {
     "inbox-v2-disposable-lifecycle:",
     "disposable install/reset coverage must remain active"
   );
+  requireText(
+    issues,
+    input.checkWorkflow,
+    "inbox-v2-production-runtime-smoke:",
+    "production API/Web/worker startup smoke must remain active"
+  );
+  requireText(
+    issues,
+    input.checkWorkflow,
+    "Prove a stale declared epoch fails before worker startup",
+    "production smoke must prove that a stale declared epoch fails closed"
+  );
+  requireText(
+    issues,
+    input.checkWorkflow,
+    "inbox_v2.runtime_schema_epoch_mismatch",
+    "stale-epoch smoke must require the exact mismatch diagnostic"
+  );
+  requireText(
+    issues,
+    input.checkWorkflow,
+    "timeout --signal=TERM 30s docker run",
+    "stale-epoch smoke must have a bounded process timeout"
+  );
 
   requireMatch(
     issues,
@@ -127,7 +151,20 @@ export function validateInboxV2CleanSlateFreeze(input) {
   );
 
   validateRuntimeDetachment(issues, input);
+  validateRuntimeSchemaEpochBoundary(issues, input);
   validateRemovedInboxV1Implementation(issues, input);
+  requireText(
+    issues,
+    input.v1Allowlist,
+    "Status: `verified`",
+    "the V1 ownership allowlist must remain verified"
+  );
+  requireText(
+    issues,
+    input.v1Allowlist,
+    "Public API `/v1`",
+    "the V1 ownership allowlist must retain the Public API distinction"
+  );
 
   for (const [label, source] of [
     ["ADR 0016", input.adr],
@@ -174,6 +211,12 @@ async function main() {
     webInboxPageSource,
     foundationSeedSource,
     productionCompose,
+    apiStartupSource,
+    apiHealthSource,
+    webPackageSource,
+    runtimeSchemaGuardSource,
+    dockerfileSource,
+    v1Allowlist,
     legacyFilePaths,
     runtimeSources
   ] = await Promise.all(
@@ -190,7 +233,13 @@ async function main() {
       "apps/worker/src/runner.ts",
       "apps/web/app/page.tsx",
       "scripts/db/seed-foundation.ts",
-      "deploy/production/docker-compose.yml"
+      "deploy/production/docker-compose.yml",
+      "apps/api/src/dev-server.ts",
+      "apps/api/src/http/internal-api-handler.ts",
+      "apps/web/package.json",
+      "packages/db/src/inbox-v2-runtime-schema-guard.ts",
+      "deploy/docker/Dockerfile",
+      "docs/product/inbox-v2-clean-gate-v1-allowlist.md"
     ]
       .map((path) => readFile(resolve(repositoryRoot, path), "utf8"))
       .concat([
@@ -212,6 +261,12 @@ async function main() {
     webInboxPageSource,
     foundationSeedSource,
     productionCompose,
+    apiStartupSource,
+    apiHealthSource,
+    webPackageSource,
+    runtimeSchemaGuardSource,
+    dockerfileSource,
+    v1Allowlist,
     legacyFilePaths,
     runtimeSources
   });
@@ -223,6 +278,114 @@ async function main() {
   console.log(
     "Inbox V2 clean-slate deployment, CI freeze and runtime detachment passed."
   );
+}
+
+function validateRuntimeSchemaEpochBoundary(issues, input) {
+  const epoch = "preproduction-inbox-v2-1";
+  requireText(
+    issues,
+    input.runtimeSchemaGuardSource,
+    `"${epoch}" as const`,
+    "runtime schema guard must pin the active clean-slate epoch"
+  );
+  requireInOrder(
+    issues,
+    input.apiStartupSource,
+    "await assertInboxV2RuntimeSchemaEpoch(database)",
+    "server.listen(",
+    "API must verify the exact schema epoch before opening its listener"
+  );
+  requireInOrder(
+    issues,
+    input.workerRunnerSource,
+    "await assertInboxV2RuntimeSchemaEpoch(database)",
+    'runtime.logger.info("worker.started"',
+    "worker must verify the exact schema epoch before starting background work"
+  );
+  requireInOrder(
+    issues,
+    input.deployWorkflow,
+    'docker rm "$stale_runtime"',
+    '"${compose[@]}" run --rm -T migrate',
+    "deployment must stop old data-plane runtimes before migration"
+  );
+  requireText(
+    issues,
+    input.deployWorkflow,
+    'require_non_placeholder_env_var "$required_seed_key"',
+    "foundation bootstrap must reject missing or placeholder secrets"
+  );
+
+  let webPackage;
+  try {
+    webPackage = JSON.parse(input.webPackageSource);
+  } catch {
+    issues.push("Web package manifest must remain valid JSON");
+  }
+  if (
+    typeof webPackage?.scripts?.start !== "string" ||
+    !webPackage.scripts.start.startsWith(
+      "tsx src/assert-production-schema.ts && next start"
+    )
+  ) {
+    issues.push(
+      "Web production start must verify the exact schema epoch first"
+    );
+  }
+
+  for (const [literal, message] of [
+    [
+      `HULEE_SCHEMA_EPOCH: ${epoch}`,
+      "production compose must pin the active schema epoch"
+    ],
+    [
+      "HULEE_EGRESS_PROFILE_KIND: disabled",
+      "production compose must pin the disabled egress profile"
+    ],
+    [
+      "HULEE_EGRESS_PROFILE_STATUS: unavailable",
+      "production compose must pin unavailable provider status"
+    ],
+    [
+      'HULEE_EGRESS_PROBES_ENABLED: "false"',
+      "production compose must disable provider probes literally"
+    ],
+    ["@hulee/worker", "production worker must expose a startup healthcheck"]
+  ]) {
+    requireText(issues, input.productionCompose, literal, message);
+  }
+  requireText(
+    issues,
+    input.apiHealthSource,
+    "schemaEpoch:",
+    "API health must expose the verified schema epoch"
+  );
+  requireText(
+    issues,
+    input.apiHealthSource,
+    "buildRevision:",
+    "API health must expose the running build revision"
+  );
+  requireText(
+    issues,
+    input.dockerfileSource,
+    "LABEL org.opencontainers.image.revision=$HULEE_BUILD_REVISION",
+    "production image must carry its exact source revision label"
+  );
+  requireText(
+    issues,
+    input.dockerfileSource,
+    "LABEL io.hulee.schema-epoch=$HULEE_SCHEMA_EPOCH",
+    "production image must carry its schema epoch label"
+  );
+}
+
+function requireInOrder(issues, source, first, second, message) {
+  const firstIndex = source.indexOf(first);
+  const secondIndex = source.indexOf(second);
+  if (firstIndex < 0 || secondIndex < 0 || firstIndex >= secondIndex) {
+    issues.push(message);
+  }
 }
 
 function requireText(issues, source, expected, message) {

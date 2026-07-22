@@ -93,6 +93,11 @@ export type InternalApiHandlerOptions = {
   accessDecisions: InternalAccessDecisionService;
   egressStatus: InternalEgressStatusService;
   rbac: InternalRbacService;
+  runtimeSchemaEvidence?: Readonly<{
+    epoch: string;
+    migrationCount: number;
+  }>;
+  buildRevision?: string;
   logger?: Logger;
   requestIdFactory?: () => string;
 };
@@ -281,7 +286,14 @@ export function createInternalApiHandler(
       if (route.route === "health") {
         return jsonResponse(200, {
           status: "ok",
-          version: internalApiV1Version
+          version: internalApiV1Version,
+          ...(options.runtimeSchemaEvidence === undefined
+            ? {}
+            : {
+                schemaEpoch: options.runtimeSchemaEvidence.epoch,
+                migrationCount: options.runtimeSchemaEvidence.migrationCount,
+                buildRevision: options.buildRevision ?? "development"
+              })
         });
       }
 

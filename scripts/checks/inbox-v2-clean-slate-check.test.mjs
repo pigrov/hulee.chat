@@ -20,8 +20,17 @@ jobs:
           if [[ "$UNLOCKED" != "true" || "$CONFIRMATION" != "DEPLOY_CLEAN_SLATE_V2" ]]; then
             echo "::error::Application deployment is frozen by INB2-CLEAN-001 until INB2-CLEAN-GATE passes."
             exit 1
-          fi`,
-  checkWorkflow: `pnpm test:inbox-v2:postgres\npnpm test:inbox-v2:conversation-head-integrity\ninbox-v2-disposable-lifecycle:`,
+          fi
+          require_non_placeholder_env_var "$required_seed_key"
+          docker rm "$stale_runtime"
+          "\${compose[@]}" run --rm -T migrate`,
+  checkWorkflow: `pnpm test:inbox-v2:postgres
+pnpm test:inbox-v2:conversation-head-integrity
+inbox-v2-disposable-lifecycle:
+inbox-v2-production-runtime-smoke:
+Prove a stale declared epoch fails before worker startup
+inbox_v2.runtime_schema_epoch_mismatch
+timeout --signal=TERM 30s docker run`,
   configSource: `const defaultWorkerFeatures: readonly WorkerFeature[] = ["core"];`,
   adr: `clean-slate-2026-07-20-r1`,
   backlog: "`INB2-CLEAN-001` clean-slate-2026-07-20-r1",
@@ -44,7 +53,25 @@ jobs:
     return createCleanSlateTelegramWebhookHandler();`,
   workerRunnerSource: `
     const runtime = createWorkerRuntime();
+    await assertInboxV2RuntimeSchemaEpoch(database);
+    runtime.logger.info("worker.started");
     createWorkerSecurityDenialRetentionSweeper({ database });`,
+  apiStartupSource: `
+    await assertInboxV2RuntimeSchemaEpoch(database);
+    server.listen(port);`,
+  apiHealthSource: `return { schemaEpoch: evidence.epoch, buildRevision: revision };`,
+  webPackageSource: JSON.stringify({
+    scripts: {
+      start:
+        "tsx src/assert-production-schema.ts && next start --hostname 0.0.0.0 --port 3000"
+    }
+  }),
+  runtimeSchemaGuardSource: `export const INBOX_V2_RUNTIME_SCHEMA_EPOCH =
+    "preproduction-inbox-v2-1" as const;`,
+  dockerfileSource: `
+    LABEL org.opencontainers.image.revision=$HULEE_BUILD_REVISION
+    LABEL io.hulee.schema-epoch=$HULEE_SCHEMA_EPOCH`,
+  v1Allowlist: "Status: `verified`\nPublic API `/v1`",
   webInboxPageSource: `
     export default function InboxPage() {
       return t("inbox.cleanSlate.title");
@@ -60,7 +87,13 @@ jobs:
   worker:
     environment:
       HULEE_WORKER_FEATURES: core
+      HULEE_SCHEMA_EPOCH: preproduction-inbox-v2-1
+      HULEE_EGRESS_PROFILE_KIND: disabled
+      HULEE_EGRESS_PROFILE_STATUS: unavailable
+      HULEE_EGRESS_PROBES_ENABLED: "false"
     command: ["pnpm", "--filter", "@hulee/worker", "start"]
+    healthcheck:
+      test: ["CMD-SHELL", "grep -q -- '@hulee/worker' /proc/1/cmdline"]
   web:
     command: ["pnpm", "--filter", "@hulee/web", "start"]`,
   legacyFilePaths: Object.freeze([]),
@@ -173,6 +206,30 @@ jobs:
         "V2 Conversation-head integrity coverage must remain active",
         "V2 PostgreSQL repository coverage must remain active",
         "disposable install/reset coverage must remain active"
+      ])
+    );
+  });
+
+  it("rejects runtime composition that can start before the schema epoch fence", () => {
+    const issues = validateInboxV2CleanSlateFreeze({
+      ...validInput,
+      apiStartupSource: `server.listen(port);`,
+      workerRunnerSource: `runtime.logger.info("worker.started");`,
+      webPackageSource: JSON.stringify({
+        scripts: { start: "next start --hostname 0.0.0.0 --port 3000" }
+      }),
+      productionCompose: validInput.productionCompose.replace(
+        "HULEE_EGRESS_PROFILE_KIND: disabled",
+        "HULEE_EGRESS_PROFILE_KIND: direct"
+      )
+    });
+
+    expect(issues).toEqual(
+      expect.arrayContaining([
+        "API must verify the exact schema epoch before opening its listener",
+        "worker must verify the exact schema epoch before starting background work",
+        "Web production start must verify the exact schema epoch first",
+        "production compose must pin the disabled egress profile"
       ])
     );
   });

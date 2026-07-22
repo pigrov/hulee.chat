@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start --hostname 0.0.0.0 --port 3000",
+    "start": "tsx src/assert-production-schema.ts && next start --hostname 0.0.0.0 --port 3000",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
