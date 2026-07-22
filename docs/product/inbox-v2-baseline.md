@@ -366,7 +366,7 @@ root as disposable test state. ADR 0016 now selects:
 `freeze deploy -> stop V1 writers/providers -> delete V1 runtime/schema -> one
 V2 baseline -> reset -> verify -> resume V2-only delivery`.
 
-Until `INB2-CLEAN-GATE` passes:
+The pre-gate boundary required:
 
 - do not deploy application/provider runtime from `main`;
 - keep public/event/module version identifiers independent from Inbox V1;
@@ -376,6 +376,12 @@ Until `INB2-CLEAN-GATE` passes:
 - do not import IDs, authors, routes, rosters or provider outcomes from V1;
 - prevent stale application images, webhooks, workers and sessions from
   reconnecting to the new schema epoch.
+
+`INB2-CLEAN-GATE` passed on `2026-07-22`; its receipt is
+`docs/product/inbox-v2-clean-gate.md`. A successful full `Check` for a push to
+`main` now hands its exact checked SHA to the V2-only deployment workflow;
+direct-push and manual bypasses are absent. Provider egress remains disabled
+until a separate adapter activation is reviewed.
 
 The old preserve/N-1/backfill evidence remains historical. `INB2-CLEAN-002`
 owns runtime/provider drain, `INB2-DB-011` owns the clean baseline and reset,

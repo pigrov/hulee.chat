@@ -41,7 +41,8 @@ The production Compose file has no provider worker or VPN gateway and pins
 provider enablement, a non-core worker feature set, or stale provider container
 names. Its migration service invokes only `db:migrate`; the historical preserve
 installer and reviewed-online-bridge override are excluded. The CLEAN-001 manual
-deployment freeze remains in force.
+deployment freeze remained in force at CLEAN-002 completion. It was retired
+only after `INB2-CLEAN-GATE` passed on `2026-07-22`.
 
 ## Foundation-only registration
 
@@ -141,5 +142,7 @@ production Compose sources. It rejects:
   `encoding:check`, `branding:check`, `native:check`, clean-slate guard,
   Compose parsing and `git diff --check` passed.
 
-The next active task is `INB2-DB-011`: replace the unpublished migration chain
-with one clean V2 baseline and recreate the disposable database epoch.
+Subsequent outcome: `INB2-DB-011`, `INB2-CLEAN-003` and
+`INB2-CLEAN-GATE` completed the baseline replacement, physical V1 removal and
+remote clean-slate verification. See
+`docs/product/inbox-v2-clean-gate.md`.

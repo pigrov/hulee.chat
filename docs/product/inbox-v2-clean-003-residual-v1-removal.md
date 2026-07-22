@@ -58,9 +58,11 @@ service/DTO/adapter symbols, the old `message.sent` intent and
 owned symbols from legitimate versioned `/v1` contracts and from historical
 documentation.
 
-The same guard still enforces the manual deployment freeze, provider-free
-production worker, disabled provider I/O, fail-closed Public API and Telegram
-surfaces, foundation-only seed and clean V2 migration command.
+At CLEAN-003 completion the same guard still enforced the manual deployment
+freeze, provider-free production worker, disabled provider I/O, fail-closed
+Public API and Telegram surfaces, foundation-only seed and clean V2 migration
+command. `INB2-CLEAN-GATE` later replaced the temporary freeze assertion with a
+permanent V2-only deployment boundary.
 
 ## Verification
 
@@ -80,6 +82,6 @@ versions, clean-slate negative assertions or historical documentation.
   i18n, encoding, branding, native and clean-slate checks;
 - `git diff --check` passed.
 
-The next active task is `INB2-CLEAN-GATE`: verify the V2-only local and remote
-boundary, reset the disposable external state and decide whether the temporary
-deployment freeze can be removed.
+Subsequent outcome: `INB2-CLEAN-GATE` passed on `2026-07-22`; the disposable
+remote state was recreated and the deployment freeze was removed without
+activating provider egress. See `docs/product/inbox-v2-clean-gate.md`.

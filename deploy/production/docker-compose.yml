@@ -22,8 +22,6 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: hulee_chat_postgres
-    env_file:
-      - .env
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-hulee}
       POSTGRES_USER: ${POSTGRES_USER:-hulee}
@@ -40,8 +38,6 @@ services:
   minio:
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     container_name: hulee_chat_minio
-    env_file:
-      - .env
     environment:
       MINIO_ROOT_USER: ${HULEE_OBJECT_STORAGE_ACCESS_KEY_ID:-hulee}
       MINIO_ROOT_PASSWORD: ${HULEE_OBJECT_STORAGE_SECRET_ACCESS_KEY:-hulee-local-secret}
@@ -58,8 +54,6 @@ services:
   minio-create-bucket:
     image: minio/mc:RELEASE.2025-04-16T18-13-26Z
     container_name: hulee_chat_minio_create_bucket
-    env_file:
-      - .env
     environment:
       HULEE_OBJECT_STORAGE_BUCKET: ${HULEE_OBJECT_STORAGE_BUCKET:-hulee-files}
       HULEE_OBJECT_STORAGE_ACCESS_KEY_ID: ${HULEE_OBJECT_STORAGE_ACCESS_KEY_ID:-hulee}

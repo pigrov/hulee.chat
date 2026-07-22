@@ -53,33 +53,128 @@ const removedInboxV1Paths = Object.freeze([
 const removedInboxV1SymbolPattern =
   /\b(?:InternalInboxConversation|InternalInboxMessage|InternalInboxViewResponse|InternalInboxReply|InternalInboxRouting|createExternalMessageRepository|createExternalChannelCommandService|createPublicApiCommandService|createInternalInboxCommandService|createSqlInternalInboxAuthorizationService|createSqlInternalInboxQueryService|createInternalFileService|createTelegramChannelAdapter|normalizeTelegramIncomingMessage|createTelegramWebhookHandler|createWorkerOutboxHandler|createWorkerTelegramPollingSweeper|createWorkerTelegramAttachmentTransferSweeper)\b|["'](?:message\.sent|conversation\.routing\.updated)["']/u;
 
-export function validateInboxV2CleanSlateFreeze(input) {
+export function validateInboxV2CleanSlateBoundary(input) {
   const issues = [];
+  const activeDeployWorkflow = stripYamlCommentLines(input.deployWorkflow);
+  const activeCheckWorkflow = stripYamlCommentLines(input.checkWorkflow);
 
-  const deployTriggers = parseWorkflowTriggers(input.deployWorkflow);
-  if (
-    deployTriggers.length !== 1 ||
-    deployTriggers[0] !== "workflow_dispatch"
-  ) {
-    issues.push("deploy workflow triggers must be exactly workflow_dispatch");
+  const deployTriggers = parseWorkflowTriggers(activeDeployWorkflow);
+  if (deployTriggers.length !== 1 || deployTriggers[0] !== "workflow_run") {
+    issues.push(
+      "deploy workflow trigger must be exactly the completed Check workflow"
+    );
   }
   requireText(
     issues,
-    input.deployWorkflow,
-    "    steps:\n      - name: Enforce the Inbox V2 clean-slate deployment freeze",
-    "deploy freeze must be the first deployment step"
+    activeDeployWorkflow,
+    "  workflow_run:\n    workflows:\n      - Check\n    types:\n      - completed\n    branches:\n      - main",
+    "deployment must wait for the completed full Check workflow on main"
+  );
+  for (const [guard, message] of [
+    [
+      "github.event.workflow_run.conclusion == 'success'",
+      "deployment must require a successful full Check workflow"
+    ],
+    [
+      "github.event.workflow_run.event == 'push'",
+      "deployment must reject pull-request Check runs"
+    ],
+    [
+      "github.event.workflow_run.head_branch == 'main'",
+      "deployment must require a checked main-branch revision"
+    ],
+    [
+      "github.event.workflow_run.head_repository.full_name == github.repository",
+      "deployment must require a Check run from the same repository"
+    ]
+  ]) {
+    requireText(issues, activeDeployWorkflow, guard, message);
+  }
+  requireText(
+    issues,
+    activeDeployWorkflow,
+    "TARGET_SHA: ${{ github.event.workflow_run.head_sha }}",
+    "deployment must bind the exact SHA that passed the full Check workflow"
+  );
+  forbidText(
+    issues,
+    activeDeployWorkflow,
+    "${{ github.sha }}",
+    "workflow-run deployment must not build the unrelated event github.sha"
+  );
+  for (const [binding, message] of [
+    [
+      "ref: ${{ env.TARGET_SHA }}",
+      "deployment checkout must use the exact checked TARGET_SHA"
+    ],
+    [
+      '--build-arg "HULEE_BUILD_REVISION=${{ env.TARGET_SHA }}"',
+      "production image revision must use the exact checked TARGET_SHA"
+    ],
+    [
+      '-t "$IMAGE_NAME:${{ env.TARGET_SHA }}"',
+      "production image tag must use the exact checked TARGET_SHA"
+    ],
+    [
+      'docker push "$IMAGE_NAME:${{ env.TARGET_SHA }}"',
+      "production image push must use the exact checked TARGET_SHA"
+    ],
+    [
+      "HULEE_IMAGE=$IMAGE_NAME:${{ env.TARGET_SHA }}",
+      "release environment must use the exact checked TARGET_SHA"
+    ]
+  ]) {
+    requireText(issues, activeDeployWorkflow, binding, message);
+  }
+  requireText(
+    issues,
+    activeDeployWorkflow,
+    "git ls-remote origin refs/heads/main",
+    "deployment must resolve the current main revision before using secrets"
   );
   requireText(
     issues,
-    input.deployWorkflow,
-    "        env:\n          CONFIRMATION: ${{ inputs.confirmation }}\n          UNLOCKED: ${{ vars.HULEE_CLEAN_SLATE_DEPLOY_UNLOCKED }}",
-    "deploy guard must bind confirmation input and clean-slate unlock variable"
+    activeDeployWorkflow,
+    '[ "$latest_main_sha" != "$TARGET_SHA" ]',
+    "deployment must reject a checked revision superseded on main"
+  );
+  requireInOrder(
+    issues,
+    activeDeployWorkflow,
+    "git ls-remote origin refs/heads/main",
+    "${{ secrets.",
+    "deployment must reject a superseded revision before secret-bearing steps"
   );
   requireText(
     issues,
-    input.deployWorkflow,
-    '          if [[ "$UNLOCKED" != "true" || "$CONFIRMATION" != "DEPLOY_CLEAN_SLATE_V2" ]]; then\n            echo "::error::Application deployment is frozen by INB2-CLEAN-001 until INB2-CLEAN-GATE passes."\n            exit 1\n          fi',
-    "deploy guard must fail loudly unless both unlock factors are exact"
+    activeCheckWorkflow,
+    "concurrency:\n  group: check-${{ github.workflow }}-${{ github.ref }}\n  cancel-in-progress: true",
+    "full Check workflow must cancel superseded runs for the same branch"
+  );
+  requireText(
+    issues,
+    activeCheckWorkflow,
+    "name: Check",
+    "full Check workflow name must match the deployment handoff"
+  );
+  for (const retiredGateToken of [
+    "HULEE_CLEAN_SLATE_DEPLOY_UNLOCKED",
+    "DEPLOY_CLEAN_SLATE_V2",
+    "bootstrap_foundation",
+    "inputs.confirmation"
+  ]) {
+    forbidText(
+      issues,
+      input.deployWorkflow,
+      retiredGateToken,
+      `completed clean-slate gate must not retain ${retiredGateToken}`
+    );
+  }
+  requireText(
+    issues,
+    activeDeployWorkflow,
+    "HULEE_SEED_API_KEY HULEE_PLATFORM_ADMIN_PASS",
+    "ordinary deployment must reject raw one-time bootstrap credentials"
   );
 
   forbidText(
@@ -247,7 +342,7 @@ async function main() {
         collectRuntimeSources(["apps", "packages"])
       ])
   );
-  const issues = validateInboxV2CleanSlateFreeze({
+  const issues = validateInboxV2CleanSlateBoundary({
     deployWorkflow,
     checkWorkflow,
     configSource,
@@ -272,11 +367,11 @@ async function main() {
   });
   if (issues.length > 0) {
     throw new Error(
-      `Inbox V2 clean-slate freeze check failed:\n- ${issues.join("\n- ")}`
+      `Inbox V2 clean-slate boundary check failed:\n- ${issues.join("\n- ")}`
     );
   }
   console.log(
-    "Inbox V2 clean-slate deployment, CI freeze and runtime detachment passed."
+    "Inbox V2 clean-slate deployment boundary and runtime detachment passed."
   );
 }
 
@@ -309,25 +404,6 @@ function validateRuntimeSchemaEpochBoundary(issues, input) {
     '"${compose[@]}" run --rm -T migrate',
     "deployment must stop old data-plane runtimes before migration"
   );
-  requireText(
-    issues,
-    input.deployWorkflow,
-    'require_non_placeholder_env_var "$required_seed_key"',
-    "foundation bootstrap must reject missing or placeholder secrets"
-  );
-  for (const requiredBootstrapKey of [
-    "HULEE_SEED_ID_SEED",
-    "HULEE_PLATFORM_ADMIN_USER",
-    "HULEE_PLATFORM_ADMIN_PASS"
-  ]) {
-    requireText(
-      issues,
-      input.deployWorkflow,
-      requiredBootstrapKey,
-      `foundation bootstrap must require ${requiredBootstrapKey}`
-    );
-  }
-
   let webPackage;
   try {
     webPackage = JSON.parse(input.webPackageSource);
@@ -372,12 +448,14 @@ function validateRuntimeSchemaEpochBoundary(issues, input) {
     "HULEE_WEB_EMPLOYEE_ID: ${HULEE_WEB_EMPLOYEE_ID:-employee_local_1}",
     "production Web identity must match the deterministic foundation seed"
   );
-  forbidMatch(
-    issues,
-    extractTopLevelYamlEntry(input.productionCompose, "site"),
-    /^\s+env_file:\s*$/mu,
-    "marketing site must not receive the application secret environment file"
-  );
+  for (const service of ["postgres", "minio", "minio-create-bucket", "site"]) {
+    forbidMatch(
+      issues,
+      extractTopLevelYamlEntry(input.productionCompose, service),
+      /^\s+env_file:\s*$/mu,
+      `${service} must not receive the application secret environment file`
+    );
+  }
   requireText(
     issues,
     input.apiHealthSource,
@@ -652,6 +730,10 @@ function stripJavaScriptComments(source) {
   return source.replace(/\/\*[\s\S]*?\*\//gu, "").replace(/^\s*\/\/.*$/gmu, "");
 }
 
+function stripYamlCommentLines(source) {
+  return source.replace(/^\s*#.*$/gmu, "");
+}
+
 function parseWorkflowTriggers(source) {
   const lines = source.replaceAll("\r\n", "\n").split("\n");
   const onIndex = lines.findIndex((line) => line === "on:");
@@ -665,7 +747,11 @@ function parseWorkflowTriggers(source) {
       triggers.push(
         line === "  workflow_dispatch:"
           ? "workflow_dispatch"
-          : `invalid:${line.trim()}`
+          : line === "  push:"
+            ? "push"
+            : line === "  workflow_run:"
+              ? "workflow_run"
+              : `invalid:${line.trim()}`
       );
     }
   }

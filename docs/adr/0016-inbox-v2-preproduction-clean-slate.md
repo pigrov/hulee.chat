@@ -144,3 +144,20 @@ Negative and accepted:
 - preserve-only CI is removed while retained PostgreSQL integrity coverage stays
   active;
 - repository checks verify the temporary deployment freeze.
+
+## Operational outcome
+
+`INB2-CLEAN-GATE` passed on `2026-07-22`. The known disposable PostgreSQL and
+object-storage volumes were recreated, the one baseline and foundation seed
+were applied, V1/provider/source/file state remained absent through bounded
+observation, and stale images plus inventoried legacy backups were removed. The
+receipt is `docs/product/inbox-v2-clean-gate.md`.
+
+The temporary freeze controls above are therefore historical CLEAN-001 entry
+guards. A successful full `Check` workflow for a push to `main` now hands its
+exact checked revision to the V2-only deployment workflow. Direct-push and
+manual deployment bypasses are absent, and a superseded-main fence prevents
+out-of-order Check completion from rolling production back. Provider egress
+remains disabled and requires a separate reviewed V2 adapter activation; this
+outcome does not broaden the destructive reset authority to a future real-data
+environment.

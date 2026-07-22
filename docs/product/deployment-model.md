@@ -64,11 +64,14 @@ The current Inbox transition follows ADR 0016 and disposition
 `clean-slate-2026-07-20-r1`. The product owner classified every existing Hulee
 environment/data root as disposable pre-production test state, so V1 is removed
 without data migration and the unpublished migration chain is replaced by one
-V2 baseline. Application/provider deployment stays frozen until
-`INB2-CLEAN-GATE`. The first real production/on-prem release freezes that
-baseline; later supported releases return to append-only migrations,
-backup/restore and explicit rollback planning. ADR 0014 remains the historical
-preserve design, not the active epoch.
+V2 baseline. Application/provider deployment stayed frozen through
+`INB2-CLEAN-GATE`; the gate passed on `2026-07-22`, so a successful full `Check`
+for a push to `main` hands the exact checked SHA to one V2-only deployment
+workflow while provider egress remains disabled. There is no direct-push or
+manual deployment bypass. The first real production/on-prem release freezes
+that baseline; later supported releases return to append-only migrations,
+backup/restore and explicit rollback planning. ADR 0014 remains the historical preserve design,
+not the active epoch.
 
 ## RBAC Migration State
 

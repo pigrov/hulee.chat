@@ -1,8 +1,9 @@
 # Inbox V2 Migration And Cutover Strategy
 
 - Status: `approved clean-slate pre-production epoch`
-- Owner tasks: `INB2-ARCH-009`, `INB2-MIG-001`, `INB2-CLEAN-001`
-- Last verified: `2026-07-20`
+- Owner tasks: `INB2-ARCH-009`, `INB2-MIG-001`, `INB2-CLEAN-001`,
+  `INB2-CLEAN-GATE`
+- Last verified: `2026-07-22`
 - Applies to: the currently known shared/local/CI Hulee fleet explicitly
   classified as disposable pre-production test state. Future real shared,
   isolated or on-prem deployments use the post-baseline append-only policy and
@@ -39,11 +40,12 @@ contract remain independent versioned contracts. Generic `/internal/v1` routes
 unrelated to Inbox are not removed by prefix. Internal `InboxV2` names are not
 renamed during this cleanup.
 
-Until `INB2-CLEAN-GATE`, application deployment is manual and guarded by
-`HULEE_CLEAN_SLATE_DEPLOY_UNLOCKED=true`; the variable must remain absent or
-false. The already running test environment is stopped/reset through the
-runtime-detachment and baseline tasks rather than being inferred from this
-repository workflow change.
+`INB2-CLEAN-GATE` passed on `2026-07-22`. The temporary manual unlock and
+confirmation controls are retired. A successful full `Check` for a push to
+`main` hands its exact checked SHA to the V2-only deployment workflow; no direct
+push or manual path can bypass the full gate. The exact remote
+reset/no-reconnect receipt is `docs/product/inbox-v2-clean-gate.md`. Provider
+egress remains disabled until a separate reviewed adapter activation.
 
 ## Historical Preserve Decision (Superseded)
 

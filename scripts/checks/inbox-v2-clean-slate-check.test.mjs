@@ -1,33 +1,54 @@
 import { describe, expect, it } from "vitest";
 
-import { validateInboxV2CleanSlateFreeze } from "./inbox-v2-clean-slate-check.mjs";
+import { validateInboxV2CleanSlateBoundary as validateInboxV2CleanSlateFreeze } from "./inbox-v2-clean-slate-check.mjs";
 
 const validInput = Object.freeze({
   deployWorkflow: `on:
-  workflow_dispatch:
-    inputs:
-      confirmation:
-        type: string
+  workflow_run:
+    workflows:
+      - Check
+    types:
+      - completed
+    branches:
+      - main
+
+env:
+  TARGET_SHA: \${{ github.event.workflow_run.head_sha }}
 
 jobs:
   deploy:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     steps:
-      - name: Enforce the Inbox V2 clean-slate deployment freeze
-        env:
-          CONFIRMATION: \${{ inputs.confirmation }}
-          UNLOCKED: \${{ vars.HULEE_CLEAN_SLATE_DEPLOY_UNLOCKED }}
+      - uses: actions/checkout@v4
+        with:
+          ref: \${{ env.TARGET_SHA }}
+      - name: Refuse a superseded main revision
         run: |
-          if [[ "$UNLOCKED" != "true" || "$CONFIRMATION" != "DEPLOY_CLEAN_SLATE_V2" ]]; then
-            echo "::error::Application deployment is frozen by INB2-CLEAN-001 until INB2-CLEAN-GATE passes."
+          latest_main_sha=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [ -z "$latest_main_sha" ] || [ "$latest_main_sha" != "$TARGET_SHA" ]; then
             exit 1
           fi
-          HULEE_SEED_ID_SEED
-          HULEE_PLATFORM_ADMIN_USER
-          HULEE_PLATFORM_ADMIN_PASS
-          require_non_placeholder_env_var "$required_seed_key"
+      - name: Deploy V2-only runtime
+        env:
+          SSH_KEY: \${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          for retired_bootstrap_key in HULEE_SEED_API_KEY HULEE_PLATFORM_ADMIN_PASS; do
+            grep "$retired_bootstrap_key" .env && exit 1
+          done
+          docker build --build-arg "HULEE_BUILD_REVISION=\${{ env.TARGET_SHA }}" -t "$IMAGE_NAME:\${{ env.TARGET_SHA }}" .
+          docker push "$IMAGE_NAME:\${{ env.TARGET_SHA }}"
+          HULEE_IMAGE=$IMAGE_NAME:\${{ env.TARGET_SHA }}
           docker rm "$stale_runtime"
           "\${compose[@]}" run --rm -T migrate`,
-  checkWorkflow: `pnpm test:inbox-v2:postgres
+  checkWorkflow: `name: Check
+concurrency:
+  group: check-\${{ github.workflow }}-\${{ github.ref }}
+  cancel-in-progress: true
+pnpm test:inbox-v2:postgres
 pnpm test:inbox-v2:conversation-head-integrity
 inbox-v2-disposable-lifecycle:
 inbox-v2-production-runtime-smoke:
@@ -83,6 +104,8 @@ timeout --signal=TERM 30s docker run`,
     const registration = registerTenant(input);
     createTenantRegistrationRepository(database).registerTenant({ registration });`,
   productionCompose: `services:
+  postgres:
+    image: postgres:16-alpine
   migrate:
     command: ["pnpm", "db:migrate"]
   seed:
@@ -109,89 +132,111 @@ timeout --signal=TERM 30s docker run`,
   runtimeSources: Object.freeze([])
 });
 
-describe("Inbox V2 clean-slate freeze check", () => {
-  it("accepts a fail-loud manual deploy freeze and retained V2 gates", () => {
+describe("Inbox V2 clean-slate boundary check", () => {
+  it("accepts a successful full-Check handoff and retained V2 gates", () => {
     expect(validateInboxV2CleanSlateFreeze(validInput)).toEqual([]);
   });
 
-  it("rejects a Web identity outside the foundation seed and site secret inheritance", () => {
+  it("rejects a Web identity outside the deterministic foundation seed", () => {
     const issues = validateInboxV2CleanSlateFreeze({
       ...validInput,
-      productionCompose: validInput.productionCompose
-        .replace("employee_local_1", "employee:local-dev")
-        .replace("  site:\n", "  site:\n    env_file:\n      - .env\n")
+      productionCompose: validInput.productionCompose.replace(
+        "employee_local_1",
+        "employee:local-dev"
+      )
     });
 
-    expect(issues).toEqual(
-      expect.arrayContaining([
-        "production Web identity must match the deterministic foundation seed",
-        "marketing site must not receive the application secret environment file"
-      ])
+    expect(issues).toContain(
+      "production Web identity must match the deterministic foundation seed"
     );
   });
 
-  it.each([
-    "HULEE_SEED_ID_SEED",
-    "HULEE_PLATFORM_ADMIN_USER",
-    "HULEE_PLATFORM_ADMIN_PASS"
-  ])("requires bootstrap key %s", (requiredBootstrapKey) => {
+  it.each(["postgres", "site"])(
+    "rejects application secret inheritance by %s",
+    (service) => {
+      const productionCompose = validInput.productionCompose.replace(
+        `  ${service}:\n`,
+        `  ${service}:\n    env_file:\n      - .env\n`
+      );
+
+      expect(
+        validateInboxV2CleanSlateFreeze({
+          ...validInput,
+          productionCompose
+        })
+      ).toContain(
+        `${service} must not receive the application secret environment file`
+      );
+    }
+  );
+
+  it("requires ordinary deploys to reject raw bootstrap credentials", () => {
     expect(
       validateInboxV2CleanSlateFreeze({
         ...validInput,
         deployWorkflow: validInput.deployWorkflow.replace(
-          requiredBootstrapKey,
-          "REMOVED_BOOTSTRAP_KEY"
+          "HULEE_SEED_API_KEY HULEE_PLATFORM_ADMIN_PASS",
+          "REMOVED_BOOTSTRAP_CREDENTIALS"
         )
       })
-    ).toContain(`foundation bootstrap must require ${requiredBootstrapKey}`);
+    ).toContain(
+      "ordinary deployment must reject raw one-time bootstrap credentials"
+    );
   });
 
-  it("rejects an automatic deploy and provider-enabled worker default", () => {
+  it("does not accept Check-handoff or bootstrap guards that exist only in comments", () => {
+    const deployWorkflow = validInput.deployWorkflow
+      .replace(
+        "  workflow_run:\n    workflows:\n      - Check\n    types:\n      - completed\n    branches:\n      - main\n",
+        "  workflow_run:\n    # workflows:\n    #   - Check\n    # types:\n    #   - completed\n    # branches:\n    #   - main\n"
+      )
+      .replace(
+        "          for retired_bootstrap_key in HULEE_SEED_API_KEY HULEE_PLATFORM_ADMIN_PASS; do",
+        "          # for retired_bootstrap_key in HULEE_SEED_API_KEY HULEE_PLATFORM_ADMIN_PASS; do"
+      );
+
+    expect(
+      validateInboxV2CleanSlateFreeze({ ...validInput, deployWorkflow })
+    ).toEqual(
+      expect.arrayContaining([
+        "deployment must wait for the completed full Check workflow on main",
+        "ordinary deployment must reject raw one-time bootstrap credentials"
+      ])
+    );
+  });
+
+  it("rejects a provider-enabled worker default", () => {
     const issues = validateInboxV2CleanSlateFreeze({
       ...validInput,
-      deployWorkflow: validInput.deployWorkflow.replace(
-        "  workflow_dispatch:",
-        "  workflow_dispatch:\n  push:"
-      ),
       configSource: `const defaultWorkerFeatures: readonly WorkerFeature[] = ["core", "telegram_bot"];`
     });
 
-    expect(issues).toContain(
-      "deploy workflow triggers must be exactly workflow_dispatch"
-    );
     expect(issues).toContain(
       "a worker without explicit features must be provider-free"
     );
   });
 
   it.each([
-    ["flow-style push", `on: [push, workflow_dispatch]`],
+    ["flow-style trigger", `on: [workflow_run]`],
     [
-      "quoted push",
+      "missing workflow run",
       validInput.deployWorkflow.replace(
-        "  workflow_dispatch:",
-        "  workflow_dispatch:\n  'push':"
-      )
-    ],
-    [
-      "spaced push key",
-      validInput.deployWorkflow.replace(
-        "  workflow_dispatch:",
-        "  workflow_dispatch:\n  push :"
+        "  workflow_run:\n    workflows:\n      - Check\n    types:\n      - completed\n    branches:\n      - main\n",
+        ""
       )
     ],
     [
       "scheduled trigger",
       validInput.deployWorkflow.replace(
-        "  workflow_dispatch:",
-        "  workflow_dispatch:\n  schedule:"
+        "  workflow_run:",
+        "  workflow_run:\n  schedule:\n    - cron: '0 0 * * *'"
       )
     ],
     [
-      "workflow-run trigger",
+      "direct push trigger",
       validInput.deployWorkflow.replace(
-        "  workflow_dispatch:",
-        "  workflow_dispatch:\n  workflow_run:"
+        "  workflow_run:",
+        "  workflow_run:\n  push:"
       )
     ]
   ])("rejects %s", (_label, deployWorkflow) => {
@@ -200,39 +245,154 @@ describe("Inbox V2 clean-slate freeze check", () => {
         ...validInput,
         deployWorkflow
       })
-    ).toContain("deploy workflow triggers must be exactly workflow_dispatch");
+    ).toContain(
+      "deploy workflow trigger must be exactly the completed Check workflow"
+    );
   });
 
-  it("rejects unlock tokens that exist only in comments", () => {
-    const deployWorkflow = `on:
-  workflow_dispatch:
-jobs:
-  deploy:
-    steps:
-      # CONFIRMATION: \${{ inputs.confirmation }}
-      # UNLOCKED: \${{ vars.HULEE_CLEAN_SLATE_DEPLOY_UNLOCKED }}
-      # DEPLOY_CLEAN_SLATE_V2 exit 1`;
+  it("rejects Check handoff from a non-main branch", () => {
+    expect(
+      validateInboxV2CleanSlateFreeze({
+        ...validInput,
+        deployWorkflow: validInput.deployWorkflow.replace("- main", "- dev")
+      })
+    ).toContain(
+      "deployment must wait for the completed full Check workflow on main"
+    );
+  });
+
+  it.each([
+    [
+      "github.event.workflow_run.conclusion == 'success'",
+      "deployment must require a successful full Check workflow"
+    ],
+    [
+      "github.event.workflow_run.event == 'push'",
+      "deployment must reject pull-request Check runs"
+    ],
+    [
+      "github.event.workflow_run.head_branch == 'main'",
+      "deployment must require a checked main-branch revision"
+    ],
+    [
+      "github.event.workflow_run.head_repository.full_name == github.repository",
+      "deployment must require a Check run from the same repository"
+    ]
+  ])("requires Check handoff guard %s", (guard, message) => {
+    expect(
+      validateInboxV2CleanSlateFreeze({
+        ...validInput,
+        deployWorkflow: validInput.deployWorkflow.replace(guard, "true")
+      })
+    ).toContain(message);
+  });
+
+  it("requires the checked head SHA and rejects workflow-run github.sha", () => {
+    const deployWorkflow = validInput.deployWorkflow.replace(
+      "TARGET_SHA: ${{ github.event.workflow_run.head_sha }}",
+      "TARGET_SHA: ${{ github.sha }}"
+    );
 
     expect(
       validateInboxV2CleanSlateFreeze({ ...validInput, deployWorkflow })
     ).toEqual(
       expect.arrayContaining([
-        "deploy freeze must be the first deployment step",
-        "deploy guard must bind confirmation input and clean-slate unlock variable",
-        "deploy guard must fail loudly unless both unlock factors are exact"
+        "deployment must bind the exact SHA that passed the full Check workflow",
+        "workflow-run deployment must not build the unrelated event github.sha"
       ])
     );
   });
 
-  it("rejects a freeze guard placed after checkout", () => {
-    const deployWorkflow = validInput.deployWorkflow.replace(
-      "    steps:\n      - name: Enforce the Inbox V2 clean-slate deployment freeze",
-      "    steps:\n      - uses: actions/checkout@v4\n      - name: Enforce the Inbox V2 clean-slate deployment freeze"
+  it("pins checkout, image build, tag, push and release to TARGET_SHA", () => {
+    const deployWorkflow = validInput.deployWorkflow.replaceAll(
+      "${{ env.TARGET_SHA }}",
+      "latest"
     );
 
     expect(
       validateInboxV2CleanSlateFreeze({ ...validInput, deployWorkflow })
-    ).toContain("deploy freeze must be the first deployment step");
+    ).toEqual(
+      expect.arrayContaining([
+        "deployment checkout must use the exact checked TARGET_SHA",
+        "production image revision must use the exact checked TARGET_SHA",
+        "production image tag must use the exact checked TARGET_SHA",
+        "production image push must use the exact checked TARGET_SHA",
+        "release environment must use the exact checked TARGET_SHA"
+      ])
+    );
+  });
+
+  it("rejects removal of the superseded-main revision fence", () => {
+    const deployWorkflow = validInput.deployWorkflow
+      .replace("git ls-remote origin refs/heads/main", "echo stale")
+      .replace(
+        '[ "$latest_main_sha" != "$TARGET_SHA" ]',
+        '[ "$latest_main_sha" = "$TARGET_SHA" ]'
+      );
+
+    expect(
+      validateInboxV2CleanSlateFreeze({ ...validInput, deployWorkflow })
+    ).toEqual(
+      expect.arrayContaining([
+        "deployment must resolve the current main revision before using secrets",
+        "deployment must reject a checked revision superseded on main"
+      ])
+    );
+  });
+
+  it("requires the superseded-main fence before secret-bearing steps", () => {
+    const deployWorkflow = `${validInput.deployWorkflow.replace(
+      "git ls-remote origin refs/heads/main",
+      "echo delayed-revision-fence"
+    )}\ngit ls-remote origin refs/heads/main`;
+
+    expect(
+      validateInboxV2CleanSlateFreeze({ ...validInput, deployWorkflow })
+    ).toContain(
+      "deployment must reject a superseded revision before secret-bearing steps"
+    );
+  });
+
+  it("requires superseded full Check runs to be cancelled per branch", () => {
+    expect(
+      validateInboxV2CleanSlateFreeze({
+        ...validInput,
+        checkWorkflow: validInput.checkWorkflow.replace(
+          "  cancel-in-progress: true",
+          "  cancel-in-progress: false"
+        )
+      })
+    ).toContain(
+      "full Check workflow must cancel superseded runs for the same branch"
+    );
+  });
+
+  it("requires the full Check workflow name used by the handoff", () => {
+    expect(
+      validateInboxV2CleanSlateFreeze({
+        ...validInput,
+        checkWorkflow: validInput.checkWorkflow.replace(
+          "name: Check",
+          "name: Verify"
+        )
+      })
+    ).toContain("full Check workflow name must match the deployment handoff");
+  });
+
+  it.each([
+    "HULEE_CLEAN_SLATE_DEPLOY_UNLOCKED",
+    "DEPLOY_CLEAN_SLATE_V2",
+    "bootstrap_foundation",
+    "inputs.confirmation"
+  ])("rejects retired temporary gate token %s", (retiredGateToken) => {
+    expect(
+      validateInboxV2CleanSlateFreeze({
+        ...validInput,
+        deployWorkflow: `${validInput.deployWorkflow}\n# ${retiredGateToken}`
+      })
+    ).toContain(
+      `completed clean-slate gate must not retain ${retiredGateToken}`
+    );
   });
 
   it("rejects removal of retained V2 integrity coverage", () => {

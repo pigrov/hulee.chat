@@ -11,20 +11,30 @@ server `.env`; do not add provider tokens or this key to GitHub Secrets.
 and api containers for internal API headers. Keep the same value in both
 containers through the server `.env`.
 
-## Deployment freeze
+## V2-only deployment boundary
 
-Application deployment remains frozen until `INB2-CLEAN-GATE` passes. The
-workflow is manual (`workflow_dispatch`) and proceeds only when repository
-variable `HULEE_CLEAN_SLATE_DEPLOY_UNLOCKED` is `true` and the operator enters
-the exact `DEPLOY_CLEAN_SLATE_V2` confirmation. These controls are an explicit
-temporary exception gate, not permission to restore Inbox V1 or provider I/O.
+`INB2-CLEAN-GATE` passed on `2026-07-22`; its operational receipt is
+`docs/product/inbox-v2-clean-gate.md`. The temporary deployment freeze, unlock
+variable, confirmation token and one-time bootstrap input are retired. A push
+to `main` reaches the V2-only deployment only after every job in the full
+`Check` workflow succeeds. The deployment checks out and labels the exact
+`workflow_run.head_sha`; there is no direct-push or manual bypass around that
+handoff. Before any registry or production-host secret-bearing step, it also
+rejects a checked SHA that is no longer the current `main` revision, so
+out-of-order CI completion cannot roll production back. The `Check` workflow
+cancels superseded runs for the same branch, preventing an older completion from
+displacing the latest pending delivery.
 
-The one clean-slate deployment may set the manual
-`bootstrap_foundation=true` input after replacing the disposable PostgreSQL and
-MinIO volumes. That input runs `db:seed:foundation` exactly once after the
-baseline migration and before API/Web/worker startup. Leave it `false` for
-ordinary deployments; the foundation seed deliberately rejects an accidental
-repeat.
+This re-enables delivery, not provider traffic. Every deploy still verifies the
+exact source revision and schema epoch, removes stopped data-plane runtimes
+before migration, rejects legacy provider containers/configuration and starts
+only the `core` worker with a disabled/unavailable egress profile.
+
+Ordinary deployment refuses a live `.env` containing the one-time
+`HULEE_SEED_API_KEY` or `HULEE_PLATFORM_ADMIN_PASS`. On a newly approved fresh
+installation, configure those values only for the explicit foundation seed,
+store the resulting operator credentials outside the runtime environment, then
+remove both values and recreate all containers before normal deployment.
 
 The known pre-production runtime drain is recorded separately in
 `docs/product/inbox-v2-clean-002-runtime-detachment.md`. Do not infer remote
@@ -46,8 +56,8 @@ cp /path/to/env.example /srv/hulee-chat/.env
 chmod 600 /srv/hulee-chat/.env
 ```
 
-After the first deploy creates containers and runs migrations, the foundation
-bootstrap seed can be run once:
+After the first migration of an approved fresh installation, the foundation
+bootstrap seed can be run exactly once:
 
 ```bash
 cd /srv/hulee-chat
@@ -56,7 +66,10 @@ docker compose --env-file .env --env-file .release.env -f docker-compose.yml --p
 
 This seed creates only the platform foundation: tenant, administrator and API
 key. It does not create Inbox clients, conversations, messages, channel
-connectors or provider credentials.
+connectors or provider credentials. Set `HULEE_SEED_ID_SEED=local`,
+`HULEE_WEB_TENANT_ID=tenant_local_1` and
+`HULEE_WEB_EMPLOYEE_ID=employee_local_1` together for the deterministic
+foundation identity used by the current pre-production profile.
 
 The nginx config in `deploy/nginx/chat.hulee.ru.conf` is a template for the
 existing `transcribe_nginx` reverse proxy. Apply it only after the app container
@@ -66,7 +79,8 @@ The marketing site for `hulee.ru` runs as a separate `hulee_site` container
 from the same production image. The nginx config in
 `deploy/nginx/hulee.ru.conf` replaces the current inline placeholder page and
 proxies the apex domain to that container. Keep `chat.hulee.ru` pointed at
-`hulee_chat_web`.
+`hulee_chat_web`. The site and infrastructure containers receive only their
+explicit environment variables, not the application secret `.env` payload.
 
 ## Object storage
 
@@ -90,10 +104,9 @@ composition.
 
 The deploy workflow rejects a legacy
 `HULEE_PROVIDER_EGRESS_ENABLED=true` setting and any non-core
-`HULEE_WORKER_FEATURES` value. Before unlocking deployment, operators must also
-drain and remove any old `hulee_chat_worker_provider_egress` or
-`hulee_chat_vpn_gateway` container; the workflow refuses to deploy while either
-container still exists.
+`HULEE_WORKER_FEATURES` value. Operators must also drain and remove any old
+`hulee_chat_worker_provider_egress` or `hulee_chat_vpn_gateway` container; the
+workflow refuses to deploy while either container still exists.
 
 Provider egress may return only through an explicitly reviewed Inbox V2 adapter
 activation after the clean-slate gate. Retained egress policy and diagnostics
@@ -109,9 +122,9 @@ The API health response publishes the verified epoch, migration count and build
 revision. The production image carries the same build revision and epoch as OCI
 labels, and deployment verifies both labels as well as the exact SHA image tag.
 
-For the one-time epoch replacement, remove every stopped old application
-container and rotate the database password, MinIO credential, encryption key,
-internal API secret and bootstrap API key before creating the new volumes.
-Delete explicitly inventoried secret-bearing `.env` and SQL backup copies.
-Those rotations are the reconnect fence for pre-gate images that predate the
-runtime assertion; exact-image and epoch checks protect all subsequent images.
+The known pre-production epoch replacement is complete. Any future separately
+approved disposable replacement must again remove every old application and
+infrastructure container, rotate the database, MinIO, encryption, internal API
+and bootstrap credentials before creating new volumes, and delete every
+explicitly inventoried secret-bearing backup. Do not turn that operator action
+into a generic shared-SaaS reset command.

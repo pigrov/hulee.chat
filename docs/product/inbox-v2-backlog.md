@@ -2,7 +2,7 @@
 
 Status: `active`  
 Canonical task tracker: this file  
-Last updated: `2026-07-20`
+Last updated: `2026-07-22`
 
 ## Purpose
 
@@ -3023,9 +3023,10 @@ dual materialization, backfill, N-1 V1 runtime or soak window is required.
     Evidence:
     `docs/product/inbox-v2-clean-003-residual-v1-removal.md`.
 
-- [ ] `INB2-CLEAN-GATE` Verify the V2-only clean-slate boundary.
-  - State: `in_progress`; Priority: `P0`; Started: `2026-07-22`; Owner:
-    `Codex`; Depends on: `INB2-CLEAN-002`, `INB2-DB-011`, `INB2-CLEAN-003`.
+- [x] `INB2-CLEAN-GATE` Verify the V2-only clean-slate boundary.
+  - State: `done`; Priority: `P0`; Started: `2026-07-22`; Finished:
+    `2026-07-22`; Owner: `Codex`; Depends on: `INB2-CLEAN-002`,
+    `INB2-DB-011`, `INB2-CLEAN-003`.
   - Acceptance: one baseline and one canonical Inbox implementation remain;
     stale images/epochs fail closed; provider egress is disabled until a V2
     adapter path is explicitly activated. Passing this gate may remove the
@@ -3033,7 +3034,15 @@ dual materialization, backfill, N-1 V1 runtime or soak window is required.
   - Verification: clean install/reset, V2 PostgreSQL repositories,
     schema/ACL/invariants, API/Web/worker startup and allowlisted V1 search pass;
     remote DB/object/provider state is reset and no V1 process reconnects.
-    Evidence: -
+    Evidence: one baseline/journal and `312/257` public/V2 tables; `0/0`
+    forbidden V1 relations/types; exact-image API/Web/worker/site startup;
+    provider/source/secret/file/object state stayed zero through bounded remote
+    observation; `8` stale images and `11` legacy backups removed; final local
+    full gate passed `349/4041`, and CI check/runtime/lifecycle/PG jobs plus the
+    one-time deploy passed; permanent delivery now accepts only the exact SHA
+    from a successful full `Check` workflow for a push to `main` and rejects a
+    superseded SHA before secret-bearing steps. Detailed receipt:
+    `docs/product/inbox-v2-clean-gate.md`.
 
 - [ ] `INB2-MIG-002` Implement additive compatibility and dual materialization.
   - State: `deferred`; Priority: `P0`; Superseded and excluded from active scope
@@ -3417,3 +3426,5 @@ the task state, checkbox and evidence above.
 | 2026-07-20 | `INB2-CLEAN-001`   | ADR0016; guard/config 2/33; full unit 382/4235; DB/type/lint/aux gates     | task commit  | Codex + three independent reviews |
 | 2026-07-20 | `INB2-CLEAN-002`   | Runtime detached; remote drain; focused 10/177; full 386/4261 + gates      | task commit  | Codex + independent final reviews |
 | 2026-07-21 | `INB2-DB-011`      | One baseline; owner-alt/catalog 14619/0; reset 1/2; PG 34/373; full gate   | task commit  | Codex + independent final review  |
+| 2026-07-22 | `INB2-CLEAN-003`   | V1 code absent; source 79/1211; PG 34/373; full 348/4013 + all gates       | `de58cba`    | Codex + independent final review  |
+| 2026-07-22 | `INB2-CLEAN-GATE`  | CI clean runtime/lifecycle/PG; remote 312/257, V1 0/0, reconnect 0         | task commit  | Codex + independent reviews       |
