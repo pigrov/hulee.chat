@@ -172,7 +172,7 @@ services:
       HULEE_SCHEMA_EPOCH: preproduction-inbox-v2-1
       HULEE_INTERNAL_API_BASE_URL: http://api:3000
       HULEE_WEB_TENANT_ID: ${HULEE_WEB_TENANT_ID:-tenant_local_1}
-      HULEE_WEB_EMPLOYEE_ID: ${HULEE_WEB_EMPLOYEE_ID:-employee:local-dev}
+      HULEE_WEB_EMPLOYEE_ID: ${HULEE_WEB_EMPLOYEE_ID:-employee_local_1}
     command: ["pnpm", "--filter", "@hulee/web", "start"]
     networks:
       - default
@@ -193,8 +193,6 @@ services:
   site:
     image: ${HULEE_IMAGE:?HULEE_IMAGE is required}
     container_name: hulee_site
-    env_file:
-      - .env
     environment:
       NODE_ENV: production
       HULEE_SITE_BASE_URL: ${HULEE_SITE_BASE_URL:-https://hulee.ru}

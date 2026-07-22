@@ -21,6 +21,9 @@ jobs:
             echo "::error::Application deployment is frozen by INB2-CLEAN-001 until INB2-CLEAN-GATE passes."
             exit 1
           fi
+          HULEE_SEED_ID_SEED
+          HULEE_PLATFORM_ADMIN_USER
+          HULEE_PLATFORM_ADMIN_PASS
           require_non_placeholder_env_var "$required_seed_key"
           docker rm "$stale_runtime"
           "\${compose[@]}" run --rm -T migrate`,
@@ -95,7 +98,13 @@ timeout --signal=TERM 30s docker run`,
     healthcheck:
       test: ["CMD-SHELL", "grep -q -- '@hulee/worker' /proc/1/cmdline"]
   web:
-    command: ["pnpm", "--filter", "@hulee/web", "start"]`,
+    environment:
+      HULEE_WEB_EMPLOYEE_ID: \${HULEE_WEB_EMPLOYEE_ID:-employee_local_1}
+    command: ["pnpm", "--filter", "@hulee/web", "start"]
+  site:
+    image: \${HULEE_IMAGE:?HULEE_IMAGE is required}
+    environment:
+      NODE_ENV: production`,
   legacyFilePaths: Object.freeze([]),
   runtimeSources: Object.freeze([])
 });
@@ -103,6 +112,38 @@ timeout --signal=TERM 30s docker run`,
 describe("Inbox V2 clean-slate freeze check", () => {
   it("accepts a fail-loud manual deploy freeze and retained V2 gates", () => {
     expect(validateInboxV2CleanSlateFreeze(validInput)).toEqual([]);
+  });
+
+  it("rejects a Web identity outside the foundation seed and site secret inheritance", () => {
+    const issues = validateInboxV2CleanSlateFreeze({
+      ...validInput,
+      productionCompose: validInput.productionCompose
+        .replace("employee_local_1", "employee:local-dev")
+        .replace("  site:\n", "  site:\n    env_file:\n      - .env\n")
+    });
+
+    expect(issues).toEqual(
+      expect.arrayContaining([
+        "production Web identity must match the deterministic foundation seed",
+        "marketing site must not receive the application secret environment file"
+      ])
+    );
+  });
+
+  it.each([
+    "HULEE_SEED_ID_SEED",
+    "HULEE_PLATFORM_ADMIN_USER",
+    "HULEE_PLATFORM_ADMIN_PASS"
+  ])("requires bootstrap key %s", (requiredBootstrapKey) => {
+    expect(
+      validateInboxV2CleanSlateFreeze({
+        ...validInput,
+        deployWorkflow: validInput.deployWorkflow.replace(
+          requiredBootstrapKey,
+          "REMOVED_BOOTSTRAP_KEY"
+        )
+      })
+    ).toContain(`foundation bootstrap must require ${requiredBootstrapKey}`);
   });
 
   it("rejects an automatic deploy and provider-enabled worker default", () => {

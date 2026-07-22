@@ -155,7 +155,10 @@ jobs:
               HULEE_SEED_PRODUCT_NAME \
               HULEE_SEED_ADMIN_EMAIL \
               HULEE_SEED_API_KEY \
-              HULEE_SEED_API_KEY_NAME; do
+              HULEE_SEED_API_KEY_NAME \
+              HULEE_SEED_ID_SEED \
+              HULEE_PLATFORM_ADMIN_USER \
+              HULEE_PLATFORM_ADMIN_PASS; do
               require_non_placeholder_env_var "$required_seed_key"
             done
           fi

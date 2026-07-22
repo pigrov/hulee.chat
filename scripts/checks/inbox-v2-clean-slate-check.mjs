@@ -315,6 +315,18 @@ function validateRuntimeSchemaEpochBoundary(issues, input) {
     'require_non_placeholder_env_var "$required_seed_key"',
     "foundation bootstrap must reject missing or placeholder secrets"
   );
+  for (const requiredBootstrapKey of [
+    "HULEE_SEED_ID_SEED",
+    "HULEE_PLATFORM_ADMIN_USER",
+    "HULEE_PLATFORM_ADMIN_PASS"
+  ]) {
+    requireText(
+      issues,
+      input.deployWorkflow,
+      requiredBootstrapKey,
+      `foundation bootstrap must require ${requiredBootstrapKey}`
+    );
+  }
 
   let webPackage;
   try {
@@ -354,6 +366,18 @@ function validateRuntimeSchemaEpochBoundary(issues, input) {
   ]) {
     requireText(issues, input.productionCompose, literal, message);
   }
+  requireText(
+    issues,
+    input.productionCompose,
+    "HULEE_WEB_EMPLOYEE_ID: ${HULEE_WEB_EMPLOYEE_ID:-employee_local_1}",
+    "production Web identity must match the deterministic foundation seed"
+  );
+  forbidMatch(
+    issues,
+    extractTopLevelYamlEntry(input.productionCompose, "site"),
+    /^\s+env_file:\s*$/mu,
+    "marketing site must not receive the application secret environment file"
+  );
   requireText(
     issues,
     input.apiHealthSource,
