@@ -52,7 +52,7 @@ import {
   loadSourceConnections,
   loadTelegramIntegration,
   type TelegramIntegrationViewModel
-} from "../../../src/inbox-api-client";
+} from "../../../src/internal-api-client";
 import {
   getWebDatabase,
   resolveCurrentWebAccessSession

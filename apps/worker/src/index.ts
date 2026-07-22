@@ -39,11 +39,11 @@ import {
 } from "@hulee/db";
 import { CoreError } from "@hulee/core";
 
-import type { OutboxHandler } from "./outbox-processor";
+import type { ProviderControlOutboxHandler } from "./provider-control-outbox";
 import {
   createTenantSecretResolver,
   type SecretResolver
-} from "./telegram-outbound-dispatcher";
+} from "./secret-resolver";
 import {
   createTelegramProviderOperationDispatcher,
   type TelegramProviderOperationBotApiClientFactory
@@ -317,7 +317,7 @@ function assertWorkerInboxV2SourceProcessingRuntimeCapabilities(
   }
 }
 
-export type WorkerOutboxHandlerOptions = {
+export type WorkerProviderControlOutboxHandlerOptions = {
   database: HuleeDatabase;
   secretEncryptionKey?: string;
   secretResolver?: SecretResolver;
@@ -329,9 +329,9 @@ export type WorkerOutboxHandlerOptions = {
   publicWebhookBaseUrl?: string;
 };
 
-export function createWorkerOutboxHandler(
-  options: WorkerOutboxHandlerOptions
-): OutboxHandler {
+export function createWorkerProviderControlOutboxHandler(
+  options: WorkerProviderControlOutboxHandlerOptions
+): ProviderControlOutboxHandler {
   const tenantSecrets = options.secretEncryptionKey
     ? createSqlTenantSecretRepository(
         options.database,
@@ -567,15 +567,11 @@ function createWorkerDeploymentEgressRuntime(input: {
   });
 }
 
-export { processOutboxBatch } from "./outbox-processor";
 export { createPolicyAwareDeploymentEgressRuntime } from "./policy-egress-runtime";
 export {
   createEnvSecretResolver,
-  createTenantSecretResolver,
-  createTelegramOutboundDispatcher
-} from "./telegram-outbound-dispatcher";
-export { runTelegramPollingSweep } from "./telegram-polling-sweeper";
-export { createTelegramAttachmentTransferSweeper } from "./telegram-attachment-transfer";
+  createTenantSecretResolver
+} from "./secret-resolver";
 export { createTelegramProviderOperationDispatcher } from "./telegram-provider-operation-dispatcher";
 export { createTelegramProviderValidationDispatcher } from "./telegram-provider-validation-dispatcher";
 export {
@@ -635,33 +631,10 @@ export {
   sanitizeSecurityDenialRetentionDatabaseUrl
 } from "./security-denial-retention-database-config";
 export type {
-  ClaimPendingOutboxInput,
-  MarkOutboxFailedInput,
-  MarkOutboxProcessedInput,
-  OutboxHandler,
   OutboxRecord,
-  OutboxRepository,
-  ProcessOutboxBatchInput,
-  ProcessOutboxBatchResult
-} from "./outbox-processor";
-export type {
-  SecretResolver,
-  TelegramBotApiClientFactory,
-  TelegramOutboundDispatcherOptions
-} from "./telegram-outbound-dispatcher";
-export type {
-  TelegramPollingBotApiClientFactory,
-  TelegramPollingSweepOptions,
-  TelegramPollingSweepResult
-} from "./telegram-polling-sweeper";
-export type {
-  TelegramAttachmentTransferBotApiClient,
-  TelegramAttachmentTransferBotApiClientFactory,
-  TelegramAttachmentTransferObjectStorage,
-  TelegramAttachmentTransferSweepResult,
-  TelegramAttachmentTransferSweeper,
-  TelegramAttachmentTransferSweeperOptions
-} from "./telegram-attachment-transfer";
+  ProviderControlOutboxHandler
+} from "./provider-control-outbox";
+export type { SecretResolver } from "./secret-resolver";
 export type {
   TelegramProviderOperationBotApiClient,
   TelegramProviderOperationBotApiClientFactory,

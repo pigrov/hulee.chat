@@ -7,27 +7,6 @@ import {
 } from "./internal-api-access-policy";
 
 describe("web internal API access policy", () => {
-  it("does not require a signed override for service-authorized inbox routes", () => {
-    expect(
-      resolveRequiredInternalApiEffectivePermissionOverride({
-        method: "GET",
-        path: "/internal/v1/inbox?assigned=me"
-      })
-    ).toBeUndefined();
-    expect(
-      resolveRequiredInternalApiEffectivePermissionOverride({
-        method: "POST",
-        path: "/internal/v1/inbox/conversations/conversation-1/replies"
-      })
-    ).toBeUndefined();
-    expect(
-      resolveRequiredInternalApiEffectivePermissionOverride({
-        method: "PATCH",
-        path: "/internal/v1/inbox/conversations/conversation-1/routing"
-      })
-    ).toBeUndefined();
-  });
-
   it("keeps service-authorized admin routes free of coarse overrides", () => {
     expect(
       resolveRequiredInternalApiEffectivePermissionOverride({

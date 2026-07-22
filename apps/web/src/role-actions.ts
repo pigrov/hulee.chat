@@ -21,7 +21,7 @@ import {
   revokeRbacDirectGrant,
   revokeRbacRoleBinding,
   updateRbacRole
-} from "./inbox-api-client";
+} from "./internal-api-client";
 import { roleActionFailureStatus } from "./role-action-status";
 import type { RoleActionCode, RoleActionState } from "./role-action-state";
 import { findRoleTemplate, uniqueRoleTemplateName } from "./role-templates";

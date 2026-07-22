@@ -41,13 +41,10 @@ export type OrgStructureAuditAction =
   | "employee_team_membership.updated"
   | "employee_queue_membership.updated";
 
-export type ConversationAuditAction = "conversation.routing.updated";
-
 export type SecurityAuditAction =
   | AuthSecurityAuditAction
   | AccessAuditAction
-  | OrgStructureAuditAction
-  | ConversationAuditAction;
+  | OrgStructureAuditAction;
 
 export type AccessAuditEntityType = "role" | "role_binding" | "direct_grant";
 
@@ -55,7 +52,6 @@ export type SecurityAuditEntityType =
   | "session"
   | AccessAuditEntityType
   | "employee"
-  | "conversation"
   | "org_unit"
   | "team"
   | "work_queue";
@@ -91,10 +87,6 @@ export type SecurityAuditAuthorization =
       readonly orgUnitIds: readonly string[];
       readonly teamIds: readonly string[];
       readonly queueIds: readonly string[];
-    }
-  | {
-      readonly kind: "conversation";
-      readonly conversationId: string;
     };
 
 export type ListAccessAuditRecordsInput = {
@@ -110,33 +102,11 @@ export type ListAccessAuditRecordsInput = {
   to?: Date;
 };
 
-export type ConversationRoutingAuditRecord = {
-  id: string;
-  tenantId: TenantId;
-  actorEmployeeId?: EmployeeId;
-  conversationId: string;
-  metadata: Record<string, unknown>;
-  occurredAt: string;
-};
-
-export type ListConversationRoutingAuditRecordsInput = {
-  tenantId: TenantId;
-  authorization: SecurityAuditAuthorization;
-  conversationId?: string;
-  limit: number;
-  actorEmployeeId?: EmployeeId;
-  from?: Date;
-  to?: Date;
-};
-
 export type SecurityAuditRepository = {
   record(record: SecurityAuditRecord): Promise<void>;
   listAccessRecords(
     input: ListAccessAuditRecordsInput
   ): Promise<readonly AccessAuditRecord[]>;
-  listConversationRoutingRecords(
-    input: ListConversationRoutingAuditRecordsInput
-  ): Promise<readonly ConversationRoutingAuditRecord[]>;
 };
 
 export function createSqlSecurityAuditRepository(
@@ -158,22 +128,6 @@ export function createSqlSecurityAuditRepository(
       const records = result.rows.map(mapAccessAuditRow);
 
       assertTenantScopedAccessAuditRows(input.tenantId, records);
-
-      return filterSecurityAuditRecordsByAuthorization(
-        input.authorization,
-        records
-      );
-    },
-
-    async listConversationRoutingRecords(
-      input: ListConversationRoutingAuditRecordsInput
-    ): Promise<readonly ConversationRoutingAuditRecord[]> {
-      const result = await rawExecutor.execute<ConversationRoutingAuditRow>(
-        buildListConversationRoutingAuditRecordsSql(input)
-      );
-      const records = result.rows.map(mapConversationRoutingAuditRow);
-
-      assertTenantScopedConversationRoutingAuditRows(input, records);
 
       return filterSecurityAuditRecordsByAuthorization(
         input.authorization,
@@ -213,41 +167,6 @@ export function buildInsertSecurityAuditLogSql(
   `;
 }
 
-export function buildListConversationRoutingAuditRecordsSql(
-  input: ListConversationRoutingAuditRecordsInput
-): SQL {
-  const actorEmployeeId = input.actorEmployeeId ?? null;
-  const conversationId = normalizeOptionalFilter(input.conversationId);
-  const from = input.from ?? null;
-  const to = input.to ?? null;
-  const limit = normalizeLimit(input.limit);
-  const authorizationPredicate = buildSecurityAuditAuthorizationPredicate(
-    input.authorization,
-    "routing",
-    conversationId
-  );
-
-  return sql`
-    select id,
-           tenant_id,
-           actor_employee_id,
-           entity_id,
-           metadata,
-           created_at
-    from audit_log
-    where tenant_id = ${input.tenantId}
-      and action = 'conversation.routing.updated'
-      and entity_type = 'conversation'
-      and (${actorEmployeeId}::text is null or actor_employee_id = ${actorEmployeeId})
-      and (${conversationId}::text is null or entity_id = ${conversationId})
-      and (${from}::timestamptz is null or created_at >= ${from})
-      and (${to}::timestamptz is null or created_at <= ${to})
-      and ${authorizationPredicate}
-    order by created_at desc
-    limit ${limit}
-  `;
-}
-
 export function buildListAccessAuditRecordsSql(
   input: ListAccessAuditRecordsInput
 ): SQL {
@@ -260,8 +179,7 @@ export function buildListAccessAuditRecordsSql(
   const to = input.to ?? null;
   const limit = normalizeLimit(input.limit);
   const authorizationPredicate = buildSecurityAuditAuthorizationPredicate(
-    input.authorization,
-    "access"
+    input.authorization
   );
 
   return sql`
@@ -305,15 +223,6 @@ type AccessAuditRow = {
   created_at: SqlTimestamp;
 };
 
-type ConversationRoutingAuditRow = {
-  id: string;
-  tenant_id: string;
-  actor_employee_id: string | null;
-  entity_id: string;
-  metadata: unknown;
-  created_at: SqlTimestamp;
-};
-
 function mapAccessAuditRow(row: AccessAuditRow): AccessAuditRecord {
   if (
     !isAccessAuditAction(row.action) ||
@@ -336,21 +245,6 @@ function mapAccessAuditRow(row: AccessAuditRow): AccessAuditRecord {
   };
 }
 
-function mapConversationRoutingAuditRow(
-  row: ConversationRoutingAuditRow
-): ConversationRoutingAuditRecord {
-  return {
-    id: row.id,
-    tenantId: row.tenant_id as TenantId,
-    actorEmployeeId: row.actor_employee_id
-      ? (row.actor_employee_id as EmployeeId)
-      : undefined,
-    conversationId: row.entity_id,
-    metadata: mapMetadata(row.metadata),
-    occurredAt: mapSqlTimestamp(row.created_at)
-  };
-}
-
 function normalizeLimit(limit: number): number {
   if (!Number.isInteger(limit) || limit < 1) {
     return 50;
@@ -368,24 +262,10 @@ function normalizeOptionalFilter(value: string | undefined): string | null {
 }
 
 function buildSecurityAuditAuthorizationPredicate(
-  authorization: SecurityAuditAuthorization,
-  listKind: "access" | "routing",
-  routeConversationId: string | null = null
+  authorization: SecurityAuditAuthorization
 ): SQL {
   if (authorization.kind === "tenant") {
     return sql`true`;
-  }
-
-  if (authorization.kind === "conversation") {
-    const conversationId = normalizeOptionalFilter(
-      authorization.conversationId
-    );
-
-    return listKind === "routing" &&
-      conversationId !== null &&
-      routeConversationId === conversationId
-      ? sql`entity_id = ${conversationId}`
-      : sql`false`;
   }
 
   const scopePredicates = [
@@ -688,24 +568,6 @@ function assertTenantScopedAccessAuditRows(
   records: readonly AccessAuditRecord[]
 ): void {
   if (records.some((record) => record.tenantId !== tenantId)) {
-    throw new CoreError("tenant.boundary_violation");
-  }
-}
-
-function assertTenantScopedConversationRoutingAuditRows(
-  input: ListConversationRoutingAuditRecordsInput,
-  records: readonly ConversationRoutingAuditRecord[]
-): void {
-  if (
-    records.some(
-      (record) =>
-        record.tenantId !== input.tenantId ||
-        (input.conversationId !== undefined &&
-          record.conversationId !== input.conversationId) ||
-        (input.authorization.kind === "conversation" &&
-          record.conversationId !== input.authorization.conversationId)
-    )
-  ) {
     throw new CoreError("tenant.boundary_violation");
   }
 }

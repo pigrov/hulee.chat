@@ -16,7 +16,7 @@ import type { EgressRuntime, TelegramBotApiSettings } from "@hulee/modules";
 import { TelegramAdapterError } from "@hulee/modules";
 import { describe, expect, it, vi } from "vitest";
 
-import type { OutboxRecord } from "./outbox-processor";
+import type { OutboxRecord } from "./provider-control-outbox";
 import { createTelegramProviderValidationDispatcher } from "./telegram-provider-validation-dispatcher";
 
 const tenantId = "tenant_worker_provider_validation" as TenantId;

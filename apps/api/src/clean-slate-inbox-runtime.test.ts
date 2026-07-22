@@ -10,8 +10,7 @@ describe("Inbox V2 clean-slate API boundary", () => {
     const commands = createCleanSlatePublicApiCommandService();
     const invocations = [
       () => commands.registerClient({} as never, {} as never),
-      () =>
-        commands.acceptInboundMessage({} as never, {} as never, {} as never),
+      () => commands.acceptInboundMessage({} as never, {} as never),
       () => commands.queueOutboundMessage({} as never, {} as never),
       () => commands.getDeliveryStatus({} as never, "message-1")
     ];

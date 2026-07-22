@@ -35,7 +35,7 @@ export type InboxV2SourceIngressDurableAdmissionReceipt = Exclude<
 >;
 
 /**
- * Local persistence hand-off for MIG-002/provider cutover. It deliberately
+ * Local persistence hand-off for Inbox V2 source adapters. It deliberately
  * accepts the durable admission receipt rather than a caller-asserted raw ID,
  * and it supports durable quarantine even though the current public cursor
  * contract can only name a raw-ingress work row.
@@ -170,8 +170,8 @@ export type InboxV2SourceIngressRecordAndAcknowledgeSeam = Readonly<{
 /**
  * Provider-neutral receive/history seam. It never invokes the cursor port
  * until raw ingress has returned a validated durable admission/quarantine
- * receipt. Telegram polling remains on its legacy path until MIG-002 wires a
- * database implementation of the quarantine-aware cursor port.
+ * receipt. Provider adapters must use this boundary without a compatibility
+ * fallback when they advance an external cursor.
  */
 export function createInboxV2SourceIngressRecordAndAcknowledgeSeam(options: {
   rawIngress: Pick<InboxV2RawIngressRepositoryPort, "record">;

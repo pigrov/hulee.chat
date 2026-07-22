@@ -54,11 +54,6 @@ export type {
   CreatedAuthEmailToken,
   CreateAuthEmailTokenInput
 } from "./auth-email-tokens";
-export { assignConversationRouting } from "./conversation-routing";
-export type {
-  AssignConversationRoutingInput,
-  AssignConversationRoutingResult
-} from "./conversation-routing";
 export { CoreError } from "./errors";
 export {
   acceptEmployeeInvitation,
@@ -88,9 +83,6 @@ export {
   getInboxV2PermissionDefinition,
   INBOX_V2_PERMISSION_SCOPE_CATALOG_SCHEMA_ID,
   INBOX_V2_PERMISSION_SCOPE_CATALOG_VERSION,
-  inboxV1PermissionMappingCatalogRegistration,
-  inboxV1PermissionMappingCatalogRegistrationSchema,
-  inboxV1ToV2PermissionMappings,
   inboxV2PermissionCatalog,
   inboxV2PermissionCatalogRegistration,
   inboxV2PermissionCatalogRegistrationSchema,
@@ -107,13 +99,9 @@ export {
   isInboxV2PermissionScopePairLegal,
   isInboxV2PermissionId,
   isInboxV2PermissionScope,
-  migrateInboxV1PermissionScopeToV2,
   parseInboxV2PermissionScope
 } from "./inbox-v2-permission-catalog";
 export type {
-  InboxV1PermissionMappingDefinition,
-  InboxV1PermissionMappingDisposition,
-  InboxV1PermissionScopeMigrationResult,
   InboxV2OrgUnitScopeMode,
   InboxV2PermissionCatalogEntry,
   InboxV2PermissionDefinition,
@@ -240,19 +228,9 @@ export type {
   RbacEventPayload,
   RbacEventType
 } from "./rbac-events";
-export { createExternalChannelCommandService } from "./external-channel-command-service";
-export type {
-  ExternalChannelCommandContext,
-  ExternalChannelCommandService,
-  ExternalChannelCommandServiceOptions,
-  ExternalMessageIngestionRepository,
-  PersistedMessageSummary
-} from "./external-channel-command-service";
 export type {
   PersistTenantRegistrationInput,
-  PersistConversationReplyInput,
-  TenantRegistrationRepository,
-  TenantWorkspaceRepository
+  TenantRegistrationRepository
 } from "./repositories";
 export { registerTenant } from "./tenant-registration";
 export type {
@@ -264,38 +242,4 @@ export type {
   PreparedCustomTenantRole,
   PrepareCustomTenantRoleInput
 } from "./tenant-roles";
-export {
-  buildExternalClientHandle,
-  createMvpTenantWorkspace,
-  ingestExternalIncomingMessage,
-  queueExternalOutboundMessage,
-  registerExternalClient,
-  sendConversationReply
-} from "./vertical-slice";
-export type {
-  Client,
-  ClientContact,
-  ClientContactType,
-  ClientSource,
-  Conversation,
-  ConversationType,
-  CreateMvpTenantWorkspaceInput,
-  ExternalClientContactInput,
-  FileRecord,
-  FileStatus,
-  IngestExternalIncomingMessageInput,
-  IngestExternalIncomingMessageResult,
-  Message,
-  MessageAttachment,
-  MessageDirection,
-  MessageStatus,
-  ModuleConfigMap,
-  MvpTenantWorkspace,
-  QueueExternalOutboundMessageInput,
-  QueueExternalOutboundMessageResult,
-  RegisterExternalClientInput,
-  RegisterExternalClientResult,
-  SendConversationReplyInput,
-  SendConversationReplyResult,
-  Tenant
-} from "./vertical-slice";
+export type { ModuleConfigMap, Tenant } from "./tenant";

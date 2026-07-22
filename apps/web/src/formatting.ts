@@ -1,6 +1,6 @@
 import type { createTranslator } from "@hulee/i18n";
 
-import type { TelegramIntegrationViewModel } from "./inbox-api-client";
+import type { TelegramIntegrationViewModel } from "./internal-api-client";
 
 type Translator = ReturnType<typeof createTranslator>["t"];
 

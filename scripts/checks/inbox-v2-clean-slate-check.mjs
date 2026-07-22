@@ -1,9 +1,57 @@
-import { readFile } from "node:fs/promises";
+import { access, readdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(scriptDirectory, "../..");
+
+const removedInboxV1Paths = Object.freeze([
+  "apps/api/src/external-channel-command-service.test.ts",
+  "apps/api/src/external-channel-command-service.ts",
+  "apps/api/src/http/telegram-webhook-handler.test.ts",
+  "apps/api/src/http/telegram-webhook-handler.ts",
+  "apps/api/src/internal-file-service.test.ts",
+  "apps/api/src/internal-file-service.ts",
+  "apps/api/src/internal-inbox-service.test.ts",
+  "apps/api/src/internal-inbox-service.ts",
+  "apps/api/src/public-api-command-service.test.ts",
+  "apps/api/src/public-api-command-service.ts",
+  "apps/web/app/files/[fileId]/route.ts",
+  "apps/web/src/conversation-reply-options.test.ts",
+  "apps/web/src/conversation-reply-options.ts",
+  "apps/web/src/conversation-routing-options.test.ts",
+  "apps/web/src/conversation-routing-options.ts",
+  "apps/web/src/inbox-action-form.tsx",
+  "apps/web/src/inbox-action-state.ts",
+  "apps/web/src/inbox-action-status.test.ts",
+  "apps/web/src/inbox-action-status.ts",
+  "apps/web/src/inbox-api-client.test.ts",
+  "apps/web/src/inbox-api-client.ts",
+  "apps/web/src/inbox-queue-options.test.ts",
+  "apps/web/src/inbox-queue-options.ts",
+  "apps/worker/src/outbox-processor.test.ts",
+  "apps/worker/src/outbox-processor.ts",
+  "apps/worker/src/telegram-attachment-transfer.test.ts",
+  "apps/worker/src/telegram-attachment-transfer.ts",
+  "apps/worker/src/telegram-outbound-dispatcher.test.ts",
+  "apps/worker/src/telegram-outbound-dispatcher.ts",
+  "apps/worker/src/telegram-polling-sweeper.test.ts",
+  "apps/worker/src/telegram-polling-sweeper.ts",
+  "packages/core/src/conversation-routing.test.ts",
+  "packages/core/src/conversation-routing.ts",
+  "packages/core/src/external-channel-command-service.ts",
+  "packages/core/src/external-message.test.ts",
+  "packages/core/src/vertical-slice.test.ts",
+  "packages/core/src/vertical-slice.ts",
+  "packages/db/src/repositories/external-message-repository.ts",
+  "packages/db/src/repositories/sql-attachment-transfer-repository.ts",
+  "packages/db/src/repositories/sql-file-access-repository.ts",
+  "packages/db/src/repositories/sql-outbound-dispatch-repository.ts",
+  "packages/modules/src/public-api-channel.test.ts"
+]);
+
+const removedInboxV1SymbolPattern =
+  /\b(?:InternalInboxConversation|InternalInboxMessage|InternalInboxViewResponse|InternalInboxReply|InternalInboxRouting|createExternalMessageRepository|createExternalChannelCommandService|createPublicApiCommandService|createInternalInboxCommandService|createSqlInternalInboxAuthorizationService|createSqlInternalInboxQueryService|createInternalFileService|createTelegramChannelAdapter|normalizeTelegramIncomingMessage|createTelegramWebhookHandler|createWorkerOutboxHandler|createWorkerTelegramPollingSweeper|createWorkerTelegramAttachmentTransferSweeper)\b|["'](?:message\.sent|conversation\.routing\.updated)["']/u;
 
 export function validateInboxV2CleanSlateFreeze(input) {
   const issues = [];
@@ -79,6 +127,7 @@ export function validateInboxV2CleanSlateFreeze(input) {
   );
 
   validateRuntimeDetachment(issues, input);
+  validateRemovedInboxV1Implementation(issues, input);
 
   for (const [label, source] of [
     ["ADR 0016", input.adr],
@@ -123,9 +172,10 @@ async function main() {
     apiIndexSource,
     workerRunnerSource,
     webInboxPageSource,
-    webFileRouteSource,
     foundationSeedSource,
-    productionCompose
+    productionCompose,
+    legacyFilePaths,
+    runtimeSources
   ] = await Promise.all(
     [
       ".github/workflows/deploy.yml",
@@ -139,10 +189,14 @@ async function main() {
       "apps/api/src/index.ts",
       "apps/worker/src/runner.ts",
       "apps/web/app/page.tsx",
-      "apps/web/app/files/[fileId]/route.ts",
       "scripts/db/seed-foundation.ts",
       "deploy/production/docker-compose.yml"
-    ].map((path) => readFile(resolve(repositoryRoot, path), "utf8"))
+    ]
+      .map((path) => readFile(resolve(repositoryRoot, path), "utf8"))
+      .concat([
+        findExistingPaths(removedInboxV1Paths),
+        collectRuntimeSources(["apps", "packages"])
+      ])
   );
   const issues = validateInboxV2CleanSlateFreeze({
     deployWorkflow,
@@ -156,9 +210,10 @@ async function main() {
     apiIndexSource,
     workerRunnerSource,
     webInboxPageSource,
-    webFileRouteSource,
     foundationSeedSource,
-    productionCompose
+    productionCompose,
+    legacyFilePaths,
+    runtimeSources
   });
   if (issues.length > 0) {
     throw new Error(
@@ -247,26 +302,6 @@ function validateRuntimeDetachment(issues, input) {
     "Web root must expose the clean-slate unavailable surface"
   );
 
-  const webFileRouteSource = stripJavaScriptComments(input.webFileRouteSource);
-  forbidMatch(
-    issues,
-    webFileRouteSource,
-    /\bfetch\s*\(|\/internal\/v1\/files\/|\b(?:buildInternalApiHeaders|resolveWebConfig)\b/u,
-    "Web file route must not proxy the V1 file API"
-  );
-  requireMatch(
-    issues,
-    webFileRouteSource,
-    /status:\s*410\b/u,
-    "Web V1 file route must fail closed with HTTP 410"
-  );
-  requireText(
-    issues,
-    webFileRouteSource,
-    '"x-hulee-inbox-runtime": "clean-slate-detached"',
-    "Web V1 file route must identify the detached clean-slate runtime"
-  );
-
   const foundationSeedSource = stripJavaScriptComments(
     input.foundationSeedSource
   );
@@ -326,6 +361,75 @@ function validateRuntimeDetachment(issues, input) {
     "production compose must not define a provider worker or egress gateway"
   );
   validateProductionWorkerFeatures(issues, input.productionCompose);
+}
+
+function validateRemovedInboxV1Implementation(issues, input) {
+  const legacyFilePaths = input.legacyFilePaths ?? [];
+  if (legacyFilePaths.length > 0) {
+    issues.push(
+      `removed Inbox V1 files must not exist: ${legacyFilePaths.join(", ")}`
+    );
+  }
+
+  const residualSourcePaths = (input.runtimeSources ?? [])
+    .filter(({ source }) =>
+      removedInboxV1SymbolPattern.test(stripJavaScriptComments(source))
+    )
+    .map(({ path }) => path);
+  if (residualSourcePaths.length > 0) {
+    issues.push(
+      `removed Inbox V1 symbols must not remain in runtime or tests: ${residualSourcePaths.join(", ")}`
+    );
+  }
+}
+
+async function findExistingPaths(paths) {
+  const matches = await Promise.all(
+    paths.map(async (path) => {
+      try {
+        await access(resolve(repositoryRoot, path));
+        return path;
+      } catch {
+        return undefined;
+      }
+    })
+  );
+  return Object.freeze(matches.filter((path) => path !== undefined));
+}
+
+async function collectRuntimeSources(roots) {
+  const sourcePaths = [];
+  for (const root of roots) await collectSourcePaths(root, sourcePaths);
+
+  return Promise.all(
+    sourcePaths.sort().map(async (path) =>
+      Object.freeze({
+        path,
+        source: await readFile(resolve(repositoryRoot, path), "utf8")
+      })
+    )
+  );
+}
+
+async function collectSourcePaths(relativeDirectory, sourcePaths) {
+  const entries = await readdir(resolve(repositoryRoot, relativeDirectory), {
+    withFileTypes: true
+  });
+  for (const entry of entries) {
+    const relativePath = `${relativeDirectory}/${entry.name}`;
+    if (entry.isDirectory()) {
+      if (
+        ![".next", ".turbo", "coverage", "dist", "node_modules"].includes(
+          entry.name
+        )
+      ) {
+        await collectSourcePaths(relativePath, sourcePaths);
+      }
+      continue;
+    }
+    if (/\.(?:c|m)?(?:j|t)sx?$/u.test(entry.name))
+      sourcePaths.push(relativePath);
+  }
 }
 
 function validateProductionWorkerFeatures(issues, productionCompose) {

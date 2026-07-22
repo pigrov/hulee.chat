@@ -7,7 +7,7 @@ import { createDomainEvent } from "./domain-events";
 import { CoreError } from "./errors";
 import { createSequentialIdFactory, type IdFactory } from "./ids";
 import type { Employee } from "./permissions";
-import type { ModuleConfigMap, Tenant } from "./vertical-slice";
+import type { ModuleConfigMap, Tenant } from "./tenant";
 
 export type RegisterTenantInput = {
   now: string;

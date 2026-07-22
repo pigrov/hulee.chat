@@ -1,47 +1,24 @@
 import { createHash } from "node:crypto";
 
-import type { TenantId } from "@hulee/contracts";
 import { CoreError, type InboxV2FileObjectPin } from "@hulee/core";
-import type { FileAccessRepository } from "@hulee/db";
 import {
   ObjectStorageError,
   parseHuleeSha256,
   type HuleeSha256,
-  type ObjectStorage,
   type TenantScopedVersionAwareObjectStorageResolver
 } from "@hulee/storage";
 
-import type {
-  InternalInboxAuthorizationService,
-  InternalInboxCommandContext
-} from "./internal-inbox-service";
 import type { InboxV2FileDownloadTicketService } from "./inbox-v2-file-download-ticket";
 
-export const DEFAULT_INTERNAL_INBOX_V2_FILE_DOWNLOAD_MAXIMUM_BYTES =
-  64 * 1024 * 1024;
+export const DEFAULT_INBOX_V2_FILE_DOWNLOAD_MAXIMUM_BYTES = 64 * 1024 * 1024;
 
-export type InternalFileContent = {
-  fileId: string;
-  fileName: string;
-  mediaType: string;
-  sizeBytes: number;
-  body: Uint8Array;
-};
+export type InboxV2FileDownloadContext = Readonly<{
+  requestId: string;
+  tenantId: string;
+  employeeId: string;
+}>;
 
-export type InternalFileService = {
-  loadFileContent(
-    context: InternalInboxCommandContext,
-    input: { fileId: string }
-  ): Promise<InternalFileContent>;
-};
-
-export type InternalFileServiceOptions = {
-  repository: FileAccessRepository;
-  authorization: InternalInboxAuthorizationService;
-  objectStorage?: ObjectStorage;
-};
-
-export type InternalInboxV2FileDownloadContent = {
+export type InboxV2FileDownloadContent = {
   fileName: string;
   mediaType: string;
   sizeBytes: number;
@@ -49,9 +26,9 @@ export type InternalInboxV2FileDownloadContent = {
   body: Uint8Array;
 };
 
-export type InternalInboxV2FileDownloadService = {
+export type InboxV2FileDownloadService = {
   issueFileDownload(
-    context: InternalInboxCommandContext,
+    context: InboxV2FileDownloadContext,
     input: Readonly<{
       pin: InboxV2FileObjectPin;
       parentLinkId: string;
@@ -60,73 +37,27 @@ export type InternalInboxV2FileDownloadService = {
     Readonly<{ ticket: string; downloadUrl: string; expiresAt: string }>
   >;
   redeemFileDownload(
-    context: InternalInboxCommandContext,
+    context: InboxV2FileDownloadContext,
     input: Readonly<{ ticket: string }>
-  ): Promise<InternalInboxV2FileDownloadContent>;
+  ): Promise<InboxV2FileDownloadContent>;
 };
 
-export type InternalInboxV2FileDownloadServiceOptions = {
+export type InboxV2FileDownloadServiceOptions = {
   tickets: InboxV2FileDownloadTicketService;
   objectStorageResolver: TenantScopedVersionAwareObjectStorageResolver;
   maximumDownloadBytes?: number;
 };
 
-export function createInternalFileService(
-  options: InternalFileServiceOptions
-): InternalFileService {
-  return {
-    async loadFileContent(context, input) {
-      const file = await options.repository.findFileContentAccess({
-        tenantId: context.tenantId,
-        fileId: input.fileId
-      });
-
-      if (file === null) {
-        throw new CoreError("tenant.not_found");
-      }
-
-      assertSameTenant(context.tenantId, file.tenantId);
-      await options.authorization.assertConversationAccess(context, {
-        conversation: file.conversation,
-        permission: "files.view"
-      });
-
-      if (file.status !== "stored") {
-        throw new CoreError("validation.failed");
-      }
-
-      if (options.objectStorage === undefined) {
-        throw new CoreError(
-          "validation.failed",
-          "Object storage is not configured."
-        );
-      }
-
-      const object = await options.objectStorage.getObject({
-        storageKey: file.storageKey
-      });
-
-      return {
-        fileId: file.fileId,
-        fileName: file.fileName,
-        mediaType: object.mediaType ?? file.mediaType,
-        sizeBytes: object.sizeBytes ?? file.sizeBytes,
-        body: object.body
-      };
-    }
-  };
-}
-
 /**
  * Redeems an application ticket and streams only the exact immutable object
  * version authorized by that ticket's freshly reloaded access record.
  */
-export function createInternalInboxV2FileDownloadService(
-  options: InternalInboxV2FileDownloadServiceOptions
-): InternalInboxV2FileDownloadService {
+export function createInboxV2FileDownloadService(
+  options: InboxV2FileDownloadServiceOptions
+): InboxV2FileDownloadService {
   const maximumDownloadBytes =
     options.maximumDownloadBytes ??
-    DEFAULT_INTERNAL_INBOX_V2_FILE_DOWNLOAD_MAXIMUM_BYTES;
+    DEFAULT_INBOX_V2_FILE_DOWNLOAD_MAXIMUM_BYTES;
 
   if (!Number.isSafeInteger(maximumDownloadBytes) || maximumDownloadBytes < 1) {
     throw new Error("maximumDownloadBytes must be a positive safe integer.");
@@ -288,13 +219,4 @@ function authorizedChecksum(value: HuleeSha256): HuleeSha256 {
 
 function integrityMismatch(message: string): ObjectStorageError {
   return new ObjectStorageError("object_storage.integrity_mismatch", message);
-}
-
-function assertSameTenant(
-  expectedTenantId: TenantId,
-  actualTenantId: TenantId
-) {
-  if (actualTenantId !== expectedTenantId) {
-    throw new CoreError("tenant.boundary_violation");
-  }
 }

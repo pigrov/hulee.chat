@@ -1,146 +1,17 @@
-import type { ConversationId, MessageId, TenantId } from "@hulee/contracts";
+import type { TenantId } from "@hulee/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EgressOperationInput, EgressRuntime } from "./egress";
 import {
   buildTelegramProviderFailureOperatorHint,
   createTelegramBotApiClient,
-  createTelegramChannelAdapter,
-  normalizeTelegramIncomingMessage,
   parseTelegramChannelConfig,
-  telegramChannelManifest,
   TelegramAdapterError
 } from "./telegram-channel";
 
-describe("telegram channel adapter", () => {
+describe("telegram integration transport", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
-  });
-
-  it("normalizes direct Telegram text messages with tenant context", () => {
-    expect(
-      normalizeTelegramIncomingMessage({
-        tenantId: "tenant-1",
-        channelExternalId: "telegram-local",
-        update: {
-          update_id: 1001,
-          message: {
-            message_id: 77,
-            date: 1782115200,
-            chat: {
-              id: 9001,
-              type: "private"
-            },
-            from: {
-              id: 42,
-              first_name: "Alice",
-              username: "alice"
-            },
-            text: "Hello"
-          }
-        }
-      })
-    ).toEqual({
-      tenantId: "tenant-1",
-      providerMessageId: "9001:77",
-      channelExternalId: "telegram-local",
-      clientExternalId: "telegram-user:42",
-      clientDisplayName: "Alice",
-      text: "Hello",
-      attachments: [],
-      occurredAt: "2026-06-22T08:00:00.000Z",
-      idempotencyKey: "telegram:telegram-local:1001:9001:77"
-    });
-  });
-
-  it("normalizes supported attachment metadata without materializing files", () => {
-    expect(
-      normalizeTelegramIncomingMessage({
-        tenantId: "tenant-1",
-        channelExternalId: "telegram-local",
-        update: {
-          update_id: 1002,
-          message: {
-            message_id: 78,
-            date: 1782115200,
-            chat: {
-              id: 9001,
-              type: "private"
-            },
-            from: {
-              id: 42
-            },
-            caption: "Document",
-            document: {
-              file_id: "file-1",
-              file_name: "invoice.pdf",
-              mime_type: "application/pdf",
-              file_size: 1200
-            }
-          }
-        }
-      })
-    ).toMatchObject({
-      text: "Document",
-      attachments: [
-        {
-          id: "file-1",
-          fileName: "invoice.pdf",
-          mediaType: "application/pdf",
-          sizeBytes: 1200
-        }
-      ]
-    });
-  });
-
-  it("rejects updates without supported message content", () => {
-    expect(() =>
-      normalizeTelegramIncomingMessage({
-        tenantId: "tenant-1",
-        channelExternalId: "telegram-local",
-        update: {
-          update_id: 1003
-        }
-      })
-    ).toThrow();
-  });
-
-  it("implements the channel adapter contract", async () => {
-    const sendTextMessage = vi.fn(async () => ({
-      messageId: "provider-message-1",
-      chatId: "9001",
-      raw: {}
-    }));
-    const adapter = createTelegramChannelAdapter({
-      botApiClient: {
-        sendTextMessage
-      },
-      now: () => new Date("2026-06-22T08:00:00.000Z")
-    });
-
-    await expect(adapter.health()).resolves.toEqual({
-      status: "healthy",
-      checkedAt: "2026-06-22T08:00:00.000Z"
-    });
-    await expect(
-      adapter.sendMessage({
-        tenantId: "tenant-1" as TenantId,
-        conversationId: "conversation-1" as ConversationId,
-        messageId: "message-1" as MessageId,
-        channelExternalId: "telegram-local",
-        clientExternalId: "telegram-chat:9001",
-        text: "Hello",
-        idempotencyKey: "outbound-1"
-      })
-    ).resolves.toEqual({
-      providerMessageId: "provider-message-1",
-      status: "sent"
-    });
-    expect(sendTextMessage).toHaveBeenCalledWith({
-      chatId: "9001",
-      text: "Hello"
-    });
-    expect(adapter.manifest).toBe(telegramChannelManifest);
   });
 
   it("parses connector config and requires a secret ref for outbound", () => {

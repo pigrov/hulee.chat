@@ -32,18 +32,15 @@ import {
   enableChannelConnector,
   loadChannelConnectors,
   loadTelegramIntegration,
-  sendInboxReply,
   startChannelAuthChallenge,
   submitChannelAuthChallenge,
   updateChannelConnector,
-  updateInboxConversationRouting,
   updateTenantBrand,
   updateTelegramIntegration,
   validateTelegramBotToken,
   type InternalApiAccessOptions
-} from "./inbox-api-client";
+} from "./internal-api-client";
 import { assertWebActionRequest } from "./action-security";
-import { assertWebTenantEmailVerified } from "./access";
 import {
   assertCurrentWebEffectiveTenantPermission,
   isEmailNotVerifiedError,
@@ -51,18 +48,6 @@ import {
   getWebDatabase,
   resolveWebConfig
 } from "./session";
-import {
-  inboxReplyActionFailureStatus,
-  inboxRoutingActionFailureStatus
-} from "./inbox-action-status";
-import {
-  inboxReplyActionError,
-  inboxReplyActionSuccess,
-  inboxRoutingActionError,
-  inboxRoutingActionSuccess,
-  type InboxReplyActionState,
-  type InboxRoutingActionState
-} from "./inbox-action-state";
 import {
   loadTelegramBotChannelProviderPolicy,
   type PlatformChannelProviderPolicyView
@@ -127,79 +112,6 @@ const brandLogoMediaTypes = {
 class BrandingActionError extends Error {
   constructor(readonly code: Exclude<BrandingActionCode, "saved">) {
     super(code);
-  }
-}
-
-export async function sendReplyAction(
-  _previousState: InboxReplyActionState,
-  formData: FormData
-): Promise<InboxReplyActionState> {
-  await assertWebActionRequest();
-
-  try {
-    const conversationId = readRequiredFormString(formData, "conversationId");
-    assertWebTenantEmailVerified(await requireCurrentWebAccessSession());
-    const text = readRequiredFormString(formData, "text").trim();
-
-    if (text.length === 0) {
-      return inboxReplyActionError("invalid");
-    }
-
-    await sendInboxReply({
-      conversationId,
-      text,
-      idempotencyKey: `web-reply:${conversationId}:${randomUUID()}`
-    });
-
-    revalidatePath("/");
-
-    return inboxReplyActionSuccess("sent");
-  } catch (error) {
-    if (isEmailNotVerifiedError(error)) {
-      return inboxReplyActionError("email_verification_required");
-    }
-
-    return inboxReplyActionError(inboxReplyActionFailureStatus(error));
-  }
-}
-
-export async function updateConversationRoutingAction(
-  _previousState: InboxRoutingActionState,
-  formData: FormData
-): Promise<InboxRoutingActionState> {
-  await assertWebActionRequest();
-
-  try {
-    const conversationId = readRequiredFormString(formData, "conversationId");
-    assertWebTenantEmailVerified(await requireCurrentWebAccessSession());
-
-    await updateInboxConversationRouting({
-      conversationId,
-      request: {
-        currentQueueId: readNullableOptionalFormString(
-          formData,
-          "currentQueueId"
-        ),
-        assignedEmployeeId: readNullableOptionalFormString(
-          formData,
-          "assignedEmployeeId"
-        ),
-        assignedTeamId: readNullableOptionalFormString(
-          formData,
-          "assignedTeamId"
-        )
-      }
-    });
-
-    revalidatePath("/");
-
-    return inboxRoutingActionSuccess("saved");
-  } catch (error) {
-    if (isEmailNotVerifiedError(error)) {
-      return inboxRoutingActionError("email_verification_required");
-    }
-
-    return inboxRoutingActionError(inboxRoutingActionFailureStatus(error));
   }
 }
 
@@ -1186,20 +1098,6 @@ function normalizeActionPhoneNumber(
   value: string | undefined
 ): string | undefined {
   return normalizeOptionalPhoneNumber(value) ?? undefined;
-}
-
-function readNullableOptionalFormString(
-  formData: FormData,
-  name: string
-): string | null | undefined {
-  if (!formData.has(name)) {
-    return undefined;
-  }
-
-  const value = readOptionalFormString(formData, name);
-  const normalized = value?.trim();
-
-  return normalized && normalized.length > 0 ? normalized : null;
 }
 
 function resolvePresetId(value: string): BrandThemePresetId {

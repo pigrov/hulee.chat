@@ -1,13 +1,4 @@
-import type {
-  AdapterHealth,
-  ChannelAdapter,
-  DeliveryResult,
-  NormalizedAttachment,
-  NormalizedIncomingMessage,
-  NormalizedOutgoingMessage,
-  PlatformErrorCode,
-  TenantId
-} from "@hulee/contracts";
+import type { PlatformErrorCode, TenantId } from "@hulee/contracts";
 import { defineModuleManifest } from "@hulee/contracts";
 import { z } from "zod";
 
@@ -288,89 +279,12 @@ function isKnownProviderErrorCode(value: unknown): value is PlatformErrorCode {
   );
 }
 
-const telegramUserSchema = z
-  .object({
-    id: z.number().int(),
-    first_name: z.string().optional(),
-    last_name: z.string().optional(),
-    username: z.string().optional()
-  })
-  .passthrough();
-
-const telegramChatSchema = z
-  .object({
-    id: z.number().int(),
-    type: z.string(),
-    title: z.string().optional(),
-    first_name: z.string().optional(),
-    last_name: z.string().optional(),
-    username: z.string().optional()
-  })
-  .passthrough();
-
-const telegramPhotoSizeSchema = z
-  .object({
-    file_id: z.string().trim().min(1),
-    file_unique_id: z.string().optional(),
-    width: z.number().int().optional(),
-    height: z.number().int().optional(),
-    file_size: z.number().int().nonnegative().optional()
-  })
-  .passthrough();
-
-const telegramDocumentSchema = z
-  .object({
-    file_id: z.string().trim().min(1),
-    file_unique_id: z.string().optional(),
-    file_name: z.string().optional(),
-    mime_type: z.string().optional(),
-    file_size: z.number().int().nonnegative().optional()
-  })
-  .passthrough();
-
-const telegramMessageSchema = z
-  .object({
-    message_id: z.number().int(),
-    date: z.number().int(),
-    chat: telegramChatSchema,
-    from: telegramUserSchema.optional(),
-    text: z.string().optional(),
-    caption: z.string().optional(),
-    photo: z.array(telegramPhotoSizeSchema).optional(),
-    document: telegramDocumentSchema.optional()
-  })
-  .passthrough();
-
-export const telegramChannelInboundEnvelopeSchema = z
-  .object({
-    tenantId: z.string().trim().min(1),
-    channelExternalId: z.string().trim().min(1),
-    update: z
-      .object({
-        update_id: z.number().int().optional(),
-        message: telegramMessageSchema.optional(),
-        edited_message: telegramMessageSchema.optional(),
-        channel_post: telegramMessageSchema.optional(),
-        edited_channel_post: telegramMessageSchema.optional()
-      })
-      .passthrough()
-  })
-  .strict();
-
-export type TelegramChannelInboundEnvelope = z.infer<
-  typeof telegramChannelInboundEnvelopeSchema
->;
-
 export const telegramChannelManifest = defineModuleManifest({
   id: "channel-telegram",
   type: "channel",
   name: "Telegram channel",
   version: "0.0.0",
-  capabilities: [
-    "channel.inbound",
-    "channel.outbound",
-    "channel.attachments.metadata"
-  ],
+  capabilities: [],
   configSchema: {
     channelExternalId: "string",
     mode: ["webhook", "polling"],
@@ -383,24 +297,11 @@ export const telegramChannelManifest = defineModuleManifest({
     botToken: "string",
     webhookSecretToken: "string"
   },
-  events: ["message.received", "message.sent"],
-  jobs: [
-    "telegram.inbound_sweep",
-    "telegram.outbound_dispatch",
-    "telegram.polling"
-  ],
   uiSlots: [
     {
       id: "telegram-integration-settings",
       slot: "integration.settings.section",
       componentRef: "channel-telegram/settings",
-      supportedClients: ["web"],
-      order: 100
-    },
-    {
-      id: "telegram-inbox-sidebar",
-      slot: "inbox.sidebar.section",
-      componentRef: "channel-telegram/inbox-sidebar",
       supportedClients: ["web"],
       order: 100
     }
@@ -414,101 +315,6 @@ export function parseTelegramChannelConfig(
   input: unknown
 ): TelegramChannelConfig {
   return telegramChannelConfigSchema.parse(input);
-}
-
-export function normalizeTelegramIncomingMessage(
-  input: unknown
-): NormalizedIncomingMessage {
-  const envelope = telegramChannelInboundEnvelopeSchema.parse(input);
-  const message = extractTelegramMessage(envelope.update);
-  const text = message.text ?? message.caption;
-  const attachments = extractTelegramAttachments(message);
-
-  if (
-    (text === undefined || text.trim().length === 0) &&
-    attachments.length === 0
-  ) {
-    throw new TelegramAdapterError(
-      "validation.failed",
-      "Telegram update does not contain text or supported attachments."
-    );
-  }
-
-  const sender = message.from;
-  const clientExternalId = sender
-    ? `telegram-user:${sender.id}`
-    : `telegram-chat:${message.chat.id}`;
-  const providerMessageId = `${message.chat.id}:${message.message_id}`;
-
-  return {
-    tenantId: envelope.tenantId as TenantId,
-    providerMessageId,
-    channelExternalId: envelope.channelExternalId,
-    clientExternalId,
-    clientDisplayName: buildTelegramDisplayName(sender ?? message.chat),
-    text,
-    attachments,
-    occurredAt: new Date(message.date * 1000).toISOString(),
-    idempotencyKey: [
-      "telegram",
-      envelope.channelExternalId,
-      envelope.update.update_id ?? "no-update-id",
-      providerMessageId
-    ].join(":")
-  };
-}
-
-export function createTelegramChannelAdapter(input?: {
-  botApiClient?: TelegramMessageSender;
-  now?: () => Date;
-}): ChannelAdapter {
-  return {
-    manifest: telegramChannelManifest,
-    async normalizeIncoming(rawInput) {
-      return normalizeTelegramIncomingMessage(rawInput);
-    },
-    async sendMessage(
-      message: NormalizedOutgoingMessage
-    ): Promise<DeliveryResult> {
-      const chatId = resolveTelegramChatId(message.clientExternalId);
-
-      if (!input?.botApiClient || !message.text || !chatId) {
-        return {
-          status: "failed",
-          errorCode: "provider.permanent_failure",
-          retryability: "not_retryable"
-        };
-      }
-
-      const result = await input.botApiClient.sendTextMessage({
-        chatId,
-        text: message.text
-      });
-
-      return {
-        providerMessageId: result.messageId,
-        status: "sent"
-      };
-    },
-    async health(): Promise<AdapterHealth> {
-      return {
-        status: "healthy",
-        checkedAt: (input?.now ?? (() => new Date(0)))().toISOString()
-      };
-    }
-  };
-}
-
-function resolveTelegramChatId(
-  clientExternalId: string | undefined
-): string | null {
-  if (!clientExternalId) {
-    return null;
-  }
-
-  const match = clientExternalId.match(/^telegram-(?:chat|user):(.+)$/);
-
-  return match?.[1]?.trim() ? match[1].trim() : null;
 }
 
 export function createTelegramBotApiClient(
@@ -912,94 +718,6 @@ function assertSafeTelegramFilePath(filePath: string): void {
       "Telegram file_path is not a safe relative path."
     );
   }
-}
-
-function extractTelegramMessage(
-  update: TelegramChannelInboundEnvelope["update"]
-): z.infer<typeof telegramMessageSchema> {
-  const message =
-    update.message ??
-    update.edited_message ??
-    update.channel_post ??
-    update.edited_channel_post;
-
-  if (!message) {
-    throw new TelegramAdapterError(
-      "validation.failed",
-      "Telegram update does not contain a supported message payload."
-    );
-  }
-
-  return message;
-}
-
-function extractTelegramAttachments(
-  message: z.infer<typeof telegramMessageSchema>
-): NormalizedAttachment[] {
-  const attachments: NormalizedAttachment[] = [];
-  const largestPhoto = pickLargestPhoto(message.photo);
-
-  if (largestPhoto) {
-    attachments.push({
-      id: largestPhoto.file_id,
-      fileName: `${largestPhoto.file_unique_id ?? largestPhoto.file_id}.jpg`,
-      mediaType: "image/jpeg",
-      sizeBytes: largestPhoto.file_size
-    });
-  }
-
-  if (message.document) {
-    attachments.push({
-      id: message.document.file_id,
-      fileName:
-        message.document.file_name ??
-        `${message.document.file_unique_id ?? message.document.file_id}.bin`,
-      mediaType: message.document.mime_type ?? "application/octet-stream",
-      sizeBytes: message.document.file_size
-    });
-  }
-
-  return attachments;
-}
-
-function pickLargestPhoto(
-  photos: readonly z.infer<typeof telegramPhotoSizeSchema>[] | undefined
-): z.infer<typeof telegramPhotoSizeSchema> | undefined {
-  if (!photos || photos.length === 0) {
-    return undefined;
-  }
-
-  return photos.reduce((best, current) => {
-    const bestArea = (best.width ?? 0) * (best.height ?? 0);
-    const currentArea = (current.width ?? 0) * (current.height ?? 0);
-
-    return currentArea >= bestArea ? current : best;
-  }, photos[0]);
-}
-
-function buildTelegramDisplayName(
-  input: z.infer<typeof telegramUserSchema> | z.infer<typeof telegramChatSchema>
-): string {
-  const nameParts = [input.first_name, input.last_name].filter(Boolean);
-
-  if (nameParts.length > 0) {
-    return nameParts.join(" ");
-  }
-
-  const title =
-    "title" in input && typeof input.title === "string"
-      ? input.title
-      : undefined;
-
-  if (title) {
-    return title;
-  }
-
-  if (input.username) {
-    return `@${input.username}`;
-  }
-
-  return String(input.id);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

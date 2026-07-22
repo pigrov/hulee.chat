@@ -27,10 +27,7 @@ import {
   createDeploymentEgressRuntime,
   type EgressRuntime
 } from "@hulee/modules";
-import {
-  type ObjectStorage,
-  type TenantScopedVersionAwareObjectStorageResolver
-} from "@hulee/storage";
+import type { TenantScopedVersionAwareObjectStorageResolver } from "@hulee/storage";
 
 import {
   createPublicApiHandler,
@@ -44,7 +41,7 @@ import {
 } from "./http/internal-api-handler";
 import { createInternalAccessDecisionService } from "./internal-access-decision-service";
 import { createInternalEgressStatusService } from "./internal-egress-status-service";
-import { createInternalInboxV2FileDownloadService } from "./internal-file-service";
+import { createInboxV2FileDownloadService } from "./inbox-v2-file-download-service";
 import type { InboxV2FileDownloadTicketService } from "./inbox-v2-file-download-ticket";
 import {
   createTenantSecretResolver,
@@ -53,7 +50,6 @@ import {
 import { createInternalOrgStructureService } from "./internal-org-structure-service";
 import { createInternalRbacService } from "./internal-rbac-service";
 import { createInternalTenantSettingsService } from "./internal-tenant-service";
-import { type TelegramWebhookHandler } from "./http/telegram-webhook-handler";
 import {
   createCleanSlatePublicApiCommandService,
   createCleanSlateTelegramWebhookHandler
@@ -117,8 +113,6 @@ export type InternalApiDataPlaneHandlerOptions = {
   secretEncryptionKey?: string;
   egressRuntime?: EgressRuntime;
   egressProfile?: ApiConfig["egressProfile"];
-  objectStorageConfig?: ApiConfig["objectStorage"];
-  objectStorage?: ObjectStorage;
   inboxV2FileDownloadTicketService?: InboxV2FileDownloadTicketService;
   inboxV2FileDownloadStorageResolver?: TenantScopedVersionAwareObjectStorageResolver;
   inboxV2FileDownloadMaximumBytes?: number;
@@ -142,7 +136,7 @@ export function createInternalApiDataPlaneHandler(
   const inboxV2FileDownloads =
     options.inboxV2FileDownloadTicketService === undefined
       ? undefined
-      : createInternalInboxV2FileDownloadService({
+      : createInboxV2FileDownloadService({
           tickets: options.inboxV2FileDownloadTicketService,
           objectStorageResolver: requireInboxV2DownloadStorageResolver(
             options.inboxV2FileDownloadStorageResolver
@@ -234,7 +228,7 @@ export type TelegramWebhookDataPlaneHandlerOptions = {
 
 export function createTelegramWebhookDataPlaneHandler(
   _options: TelegramWebhookDataPlaneHandlerOptions
-): TelegramWebhookHandler {
+): ApiHttpHandler {
   return createCleanSlateTelegramWebhookHandler();
 }
 
@@ -246,8 +240,6 @@ export type ApiDataPlaneHandlerOptions = PublicApiDataPlaneHandlerOptions &
     | "secretEncryptionKey"
     | "egressRuntime"
     | "egressProfile"
-    | "objectStorageConfig"
-    | "objectStorage"
     | "inboxV2FileDownloadTicketService"
     | "inboxV2FileDownloadStorageResolver"
     | "inboxV2FileDownloadMaximumBytes"
@@ -293,8 +285,6 @@ function requireInboxV2DownloadStorageResolver(
 export { createApiNodeServer } from "./http/node-server";
 export { createInternalApiHandler } from "./http/internal-api-handler";
 export { createPublicApiHandler } from "./http/public-api-handler";
-export { createTelegramWebhookHandler } from "./http/telegram-webhook-handler";
-export { createExternalChannelCommandService } from "./external-channel-command-service";
 export {
   calculateInboxV2IdentityClaimIntentDigest,
   createInboxV2IdentityClaimCommandService,
@@ -316,30 +306,15 @@ export {
 } from "./inbox-v2-outbound-reference-command";
 export { createInternalAccessDecisionService } from "./internal-access-decision-service";
 export { createInternalEgressStatusService } from "./internal-egress-status-service";
-export {
-  createInternalFileService,
-  createInternalInboxV2FileDownloadService
-} from "./internal-file-service";
+export { createInboxV2FileDownloadService } from "./inbox-v2-file-download-service";
 export {
   createInboxV2FileDownloadTicketService,
   InboxV2FileDownloadTicketError
 } from "./inbox-v2-file-download-ticket";
-export {
-  createInternalInboxAuthorizationService,
-  createInternalInboxCommandService,
-  createSqlInternalInboxAuthorizationService,
-  createSqlInternalInboxQueryService
-} from "./internal-inbox-service";
 export { createInternalIntegrationService } from "./internal-integrations-service";
 export { createInternalOrgStructureService } from "./internal-org-structure-service";
 export { createInternalRbacService } from "./internal-rbac-service";
 export { createInternalTenantSettingsService } from "./internal-tenant-service";
-export { createPublicApiCommandService } from "./public-api-command-service";
-export type {
-  ExternalChannelCommandContext,
-  ExternalChannelCommandService,
-  ExternalChannelCommandServiceOptions
-} from "./external-channel-command-service";
 export type {
   InboxV2AutomaticIdentityClaimCommand,
   InboxV2IdentityClaimCommand,
@@ -401,13 +376,11 @@ export type {
   InternalEgressStatusServiceOptions
 } from "./internal-egress-status-service";
 export type {
-  InternalFileContent,
-  InternalFileService,
-  InternalFileServiceOptions,
-  InternalInboxV2FileDownloadContent,
-  InternalInboxV2FileDownloadService,
-  InternalInboxV2FileDownloadServiceOptions
-} from "./internal-file-service";
+  InboxV2FileDownloadContent,
+  InboxV2FileDownloadContext,
+  InboxV2FileDownloadService,
+  InboxV2FileDownloadServiceOptions
+} from "./inbox-v2-file-download-service";
 export type {
   InboxV2FileDownloadAccessRecord,
   InboxV2FileDownloadAccessRepository,
@@ -417,16 +390,6 @@ export type {
   InboxV2FileDownloadTicketService,
   InboxV2FileDownloadTicketServiceOptions
 } from "./inbox-v2-file-download-ticket";
-export type {
-  InternalInboxAuthorizationService,
-  InternalInboxAuthorizationServiceOptions,
-  InternalInboxConversationAccessResource,
-  InternalInboxCommandContext,
-  InternalInboxCommandService,
-  InternalInboxCommandServiceOptions,
-  InternalInboxQueryContext,
-  InternalInboxQueryService
-} from "./internal-inbox-service";
 export type {
   InternalIntegrationContext,
   InternalIntegrationService,
@@ -441,11 +404,6 @@ export type {
   InternalTenantSettingsContext,
   InternalTenantSettingsService
 } from "./internal-tenant-service";
-export type { PublicApiCommandServiceOptions } from "./public-api-command-service";
-export type {
-  TelegramWebhookHandler,
-  TelegramWebhookHandlerOptions
-} from "./http/telegram-webhook-handler";
 export type {
   ApiHttpHandler,
   ApiHttpMethod,

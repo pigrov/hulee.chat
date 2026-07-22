@@ -21,11 +21,11 @@ function createCommands(): PublicApiCommandService {
         created: true
       };
     },
-    async acceptInboundMessage(_context, message) {
+    async acceptInboundMessage(_context, request) {
       return {
-        clientId: `client:${message.clientExternalId}`,
+        clientId: `client:${request.clientExternalId}`,
         conversationId: "conversation-1",
-        messageId: `message:${message.providerMessageId}`,
+        messageId: `message:${request.providerMessageId}`,
         accepted: true
       };
     },
@@ -186,15 +186,15 @@ describe("public API handler", () => {
     ]);
   });
 
-  it("normalizes inbound messages through the public API channel adapter", async () => {
+  it("passes the versioned inbound request to the command boundary", async () => {
     const acceptInboundMessage = vi.fn(
       async (
         _context: PublicApiCommandContext,
-        message: Parameters<PublicApiCommandService["acceptInboundMessage"]>[1]
+        request: Parameters<PublicApiCommandService["acceptInboundMessage"]>[1]
       ) => ({
-        clientId: `client:${message.clientExternalId}`,
+        clientId: `client:${request.clientExternalId}`,
         conversationId: "conversation-1",
-        messageId: `message:${message.providerMessageId}`,
+        messageId: `message:${request.providerMessageId}`,
         accepted: true as const
       })
     );
@@ -227,7 +227,6 @@ describe("public API handler", () => {
         apiKeyId: "api-key-1"
       },
       {
-        tenantId,
         providerMessageId: "provider-message-1",
         channelExternalId: "public-api",
         clientExternalId: "client-1",
@@ -235,11 +234,51 @@ describe("public API handler", () => {
         attachments: [],
         occurredAt: "2026-06-22T07:00:00.000Z",
         idempotencyKey: "inbound-1"
-      },
-      expect.objectContaining({
-        clientExternalId: "client-1"
-      })
+      }
     );
+  });
+
+  it("rejects caller scope and provider fields on inbound before command execution", async () => {
+    const auditRecords: PublicApiAuditRecord[] = [];
+    const acceptInboundMessage = vi.fn(createCommands().acceptInboundMessage);
+    const commands = {
+      ...createCommands(),
+      acceptInboundMessage
+    };
+
+    const response = await createHandler({ commands, auditRecords }).handle({
+      method: "POST",
+      path: "/v1/messages/inbound",
+      headers: {
+        "x-hulee-api-key": "valid-key"
+      },
+      body: {
+        tenantId: "caller-controlled-tenant",
+        clientExternalId: "client-1",
+        channelExternalId: "public-api",
+        providerMessageId: "provider-message-1",
+        text: "Hello",
+        occurredAt: "2026-06-22T07:00:00.000Z",
+        idempotencyKey: "inbound-1",
+        providerSpecificFlag: true
+      }
+    });
+
+    expect(response.status).toBe(400);
+    expect(acceptInboundMessage).not.toHaveBeenCalled();
+    expect(auditRecords).toEqual([
+      {
+        requestId: "request-1",
+        tenantId,
+        apiKeyId: "api-key-1",
+        action: "public_api.message.inbound",
+        entityType: "inbound_message",
+        entityId: "*",
+        outcome: "failure",
+        status: 400,
+        errorCode: "validation.failed"
+      }
+    ]);
   });
 
   it("rejects invalid request bodies before command execution", async () => {

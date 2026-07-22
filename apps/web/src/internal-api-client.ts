@@ -37,12 +37,6 @@ import {
   type InternalChannelConnectorSummary,
   type InternalChannelConnectorsResponse,
   type InternalEgressStatusResponse,
-  type InternalInboxConversation,
-  type InternalInboxConversationRoutingUpdateRequest,
-  type InternalInboxConversationRoutingUpdateResponse,
-  type InternalInboxMessage,
-  type InternalInboxReplyResponse,
-  type InternalInboxViewResponse,
   type InternalRbacDirectGrantCreateRequest,
   type InternalRbacDirectGrantResponse,
   type InternalRbacDirectGrantsResponse,
@@ -70,9 +64,6 @@ import { buildInternalApiHeaders } from "./session";
 import { throwInternalApiErrorResponse } from "./internal-api-errors";
 import { resolveWebConfig } from "./web-config";
 
-export type InboxConversation = InternalInboxConversation;
-export type InboxMessage = InternalInboxMessage;
-export type InboxViewModel = InternalInboxViewResponse;
 export type TenantBrandViewModel = InternalTenantBrandResponse;
 export type ChannelCatalogViewModel = InternalChannelCatalogResponse;
 export type SourceCatalogViewModel = InternalSourceCatalogResponse;
@@ -95,36 +86,6 @@ export type InternalApiAccessOptions<
 > = {
   readonly effectivePermissionOverride: TPermission;
 };
-
-export async function loadInboxViewModel(_input?: {
-  selectedConversationId?: string;
-  queueId?: string;
-  assignedToMe?: boolean;
-}): Promise<InboxViewModel> {
-  return rejectDetachedInboxV1Client();
-}
-
-export async function sendInboxReply(_input: {
-  conversationId: string;
-  text: string;
-  idempotencyKey?: string;
-}): Promise<InternalInboxReplyResponse> {
-  return rejectDetachedInboxV1Client();
-}
-
-export async function updateInboxConversationRouting(_input: {
-  conversationId: string;
-  request: InternalInboxConversationRoutingUpdateRequest;
-}): Promise<InternalInboxConversationRoutingUpdateResponse> {
-  return rejectDetachedInboxV1Client();
-}
-
-function rejectDetachedInboxV1Client(): never {
-  throw new CoreError(
-    "module.disabled",
-    "Inbox V1 Web clients are detached during the Inbox V2 clean-slate epoch."
-  );
-}
 
 export async function loadRbacRoles(): Promise<RbacRolesViewModel> {
   return requestServiceAuthorizedInternalApiJson({

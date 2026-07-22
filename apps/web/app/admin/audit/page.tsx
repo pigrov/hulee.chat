@@ -11,11 +11,10 @@ import {
   createSqlSecurityAuditRepository,
   createSqlTenantRbacRepository,
   type AccessAuditAction,
-  type AccessAuditRecord,
-  type ConversationRoutingAuditRecord
+  type AccessAuditRecord
 } from "@hulee/db";
 import { createTranslator, type I18nMessageKey } from "@hulee/i18n";
-import { ListChecks, Route, Search } from "lucide-react";
+import { ListChecks, Search } from "lucide-react";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
@@ -37,30 +36,12 @@ export const runtime = "nodejs";
 
 type Translator = ReturnType<typeof createTranslator>["t"];
 
-type AuditEventType = "all" | "access" | "routing";
-
-type AuditListRecord =
-  | {
-      readonly type: "access";
-      readonly id: string;
-      readonly occurredAt: string;
-      readonly record: AccessAuditRecord;
-    }
-  | {
-      readonly type: "routing";
-      readonly id: string;
-      readonly occurredAt: string;
-      readonly record: ConversationRoutingAuditRecord;
-    };
-
 export default async function AuditAdminPage({
   searchParams
 }: {
   searchParams?: Promise<{
     auditAction?: string;
     auditActorEmployeeId?: string;
-    auditConversationId?: string;
-    auditEventType?: string;
     auditFrom?: string;
     auditPermission?: string;
     auditRoleId?: string;
@@ -107,36 +88,18 @@ export default async function AuditAdminPage({
   ]);
   const { t, locale } = createTranslator(model.tenant.locale);
   const filters = resolveAuditFilters(resolvedSearchParams);
-  const includeAccessAudit = shouldIncludeAccessAudit(filters);
-  const includeRoutingAudit = shouldIncludeRoutingAudit(filters);
-  const [accessAuditRecords, routingAuditRecords] = await Promise.all([
-    !includeAccessAudit
-      ? Promise.resolve<readonly AccessAuditRecord[]>([])
-      : securityAuditRepository.listAccessRecords({
-          tenantId: access.tenantId,
-          authorization: auditAuthorization,
-          limit: 50,
-          action: filters.accessAction,
-          actorEmployeeId: filters.actorEmployeeId,
-          targetEmployeeId: filters.targetEmployeeId,
-          roleId: filters.roleId,
-          permission: filters.permission,
-          from: filters.from,
-          to: filters.to
-        }),
-    !includeRoutingAudit
-      ? Promise.resolve<readonly ConversationRoutingAuditRecord[]>([])
-      : securityAuditRepository.listConversationRoutingRecords({
-          tenantId: access.tenantId,
-          authorization: auditAuthorization,
-          limit: 50,
-          actorEmployeeId: filters.actorEmployeeId,
-          conversationId: filters.conversationId,
-          from: filters.from,
-          to: filters.to
-        })
-  ]);
-  const records = mergeAuditRecords(accessAuditRecords, routingAuditRecords);
+  const records = await securityAuditRepository.listAccessRecords({
+    tenantId: access.tenantId,
+    authorization: auditAuthorization,
+    limit: 50,
+    action: filters.accessAction,
+    actorEmployeeId: filters.actorEmployeeId,
+    targetEmployeeId: filters.targetEmployeeId,
+    roleId: filters.roleId,
+    permission: filters.permission,
+    from: filters.from,
+    to: filters.to
+  });
 
   return (
     <TenantAdminShell
@@ -169,22 +132,6 @@ export default async function AuditAdminPage({
             className="settingsForm accessAuditFilterForm auditFilterForm"
             method="get"
           >
-            <label className="fieldStack">
-              <span className="detailLabel">{t("admin.audit.eventType")}</span>
-              <select
-                className="selectInput"
-                defaultValue={filters.eventType}
-                name="auditEventType"
-              >
-                <option value="all">{t("admin.audit.eventType.all")}</option>
-                <option value="access">
-                  {t("admin.audit.eventType.access")}
-                </option>
-                <option value="routing">
-                  {t("admin.audit.eventType.routing")}
-                </option>
-              </select>
-            </label>
             <label className="fieldStack">
               <span className="detailLabel">{t("admin.audit.action")}</span>
               <select
@@ -248,17 +195,6 @@ export default async function AuditAdminPage({
               </select>
             </label>
             <label className="fieldStack">
-              <span className="detailLabel">
-                {t("admin.audit.conversationId")}
-              </span>
-              <input
-                className="textInput"
-                defaultValue={filters.conversationId ?? ""}
-                name="auditConversationId"
-                type="text"
-              />
-            </label>
-            <label className="fieldStack">
               <span className="detailLabel">{t("admin.audit.from")}</span>
               <input
                 className="textInput"
@@ -299,23 +235,14 @@ export default async function AuditAdminPage({
               {records.length === 0 ? (
                 <p className="metaText">{t("admin.audit.empty")}</p>
               ) : (
-                records.map((record) =>
-                  record.type === "access" ? (
-                    <AccessAuditRow
-                      key={record.id}
-                      locale={locale}
-                      record={record.record}
-                      t={t}
-                    />
-                  ) : (
-                    <RoutingAuditRow
-                      key={record.id}
-                      locale={locale}
-                      record={record.record}
-                      t={t}
-                    />
-                  )
-                )
+                records.map((record) => (
+                  <AccessAuditRow
+                    key={record.id}
+                    locale={locale}
+                    record={record}
+                    t={t}
+                  />
+                ))
               )}
             </div>
           </section>
@@ -406,133 +333,11 @@ function AccessAuditRow({
   );
 }
 
-function RoutingAuditRow({
-  locale,
-  record,
-  t
-}: {
-  locale: string;
-  record: ConversationRoutingAuditRecord;
-  t: Translator;
-}): ReactNode {
-  return (
-    <article className="managementRow accessAuditRow">
-      <span className="metricIcon">
-        <Route size={18} aria-hidden="true" />
-      </span>
-      <div>
-        <h3 className="listItemTitle">
-          {t("admin.audit.action.conversationRoutingUpdated")}
-        </h3>
-        <p className="metaText">
-          {t("admin.audit.occurredAtValue", {
-            value: formatDateTime(record.occurredAt, locale)
-          })}
-        </p>
-        <p className="metaText">
-          {t("admin.audit.actorValue", {
-            value: formatActor(record.actorEmployeeId, t)
-          })}
-        </p>
-        <p className="metaText">
-          {t("admin.audit.conversationValue", {
-            value: record.conversationId
-          })}
-        </p>
-      </div>
-      <div className="auditMetadataList">
-        <span className="badge">
-          {t("admin.audit.queueValue", {
-            value: formatRoutingTransition({
-              emptyLabel: t("inbox.routing.noQueue"),
-              metadata: record.metadata,
-              nextKey: "currentQueueId",
-              previousKey: "previousCurrentQueueId",
-              resolveLabel: opaqueAuditId
-            })
-          })}
-        </span>
-        <span className="badge">
-          {t("admin.audit.assigneeValue", {
-            value: formatRoutingTransition({
-              emptyLabel: t("inbox.routing.noAssignee"),
-              metadata: record.metadata,
-              nextKey: "assignedEmployeeId",
-              previousKey: "previousAssignedEmployeeId",
-              resolveLabel: opaqueAuditId
-            })
-          })}
-        </span>
-        <span className="badge">
-          {t("admin.audit.teamValue", {
-            value: formatRoutingTransition({
-              emptyLabel: t("inbox.routing.noTeam"),
-              metadata: record.metadata,
-              nextKey: "assignedTeamId",
-              previousKey: "previousAssignedTeamId",
-              resolveLabel: opaqueAuditId
-            })
-          })}
-        </span>
-      </div>
-    </article>
-  );
-}
-
-function mergeAuditRecords(
-  accessAuditRecords: readonly AccessAuditRecord[],
-  routingAuditRecords: readonly ConversationRoutingAuditRecord[]
-): readonly AuditListRecord[] {
-  return [
-    ...accessAuditRecords.map((record) => ({
-      type: "access" as const,
-      id: `access:${record.id}`,
-      occurredAt: record.occurredAt,
-      record
-    })),
-    ...routingAuditRecords.map((record) => ({
-      type: "routing" as const,
-      id: `routing:${record.id}`,
-      occurredAt: record.occurredAt,
-      record
-    }))
-  ]
-    .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt))
-    .slice(0, 50);
-}
-
-function shouldIncludeAccessAudit(filters: {
-  readonly conversationId?: string;
-  readonly eventType: AuditEventType;
-}): boolean {
-  return (
-    filters.eventType !== "routing" && filters.conversationId === undefined
-  );
-}
-
-function shouldIncludeRoutingAudit(filters: {
-  readonly accessAction?: AccessAuditAction;
-  readonly eventType: AuditEventType;
-  readonly permission?: Permission;
-  readonly roleId?: string;
-  readonly targetEmployeeId?: string;
-}): boolean {
-  return (
-    filters.eventType !== "access" &&
-    filters.accessAction === undefined &&
-    filters.permission === undefined &&
-    filters.roleId === undefined &&
-    filters.targetEmployeeId === undefined
-  );
-}
-
 function resolveAuditFilters(
   searchParams:
     | {
         auditAction?: string;
         auditActorEmployeeId?: string;
-        auditConversationId?: string;
-        auditEventType?: string;
         auditFrom?: string;
         auditPermission?: string;
         auditRoleId?: string;
@@ -543,8 +348,6 @@ function resolveAuditFilters(
 ): {
   readonly accessAction?: AccessAuditAction;
   readonly actorEmployeeId?: EmployeeId;
-  readonly conversationId?: string;
-  readonly eventType: AuditEventType;
   readonly from?: Date;
   readonly permission?: Permission;
   readonly roleId?: string;
@@ -562,25 +365,15 @@ function resolveAuditFilters(
     searchParams?.auditPermission && isPermission(searchParams.auditPermission)
       ? searchParams.auditPermission
       : undefined;
-  const conversationId = normalizeOptionalFilter(
-    searchParams?.auditConversationId
-  );
-
   return {
     accessAction: resolveAccessAuditAction(searchParams?.auditAction),
     actorEmployeeId,
-    conversationId,
-    eventType: resolveAuditEventType(searchParams?.auditEventType),
     from: resolveAuditDate(searchParams?.auditFrom, "start"),
     permission,
     roleId,
     targetEmployeeId,
     to: resolveAuditDate(searchParams?.auditTo, "end")
   };
-}
-
-function resolveAuditEventType(value: string | undefined): AuditEventType {
-  return value === "access" || value === "routing" ? value : "all";
 }
 
 function resolveAccessAuditAction(
@@ -658,25 +451,6 @@ function scopeValueFromAuditMetadata(
   return scopeId === undefined
     ? t(permissionScopeTypeKey(scopeType))
     : `${t(permissionScopeTypeKey(scopeType))}:${scopeId}`;
-}
-
-function formatRoutingTransition(input: {
-  readonly emptyLabel: string;
-  readonly metadata: Record<string, unknown>;
-  readonly previousKey: string;
-  readonly nextKey: string;
-  readonly resolveLabel: (id: string) => string;
-}): string {
-  const previousValue = metadataString(input.metadata, input.previousKey);
-  const nextValue = metadataString(input.metadata, input.nextKey);
-
-  return `${previousValue ? input.resolveLabel(previousValue) : input.emptyLabel} -> ${
-    nextValue ? input.resolveLabel(nextValue) : input.emptyLabel
-  }`;
-}
-
-function opaqueAuditId(id: string): string {
-  return id;
 }
 
 function accessAuditActionKey(action: AccessAuditAction): I18nMessageKey {

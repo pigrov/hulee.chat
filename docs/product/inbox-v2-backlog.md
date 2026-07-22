@@ -3008,15 +3008,20 @@ dual materialization, backfill, N-1 V1 runtime or soak window is required.
     Detailed receipt:
     `docs/product/inbox-v2-db-011-baseline.md`.
 
-- [ ] `INB2-CLEAN-003` Delete residual V1 code and preserve-only tooling.
-  - State: `planned`; Priority: `P0`; Depends on: `INB2-CLEAN-002`,
-    `INB2-DB-011`.
+- [x] `INB2-CLEAN-003` Delete residual V1 code and preserve-only tooling.
+  - State: `done`; Priority: `P0`; Started: `2026-07-22`; Finished:
+    `2026-07-22`; Owner: `Codex`; Depends on: `INB2-CLEAN-002`, `INB2-DB-011`.
   - Acceptance: obsolete V1 core/contracts/repositories/routes/workers/UI/tests,
     preserve/N-1/online-bridge/RBAC-mapping scripts, fixtures and package commands
     are deleted. Shared versioned `/v1` contracts and non-Inbox internal routes
     remain; deletion is ownership-based rather than prefix-based.
   - Verification: dependency-aware repository search has only reviewed public or
-    historical V1 references and every retained gate passes. Evidence: -
+    historical V1 references and every retained gate passes. The physical
+    absence guard passed; source passed `79/79` files / `1,211/1,211` tests,
+    PostgreSQL passed `34/34` / `373/373` with `6` declared skips, and full
+    `pnpm check` passed `348` files / `4,013` tests with all auxiliary gates.
+    Evidence:
+    `docs/product/inbox-v2-clean-003-residual-v1-removal.md`.
 
 - [ ] `INB2-CLEAN-GATE` Verify the V2-only clean-slate boundary.
   - State: `planned`; Priority: `P0`; Depends on: `INB2-CLEAN-002`,

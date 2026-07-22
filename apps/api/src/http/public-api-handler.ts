@@ -1,6 +1,4 @@
 import type {
-  ChannelAdapter,
-  NormalizedIncomingMessage,
   PlatformErrorCode,
   PublicApiDeliveryStatusResponse,
   PublicApiInboundMessageRequest,
@@ -20,7 +18,6 @@ import {
   publicApiRegisterClientRequestSchema,
   publicApiV1Version
 } from "@hulee/contracts";
-import { createPublicApiChannelAdapter } from "@hulee/modules";
 import type { Logger } from "@hulee/observability";
 
 import { resolveRequestId } from "./request-id";
@@ -91,7 +88,6 @@ export type PublicApiCommandService = {
   ): Promise<PublicApiRegisterClientResponse>;
   acceptInboundMessage(
     context: PublicApiCommandContext,
-    message: NormalizedIncomingMessage,
     request: PublicApiInboundMessageRequest
   ): Promise<PublicApiInboundMessageResponse>;
   queueOutboundMessage(
@@ -108,7 +104,6 @@ export type PublicApiHandlerOptions = {
   authenticator: ApiKeyAuthenticator;
   commands: PublicApiCommandService;
   auditSink?: PublicApiAuditSink;
-  channelAdapter?: ChannelAdapter;
   logger?: Logger;
   requestIdFactory?: () => string;
 };
@@ -146,8 +141,6 @@ const apiKeyPattern = /^[A-Za-z0-9._~:-]+$/;
 export function createPublicApiHandler(
   options: PublicApiHandlerOptions
 ): PublicApiHandler {
-  const channelAdapter =
-    options.channelAdapter ?? createPublicApiChannelAdapter();
   const requestIdFactory = options.requestIdFactory ?? defaultRequestIdFactory;
 
   return {
@@ -193,8 +186,7 @@ export function createPublicApiHandler(
           route,
           context,
           commands: options.commands,
-          auditSink: options.auditSink,
-          channelAdapter
+          auditSink: options.auditSink
         });
       } catch (error) {
         const code = platformErrorCodeFromUnknown(error);
@@ -234,7 +226,6 @@ async function handleAuthenticatedRoute(input: {
   context: PublicApiCommandContext;
   commands: PublicApiCommandService;
   auditSink?: PublicApiAuditSink;
-  channelAdapter: ChannelAdapter;
 }): Promise<ApiHttpResponse> {
   switch (input.route.route) {
     case "register_client": {
@@ -264,13 +255,8 @@ async function handleAuthenticatedRoute(input: {
       const parsed = publicApiInboundMessageRequestSchema.parse(
         input.request.body
       );
-      const normalized = await input.channelAdapter.normalizeIncoming({
-        tenantId: input.context.tenantId,
-        body: parsed
-      });
       const response = await input.commands.acceptInboundMessage(
         input.context,
-        normalized,
         parsed
       );
 

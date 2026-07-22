@@ -6,9 +6,6 @@ import type {
   InternalChannelConnectorSummary,
   InternalChannelConnectorsResponse,
   InternalEgressStatusResponse,
-  InternalInboxConversationRoutingUpdateResponse,
-  InternalInboxReplyResponse,
-  InternalInboxViewResponse,
   InternalOrgStructureResponse,
   InternalOrgUnit,
   InternalRbacDirectGrantResponse,
@@ -37,9 +34,7 @@ import {
   internalChannelConnectorUpdateRequestSchema,
   internalSourceConnectionCreateRequestSchema,
   internalAccessDecisionRequestSchema,
-  internalInboxConversationRoutingUpdateRequestSchema,
   internalApiV1Version,
-  internalInboxReplyRequestSchema,
   internalOrgUnitUpsertRequestSchema,
   internalRbacDirectGrantCreateRequestSchema,
   internalRbacRoleBindingCreateRequestSchema,
@@ -63,14 +58,7 @@ import {
 } from "@hulee/core";
 import type { Logger } from "@hulee/observability";
 
-import type {
-  InternalInboxCommandService,
-  InternalInboxQueryService
-} from "../internal-inbox-service";
-import type {
-  InternalFileService,
-  InternalInboxV2FileDownloadService
-} from "../internal-file-service";
+import type { InboxV2FileDownloadService } from "../inbox-v2-file-download-service";
 import { InboxV2FileDownloadTicketError } from "../inbox-v2-file-download-ticket";
 import type { InternalAccessDecisionService } from "../internal-access-decision-service";
 import type { InternalEgressStatusService } from "../internal-egress-status-service";
@@ -98,10 +86,7 @@ export type InternalApiSessionResolver = {
 
 export type InternalApiHandlerOptions = {
   sessionResolver: InternalApiSessionResolver;
-  inboxQueries?: InternalInboxQueryService;
-  inboxCommands?: InternalInboxCommandService;
-  files?: InternalFileService;
-  fileDownloads?: InternalInboxV2FileDownloadService;
+  fileDownloads?: InboxV2FileDownloadService;
   integrations: InternalIntegrationService;
   tenantSettings: InternalTenantSettingsService;
   orgStructure: InternalOrgStructureService;
@@ -119,24 +104,6 @@ export type InternalApiHandler = {
 type RouteMatch =
   | {
       route: "health";
-    }
-  | {
-      route: "inbox_view";
-      selectedConversationId?: string;
-      queueId?: string;
-      assignedToMe?: boolean;
-    }
-  | {
-      route: "inbox_reply";
-      conversationId: string;
-    }
-  | {
-      route: "inbox_routing_update";
-      conversationId: string;
-    }
-  | {
-      route: "file_content";
-      fileId: string;
     }
   | {
       route: "inbox_v2_file_download";
@@ -329,9 +296,6 @@ export function createInternalApiHandler(
           request,
           route,
           session,
-          inboxQueries: options.inboxQueries,
-          inboxCommands: options.inboxCommands,
-          files: options.files,
           fileDownloads: options.fileDownloads,
           integrations: options.integrations,
           tenantSettings: options.tenantSettings,
@@ -468,10 +432,7 @@ async function handleAuthenticatedRoute(input: {
   request: ApiHttpRequest;
   route: Exclude<RouteMatch, { route: "health" }>;
   session: InternalApiSession;
-  inboxQueries: InternalInboxQueryService | undefined;
-  inboxCommands: InternalInboxCommandService | undefined;
-  files: InternalFileService | undefined;
-  fileDownloads?: InternalInboxV2FileDownloadService;
+  fileDownloads?: InboxV2FileDownloadService;
   integrations: InternalIntegrationService;
   tenantSettings: InternalTenantSettingsService;
   orgStructure: InternalOrgStructureService;
@@ -482,61 +443,6 @@ async function handleAuthenticatedRoute(input: {
   assertInternalRouteAuthorization(input.session, input.route);
 
   switch (input.route.route) {
-    case "inbox_view": {
-      const inboxQueries = requireInboxV1Service(input.inboxQueries);
-      const response: InternalInboxViewResponse =
-        await inboxQueries.loadInboxView(input.session, {
-          selectedConversationId: input.route.selectedConversationId,
-          filters: {
-            queueId: input.route.queueId,
-            assignedToMe: input.route.assignedToMe
-          }
-        });
-
-      return jsonResponse(200, response);
-    }
-
-    case "inbox_reply": {
-      const inboxCommands = requireInboxV1Service(input.inboxCommands);
-      const request = internalInboxReplyRequestSchema.parse(input.request.body);
-      const response: InternalInboxReplyResponse =
-        await inboxCommands.sendReply(input.session, {
-          conversationId: input.route.conversationId,
-          request
-        });
-
-      return jsonResponse(202, response);
-    }
-
-    case "inbox_routing_update": {
-      const inboxCommands = requireInboxV1Service(input.inboxCommands);
-      const request = internalInboxConversationRoutingUpdateRequestSchema.parse(
-        input.request.body
-      );
-      const response: InternalInboxConversationRoutingUpdateResponse =
-        await inboxCommands.updateConversationRouting(input.session, {
-          conversationId: input.route.conversationId,
-          request
-        });
-
-      return jsonResponse(200, response);
-    }
-
-    case "file_content": {
-      const files = requireInboxV1Service(input.files);
-      const file = await files.loadFileContent(input.session, {
-        fileId: input.route.fileId
-      });
-
-      return binaryResponse(200, file.body, {
-        "content-type": file.mediaType,
-        "content-length": String(file.body.byteLength),
-        "content-disposition": contentDispositionHeader(file.fileName),
-        "cache-control": "private, max-age=60",
-        "x-content-type-options": "nosniff"
-      });
-    }
-
     case "inbox_v2_file_download": {
       if (input.fileDownloads === undefined) {
         throw new CoreError(
@@ -957,17 +863,6 @@ async function handleAuthenticatedRoute(input: {
   }
 }
 
-function requireInboxV1Service<T>(service: T | undefined): T {
-  if (service === undefined) {
-    throw new CoreError(
-      "module.disabled",
-      "Inbox V1 is detached while the Inbox V2 production composition is incomplete."
-    );
-  }
-
-  return service;
-}
-
 function assertRouteConnectorMatchesRequest(
   routeConnectorId: string,
   request: { connectorId: string }
@@ -992,10 +887,6 @@ function internalRouteAuthorizationPolicy(
   route: Exclude<RouteMatch, { route: "health" }>
 ): InternalRouteAuthorizationPolicy {
   switch (route.route) {
-    case "inbox_view":
-    case "inbox_reply":
-    case "inbox_routing_update":
-    case "file_content":
     case "inbox_v2_file_download":
     case "inbox_v2_file_download_issue":
       return {
@@ -1064,16 +955,6 @@ function matchRoute(request: ApiHttpRequest): RouteMatch | undefined {
     return { route: "health" };
   }
 
-  if (request.method === "GET" && path === "/internal/v1/inbox") {
-    return {
-      route: "inbox_view",
-      selectedConversationId:
-        url.searchParams.get("conversationId") ?? undefined,
-      queueId: nonEmptyQueryValue(url.searchParams.get("queueId")),
-      assignedToMe: url.searchParams.get("assigned") === "me"
-    };
-  }
-
   if (
     request.method === "GET" &&
     path === "/internal/inbox-v2/files/download"
@@ -1094,17 +975,6 @@ function matchRoute(request: ApiHttpRequest): RouteMatch | undefined {
   if (request.method === "GET" && path === "/internal/v1/tenant/brand") {
     return {
       route: "tenant_brand_view"
-    };
-  }
-
-  const fileContentMatch = path.match(
-    /^\/internal\/v1\/files\/([^/]+)\/content$/
-  );
-
-  if (request.method === "GET" && fileContentMatch?.[1]) {
-    return {
-      route: "file_content",
-      fileId: decodeURIComponent(fileContentMatch[1])
     };
   }
 
@@ -1230,28 +1100,6 @@ function matchRoute(request: ApiHttpRequest): RouteMatch | undefined {
     return {
       route: "rbac_direct_grant_revoke",
       grantId: decodeURIComponent(directGrantRevokeMatch[1])
-    };
-  }
-
-  const replyMatch = path.match(
-    /^\/internal\/v1\/inbox\/conversations\/([^/]+)\/replies$/
-  );
-
-  if (request.method === "POST" && replyMatch?.[1]) {
-    return {
-      route: "inbox_reply",
-      conversationId: decodeURIComponent(replyMatch[1])
-    };
-  }
-
-  const routingUpdateMatch = path.match(
-    /^\/internal\/v1\/inbox\/conversations\/([^/]+)\/routing$/
-  );
-
-  if (request.method === "PATCH" && routingUpdateMatch?.[1]) {
-    return {
-      route: "inbox_routing_update",
-      conversationId: decodeURIComponent(routingUpdateMatch[1])
     };
   }
 

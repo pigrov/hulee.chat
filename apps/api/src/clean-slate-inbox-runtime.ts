@@ -6,8 +6,10 @@ import type {
 } from "@hulee/contracts";
 import { CoreError } from "@hulee/core";
 
-import type { PublicApiCommandService } from "./http/public-api-handler";
-import type { TelegramWebhookHandler } from "./http/telegram-webhook-handler";
+import type {
+  ApiHttpHandler,
+  PublicApiCommandService
+} from "./http/public-api-handler";
 
 const detachedRuntimeMessage =
   "Inbox V1 is detached while the Inbox V2 production composition is incomplete.";
@@ -32,7 +34,7 @@ export function createCleanSlatePublicApiCommandService(): PublicApiCommandServi
   };
 }
 
-export function createCleanSlateTelegramWebhookHandler(): TelegramWebhookHandler {
+export function createCleanSlateTelegramWebhookHandler(): ApiHttpHandler {
   return {
     async handle() {
       // A success response deliberately drains any provider webhook that has not

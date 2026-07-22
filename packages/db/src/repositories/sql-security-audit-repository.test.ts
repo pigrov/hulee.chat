@@ -6,7 +6,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildListAccessAuditRecordsSql,
-  buildListConversationRoutingAuditRecordsSql,
   createSqlSecurityAuditRepository
 } from "./sql-security-audit-repository";
 import type {
@@ -121,170 +120,6 @@ describe("SQL security audit repository", () => {
     );
   });
 
-  it("writes and lists conversation routing audit records", async () => {
-    const tenantId = "tenant-1" as TenantId;
-    const actorEmployeeId = "employee-admin" as EmployeeId;
-    const executor = new RecordingSqlExecutor([
-      [],
-      [
-        {
-          id: "audit:conversation-1:routing",
-          tenant_id: tenantId,
-          actor_employee_id: actorEmployeeId,
-          entity_id: "conversation-1",
-          metadata: {
-            previousCurrentQueueId: "queue-intake",
-            currentQueueId: "queue-sales"
-          },
-          created_at: new Date("2026-06-23T12:00:00.000Z")
-        }
-      ]
-    ]);
-    const repository = createSqlSecurityAuditRepository(executor);
-
-    await repository.record({
-      id: "audit:conversation-1:routing",
-      tenantId,
-      actorEmployeeId,
-      action: "conversation.routing.updated",
-      entityType: "conversation",
-      entityId: "conversation-1",
-      metadata: {
-        previousCurrentQueueId: "queue-intake",
-        currentQueueId: "queue-sales"
-      },
-      occurredAt: new Date("2026-06-23T12:00:00.000Z")
-    });
-
-    await expect(
-      repository.listConversationRoutingRecords({
-        tenantId,
-        authorization: {
-          kind: "conversation",
-          conversationId: "conversation-1"
-        },
-        conversationId: "conversation-1",
-        limit: 5
-      })
-    ).resolves.toEqual([
-      {
-        id: "audit:conversation-1:routing",
-        tenantId,
-        actorEmployeeId,
-        conversationId: "conversation-1",
-        metadata: {
-          previousCurrentQueueId: "queue-intake",
-          currentQueueId: "queue-sales"
-        },
-        occurredAt: "2026-06-23T12:00:00.000Z"
-      }
-    ]);
-
-    const listQuery = renderQuery(executor.queries[1]);
-
-    expect(listQuery.sql).toContain("action = 'conversation.routing.updated'");
-    expect(listQuery.sql).toContain("entity_type = 'conversation'");
-    expect(listQuery.params).toEqual(
-      expect.arrayContaining([tenantId, "conversation-1"])
-    );
-  });
-
-  it("lists tenant conversation routing audit records with optional filters", async () => {
-    const tenantId = "tenant-1" as TenantId;
-    const actorEmployeeId = "employee-admin" as EmployeeId;
-    const from = new Date("2026-06-23T00:00:00.000Z");
-    const to = new Date("2026-06-23T23:59:59.999Z");
-    const executor = new RecordingSqlExecutor([
-      [
-        {
-          id: "audit:conversation-1:routing",
-          tenant_id: tenantId,
-          actor_employee_id: actorEmployeeId,
-          entity_id: "conversation-1",
-          metadata: {
-            currentQueueId: "queue-sales"
-          },
-          created_at: new Date("2026-06-23T12:00:00.000Z")
-        },
-        {
-          id: "audit:conversation-2:routing",
-          tenant_id: tenantId,
-          actor_employee_id: actorEmployeeId,
-          entity_id: "conversation-2",
-          metadata: {
-            currentQueueId: "queue-claims"
-          },
-          created_at: new Date("2026-06-23T13:00:00.000Z")
-        }
-      ]
-    ]);
-    const repository = createSqlSecurityAuditRepository(executor);
-
-    await expect(
-      repository.listConversationRoutingRecords({
-        tenantId,
-        authorization: { kind: "tenant" },
-        actorEmployeeId,
-        from,
-        to,
-        limit: 25
-      })
-    ).resolves.toMatchObject([
-      {
-        id: "audit:conversation-1:routing",
-        tenantId,
-        actorEmployeeId,
-        conversationId: "conversation-1"
-      },
-      {
-        id: "audit:conversation-2:routing",
-        tenantId,
-        actorEmployeeId,
-        conversationId: "conversation-2"
-      }
-    ]);
-
-    const listQuery = renderQuery(executor.queries[0]);
-
-    expect(listQuery.sql).toContain("actor_employee_id");
-    expect(listQuery.sql).toContain("created_at >=");
-    expect(listQuery.sql).toContain("created_at <=");
-    expect(listQuery.params).toEqual(
-      expect.arrayContaining([tenantId, actorEmployeeId, from, to, 25])
-    );
-  });
-
-  it("rejects cross-tenant conversation routing audit rows", async () => {
-    const repository = createSqlSecurityAuditRepository(
-      new RecordingSqlExecutor([
-        [
-          {
-            id: "audit:conversation-cross-tenant:routing",
-            tenant_id: "tenant-2",
-            actor_employee_id: "employee-admin",
-            entity_id: "conversation-1",
-            metadata: {
-              currentQueueId: "queue-sales"
-            },
-            created_at: new Date("2026-06-23T12:00:00.000Z")
-          }
-        ]
-      ])
-    );
-
-    await expect(
-      repository.listConversationRoutingRecords({
-        tenantId: "tenant-1" as TenantId,
-        authorization: {
-          kind: "conversation",
-          conversationId: "conversation-1"
-        },
-        conversationId: "conversation-1",
-        limit: 10
-      })
-    ).rejects.toEqual(new CoreError("tenant.boundary_violation"));
-  });
-
   it("rejects cross-tenant access audit rows", async () => {
     const repository = createSqlSecurityAuditRepository(
       new RecordingSqlExecutor([
@@ -360,65 +195,6 @@ describe("SQL security audit repository", () => {
         limit: 50
       })
     ).resolves.toMatchObject([{ id: "audit:allowed" }]);
-  });
-
-  it("shows a cross-scope event to the source viewer with foreign facets redacted", async () => {
-    const tenantId = "tenant-1" as TenantId;
-    const repository = createSqlSecurityAuditRepository(
-      new RecordingSqlExecutor([[crossScopeRoutingAuditRow(tenantId)]])
-    );
-
-    const records = await repository.listConversationRoutingRecords({
-      tenantId,
-      authorization: {
-        kind: "scoped",
-        orgUnitIds: [],
-        teamIds: [],
-        queueIds: ["queue-sales"]
-      },
-      limit: 50
-    });
-
-    expect(records).toHaveLength(1);
-    expect(records[0]?.metadata).toEqual({
-      conversationId: "conversation-1",
-      previousCurrentQueueId: "queue-sales",
-      queueIds: ["queue-sales"],
-      teamIds: [],
-      scopeType: "queue",
-      nestedScope: { type: "team" },
-      authorizationScopes: [{ type: "queue", id: "queue-sales" }]
-    });
-  });
-
-  it("shows a cross-scope event to the destination viewer with source facets redacted", async () => {
-    const tenantId = "tenant-1" as TenantId;
-    const repository = createSqlSecurityAuditRepository(
-      new RecordingSqlExecutor([[crossScopeRoutingAuditRow(tenantId)]])
-    );
-
-    const records = await repository.listConversationRoutingRecords({
-      tenantId,
-      authorization: {
-        kind: "scoped",
-        orgUnitIds: [],
-        teamIds: [],
-        queueIds: ["queue-claims"]
-      },
-      limit: 50
-    });
-
-    expect(records).toHaveLength(1);
-    expect(records[0]?.metadata).toEqual({
-      conversationId: "conversation-1",
-      currentQueueId: "queue-claims",
-      queueIds: ["queue-claims"],
-      teamIds: [],
-      scopeType: "queue",
-      scopeId: "queue-claims",
-      nestedScope: { type: "team" },
-      authorizationScopes: [{ type: "queue", id: "queue-claims" }]
-    });
   });
 
   it("redacts the opposite RBAC facet for source and destination scoped viewers", async () => {
@@ -534,22 +310,6 @@ describe("SQL security audit repository", () => {
     });
   });
 
-  it("returns complete cross-scope metadata to tenant audit", async () => {
-    const tenantId = "tenant-1" as TenantId;
-    const row = crossScopeRoutingAuditRow(tenantId);
-    const repository = createSqlSecurityAuditRepository(
-      new RecordingSqlExecutor([[row]])
-    );
-
-    const records = await repository.listConversationRoutingRecords({
-      tenantId,
-      authorization: { kind: "tenant" },
-      limit: 50
-    });
-
-    expect(records[0]?.metadata).toEqual(row.metadata);
-  });
-
   it("applies scoped authorization before ordering and limiting", () => {
     const query = renderQuery(
       buildListAccessAuditRecordsSql({
@@ -588,7 +348,7 @@ describe("SQL security audit repository", () => {
 
   it("fails closed for scoped authorization without usable facets", () => {
     const query = renderQuery(
-      buildListConversationRoutingAuditRecordsSql({
+      buildListAccessAuditRecordsSql({
         tenantId: "tenant-1" as TenantId,
         authorization: {
           kind: "scoped",
@@ -615,44 +375,6 @@ describe("SQL security audit repository", () => {
 
     expect(query.sql).toContain("and true");
     expect(query.sql).not.toContain("authorizationScopes");
-  });
-
-  it("restricts conversation authorization to the exact routing entity", () => {
-    const query = renderQuery(
-      buildListConversationRoutingAuditRecordsSql({
-        tenantId: "tenant-1" as TenantId,
-        authorization: {
-          kind: "conversation",
-          conversationId: "conversation-1"
-        },
-        conversationId: "conversation-1",
-        limit: 5
-      })
-    );
-
-    expect(query.sql).toContain("and entity_id =");
-    expect(
-      query.params.filter((parameter) => parameter === "conversation-1")
-    ).toHaveLength(3);
-    expect(query.sql.indexOf("entity_id =")).toBeLessThan(
-      query.sql.indexOf("order by created_at desc")
-    );
-  });
-
-  it("fails closed when conversation authorization and filter differ", () => {
-    const query = renderQuery(
-      buildListConversationRoutingAuditRecordsSql({
-        tenantId: "tenant-1" as TenantId,
-        authorization: {
-          kind: "conversation",
-          conversationId: "conversation-1"
-        },
-        conversationId: "conversation-2",
-        limit: 5
-      })
-    );
-
-    expect(query.sql).toContain("and false");
   });
 });
 
@@ -686,32 +408,4 @@ function renderQuery(query: SQL | undefined): {
   }
 
   return new PgDialect().sqlToQuery(query);
-}
-
-function crossScopeRoutingAuditRow(tenantId: TenantId) {
-  return {
-    id: "audit:conversation-1:routing",
-    tenant_id: tenantId,
-    actor_employee_id: "employee-admin",
-    entity_id: "conversation-1",
-    metadata: {
-      conversationId: "conversation-1",
-      previousCurrentQueueId: "queue-sales",
-      currentQueueId: "queue-claims",
-      previousAssignedTeamId: "team-sales",
-      assignedTeamId: "team-claims",
-      queueIds: ["queue-sales", "queue-claims"],
-      teamIds: ["team-sales", "team-claims"],
-      scopeType: "queue",
-      scopeId: "queue-claims",
-      nestedScope: { type: "team", id: "team-claims" },
-      authorizationScopes: [
-        { type: "queue", id: "queue-sales" },
-        { type: "queue", id: "queue-claims" },
-        { type: "team", id: "team-sales" },
-        { type: "team", id: "team-claims" }
-      ]
-    },
-    created_at: new Date("2026-06-23T12:00:00.000Z")
-  };
 }

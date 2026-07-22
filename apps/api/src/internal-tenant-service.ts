@@ -6,7 +6,7 @@ import {
 } from "@hulee/branding";
 import type {
   EventId,
-  InternalInboxBrandProfile,
+  InternalTenantBrandProfile,
   InternalTenantBrandResponse,
   InternalTenantBrandUpdateRequest,
   PlatformEvent,
@@ -259,7 +259,7 @@ export function buildUpdateTenantBrandSql(input: {
 async function loadTenantBrand(
   executor: RawSqlExecutor,
   tenantId: TenantId
-): Promise<InternalInboxBrandProfile> {
+): Promise<InternalTenantBrandProfile> {
   const result = await executor.execute<TenantBrandRow>(
     buildLoadTenantBrandSql(tenantId)
   );
@@ -275,7 +275,7 @@ async function loadTenantBrand(
 function mapTenantBrandRow(
   row: TenantBrandRow,
   input: { strictTokens: boolean }
-): InternalInboxBrandProfile {
+): InternalTenantBrandProfile {
   const tenantBrand: BrandProfile | undefined =
     row.brand_id && row.product_name
       ? {

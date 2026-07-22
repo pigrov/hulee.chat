@@ -25,14 +25,6 @@ import {
 } from "@hulee/contracts";
 import { z } from "zod";
 
-import {
-  isPermission as isInboxV1Permission,
-  isPermissionScope as isInboxV1PermissionScope,
-  isPermissionScopeAllowed as isInboxV1PermissionScopeAllowed,
-  type Permission as InboxV1Permission,
-  type PermissionScope as InboxV1PermissionScope
-} from "./permissions";
-
 export const INBOX_V2_PERMISSION_SCOPE_CATALOG_SCHEMA_ID =
   "core:inbox-v2.permission-scope-catalog" as const;
 export const INBOX_V2_PERMISSION_SCOPE_CATALOG_VERSION = "v1" as const;
@@ -996,342 +988,6 @@ export function isInboxV2PermissionScopePairLegal(input: {
   return evaluateInboxV2PermissionScopePairLegality(input).kind === "legal";
 }
 
-export type InboxV1PermissionMappingDisposition =
-  | "automatic_if_scope_legal"
-  | "review_required"
-  | "compatibility_only";
-
-export type InboxV1PermissionMappingDefinition = Readonly<{
-  v1PermissionId: InboxV1Permission;
-  disposition: InboxV1PermissionMappingDisposition;
-  candidatePermissionIds: readonly InboxV2PermissionId[];
-  semanticRestriction:
-    | "same_or_narrower"
-    | "aggregate_only"
-    | "external_reply_only"
-    | "action_split"
-    | "outside_inbox_v2";
-}>;
-
-function v1Mapping(
-  v1PermissionId: InboxV1Permission,
-  disposition: InboxV1PermissionMappingDisposition,
-  candidatePermissionIds: readonly InboxV2PermissionId[],
-  semanticRestriction: InboxV1PermissionMappingDefinition["semanticRestriction"]
-): InboxV1PermissionMappingDefinition {
-  return Object.freeze({
-    v1PermissionId,
-    disposition,
-    candidatePermissionIds: Object.freeze([...candidatePermissionIds]),
-    semanticRestriction
-  });
-}
-
-const v1MappingByPermission = {
-  "tenant.manage": v1Mapping(
-    "tenant.manage",
-    "automatic_if_scope_legal",
-    ["core:tenant.manage"],
-    "same_or_narrower"
-  ),
-  "employees.manage": v1Mapping(
-    "employees.manage",
-    "review_required",
-    [
-      "core:employee.directory.view",
-      "core:employee.invite",
-      "core:employee.profile.manage",
-      "core:employee.deactivate",
-      "core:org_unit.manage",
-      "core:team.manage",
-      "core:queue.manage"
-    ],
-    "action_split"
-  ),
-  "roles.manage": v1Mapping(
-    "roles.manage",
-    "review_required",
-    ["core:roles.define", "core:roles.bind", "core:direct_grants.manage"],
-    "action_split"
-  ),
-  "modules.manage": v1Mapping(
-    "modules.manage",
-    "compatibility_only",
-    [],
-    "outside_inbox_v2"
-  ),
-  "integrations.manage": v1Mapping(
-    "integrations.manage",
-    "compatibility_only",
-    [],
-    "outside_inbox_v2"
-  ),
-  "branding.manage": v1Mapping(
-    "branding.manage",
-    "compatibility_only",
-    [],
-    "outside_inbox_v2"
-  ),
-  "inbox.read": v1Mapping(
-    "inbox.read",
-    "automatic_if_scope_legal",
-    ["core:inbox.read"],
-    "same_or_narrower"
-  ),
-  "message.reply": v1Mapping(
-    "message.reply",
-    "review_required",
-    ["core:message.reply_external"],
-    "external_reply_only"
-  ),
-  "client.view": v1Mapping(
-    "client.view",
-    "automatic_if_scope_legal",
-    ["core:client.view"],
-    "same_or_narrower"
-  ),
-  "client.edit": v1Mapping(
-    "client.edit",
-    "automatic_if_scope_legal",
-    ["core:client.edit"],
-    "same_or_narrower"
-  ),
-  "client.contacts.view": v1Mapping(
-    "client.contacts.view",
-    "automatic_if_scope_legal",
-    ["core:client.contacts.view"],
-    "same_or_narrower"
-  ),
-  "client.contacts.edit": v1Mapping(
-    "client.contacts.edit",
-    "review_required",
-    ["core:client.edit", "core:client.fields.edit"],
-    "action_split"
-  ),
-  "conversation.read": v1Mapping(
-    "conversation.read",
-    "automatic_if_scope_legal",
-    ["core:conversation.read"],
-    "same_or_narrower"
-  ),
-  "conversation.assign": v1Mapping(
-    "conversation.assign",
-    "review_required",
-    [
-      "core:work.claim",
-      "core:work.assign",
-      "core:work.servicing_team.manage",
-      "core:work.release_self",
-      "core:work.release_other",
-      "core:work.transfer"
-    ],
-    "action_split"
-  ),
-  "conversation.close": v1Mapping(
-    "conversation.close",
-    "review_required",
-    ["core:work.close"],
-    "action_split"
-  ),
-  "conversation.reopen": v1Mapping(
-    "conversation.reopen",
-    "review_required",
-    ["core:work.reopen"],
-    "action_split"
-  ),
-  "lead.classify": v1Mapping(
-    "lead.classify",
-    "review_required",
-    ["core:client.pipeline.transition"],
-    "action_split"
-  ),
-  "lead.qualify": v1Mapping(
-    "lead.qualify",
-    "review_required",
-    ["core:client.pipeline.transition"],
-    "action_split"
-  ),
-  "lead.assign": v1Mapping(
-    "lead.assign",
-    "review_required",
-    ["core:work.assign", "core:client.owner.assign"],
-    "action_split"
-  ),
-  "files.view": v1Mapping(
-    "files.view",
-    "automatic_if_scope_legal",
-    ["core:file.view"],
-    "same_or_narrower"
-  ),
-  "files.upload": v1Mapping(
-    "files.upload",
-    "automatic_if_scope_legal",
-    ["core:file.upload"],
-    "same_or_narrower"
-  ),
-  "reports.view": v1Mapping(
-    "reports.view",
-    "automatic_if_scope_legal",
-    ["core:reports.view"],
-    "aggregate_only"
-  ),
-  "audit.view": v1Mapping(
-    "audit.view",
-    "automatic_if_scope_legal",
-    ["core:audit.view"],
-    "same_or_narrower"
-  ),
-  "api_keys.manage": v1Mapping(
-    "api_keys.manage",
-    "compatibility_only",
-    [],
-    "outside_inbox_v2"
-  ),
-  "webhooks.manage": v1Mapping(
-    "webhooks.manage",
-    "compatibility_only",
-    [],
-    "outside_inbox_v2"
-  )
-} as const satisfies Record<
-  InboxV1Permission,
-  InboxV1PermissionMappingDefinition
->;
-
-export const inboxV1ToV2PermissionMappings = Object.freeze(
-  Object.values(v1MappingByPermission)
-);
-
-export type InboxV1PermissionScopeMigrationResult =
-  | Readonly<{
-      kind: "mapped";
-      grants: readonly Readonly<{
-        permissionId: InboxV2PermissionId;
-        scope: InboxV2PermissionScope;
-      }>[];
-      semanticRestriction: InboxV1PermissionMappingDefinition["semanticRestriction"];
-    }>
-  | Readonly<{
-      kind: "review_required";
-      reason:
-        | "legacy_relation_scope_ambiguous"
-        | "legacy_client_scope_does_not_propagate"
-        | "permission_action_split"
-        | "scope_pair_not_legal"
-        | "scope_target_requires_v2_id_mapping";
-      candidatePermissionIds: readonly InboxV2PermissionId[];
-    }>
-  | Readonly<{
-      kind: "compatibility_only";
-      reason: "outside_inbox_v2";
-    }>
-  | Readonly<{
-      kind: "invalid";
-      reason:
-        | "unknown_v1_permission"
-        | "invalid_v1_scope"
-        | "illegal_v1_permission_scope_pair"
-        | "invalid_tenant";
-    }>;
-
-export function migrateInboxV1PermissionScopeToV2(input: {
-  tenantId: string;
-  permissionId: string;
-  scope: unknown;
-}): InboxV1PermissionScopeMigrationResult {
-  const tenantId = inboxV2TenantIdSchema.safeParse(input.tenantId);
-  if (!tenantId.success) {
-    return Object.freeze({ kind: "invalid", reason: "invalid_tenant" });
-  }
-
-  if (!isInboxV1Permission(input.permissionId)) {
-    return Object.freeze({
-      kind: "invalid",
-      reason: "unknown_v1_permission"
-    });
-  }
-
-  if (!isInboxV1PermissionScope(input.scope)) {
-    return Object.freeze({ kind: "invalid", reason: "invalid_v1_scope" });
-  }
-
-  const mapping = v1MappingByPermission[input.permissionId];
-  if (input.scope.type === "assigned" || input.scope.type === "own") {
-    return reviewRequired(
-      "legacy_relation_scope_ambiguous",
-      mapping.candidatePermissionIds
-    );
-  }
-
-  if (!isInboxV1PermissionScopeAllowed(input.permissionId, input.scope.type)) {
-    return Object.freeze({
-      kind: "invalid",
-      reason: "illegal_v1_permission_scope_pair"
-    });
-  }
-
-  if (mapping.disposition === "compatibility_only") {
-    return Object.freeze({
-      kind: "compatibility_only",
-      reason: "outside_inbox_v2"
-    });
-  }
-
-  if (
-    input.scope.type === "client" &&
-    mapping.candidatePermissionIds.some(
-      (permissionId) =>
-        permissionId === "core:inbox.read" ||
-        permissionId === "core:conversation.read" ||
-        permissionId === "core:message.reply_external"
-    )
-  ) {
-    return reviewRequired(
-      "legacy_client_scope_does_not_propagate",
-      mapping.candidatePermissionIds
-    );
-  }
-
-  const scope = translateInboxV1Scope(tenantId.data, input.scope);
-  if (scope === undefined) {
-    return reviewRequired(
-      "scope_target_requires_v2_id_mapping",
-      mapping.candidatePermissionIds
-    );
-  }
-  const legalCandidateIds = mapping.candidatePermissionIds.filter(
-    (permissionId) =>
-      isInboxV2PermissionScopePairLegal({
-        permissionId,
-        scope,
-        principalKind: "employee"
-      })
-  );
-
-  if (mapping.disposition === "review_required") {
-    return reviewRequired(
-      "permission_action_split",
-      legalCandidateIds.length > 0
-        ? legalCandidateIds
-        : mapping.candidatePermissionIds
-    );
-  }
-
-  if (legalCandidateIds.length !== mapping.candidatePermissionIds.length) {
-    return reviewRequired("scope_pair_not_legal", legalCandidateIds);
-  }
-
-  return Object.freeze({
-    kind: "mapped",
-    grants: Object.freeze(
-      legalCandidateIds.map((permissionId) =>
-        Object.freeze({ permissionId, scope })
-      )
-    ),
-    semanticRestriction: mapping.semanticRestriction
-  });
-}
-
 const scopeTypeSchema = z.enum(inboxV2PermissionScopeTypes);
 const principalKindSchema = z.enum(["employee", "trusted_service"]);
 const orgUnitModeSchema = z.enum(["exact", "subtree"]);
@@ -1403,44 +1059,6 @@ const guardProfileDefinitionRegistrationSchema = z
       "requiredFenceIds",
       context
     );
-  });
-
-const v1MappingDefinitionRegistrationSchema = z
-  .object({
-    v1PermissionId: z.string().refine(isInboxV1Permission),
-    disposition: z.enum([
-      "automatic_if_scope_legal",
-      "review_required",
-      "compatibility_only"
-    ]),
-    candidatePermissionIds: z
-      .array(z.string().refine(isInboxV2PermissionId))
-      .max(inboxV2PermissionCatalog.length),
-    semanticRestriction: z.enum([
-      "same_or_narrower",
-      "aggregate_only",
-      "external_reply_only",
-      "action_split",
-      "outside_inbox_v2"
-    ])
-  })
-  .strict()
-  .superRefine((value, context) => {
-    addDuplicateArrayIssues(
-      value.candidatePermissionIds,
-      "candidatePermissionIds",
-      context
-    );
-    if (
-      (value.disposition === "compatibility_only") !==
-      (value.candidatePermissionIds.length === 0)
-    ) {
-      context.addIssue({
-        code: "custom",
-        message:
-          "Compatibility-only V1 mappings must be the only mappings without V2 candidates."
-      });
-    }
   });
 
 const inboxV2PermissionCatalogRegistrationBaseSchema =
@@ -1581,52 +1199,6 @@ export const inboxV2PermissionGuardProfileCatalogRegistrationSchema =
     }
   );
 
-const inboxV1PermissionMappingCatalogRegistrationBaseSchema =
-  createInboxV2CoreCatalogRegistrationSchema({
-    catalog: "inbox-v1-permission-mapping",
-    definitionSchema: v1MappingDefinitionRegistrationSchema
-  });
-export const inboxV1PermissionMappingCatalogRegistrationSchema =
-  inboxV1PermissionMappingCatalogRegistrationBaseSchema.superRefine(
-    (registration, context) => {
-      if (
-        registration.payload.entries.length !==
-        inboxV1ToV2PermissionMappings.length
-      ) {
-        context.addIssue({
-          code: "custom",
-          path: ["payload", "entries"],
-          message: "Inbox V1 compatibility mapping must be complete."
-        });
-      }
-
-      for (const [index, entry] of registration.payload.entries.entries()) {
-        const expected = isInboxV1Permission(entry.definition.v1PermissionId)
-          ? v1MappingByPermission[entry.definition.v1PermissionId]
-          : undefined;
-        if (
-          expected === undefined ||
-          `core:v1-permission.${expected.v1PermissionId}` !==
-            String(entry.id) ||
-          expected.disposition !== entry.definition.disposition ||
-          expected.semanticRestriction !==
-            entry.definition.semanticRestriction ||
-          !sameStringArray(
-            expected.candidatePermissionIds,
-            entry.definition.candidatePermissionIds
-          )
-        ) {
-          context.addIssue({
-            code: "custom",
-            path: ["payload", "entries", index],
-            message:
-              "Inbox V1 compatibility mapping differs from the canonical catalog."
-          });
-        }
-      }
-    }
-  );
-
 export const inboxV2PermissionCatalogRegistration = requireRegistration(
   defineInboxV2CatalogRegistrations([
     inboxV2PermissionCatalogRegistrationSchema.parse({
@@ -1688,30 +1260,12 @@ export const inboxV2PermissionGuardProfileCatalogRegistration =
     ])[0]
   );
 
-export const inboxV1PermissionMappingCatalogRegistration = requireRegistration(
-  defineInboxV2CatalogRegistrations([
-    inboxV1PermissionMappingCatalogRegistrationSchema.parse({
-      schemaId: INBOX_V2_CATALOG_REGISTRATION_SCHEMA_ID,
-      schemaVersion: INBOX_V2_INITIAL_SCHEMA_VERSION,
-      payload: {
-        catalog: "inbox-v1-permission-mapping",
-        owner: { kind: "core" },
-        entries: inboxV1ToV2PermissionMappings.map((entry) => ({
-          id: `core:v1-permission.${entry.v1PermissionId}`,
-          definition: entry
-        }))
-      }
-    })
-  ])[0]
-);
-
 const inboxV2PermissionScopeCatalogPayloadSchema = z
   .object({
     registrations: z.tuple([
       inboxV2PermissionCatalogRegistrationSchema,
       inboxV2ScopeCatalogRegistrationSchema,
-      inboxV2PermissionGuardProfileCatalogRegistrationSchema,
-      inboxV1PermissionMappingCatalogRegistrationSchema
+      inboxV2PermissionGuardProfileCatalogRegistrationSchema
     ])
   })
   .strict();
@@ -1726,8 +1280,7 @@ export const inboxV2PermissionScopeCatalogSchema =
 const inboxV2PermissionScopeCatalogRegistrations = Object.freeze([
   inboxV2PermissionCatalogRegistration,
   inboxV2ScopeCatalogRegistration,
-  inboxV2PermissionGuardProfileCatalogRegistration,
-  inboxV1PermissionMappingCatalogRegistration
+  inboxV2PermissionGuardProfileCatalogRegistration
 ] as const);
 
 inboxV2PermissionScopeCatalogSchema.parse({
@@ -1743,56 +1296,6 @@ export const inboxV2PermissionScopeCatalog = Object.freeze({
     registrations: inboxV2PermissionScopeCatalogRegistrations
   })
 });
-
-function translateInboxV1Scope(
-  tenantId: InboxV2TenantId,
-  scope: InboxV1PermissionScope
-): InboxV2PermissionScope | undefined {
-  if (scope.type === "tenant") {
-    return Object.freeze({ type: "tenant", tenantId });
-  }
-
-  if (scope.type === "org_unit") {
-    const id = inboxV2OrgUnitIdSchema.safeParse(scope.id);
-    if (!id.success) {
-      return undefined;
-    }
-    return Object.freeze({
-      type: "org_unit",
-      tenantId,
-      id: id.data,
-      mode: "exact"
-    });
-  }
-
-  if (scope.type === "assigned" || scope.type === "own") {
-    return undefined;
-  }
-
-  if (!("id" in scope)) {
-    return undefined;
-  }
-
-  const parser = exactReferenceIdParserByScopeType[scope.type];
-  const id = parser.safeParse(scope.id);
-  return id.success
-    ? createExactReferenceScope(scope.type, tenantId, id.data)
-    : undefined;
-}
-
-function reviewRequired(
-  reason: Extract<
-    InboxV1PermissionScopeMigrationResult,
-    { kind: "review_required" }
-  >["reason"],
-  candidatePermissionIds: readonly InboxV2PermissionId[]
-): InboxV1PermissionScopeMigrationResult {
-  return Object.freeze({
-    kind: "review_required",
-    reason,
-    candidatePermissionIds: Object.freeze([...candidatePermissionIds])
-  });
-}
 
 const exactReferenceIdParserByScopeType = {
   team: inboxV2TeamIdSchema,

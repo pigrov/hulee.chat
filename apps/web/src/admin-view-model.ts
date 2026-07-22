@@ -3,8 +3,8 @@ import {
   resolveBrandProfile
 } from "@hulee/branding";
 import type {
-  InternalInboxBrandProfile,
-  InternalInboxTenantContext,
+  InternalTenantBrandProfile,
+  InternalTenantContext,
   TenantId
 } from "@hulee/contracts";
 import { CoreError } from "@hulee/core";
@@ -14,7 +14,7 @@ import { sql } from "drizzle-orm";
 import { getWebDatabase } from "./web-database";
 
 export type TenantAdminViewModel = {
-  readonly tenant: InternalInboxTenantContext;
+  readonly tenant: InternalTenantContext;
 };
 
 type TenantAdminRow = {
@@ -81,7 +81,7 @@ export async function loadTenantAdminViewModel(input: {
 function mapTenantAdminRow(
   row: TenantAdminRow,
   tenantId: TenantId
-): InternalInboxTenantContext {
+): InternalTenantContext {
   const tenantBrand =
     row.brand_id && row.product_name
       ? {
@@ -114,7 +114,7 @@ function mapTenantAdminRow(
       assets: brand.assets,
       themeTokens: brand.themeTokens,
       links: brand.links ?? {}
-    } satisfies InternalInboxBrandProfile
+    } satisfies InternalTenantBrandProfile
   };
 }
 
@@ -138,13 +138,13 @@ function normalizeThemeTokens(value: unknown): Record<string, string> {
   }
 }
 
-function resolveLocale(locale: string): InternalInboxTenantContext["locale"] {
+function resolveLocale(locale: string): InternalTenantContext["locale"] {
   return locale === "en" ? "en" : "ru";
 }
 
 function resolveDeploymentType(
   deploymentType: string
-): InternalInboxTenantContext["deploymentType"] {
+): InternalTenantContext["deploymentType"] {
   switch (deploymentType) {
     case "saas_isolated":
     case "on_prem":

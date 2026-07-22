@@ -27,14 +27,14 @@ export const internalApiPlatformErrorCodeSchema = z.enum([
   "validation.failed"
 ] satisfies [PlatformErrorCode, ...PlatformErrorCode[]]);
 
-export const internalInboxLocaleSchema = z.enum(["ru", "en"]);
-export const internalInboxDeploymentTypeSchema = z.enum([
+export const internalTenantLocaleSchema = z.enum(["ru", "en"]);
+export const internalTenantDeploymentTypeSchema = z.enum([
   "saas_shared",
   "saas_isolated",
   "on_prem"
 ]);
 
-export const internalInboxBrandProfileSchema = z
+export const internalTenantBrandProfileSchema = z
   .object({
     id: z.string().trim().min(1),
     scope: z.enum(["platform", "tenant", "deployment"]),
@@ -48,105 +48,14 @@ export const internalInboxBrandProfileSchema = z
   })
   .strict();
 
-export const internalInboxTenantContextSchema = z
+export const internalTenantContextSchema = z
   .object({
     tenantId: z.string().trim().min(1),
     displayName: z.string().trim().min(1),
-    deploymentType: internalInboxDeploymentTypeSchema,
-    locale: internalInboxLocaleSchema,
+    deploymentType: internalTenantDeploymentTypeSchema,
+    locale: internalTenantLocaleSchema,
     timezone: z.string().trim().min(1),
-    brand: internalInboxBrandProfileSchema
-  })
-  .strict();
-
-export const internalInboxConversationSchema = z
-  .object({
-    id: z.string().trim().min(1),
-    clientId: z.string().trim().min(1),
-    clientDisplayName: z.string().trim().min(1),
-    status: z.string().trim().min(1),
-    source: z.string().trim().min(1),
-    currentQueueId: z.string().trim().min(1).optional(),
-    currentQueueName: z.string().trim().min(1).optional(),
-    currentQueueOwningOrgUnitId: z.string().trim().min(1).optional(),
-    assignedEmployeeId: z.string().trim().min(1).optional(),
-    assignedEmployeeDisplayName: z.string().trim().min(1).optional(),
-    assignedTeamId: z.string().trim().min(1).optional(),
-    assignedTeamName: z.string().trim().min(1).optional(),
-    messageCount: z.number().int().nonnegative(),
-    queuedCount: z.number().int().nonnegative(),
-    lastMessageText: z.string().optional(),
-    lastMessageAt: z.string().datetime({ offset: true }).optional()
-  })
-  .strict();
-
-export const internalInboxMessageAttachmentSchema = z
-  .object({
-    id: z.string().trim().min(1),
-    fileId: z.string().trim().min(1),
-    fileName: z.string().trim().min(1),
-    mediaType: z.string().trim().min(1),
-    sizeBytes: z.number().int().nonnegative(),
-    status: z.enum(["pending_download", "stored", "failed"])
-  })
-  .strict();
-
-export const internalInboxMessageSchema = z
-  .object({
-    id: z.string().trim().min(1),
-    conversationId: z.string().trim().min(1),
-    direction: z.enum(["inbound", "outbound"]),
-    text: z.string().optional(),
-    status: z.enum(["received", "queued", "sent", "failed"]),
-    attachments: z.array(internalInboxMessageAttachmentSchema).default([]),
-    createdAt: z.string().datetime({ offset: true })
-  })
-  .strict();
-
-export const internalInboxViewResponseSchema = z
-  .object({
-    tenant: internalInboxTenantContextSchema,
-    conversations: z.array(internalInboxConversationSchema),
-    selectedConversation: internalInboxConversationSchema.optional(),
-    messages: z.array(internalInboxMessageSchema)
-  })
-  .strict();
-
-export const internalInboxReplyRequestSchema = z
-  .object({
-    text: z.string().trim().min(1).max(20_000),
-    idempotencyKey: z.string().trim().min(1).max(300).optional()
-  })
-  .strict();
-
-export const internalInboxReplyResponseSchema = z
-  .object({
-    messageId: z.string().trim().min(1),
-    status: z.literal("queued"),
-    idempotencyKey: z.string().trim().min(1)
-  })
-  .strict();
-
-export const internalInboxConversationRoutingUpdateRequestSchema = z
-  .object({
-    currentQueueId: z.string().trim().min(1).max(200).nullable().optional(),
-    assignedEmployeeId: z.string().trim().min(1).max(200).nullable().optional(),
-    assignedTeamId: z.string().trim().min(1).max(200).nullable().optional()
-  })
-  .strict()
-  .refine(
-    (request) => Object.values(request).some((value) => value !== undefined),
-    {
-      message: "At least one routing field is required."
-    }
-  );
-
-export const internalInboxConversationRoutingUpdateResponseSchema = z
-  .object({
-    conversationId: z.string().trim().min(1),
-    currentQueueId: z.string().trim().min(1).optional(),
-    assignedEmployeeId: z.string().trim().min(1).optional(),
-    assignedTeamId: z.string().trim().min(1).optional()
+    brand: internalTenantBrandProfileSchema
   })
   .strict();
 
@@ -163,7 +72,7 @@ export const internalTenantBrandUpdateRequestSchema = z
 
 export const internalTenantBrandResponseSchema = z
   .object({
-    brand: internalInboxBrandProfileSchema
+    brand: internalTenantBrandProfileSchema
   })
   .strict();
 
@@ -1219,34 +1128,10 @@ export const internalApiErrorResponseSchema = z
   })
   .strict();
 
-export type InternalInboxBrandProfile = z.infer<
-  typeof internalInboxBrandProfileSchema
+export type InternalTenantBrandProfile = z.infer<
+  typeof internalTenantBrandProfileSchema
 >;
-export type InternalInboxTenantContext = z.infer<
-  typeof internalInboxTenantContextSchema
->;
-export type InternalInboxConversation = z.infer<
-  typeof internalInboxConversationSchema
->;
-export type InternalInboxMessage = z.infer<typeof internalInboxMessageSchema>;
-export type InternalInboxMessageAttachment = z.infer<
-  typeof internalInboxMessageAttachmentSchema
->;
-export type InternalInboxViewResponse = z.infer<
-  typeof internalInboxViewResponseSchema
->;
-export type InternalInboxReplyRequest = z.infer<
-  typeof internalInboxReplyRequestSchema
->;
-export type InternalInboxReplyResponse = z.infer<
-  typeof internalInboxReplyResponseSchema
->;
-export type InternalInboxConversationRoutingUpdateRequest = z.infer<
-  typeof internalInboxConversationRoutingUpdateRequestSchema
->;
-export type InternalInboxConversationRoutingUpdateResponse = z.infer<
-  typeof internalInboxConversationRoutingUpdateResponseSchema
->;
+export type InternalTenantContext = z.infer<typeof internalTenantContextSchema>;
 export type InternalTenantBrandUpdateRequest = z.infer<
   typeof internalTenantBrandUpdateRequestSchema
 >;

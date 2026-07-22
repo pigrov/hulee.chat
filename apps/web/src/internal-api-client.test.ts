@@ -38,65 +38,25 @@ import {
   loadSourceCatalog,
   loadSourceConnections,
   loadTenantBrand,
-  loadInboxViewModel,
   loadTelegramIntegration,
   refreshTelegramDiagnostics,
   restoreRbacRole,
   revokeRbacDirectGrant,
   revokeRbacRoleBinding,
-  sendInboxReply,
   setTelegramWebhook,
   startChannelAuthChallenge,
   submitChannelAuthChallenge,
   updateChannelConnector,
   updateRbacRole,
-  updateInboxConversationRouting,
   updateTelegramIntegration,
   updateTenantBrand,
   validateTelegramBotToken
-} from "./inbox-api-client";
+} from "./internal-api-client";
 
-describe("inbox API client", () => {
+describe("internal API client", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
-  });
-
-  it("fails closed every detached Inbox V1 client before headers or network I/O", async () => {
-    const fetchMock = vi.fn<typeof fetch>();
-    vi.stubGlobal("fetch", fetchMock);
-    const invocations = [
-      () =>
-        loadInboxViewModel({
-          selectedConversationId: "conversation-1",
-          queueId: "queue-sales",
-          assignedToMe: true
-        }),
-      () =>
-        sendInboxReply({
-          conversationId: "conversation-1",
-          text: "Hello",
-          idempotencyKey: "reply-1"
-        }),
-      () =>
-        updateInboxConversationRouting({
-          conversationId: "conversation-1",
-          request: {
-            currentQueueId: "queue-sales",
-            assignedEmployeeId: "employee-2",
-            assignedTeamId: null
-          }
-        })
-    ];
-
-    for (const invocation of invocations) {
-      await expect(invocation()).rejects.toMatchObject({
-        code: "module.disabled"
-      });
-    }
-
-    expect(buildInternalApiHeaders).not.toHaveBeenCalled();
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("passes explicit effective permission override when loading integration settings", async () => {

@@ -104,12 +104,12 @@ class RecordingSqlExecutor implements RawSqlExecutor {
 function createEvent(inputTenantId: TenantId): PlatformEvent {
   return {
     id: "event_sql_outbox" as never,
-    type: "message.sent",
+    type: "tenant.created",
     version: "v1",
     tenantId: inputTenantId,
     occurredAt: now.toISOString(),
     payload: {
-      messageId: "message_sql_outbox" as never
+      tenantId: inputTenantId
     }
   };
 }

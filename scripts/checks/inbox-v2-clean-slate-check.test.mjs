@@ -49,13 +49,6 @@ jobs:
     export default function InboxPage() {
       return t("inbox.cleanSlate.title");
     }`,
-  webFileRouteSource: `
-    export async function GET() {
-      return new Response(null, {
-        status: 410,
-        headers: { "x-hulee-inbox-runtime": "clean-slate-detached" }
-      });
-    }`,
   foundationSeedSource: `
     const registration = registerTenant(input);
     createTenantRegistrationRepository(database).registerTenant({ registration });`,
@@ -69,7 +62,9 @@ jobs:
       HULEE_WORKER_FEATURES: core
     command: ["pnpm", "--filter", "@hulee/worker", "start"]
   web:
-    command: ["pnpm", "--filter", "@hulee/web", "start"]`
+    command: ["pnpm", "--filter", "@hulee/web", "start"]`,
+  legacyFilePaths: Object.freeze([]),
+  runtimeSources: Object.freeze([])
 });
 
 describe("Inbox V2 clean-slate freeze check", () => {
@@ -261,18 +256,37 @@ jobs:
     );
   });
 
-  it("rejects a V1 Inbox Web root and V1 file proxy", () => {
+  it("rejects a V1 Inbox Web root", () => {
     const issues = validateInboxV2CleanSlateFreeze({
       ...validInput,
-      webInboxPageSource: `${validInput.webInboxPageSource}\nloadInboxViewModel();`,
-      webFileRouteSource: `${validInput.webFileRouteSource}
-        fetch("/internal/v1/files/file-1/content");`
+      webInboxPageSource: `${validInput.webInboxPageSource}\nloadInboxViewModel();`
+    });
+
+    expect(issues).toContain("Web root must not load the V1 Inbox view model");
+  });
+
+  it("rejects deleted V1 files and residual implementation symbols", () => {
+    const issues = validateInboxV2CleanSlateFreeze({
+      ...validInput,
+      legacyFilePaths: ["apps/web/src/inbox-api-client.ts"],
+      runtimeSources: [
+        {
+          path: "apps/api/src/legacy.ts",
+          source: `createInternalInboxCommandService();`
+        },
+        {
+          path: "packages/db/src/outbox.test.ts",
+          source: `const type = "message.sent";`
+        }
+      ]
     });
 
     expect(issues).toEqual(
       expect.arrayContaining([
-        "Web root must not load the V1 Inbox view model",
-        "Web file route must not proxy the V1 file API"
+        expect.stringContaining("apps/web/src/inbox-api-client.ts"),
+        expect.stringContaining(
+          "apps/api/src/legacy.ts, packages/db/src/outbox.test.ts"
+        )
       ])
     );
   });

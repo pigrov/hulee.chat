@@ -32,7 +32,7 @@ vi.mock("./action-security", () => ({
   assertWebActionRequest: mocks.assertWebActionRequest
 }));
 
-vi.mock("./inbox-api-client", () => ({
+vi.mock("./internal-api-client", () => ({
   archiveRbacRole: mocks.archiveRbacRole,
   createRbacDirectGrant: mocks.createRbacDirectGrant,
   createRbacRole: mocks.createRbacRole,

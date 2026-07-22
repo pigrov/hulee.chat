@@ -1,6 +1,5 @@
 import type {
   ChannelConnectorId,
-  ClientId,
   ConversationId,
   EmployeeId,
   EventId,
@@ -287,20 +286,6 @@ export type PlatformEvent =
       { employeeId: EmployeeId; role: string }
     >
   | EventEnvelope<"employee.deactivated", { employeeId: EmployeeId }>
-  | EventEnvelope<"client.created", { clientId: ClientId }>
-  | EventEnvelope<"conversation.created", { conversationId: ConversationId }>
-  | EventEnvelope<
-      "conversation.assigned",
-      {
-        conversationId: ConversationId;
-        actorEmployeeId: EmployeeId;
-        currentQueueId: string | null;
-        assignedEmployeeId: EmployeeId | null;
-        assignedTeamId: string | null;
-      }
-    >
-  | EventEnvelope<"message.received", { messageId: MessageId }>
-  | EventEnvelope<"message.sent", { messageId: MessageId }>
   | EventEnvelope<
       "channel.provider_operation.requested",
       {
@@ -339,10 +324,6 @@ export type PlatformEvent =
         sourceConnectionId: SourceConnectionId;
         eventType: SourceEventType;
       }
-    >
-  | EventEnvelope<
-      "message.delivery_failed",
-      { messageId: MessageId; errorCode: PlatformErrorCode }
     >
   | EventEnvelope<"notification.created", { notificationId: string }>
   | EventEnvelope<"notification_endpoint.registered", { endpointId: string }>
@@ -657,52 +638,6 @@ export type SourceAdapter = {
     connection?: SourceConnection;
     account?: SourceAccount;
   }): Promise<AdapterHealth>;
-};
-
-export type NormalizedAttachment = {
-  id?: string;
-  fileName?: string;
-  mediaType: string;
-  sizeBytes?: number;
-  storageKey?: string;
-  sourceUrl?: string;
-};
-
-export type NormalizedIncomingMessage = {
-  tenantId: TenantId;
-  providerMessageId: string;
-  channelExternalId: string;
-  clientExternalId: string;
-  clientDisplayName?: string;
-  text?: string;
-  attachments?: NormalizedAttachment[];
-  occurredAt: string;
-  idempotencyKey: string;
-};
-
-export type NormalizedOutgoingMessage = {
-  tenantId: TenantId;
-  conversationId: ConversationId;
-  messageId: MessageId;
-  channelExternalId: string;
-  clientExternalId?: string;
-  text?: string;
-  attachments?: NormalizedAttachment[];
-  idempotencyKey: string;
-};
-
-export type DeliveryResult = {
-  providerMessageId?: string;
-  status: "accepted" | "sent" | "failed";
-  errorCode?: PlatformErrorCode;
-  retryability?: Retryability;
-};
-
-export type ChannelAdapter = {
-  manifest: ModuleManifest;
-  normalizeIncoming(input: unknown): Promise<NormalizedIncomingMessage>;
-  sendMessage(message: NormalizedOutgoingMessage): Promise<DeliveryResult>;
-  health(): Promise<AdapterHealth>;
 };
 
 export type TelephonyProvider = {

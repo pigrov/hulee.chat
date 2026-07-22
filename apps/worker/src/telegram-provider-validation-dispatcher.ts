@@ -22,8 +22,11 @@ import {
   type TelegramBotIdentity
 } from "@hulee/modules";
 
-import type { OutboxHandler, OutboxRecord } from "./outbox-processor";
-import type { SecretResolver } from "./telegram-outbound-dispatcher";
+import type {
+  OutboxRecord,
+  ProviderControlOutboxHandler
+} from "./provider-control-outbox";
+import type { SecretResolver } from "./secret-resolver";
 
 export type TelegramProviderValidationBotApiClient = {
   getMe(): Promise<TelegramBotIdentity>;
@@ -48,7 +51,7 @@ const telegramBotTokenValidationKind = "telegram_bot_token";
 
 export function createTelegramProviderValidationDispatcher(
   options: TelegramProviderValidationDispatcherOptions
-): OutboxHandler {
+): ProviderControlOutboxHandler {
   const botApiClientFactory =
     options.botApiClientFactory ?? createTelegramBotApiClient;
   const egressRuntime =

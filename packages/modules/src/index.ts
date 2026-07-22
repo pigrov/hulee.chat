@@ -89,27 +89,18 @@ export type {
   SourceAdapterTransientRouteWrite,
   SourceAdapterTransientSecretWrite
 } from "./source-adapter-registry";
-export {
-  createPublicApiChannelAdapter,
-  normalizePublicApiIncomingMessage,
-  publicApiChannelInboundEnvelopeSchema,
-  publicApiChannelManifest
-} from "./public-api-channel";
-export type { PublicApiChannelInboundEnvelope } from "./public-api-channel";
+export { publicApiChannelManifest } from "./public-api-channel";
 export {
   createTelegramBotApiClient,
-  createTelegramChannelAdapter,
   deleteTelegramWebhook,
   buildTelegramProviderFailureOperatorHint,
   getTelegramBotIdentity,
   getTelegramUpdates,
   getTelegramWebhookInfo,
-  normalizeTelegramIncomingMessage,
   parseTelegramChannelConfig,
   sendTelegramTextMessage,
   setTelegramWebhook,
   telegramChannelConfigSchema,
-  telegramChannelInboundEnvelopeSchema,
   telegramChannelManifest,
   TelegramAdapterError
 } from "./telegram-channel";
@@ -118,7 +109,6 @@ export type {
   TelegramBotApiEgressBinding,
   TelegramBotIdentity,
   TelegramChannelConfig,
-  TelegramChannelInboundEnvelope,
   TelegramBotApiSettings,
   TelegramDeleteWebhookInput,
   TelegramGetUpdatesInput,

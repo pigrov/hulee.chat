@@ -493,7 +493,6 @@ export {
 } from "./sql-platform-audit-repository";
 export {
   buildListAccessAuditRecordsSql,
-  buildListConversationRoutingAuditRecordsSql,
   buildInsertSecurityAuditLogSql,
   accessAuditActions,
   createSqlSecurityAuditRepository
@@ -557,28 +556,6 @@ export type {
   PersistenceTable
 } from "./persistence-executor";
 export { tableRef } from "./persistence-executor";
-export type {
-  ExternalMessageRepository,
-  FindClientByExternalHandleInput,
-  FindConversationByIdInput,
-  FindDeliveryStatusInput,
-  FindMessageByIdempotencyKeyInput,
-  FindOpenConversationByClientInput,
-  PersistedMessageSummary,
-  UpdateConversationRoutingInput
-} from "./external-message-repository";
-export type {
-  AttachmentTransferRepository,
-  ListPendingTelegramAttachmentTransfersInput,
-  MarkAttachmentTransferFailedInput,
-  MarkAttachmentTransferStoredInput,
-  PendingTelegramAttachmentTransfer
-} from "./sql-attachment-transfer-repository";
-export type {
-  FileAccessRepository,
-  FileContentAccessRecord,
-  FindFileContentAccessInput
-} from "./sql-file-access-repository";
 export type {
   ClaimPendingOutboxInput,
   MarkOutboxFailedInput,
@@ -723,13 +700,6 @@ export type {
   UpdateCustomTenantRoleWithPermissionsInput
 } from "./sql-rbac-repository";
 export type {
-  FindQueuedOutboundMessageInput,
-  MarkOutboundMessageFailedInput,
-  MarkOutboundMessageSentInput,
-  OutboundDispatchRepository,
-  QueuedOutboundMessageForDispatch
-} from "./sql-outbound-dispatch-repository";
-export type {
   AuthenticatedTenantApiKey,
   CreateTenantApiKeyInput,
   PublicApiAuditLogRecord,
@@ -747,11 +717,8 @@ export type {
   AccessAuditEntityType,
   AccessAuditRecord,
   AuthSecurityAuditAction,
-  ConversationAuditAction,
-  ConversationRoutingAuditRecord,
   OrgStructureAuditAction,
   ListAccessAuditRecordsInput,
-  ListConversationRoutingAuditRecordsInput,
   SecurityAuditAction,
   SecurityAuditAuthorization,
   SecurityAuditEntityType,

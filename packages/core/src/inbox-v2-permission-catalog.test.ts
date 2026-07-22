@@ -5,7 +5,6 @@ import {
   INBOX_V2_PERMISSION_SCOPE_CATALOG_VERSION,
   createInboxV2ModulePermissionCatalogRegistrationSchema,
   evaluateInboxV2PermissionScopePairLegality,
-  inboxV1PermissionMappingCatalogRegistrationSchema,
   inboxV2PermissionCatalog,
   inboxV2PermissionCatalogRegistrationSchema,
   inboxV2PermissionGuardProfileCatalogRegistrationSchema,
@@ -17,7 +16,6 @@ import {
   inboxV2ScopeCatalog,
   inboxV2ScopeCatalogRegistrationSchema,
   isInboxV2PermissionScopePairLegal,
-  migrateInboxV1PermissionScopeToV2,
   parseInboxV2PermissionScope
 } from "./index";
 
@@ -569,7 +567,7 @@ describe("Inbox V2 permission/scope catalog", () => {
       schemaVersion: INBOX_V2_PERMISSION_SCOPE_CATALOG_VERSION,
       payload: { registrations: expect.any(Array) }
     });
-    expect(inboxV2PermissionScopeCatalog.payload.registrations).toHaveLength(4);
+    expect(inboxV2PermissionScopeCatalog.payload.registrations).toHaveLength(3);
 
     expect(inboxV2PermissionCatalog).toHaveLength(102);
     expect(inboxV2ScopeCatalog).toHaveLength(12);
@@ -605,7 +603,7 @@ describe("Inbox V2 permission/scope catalog", () => {
     ).toBe(true);
   });
 
-  it("composes four core-owned frozen CON-001 catalog registrations", () => {
+  it("composes three core-owned frozen CON-001 catalog registrations", () => {
     const registrations = inboxV2PermissionScopeCatalog.payload.registrations;
 
     expect(
@@ -616,8 +614,7 @@ describe("Inbox V2 permission/scope catalog", () => {
     ).toEqual([
       ["inbox-v2-permission", 102],
       ["inbox-v2-permission-scope", 12],
-      ["inbox-v2-permission-guard-profile", 21],
-      ["inbox-v1-permission-mapping", 25]
+      ["inbox-v2-permission-guard-profile", 21]
     ]);
 
     for (const registration of registrations) {
@@ -635,12 +632,8 @@ describe("Inbox V2 permission/scope catalog", () => {
   });
 
   it("rejects malformed specific and aggregate catalog envelopes", () => {
-    const [
-      permissionRegistration,
-      scopeRegistration,
-      guardRegistration,
-      mappingRegistration
-    ] = inboxV2PermissionScopeCatalog.payload.registrations;
+    const [permissionRegistration, scopeRegistration, guardRegistration] =
+      inboxV2PermissionScopeCatalog.payload.registrations;
 
     const specificSchemasAndRegistrations = [
       [inboxV2PermissionCatalogRegistrationSchema, permissionRegistration],
@@ -648,8 +641,7 @@ describe("Inbox V2 permission/scope catalog", () => {
       [
         inboxV2PermissionGuardProfileCatalogRegistrationSchema,
         guardRegistration
-      ],
-      [inboxV1PermissionMappingCatalogRegistrationSchema, mappingRegistration]
+      ]
     ] as const;
 
     for (const [schema, registration] of specificSchemasAndRegistrations) {
@@ -722,33 +714,6 @@ describe("Inbox V2 permission/scope catalog", () => {
           ]
         }
       }).success
-    ).toBe(false);
-
-    const malformedV1Mapping = {
-      ...mappingRegistration,
-      payload: {
-        ...mappingRegistration.payload,
-        entries: [
-          {
-            ...mappingRegistration.payload.entries[0]!,
-            definition: {
-              ...mappingRegistration.payload.entries[0]!.definition,
-              v1PermissionId: "not.valid"
-            }
-          },
-          ...mappingRegistration.payload.entries.slice(1)
-        ]
-      }
-    };
-    expect(() =>
-      inboxV1PermissionMappingCatalogRegistrationSchema.safeParse(
-        malformedV1Mapping
-      )
-    ).not.toThrow();
-    expect(
-      inboxV1PermissionMappingCatalogRegistrationSchema.safeParse(
-        malformedV1Mapping
-      ).success
     ).toBe(false);
 
     expect(
@@ -1109,170 +1074,6 @@ describe("Inbox V2 permission/scope catalog", () => {
         principalKind: "employee"
       })
     ).toBe(false);
-
-    expect(
-      migrateInboxV1PermissionScopeToV2({
-        tenantId,
-        permissionId: "conversation.read",
-        scope: { type: "client", id: "client:customer-1" }
-      })
-    ).toEqual({
-      kind: "review_required",
-      reason: "legacy_client_scope_does_not_propagate",
-      candidatePermissionIds: ["core:conversation.read"]
-    });
-  });
-
-  it("maps V1 permissions conservatively and never invents V2 relations", () => {
-    expect(
-      migrateInboxV1PermissionScopeToV2({
-        tenantId,
-        permissionId: "reports.view",
-        scope: { type: "tenant" }
-      })
-    ).toEqual({
-      kind: "mapped",
-      grants: [
-        {
-          permissionId: "core:reports.view",
-          scope: { type: "tenant", tenantId }
-        }
-      ],
-      semanticRestriction: "aggregate_only"
-    });
-
-    expect(
-      migrateInboxV1PermissionScopeToV2({
-        tenantId,
-        permissionId: "inbox.read",
-        scope: { type: "org_unit", id: "org_unit:support" }
-      })
-    ).toEqual({
-      kind: "mapped",
-      grants: [
-        {
-          permissionId: "core:inbox.read",
-          scope: {
-            type: "org_unit",
-            tenantId,
-            id: "org_unit:support",
-            mode: "exact"
-          }
-        }
-      ],
-      semanticRestriction: "same_or_narrower"
-    });
-
-    expect(
-      migrateInboxV1PermissionScopeToV2({
-        tenantId,
-        permissionId: "message.reply",
-        scope: { type: "conversation", id: "conversation:case-1" }
-      })
-    ).toEqual({
-      kind: "review_required",
-      reason: "permission_action_split",
-      candidatePermissionIds: ["core:message.reply_external"]
-    });
-
-    expect(
-      migrateInboxV1PermissionScopeToV2({
-        tenantId,
-        permissionId: "conversation.assign",
-        scope: { type: "queue", id: "work_queue:support" }
-      })
-    ).toMatchObject({
-      kind: "review_required",
-      reason: "permission_action_split"
-    });
-
-    for (const type of ["assigned", "own"] as const) {
-      expect(
-        migrateInboxV1PermissionScopeToV2({
-          tenantId,
-          permissionId: "message.reply",
-          scope: { type }
-        })
-      ).toEqual({
-        kind: "review_required",
-        reason: "legacy_relation_scope_ambiguous",
-        candidatePermissionIds: ["core:message.reply_external"]
-      });
-    }
-
-    expect(
-      migrateInboxV1PermissionScopeToV2({
-        tenantId,
-        permissionId: "modules.manage",
-        scope: { type: "assigned" }
-      })
-    ).toEqual({
-      kind: "review_required",
-      reason: "legacy_relation_scope_ambiguous",
-      candidatePermissionIds: []
-    });
-
-    expect(
-      migrateInboxV1PermissionScopeToV2({
-        tenantId,
-        permissionId: "reports.view",
-        scope: { type: "client", id: "client:customer-1" }
-      })
-    ).toEqual({
-      kind: "invalid",
-      reason: "illegal_v1_permission_scope_pair"
-    });
-
-    expect(
-      migrateInboxV1PermissionScopeToV2({
-        tenantId,
-        permissionId: "files.view",
-        scope: { type: "client", id: "legacy-uuid-without-kind" }
-      })
-    ).toEqual({
-      kind: "review_required",
-      reason: "scope_target_requires_v2_id_mapping",
-      candidatePermissionIds: ["core:file.view"]
-    });
-
-    expect(
-      migrateInboxV1PermissionScopeToV2({
-        tenantId,
-        permissionId: "files.view",
-        scope: { type: "client", id: "client:customer-1" }
-      })
-    ).toEqual({
-      kind: "mapped",
-      grants: [
-        {
-          permissionId: "core:file.view",
-          scope: { type: "client", tenantId, id: "client:customer-1" }
-        }
-      ],
-      semanticRestriction: "same_or_narrower"
-    });
-
-    expect(
-      migrateInboxV1PermissionScopeToV2({
-        tenantId,
-        permissionId: "modules.manage",
-        scope: { type: "tenant" }
-      })
-    ).toEqual({ kind: "compatibility_only", reason: "outside_inbox_v2" });
-    expect(
-      migrateInboxV1PermissionScopeToV2({
-        tenantId,
-        permissionId: "unknown.permission",
-        scope: { type: "tenant" }
-      })
-    ).toEqual({ kind: "invalid", reason: "unknown_v1_permission" });
-    expect(
-      migrateInboxV1PermissionScopeToV2({
-        tenantId,
-        permissionId: "reports.view",
-        scope: { type: "provider", id: "provider:admin" }
-      })
-    ).toEqual({ kind: "invalid", reason: "invalid_v1_scope" });
   });
 
   it("returns stable rejection reasons for malformed catalog inputs", () => {

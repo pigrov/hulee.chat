@@ -2,7 +2,6 @@ import type {
   EmployeeId,
   InternalAccessDecisionRequest,
   InternalAccessDecisionResponse,
-  InternalInboxViewResponse,
   InternalOrgUnitUpsertRequest,
   InternalRbacDirectGrantCreateRequest,
   InternalRbacRoleBindingCreateRequest,
@@ -45,51 +44,20 @@ const session: InternalApiSession = {
   ],
   authMode: "signed"
 };
-const inboxView: InternalInboxViewResponse = {
-  tenant: {
-    tenantId,
-    displayName: "Acme",
-    deploymentType: "saas_shared",
-    locale: "en",
-    timezone: "UTC",
-    brand: {
-      id: "brand-1",
-      scope: "tenant",
-      tenantId,
-      productName: "Acme Desk",
-      assets: {},
-      themeTokens: {},
-      links: {}
-    }
-  },
-  conversations: [],
-  messages: []
+const tenantBrand = {
+  id: "brand-1",
+  scope: "tenant" as const,
+  tenantId,
+  productName: "Acme Desk",
+  assets: {},
+  themeTokens: {},
+  links: {}
 };
 
 function createHandler(input?: {
   session?: InternalApiSession | null;
-  view?: InternalInboxViewResponse;
   fileDownloadsConfigured?: boolean;
-  inboxV1ServicesConfigured?: boolean;
 }) {
-  const loadInboxView = vi.fn(async () => input?.view ?? inboxView);
-  const sendReply = vi.fn(async () => ({
-    messageId: "message-1",
-    status: "queued" as const,
-    idempotencyKey: "reply-1"
-  }));
-  const updateConversationRouting = vi.fn(async () => ({
-    conversationId: "conversation-1",
-    currentQueueId: "queue-sales",
-    assignedEmployeeId: "employee-2"
-  }));
-  const loadFileContent = vi.fn(async () => ({
-    fileId: "file-1",
-    fileName: "photo.jpg",
-    mediaType: "image/jpeg",
-    sizeBytes: 3,
-    body: new Uint8Array([1, 2, 3])
-  }));
   const redeemFileDownload = vi.fn(async () => ({
     fileName: "exact-photo.jpg",
     mediaType: "image/jpeg",
@@ -560,12 +528,12 @@ function createHandler(input?: {
     }
   }));
   const loadTenantBrand = vi.fn(async () => ({
-    brand: inboxView.tenant.brand
+    brand: tenantBrand
   }));
   const updateTenantBrand = vi.fn(
     async (_context: unknown, request: InternalTenantBrandUpdateRequest) => ({
       brand: {
-        ...inboxView.tenant.brand,
+        ...tenantBrand,
         productName: request.productName,
         shortProductName: request.shortProductName,
         themeTokens: request.themeTokens
@@ -619,13 +587,6 @@ function createHandler(input?: {
         return input?.session === undefined ? session : input.session;
       }
     },
-    ...(input?.inboxV1ServicesConfigured === false
-      ? {}
-      : {
-          inboxQueries: { loadInboxView },
-          inboxCommands: { sendReply, updateConversationRouting },
-          files: { loadFileContent }
-        }),
     ...(input?.fileDownloadsConfigured === false
       ? {}
       : { fileDownloads: { issueFileDownload, redeemFileDownload } }),
@@ -682,10 +643,6 @@ function createHandler(input?: {
 
   return {
     handler,
-    loadInboxView,
-    sendReply,
-    updateConversationRouting,
-    loadFileContent,
     issueFileDownload,
     redeemFileDownload,
     listChannelCatalog,
@@ -752,7 +709,7 @@ describe("internal API handler", () => {
     const { handler } = createHandler({ session: null });
     const response = await handler.handle({
       method: "GET",
-      path: "/internal/v1/inbox"
+      path: "/internal/v1/tenant/brand"
     });
 
     expect(response.status).toBe(401);
@@ -760,176 +717,6 @@ describe("internal API handler", () => {
       error: {
         code: "auth.invalid_credentials",
         requestId: "request-1"
-      }
-    });
-  });
-
-  it.each([
-    ["inbox view", "GET", "/internal/v1/inbox", undefined],
-    [
-      "reply",
-      "POST",
-      "/internal/v1/inbox/conversations/conversation-1/replies",
-      { text: "must not be parsed" }
-    ],
-    [
-      "routing",
-      "PATCH",
-      "/internal/v1/inbox/conversations/conversation-1/routing",
-      { assignedEmployeeId: "employee-2" }
-    ],
-    ["file content", "GET", "/internal/v1/files/file-1/content", undefined]
-  ] as const)(
-    "fails closed detached V1 %s in production-style composition",
-    async (_label, method, path, body) => {
-      const {
-        handler,
-        loadInboxView,
-        sendReply,
-        updateConversationRouting,
-        loadFileContent
-      } = createHandler({ inboxV1ServicesConfigured: false });
-      const response = await handler.handle({
-        method,
-        path,
-        ...(body === undefined ? {} : { body })
-      });
-
-      expect(response.status).toBe(403);
-      expect(response.body).toMatchObject({
-        error: {
-          code: "module.disabled",
-          requestId: "request-1"
-        }
-      });
-      expect(loadInboxView).not.toHaveBeenCalled();
-      expect(sendReply).not.toHaveBeenCalled();
-      expect(updateConversationRouting).not.toHaveBeenCalled();
-      expect(loadFileContent).not.toHaveBeenCalled();
-    }
-  );
-
-  it("loads inbox through the tenant-scoped session context", async () => {
-    const { handler, loadInboxView } = createHandler();
-    const response = await handler.handle({
-      method: "GET",
-      path: "/internal/v1/inbox?conversationId=conversation-1&queueId=queue-sales&assigned=me"
-    });
-
-    expect(response.status).toBe(200);
-    expect(response.body).toEqual(inboxView);
-    expect(loadInboxView).toHaveBeenCalledWith(session, {
-      selectedConversationId: "conversation-1",
-      filters: {
-        queueId: "queue-sales",
-        assignedToMe: true
-      }
-    });
-  });
-
-  it("delegates inbox authorization to the query service", async () => {
-    const scopedSession: InternalApiSession = {
-      ...session,
-      permissions: ["message.reply", "modules.manage"]
-    };
-    const { handler, loadInboxView } = createHandler({
-      session: scopedSession
-    });
-    const response = await handler.handle({
-      method: "GET",
-      path: "/internal/v1/inbox"
-    });
-
-    expect(response.status).toBe(200);
-    expect(response.body).toEqual(inboxView);
-    expect(loadInboxView).toHaveBeenCalledWith(scopedSession, {
-      selectedConversationId: undefined,
-      filters: {
-        queueId: undefined,
-        assignedToMe: false
-      }
-    });
-  });
-
-  it("returns inbox permission errors from the query service", async () => {
-    const scopedSession: InternalApiSession = {
-      ...session,
-      permissions: []
-    };
-    const { handler, loadInboxView } = createHandler({
-      session: scopedSession
-    });
-    loadInboxView.mockRejectedValueOnce(new CoreError("permission.denied"));
-
-    const response = await handler.handle({
-      method: "GET",
-      path: "/internal/v1/inbox"
-    });
-
-    expect(response.status).toBe(403);
-    expect(response.body).toMatchObject({
-      error: {
-        code: "permission.denied"
-      }
-    });
-    expect(loadInboxView).toHaveBeenCalledWith(scopedSession, {
-      selectedConversationId: undefined,
-      filters: {
-        queueId: undefined,
-        assignedToMe: false
-      }
-    });
-  });
-
-  it("streams file content through the file service without coarse route permissions", async () => {
-    const scopedSession: InternalApiSession = {
-      ...session,
-      permissions: []
-    };
-    const { handler, loadFileContent } = createHandler({
-      session: scopedSession
-    });
-    const response = await handler.handle({
-      method: "GET",
-      path: "/internal/v1/files/file-1/content"
-    });
-
-    expect(response).toEqual({
-      status: 200,
-      headers: {
-        "content-type": "image/jpeg",
-        "content-length": "3",
-        "content-disposition":
-          "inline; filename=\"photo.jpg\"; filename*=UTF-8''photo.jpg",
-        "cache-control": "private, max-age=60",
-        "x-content-type-options": "nosniff"
-      },
-      body: new Uint8Array([1, 2, 3])
-    });
-    expect(loadFileContent).toHaveBeenCalledWith(scopedSession, {
-      fileId: "file-1"
-    });
-  });
-
-  it("returns file permission errors from the file service", async () => {
-    const scopedSession: InternalApiSession = {
-      ...session,
-      permissions: []
-    };
-    const { handler, loadFileContent } = createHandler({
-      session: scopedSession
-    });
-    loadFileContent.mockRejectedValueOnce(new CoreError("permission.denied"));
-
-    const response = await handler.handle({
-      method: "GET",
-      path: "/internal/v1/files/file-1/content"
-    });
-
-    expect(response.status).toBe(403);
-    expect(response.body).toMatchObject({
-      error: {
-        code: "permission.denied"
       }
     });
   });
@@ -1131,7 +918,7 @@ describe("internal API handler", () => {
 
     expect(loadResponse.status).toBe(200);
     expect(loadResponse.body).toEqual({
-      brand: inboxView.tenant.brand
+      brand: tenantBrand
     });
     expect(updateResponse.status).toBe(200);
     expect(updateResponse.body).toMatchObject({
@@ -1688,188 +1475,6 @@ describe("internal API handler", () => {
     expect(grantResponse.status).toBe(400);
     expect(createRole).not.toHaveBeenCalled();
     expect(createDirectGrant).not.toHaveBeenCalled();
-  });
-
-  it("validates and queues replies through the command service", async () => {
-    const { handler, sendReply } = createHandler();
-    const response = await handler.handle({
-      method: "POST",
-      path: "/internal/v1/inbox/conversations/conversation-1/replies",
-      body: {
-        text: " Hello ",
-        idempotencyKey: "reply-1"
-      }
-    });
-
-    expect(response.status).toBe(202);
-    expect(response.body).toEqual({
-      messageId: "message-1",
-      status: "queued",
-      idempotencyKey: "reply-1"
-    });
-    expect(sendReply).toHaveBeenCalledWith(session, {
-      conversationId: "conversation-1",
-      request: {
-        text: "Hello",
-        idempotencyKey: "reply-1"
-      }
-    });
-  });
-
-  it("delegates reply authorization to the command service instead of session permissions", async () => {
-    const scopedSession = sessionWithPermissions([]);
-    const { handler, sendReply } = createHandler({
-      session: scopedSession
-    });
-    const response = await handler.handle({
-      method: "POST",
-      path: "/internal/v1/inbox/conversations/conversation-1/replies",
-      body: {
-        text: "Hello",
-        idempotencyKey: "reply-1"
-      }
-    });
-
-    expect(response.status).toBe(202);
-    expect(sendReply).toHaveBeenCalledWith(scopedSession, {
-      conversationId: "conversation-1",
-      request: {
-        text: "Hello",
-        idempotencyKey: "reply-1"
-      }
-    });
-  });
-
-  it("returns reply permission errors from the command service", async () => {
-    const scopedSession: InternalApiSession = {
-      ...session,
-      permissions: ["inbox.read"]
-    };
-    const { handler, sendReply } = createHandler({
-      session: scopedSession
-    });
-    sendReply.mockRejectedValueOnce(new CoreError("permission.denied"));
-
-    const response = await handler.handle({
-      method: "POST",
-      path: "/internal/v1/inbox/conversations/conversation-1/replies",
-      body: {
-        text: " Hello ",
-        idempotencyKey: "reply-1"
-      }
-    });
-
-    expect(response.status).toBe(403);
-    expect(response.body).toMatchObject({
-      error: {
-        code: "permission.denied"
-      }
-    });
-    expect(sendReply).toHaveBeenCalledWith(scopedSession, {
-      conversationId: "conversation-1",
-      request: {
-        text: "Hello",
-        idempotencyKey: "reply-1"
-      }
-    });
-  });
-
-  it("rejects empty reply bodies before command execution", async () => {
-    const { handler, sendReply } = createHandler();
-    const response = await handler.handle({
-      method: "POST",
-      path: "/internal/v1/inbox/conversations/conversation-1/replies",
-      body: {
-        text: " "
-      }
-    });
-
-    expect(response.status).toBe(400);
-    expect(sendReply).not.toHaveBeenCalled();
-  });
-
-  it("validates and updates conversation routing through the command service", async () => {
-    const { handler, updateConversationRouting } = createHandler();
-    const response = await handler.handle({
-      method: "PATCH",
-      path: "/internal/v1/inbox/conversations/conversation-1/routing",
-      body: {
-        currentQueueId: " queue-sales ",
-        assignedEmployeeId: "employee-2",
-        assignedTeamId: null
-      }
-    });
-
-    expect(response.status).toBe(200);
-    expect(response.body).toEqual({
-      conversationId: "conversation-1",
-      currentQueueId: "queue-sales",
-      assignedEmployeeId: "employee-2"
-    });
-    expect(updateConversationRouting).toHaveBeenCalledWith(session, {
-      conversationId: "conversation-1",
-      request: {
-        currentQueueId: "queue-sales",
-        assignedEmployeeId: "employee-2",
-        assignedTeamId: null
-      }
-    });
-  });
-
-  it("delegates routing authorization to the command service instead of session permissions", async () => {
-    const scopedSession = sessionWithPermissions([]);
-    const { handler, updateConversationRouting } = createHandler({
-      session: scopedSession
-    });
-    const response = await handler.handle({
-      method: "PATCH",
-      path: "/internal/v1/inbox/conversations/conversation-1/routing",
-      body: {
-        currentQueueId: "queue-sales"
-      }
-    });
-
-    expect(response.status).toBe(200);
-    expect(updateConversationRouting).toHaveBeenCalledWith(scopedSession, {
-      conversationId: "conversation-1",
-      request: {
-        currentQueueId: "queue-sales"
-      }
-    });
-  });
-
-  it("returns routing permission errors from the command service", async () => {
-    const scopedSession: InternalApiSession = {
-      ...session,
-      permissions: ["inbox.read", "message.reply"]
-    };
-    const { handler, updateConversationRouting } = createHandler({
-      session: scopedSession
-    });
-    updateConversationRouting.mockRejectedValueOnce(
-      new CoreError("permission.denied")
-    );
-
-    const response = await handler.handle({
-      method: "PATCH",
-      path: "/internal/v1/inbox/conversations/conversation-1/routing",
-      body: {
-        currentQueueId: "queue-sales"
-      }
-    });
-
-    expect(response.status).toBe(403);
-    expect(response.body).toMatchObject({
-      error: {
-        code: "permission.denied"
-      }
-    });
-    expect(updateConversationRouting).toHaveBeenCalledWith(scopedSession, {
-      conversationId: "conversation-1",
-      request: {
-        currentQueueId: "queue-sales"
-      }
-    });
   });
 
   it("loads Telegram integration config through modules.manage permission", async () => {
@@ -2543,16 +2148,17 @@ describe("internal API handler", () => {
     });
     const request = {
       method: "POST" as const,
-      path: "/internal/v1/inbox/conversations/conversation-1/replies",
+      path: "/internal/v1/access/decision",
       headers: {
         "x-hulee-tenant-id": tenantId,
         "x-hulee-employee-id": employeeId,
-        "x-hulee-permissions": "inbox.read,message.reply",
+        "x-hulee-permissions": "roles.manage",
         [internalApiTimestampHeader]: "2026-06-23T10:00:00.000Z"
       },
       body: {
-        text: "Hello",
-        idempotencyKey: "reply-1"
+        employeeId: "employee-2",
+        permission: "conversation.read",
+        resource: { tenantId }
       }
     };
     const signedRequest = {
@@ -2567,7 +2173,7 @@ describe("internal API handler", () => {
             body: request.body,
             tenantId,
             employeeId,
-            permissions: ["inbox.read", "message.reply"],
+            permissions: ["roles.manage"],
             timestamp: request.headers[internalApiTimestampHeader]
           }
         )
@@ -2579,7 +2185,7 @@ describe("internal API handler", () => {
     ).resolves.toMatchObject({
       tenantId,
       employeeId,
-      permissions: ["inbox.read", "message.reply"],
+      permissions: ["roles.manage"],
       authMode: "signed"
     });
   });
@@ -2591,15 +2197,17 @@ describe("internal API handler", () => {
     });
     const timestamp = "2026-06-23T10:00:00.000Z";
     const body = {
-      text: "Hello"
+      employeeId: "employee-2",
+      permission: "conversation.read",
+      resource: { tenantId }
     };
     const signature = createInternalApiSignature("internal-secret", {
       method: "POST",
-      path: "/internal/v1/inbox/conversations/conversation-1/replies",
+      path: "/internal/v1/access/decision",
       body,
       tenantId,
       employeeId,
-      permissions: ["message.reply"],
+      permissions: ["roles.manage"],
       timestamp
     });
 
@@ -2607,11 +2215,11 @@ describe("internal API handler", () => {
       resolver.resolve(
         {
           method: "POST",
-          path: "/internal/v1/inbox/conversations/conversation-1/replies",
+          path: "/internal/v1/access/decision",
           headers: {
             "x-hulee-tenant-id": tenantId,
             "x-hulee-employee-id": employeeId,
-            "x-hulee-permissions": "message.reply",
+            "x-hulee-permissions": "roles.manage",
             [internalApiTimestampHeader]: timestamp
           },
           body
@@ -2623,16 +2231,17 @@ describe("internal API handler", () => {
       resolver.resolve(
         {
           method: "POST",
-          path: "/internal/v1/inbox/conversations/conversation-1/replies",
+          path: "/internal/v1/access/decision",
           headers: {
             "x-hulee-tenant-id": tenantId,
             "x-hulee-employee-id": employeeId,
-            "x-hulee-permissions": "message.reply",
+            "x-hulee-permissions": "roles.manage",
             [internalApiTimestampHeader]: timestamp,
             [internalApiSignatureHeader]: signature
           },
           body: {
-            text: "Changed"
+            ...body,
+            employeeId: "employee-3"
           }
         },
         "request-1"

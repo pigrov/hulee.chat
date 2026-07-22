@@ -24,7 +24,7 @@ import type {
 import type { EgressRuntime, TelegramBotApiSettings } from "@hulee/modules";
 import { describe, expect, it, vi } from "vitest";
 
-import type { OutboxRecord } from "./outbox-processor";
+import type { OutboxRecord } from "./provider-control-outbox";
 import { createTelegramProviderOperationDispatcher } from "./telegram-provider-operation-dispatcher";
 
 const tenantId = "tenant_worker_provider_ops" as TenantId;

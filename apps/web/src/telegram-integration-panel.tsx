@@ -13,7 +13,7 @@ import {
   telegramStatusKey
 } from "./formatting";
 import { egressProfileKindKey, egressStatusKey } from "./egress-formatting";
-import type { TelegramIntegrationViewModel } from "./inbox-api-client";
+import type { TelegramIntegrationViewModel } from "./internal-api-client";
 import { LocalDateTime } from "./local-date-time";
 import { TelegramConnectionForm } from "./telegram-connection-form";
 

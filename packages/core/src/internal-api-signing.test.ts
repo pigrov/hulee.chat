@@ -8,14 +8,14 @@ import {
 
 const input = {
   method: "post",
-  path: "/internal/v1/inbox/conversations/c1/replies",
+  path: "/internal/v1/tenant/brand",
   body: {
     idempotencyKey: "reply-1",
     text: "Hello"
   },
   tenantId: "tenant-1",
   employeeId: "employee-1",
-  permissions: ["message.reply", "inbox.read"],
+  permissions: ["tenant.manage"],
   timestamp: "2026-06-23T10:00:00.000Z"
 };
 
@@ -36,7 +36,7 @@ describe("internal API signing", () => {
 
   it("includes request scope in the canonical payload", () => {
     expect(canonicalInternalApiSignaturePayload(input)).toContain(
-      "/internal/v1/inbox/conversations/c1/replies"
+      "/internal/v1/tenant/brand"
     );
     expect(canonicalInternalApiSignaturePayload(input)).toContain("tenant-1");
     expect(canonicalInternalApiSignaturePayload(input)).toContain("employee-1");

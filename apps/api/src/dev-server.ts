@@ -21,7 +21,6 @@ const server = createApiNodeServer({
     internalApiSecret: runtime.config.internalApiSecret,
     secretEncryptionKey: runtime.config.secretEncryptionKey,
     egressProfile: runtime.config.egressProfile,
-    objectStorageConfig: runtime.config.objectStorage,
     publicWebhookBaseUrl: runtime.config.publicWebhookBaseUrl
   })
 });
