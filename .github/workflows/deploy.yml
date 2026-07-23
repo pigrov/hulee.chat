@@ -175,6 +175,13 @@ jobs:
               exit 1
             fi
           done < <(docker ps -aq --filter label=com.docker.compose.project=hulee-chat)
+          compose=(docker compose --env-file .env --env-file .release.env -f docker-compose.yml)
+          core_services=(postgres minio minio-create-bucket api worker web site)
+          pull_services=(postgres minio minio-create-bucket api worker web site)
+          image_containers=(hulee_chat_api hulee_chat_web hulee_chat_worker hulee_site)
+          "${compose[@]}" config --quiet
+          "${compose[@]}" pull "${pull_services[@]}"
+          "${compose[@]}" run --rm -T migrate pnpm db:inbox-v2:preflight </dev/null
           for stale_runtime in hulee_chat_api hulee_chat_worker hulee_chat_web; do
             if docker container inspect "$stale_runtime" >/dev/null 2>&1; then
               docker update --restart=no "$stale_runtime" >/dev/null
@@ -182,11 +189,6 @@ jobs:
               docker rm "$stale_runtime" >/dev/null
             fi
           done
-          compose=(docker compose --env-file .env --env-file .release.env -f docker-compose.yml)
-          core_services=(postgres minio minio-create-bucket api worker web site)
-          pull_services=(postgres minio minio-create-bucket api worker web site)
-          image_containers=(hulee_chat_api hulee_chat_web hulee_chat_worker hulee_site)
-          "${compose[@]}" pull "${pull_services[@]}"
           "${compose[@]}" run --rm -T migrate </dev/null
           "${compose[@]}" up -d --force-recreate --wait --wait-timeout 180 "${core_services[@]}"
           for container in "${image_containers[@]}"; do

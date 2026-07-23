@@ -22,6 +22,7 @@
     "infra:logs": "docker compose -f infra/docker-compose/docker-compose.yml logs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node scripts/db/run-migrations.mjs",
+    "db:inbox-v2:preflight": "node scripts/db/preflight-inbox-v2.mjs",
     "db:inbox-v2:install": "node scripts/db/install-inbox-v2.mjs",
     "db:inbox-v2:reset": "node scripts/db/reset-inbox-v2.mjs",
     "db:inbox-v2:baseline-catalog": "node scripts/db/inbox-v2-baseline-catalog.mjs verify",

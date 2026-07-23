@@ -42,8 +42,10 @@ jobs:
           docker build --build-arg "HULEE_BUILD_REVISION=\${{ env.TARGET_SHA }}" -t "$IMAGE_NAME:\${{ env.TARGET_SHA }}" .
           docker push "$IMAGE_NAME:\${{ env.TARGET_SHA }}"
           HULEE_IMAGE=$IMAGE_NAME:\${{ env.TARGET_SHA }}
+          "\${compose[@]}" run --rm -T migrate pnpm db:inbox-v2:preflight </dev/null
+          docker stop --time 30 "$stale_runtime"
           docker rm "$stale_runtime"
-          "\${compose[@]}" run --rm -T migrate`,
+          "\${compose[@]}" run --rm -T migrate </dev/null`,
   checkWorkflow: `name: Check
 concurrency:
   group: check-\${{ github.workflow }}-\${{ github.ref }}
@@ -65,6 +67,7 @@ timeout --signal=TERM 30s docker run`,
       check: "pnpm test && pnpm inbox-v2:clean-slate:check",
       "inbox-v2:clean-slate:check":
         "node scripts/checks/inbox-v2-clean-slate-check.mjs",
+      "db:inbox-v2:preflight": "node scripts/db/preflight-inbox-v2.mjs",
       "db:seed:foundation": "tsx scripts/db/seed-foundation.ts"
     }
   }),
@@ -432,6 +435,34 @@ describe("Inbox V2 clean-slate boundary check", () => {
         "Web production start must verify the exact schema epoch first",
         "production compose must pin the disabled egress profile"
       ])
+    );
+  });
+
+  it("requires the read-only migration preflight before stopping the live runtime", () => {
+    const issues = validateInboxV2CleanSlateFreeze({
+      ...validInput,
+      deployWorkflow: validInput.deployWorkflow.replace(
+        '          "${compose[@]}" run --rm -T migrate pnpm db:inbox-v2:preflight </dev/null\n          docker stop --time 30 "$stale_runtime"',
+        '          docker stop --time 30 "$stale_runtime"\n          "${compose[@]}" run --rm -T migrate pnpm db:inbox-v2:preflight </dev/null'
+      )
+    });
+
+    expect(issues).toContain(
+      "deployment must preflight the exact migration journal before stopping old data-plane runtimes"
+    );
+  });
+
+  it("requires old data-plane writers to stop before the mutating migration", () => {
+    const issues = validateInboxV2CleanSlateFreeze({
+      ...validInput,
+      deployWorkflow: validInput.deployWorkflow.replace(
+        '          docker rm "$stale_runtime"\n          "${compose[@]}" run --rm -T migrate </dev/null',
+        '          "${compose[@]}" run --rm -T migrate </dev/null\n          docker rm "$stale_runtime"'
+      )
+    });
+
+    expect(issues).toContain(
+      "deployment must stop old data-plane writers before applying migrations"
     );
   });
 

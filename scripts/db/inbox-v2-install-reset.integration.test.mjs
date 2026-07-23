@@ -12,6 +12,7 @@ import {
   inspectInboxV2DatabaseInventory,
   inspectInboxV2DatabaseTarget,
   installInboxV2Database,
+  preflightInboxV2Database,
   readAppliedMigrationJournal,
   resetInboxV2Database
 } from "./inbox-v2-database-lifecycle.mjs";
@@ -93,6 +94,95 @@ describePostgres("Inbox V2 clean install and guarded reset", () => {
       throw new AggregateError(cleanupErrors, "DB-008 cleanup failed.");
     }
   }, 60_000);
+
+  it("preflights empty/current journals without writes and rejects incompatible journals before migration", async () => {
+    const database = await createDisposableDatabase("preflight");
+    const emptyBefore = await readPreflightMutationSnapshot(database.url);
+
+    await expect(
+      preflightInboxV2Database({
+        databaseUrl: database.url,
+        migrationsFolder
+      })
+    ).resolves.toMatchObject({
+      action: "preflight",
+      appliedMigrationCount: 0,
+      expectedMigrationCount: baselineMigrationCount,
+      pendingMigrationCount: baselineMigrationCount
+    });
+    expect(await readPreflightMutationSnapshot(database.url)).toEqual(
+      emptyBefore
+    );
+
+    const install = await installInboxV2Database({
+      databaseUrl: database.url,
+      migrationsFolder
+    });
+    const currentBefore = await readPreflightMutationSnapshot(database.url);
+    await expect(
+      preflightInboxV2Database({
+        databaseUrl: database.url,
+        migrationsFolder
+      })
+    ).resolves.toMatchObject({
+      action: "preflight",
+      appliedMigrationCount: baselineMigrationCount,
+      expectedMigrationCount: baselineMigrationCount,
+      pendingMigrationCount: 0,
+      migrationContractSha256: install.migrationContractSha256,
+      migrationJournalSha256: install.migrationJournalSha256
+    });
+    expect(await readPreflightMutationSnapshot(database.url)).toEqual(
+      currentBefore
+    );
+
+    await withClient(database.url, (client) =>
+      client.query(
+        `insert into drizzle.__drizzle_migrations (hash, created_at)
+         values (repeat('f', 64), 9999999999999)`
+      )
+    );
+    const newerBefore = await readPreflightMutationSnapshot(database.url);
+    await expect(
+      preflightInboxV2Database({
+        databaseUrl: database.url,
+        migrationsFolder
+      })
+    ).rejects.toMatchObject({
+      code: "inbox_v2.migration_journal_not_prefix"
+    });
+    expect(await readPreflightMutationSnapshot(database.url)).toEqual(
+      newerBefore
+    );
+
+    await withClient(database.url, (client) =>
+      client.query(
+        `delete from drizzle.__drizzle_migrations
+          where hash = repeat('f', 64)
+            and created_at = 9999999999999`
+      )
+    );
+    await withClient(database.url, (client) =>
+      client.query(
+        `update drizzle.__drizzle_migrations
+            set hash = repeat('0', 64)`
+      )
+    );
+    const incompatibleBefore = await readPreflightMutationSnapshot(
+      database.url
+    );
+    await expect(
+      preflightInboxV2Database({
+        databaseUrl: database.url,
+        migrationsFolder
+      })
+    ).rejects.toMatchObject({
+      code: "inbox_v2.migration_journal_not_prefix"
+    });
+    expect(await readPreflightMutationSnapshot(database.url)).toEqual(
+      incompatibleBefore
+    );
+  }, 120_000);
 
   it("installs empty/current state, preserves current rows, rejects implicit authority and repeatably repairs only through reviewed reset", async () => {
     const database = await createDisposableDatabase("lifecycle");
@@ -2137,6 +2227,52 @@ async function readBootstrapState(databaseUrl) {
       streamRevision: row.stream_revision,
       projectionRevision: row.projection_revision,
       checkpointRevision: row.checkpoint_revision
+    };
+  });
+}
+
+async function readPreflightMutationSnapshot(databaseUrl) {
+  return withClient(databaseUrl, async (client) => {
+    const journal = await readAppliedMigrationJournal(client);
+    const relations = await client.query(`
+      select namespace_row.nspname as schema_name,
+             relation_row.relname as relation_name,
+             relation_row.relkind as relation_kind
+        from pg_catalog.pg_class relation_row
+        join pg_catalog.pg_namespace namespace_row
+          on namespace_row.oid = relation_row.relnamespace
+       where namespace_row.nspname in ('public', 'drizzle')
+       order by namespace_row.nspname, relation_row.relname,
+                relation_row.relkind
+    `);
+    const types = await client.query(`
+      select namespace_row.nspname as schema_name,
+             type_row.typname as type_name,
+             type_row.typtype as type_kind
+        from pg_catalog.pg_type type_row
+        join pg_catalog.pg_namespace namespace_row
+          on namespace_row.oid = type_row.typnamespace
+       where namespace_row.nspname in ('public', 'drizzle')
+       order by namespace_row.nspname, type_row.typname, type_row.typtype
+    `);
+    const defaultPrivileges = await client.query(`
+      select defaclrole::text, defaclnamespace::text,
+             defaclobjtype, defaclacl::text
+        from pg_catalog.pg_default_acl
+       order by defaclrole, defaclnamespace, defaclobjtype
+    `);
+    const schemaPrivileges = await client.query(`
+      select nspname, nspacl::text
+        from pg_catalog.pg_namespace
+       where nspname in ('public', 'drizzle')
+       order by nspname
+    `);
+    return {
+      journal,
+      relations: relations.rows,
+      types: types.rows,
+      defaultPrivileges: defaultPrivileges.rows,
+      schemaPrivileges: schemaPrivileges.rows
     };
   });
 }

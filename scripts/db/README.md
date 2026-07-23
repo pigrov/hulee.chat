@@ -16,6 +16,19 @@ localhost database. The preflight refuses default ACL entries and the current
 audit refuses PUBLIC schema creation, any PUBLIC privilege on a managed
 relation, sequence or column, and unsafe privileged-function/reset-ledger ACLs.
 
+Production deployment performs the same compatibility checks without applying
+DDL before it drains the current data-plane runtime:
+
+```bash
+pnpm db:inbox-v2:preflight
+```
+
+This command takes the lifecycle advisory lock, verifies the exact migration
+journal prefix and database privilege boundary, and audits the full schema when
+the journal is already current. It is read-only: a failure leaves the existing
+API, worker and Web containers available. Pending migrations are applied only
+by the later `db:migrate` step after old writers have stopped.
+
 The repeatable V2 install can also apply an explicit tenant stream/projection
 bootstrap:
 

@@ -400,9 +400,16 @@ function validateRuntimeSchemaEpochBoundary(issues, input) {
   requireInOrder(
     issues,
     input.deployWorkflow,
+    '"${compose[@]}" run --rm -T migrate pnpm db:inbox-v2:preflight </dev/null',
+    'docker stop --time 30 "$stale_runtime"',
+    "deployment must preflight the exact migration journal before stopping old data-plane runtimes"
+  );
+  requireInOrder(
+    issues,
+    input.deployWorkflow,
     'docker rm "$stale_runtime"',
-    '"${compose[@]}" run --rm -T migrate',
-    "deployment must stop old data-plane runtimes before migration"
+    '"${compose[@]}" run --rm -T migrate </dev/null',
+    "deployment must stop old data-plane writers before applying migrations"
   );
   let webPackage;
   try {
@@ -781,6 +788,14 @@ function validatePackageScripts(issues, packageSource) {
   }
   if (scripts?.["db:seed:foundation"] !== "tsx scripts/db/seed-foundation.ts") {
     issues.push("package.json must expose the foundation-only seed command");
+  }
+  if (
+    scripts?.["db:inbox-v2:preflight"] !==
+    "node scripts/db/preflight-inbox-v2.mjs"
+  ) {
+    issues.push(
+      "package.json must expose the read-only Inbox V2 deployment preflight"
+    );
   }
 }
 

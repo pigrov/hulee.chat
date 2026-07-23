@@ -1033,6 +1033,42 @@ export class InboxV2DatabaseLifecycleError extends Error {
   }
 }
 
+export async function preflightInboxV2Database(options = {}) {
+  const databaseUrl = requiredDatabaseUrl(options.databaseUrl);
+  const migrationsFolder = resolve(
+    options.migrationsFolder ?? "packages/db/drizzle"
+  );
+  const migrationBundle = loadMigrationBundle(migrationsFolder);
+  return withLifecycleConnection(databaseUrl, async ({ lockClient }) => {
+    await lockClient.query("begin transaction read only");
+    try {
+      const journal = await assertMigrationJournalPrefix(
+        lockClient,
+        migrationsFolder
+      );
+      await assertNoUnsafeInboxV2DefaultPrivileges(lockClient);
+      await assertNoPublicSchemaCreate(lockClient);
+      if (journal.applied.length === journal.expected.length) {
+        await assertCurrentInboxV2Schema(lockClient, migrationBundle);
+      }
+      const result = Object.freeze({
+        action: "preflight",
+        migrationsFolder,
+        appliedMigrationCount: journal.applied.length,
+        expectedMigrationCount: journal.expected.length,
+        pendingMigrationCount: journal.expected.length - journal.applied.length,
+        migrationContractSha256: migrationBundle.digest,
+        migrationJournalSha256: digestMigrationJournal(journal.applied)
+      });
+      await lockClient.query("commit");
+      return result;
+    } catch (error) {
+      await lockClient.query("rollback").catch(() => {});
+      throw error;
+    }
+  });
+}
+
 export async function installInboxV2Database(options) {
   const databaseUrl = requiredDatabaseUrl(options.databaseUrl);
   const migrationDdlBudget = resolveInboxV2MigrationDdlBudget(options);

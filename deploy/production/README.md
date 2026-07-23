@@ -26,9 +26,14 @@ cancels superseded runs for the same branch, preventing an older completion from
 displacing the latest pending delivery.
 
 This re-enables delivery, not provider traffic. Every deploy still verifies the
-exact source revision and schema epoch, removes stopped data-plane runtimes
-before migration, rejects legacy provider containers/configuration and starts
-only the `core` worker with a disabled/unavailable egress profile.
+exact source revision and schema epoch, rejects legacy provider
+containers/configuration and starts only the `core` worker with a
+disabled/unavailable egress profile. Before any live runtime is stopped, the
+target image runs a read-only migration preflight against the exact checked-in
+journal contract. An incompatible journal therefore fails the deployment while
+the current API, worker and Web remain available. Only after that preflight
+passes does deployment stop the old data-plane writers, apply pending DDL and
+start the target runtime.
 
 Ordinary deployment refuses a live `.env` containing the one-time
 `HULEE_SEED_API_KEY` or `HULEE_PLATFORM_ADMIN_PASS`. On a newly approved fresh
