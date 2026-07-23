@@ -25,6 +25,10 @@ out-of-order CI completion cannot roll production back. The `Check` workflow
 cancels superseded runs for the same branch, preventing an older completion from
 displacing the latest pending delivery.
 
+The separately approved unpublished-baseline replacement and deployment-safety
+repair performed on `2026-07-23` are recorded in
+`deploy/production/receipts/inbox-v2-reset-2026-07-23.md`.
+
 This re-enables delivery, not provider traffic. Every deploy still verifies the
 exact source revision and schema epoch, rejects legacy provider
 containers/configuration and starts only the `core` worker with a
