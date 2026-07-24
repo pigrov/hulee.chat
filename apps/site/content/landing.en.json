@@ -6,7 +6,6 @@
   "navigation": [
     { "label": "Product", "href": "#product" },
     { "label": "Channels", "href": "#channels" },
-    { "label": "For teams", "href": "#audience" },
     { "label": "Pricing", "href": "#pricing" },
     { "label": "Data", "href": "#data" }
   ],
@@ -31,7 +30,7 @@
   "hero": {
     "eyebrow": "Communication platform",
     "title": "All requests and the whole team in one workspace.",
-    "lead": "{product} collects customer and internal requests from every channel in one place, helping teams reply faster, keep context, and work with full transparency.",
+    "lead": "{product} brings messengers, social networks, your website, email, marketplaces, and internal requests into one workspace. Connect channels and teammates without separate Hulee fees; pay for stored data volume and optional services.",
     "imageAlt": "{product} interface with a unified request workspace",
     "metrics": [
       { "value": "$0", "label": "per channel in {product}" },

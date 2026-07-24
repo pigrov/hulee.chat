@@ -155,6 +155,7 @@ section[id] {
 body {
   min-height: 100%;
   margin: 0;
+  overflow-x: hidden;
   background:
     radial-gradient(circle at 74% 12%, rgb(109 93 251 / 8%), transparent 34%),
     linear-gradient(180deg, var(--site-bg), var(--site-bg-soft));
@@ -187,6 +188,14 @@ svg {
 .site-shell {
   min-height: 100svh;
   overflow-x: clip;
+}
+
+.hero-copy h1,
+.trust-section__heading h2,
+.product-workflow__heading h2,
+.channels-showcase__heading h2,
+.pricing-logic__heading h2 {
+  overflow-wrap: anywhere;
 }
 
 .hero-metrics,
@@ -381,6 +390,7 @@ svg {
 .hero-copy {
   position: relative;
   z-index: 2;
+  min-width: 0;
   padding: 4px 0;
   animation: hero-copy-enter 560ms ease-out both;
 }
@@ -2027,6 +2037,7 @@ svg {
 }
 
 .pricing-logic__heading {
+  min-width: 0;
   max-width: 980px;
   margin: 0 auto;
   text-align: center;
@@ -3002,6 +3013,7 @@ svg {
 
   .site-header {
     min-height: 70px;
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .theme-toggle {
@@ -3009,12 +3021,15 @@ svg {
   }
 
   .header-cta {
-    min-height: 42px;
-    font-size: 0.9rem;
+    display: none;
   }
 
   .hero-copy h1 {
-    font-size: 2.55rem;
+    max-width: 100%;
+    font-size: 1.72rem;
+    line-height: 1.08;
+    text-wrap: initial;
+    word-break: break-word;
   }
 
   .hero-section {
@@ -3026,7 +3041,15 @@ svg {
   }
 
   .hero-section__inner {
+    width: calc(100% - (var(--site-pad) * 2));
+    max-width: calc(100% - (var(--site-pad) * 2));
+    grid-template-columns: minmax(0, 1fr);
     gap: 38px;
+  }
+
+  .hero-copy {
+    width: 100%;
+    max-width: 100%;
   }
 
   .hero-copy .section-kicker {
@@ -3048,6 +3071,9 @@ svg {
 
   .hero-visual {
     display: grid;
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
   }
 
   .hero-visual__frame {
@@ -3081,7 +3107,7 @@ svg {
   }
 
   .trust-section__heading h2 {
-    font-size: 2.25rem;
+    font-size: 1.96rem;
   }
 
   .trust-section__items {
@@ -3096,14 +3122,20 @@ svg {
 
   .trust-item h3 {
     font-size: 1rem;
+    overflow-wrap: anywhere;
+    text-wrap: initial;
   }
 
   .trust-item p {
     font-size: 0.9rem;
+    overflow-wrap: anywhere;
   }
 
   .product-workflow__heading h2 {
-    font-size: 2.45rem;
+    max-width: 100%;
+    font-size: 1.72rem;
+    text-wrap: initial;
+    word-break: break-word;
   }
 
   .product-workflow__heading > p:not(.section-kicker) {
@@ -3171,7 +3203,10 @@ svg {
   }
 
   .channels-showcase__heading h2 {
-    font-size: 2.35rem;
+    max-width: 100%;
+    font-size: 1.72rem;
+    text-wrap: initial;
+    word-break: break-word;
   }
 
   .channel-flow {
@@ -3216,7 +3251,10 @@ svg {
   }
 
   .pricing-logic__heading h2 {
-    font-size: 2.35rem;
+    max-width: 100%;
+    font-size: 1.72rem;
+    text-wrap: initial;
+    word-break: break-word;
   }
 
   .pricing-logic__heading > p:not(.section-kicker) {
